@@ -213,9 +213,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "barca-compile"
+version = "0.42.0"
+dependencies = [
+ "barca-model",
+ "petgraph",
+ "ruff_python_ast",
+ "ruff_python_parser",
+ "ruff_text_size",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smallvec",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "ts-rs",
+]
+
+[[package]]
 name = "barca-core"
 version = "0.42.0"
 dependencies = [
+ "barca-compile",
  "barca-db",
  "barca-model",
  "chrono",

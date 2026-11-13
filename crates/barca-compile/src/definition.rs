@@ -188,11 +188,11 @@ pub(crate) fn node_argument_rules()
         })
 }
 
-fn node_argument_counts(kind: crate::NodeKind, name: &str) -> Counts {
+fn node_argument_counts(kind: barca_model::NodeKind, name: &str) -> Counts {
     let call = match kind {
-        crate::NodeKind::Asset => "asset",
-        crate::NodeKind::Sensor => "sensor",
-        crate::NodeKind::Task => "task",
+        barca_model::NodeKind::Asset => "asset",
+        barca_model::NodeKind::Sensor => "sensor",
+        barca_model::NodeKind::Task => "task",
     };
     node_argument_rules()
         .find(|(argument, _)| argument.call == call && argument.name == name)
@@ -297,7 +297,7 @@ pub(crate) fn node_definition<'a>(
 
 /// The counted arguments of one `@asset(...)` / `@sensor(...)` / `@task(...)` call.
 fn node_arguments<'a>(
-    kind: crate::NodeKind,
+    kind: barca_model::NodeKind,
     call: &'a ast::ExprCall,
     source: &str,
     barca: &crate::decorator_args::BarcaNames,
@@ -730,14 +730,14 @@ fn write_expr(expr: &Expr, source: &str, out: &mut String) {
 
 /// The components of `node`'s definition hash and a digest of each: the counted decorator
 /// parts, the function, the helpers in its cone, the kind.
-pub(crate) fn definition_components(node: &crate::model::ExtractedNode) -> Vec<(String, String)> {
+pub fn definition_components(node: &barca_model::model::ExtractedNode) -> Vec<(String, String)> {
     let mut parts: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     let mut add = |key: String, text: &str| {
         parts
             .entry(key)
             .or_default()
-            .push(crate::hash::short_digest(text.as_bytes()));
+            .push(barca_model::hash::short_digest(text.as_bytes()));
     };
     // The definition text is the counted parts, one per line, then the function from `def` on
     // ([`crate::definition::node_definition`]).

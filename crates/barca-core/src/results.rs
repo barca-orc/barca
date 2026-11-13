@@ -350,3 +350,46 @@ mod key_summary_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod multi_result_tests {
+    use super::*;
+
+    fn outcome(status: &str) -> TargetOutcome {
+        TargetOutcome {
+            status: status.to_string(),
+            final_output: None,
+            error: None,
+            failed_node: None,
+            failed_phase: None,
+            partitions: None,
+            key_summary: None,
+        }
+    }
+
+    #[test]
+    fn multi_result_targets_serialize_as_a_map_in_the_order_given() {
+        let r = MultiResult {
+            run_id: "r".to_string(),
+            elapsed_seconds: 0.0,
+            steps_executed: 0,
+            phases: 0,
+            steps: Vec::new(),
+            warnings: Vec::new(),
+            targets: vec![
+                ("zeta".to_string(), outcome("success")),
+                ("alpha".to_string(), outcome("failed")),
+            ],
+            cache: None,
+            uploads: None,
+            metadata_seconds: None,
+            partition_selection: None,
+        };
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(
+            s.find("\"zeta\"").unwrap() < s.find("\"alpha\"").unwrap(),
+            "{s}"
+        );
+        assert!(r.any_failed());
+    }
+}

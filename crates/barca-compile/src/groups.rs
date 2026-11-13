@@ -1,8 +1,8 @@
 //! Static organizational metadata, kept separate from dependency edges and hashes.
-use crate::{
+use crate::parse::FileNames;
+use barca_model::{
     BarcaError,
     model::{ExtractedNode, NodeRef},
-    parse::FileNames,
 };
 use ruff_python_ast::{Expr, Stmt};
 use serde::{Deserialize, Serialize};

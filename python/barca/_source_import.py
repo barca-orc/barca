@@ -189,7 +189,7 @@ def load_source_module(source_file: str, mod_name: str) -> ModuleType:
     The file's directory goes on sys.path (so sibling imports work) and is claimed, so
     those imports are validated against their source too. So is the cwd, the project root:
     it is already on sys.path behind the file's directory, and the modules a step imports
-    from it are part of the step's hash (crates/barca-core/src/project_modules.rs mirrors
+    from it are part of the step's hash (crates/barca-compile/src/project_modules.rs mirrors
     this search order: the file's directory, then the root).
     """
     path = os.path.realpath(source_file)

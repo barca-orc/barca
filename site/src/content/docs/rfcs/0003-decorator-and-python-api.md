@@ -149,7 +149,7 @@ This is the RFC where the "never import user code during planning" invariant is 
 visible at the decorator level:
 
 - Decorator kwargs, `inputs=`, and node kind/freshness are extracted by
-  `ruff_python_parser` AST inspection in `crates/barca-core/src/parse.rs` — **no
+  `ruff_python_parser` AST inspection in `crates/barca-compile/src/parse.rs` — **no
   import**.
 - `partitions(...)` is the one documented exception: a literal list is extracted
   statically, but an arbitrary expression (list comprehension, function call) is
@@ -190,7 +190,7 @@ Decorator kwargs (`inputs`, `partitions`, source code) feed `definition_hash`/`r
 computation — see [RFC-0005](/rfcs/0005-artifact-serialization-and-storage/) and
 [Core Constraints](/core-constraints/). `retries`/`retry_backoff` do not affect the
 cache key (a retried-then-successful run caches identically to a first-try success).
-Covered by `crates/barca-core/src/parse.rs` unit tests (decorator/kwarg extraction) and
+Covered by `crates/barca-compile/src/parse.rs` unit tests (decorator/kwarg extraction) and
 `python/tests/` (stub identity behavior, `api.py` subprocess/parsing behavior).
 
 ## 6. Performance

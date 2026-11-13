@@ -20,7 +20,7 @@ use ruff_python_ast::{self as ast, Expr, Keyword};
 use ruff_text_size::Ranged;
 
 use crate::decorator_args::Problem;
-use crate::model::NodeKind;
+use barca_model::model::NodeKind;
 
 /// The first mismatch between what barca passes `func` and what `func` takes, if any.
 pub(crate) fn check(
@@ -107,8 +107,8 @@ pub(crate) fn check(
                 .copied()
                 .filter(|n| !passed.iter().any(|(k, _, _)| k == n))
                 .collect();
-            let guess = crate::suggest::closest(key, free.iter().copied());
-            let meant = crate::suggest::did_you_mean(&guess, '`')
+            let guess = barca_model::suggest::closest(key, free.iter().copied());
+            let meant = barca_model::suggest::did_you_mean(&guess, '`')
                 .map(|m| format!(" {m}"))
                 .unwrap_or_default();
             let positional_only = params.posonlyargs.iter().any(|p| p.name().as_str() == key);
@@ -170,7 +170,7 @@ pub(crate) fn check(
             .filter(|(k, _, what)| !what.is_empty() && !names.contains(&k.as_str()))
             .map(|(k, _, _)| k.as_str())
             .collect();
-        let guess = crate::suggest::closest(missing, unused.iter().copied());
+        let guess = barca_model::suggest::closest(missing, unused.iter().copied());
         let meant = match guess.as_slice() {
             [g] => format!(" (the key `{g}` looks like it was meant for it)"),
             _ => String::new(),

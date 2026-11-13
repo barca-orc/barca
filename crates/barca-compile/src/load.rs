@@ -3,9 +3,9 @@
 //! Parsing is static (ruff's AST); the only Python that runs is the subprocess that lists a
 //! dynamic partition's values.
 
-use crate::BarcaError;
 use crate::dag::Dag;
 use crate::parse::extract_pipeline;
+use barca_model::BarcaError;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -70,17 +70,17 @@ pub fn source_dir(file: &std::path::Path) -> PathBuf {
 /// already in `loaded`, so nothing is read from disk. Paths are root-relative (the working
 /// directory), in the order found.
 fn imported_sources(
-    loaded_nodes: &[(String, Vec<crate::model::ExtractedNode>)],
+    loaded_nodes: &[(String, Vec<barca_model::model::ExtractedNode>)],
     loaded: &std::collections::HashSet<String>,
 ) -> Vec<String> {
-    use crate::model::{NodeRef, PartitionSpec};
+    use barca_model::model::{NodeRef, PartitionSpec};
     use std::collections::{HashMap, HashSet};
     let norm = |p: &std::path::Path| {
-        crate::config::normalize_lexically(p)
+        barca_model::config::normalize_lexically(p)
             .to_string_lossy()
             .replace('\\', "/")
     };
-    let parse = |file: &str| -> Option<Vec<crate::model::ExtractedNode>> {
+    let parse = |file: &str| -> Option<Vec<barca_model::model::ExtractedNode>> {
         let source = fs::read_to_string(file).ok()?;
         extract_pipeline(&source, file, |_| None)
             .ok()
@@ -88,8 +88,9 @@ fn imported_sources(
     };
     let mut loaded: HashSet<String> = loaded.clone();
     // Files probed on disk: their nodes, `None` when missing or unparseable.
-    let mut probed: HashMap<String, Option<Vec<crate::model::ExtractedNode>>> = HashMap::new();
-    let mut queue: Vec<(String, Vec<crate::model::ExtractedNode>)> = loaded_nodes.to_vec();
+    let mut probed: HashMap<String, Option<Vec<barca_model::model::ExtractedNode>>> =
+        HashMap::new();
+    let mut queue: Vec<(String, Vec<barca_model::model::ExtractedNode>)> = loaded_nodes.to_vec();
     let mut added = Vec::new();
     while let Some((file, nodes)) = queue.pop() {
         for node in &nodes {
@@ -147,7 +148,7 @@ fn imported_sources(
     added
 }
 
-pub(crate) fn build_dag_blocking(
+pub fn build_dag_blocking(
     file_args: &[String],
     python: &std::path::Path,
 ) -> Result<Dag, BarcaError> {
@@ -177,7 +178,7 @@ fn load_files(
     // Read pipeline sources first, so discovery and hashing share the import-path cache.
     let mut sources: Vec<(PathBuf, std::rc::Rc<str>)> = Vec::with_capacity(file_args.len());
     let mut group_declarations = Vec::new();
-    let mut nodes_by_file: Vec<Vec<crate::model::ExtractedNode>> = Vec::new();
+    let mut nodes_by_file: Vec<Vec<barca_model::model::ExtractedNode>> = Vec::new();
     for arg in file_args {
         let path = PathBuf::from(arg);
         match fs::read_to_string(&path) {
@@ -235,7 +236,7 @@ fn load_files(
         return Err(BarcaError::Usage(error.clone()));
     }
     // Nodes in command-line order (the last asset is `get file.py`'s final value).
-    let mut all_nodes: Vec<crate::model::ExtractedNode> = Vec::new();
+    let mut all_nodes: Vec<barca_model::model::ExtractedNode> = Vec::new();
     // Each helper's environment reads, parsed once however many steps reach it.
     let mut env_scanned = std::collections::HashMap::new();
     for (index, nodes) in nodes_by_file.into_iter().enumerate() {
@@ -269,7 +270,7 @@ fn load_files(
     let files_read = cones.paths_probed();
 
     if !partial && imported.is_empty() {
-        let loaded_nodes: Vec<(String, Vec<crate::model::ExtractedNode>)> = sources
+        let loaded_nodes: Vec<(String, Vec<barca_model::model::ExtractedNode>)> = sources
             .iter()
             .map(|(path, _)| {
                 let file = path.to_string_lossy();
@@ -284,7 +285,7 @@ fn load_files(
         let loaded = sources
             .iter()
             .map(|(path, _)| {
-                crate::config::normalize_lexically(path)
+                barca_model::config::normalize_lexically(path)
                     .to_string_lossy()
                     .replace('\\', "/")
             })
@@ -447,7 +448,7 @@ fn user_traceback(stderr: &str) -> (String, String) {
 /// expression cannot be evaluated is returned as (node id, error) for a load error naming it,
 /// with the traceback (#628), instead of being left with no keys.
 fn resolve_dynamic_partitions(
-    nodes: &mut [crate::model::ExtractedNode],
+    nodes: &mut [barca_model::model::ExtractedNode],
     python: &std::path::Path,
 ) -> Result<Vec<(String, String)>, BarcaError> {
     let mut failures = Vec::new();
@@ -456,10 +457,10 @@ fn resolve_dynamic_partitions(
     let mut evaluated: std::collections::HashMap<(PathBuf, String), Result<Vec<_>, KeysError>> =
         std::collections::HashMap::new();
     for node in nodes.iter_mut() {
-        let mut resolved: Vec<(String, Vec<crate::model::PartitionValue>)> = Vec::new();
+        let mut resolved: Vec<(String, Vec<barca_model::model::PartitionValue>)> = Vec::new();
         let mut failed = None;
         for (dim, spec) in &node.partitions {
-            let crate::model::PartitionSpec::Dynamic { source_text } = spec else {
+            let barca_model::model::PartitionSpec::Dynamic { source_text } = spec else {
                 continue;
             };
             let module_path = std::path::Path::new(&node.source_file)
@@ -509,35 +510,33 @@ fn resolve_dynamic_partitions(
         }
         for (dim, values) in resolved {
             node.partitions
-                .insert(dim, crate::model::PartitionSpec::Static { values });
+                .insert(dim, barca_model::model::PartitionSpec::Static { values });
         }
         // `batches(<expression>)` and `batches_by(<function>)` (RFC-0013): evaluated with the
         // project importable, like the keys above; an error is a load error naming the node.
         let mut dims: Vec<String> = node.partitions.keys().cloned().collect();
         dims.sort();
         match node.batch.clone() {
-            Some(crate::model::BatchSpec::GroupsExpr {
+            Some(barca_model::model::BatchSpec::GroupsExpr {
                 source_text,
                 strict,
             }) => {
-                match crate::batch::spec::evaluate_groups(
+                match crate::batch_spec::evaluate_groups(
                     python,
                     &node.source_file,
                     &source_text,
                     &dims,
                 ) {
                     Ok(groups) => {
-                        node.batch = Some(crate::model::BatchSpec::Groups { groups, strict });
+                        node.batch = Some(barca_model::model::BatchSpec::Groups { groups, strict });
                     }
                     Err(error) => failures.push((node.continuity_key(), error)),
                 }
             }
-            Some(crate::model::BatchSpec::By { source_text, .. }) => {
-                if let Err(error) = crate::batch::spec::check_label_function(
-                    python,
-                    &node.source_file,
-                    &source_text,
-                ) {
+            Some(barca_model::model::BatchSpec::By { source_text, .. }) => {
+                if let Err(error) =
+                    crate::batch_spec::check_label_function(python, &node.source_file, &source_text)
+                {
                     failures.push((node.continuity_key(), error));
                 }
             }
@@ -562,7 +561,7 @@ fn evaluate_keys(
     python: &std::path::Path,
     module_path: &std::path::Path,
     source_text: &str,
-) -> std::io::Result<Result<Vec<crate::model::PartitionValue>, KeysError>> {
+) -> std::io::Result<Result<Vec<barca_model::model::PartitionValue>, KeysError>> {
     // `-c`: the cwd (the project root) is first on sys.path, as for a worker.
     const SCRIPT: &str = "import json, sys\n\
         from barca._source_import import load_pipeline_module\n\
@@ -578,7 +577,7 @@ fn evaluate_keys(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let output =
-        crate::spawn_lock::spawn_std(&mut eval).and_then(|child| child.wait_with_output())?;
+        barca_model::spawn_lock::spawn_std(&mut eval).and_then(|child| child.wait_with_output())?;
     if !output.status.success() {
         let (exception, frames) = user_traceback(&String::from_utf8_lossy(&output.stderr));
         return Ok(Err(KeysError::Raised { exception, frames }));
@@ -591,8 +590,8 @@ fn evaluate_keys(
     Ok(Ok(values
         .into_iter()
         .filter_map(|v| match v {
-            serde_json::Value::String(s) => Some(crate::model::PartitionValue::Str(s)),
-            serde_json::Value::Number(n) => n.as_i64().map(crate::model::PartitionValue::Int),
+            serde_json::Value::String(s) => Some(barca_model::model::PartitionValue::Str(s)),
+            serde_json::Value::Number(n) => n.as_i64().map(barca_model::model::PartitionValue::Int),
             _ => None,
         })
         .collect()))
@@ -657,7 +656,7 @@ mod dynamic_key_tests {
             for node in ["src", "other", "down", "further"] {
                 let id = format!("{}:{node}", files[0]);
                 match &dag.get_node(&id).expect(&id).extracted.partitions["key"] {
-                    crate::model::PartitionSpec::Static { values } => {
+                    barca_model::model::PartitionSpec::Static { values } => {
                         assert_eq!(values.len(), 3, "partial={partial}: {node}")
                     }
                     spec => panic!("partial={partial}: {node}: {spec:?}"),

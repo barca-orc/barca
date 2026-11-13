@@ -1435,6 +1435,7 @@ fn every_barca_env_var_is_in_the_contract() {
     let mut files = Vec::new();
     for krate in [
         "barca-model",
+        "barca-compile",
         "barca-db",
         "barca-core",
         "barca-cli",

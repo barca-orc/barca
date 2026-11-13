@@ -10,11 +10,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::dag::Dag;
-use crate::model::{PartitionKey, StepId};
+use barca_model::model::{PartitionKey, StepId};
 
 /// Resource configuration — the knobs the user controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ResourceConfig {
+pub struct ResourceConfig {
     /// Max concurrent workers (default: cpu_count).
     pub pool_size: usize,
     /// Per-group concurrency limits from `tags={"concurrency_group": "..."}`.
@@ -34,7 +34,7 @@ pub struct ExecutionPlan {
 
 impl ExecutionPlan {
     /// The node id of every planned step, in plan order (a partitioned step once per stream).
-    pub(crate) fn step_ids(&self) -> impl Iterator<Item = &str> {
+    pub fn step_ids(&self) -> impl Iterator<Item = &str> {
         self.phases
             .iter()
             .flat_map(|p| &p.streams)
@@ -69,7 +69,7 @@ pub struct StreamStep {
     /// Step identity: base node ID (unpartitioned — workers expand partition_keys).
     pub step_id: StepId,
     /// The kind of node (asset, sensor, task).
-    pub kind: crate::model::NodeKind,
+    pub kind: barca_model::model::NodeKind,
     pub function_name: Arc<str>,
     pub source_file: Arc<str>,
     pub inputs: HashMap<String, String>,
@@ -79,7 +79,7 @@ pub struct StreamStep {
     /// Explicit artifact serializer from `@asset(serializer="parquet")`.
     pub serializer: Option<Arc<str>>,
     /// Sink outputs from stacked `@sink(...)` decorators.
-    pub sinks: Vec<crate::model::SinkDecl>,
+    pub sinks: Vec<barca_model::model::SinkDecl>,
     /// Pre-dispatch run hashes: display node id → run_hash (one entry for
     /// unpartitioned steps, one per partition otherwise). Populated by the
     /// executor's cache pass; empty in freshly planned steps.
@@ -96,18 +96,18 @@ pub struct StreamStep {
     /// Empty for unpartitioned nodes. Enables 1M+ partitions without 1M structs.
     pub partition_keys: Vec<PartitionKey>,
     /// Parameter frame types from function annotations (param → loader).
-    pub param_types: HashMap<String, crate::model::ValueType>,
+    pub param_types: HashMap<String, barca_model::model::ValueType>,
     /// Return frame type from the function's return annotation.
-    pub return_type: Option<crate::model::ValueType>,
-    /// Keyed `partitions_from` sources (`crate::keyed`): the dict sources the keys were
+    pub return_type: Option<barca_model::model::ValueType>,
+    /// Keyed `partitions_from` sources (`barca_model::keyed`): the dict sources the keys were
     /// expanded from, and whether this step is itself a source a `partitions_from` reads.
-    pub keyed: crate::keyed::StepKeyed,
+    pub keyed: barca_model::keyed::StepKeyed,
 }
 
 impl StreamStep {
     /// This step with `keys` in place of its partition keys, without copying its own (a
     /// partitioned step can hold 200k keys).
-    pub(crate) fn with_keys(&self, keys: Vec<PartitionKey>) -> StreamStep {
+    pub fn with_keys(&self, keys: Vec<PartitionKey>) -> StreamStep {
         StreamStep {
             step_id: self.step_id.clone(),
             kind: self.kind,
@@ -137,7 +137,7 @@ impl StreamStep {
 /// The decomposed structure of a DAG — chains and their relationships.
 /// This is the intermediate between raw DAG and execution plan.
 #[derive(Debug, Clone)]
-pub(crate) struct Topology {
+pub struct Topology {
     /// All chains (maximal sequential paths). Every node is in exactly one chain.
     pub chains: Vec<Chain>,
     /// Which chains each chain depends on.
@@ -146,7 +146,7 @@ pub(crate) struct Topology {
 
 /// A chain: maximal path where each internal node has single predecessor and successor.
 #[derive(Debug, Clone)]
-pub(crate) struct Chain {
+pub struct Chain {
     /// Ordered node IDs (head to tail).
     pub nodes: Vec<String>,
 }
@@ -156,7 +156,7 @@ pub(crate) struct Chain {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Decompose a DAG into its topological structure (chains + relationships).
-pub(crate) fn decompose(dag: &Dag) -> Topology {
+pub fn decompose(dag: &Dag) -> Topology {
     decompose_ordered(dag, dag.topo_order())
 }
 
@@ -269,8 +269,9 @@ fn detect_chains(dag: &Dag, topo: &[&str]) -> Vec<Chain> {
 // Step 2: Plan — Topology × ResourceConfig → ExecutionPlan
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[cfg(test)]
-/// Generate an execution plan from a topology and resource config.
+/// Generate an execution plan from a topology and resource config. For tests (here and in
+/// `barca-core`, which a `cfg(test)` item would not reach).
+#[doc(hidden)]
 pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> ExecutionPlan {
     plan_narrowed(dag, topology, config, None)
 }
@@ -278,7 +279,7 @@ pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> Executio
 /// [`plan`], expanding only the selected keys of a static dimension that `selection` names
 /// (`--partition`), so a few keys out of many are never all built. A pre-filter only:
 /// [`crate::selection::PartitionSelection::apply`] narrows the plan and decides what is skipped.
-pub(crate) fn plan_narrowed(
+pub fn plan_narrowed(
     dag: &Dag,
     topology: &Topology,
     config: &ResourceConfig,
@@ -584,7 +585,7 @@ fn chain_to_steps(
             .extracted
             .artifact_serializer
             .map(|s| Arc::from(format!("{s:?}").to_lowercase().as_str()));
-        let sinks: Vec<crate::model::SinkDecl> = node.extracted.sinks.to_vec();
+        let sinks: Vec<barca_model::model::SinkDecl> = node.extracted.sinks.to_vec();
         let timeout_seconds = node.extracted.timeout_seconds;
         let retries = node.extracted.retries;
         let weight = node.extracted.weight;
@@ -595,7 +596,7 @@ fn chain_to_steps(
         let return_type = node.extracted.return_type;
         // An unpartitioned node a `partitions_from(...)` reads: the worker checks what it
         // returns can be read for keys (a list, or a dict with JSON values).
-        let mut keyed = crate::keyed::StepKeyed {
+        let mut keyed = barca_model::keyed::StepKeyed {
             order: None,
             sources: None,
             is_source: node.extracted.partitions.is_empty() && dag.feeds_partitions(node_id),
@@ -675,11 +676,11 @@ fn chain_to_steps(
 
 /// Collect DerivedFrom partition specs: dimension → source_node_id.
 fn collect_derived_partitions(
-    specs: &HashMap<String, crate::model::PartitionSpec>,
+    specs: &HashMap<String, barca_model::model::PartitionSpec>,
 ) -> HashMap<String, String> {
     let mut result = HashMap::new();
     for (dim, spec) in specs {
-        if let crate::model::PartitionSpec::DerivedFrom { source_ref } = spec {
+        if let barca_model::model::PartitionSpec::DerivedFrom { source_ref } = spec {
             result.insert(dim.clone(), source_ref.resolution_name().to_string());
         }
     }
@@ -689,16 +690,16 @@ fn collect_derived_partitions(
 /// Collect only static partition specs (already resolved values).
 /// Dynamic and DerivedFrom specs are handled at dispatch time.
 fn collect_static_partitions(
-    specs: &HashMap<String, crate::model::PartitionSpec>,
+    specs: &HashMap<String, barca_model::model::PartitionSpec>,
 ) -> HashMap<String, Vec<String>> {
     let mut result = HashMap::new();
     for (dim, spec) in specs {
-        if let crate::model::PartitionSpec::Static { values } = spec {
+        if let barca_model::model::PartitionSpec::Static { values } = spec {
             let vals: Vec<String> = values
                 .iter()
                 .map(|v| match v {
-                    crate::model::PartitionValue::Str(s) => s.clone(),
-                    crate::model::PartitionValue::Int(i) => i.to_string(),
+                    barca_model::model::PartitionValue::Str(s) => s.clone(),
+                    barca_model::model::PartitionValue::Int(i) => i.to_string(),
                 })
                 .collect();
             if !vals.is_empty() {
@@ -712,7 +713,7 @@ fn collect_static_partitions(
 /// Expand partition dimensions into all combinations.
 /// For single dimension {"ticker": ["A","B","C"]} → [{"ticker":"A"}, {"ticker":"B"}, {"ticker":"C"}]
 /// For multiple dimensions, produces the cartesian product.
-pub(crate) fn expand_partition_combos(
+pub fn expand_partition_combos(
     dims: &HashMap<String, Vec<String>>,
 ) -> Vec<HashMap<String, String>> {
     let mut combos = vec![HashMap::new()];
@@ -814,14 +815,15 @@ fn topo_sort_indices(count: usize, deps: &HashMap<usize, HashSet<usize>>) -> Vec
 // Convenience: full pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[cfg(test)]
-/// Full pipeline: DAG → decompose → plan.
+/// Full pipeline: DAG → decompose → plan. For tests (here and in `barca-core`, which a
+/// `cfg(test)` item would not reach).
+#[doc(hidden)]
 pub fn plan_from_dag(dag: &Dag, config: &ResourceConfig) -> ExecutionPlan {
     plan_from_dag_narrowed(dag, config, None)
 }
 
 /// [`plan_from_dag`] with the [`plan_narrowed`] pre-filter.
-pub(crate) fn plan_from_dag_narrowed(
+pub fn plan_from_dag_narrowed(
     dag: &Dag,
     config: &ResourceConfig,
     selection: Option<&crate::selection::PartitionSelection>,
@@ -831,7 +833,7 @@ pub(crate) fn plan_from_dag_narrowed(
 }
 
 /// Plan only a dependency-closed set of nodes; unrelated partition sets are never expanded.
-pub(crate) fn plan_for_nodes(
+pub fn plan_for_nodes(
     dag: &Dag,
     nodes: &[&str],
     config: &ResourceConfig,
@@ -843,7 +845,7 @@ pub(crate) fn plan_for_nodes(
 
 /// The step whose value a run with no target returns as `final_output`: the last planned asset
 /// (a sensor or task only when the plan has no asset).
-pub(crate) fn returned_step(plan: &ExecutionPlan) -> Option<&StreamStep> {
+pub fn returned_step(plan: &ExecutionPlan) -> Option<&StreamStep> {
     let steps = || {
         plan.phases
             .iter()
@@ -852,7 +854,7 @@ pub(crate) fn returned_step(plan: &ExecutionPlan) -> Option<&StreamStep> {
     };
     steps()
         .rev()
-        .find(|st| st.kind == crate::model::NodeKind::Asset)
+        .find(|st| st.kind == barca_model::model::NodeKind::Asset)
         .or_else(|| steps().next_back())
 }
 

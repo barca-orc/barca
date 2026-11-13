@@ -13,7 +13,7 @@ use ruff_python_ast::{self as ast, Expr, Stmt};
 
 use std::collections::HashMap;
 
-use crate::model::{DeclaredInput, ValueType};
+use barca_model::model::{DeclaredInput, ValueType};
 
 /// Names through which a function can reach its own parameters without naming them. A body
 /// that mentions any of these, as a bare name (also when imported under another name) or as an

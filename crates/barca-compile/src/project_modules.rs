@@ -375,7 +375,7 @@ impl ProjectCones {
     /// provide no evidence that an ordinary installed/stdlib import is invalid.
     pub(crate) fn validate_imports(
         &mut self,
-        nodes: &[Vec<crate::model::ExtractedNode>],
+        nodes: &[Vec<barca_model::model::ExtractedNode>],
     ) -> std::collections::BTreeMap<PathBuf, String> {
         let mut errors = std::collections::BTreeMap::new();
         let mut broken = std::collections::BTreeMap::new();
@@ -511,11 +511,13 @@ impl ProjectCones {
             for node in source_nodes {
                 for reference in node.inputs.iter().map(|input| &input.upstream).chain(
                     node.partitions.values().filter_map(|p| match p {
-                        crate::model::PartitionSpec::DerivedFrom { source_ref } => Some(source_ref),
+                        barca_model::model::PartitionSpec::DerivedFrom { source_ref } => {
+                            Some(source_ref)
+                        }
                         _ => None,
                     }),
                 ) {
-                    if let crate::model::NodeRef::Imported { module, name } = reference
+                    if let barca_model::model::NodeRef::Imported { module, name } = reference
                         && matches!(
                             pipeline.modules.find(module),
                             Found::Missing | Found::Namespace(_)

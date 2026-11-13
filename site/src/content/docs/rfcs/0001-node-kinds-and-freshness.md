@@ -41,7 +41,7 @@ must not be skipped because its last "output" was unchanged), and an orchestrato
 caches nothing is wrong for data (rematerializing an unchanged dataframe on every run
 defeats the point of the tool). Barca needed a fixed, small set of node kinds so that
 `barca-core`'s planner — which never imports user code — can decide caching and DAG
-validity from static AST extraction alone (`crates/barca-core/src/parse.rs`), not from
+validity from static AST extraction alone (`crates/barca-compile/src/parse.rs`), not from
 runtime behavior.
 
 Separately, "how eagerly should this be kept up to date" is a different axis from "is
@@ -107,9 +107,9 @@ verbatim into the plan JSON (`barca plan`) and `GET /assets` / `GET /schedule`.
 
 ### 4.2 Implementation Details
 
-Node-kind and freshness parsing lives in `crates/barca-core/src/parse.rs`
+Node-kind and freshness parsing lives in `crates/barca-compile/src/parse.rs`
 (`extract_freshness`); DAG-level validity (the cache-poisoning guard below) lives in
-`crates/barca-core/src/dag.rs`. See [Architecture](/architecture/) for how this feeds
+`crates/barca-compile/src/dag.rs`. See [Architecture](/architecture/) for how this feeds
 the planner, and [Architecture Decisions](/architecture-decisions/) for the execution
 engine this vocabulary drives.
 
@@ -128,7 +128,7 @@ side — freshness cannot, because the Rust coordinator needs it before any work
 The table in §4.1 **is** the contract this RFC establishes. The cache-poisoning guard —
 a task must never be an input to an asset or sensor, because a task always re-runs and
 would keep any cacheable downstream perpetually stale — is enforced in
-`crates/barca-core/src/dag.rs` (`DagError::TaskAsInput`) as a hard indexing-time error,
+`crates/barca-compile/src/dag.rs` (`DagError::TaskAsInput`) as a hard indexing-time error,
 not a lint.
 
 ### 4.5 Edge Cases
@@ -152,7 +152,7 @@ Freshness itself is not part of the cache key — cache validity is provenance-b
 (`definition_hash` / `run_hash` matching, see [Core Constraints](/core-constraints/)),
 not recency-based. Node kind *does* gate caching: sensors and tasks are unconditionally
 excluded from the cache-hit path regardless of hash match. Covered by
-`crates/barca-core/src/dag.rs` and `parse.rs` unit tests (`cargo test`) and the DAG
+`crates/barca-compile/src/dag.rs` and `parse.rs` unit tests (`cargo test`) and the DAG
 validation integration tests in `tests/integration/`.
 
 ## 6. Performance

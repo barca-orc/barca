@@ -9,7 +9,7 @@ use ruff_text_size::Ranged;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-use crate::model::{
+use barca_model::model::{
     CronExpr, DeclaredInput, ExtractedNode, Freshness, NodeKind, NodeRef, ParallelCall,
     PartitionSpec, PartitionValue, SerializerKind, SinkDecl, ValueType,
 };
@@ -102,7 +102,7 @@ impl SyntaxProblem {
     }
 
     /// The line, and a caret under the column: what an editor would point at.
-    pub(crate) fn excerpt(&self) -> String {
+    pub fn excerpt(&self) -> String {
         let pad: String = self
             .text
             .chars()
@@ -164,9 +164,9 @@ pub(crate) fn extract_pipeline(
     source: &str,
     file: &str,
     star_exports: impl Fn(&ast::StmtImportFrom) -> Option<Vec<String>>,
-) -> Result<(Vec<ExtractedNode>, Vec<crate::groups::Declaration>), crate::BarcaError> {
+) -> Result<(Vec<ExtractedNode>, Vec<crate::groups::Declaration>), barca_model::BarcaError> {
     let parsed = parse_module(source).map_err(|e| {
-        crate::BarcaError::Parse(
+        barca_model::BarcaError::Parse(
             ParseError::SyntaxError {
                 file: file.to_string(),
                 message: syntax_message(source, &e),
@@ -183,7 +183,7 @@ pub(crate) fn extract_pipeline(
     for stmt in body {
         if let Stmt::FunctionDef(func) = stmt
             && let Some(node) = try_extract_function(func, file, source, &names)
-                .map_err(|e| crate::BarcaError::Parse(e.to_string()))?
+                .map_err(|e| barca_model::BarcaError::Parse(e.to_string()))?
         {
             nodes.push(node);
         }
@@ -445,7 +445,7 @@ fn try_extract_function(
             function: func.name.to_string(),
             line: source[..offset].matches('\n').count() + 1,
             message,
-            fix: crate::batch::spec::FIX.to_string(),
+            fix: crate::batch_spec::FIX.to_string(),
         },
     )?;
     let schedule_batch =
@@ -1264,7 +1264,7 @@ fn extract_batch(
     source: &str,
     barca: &crate::decorator_args::BarcaNames,
     partitions: &HashMap<String, PartitionSpec>,
-) -> Result<Option<crate::model::BatchSpec>, (usize, String)> {
+) -> Result<Option<barca_model::model::BatchSpec>, (usize, String)> {
     let Some(kw) = keywords
         .iter()
         .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("batch"))
@@ -1273,7 +1273,7 @@ fn extract_batch(
     };
     let mut dims: Vec<String> = partitions.keys().cloned().collect();
     dims.sort();
-    let spec = crate::batch::spec::extract(&kw.value, source, barca, &dims)?;
+    let spec = crate::batch_spec::extract(&kw.value, source, barca, &dims)?;
     if spec.is_none() {
         return Ok(None);
     }
@@ -1299,7 +1299,7 @@ fn extract_batch(
         }
         if let Some(scalar) = arg
             .annotation()
-            .and_then(crate::batch::spec::scalar_annotation)
+            .and_then(crate::batch_spec::scalar_annotation)
         {
             return Err((
                 arg.range().start().to_usize(),
@@ -1349,7 +1349,7 @@ fn extract_schedule_batch(
         },
         _ => String::new(),
     };
-    crate::batch::spec::BatchOverride::parse(std::slice::from_ref(&value))
+    crate::batch_spec::BatchOverride::parse(std::slice::from_ref(&value))
         .map_err(|e| (at, format!("Schedule(batch=): {e}")))?;
     Ok(Some(value))
 }
@@ -1859,7 +1859,7 @@ def my_task(data):
 
     #[test]
     fn type_annotations_extracted_from_signature() {
-        use crate::model::ValueType;
+        use barca_model::model::ValueType;
 
         let src = r#"
 from barca import asset
@@ -1892,7 +1892,7 @@ def collected(parts: list[pl.DataFrame]) -> pl.DataFrame:
 
     #[test]
     fn lazyframe_annotation_is_its_own_value_type() {
-        use crate::model::ValueType;
+        use barca_model::model::ValueType;
 
         let src = r#"
 from barca import asset

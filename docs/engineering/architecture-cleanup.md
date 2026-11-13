@@ -70,8 +70,8 @@ in structural refactors; change them explicitly to meet the approved operations 
 
 ### Preparation, decisions and execution
 
-[Loading](../../crates/barca-core/src/load.rs), [project import analysis](../../crates/barca-core/src/project_modules.rs),
-[target resolution](../../crates/barca-core/src/targets.rs) and [planning](../../crates/barca-core/src/planner.rs)
+[Loading](../../crates/barca-compile/src/load.rs), [project import analysis](../../crates/barca-compile/src/project_modules.rs),
+[target resolution](../../crates/barca-compile/src/targets.rs) and [planning](../../crates/barca-compile/src/planner.rs)
 prepare a dependency cone. [Cache decisions](../../crates/barca-core/src/cache.rs) and
 [incremental proofs](../../crates/barca-core/src/incremental.rs) decide which work can be reused.
 [Dispatch](../../crates/barca-core/src/dispatch.rs) expands partitions and builds provided inputs.

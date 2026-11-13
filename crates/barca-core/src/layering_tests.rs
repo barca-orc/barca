@@ -49,6 +49,7 @@ use Layer::{Compile, Core, Db, Engine, Model};
 /// The crates the guard scans, bottom up: (directory under `crates/`, name in a path).
 const CRATES: &[(&str, &str)] = &[
     ("barca-model", "barca_model"),
+    ("barca-compile", "barca_compile"),
     ("barca-db", "barca_db"),
     ("barca-core", "barca_core"),
 ];
@@ -58,8 +59,9 @@ const CRATES: &[(&str, &str)] = &[
 fn crate_of(layer: Layer) -> &'static str {
     match layer {
         Model => "barca-model",
+        Compile => "barca-compile",
         Db => "barca-db",
-        Compile | Engine | Core => "barca-core",
+        Engine | Core => "barca-core",
     }
 }
 
@@ -75,13 +77,15 @@ impl Layer {
     }
 }
 
-/// Every top-level module (and `lib`, `barca-model`'s crate root and its own items; `barca_core`,
-/// the root of `barca-core`, which only declares and re-exports), with its layer. Modules the
+/// Every top-level module (and `lib`, `barca-model`'s crate root and its own items;
+/// `barca_compile` and `barca_db`, the roots of `barca-compile` and `barca-db`; `barca_core`, the
+/// root of `barca-core`, which only declares and re-exports), with its layer. Modules the
 /// #905 Target table names are placed as it says; the others by what they use and who uses them.
 #[rustfmt::skip]
 const LAYERS: &[(&str, Layer)] = &[
     // ---- model (barca-model) ----
     ("lib", Model), // `BarcaError`, `FailedStep`, `PartialRun`, `safe_node_id`: used everywhere
+    ("barca_compile", Compile), // the root of `barca-compile`: module declarations, `Dag`
     ("barca_core", Core), // the root of `barca-core`: module declarations and re-exports
     ("barca_db", Db), // the root of `barca-db`: module declarations only
     ("model", Model),
@@ -131,6 +135,8 @@ const LAYERS: &[(&str, Layer)] = &[
     ("discover", Compile), // which `.py` files make up the project
     ("load", Compile),     // project to `Dag` (#905: "source in, Dag out")
     ("warnings", Compile), // plan-time warnings, over `dag` and `planner`
+    ("batch_spec", Compile), // reading `batch=`, `--batch`, evaluating `batches(...)` at load;
+                             // `batch::spec` in barca-core
     // ---- db (barca-db) ----
     ("db", Db),
     ("recording", Db), // a run's rows at its end; `persist` re-exports it as `persist::recording`
@@ -149,7 +155,6 @@ const LAYERS: &[(&str, Layer)] = &[
     ("result_journal", Engine),
     ("helper_proc", Engine),
     ("batch", Engine),
-    ("batch::spec", Compile), // reading `batch=`, `--batch`, evaluating `batches(...)` at load
     ("run_host", Engine),
     ("interrupt", Engine),     // how a run is told to stop
     ("cost", Engine),          // measured cost and adaptive batch sizing for the dispatcher

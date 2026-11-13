@@ -6,7 +6,7 @@
 use ruff_python_ast::{self as ast, Expr};
 use ruff_text_size::Ranged;
 
-use crate::model::BatchSpec;
+use barca_model::model::BatchSpec;
 
 // ─── Reading `batch=` ────────────────────────────────────────────────────────
 
@@ -373,7 +373,7 @@ impl BatchOverride {
     /// Every named node must be in the graph and declare `batch=`. A usage error otherwise.
     pub fn check(&self, dag: &crate::dag::Dag) -> Result<(), String> {
         for (name, _) in &self.nodes {
-            let found: Vec<&crate::model::DagNode> = dag
+            let found: Vec<&barca_model::model::DagNode> = dag
                 .graph
                 .node_weights()
                 .filter(|n| names_node(n, name))
@@ -394,7 +394,7 @@ impl BatchOverride {
         Ok(())
     }
 
-    pub(super) fn value_for(&self, node: &crate::model::DagNode) -> Option<OverrideValue> {
+    pub fn value_for(&self, node: &barca_model::model::DagNode) -> Option<OverrideValue> {
         self.nodes
             .iter()
             .rev()
@@ -404,7 +404,7 @@ impl BatchOverride {
     }
 }
 
-fn names_node(node: &crate::model::DagNode, name: &str) -> bool {
+fn names_node(node: &barca_model::model::DagNode, name: &str) -> bool {
     node.id == name
         || node.extracted.function_name == name
         || node.extracted.explicit_name.as_deref() == Some(name)
@@ -471,7 +471,7 @@ fn run_python(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut child = crate::spawn_lock::spawn_std(&mut cmd)
+    let mut child = barca_model::spawn_lock::spawn_std(&mut cmd)
         .map_err(|e| format!("cannot run {}: {e}", python.display()))?;
     let body = serde_json::to_vec(request).unwrap_or_default();
     if let Some(mut stdin) = child.stdin.take() {
@@ -541,7 +541,7 @@ pub(crate) fn check_label_function(
 }
 
 /// The `batches_by` label of each key (inner display forms, `retailer=r1`).
-pub(crate) fn evaluate_labels(
+pub fn evaluate_labels(
     python: &std::path::Path,
     source_file: &str,
     expr: &str,
@@ -551,7 +551,7 @@ pub(crate) fn evaluate_labels(
         .iter()
         .map(|k| {
             let id = format!("node[{k}]");
-            crate::model::PartitionKey::parse_from_id(&id)
+            barca_model::model::PartitionKey::parse_from_id(&id)
                 .1
                 .0
                 .into_iter()

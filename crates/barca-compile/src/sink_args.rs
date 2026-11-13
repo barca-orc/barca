@@ -245,7 +245,7 @@ fn positive_int(expr: &Expr) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::SinkDecl;
+    use barca_model::model::SinkDecl;
 
     fn parse(decorators: &str) -> Result<Vec<SinkDecl>, String> {
         let source = format!(

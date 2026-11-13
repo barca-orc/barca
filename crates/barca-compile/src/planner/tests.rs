@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::*;
+use barca_model::model::*;
 use smallvec::SmallVec;
 
 fn build_test_dag(specs: &[(&str, &[&str])]) -> Dag {
@@ -680,15 +680,15 @@ fn build_partitioned_dag(specs: &[(&str, &[&str], &[(&str, &[&str])])]) -> Dag {
                     collected: false,
                 })
                 .collect();
-            let partition_map: HashMap<String, crate::model::PartitionSpec> = partitions
+            let partition_map: HashMap<String, barca_model::model::PartitionSpec> = partitions
                 .iter()
                 .map(|(dim, vals)| {
                     (
                         dim.to_string(),
-                        crate::model::PartitionSpec::Static {
+                        barca_model::model::PartitionSpec::Static {
                             values: vals
                                 .iter()
-                                .map(|v| crate::model::PartitionValue::Str(v.to_string()))
+                                .map(|v| barca_model::model::PartitionValue::Str(v.to_string()))
                                 .collect(),
                         },
                     )

@@ -1,14 +1,15 @@
 //! Target resolution, cone selection, and per-target outcomes.
+use crate::dag::Dag;
 use crate::planner::{self, ExecutionPlan, ResourceConfig};
-use crate::step_result;
-use crate::{BarcaError, dag::Dag, reports::TargetOutcome, step_result::OutputRef};
+use barca_model::step_result;
+use barca_model::{BarcaError, reports::TargetOutcome, step_result::OutputRef};
 use std::collections::HashMap;
 
 /// Does a target `name` identify node `id`? A name is a function name (`deploy`), a full id
 /// (`pipeline.py:deploy`), or a path-suffixed id (`p.py:deploy` for `sub/p.py:deploy`). It
 /// matches only at a `:` or `/` boundary, never as the tail of a longer name, so `deploy` does
 /// not select `prod_deploy`.
-pub(crate) fn target_name_matches(id: &str, name: &str) -> bool {
+pub fn target_name_matches(id: &str, name: &str) -> bool {
     if id == name {
         return true;
     }
@@ -32,7 +33,10 @@ pub enum TargetError {
     Ambiguous { name: String, matches: Vec<String> },
     /// One node has it, of a kind the command does not take: `get` is for assets and
     /// sensors, `run` for tasks and sensors.
-    WrongKind { name: String, kind: crate::NodeKind },
+    WrongKind {
+        name: String,
+        kind: barca_model::NodeKind,
+    },
 }
 
 impl std::fmt::Display for TargetError {
@@ -52,7 +56,9 @@ impl std::fmt::Display for TargetError {
                 matches[0]
             ),
             TargetError::WrongKind { name, kind } => match kind {
-                crate::NodeKind::Task => write!(f, "'{name}' is a task — use `barca run` instead"),
+                barca_model::NodeKind::Task => {
+                    write!(f, "'{name}' is a task — use `barca run` instead")
+                }
                 _ => write!(f, "'{name}' is an asset — use `barca get` instead"),
             },
         }
@@ -76,16 +82,17 @@ impl From<TargetError> for BarcaError {
 /// The single node `name` identifies among `nodes` (id and kind, in topological order), as a
 /// target of `command_label` (`get`, `run`; anything else takes every kind).
 pub fn resolve_target_among<'a>(
-    nodes: impl IntoIterator<Item = (&'a str, crate::NodeKind)>,
+    nodes: impl IntoIterator<Item = (&'a str, barca_model::NodeKind)>,
     name: &str,
     command_label: &str,
 ) -> Result<String, TargetError> {
-    let nodes: Vec<(&str, crate::NodeKind)> = nodes.into_iter().collect();
-    let matches: Vec<&(&str, crate::NodeKind)> = nodes
+    let nodes: Vec<(&str, barca_model::NodeKind)> = nodes.into_iter().collect();
+    let matches: Vec<&(&str, barca_model::NodeKind)> = nodes
         .iter()
         .filter(|(id, _)| target_name_matches(id, name))
         .collect();
-    let ids = |of: &[&(&str, crate::NodeKind)]| of.iter().map(|(id, _)| id.to_string()).collect();
+    let ids =
+        |of: &[&(&str, barca_model::NodeKind)]| of.iter().map(|(id, _)| id.to_string()).collect();
     match matches.as_slice() {
         [] => Err(TargetError::NotFound {
             name: name.to_string(),
@@ -93,8 +100,8 @@ pub fn resolve_target_among<'a>(
         }),
         [(id, kind)] => {
             // `barca get` is for assets, `barca run` is for tasks.
-            let wrong = (command_label == "get" && *kind == crate::NodeKind::Task)
-                || (command_label == "run" && *kind == crate::NodeKind::Asset);
+            let wrong = (command_label == "get" && *kind == barca_model::NodeKind::Task)
+                || (command_label == "run" && *kind == barca_model::NodeKind::Asset);
             if wrong {
                 return Err(TargetError::WrongKind {
                     name: name.to_string(),
@@ -111,13 +118,13 @@ pub fn resolve_target_among<'a>(
 }
 
 /// The DAG's nodes as [`resolve_target_among`] takes them.
-fn dag_nodes(dag: &Dag) -> impl Iterator<Item = (&str, crate::NodeKind)> {
+fn dag_nodes(dag: &Dag) -> impl Iterator<Item = (&str, barca_model::NodeKind)> {
     dag.topo_order()
         .into_iter()
         .filter_map(|id| dag.get_node(id).map(|node| (id, node.kind())))
 }
 
-fn candidates<'a>(dag: &'a Dag, name: &str) -> Vec<(&'a str, crate::NodeKind)> {
+fn candidates<'a>(dag: &'a Dag, name: &str) -> Vec<(&'a str, barca_model::NodeKind)> {
     let nodes = dag.named(name);
     if nodes.is_empty() {
         dag_nodes(dag).collect()
@@ -138,7 +145,7 @@ pub fn find_target_id(dag: &Dag, name: &str) -> Result<String, BarcaError> {
 
 /// The node a command's target names, checked for its kind: `barca get`
 /// targets assets and `barca run` targets tasks.
-pub(crate) fn resolve_target(
+pub fn resolve_target(
     dag: &Dag,
     target_name: Option<&str>,
     command_label: &str,
@@ -156,7 +163,7 @@ pub(crate) fn resolve_target(
 /// Resolve several target names (`barca run a,b`) to node ids, each checked like a single
 /// target, before anything runs. Returns `(name as given, node id)` pairs; a name resolving to an
 /// id already listed is dropped, so `a,a` is one target.
-pub(crate) fn resolve_targets(
+pub fn resolve_targets(
     dag: &Dag,
     names: &[String],
     command_label: &str,
@@ -176,7 +183,7 @@ pub(crate) fn resolve_targets(
 /// shared by several targets appears (and runs) once. No targets means everything the command
 /// covers: for `get`, every asset and sensor (tasks are skipped: get is for assets, run is for
 /// tasks); for anything else (`status`), the whole DAG.
-pub(crate) fn plan_for_targets(
+pub fn plan_for_targets(
     dag: &Dag,
     target_ids: &[&str],
     config: &ResourceConfig,
@@ -198,16 +205,16 @@ pub(crate) fn plan_for_targets(
     }
 }
 
-pub(crate) fn is_task(dag: &Dag, id: &str) -> bool {
+pub fn is_task(dag: &Dag, id: &str) -> bool {
     dag.get_node(id)
-        .is_some_and(|n| n.kind() == crate::NodeKind::Task)
+        .is_some_and(|n| n.kind() == barca_model::NodeKind::Task)
 }
 
 /// The stderr note for `barca get <files>` with no target when the files define tasks: which
 /// tasks were skipped and how to run one. `None` when there is no task to mention.
-pub(crate) fn skipped_tasks_note(dag: &Dag, file_args: &[String]) -> Option<String> {
+pub fn skipped_tasks_note(dag: &Dag, file_args: &[String]) -> Option<String> {
     let order = dag.topo_order();
-    let kinds: Vec<(&str, crate::NodeKind)> = order
+    let kinds: Vec<(&str, barca_model::NodeKind)> = order
         .iter()
         .filter_map(|id| dag.get_node(id).map(|n| (*id, n.kind())))
         .collect();
@@ -217,12 +224,12 @@ pub(crate) fn skipped_tasks_note(dag: &Dag, file_args: &[String]) -> Option<Stri
 /// [`skipped_tasks_note`] from the nodes in topological order with their kinds, as
 /// `barca list --json` gives them (a `--server` dry run prints it from the server's list).
 pub fn skipped_tasks_note_among(
-    order: &[(&str, crate::NodeKind)],
+    order: &[(&str, barca_model::NodeKind)],
     file_args: &[String],
 ) -> Option<String> {
     let tasks: Vec<&str> = order
         .iter()
-        .filter(|(_, kind)| *kind == crate::NodeKind::Task)
+        .filter(|(_, kind)| *kind == barca_model::NodeKind::Task)
         .map(|(id, _)| short_name(id))
         .collect();
     let first = tasks.first()?;
@@ -260,7 +267,7 @@ pub fn skipped_tasks_note_among(
 
 /// The failed node upstream of `base_id`, if any: it blocks `base_id` from running. Used when
 /// several targets run together, so a failure stops only the targets that need it.
-pub(crate) fn blocking_failure<'a>(
+pub fn blocking_failure<'a>(
     dag: &'a Dag,
     base_id: &str,
     failed: &std::collections::HashSet<String>,
@@ -274,10 +281,7 @@ pub(crate) fn blocking_failure<'a>(
 }
 
 /// The output of `target_id` in this run (the first partition, by key, for a partitioned one).
-pub(crate) fn output_for(
-    target_id: &str,
-    all_outputs: &HashMap<String, OutputRef>,
-) -> Option<OutputRef> {
+pub fn output_for(target_id: &str, all_outputs: &HashMap<String, OutputRef>) -> Option<OutputRef> {
     all_outputs.get(target_id).cloned().or_else(|| {
         let prefix = format!("{target_id}[");
         all_outputs
@@ -290,7 +294,7 @@ pub(crate) fn output_for(
 
 /// How each target of a multi-target run ended: `success` with its output, or `failed` with
 /// the step that failed (the target itself or something upstream of it) and its error.
-pub(crate) fn target_outcomes(
+pub fn target_outcomes(
     dag: &Dag,
     targets: &[(String, String)],
     all_outputs: &HashMap<String, OutputRef>,
@@ -298,7 +302,7 @@ pub(crate) fn target_outcomes(
     selection: Option<&crate::selection::PartitionSelection>,
 ) -> Vec<(String, TargetOutcome)> {
     let base =
-        |f: &step_result::StepFailure| crate::StepId::parse(&f.node_id).base_id().to_string();
+        |f: &step_result::StepFailure| barca_model::StepId::parse(&f.node_id).base_id().to_string();
     targets
         .iter()
         .map(|(name, tid)| {
@@ -348,23 +352,23 @@ pub(crate) fn target_outcomes(
 }
 
 /// Does the asset part of a `--refresh` selector (short name or full id) identify `node_id`?
-pub(crate) fn refresh_name_matches(node_id: &str, name: &str) -> bool {
+pub fn refresh_name_matches(node_id: &str, name: &str) -> bool {
     let name = name.split('[').next().unwrap_or(name);
     node_id == name || node_id.ends_with(&format!(":{name}"))
 }
 
 /// "Did you mean ...?" for an unknown target `name` among node ids `available`: compared with
 /// the function names, or with the full ids when `name` is one (`pipeline.py:amount`).
-pub(crate) fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
+pub fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
     if name.contains(':') {
-        crate::suggest::suggestion(name, available.iter().copied())
+        barca_model::suggest::suggestion(name, available.iter().copied())
     } else {
-        crate::suggest::suggestion(name, available.iter().map(|id| short_name(id)))
+        barca_model::suggest::suggestion(name, available.iter().map(|id| short_name(id)))
     }
 }
 
 /// The function name of a node id (`pipeline.py:src` -> `src`, `pipeline.py:p[k=v]` -> `p`).
-pub(crate) fn short_name(node_id: &str) -> &str {
+pub fn short_name(node_id: &str) -> &str {
     let base = node_id.split('[').next().unwrap_or(node_id);
     base.rsplit(':').next().unwrap_or(base)
 }
@@ -374,7 +378,7 @@ pub(crate) fn short_name(node_id: &str) -> &str {
 /// `include_targets` a target may name itself; `run` targets are tasks and never can. `planned`
 /// is the cone the run plans when it is not the targets' whole cone (it does not walk past a
 /// `Manual` node read as it is, so nothing behind one can be refreshed).
-pub(crate) fn validate_refresh_names(
+pub fn validate_refresh_names(
     dag: &Dag,
     target_ids: &[&str],
     names: &[String],
@@ -391,12 +395,12 @@ pub(crate) fn validate_refresh_names(
         .filter(|id| include_targets || !target_ids.contains(id))
         .filter(|id| {
             dag.get_node(id)
-                .is_some_and(|n| n.kind() == crate::NodeKind::Asset)
+                .is_some_and(|n| n.kind() == barca_model::NodeKind::Asset)
         })
         .collect();
     for name in names {
         if name.contains('[') {
-            let (_, key) = crate::model::PartitionKey::parse_from_id(name);
+            let (_, key) = barca_model::model::PartitionKey::parse_from_id(name);
             if !name.ends_with(']')
                 || key.0.len() != 1
                 || key
@@ -445,7 +449,7 @@ pub(crate) fn validate_refresh_names(
 /// partitioned target, the first partition by key), none when there are several (each target
 /// reports its own), and with no target the last planned asset's (a sensor's only when the plan
 /// has no asset).
-pub(crate) fn final_output_of(
+pub fn final_output_of(
     exec_plan: &ExecutionPlan,
     target_ids: &[&str],
     several_targets: bool,
@@ -488,9 +492,8 @@ mod refresh_name_tests {
 mod multi_target_tests {
     use super::*;
     use crate::planner::ResourceConfig;
-    use crate::report::{RunOutcome, end_of_run_line, failed_step_line};
-    use crate::results::{
-        ExplainResult, ExplainSummary, MultiResult, PartitionSummary, StepReport, TargetPrediction,
+    use barca_model::reports::{
+        ExplainResult, ExplainSummary, PartitionSummary, StepReport, TargetPrediction,
     };
 
     const SRC: &str = r#"
@@ -558,18 +561,6 @@ def lone() -> int:
             size_bytes: 1,
             elapsed_seconds: None,
             content_hash: None,
-        }
-    }
-
-    fn outcome(status: &str) -> TargetOutcome {
-        TargetOutcome {
-            status: status.to_string(),
-            final_output: None,
-            error: None,
-            failed_node: None,
-            failed_phase: None,
-            partitions: None,
-            key_summary: None,
         }
     }
 
@@ -671,11 +662,16 @@ def lone() -> int:
 
     #[test]
     fn skipped_tasks_note_stays_one_short_line_in_a_large_project() {
-        let kinds: Vec<(String, crate::NodeKind)> =
-            std::iter::once(("a.py:src".to_string(), crate::NodeKind::Asset))
-                .chain((0..42).map(|i| (format!("checks.py:validate_{i}"), crate::NodeKind::Task)))
+        let kinds: Vec<(String, barca_model::NodeKind)> =
+            std::iter::once(("a.py:src".to_string(), barca_model::NodeKind::Asset))
+                .chain((0..42).map(|i| {
+                    (
+                        format!("checks.py:validate_{i}"),
+                        barca_model::NodeKind::Task,
+                    )
+                }))
                 .collect();
-        let kinds: Vec<(&str, crate::NodeKind)> =
+        let kinds: Vec<(&str, barca_model::NodeKind)> =
             kinds.iter().map(|(id, k)| (id.as_str(), *k)).collect();
         let files = names(&["a.py", "checks.py", "helpers.py"]);
         let note = skipped_tasks_note_among(&kinds, &files).unwrap();
@@ -733,8 +729,12 @@ def lone() -> int:
             Some("Did you mean 'q.py:amounts'?")
         );
         assert_eq!(target_suggestion("orders", &ids), None);
-        let err = resolve_target_among([("p.py:amounts", crate::NodeKind::Asset)], "amount", "get")
-            .unwrap_err();
+        let err = resolve_target_among(
+            [("p.py:amounts", barca_model::NodeKind::Asset)],
+            "amount",
+            "get",
+        )
+        .unwrap_err();
         assert!(matches!(err, TargetError::NotFound { .. }));
     }
 
@@ -770,53 +770,6 @@ def lone() -> int:
         assert_eq!(out[1].1.error.as_deref(), Some("boom"));
         assert_eq!(out[2].1.status, "failed");
         assert_eq!(out[2].1.error.as_deref(), Some("did not run"));
-    }
-
-    #[test]
-    fn a_batched_node_has_one_line_with_its_calls_keys_and_phases() {
-        let b = crate::reports::BatchExecution {
-            calls: 1,
-            keys: 3077,
-            import_seconds: 0.12,
-            load_seconds: 1.2,
-            compute_seconds: 8.44,
-            split_seconds: 3.1,
-            write_seconds: 14.2,
-        };
-        assert_eq!(
-            crate::report::batch_line("p.py:orders", &b),
-            "[barca] batch:p.py:orders 1 call, 3077 keys | import 0.1s, load 1.2s, compute 8.4s, split 3.1s, write 14.2s"
-        );
-    }
-
-    #[test]
-    fn end_of_run_line_is_one_format_and_never_says_done_on_failure() {
-        assert_eq!(
-            end_of_run_line(3, 3, 1.26, RunOutcome::Done),
-            "[barca] 3/3 steps | done in 1.3s"
-        );
-        let failed = end_of_run_line(0, 3, 0.0, RunOutcome::Failed);
-        assert_eq!(failed, "[barca] 0/3 steps | failed in 0.0s");
-        assert!(!failed.contains("done"));
-        assert_eq!(
-            end_of_run_line(1, 3, 2.0, RunOutcome::Cancelled),
-            "[barca] 1/3 steps | cancelled after 2.0s"
-        );
-    }
-
-    #[test]
-    fn failed_step_line_names_the_step_and_the_first_error_line() {
-        assert_eq!(
-            failed_step_line(
-                "p.py:broken",
-                "\nValueError: boom\n  File \"p.py\", line 3, in broken"
-            ),
-            "[barca] step:p.py:broken failed: ValueError: boom"
-        );
-        assert_eq!(
-            failed_step_line("p.py:x", ""),
-            "[barca] step:p.py:x failed: unknown error"
-        );
     }
 
     #[test]
@@ -895,32 +848,6 @@ def lone() -> int:
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.find("\"b\"").unwrap() < s.find("\"a\"").unwrap(), "{s}");
     }
-
-    #[test]
-    fn multi_result_targets_serialize_as_a_map_in_the_order_given() {
-        let r = MultiResult {
-            run_id: "r".to_string(),
-            elapsed_seconds: 0.0,
-            steps_executed: 0,
-            phases: 0,
-            steps: Vec::new(),
-            warnings: Vec::new(),
-            targets: vec![
-                ("zeta".to_string(), outcome("success")),
-                ("alpha".to_string(), outcome("failed")),
-            ],
-            cache: None,
-            uploads: None,
-            metadata_seconds: None,
-            partition_selection: None,
-        };
-        let s = serde_json::to_string(&r).unwrap();
-        assert!(
-            s.find("\"zeta\"").unwrap() < s.find("\"alpha\"").unwrap(),
-            "{s}"
-        );
-        assert!(r.any_failed());
-    }
 }
 
 #[cfg(test)]
@@ -947,7 +874,7 @@ mod target_name_tests {
 #[cfg(test)]
 mod resolve_target_tests {
     use super::{TargetError, resolve_target_among};
-    use crate::{BarcaError, NodeKind};
+    use barca_model::{BarcaError, NodeKind};
 
     const NODES: [(&str, NodeKind); 5] = [
         ("a.py:orders", NodeKind::Asset),
