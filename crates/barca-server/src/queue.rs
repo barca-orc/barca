@@ -450,6 +450,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
                 steps_total: None,
                 job: None,
                 trigger: &spec.trigger,
+                traced: false,
             },
             "error",
             outcome.text(),

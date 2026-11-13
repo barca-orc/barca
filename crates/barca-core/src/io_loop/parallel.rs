@@ -120,7 +120,7 @@ pub(super) fn sweep_branch_results(parent: &Path) {
             .and_then(|n| n.rsplit_once('-'))
             .and_then(|(_, pid)| pid.parse::<i64>().ok());
         // A name this code did not make is left alone.
-        if owner.is_some_and(|pid| !crate::db::pid_alive(pid)) {
+        if owner.is_some_and(|pid| !crate::process::pid_alive(pid)) {
             std::fs::remove_dir_all(entry.path()).ok();
         }
     }

@@ -4,7 +4,6 @@
 //! `python -m barca._inspect`. `barca status` and the ledger consume it.
 
 use crate::cache_state::CacheState;
-use crate::db;
 use crate::status::NodeStatus;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -85,7 +84,7 @@ pub(crate) async fn check_store_copies(
 ) -> HashSet<usize> {
     let mut verified_local = HashSet::new();
     let layout = crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
-    let Ok(cache) = db::CacheReader::for_config(cfg).await else {
+    let Ok(cache) = crate::cache::CacheReader::for_config(cfg).await else {
         return verified_local;
     };
     // (node index, store path, local path, recorded digest)
@@ -262,7 +261,7 @@ pub(crate) async fn read_shapes(
                     != Some(path)
             })
         }) {
-        db::CacheReader::for_config(cfg).await.ok()
+        crate::cache::CacheReader::for_config(cfg).await.ok()
     } else {
         None
     };

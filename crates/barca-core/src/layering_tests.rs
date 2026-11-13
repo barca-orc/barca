@@ -78,6 +78,15 @@ const LAYERS: &[(&str, Layer)] = &[
     ("layout", Model), // `.barca/` paths from the config: `db` and `gc` use them
     ("source_observation", Model), // compact observation values over `keyed`
     ("test_hooks", Model), // `BARCA_TEST_*` reads, used by every layer
+    ("trigger", Model),        // what started a run: `db` records it on the `runs` row
+    ("node_estimate", Model),  // a node's measured cost: `cost` updates it, `db` keeps it
+    ("ledger_post", Model),    // a ledger post's run and step rows: `ledger` sends, `db` records
+    ("process", Model),    // `pid_alive`, `local_host`, `Until`: db, engine and core share them
+    ("trace_ids", Model),  // Datadog trace and span ids: `jsonlog` and the exporter derive them
+    ("step_result", Model), // `OutputRef`, `ErrorPhase`, `StepFailure`: what a step produced
+    ("reports", Model),     // the report values `results` re-exports, returned below core
+    ("dag_error", Model),   // `DagError`, wrapped by the crate root's `BarcaError`
+    ("spawn_lock", Model), // one child process started at a time: loading and the engine both start them
     // ---- compile (barca-compile) ----
     ("parse", Compile),
     ("cone", Compile),
@@ -115,11 +124,13 @@ const LAYERS: &[(&str, Layer)] = &[
     ("result_journal", Engine),
     ("helper_proc", Engine),
     ("batch", Engine),
+    ("batch::spec", Compile), // reading `batch=`, `--batch`, evaluating `batches(...)` at load
     ("run_host", Engine),
     ("interrupt", Engine),     // how a run is told to stop
     ("cost", Engine),          // measured cost and adaptive batch sizing for the dispatcher
     ("dataset_sinks", Engine), // a step's `@sink` writes, through `helper_proc`
     ("observation", Engine),   // a sensor's freshness revision from its result
+    ("step_trace", Engine),    // the trace context the worker loop attaches to each step
     // ---- core (barca-core, the remainder) ----
     ("execution", Core), // the run orchestrator: cache, freshness, publication, backup (#905)
     ("persist", Core), // the run's recording driver and telemetry report; `recording` is db
@@ -177,58 +188,6 @@ const ROOT_ITEMS: &[(&str, &str)] = &[
 /// Delete a line when its edge is gone; never add one.
 #[rustfmt::skip]
 const EXCEPTIONS: &[(&str, &str, &str)] = &[
-    // ---- step 2, `planner` and `dag`: helpers move to the compile side ----
-    ("dag", "changes", "changes::definition_components"),
-    ("planner", "cache", "cache::folds_output"),
-    // ---- step 2, `dispatch` types: OutputRef, StepFailure, ErrorPhase move to model ----
-    ("db", "dispatch", "dispatch::{OutputRef, StepFailure}"),
-    ("lib", "dispatch", "FailedStep.phase: dispatch::ErrorPhase; PartialRun: dispatch::OutputRef"),
-    ("selection", "dispatch", "dispatch::OutputRef"),
-    ("targets", "dispatch", "dispatch::{OutputRef, StepFailure}"),
-    // ---- step 2, `db` value types move down; DDL moves into db/schema ----
-    ("db", "cache", "cache::READ_STAMP_REFRESH"),
-    ("db", "changes", "changes::DEFINITION_KEY"),
-    ("db", "cost", "cost::NodeEstimate"),
-    ("db", "incremental", "incremental::CREATE (freshness_proofs DDL)"),
-    ("db", "ledger", "ledger::{Ledger, LedgerRun, LedgerStep}"),
-    ("db", "outcome", "outcome::{Trigger, TriggeredBy}"),
-    ("db", "serve", "serve::run_queue::{CREATE_QUEUE, CREATE_SERVER_STATE}"),
-    ("db", "telemetry", "telemetry::is_on, telemetry::datadog::step_trace_ref"),
-    ("persist::recording", "ledger", "ledger::{LedgerPost, PostAccepted}"),
-    // ---- step 2, `pid_alive` and host identity move to a shared process module ----
-    ("db", "helper_proc", "helper_proc::Until (the deadline helper beside pid_alive)"),
-    ("io_loop", "db", "db::pid_alive"),
-    ("protocol", "db", "db::pid_alive"),
-    // ---- step 3, the engine and storage seam: the engine reads no metadata ----
-    ("observation", "db", "db::CacheReader"),
-    // ---- no #905 step names these yet; each needs a decision before step 4 ----
-    // `results` holds report types every layer returns: the ones below it use move to model.
-    ("batch", "results", "results::{BatchPlan, StepReport}"),
-    ("lib", "results", "PartialRun: results::{StepReport, KeySummary}"),
-    ("pending_uploads", "results", "results::UploadsReport"),
-    ("selection", "results", "results::{ExplainResult, StepReport, PartitionSelectionReport, ...}"),
-    ("targets", "results", "results::TargetOutcome"),
-    // The crate root's error types name compile-side types.
-    ("lib", "dag", "BarcaError::Dag(dag::DagError)"),
-    ("lib", "warnings", "PartialRun.warnings: warnings::PlanWarning"),
-    // `batch` straddles compile (parsing `batch=`, evaluating groups) and engine (calls).
-    ("load", "batch", "batch::{evaluate_groups, check_label_function}"),
-    ("parse", "batch", "batch::{FIX, extract, scalar_annotation, BatchOverride}"),
-    // The partition-key resolver runs a project subprocess (RFC-0013).
-    ("load", "helper_proc", "helper_proc::spawn_std"),
-    // `telemetry` straddles: the Datadog dispatch and log ids are used below it.
-    ("io_loop", "telemetry", "telemetry::datadog::Dispatch"),
-    ("jsonlog", "telemetry", "telemetry::datadog::log_ids"),
-    ("model", "env_reads", "env_reads::undeclared"),
-    // `db::run_steps::planned_run_nodes` rebuilds a plan: a query, not storage.
-    ("db", "dag", "dag::Dag (planned_run_nodes)"),
-    ("db", "planner", "planner::ResourceConfig (planned_run_nodes)"),
-    ("db", "targets", "targets::{plan_for_targets, blocking_failure} (planned_run_nodes)"),
-    // `pending_uploads` straddles: rows (db) and the upload itself (core).
-    ("pending_uploads", "execution", "execution::upload_pending (upload_now)"),
-    ("persist::recording", "persist", "persist::RunLedger"),
-    ("selection", "report", "report::kind_str"),
-    ("targets", "recover", "recover::returned_step"),
 ];
 
 /// One reference: the crate-relative path it names and the line it is on.

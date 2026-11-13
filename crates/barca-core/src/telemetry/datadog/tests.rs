@@ -1,4 +1,5 @@
 use super::*;
+use crate::trace_ids::{log_ids, span_id};
 
 #[test]
 fn malformed_agent_url_diagnostics_do_not_echo_secret_values() {
@@ -591,15 +592,17 @@ async fn the_end_of_the_run_sends_only_what_the_live_path_did_not() {
 
 fn dispatch() -> Dispatch {
     Dispatch {
-        run_id: "dispatch-test".to_string(),
-        service: "planning".to_string(),
-        project: Some("shop".to_string()),
-        job: "p.py:orders".to_string(),
-        nodes: [
-            ("p.py:orders".to_string(), node("p.py:orders")),
-            ("p.py:weekly".to_string(), node("p.py:weekly")),
-        ]
-        .into(),
+        trace: Arc::new(StepTrace {
+            run_id: "dispatch-test".to_string(),
+            service: "planning".to_string(),
+            project: Some("shop".to_string()),
+            job: "p.py:orders".to_string(),
+            nodes: [
+                ("p.py:orders".to_string(), node("p.py:orders")),
+                ("p.py:weekly".to_string(), node("p.py:weekly")),
+            ]
+            .into(),
+        }),
         upstream: [("p.py:weekly".to_string(), vec!["p.py:orders".to_string()])].into(),
         exporter: None,
     }

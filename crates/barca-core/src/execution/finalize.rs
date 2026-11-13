@@ -154,7 +154,7 @@ pub(super) fn returned_node(
         [one] => Some(one.to_string()),
         _ if several_targets => None,
         _ => Some(
-            recover::returned_step(exec_plan)?
+            crate::planner::returned_step(exec_plan)?
                 .step_id
                 .base_id()
                 .to_string(),
@@ -822,12 +822,12 @@ pub(super) async fn final_backup(
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
     let started = Instant::now();
     let until = if *cancelled {
-        helper_proc::Until {
+        crate::process::Until {
             cancel: Some(&interrupt.abandon),
             deadline: Some(Instant::now() + crate::interrupt::WRAP_UP_LIMIT),
         }
     } else {
-        helper_proc::Until::cancelled(&interrupt.cancel)
+        crate::process::Until::cancelled(&interrupt.cancel)
     };
     let wrap_up = *cancelled;
     // Whether `until` fired: the backup (its copy, or the upload of a copy already taken) was

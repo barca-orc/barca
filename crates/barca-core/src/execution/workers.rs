@@ -8,7 +8,15 @@ pub(super) async fn start_workers(
     prepared: &Prepared,
     started: &mut RunStart,
     pb: &Option<indicatif::ProgressBar>,
-) -> Result<(Option<StoreSync>, crate::io_loop::WorkerPool, StepRecorder), BarcaError> {
+) -> Result<
+    (
+        Option<StoreSync>,
+        crate::io_loop::WorkerPool,
+        Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
+        StepRecorder,
+    ),
+    BarcaError,
+> {
     let cfg = request.cfg;
     let python = request.python;
     let cancel = &started.cancel;
@@ -101,6 +109,16 @@ pub(super) async fn start_workers(
         None => cfg.artifact_root.clone(),
     };
 
+    let datadog = telemetry
+        .iter()
+        .any(|(name, _)| name == "datadog")
+        .then(|| {
+            std::sync::Arc::new(crate::telemetry::datadog::Dispatch::new(
+                &prepared.dag,
+                job_name,
+                run_id,
+            ))
+        });
     // Persistent worker pool: one pool for the whole run, shared across
     // phases so workers keep their interpreter (and imported user modules)
     // warm between phases.
@@ -114,16 +132,7 @@ pub(super) async fn start_workers(
         capacity: prepared.capacity,
         host: request.options.host.clone(),
         run_id: run_id.clone(),
-        datadog: telemetry
-            .iter()
-            .any(|(name, _)| name == "datadog")
-            .then(|| {
-                std::sync::Arc::new(crate::telemetry::datadog::Dispatch::new(
-                    &prepared.dag,
-                    job_name,
-                    run_id,
-                ))
-            }),
+        datadog: datadog.as_ref().map(|d| d.trace()),
         artifact_root: worker_artifact_root,
         storage_options_json: cfg.storage_options_json.clone(),
         agent_mode: request.agent_mode,
@@ -159,7 +168,7 @@ pub(super) async fn start_workers(
     }
     trace_point!(started.trace, "pool_started");
 
-    Ok((store, pool, recorder))
+    Ok((store, pool, datadog, recorder))
 }
 
 /// Upload what earlier commands on this machine left pending (#390), before this command's own

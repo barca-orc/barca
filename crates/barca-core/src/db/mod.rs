@@ -60,7 +60,7 @@ mod write_boundary_tests;
 // family calls in another; each family file starts with `use super::*`.
 pub(crate) use asset_pauses::CREATE as CREATE_ASSET_PAUSES;
 pub use asset_pauses::{AssetPause, get_asset_pauses, pause_assets, resume_assets};
-pub(crate) use cache_reader::CacheReader;
+pub(crate) use cache_reader::{CacheReader, READ_STAMP_REFRESH};
 pub(crate) use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;
 pub use failure::{FailureFacts, LastSuccess, SourceLine, failure_facts, raised_at};
@@ -76,7 +76,7 @@ pub(crate) use materializations::last_output_hashes;
 pub use materializations::persist_outputs;
 use materializations::record_definitions;
 pub(crate) use materializations::{
-    adopt_store_digests, confirmed_object, evicted_among, evicted_paths, key_range,
+    DEFINITION_KEY, adopt_store_digests, confirmed_object, evicted_among, evicted_paths, key_range,
     last_success_components, latest_success, latest_success_id, partition_artifacts_for_config,
     touch_read, touch_read_in, touch_read_on,
 };
@@ -92,16 +92,15 @@ pub use pins::{
     set_pin,
 };
 pub(crate) use pins::{pins_on, success_at};
-pub(crate) use run_liveness::local_host;
 pub use run_liveness::{AliveRun, alive_running_runs, alive_running_runs_in};
 use run_liveness::{interrupted_runs, mark_interrupted_runs};
-pub(crate) use run_liveness::{live_runs, pid_alive, runs_alive_here};
+pub(crate) use run_liveness::{live_runs, runs_alive_here};
 pub(crate) use run_steps::get_run_steps;
 #[cfg(test)]
 pub(crate) use run_steps::worker_exit;
 pub use run_steps::{
-    RUN_STEPS_LIMIT, RunStep, StepRow, StepsPage, attach_trace_ids, get_run_steps_page,
-    get_run_traced, planned_run_nodes, read_step_rows, run_node_summaries,
+    RUN_STEPS_LIMIT, RunNodeSummary, RunStep, StepRow, StepsPage, attach_trace_ids,
+    get_run_steps_page, get_run_traced, read_step_rows, run_node_summaries,
 };
 #[cfg(test)]
 pub(crate) use runs::create_run_with;
@@ -328,14 +327,14 @@ pub(crate) struct DbLock {
 }
 
 pub(crate) async fn lock_db(db_path: &str) -> Result<DbLock, BarcaError> {
-    lock_db_with_until(db_path, crate::helper_proc::Until::done()).await
+    lock_db_with_until(db_path, crate::process::Until::done()).await
 }
 
 /// Cancellation applies only to lock admission. The caller must finish any admitted
 /// atomic database mutation before releasing this lock.
 pub(crate) async fn lock_db_with_until(
     db_path: &str,
-    until: crate::helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<DbLock, BarcaError> {
     let guard = until.admit(db_guard()).await?;
     let lock = until
@@ -622,12 +621,12 @@ pub(crate) fn empty_file(path: &str) -> bool {
 /// for the duration of their work on the returned connection; the returned
 /// handle holds the cross-process lock until it is dropped.
 pub(crate) async fn open_conn(db_path: &str) -> Result<(DbHandle, libsql::Connection), BarcaError> {
-    open_conn_with_until(db_path, crate::helper_proc::Until::done()).await
+    open_conn_with_until(db_path, crate::process::Until::done()).await
 }
 
 pub(crate) async fn open_conn_with_until(
     db_path: &str,
-    until: crate::helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<(DbHandle, libsql::Connection), BarcaError> {
     if is_read_view(db_path) {
         until.check()?;
@@ -955,7 +954,7 @@ mod fold_log_tests {
             })
         };
         let copy = dir.path().join("backup.db");
-        let digest = copy_for_backup(&path, &copy, None, crate::helper_proc::Until::done())
+        let digest = copy_for_backup(&path, &copy, None, crate::process::Until::done())
             .await
             .unwrap()
             .unwrap();

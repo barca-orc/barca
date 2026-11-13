@@ -445,7 +445,7 @@ fn try_extract_function(
             function: func.name.to_string(),
             line: source[..offset].matches('\n').count() + 1,
             message,
-            fix: crate::batch::FIX.to_string(),
+            fix: crate::batch::spec::FIX.to_string(),
         },
     )?;
     let schedule_batch =
@@ -1273,7 +1273,7 @@ fn extract_batch(
     };
     let mut dims: Vec<String> = partitions.keys().cloned().collect();
     dims.sort();
-    let spec = crate::batch::extract(&kw.value, source, barca, &dims)?;
+    let spec = crate::batch::spec::extract(&kw.value, source, barca, &dims)?;
     if spec.is_none() {
         return Ok(None);
     }
@@ -1297,7 +1297,10 @@ fn extract_batch(
         if !partitions.contains_key(name) {
             continue;
         }
-        if let Some(scalar) = arg.annotation().and_then(crate::batch::scalar_annotation) {
+        if let Some(scalar) = arg
+            .annotation()
+            .and_then(crate::batch::spec::scalar_annotation)
+        {
             return Err((
                 arg.range().start().to_usize(),
                 format!(
@@ -1346,7 +1349,7 @@ fn extract_schedule_batch(
         },
         _ => String::new(),
     };
-    crate::batch::BatchOverride::parse(std::slice::from_ref(&value))
+    crate::batch::spec::BatchOverride::parse(std::slice::from_ref(&value))
         .map_err(|e| (at, format!("Schedule(batch=): {e}")))?;
     Ok(Some(value))
 }

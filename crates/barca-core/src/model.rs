@@ -571,11 +571,22 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+/// A node kind as reports name it (`asset`, `task`, `sensor`), `unknown` for no node.
+pub(crate) fn kind_str(kind: Option<NodeKind>) -> String {
+    match kind {
+        Some(NodeKind::Asset) => "asset",
+        Some(NodeKind::Task) => "task",
+        Some(NodeKind::Sensor) => "sensor",
+        None => "unknown",
+    }
+    .to_string()
+}
+
 impl ExtractedNode {
     /// The environment variables the step reads without declaring them in `env=[...]`, sorted.
     pub fn undeclared_env(&self) -> Vec<String> {
         let reads = self.env_reads.iter().cloned().collect();
-        crate::env_reads::undeclared(&reads, &self.env)
+        crate::envdeps::undeclared(&reads, &self.env)
     }
 
     /// The continuity key — stable identity for this node.

@@ -19,10 +19,8 @@
 //! (#293). `tests::every_child_process_is_started_through_this_module` fails on a `.spawn()`,
 //! `.output()` or `.status()` anywhere else in `crates/`.
 
-use crate::BarcaError;
 use std::time::Duration;
 use tokio::process::{Child, Command};
-use tokio_util::sync::CancellationToken;
 
 /// Build a Python module command with the storage options shared by workers and helpers.
 /// Process lifetime and stdio stay with the caller because helpers use different protocols.
@@ -51,9 +49,6 @@ pub(crate) fn python_module(
     python_module_std(python, module, storage_options).into()
 }
 
-/// Held while a child process is being started.
-static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Start a child process. Only one is started at a time, across the whole program.
 ///
 /// Starting a child with a pipe (its stdout, its lifeline) creates the pipe first and marks
@@ -66,28 +61,13 @@ static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// an artifact store hung for ever in its first pull. Started one at a time, no child can
 /// inherit what was made for another.
 pub fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
-    let _one_at_a_time = SPAWNING
+    let _one_at_a_time = crate::spawn_lock::SPAWNING
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cmd.spawn()
 }
 
-/// [`spawn`] for a `std::process::Command`.
-pub fn spawn_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
-    let _one_at_a_time = SPAWNING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cmd.spawn()
-}
-
-/// Run `cmd` to completion and collect its output, started through [`spawn_std`]: what
-/// `Command::output` does, one at a time.
-pub fn output_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    spawn_std(cmd)?.wait_with_output()
-}
+pub use crate::spawn_lock::{output_std, spawn_std};
 
 /// How long a helper gets to clean up after SIGTERM before it is killed.
 pub(crate) const STOP_GRACE: Duration = Duration::from_secs(2);
@@ -236,71 +216,8 @@ pub(crate) async fn run_to_output(
     Err(why)
 }
 
-// ─── Deadlines and cancellation ──────────────────────────────────────────────
-
-/// When a helper or a lock wait gives up: `cancel` fires, or `deadline` passes. Either way the
-/// helper is stopped and the result is [`BarcaError::Cancelled`].
-#[derive(Clone, Copy, Default)]
-pub struct Until<'a> {
-    pub cancel: Option<&'a CancellationToken>,
-    pub deadline: Option<std::time::Instant>,
-}
-
-impl<'a> Until<'a> {
-    pub(crate) fn check(self) -> Result<(), BarcaError> {
-        if self.cancel.is_some_and(CancellationToken::is_cancelled)
-            || self.remaining().is_some_and(|left| left.is_zero())
-        {
-            Err(BarcaError::Cancelled)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Only wrap cancellable admission, never an admitted database mutation.
-    pub(crate) async fn admit<T>(
-        self,
-        work: impl std::future::Future<Output = T>,
-    ) -> Result<T, BarcaError> {
-        self.check()?;
-        let cancelled = async {
-            match self.cancel {
-                Some(cancel) => cancel.cancelled().await,
-                None => std::future::pending().await,
-            }
-        };
-        let expired = async {
-            match self.remaining() {
-                Some(left) => tokio::time::sleep(left).await,
-                None => std::future::pending().await,
-            }
-        };
-        tokio::select! {
-            biased;
-            _ = cancelled => Err(BarcaError::Cancelled),
-            _ = expired => Err(BarcaError::Cancelled),
-            result = work => Ok(result),
-        }
-    }
-
-    /// Never: the transfer runs to its end.
-    pub fn done() -> Self {
-        Self::default()
-    }
-
-    pub fn cancelled(cancel: &'a CancellationToken) -> Self {
-        Self {
-            cancel: Some(cancel),
-            deadline: None,
-        }
-    }
-
-    /// The time left, when there is a deadline (zero once it has passed).
-    pub(crate) fn remaining(&self) -> Option<std::time::Duration> {
-        self.deadline
-            .map(|d| d.saturating_duration_since(std::time::Instant::now()))
-    }
-}
+/// Kept at its old path for callers outside the crate.
+pub use crate::process::Until;
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
 /// prints), else its last non-empty line. Library warnings printed before it (google-auth's
@@ -670,7 +587,8 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            let this_module = path.ends_with("barca-core/src/helper_proc.rs");
+            let this_module = path.ends_with("barca-core/src/helper_proc.rs")
+                || path.ends_with("barca-core/src/spawn_lock.rs");
             // `process::Command` as well as `Command::new`: a file that imports the type under
             // another name, or is handed a `Command` built elsewhere, still names the type.
             let has_command = text.contains(&builds_a_command) || text.contains(&names_the_type);
@@ -801,10 +719,10 @@ error: RefreshError: Reauthentication is needed.\n";
         );
     }
 
-    use super::*;
     use super::{OutputFailed as HelperFailed, run_to_output as run_helper};
     use std::path::Path;
     use tokio::process::Command;
+    use tokio_util::sync::CancellationToken;
 
     /// A helper that stalls is stopped at its limit; one that finishes in time is not
     /// disturbed.
@@ -828,11 +746,11 @@ error: RefreshError: Reauthentication is needed.\n";
             .parse()
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while crate::db::pid_alive(pid) && std::time::Instant::now() < deadline {
+        while crate::process::pid_alive(pid) && std::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         assert!(
-            !crate::db::pid_alive(pid),
+            !crate::process::pid_alive(pid),
             "the stalled helper is still running"
         );
 
@@ -891,7 +809,7 @@ error: RefreshError: Reauthentication is needed.\n";
             assert!(matches!(failed, Err(HelperFailed::Cancelled)), "{name}");
             let pid = canceller.await.unwrap();
             assert!(
-                !crate::db::pid_alive(pid),
+                !crate::process::pid_alive(pid),
                 "{name}: alive after the call returned"
             );
         }
@@ -921,7 +839,7 @@ error: RefreshError: Reauthentication is needed.\n";
             still.is_err(),
             "the helper ended although its lifeline is open"
         );
-        assert!(crate::db::pid_alive(pid));
+        assert!(crate::process::pid_alive(pid));
         // In a group of its own (its pid), not the one the terminal's Ctrl-C goes to.
         // SAFETY: plain syscalls.
         let (group, ours) = unsafe { (libc::getpgid(pid as i32), libc::getpgrp()) };
@@ -929,6 +847,6 @@ error: RefreshError: Reauthentication is needed.\n";
         assert_ne!(group, ours);
         cancel.cancel();
         assert!(matches!(run.await, Err(HelperFailed::Cancelled)));
-        assert!(!crate::db::pid_alive(pid));
+        assert!(!crate::process::pid_alive(pid));
     }
 }

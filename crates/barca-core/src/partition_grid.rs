@@ -515,7 +515,7 @@ pub async fn partition_key_detail(
         }
     }
     let reader = if db_exists {
-        crate::db::CacheReader::for_config(cfg).await.ok()
+        crate::cache::CacheReader::for_config(cfg).await.ok()
     } else {
         None
     };

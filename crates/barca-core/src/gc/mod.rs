@@ -779,7 +779,7 @@ fn staging_leftovers(project: &Project) -> Vec<plan::Leftover> {
         .filter(|e| e.path().is_dir())
         .filter_map(|e| {
             let pid: i64 = e.file_name().to_str()?.parse().ok()?;
-            (pid != i64::from(std::process::id()) && !crate::db::pid_alive(pid)).then(|| {
+            (pid != i64::from(std::process::id()) && !crate::process::pid_alive(pid)).then(|| {
                 let (bytes, modified) = du(&e.path());
                 plan::Leftover {
                     kind: LeftoverKind::Staging,

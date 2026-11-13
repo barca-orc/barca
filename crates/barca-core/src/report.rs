@@ -798,15 +798,7 @@ pub(crate) fn env_suffix(dag: &Dag, node_id: &str) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) fn kind_str(kind: Option<crate::NodeKind>) -> String {
-    match kind {
-        Some(crate::NodeKind::Asset) => "asset",
-        Some(crate::NodeKind::Task) => "task",
-        Some(crate::NodeKind::Sensor) => "sensor",
-        None => "unknown",
-    }
-    .to_string()
-}
+pub(crate) use crate::model::kind_str;
 
 /// Build the report line for one decided step. `dry` selects the vocabulary: a dry run says what
 /// will happen (`action`), a real run says what happened (`status`).

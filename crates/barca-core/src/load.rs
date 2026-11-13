@@ -520,8 +520,12 @@ fn resolve_dynamic_partitions(
                 source_text,
                 strict,
             }) => {
-                match crate::batch::evaluate_groups(python, &node.source_file, &source_text, &dims)
-                {
+                match crate::batch::spec::evaluate_groups(
+                    python,
+                    &node.source_file,
+                    &source_text,
+                    &dims,
+                ) {
                     Ok(groups) => {
                         node.batch = Some(crate::model::BatchSpec::Groups { groups, strict });
                     }
@@ -529,9 +533,11 @@ fn resolve_dynamic_partitions(
                 }
             }
             Some(crate::model::BatchSpec::By { source_text, .. }) => {
-                if let Err(error) =
-                    crate::batch::check_label_function(python, &node.source_file, &source_text)
-                {
+                if let Err(error) = crate::batch::spec::check_label_function(
+                    python,
+                    &node.source_file,
+                    &source_text,
+                ) {
                     failures.push((node.continuity_key(), error));
                 }
             }
@@ -572,7 +578,7 @@ fn evaluate_keys(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let output =
-        crate::helper_proc::spawn_std(&mut eval).and_then(|child| child.wait_with_output())?;
+        crate::spawn_lock::spawn_std(&mut eval).and_then(|child| child.wait_with_output())?;
     if !output.status.success() {
         let (exception, frames) = user_traceback(&String::from_utf8_lossy(&output.stderr));
         return Ok(Err(KeysError::Raised { exception, frames }));
