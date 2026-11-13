@@ -83,7 +83,7 @@ impl WorkerPool {
             // How many workers the run started, against the failed steps that kept theirs (a
             // failing step costs no worker start), and how many steps were sent to workers,
             // re-sends included (#523).
-            crate::errln!(
+            barca_model::errln!(
                 "[trace]  {:>8.1}ms  workers started {}, failed steps that kept their worker {}, steps dispatched {}",
                 self.trace_start.elapsed().as_secs_f64() * 1000.0,
                 self.next_worker_id,
@@ -251,7 +251,7 @@ impl WorkerPool {
         }
         let wanted = batches.saturating_sub(self.pending.len()).min(room);
         if self.trace_on && wanted > 0 {
-            crate::errln!(
+            barca_model::errln!(
                 "[trace]  {:>8.1}ms  starting {wanted} worker(s) ({} already starting)",
                 self.trace_start.elapsed().as_secs_f64() * 1000.0,
                 self.pending.len()
@@ -262,7 +262,7 @@ impl WorkerPool {
             self.next_worker_id += 1;
             let cmd = worker_command(&self.config, &self.socket_path, wid);
             if let Err(e) = self.launch(cmd, wid) {
-                crate::errln!("[barca] failed to spawn worker: {e}");
+                barca_model::errln!("[barca] failed to spawn worker: {e}");
                 return;
             }
         }
@@ -273,7 +273,7 @@ impl WorkerPool {
         let started = std::time::Instant::now();
         let child = crate::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;
         if self.trace_on {
-            crate::errln!(
+            barca_model::errln!(
                 "[trace]  worker {worker_id} process spawned in {:.1}ms",
                 started.elapsed().as_secs_f64() * 1000.0
             );
@@ -303,7 +303,7 @@ impl WorkerPool {
             });
         let Some(wid) = wid else {
             if self.trace_on {
-                crate::errln!(
+                barca_model::errln!(
                     "[trace]  connection from an unknown process (worker id {worker_id:?}, pid {pid:?}) closed"
                 );
             }
@@ -313,13 +313,13 @@ impl WorkerPool {
         let stream = match stream {
             Ok(stream) => stream,
             Err(e) => {
-                crate::errln!("[barca] failed to spawn worker: worker {wid} {e}");
+                barca_model::errln!("[barca] failed to spawn worker: worker {wid} {e}");
                 self.reap(pending.child);
                 return false;
             }
         };
         if self.trace_on {
-            crate::errln!(
+            barca_model::errln!(
                 "[trace]  worker {wid} connected (accept) in {:.1}ms",
                 pending.started.elapsed().as_secs_f64() * 1000.0
             );
@@ -368,7 +368,7 @@ impl WorkerPool {
         failed
             .into_iter()
             .map(|(wid, why)| {
-                crate::errln!("[barca] failed to spawn worker: {why}");
+                barca_model::errln!("[barca] failed to spawn worker: {why}");
                 if let Some(p) = self.pending.remove(&wid) {
                     self.reap(p.child);
                 }
@@ -403,9 +403,9 @@ pub(super) fn worker_command(config: &IoConfig, socket_path: &Path, worker_id: u
         // only barca's result, so `barca run ... | jq` works when steps print.
         // Both streams are one destination, as they always were; when barca's stderr is a
         // pipe it is a pipe barca owns, so a reader that leaves cannot fail the step or
-        // kill a process it starts (`crate::term`, "What barca's child processes write to").
-        .stdout(crate::term::child_output())
-        .stderr(crate::term::child_output())
+        // kill a process it starts (`barca_model::term`, "What barca's child processes write to").
+        .stdout(barca_model::term::child_output())
+        .stderr(barca_model::term::child_output())
         .stdin(Stdio::null());
 
     if config.agent_mode {

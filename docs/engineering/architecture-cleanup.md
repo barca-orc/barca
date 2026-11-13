@@ -74,7 +74,7 @@ in structural refactors; change them explicitly to meet the approved operations 
 [target resolution](../../crates/barca-compile/src/targets.rs) and [planning](../../crates/barca-compile/src/planner.rs)
 prepare a dependency cone. [Cache decisions](../../crates/barca-core/src/cache.rs) and
 [incremental proofs](../../crates/barca-core/src/incremental.rs) decide which work can be reused.
-[Dispatch](../../crates/barca-core/src/dispatch.rs) expands partitions and builds provided inputs.
+[Dispatch](../../crates/barca-engine/src/dispatch.rs) expands partitions and builds provided inputs.
 
 [Execution](../../crates/barca-core/src/execution.rs) joins these pieces. Its `RunSession` owns
 a recorder, worker pool and store synchronization; `RunState` retains decision state, outputs,
@@ -83,8 +83,8 @@ recovery and finalization. This is the main concentration of responsibilities to
 The existing `selection.rs` narrows requested partitions; its name does not make it an owner
 of ordered current-result publication.
 
-[Coordinator](../../crates/barca-core/src/coordinator.rs) already separates scheduling state
-from [worker I/O](../../crates/barca-core/src/io_loop.rs). Keep that separation. The worker pool
+[Coordinator](../../crates/barca-engine/src/coordinator.rs) already separates scheduling state
+from [worker I/O](../../crates/barca-engine/src/io_loop.rs). Keep that separation. The worker pool
 is reused across phases of one run, while [capacity](../../crates/barca-core/src/serve/capacity.rs)
 can be shared across server runs. Sharing capacity does not deduplicate matching work.
 The coordinator's per-item retries are also distinct from a new user-requested invocation attempt.
@@ -100,7 +100,7 @@ optimizations are not a bound on cold/full-domain execution.
 
 [Freshness state](../../crates/barca-core/src/freshness.rs), incremental proof saving and
 [database operations](../../crates/barca-db/src/db/mod.rs) participate in current-state decisions.
-[Observation](../../crates/barca-core/src/observation.rs) and
+[Observation](../../crates/barca-engine/src/observation.rs) and
 [source observations](../../crates/barca-model/src/source_observation.rs) provide evidence;
 their hashes do not supply a monotonic reconciliation order. Result history, current
 membership/selection and freshness evidence need explicit responsibilities before multiple

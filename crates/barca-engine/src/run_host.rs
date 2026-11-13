@@ -4,8 +4,8 @@
 //! A `barca get` or `barca run` on its own is hosted by [`LocalHost`], which shares nothing:
 //! it has no shared capacity, so the worker pool never asks for one, and it shares no steps,
 //! so every step is the run's own. Under `barca serve` every run is hosted by
-//! [`crate::serve::ServeHost`], which wraps the server's [`crate::serve::capacity`] (#628) and
-//! [`crate::serve::claims`] (#654). The pool asks [`RunHost::shared_capacity`] and
+//! `barca_core::serve::ServeHost`, which wraps the server's `barca_core::serve::capacity` (#628) and
+//! `barca_core::serve::claims` (#654). The pool asks [`RunHost::shared_capacity`] and
 //! [`RunHost::shares_steps`] once, when it starts, and keeps no per-run state for what the
 //! host does not share, so a local run pays nothing for either.
 
@@ -13,7 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 /// What identifies shared work: the step's display id (with its partition key) and its run hash.
-pub(crate) type StepKey = (String, String);
+pub type StepKey = (String, String);
 
 /// A wait for a step another run is computing: its artifact when that run finished it, `None`
 /// when its claim ended without one.
@@ -36,8 +36,8 @@ pub struct SharedBudget {
 
 /// What the local loop calls on the host of a run. The capacity operations are only called
 /// when [`Self::shared_capacity`] is `Some`, the step operations only when
-/// [`Self::shares_steps`]; their arguments are as [`crate::serve::capacity::SharedCapacity`]
-/// and [`crate::serve::claims::SharedSteps`] take them.
+/// [`Self::shares_steps`]; their arguments are as `barca_core::serve::capacity::SharedCapacity`
+/// and `barca_core::serve::claims::SharedSteps` take them.
 pub trait RunHost: Send + Sync + std::fmt::Debug {
     /// Whether the run belongs to a server, which owns the final shutdown backup: the run's
     /// own end takes a routine backup instead.
@@ -78,7 +78,7 @@ pub trait RunHost: Send + Sync + std::fmt::Debug {
 /// A run on its own: no shared capacity (every step is admitted), no shared steps (every
 /// step is the run's own), and the run owns its final backup.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct LocalHost;
+pub struct LocalHost;
 
 impl LocalHost {
     /// The host of a run on its own.

@@ -5,7 +5,7 @@ use super::*;
 impl WorkerPool {
     /// Library warnings the workers printed once and then suppressed, with how many times
     /// each was suppressed, most repeated first. Drains the tally.
-    pub(crate) fn take_repeated_warnings(&mut self) -> Vec<(String, u64)> {
+    pub fn take_repeated_warnings(&mut self) -> Vec<(String, u64)> {
         let mut out = std::mem::take(&mut self.repeated_warnings);
         out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         out
@@ -13,7 +13,7 @@ impl WorkerPool {
 
     /// Report steps that stay in flight longer than the progress interval, so a long
     /// step does not look like a hang.
-    pub(crate) fn on_running(&mut self, hook: RunningHook) {
+    pub fn on_running(&mut self, hook: RunningHook) {
         self.running_hook = Some(hook);
     }
 
@@ -58,7 +58,7 @@ impl WorkerPool {
     /// Cancelling `cancel` returns `Err("run cancelled")` promptly; workers
     /// stay alive until [`WorkerPool::shutdown`], which the caller runs on
     /// every exit path.
-    pub(crate) async fn run_phase(
+    pub async fn run_phase(
         &mut self,
         coord: &mut Coordinator,
         cost: &mut CostModel,
@@ -155,7 +155,7 @@ impl WorkerPool {
                         ref artifact,
                     } => {
                         if self.trace_on {
-                            crate::errln!(
+                            barca_model::errln!(
                                 "[trace]  {:>8.1}ms  StepCompleted <- worker {worker_id}: {node_id} (self-reported elapsed={:.1}ms cpu={:.1}ms)",
                                 self.trace_start.elapsed().as_secs_f64() * 1000.0,
                                 artifact.elapsed_seconds.unwrap_or(0.0) * 1000.0,
@@ -163,7 +163,7 @@ impl WorkerPool {
                             );
                         }
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
-                            crate::errln!(
+                            barca_model::errln!(
                                 "[barca] StepCompleted for '{node_id}' from worker {worker_id} \
                                  with no matching lease — ignoring"
                             );
@@ -216,7 +216,7 @@ impl WorkerPool {
                         phase,
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
-                            crate::errln!(
+                            barca_model::errln!(
                                 "[barca] StepError for '{node_id}' from worker {worker_id} \
                                  with no matching lease — ignoring"
                             );
@@ -238,7 +238,7 @@ impl WorkerPool {
                                 ev(RunEvent::log(
                                     node_id.clone(),
                                     line,
-                                    crate::LogStream::Stderr,
+                                    barca_model::LogStream::Stderr,
                                 ));
                             }
                             ev(RunEvent::StepFinished {
@@ -289,7 +289,7 @@ impl WorkerPool {
                             .get(&worker_id)
                             .map_or(Duration::ZERO, |h| h.front_since.elapsed());
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
-                            crate::errln!(
+                            barca_model::errln!(
                                 "[barca] Blocked for '{node_id}' from worker {worker_id} \
                                  with no matching lease — ignoring"
                             );
@@ -310,13 +310,13 @@ impl WorkerPool {
                         artifact_results,
                     } => {
                         let Some(handle) = self.workers.get(&worker_id) else {
-                            crate::errln!(
+                            barca_model::errln!(
                                 "[barca] Submit from unknown worker {worker_id}, ignoring"
                             );
                             continue;
                         };
                         let Some(&item_id) = handle.leases.front() else {
-                            crate::errln!(
+                            barca_model::errln!(
                                 "[barca] Submit from worker {worker_id} with no lease, ignoring"
                             );
                             continue;
@@ -363,7 +363,10 @@ impl WorkerPool {
                         let result_dir = self.branch_root.join(self.next_branch_group.to_string());
                         self.next_branch_group += 1;
                         if let Err(e) = std::fs::create_dir_all(&result_dir) {
-                            crate::errln!("[barca] could not create {}: {e}", result_dir.display());
+                            barca_model::errln!(
+                                "[barca] could not create {}: {e}",
+                                result_dir.display()
+                            );
                         }
                         coord.set_group_result_dir(group_id, result_dir.clone());
                         self.branch_dirs
@@ -421,8 +424,8 @@ impl WorkerPool {
                                 line,
                                 stream,
                                 ts: Some(t.map_or_else(
-                                    crate::events::log_timestamp,
-                                    crate::events::epoch_timestamp,
+                                    barca_model::events::log_timestamp,
+                                    barca_model::events::epoch_timestamp,
                                 )),
                             });
                         }

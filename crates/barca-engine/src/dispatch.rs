@@ -2,12 +2,12 @@
 //!
 //! Execution (worker spawning, protocol parsing) lives in `io_loop`.
 
-use crate::planner::{Phase, StreamStep, WorkerStream, expand_partition_combos};
+use barca_compile::planner::{Phase, StreamStep, WorkerStream, expand_partition_combos};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-pub use crate::step_result::{ErrorPhase, OutputRef};
-pub(crate) use crate::step_result::{StepError, StepFailure};
+pub use barca_model::step_result::{ErrorPhase, OutputRef};
+pub use barca_model::step_result::{StepError, StepFailure};
 
 /// The materialized output a `partitions_from` source name refers to.
 fn find_partition_source<'a>(
@@ -22,7 +22,7 @@ fn find_partition_source<'a>(
 
 /// The partition-source outputs [`expand_pending_partitions`] will read from
 /// disk for this phase (so callers can make sure they are local first).
-pub(crate) fn partition_sources<'a>(
+pub fn partition_sources<'a>(
     phase: &Phase,
     all_outputs: &'a HashMap<String, OutputRef>,
 ) -> Vec<&'a OutputRef> {
@@ -37,9 +37,9 @@ pub(crate) fn partition_sources<'a>(
 
 /// What [`expand_pending_partitions`] made of a phase.
 #[derive(Debug, Default)]
-pub(crate) struct Expansion {
+pub struct Expansion {
     /// Complete membership counts before an execution-time key filter.
-    pub(crate) key_counts: HashMap<String, usize>,
+    pub key_counts: HashMap<String, usize>,
     /// The phase with every step that had pending partitions expanded into its keys; `None`
     /// when no step had any.
     pub phase: Option<Phase>,
@@ -50,22 +50,24 @@ pub(crate) struct Expansion {
 
 /// The node id of the `partitions_from` source `source_name` of `node` (a `PartitionSource`
 /// predecessor with that name), else the first recorded output named so.
-fn source_id_of(dag: &crate::dag::Dag, node: &str, source_name: &str) -> Option<String> {
+fn source_id_of(dag: &barca_compile::dag::Dag, node: &str, source_name: &str) -> Option<String> {
     dag.partition_sources(node)
         .into_iter()
-        .find(|id| crate::targets::short_name(id) == source_name)
+        .find(|id| barca_compile::targets::short_name(id) == source_name)
         .map(str::to_string)
 }
 
-#[cfg(test)]
 /// Expand steps with pending_partitions using materialized source outputs.
 ///
 /// A source that returned a list gives its values as keys; one that returned a dict gives its
 /// keys, and each key's value is passed to the steps that name the source
-/// ([`crate::keyed`]). A step whose source cannot be read is left out and listed in
+/// ([`barca_model::keyed`]). A step whose source cannot be read is left out and listed in
 /// [`Expansion::failures`].
-pub(crate) fn expand_pending_partitions(
-    dag: &crate::dag::Dag,
+///
+/// Tests only (here and in `barca-core`), so compiled always.
+#[doc(hidden)]
+pub fn expand_pending_partitions(
+    dag: &barca_compile::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
@@ -81,26 +83,26 @@ pub(crate) fn expand_pending_partitions(
 }
 
 /// Explicit selection can project before allocating hashes for the entire source.
-pub(crate) fn selected_source(
+pub fn selected_source(
     outputs: &HashMap<String, OutputRef>,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&barca_compile::selection::PartitionSelection>,
     dim: &str,
     source: &str,
-) -> Option<(usize, crate::keyed::SourceKeys)> {
+) -> Option<(usize, barca_model::keyed::SourceKeys)> {
     let selected = selection?.dimensions.get(dim)?.iter().cloned().collect();
     let output = outputs.get(source)?;
-    crate::source_observation::Source::project_file(&output.path, &selected).ok()
+    barca_model::source_observation::Source::project_file(&output.path, &selected).ok()
 }
 
-pub(crate) fn expand_pending_partitions_filtered(
-    dag: &crate::dag::Dag,
+pub fn expand_pending_partitions_filtered(
+    dag: &barca_compile::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
-    project: impl Fn(&str, &str, &str) -> Option<(usize, crate::keyed::SourceKeys)>,
+    project: impl Fn(&str, &str, &str) -> Option<(usize, barca_model::keyed::SourceKeys)>,
     filter: impl Fn(&str, &mut HashMap<String, Vec<String>>),
 ) -> Expansion {
-    use crate::keyed::{KeyedSource, SourceKeys};
+    use barca_model::keyed::{KeyedSource, SourceKeys};
     use std::sync::Arc;
 
     let has_pending = phase
@@ -194,7 +196,7 @@ pub(crate) fn expand_pending_partitions_filtered(
                             oref.path
                         )
                     })?;
-                    match crate::keyed::read_source(&text) {
+                    match barca_model::keyed::read_source(&text) {
                         Ok(SourceKeys::List(keys)) => Ok((oref.path.clone(), keys.len(), Arc::new(keys), None)),
                         Ok(SourceKeys::Keyed(keys, hashes)) => {
                             Ok((oref.path.clone(), keys.len(), Arc::new(keys), Some(Arc::new(hashes))))
@@ -246,10 +248,12 @@ pub(crate) fn expand_pending_partitions_filtered(
             key_counts.insert(base.clone(), original_count);
             filter(&base, &mut dim_values);
             let combos = expand_partition_combos(&dim_values);
-            let pks: Vec<crate::PartitionKey> =
-                combos.into_iter().map(crate::PartitionKey::from).collect();
+            let pks: Vec<barca_model::PartitionKey> = combos
+                .into_iter()
+                .map(barca_model::PartitionKey::from)
+                .collect();
             let no_keys = pks.is_empty();
-            let mut step_keyed = crate::keyed::StepKeyed {
+            let mut step_keyed = barca_model::keyed::StepKeyed {
                 sources: (!keyed.is_empty()).then(|| Arc::new(keyed)),
                 is_source: step.keyed.is_source,
                 no_keys,
@@ -262,7 +266,7 @@ pub(crate) fn expand_pending_partitions_filtered(
                 step_keyed.remember_order(&pks);
             }
             all_expanded_steps.push(StreamStep {
-                step_id: crate::StepId::unpartitioned(step.step_id.base.clone()),
+                step_id: barca_model::StepId::unpartitioned(step.step_id.base.clone()),
                 kind: step.kind,
                 function_name: step.function_name.clone(),
                 source_file: step.source_file.clone(),
@@ -298,7 +302,8 @@ pub(crate) fn expand_pending_partitions_filtered(
             // The keys move into their chunks: no second copy of 200k keys.
             let mut keys = std::mem::take(&mut step.partition_keys).into_iter();
             loop {
-                let chunk: Vec<crate::PartitionKey> = keys.by_ref().take(chunk_size).collect();
+                let chunk: Vec<barca_model::PartitionKey> =
+                    keys.by_ref().take(chunk_size).collect();
                 if chunk.is_empty() {
                     break;
                 }
@@ -374,7 +379,7 @@ pub(crate) fn expand_pending_partitions_filtered(
 /// A provided input — either a single artifact or a collected list of partition artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum ProvidedInput {
+pub enum ProvidedInput {
     Single(OutputRef),
     Collected(Vec<OutputRef>),
 }
@@ -384,7 +389,7 @@ pub(crate) enum ProvidedInput {
 /// Only data edges (`Direct`/`Collect`, surfaced via `step.inputs`) produce
 /// provided inputs. `After` edges carry no data — they never appear in
 /// `step.inputs`, so an after-ordered step receives no artifact from them.
-pub(crate) fn build_provided_inputs(
+pub fn build_provided_inputs(
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
 ) -> HashMap<String, ProvidedInput> {
@@ -476,7 +481,7 @@ pub(crate) fn build_provided_inputs(
 /// by its base id (`f:up`), never by one partition (`f:up[k=a]`), whether it reads one
 /// partition per key or all of them through `collect()`. So readers of the same upstream
 /// always name it the same way, and comparing ids is enough.
-pub(crate) fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
+pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
     let mut lazy = HashSet::new();
     let mut eager = HashSet::new();
     for step in phase.streams.iter().flat_map(|s| &s.steps) {
@@ -495,14 +500,14 @@ pub(crate) fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ValueType;
-    use crate::planner::PhaseReason;
-    use crate::{NodeKind, PartitionKey, StepId};
+    use barca_compile::planner::PhaseReason;
+    use barca_model::model::ValueType;
+    use barca_model::{NodeKind, PartitionKey, StepId};
     use std::sync::Arc;
 
     /// A DAG without nodes: sources are found by name among the outputs.
-    fn no_dag() -> crate::dag::Dag {
-        crate::dag::Dag::build(&[]).unwrap()
+    fn no_dag() -> barca_compile::dag::Dag {
+        barca_compile::dag::Dag::build(&[]).unwrap()
     }
 
     fn test_output_ref(path: &str, format: &str) -> OutputRef {
@@ -780,9 +785,9 @@ mod tests {
         let artifact_path = dir.path().join("regions.json");
         std::fs::write(&artifact_path, r#"["us","eu"]"#).unwrap();
 
-        let sink = crate::model::SinkDecl {
+        let sink = barca_model::model::SinkDecl {
             path: "exports/out.parquet".to_string(),
-            serializer: Some(crate::model::SerializerKind::Parquet),
+            serializer: Some(barca_model::model::SerializerKind::Parquet),
             ..Default::default()
         };
         let phase = Phase {

@@ -13,18 +13,18 @@
 //! [`BatchOverride`]) and the Python evaluation of `batches(<expression>)` and
 //! `batches_by(<function>)` are [`spec`]'s: loading a pipeline needs them.
 
-use crate::model::BatchSpec;
+use barca_model::model::BatchSpec;
 
 pub(crate) use barca_compile::batch_spec as spec;
 
-pub(crate) use spec::evaluate_labels;
+pub use spec::evaluate_labels;
 pub use spec::{BatchOverride, OverrideValue};
 
 // ─── Grouping ────────────────────────────────────────────────────────────────
 
 /// How one node's keys are grouped in a run: its `batch=`, or the run's override of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Grouping {
+pub enum Grouping {
     One,
     Size(usize),
     All,
@@ -53,7 +53,7 @@ impl Grouping {
 
 /// The grouping of `node` in a run with `over`: `None` for a node that does not declare
 /// `batch=` (one key per call, and its function takes a single key).
-pub(crate) fn effective(node: &crate::model::DagNode, over: &BatchOverride) -> Option<Grouping> {
+pub fn effective(node: &barca_model::model::DagNode, over: &BatchOverride) -> Option<Grouping> {
     let spec = node.extracted.batch.as_ref()?;
     if let Some(v) = over.value_for(node) {
         return Some(match v {
@@ -89,7 +89,7 @@ pub(crate) fn effective(node: &crate::model::DagNode, over: &BatchOverride) -> O
 /// as indexes into `keys`. `labels` is required for [`Grouping::By`] (one per key).
 ///
 /// Linear in the keys given: the keys that run, not the keys declared.
-pub(crate) fn group_keys(
+pub fn group_keys(
     keys: &[String],
     grouping: &Grouping,
     labels: Option<&[String]>,
@@ -191,7 +191,7 @@ fn calls_for(n: usize, grouping: &Grouping) -> Option<usize> {
 }
 
 /// "3 keys in 1 call (batch=all)".
-pub(crate) fn grouping_line(plan: &crate::reports::BatchPlan) -> String {
+pub fn grouping_line(plan: &barca_model::reports::BatchPlan) -> String {
     let keys = format!("{} key{}", plan.keys, if plan.keys == 1 { "" } else { "s" });
     match plan.calls {
         Some(c) => format!(
@@ -205,12 +205,12 @@ pub(crate) fn grouping_line(plan: &crate::reports::BatchPlan) -> String {
 
 /// Add the grouping of each batched node's keys that will run to its dry-run report: `batch`,
 /// and the line at the end of `detail`.
-pub(crate) fn annotate(
-    dag: &crate::dag::Dag,
-    steps: &mut [crate::reports::StepReport],
+pub fn annotate(
+    dag: &barca_compile::dag::Dag,
+    steps: &mut [barca_model::reports::StepReport],
     over: &BatchOverride,
     python: &std::path::Path,
-) -> Result<(), crate::BarcaError> {
+) -> Result<(), barca_model::BarcaError> {
     for step in steps.iter_mut() {
         let Some(node) = dag.get_node(&step.id) else {
             continue;
@@ -235,16 +235,16 @@ pub(crate) fn annotate(
                     &parts.will_run_keys,
                 )
                 .map(Some)
-                .map_err(|e| crate::BarcaError::Usage(format!("{}: {e}", step.id)))?,
+                .map_err(|e| barca_model::BarcaError::Usage(format!("{}: {e}", step.id)))?,
                 _ => None,
             };
             calls = Some(
                 group_keys(&parts.will_run_keys, &grouping, labels.as_deref())
-                    .map_err(|e| crate::BarcaError::Usage(format!("{}: {e}", step.id)))?
+                    .map_err(|e| barca_model::BarcaError::Usage(format!("{}: {e}", step.id)))?
                     .len(),
             );
         }
-        let plan = crate::reports::BatchPlan {
+        let plan = barca_model::reports::BatchPlan {
             grouping: grouping.describe(),
             keys: n,
             calls,

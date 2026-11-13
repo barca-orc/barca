@@ -7,7 +7,7 @@ impl Coordinator {
     /// Group the items this phase will load into calls, before [`Self::load_phase`]: each call
     /// is `(its id, the display ids of its keys in key order)`. An item of a call is leased
     /// with the rest of its call, once every one of them is ready.
-    pub(crate) fn assign_calls(&mut self, calls: Vec<(String, Vec<String>)>) {
+    pub fn assign_calls(&mut self, calls: Vec<(String, Vec<String>)>) {
         for (id, members) in calls {
             let index = self.calls.len();
             self.calls.push(Call {

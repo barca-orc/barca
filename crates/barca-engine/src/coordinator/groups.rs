@@ -24,9 +24,9 @@ impl Coordinator {
             let child_id = ItemId(self.next_item_id);
             self.next_item_id += 1;
 
-            let step_id = crate::StepId {
+            let step_id = barca_model::StepId {
                 base: std::sync::Arc::from(spec.fn_ref.as_str()),
-                partition: crate::model::PartitionKey(BTreeMap::from([(
+                partition: barca_model::model::PartitionKey(BTreeMap::from([(
                     "_branch".to_string(),
                     child_id.0.to_string(),
                 )])),

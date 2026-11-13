@@ -347,6 +347,6 @@ json.dump({'steps':steps,'results':encoded}, sys.stdout)
             artifact.upload_snapshot.as_deref(),
             Some("/staging/upload-17")
         );
-        crate::errln!("10k execution: {plain_bytes} bytes plain, {compact_bytes} compact");
+        barca_model::errln!("10k execution: {plain_bytes} bytes plain, {compact_bytes} compact");
     }
 }

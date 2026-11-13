@@ -8,7 +8,7 @@ impl Coordinator {
     /// If has unsatisfied deps, add to pending.
     pub(crate) fn add_item(
         &mut self,
-        step_id: crate::StepId,
+        step_id: barca_model::StepId,
         spec: ItemSpec,
         deps: Vec<Dep>,
     ) -> ItemId {
@@ -34,7 +34,7 @@ impl Coordinator {
     pub(super) fn finalize_item(
         &mut self,
         id: ItemId,
-        step_id: crate::StepId,
+        step_id: barca_model::StepId,
         spec: ItemSpec,
         deps: Vec<Dep>,
     ) {
@@ -109,22 +109,22 @@ impl Coordinator {
     /// data dependencies, so a consumer's chunk can land in a stream
     /// processed before its producer's. With two passes, resolution order no
     /// longer depends on stream order at all.
-    pub(crate) fn load_phase(
+    pub fn load_phase(
         &mut self,
-        phase: &crate::planner::Phase,
+        phase: &barca_compile::planner::Phase,
         provided: &HashMap<String, crate::dispatch::ProvidedInput>,
     ) -> usize {
         enum Pending<'p> {
             Plain {
-                step: &'p crate::planner::StreamStep,
-                step_id: crate::StepId,
+                step: &'p barca_compile::planner::StreamStep,
+                step_id: barca_model::StepId,
                 item_id: ItemId,
                 prev: Option<usize>,
             },
             Partition {
-                step: &'p crate::planner::StreamStep,
-                pk: &'p crate::model::PartitionKey,
-                partition_step_id: crate::StepId,
+                step: &'p barca_compile::planner::StreamStep,
+                pk: &'p barca_model::model::PartitionKey,
+                partition_step_id: barca_model::StepId,
                 item_id: ItemId,
                 prev: Option<usize>,
             },
@@ -164,7 +164,7 @@ impl Coordinator {
 
                     for pk in &step.partition_keys {
                         let partition_step_id =
-                            crate::StepId::new(step.step_id.base.clone(), pk.clone());
+                            barca_model::StepId::new(step.step_id.base.clone(), pk.clone());
                         let partition_display = partition_step_id.display();
                         let item_id = self.reserve_item_id();
                         node_to_item.insert(partition_display, item_id);

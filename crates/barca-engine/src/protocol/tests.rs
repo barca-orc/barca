@@ -435,7 +435,7 @@ fn test_log_message_roundtrip() {
             assert_eq!(t, None);
             assert_eq!(node_id, "a.py:load");
             assert_eq!(line, "loading…");
-            assert_eq!(stream, crate::LogStream::Stdout);
+            assert_eq!(stream, barca_model::LogStream::Stdout);
         }
         _ => panic!("expected Log"),
     }
@@ -444,7 +444,7 @@ fn test_log_message_roundtrip() {
     let msg = WorkerMessage::Log {
         node_id: "a.py:load".to_string(),
         line: "loading…".to_string(),
-        stream: crate::LogStream::Stderr,
+        stream: barca_model::LogStream::Stderr,
         t: Some(1.5),
     };
     let json = serde_json::to_string(&msg).unwrap();

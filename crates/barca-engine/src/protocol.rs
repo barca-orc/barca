@@ -15,13 +15,13 @@ use std::io;
 use std::io::{Read, Write};
 
 /// Negotiated worker/transfer wire version, independent of package and DB versions.
-pub(crate) const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Negotiate before a helper can receive work. The caller bounds this together
 /// with connection startup and owns reaping the child on every error path.
 /// Returns the helper's hello: a worker's carries its `worker_id`, which pairs the
 /// connection with the process the coordinator started.
-pub(crate) async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<serde_json::Value>
+pub async fn accept_hello<S>(stream: &mut S, role: &str) -> io::Result<serde_json::Value>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -92,7 +92,7 @@ pub(crate) enum WorkerMessage {
         node_id: String,
         line: String,
         #[serde(default)]
-        stream: crate::LogStream,
+        stream: barca_model::LogStream,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         t: Option<f64>,
     },
@@ -185,7 +185,7 @@ pub(crate) struct ArtifactRef {
 
 /// Where one batched call's time went before its keys were written (RFC-0013).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct BatchPhases {
+pub struct BatchPhases {
     pub import_seconds: f64,
     pub load_seconds: f64,
     pub compute_seconds: f64,
@@ -254,7 +254,7 @@ pub(crate) struct BranchArtifact {
 /// Many may be in flight at once; replies are matched by `id`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum TransferRequest {
+pub enum TransferRequest {
     /// Upload a local artifact file to the artifact store.
     Put {
         id: u64,
@@ -286,7 +286,7 @@ pub(crate) enum TransferRequest {
 /// already retried transient failures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum TransferReply {
+pub enum TransferReply {
     Done {
         id: u64,
         size_bytes: u64,
@@ -378,7 +378,7 @@ pub(crate) fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
 }
 
 /// Async [`write_message`]: write one length-prefixed JSON frame.
-pub(crate) async fn write_frame<W, T>(writer: &mut W, msg: &T) -> io::Result<()>
+pub async fn write_frame<W, T>(writer: &mut W, msg: &T) -> io::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
     T: Serialize,
@@ -391,7 +391,7 @@ where
 
 /// Async [`read_message`]: read one length-prefixed JSON frame.
 /// Returns `None` on a clean EOF at a frame boundary.
-pub(crate) async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
+pub async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
 where
     R: tokio::io::AsyncRead + Unpin,
     T: for<'de> Deserialize<'de>,
@@ -499,7 +499,7 @@ fn sweep_dead_sockets(dir: &std::path::Path) {
             .split_once('-')
             .and_then(|(pid, _)| pid.parse::<i64>().ok());
         if owner.is_some_and(|pid| {
-            pid != i64::from(std::process::id()) && !crate::process::pid_alive(pid)
+            pid != i64::from(std::process::id()) && !barca_model::process::pid_alive(pid)
         }) {
             let path = entry.path();
             if path.is_dir() {

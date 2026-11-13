@@ -53,7 +53,7 @@ const ALPHA_FALL: f64 = 0.25;
 /// An estimate may drop at most this factor per observation (fall slow).
 const FLOOR_FACTOR: f64 = 0.7;
 
-pub(crate) use crate::node_estimate::NodeEstimate;
+pub use barca_model::node_estimate::NodeEstimate;
 
 /// Measured-cost model: per-node estimates with a three-tier prior, updated
 /// on every task completion, driving the batch-pull size `K`.
@@ -61,7 +61,7 @@ pub(crate) use crate::node_estimate::NodeEstimate;
 /// Wall time (not CPU time) drives `K`: batch sizing exists to keep workers
 /// *occupied*, and a worker blocked on I/O is exactly as occupied as one
 /// burning CPU. CPU time and RSS ride along as history for later policies.
-pub(crate) struct CostModel {
+pub struct CostModel {
     /// Exact node id (including partition suffix) → estimate.
     per_node: HashMap<String, NodeEstimate>,
     /// Base node id → estimate over all its partitions. Lets an unseen
@@ -96,7 +96,7 @@ impl CostModel {
         let mut by_base: HashMap<String, Vec<f64>> = HashMap::new();
         let mut explicit_bases = std::collections::HashSet::new();
         for (node_id, est) in persisted {
-            let base = crate::StepId::parse(&node_id).base_id().to_string();
+            let base = barca_model::StepId::parse(&node_id).base_id().to_string();
             if node_id == base {
                 explicit_bases.insert(base.clone());
                 self.per_base.insert(base.clone(), est);
@@ -123,10 +123,7 @@ impl CostModel {
     }
 
     /// Exact history is loaded only for keys that are about to execute.
-    pub(crate) fn seed_exact(
-        &mut self,
-        persisted: impl IntoIterator<Item = (String, NodeEstimate)>,
-    ) {
+    pub fn seed_exact(&mut self, persisted: impl IntoIterator<Item = (String, NodeEstimate)>) {
         self.per_node.extend(persisted);
     }
 
@@ -136,7 +133,7 @@ impl CostModel {
         if let Some(e) = self.per_node.get(node_id) {
             return e.estimate_seconds;
         }
-        let base = crate::StepId::parse(node_id).base_id().to_string();
+        let base = barca_model::StepId::parse(node_id).base_id().to_string();
         if let Some(e) = self.per_base.get(&base) {
             return e.estimate_seconds;
         }
@@ -148,7 +145,7 @@ impl CostModel {
     /// this task — the first wave of a cold run is the probe.
     pub fn observe(&mut self, node_id: &str, wall_seconds: f64, cpu_seconds: f64, rss_bytes: u64) {
         let wall = wall_seconds.max(0.0);
-        let base = crate::StepId::parse(node_id).base_id().to_string();
+        let base = barca_model::StepId::parse(node_id).base_id().to_string();
         self.observed.insert(node_id.to_string());
         self.observed_bases.insert(base.clone());
         Self::fold(
@@ -256,7 +253,7 @@ impl CostModel {
     }
 
     /// Keep exact histories on disk, with one aggregate prior per changed logical node.
-    pub(crate) fn persistence_snapshot(&self) -> impl Iterator<Item = (&String, &NodeEstimate)> {
+    pub fn persistence_snapshot(&self) -> impl Iterator<Item = (&String, &NodeEstimate)> {
         self.snapshot()
             .filter(|(id, _)| !self.observed_bases.contains(*id))
             .chain(self.base_snapshot())

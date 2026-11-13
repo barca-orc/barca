@@ -5,25 +5,17 @@
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
 pub mod backup;
-pub mod batch;
 pub mod cache;
 pub(crate) mod changes;
 pub mod commands;
-pub(crate) mod coordinator;
-pub(crate) mod cost;
-mod dataset_sinks;
 pub mod diagnostics;
-pub mod dispatch;
 pub mod envelope;
 pub(crate) mod execution;
 pub mod freshness;
 pub mod gc;
-pub mod helper_proc;
 pub mod history_filter;
 pub mod http;
 mod incremental;
-pub mod interrupt;
-pub(crate) mod io_loop;
 pub mod ledger;
 mod mismatch;
 pub mod outcome;
@@ -31,20 +23,16 @@ pub mod partition_grid;
 pub mod pauses;
 mod persist;
 pub mod pins;
-pub(crate) mod protocol;
 pub mod queries;
 mod recover;
 pub mod report;
-mod result_journal;
 pub mod results;
-pub(crate) mod run_host;
 pub mod schedule;
 pub mod serve;
 #[cfg(test)]
 mod source_scan;
 pub mod sql;
 pub mod status;
-pub(crate) mod step_trace;
 pub mod store_inspect;
 mod store_sync;
 pub mod telemetry;
@@ -60,7 +48,6 @@ pub use barca_model::cache_state;
 pub use barca_model::config;
 pub use barca_model::dag_error;
 pub(crate) use barca_model::envdeps;
-pub(crate) use barca_model::events;
 pub use barca_model::hash;
 pub use barca_model::jsonlog;
 pub(crate) use barca_model::keyed;
@@ -73,7 +60,6 @@ pub(crate) use barca_model::node_estimate;
 pub(crate) use barca_model::process;
 pub use barca_model::reports;
 use barca_model::source_observation;
-use barca_model::spawn_lock;
 pub use barca_model::step_result;
 pub use barca_model::step_status;
 pub use barca_model::suggest;
@@ -110,9 +96,26 @@ use barca_db::run_owner;
 use barca_db::sink_publications;
 pub(crate) use barca_db::state_validate;
 
+// The engine layer lives in `barca-engine` (#905 step 4); its modules keep their `barca_core::`
+// paths.
+pub use barca_engine::batch;
+pub(crate) use barca_engine::coordinator;
+pub(crate) use barca_engine::cost;
+use barca_engine::dataset_sinks;
+pub use barca_engine::dispatch;
+pub use barca_engine::helper_proc;
+pub use barca_engine::interrupt;
+pub(crate) use barca_engine::io_loop;
+use barca_engine::observation;
+pub(crate) use barca_engine::protocol;
+pub(crate) use barca_engine::run_host;
+pub(crate) use barca_engine::step_trace;
+
 pub use dag::Dag;
 pub use execution::sizing;
 
+#[cfg(test)]
+mod helper_launch_tests;
 #[cfg(test)]
 mod layering_tests;
 #[cfg(test)]
@@ -121,7 +124,3 @@ mod selection_tests;
 mod step_status_literals_tests;
 #[cfg(test)]
 mod write_boundary_tests;
-
-mod wire;
-
-mod observation;

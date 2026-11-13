@@ -1437,6 +1437,7 @@ fn every_barca_env_var_is_in_the_contract() {
         "barca-model",
         "barca-compile",
         "barca-db",
+        "barca-engine",
         "barca-core",
         "barca-cli",
         "barca-server",

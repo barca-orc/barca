@@ -237,6 +237,7 @@ version = "0.42.0"
 dependencies = [
  "barca-compile",
  "barca-db",
+ "barca-engine",
  "barca-model",
  "chrono",
  "chrono-tz",
@@ -277,6 +278,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "ts-rs",
+]
+
+[[package]]
+name = "barca-engine"
+version = "0.42.0"
+dependencies = [
+ "barca-compile",
+ "barca-model",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

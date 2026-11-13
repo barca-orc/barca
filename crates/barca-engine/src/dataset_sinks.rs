@@ -16,22 +16,22 @@ use std::collections::{BTreeSet, HashMap};
 
 use sha2::{Digest, Sha256};
 
-use crate::model::SinkDecl;
-use crate::planner::Phase;
+use barca_compile::planner::Phase;
+use barca_model::model::SinkDecl;
 
 /// The marker a dataset sink keeps at its prefix (`barca/_sinks.py`).
 pub(crate) const MARKER: &str = "_barca_sink.json";
 
 /// One asset's dataset sinks and every key the run knows of it, values in dimension order.
 #[derive(Debug, Default)]
-pub(crate) struct DatasetKeys {
+pub struct DatasetKeys {
     sinks: Vec<SinkDecl>,
     keys: BTreeSet<Vec<String>>,
 }
 
 /// Add the keys of `phase` (expanded, not yet filtered by the cache) for each partitioned
 /// asset with a dataset sink. `narrowed` names the assets a `--partition` selection narrowed.
-pub(crate) fn collect(
+pub fn collect(
     datasets: &mut HashMap<String, DatasetKeys>,
     phase: &Phase,
     narrowed: impl Fn(&str) -> bool,
@@ -64,11 +64,11 @@ pub(crate) fn collect(
 }
 
 /// Supply complete membership after incremental planning omitted fresh keys.
-pub(crate) fn collect_membership(
+pub fn collect_membership(
     datasets: &mut HashMap<String, DatasetKeys>,
     base: &str,
     sinks: &[SinkDecl],
-    keys: impl IntoIterator<Item = crate::PartitionKey>,
+    keys: impl IntoIterator<Item = barca_model::PartitionKey>,
 ) {
     let dataset_sinks: Vec<_> = sinks
         .iter()
@@ -175,7 +175,7 @@ pub(crate) fn request(datasets: HashMap<String, DatasetKeys>) -> Vec<serde_json:
 /// Delete the removed keys of every dataset in `datasets`. Returns the lines to show: a
 /// deletion, or a warning when a dataset could not be pruned (the run's steps succeeded, so a
 /// failed prune does not fail the run).
-pub(crate) async fn prune(
+pub async fn prune(
     datasets: HashMap<String, DatasetKeys>,
     python: &std::path::Path,
     storage_options: Option<&str>,
@@ -235,8 +235,8 @@ pub(crate) async fn prune(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PartitionKey;
-    use crate::planner::{StreamStep, WorkerStream};
+    use barca_compile::planner::{StreamStep, WorkerStream};
+    use barca_model::model::PartitionKey;
 
     fn sink(path: &str, dims: &[&str]) -> SinkDecl {
         SinkDecl {
@@ -248,8 +248,8 @@ mod tests {
 
     fn phase(base: &str, sinks: Vec<SinkDecl>, keys: &[&[(&str, &str)]]) -> Phase {
         let step = StreamStep {
-            step_id: crate::StepId::unpartitioned(base),
-            kind: crate::model::NodeKind::Asset,
+            step_id: barca_model::StepId::unpartitioned(base),
+            kind: barca_model::model::NodeKind::Asset,
             function_name: std::sync::Arc::from("f"),
             source_file: std::sync::Arc::from("p.py"),
             inputs: HashMap::new(),
@@ -276,7 +276,7 @@ mod tests {
             keyed: Default::default(),
         };
         Phase {
-            reason: crate::planner::PhaseReason::Initial,
+            reason: barca_compile::planner::PhaseReason::Initial,
             streams: vec![WorkerStream {
                 stream_id: "w0".to_string(),
                 steps: vec![step],
