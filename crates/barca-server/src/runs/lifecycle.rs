@@ -441,20 +441,16 @@ async fn persist_outcome(
     } else if recorded && db::set_run_outcome(&cfg.db_path, run_id, status, outcome.text()).await? {
         return Ok(());
     }
-    db::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    barca_core::queries::open_metadata(cfg).await?;
     let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
-    db::record_unstarted_run(
+    barca_core::serve::record_unstarted_run(
         &cfg.db_path,
-        db::NewRun {
+        barca_core::serve::UnstartedRun {
             run_id,
             command: spec.command.as_str(),
-            files: &db::encode_files(run_files(state, &spec.files)),
+            files: run_files(state, &spec.files),
             target: target.as_deref(),
-            steps_total: None,
-            job: None,
             trigger: &spec.trigger,
-            traced: false,
         },
         status,
         outcome.text(),

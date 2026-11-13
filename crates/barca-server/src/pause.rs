@@ -99,8 +99,7 @@ async fn set(
     crate::runs::refuse_if_read_only(state)?;
     let node = scheduled_node(state, id).await?;
     let cfg = &state.config.resolved;
-    db::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    barca_core::queries::open_metadata(cfg).await?;
     db::set_schedule_pause(&cfg.db_path, &node, pause, now).await?;
     {
         let mut pauses = pauses(state).await?.write().unwrap();

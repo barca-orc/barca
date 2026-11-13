@@ -79,8 +79,7 @@ pub async fn pin(
     };
     let dag = state.loaded_dag().await?;
     let cfg = &state.config.resolved;
-    barca_core::db::ensure_env_dirs(&cfg.env)?;
-    barca_core::db::init_db(&cfg.db_path).await?;
+    barca_core::queries::open_metadata(cfg).await?;
     let pinned = barca_core::pins::pin(
         &cfg.db_path,
         &dag,
@@ -131,8 +130,7 @@ pub async fn upload(
     }
     let dag = state.loaded_dag().await?;
     let cfg = &state.config.resolved;
-    barca_core::db::ensure_env_dirs(&cfg.env)?;
-    barca_core::db::init_db(&cfg.db_path).await?;
+    barca_core::queries::open_metadata(cfg).await?;
     let supplied = barca_core::pins::Supplied {
         bytes: body.to_vec(),
         file_name,

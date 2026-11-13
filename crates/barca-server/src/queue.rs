@@ -440,17 +440,14 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         } else {
             &spec.files
         };
-        let _ = db::record_unstarted_run(
+        let _ = barca_core::serve::record_unstarted_run(
             &cfg.db_path,
-            db::NewRun {
+            barca_core::serve::UnstartedRun {
                 run_id,
                 command: spec.command.as_str(),
-                files: &db::encode_files(files),
+                files,
                 target: target.as_deref(),
-                steps_total: None,
-                job: None,
                 trigger: &spec.trigger,
-                traced: false,
             },
             "error",
             outcome.text(),
