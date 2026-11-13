@@ -1,5 +1,5 @@
 //! The report values below the command layer: what a step, a target, a dry run and a run's
-//! uploads and partition selection report. Data only, like the rest of [`crate::results`],
+//! uploads and partition selection report. Data only, like the rest of `barca_core::results`,
 //! which re-exports them; they live here so the planner, the engine and the metadata DB can
 //! return them.
 
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// returns more, with no `--partition` selecting them, lists only the keys the run computed (at
 /// most this many) and counts the others: `{"_barca_partitions": {...}}` (`barca docs
 /// partitions`, "Many keys"). `--partition` returns every key it selects, however many.
-pub(crate) const LISTED_KEYS: usize = 1000;
+pub const LISTED_KEYS: usize = 1000;
 
 /// What `final_output` says of a partitioned target that returned more than [`LISTED_KEYS`]
 /// keys: how many, how many this run computed, and those keys' artifacts.
@@ -143,7 +143,7 @@ pub struct PlanWarning {
 }
 
 /// Read target objects directly through serde so their declared order survives a wire round trip.
-pub(crate) fn deserialize_targets<'de, D, T>(deserializer: D) -> Result<Vec<(String, T)>, D::Error>
+pub fn deserialize_targets<'de, D, T>(deserializer: D) -> Result<Vec<(String, T)>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
@@ -194,11 +194,11 @@ pub struct TargetOutcome {
     /// envelope (`phase`), not into the run JSON.
     #[serde(skip)]
     pub failed_phase: Option<ErrorPhase>,
-    /// A partitioned target's returned keys and their artifacts (see [`GetResult::partitions`]);
+    /// A partitioned target's returned keys and their artifacts (see `barca_core::results::GetResult::partitions`);
     /// on a failed target, the keys that succeeded.
     #[serde(skip)]
     pub partitions: Option<Vec<(String, OutputRef)>>,
-    /// See [`GetResult::key_summary`].
+    /// See `barca_core::results::GetResult::key_summary`.
     #[serde(skip)]
     pub key_summary: Option<KeySummary>,
 }
@@ -361,7 +361,7 @@ pub struct ExplainResult {
     pub uploads: Option<UploadsReport>,
     /// The most the `weight=` of the steps running at once may add up to (#436).
     pub capacity: usize,
-    /// See [`GetResult::partition_selection`].
+    /// See `barca_core::results::GetResult::partition_selection`.
     pub partition_selection: Option<PartitionSelectionReport>,
 }
 
@@ -375,7 +375,7 @@ pub struct TargetPrediction {
 
 impl ExplainResult {
     /// The target names in scope: the several given, the one given, or none (whole file).
-    pub(crate) fn target_names(&self) -> Vec<String> {
+    pub fn target_names(&self) -> Vec<String> {
         if self.targets.is_empty() {
             self.target.iter().cloned().collect()
         } else {
@@ -459,7 +459,7 @@ impl<'de> Deserialize<'de> for ExplainResult {
 
 impl ExplainSummary {
     /// Add one (merged) dry-run step line: a partitioned line counts its keys.
-    pub(crate) fn add(&mut self, r: &StepReport) {
+    pub fn add(&mut self, r: &StepReport) {
         match (r.action.as_deref(), &r.partitions) {
             (Some("unknown"), _) => self.unknown += 1,
             (_, Some(p)) => {

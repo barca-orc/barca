@@ -140,7 +140,7 @@ if command -v uv >/dev/null 2>&1; then
     (cd "$tree" && uv lock --check --quiet) ||
         die "uv.lock does not match the bumped pyproject.toml"
 fi
-expected="CHANGELOG.md Cargo.lock crates/barca-cli/Cargo.toml crates/barca-core/Cargo.toml crates/barca-server/Cargo.toml pyproject.toml python/barca/__init__.py uv.lock"
+expected="CHANGELOG.md Cargo.lock crates/barca-cli/Cargo.toml crates/barca-core/Cargo.toml crates/barca-model/Cargo.toml crates/barca-server/Cargo.toml pyproject.toml python/barca/__init__.py uv.lock"
 changed="$(git -C "$tree" diff --name-only | grep -v '^scripts/ci-test-durations\.json$' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
 [ "$changed" = "$expected" ] || die "unexpected files changed: $changed"
 durations_note=""

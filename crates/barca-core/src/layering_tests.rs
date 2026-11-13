@@ -1,6 +1,7 @@
-//! The layering guard (#905 step 1): every top-level module of `barca-core` belongs to one layer,
-//! and non-test code may only name (`crate::...`, `super::...` up to the crate root, and bare
-//! module paths in `lib.rs`) a module in a layer its own layer may use:
+//! The layering guard (#905 step 1): every top-level module of the crates in [`CRATES`] belongs to
+//! one layer, and non-test code may only name (`crate::...`, `super::...` up to the crate root,
+//! `barca_model::...` and the other crates' names, and bare module paths in `lib.rs`) a module in
+//! a layer its own layer may use:
 //!
 //! ```text
 //! model   <  compile  <  engine  <  core
@@ -11,10 +12,14 @@
 //! per-step scheduler and worker loop) uses `model` and `compile` but not `db`. `execution`, the
 //! run orchestrator that decides caching, freshness and publication, is `core`. `core` (the
 //! remainder) uses everything, and nothing uses `core`. A layer is the crate it becomes in
-//! #905 step 4 (`barca-model`, `barca-compile`, `barca-db`, `barca-engine`, `barca-core`).
+//! #905 step 4 (`barca-model`, `barca-compile`, `barca-db`, `barca-engine`, `barca-core`); a
+//! layer that is its own crate already ([`crate_of`]) must have every module there and none
+//! elsewhere, and Cargo keeps it from naming a crate above it.
 //!
 //! Editing this file:
-//! - A new module goes in [`LAYERS`]; a module missing from it fails the test.
+//! - A new module goes in [`LAYERS`]; a module missing from it fails the test. Module names are
+//!   unique across the crates: `barca-core` re-exports each lower crate's modules under the same
+//!   name, so `crate::config` and `barca_model::config` are the same module.
 //! - A module that straddles two layers can be split: a `parent::child` entry places that file
 //!   (or directory) apart from its parent, and wins over it (longest prefix).
 //! - [`EXCEPTIONS`] is today's upward edges, one line per (from, to) module pair. A #905 step
@@ -23,7 +28,7 @@
 
 use crate::source_scan::{Tok, is_cfg_test, lex_with_lines, non_test_sources, skip_cfg_test_item};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Layer {
@@ -41,6 +46,18 @@ enum Layer {
 
 use Layer::{Compile, Core, Db, Engine, Model};
 
+/// The crates the guard scans, bottom up: (directory under `crates/`, name in a path).
+const CRATES: &[(&str, &str)] = &[("barca-model", "barca_model"), ("barca-core", "barca_core")];
+
+/// The crate a layer's modules live in today. A #905 step 4 PR that gives a layer its own crate
+/// adds it here and to [`CRATES`].
+fn crate_of(layer: Layer) -> &'static str {
+    match layer {
+        Model => "barca-model",
+        Compile | Db | Engine | Core => "barca-core",
+    }
+}
+
 impl Layer {
     fn may_use(self, other: Layer) -> bool {
         match self {
@@ -53,12 +70,14 @@ impl Layer {
     }
 }
 
-/// Every top-level module (and `lib`, the crate root's own items), with its layer. Modules the
+/// Every top-level module (and `lib`, `barca-model`'s crate root and its own items; `barca_core`,
+/// the root of `barca-core`, which only declares and re-exports), with its layer. Modules the
 /// #905 Target table names are placed as it says; the others by what they use and who uses them.
 #[rustfmt::skip]
 const LAYERS: &[(&str, Layer)] = &[
     // ---- model (barca-model) ----
     ("lib", Model), // `BarcaError`, `FailedStep`, `PartialRun`, `safe_node_id`: used everywhere
+    ("barca_core", Core), // the root of `barca-core`: module declarations and re-exports
     ("model", Model),
     ("keyed", Model),
     ("step_status", Model),
@@ -167,7 +186,7 @@ const LAYERS: &[(&str, Layer)] = &[
 ];
 
 /// Crate-root names that are not modules: where each lives. A name not here and not a module
-/// must be one of `model`'s (`pub use model::*`).
+/// must be one of `model`'s (`pub use model::*`). `barca-core`'s root re-exports each of them.
 const ROOT_ITEMS: &[(&str, &str)] = &[
     ("BarcaError", "lib"),
     ("FailedStep", "lib"),
@@ -263,7 +282,8 @@ fn is_path_sep(toks: &[Tok], i: usize) -> bool {
 }
 
 /// Every crate-relative path non-test code in a file at `module` names: `crate::` (and
-/// `$crate::`) paths and use trees, and `super::` paths that climb to the crate root or past
+/// `$crate::`) paths and use trees, paths into another crate of [`CRATES`] (`barca_model::...`,
+/// relative to that crate's root), and `super::` paths that climb to the crate root or past
 /// the file's top-level module. In the crate root (`module` empty), bare paths that start with
 /// one of `root_modules` count too, except in `use` items (re-exports, see [`ROOT_ITEMS`]).
 fn references(src: &str, module: &[String], root_modules: &BTreeSet<String>) -> Vec<Ref> {
@@ -300,7 +320,11 @@ fn references(src: &str, module: &[String], root_modules: &BTreeSet<String>) -> 
         }
         let after_sep = i >= 2 && is_path_sep(&toks, i - 2);
         match &toks[i] {
-            Tok::Ident(w) if w == "crate" && is_path_sep(&toks, i + 1) && !after_sep => {
+            Tok::Ident(w)
+                if (w == "crate" || CRATES.iter().any(|(_, name)| name == w))
+                    && is_path_sep(&toks, i + 1)
+                    && !after_sep =>
+            {
                 i = parse_tree(&toks, &lines, i + 3, Vec::new(), &mut out);
                 continue;
             }
@@ -374,11 +398,21 @@ fn layer_of(key: &str) -> Layer {
 
 #[test]
 fn modules_only_use_layers_below_them() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let sources = non_test_sources(&root);
-    let lib_src = &sources.iter().find(|(rel, _)| rel == "lib.rs").unwrap().1;
-    let modules = declared_modules(lib_src);
-    let model_src = std::fs::read_to_string(root.join("model.rs")).unwrap();
+    let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    // (crate directory, its `src`, its non-test sources, the modules its `lib.rs` declares)
+    let crates: Vec<(&str, PathBuf, Vec<(String, String)>, BTreeSet<String>)> = CRATES
+        .iter()
+        .map(|(dir, _)| {
+            let root = crates_dir.join(dir).join("src");
+            let sources = non_test_sources(&root);
+            let lib_src = &sources.iter().find(|(rel, _)| rel == "lib.rs").unwrap().1;
+            let modules = declared_modules(lib_src);
+            (*dir, root, sources, modules)
+        })
+        .collect();
+    let modules: BTreeSet<String> = crates.iter().flat_map(|c| c.3.iter().cloned()).collect();
+    let model_root = &crates.iter().find(|c| c.0 == crate_of(Model)).unwrap().1;
+    let model_src = std::fs::read_to_string(model_root.join("model.rs")).unwrap();
     let model_names: BTreeSet<String> = {
         let (toks, _) = lex_with_lines(&model_src);
         toks.windows(2)
@@ -397,25 +431,37 @@ fn modules_only_use_layers_below_them() {
     };
 
     let mut problems = Vec::new();
-    for m in &modules {
-        if !LAYERS.iter().any(|(k, _)| k == m) {
-            problems.push(format!(
-                "  module `{m}` has no layer: add it to LAYERS in src/layering_tests.rs"
-            ));
+    for (dir, _, _, declared) in &crates {
+        for m in declared {
+            match LAYERS.iter().find(|(k, _)| k == m) {
+                None => problems.push(format!(
+                    "  module `{m}` of {dir} has no layer: add it to LAYERS in \
+                     crates/barca-core/src/layering_tests.rs"
+                )),
+                Some((_, layer)) if crate_of(*layer) != *dir => problems.push(format!(
+                    "  module `{m}` is in {dir}, but its layer ({layer:?}) is {}",
+                    crate_of(*layer)
+                )),
+                Some(_) => {}
+            }
         }
     }
     for (k, _) in LAYERS {
         let top = k.split("::").next().unwrap();
         let known = *k == "lib"
-            || (modules.contains(top)
-                && (!k.contains("::") || {
-                    let rel = k.replace("::", "/");
-                    root.join(format!("{rel}.rs")).exists()
-                        || root.join(&rel).join("mod.rs").exists()
-                }));
+            || *k == "barca_core"
+            || crates.iter().any(|(_, root, _, declared)| {
+                declared.contains(top)
+                    && (!k.contains("::") || {
+                        let rel = k.replace("::", "/");
+                        root.join(format!("{rel}.rs")).exists()
+                            || root.join(&rel).join("mod.rs").exists()
+                    })
+            });
         if !known {
             problems.push(format!(
-                "  LAYERS names `{k}`, which is not a module of this crate"
+                "  LAYERS names `{k}`, which is not a module of {}",
+                CRATES.iter().map(|c| c.0).collect::<Vec<_>>().join(" or ")
             ));
         }
     }
@@ -430,42 +476,50 @@ fn modules_only_use_layers_below_them() {
     // (from, to) -> the places that name it.
     let mut violations: BTreeMap<(&str, &str), Vec<String>> = BTreeMap::new();
     let mut used = BTreeSet::new();
-    for (rel, src) in &sources {
-        if rel == "layering_tests.rs" {
-            continue;
-        }
-        let module = module_path(rel);
-        let from = if module.is_empty() {
-            "lib"
-        } else {
-            key_of(&module).unwrap_or_else(|| panic!("{rel}: no layer for {module:?}"))
-        };
-        for (path, line) in references(src, &module, &modules) {
-            let Some(first) = path.first() else { continue };
-            let to = if modules.contains(first) {
-                key_of(&path).unwrap_or_else(|| panic!("{rel}:{line}: no layer for {path:?}"))
-            } else if let Some((_, owner)) = ROOT_ITEMS.iter().find(|(n, _)| n == first) {
-                key_of(&[owner.to_string()]).unwrap()
-            } else if model_names.contains(first) {
-                "model"
+    for (dir, _, sources, _) in &crates {
+        for (rel, src) in sources {
+            if rel == "layering_tests.rs" {
+                continue;
+            }
+            let module = module_path(rel);
+            let from = if module.is_empty() {
+                if *dir == crate_of(Model) {
+                    "lib"
+                } else {
+                    "barca_core"
+                }
             } else {
-                problems.push(format!(
-                    "  {rel}:{line}: `crate::{first}` is neither a module nor a known root item: \
+                key_of(&module)
+                    .unwrap_or_else(|| panic!("{dir}/src/{rel}: no layer for {module:?}"))
+            };
+            for (path, line) in references(src, &module, &modules) {
+                let Some(first) = path.first() else { continue };
+                let to = if modules.contains(first) {
+                    key_of(&path)
+                        .unwrap_or_else(|| panic!("{dir}/src/{rel}:{line}: no layer for {path:?}"))
+                } else if let Some((_, owner)) = ROOT_ITEMS.iter().find(|(n, _)| n == first) {
+                    key_of(&[owner.to_string()]).unwrap()
+                } else if model_names.contains(first) {
+                    "model"
+                } else {
+                    problems.push(format!(
+                    "  {dir}/src/{rel}:{line}: `crate::{first}` is neither a module nor a known root item: \
                      add it to ROOT_ITEMS in src/layering_tests.rs"
                 ));
-                continue;
-            };
-            if from == to || layer_of(from).may_use(layer_of(to)) {
-                continue;
+                    continue;
+                };
+                if from == to || layer_of(from).may_use(layer_of(to)) {
+                    continue;
+                }
+                if EXCEPTIONS.iter().any(|(f, t, _)| *f == from && *t == to) {
+                    used.insert((from, to));
+                    continue;
+                }
+                violations
+                    .entry((from, to))
+                    .or_default()
+                    .push(format!("{dir}/src/{rel}:{line} ({})", path.join("::")));
             }
-            if EXCEPTIONS.iter().any(|(f, t, _)| *f == from && *t == to) {
-                used.insert((from, to));
-                continue;
-            }
-            violations
-                .entry((from, to))
-                .or_default()
-                .push(format!("{rel}:{line} ({})", path.join("::")));
         }
     }
     assert!(
@@ -521,6 +575,7 @@ fn the_scan_sees_paths_use_trees_and_super() {
         fn i() { other::crate_like::x(); crate::{a, b::*}; }
         mod inner { fn j() { super::super::super::gc::run(); } }
         fn k() { super::super::cost::x(); }
+        fn l() { barca_model::config::load(); x::barca_model::y(); }
     "#;
     let module = vec!["db".to_string(), "runs".to_string()];
     let got: Vec<(String, usize)> = references(src, &module, &BTreeSet::new())
@@ -540,6 +595,7 @@ fn the_scan_sees_paths_use_trees_and_super() {
         ("b", 10),
         ("gc::run", 11),
         ("cost::x", 12),
+        ("config::load", 13),
     ];
     let want: Vec<(String, usize)> = want.iter().map(|(p, l)| (p.to_string(), *l)).collect();
     assert_eq!(got, want);

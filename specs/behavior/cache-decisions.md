@@ -20,7 +20,7 @@ terminal outcome; process ownership can be proven alive, proven gone or unknown.
 
 A node's **cache state** is the outcome of the decision `barca status` and `get --dry-run` make
 from the same function. It is one enum, `CacheState` in
-[cache_state.rs](../../crates/barca-core/src/cache_state.rs) (0.39.5, #802), used by status
+[cache_state.rs](../../crates/barca-model/src/cache_state.rs) (0.39.5, #802), used by status
 JSON (`cache.state`), the `--state` filter, the server's node state and, through generated
 TypeScript types, the UI; nothing else spells a state. Its eight values, in the order the
 manual, the OpenAPI `Cache.state` enum and `summary` list them:

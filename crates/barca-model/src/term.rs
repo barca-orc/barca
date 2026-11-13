@@ -180,7 +180,7 @@ static PROGRESS_BAR: Mutex<Option<indicatif::WeakProgressBar>> = Mutex::new(None
 
 /// Route every later stderr line above `bar` while it is drawn (until it is finished or
 /// dropped).
-pub(crate) fn above_progress_bar(bar: &indicatif::ProgressBar) {
+pub fn above_progress_bar(bar: &indicatif::ProgressBar) {
     *PROGRESS_BAR.lock().unwrap_or_else(|e| e.into_inner()) = Some(bar.downgrade());
 }
 
@@ -401,7 +401,7 @@ fn write_stderr(bytes: &[u8]) {
 /// What a child process's stdout and stderr should be, so that its output reaches barca's
 /// stderr and the child never writes to a pipe that has lost its reader (see the module
 /// documentation). Use it for both streams of every child whose output is not captured.
-pub(crate) fn child_output() -> Stdio {
+pub fn child_output() -> Stdio {
     match ChildOutput::get().and_then(|out| out.writer.try_clone().ok()) {
         Some(writer) => Stdio::from(writer),
         None => Stdio::from(std::io::stderr()),

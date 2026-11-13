@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct Source {
+pub struct Source {
     path: String,
     pub count: usize,
     content_hash: String,
@@ -48,13 +48,13 @@ struct Observation {
     removed: HashSet<String>,
 }
 impl Source {
-    pub(crate) fn matches(&self, path: &str, hash: Option<&str>) -> bool {
+    pub fn matches(&self, path: &str, hash: Option<&str>) -> bool {
         self.path == path && hash == Some(self.content_hash.as_str())
     }
-    pub(crate) fn valid(&self) -> bool {
+    pub fn valid(&self) -> bool {
         self.content_hash.len() == 64 && self.membership_hash.len() == 64
     }
-    pub(crate) fn observed(path: &str, content_hash: &str, wire: &Value) -> Result<Self, String> {
+    pub fn observed(path: &str, content_hash: &str, wire: &Value) -> Result<Self, String> {
         let observation: Observation =
             serde_json::from_value(wire.clone()).map_err(|e| e.to_string())?;
         if observation.changed.len() > observation.count
@@ -99,7 +99,7 @@ impl Source {
         }
         Ok(source)
     }
-    pub(crate) fn read(path: &str, content_hash: &str) -> Result<Self, String> {
+    pub fn read(path: &str, content_hash: &str) -> Result<Self, String> {
         let scan = scan(path, None, false, true)?;
         Ok(Self {
             path: path.into(),
@@ -110,7 +110,7 @@ impl Source {
             delta: None,
         })
     }
-    pub(crate) fn changes(&self, old: &Self) -> Option<HashSet<String>> {
+    pub fn changes(&self, old: &Self) -> Option<HashSet<String>> {
         if !self.keyed || !old.keyed {
             return None;
         }
@@ -123,7 +123,7 @@ impl Source {
             .filter(|d| d.previous_hash == old.content_hash)?;
         Some(delta.hashes.keys().chain(&delta.removed).cloned().collect())
     }
-    pub(crate) fn keys(&self) -> Result<Vec<String>, String> {
+    pub fn keys(&self) -> Result<Vec<String>, String> {
         Ok(scan(&self.path, None, true, false)?.keys)
     }
     fn known(&self, selected: &HashSet<String>) -> Option<&Delta> {
@@ -133,7 +133,7 @@ impl Source {
                 .all(|k| d.hashes.contains_key(k) || d.removed.contains(k))
         })
     }
-    pub(crate) fn active(&self, selected: &HashSet<String>) -> Result<HashSet<String>, String> {
+    pub fn active(&self, selected: &HashSet<String>) -> Result<HashSet<String>, String> {
         if let Some(delta) = self.known(selected) {
             return Ok(selected
                 .iter()
@@ -146,10 +146,7 @@ impl Source {
             .into_iter()
             .collect())
     }
-    pub(crate) fn project(
-        &self,
-        selected: &HashSet<String>,
-    ) -> Result<crate::keyed::SourceKeys, String> {
+    pub fn project(&self, selected: &HashSet<String>) -> Result<crate::keyed::SourceKeys, String> {
         let (keys, hashes) = if let Some(delta) = self.known(selected) {
             let keys: Vec<_> = delta
                 .order
@@ -173,7 +170,7 @@ impl Source {
         })
     }
     /// Read only selected values while counting the full partition domain.
-    pub(crate) fn project_file(
+    pub fn project_file(
         path: &str,
         selected: &HashSet<String>,
     ) -> Result<(usize, crate::keyed::SourceKeys), String> {
@@ -185,7 +182,7 @@ impl Source {
         };
         Ok((read.count, keys))
     }
-    pub(crate) fn is_keyed(&self) -> bool {
+    pub fn is_keyed(&self) -> bool {
         self.keyed
     }
 }

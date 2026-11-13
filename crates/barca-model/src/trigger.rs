@@ -1,5 +1,5 @@
 //! What started a run ([`Trigger`]): recorded on its `runs` row and its `barca.run` span, and
-//! part of the server's run contract ([`crate::outcome`] re-exports it).
+//! part of the server's run contract (`barca_core::outcome` re-exports it).
 
 use crate::time::rfc3339;
 use serde::{Deserialize, Serialize};

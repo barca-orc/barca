@@ -56,7 +56,7 @@ the `test` extra.
 barca prints through `barca_core::outln!` and `errln!`, which do not panic when the reader of
 stdout or stderr has gone; clippy denies `println!` and `eprintln!` in the three crates.
 Workers do not hold barca's stderr when it is a pipe: they write to a pipe barca reads and
-forwards (`crates/barca-core/src/term.rs`), so a step's child processes cannot meet a closed
+forwards (`crates/barca-model/src/term.rs`), so a step's child processes cannot meet a closed
 pipe either. `python/tests/test_closed_pipe.py` starts barca with a pipe whose read end is
 already closed, so the first write fails every time and no test waits for a reader to exit.
 

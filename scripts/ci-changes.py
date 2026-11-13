@@ -91,7 +91,7 @@ DUCKDB1 = ALWAYS + [
 # the test with the helpers it imports.
 CHECKPOINT = ALWAYS + [
     "crates/barca-core/src/db/*",
-    "crates/barca-core/src/config.rs",
+    "crates/barca-model/src/config.rs",
     "crates/barca-core/src/backup/*",
     "crates/barca-server/src/lib.rs",
     "crates/barca-server/src/runs.rs",

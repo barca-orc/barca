@@ -120,7 +120,7 @@ mod tests {
             .collect();
         assert_eq!(
             rust, python,
-            "crates/barca-core/src/artifact_format.rs and python/barca/_artifacts.py differ"
+            "crates/barca-model/src/artifact_format.rs and python/barca/_artifacts.py differ"
         );
     }
 }

@@ -101,7 +101,7 @@ optimizations are not a bound on cold/full-domain execution.
 [Freshness state](../../crates/barca-core/src/freshness.rs), incremental proof saving and
 [database operations](../../crates/barca-core/src/db/mod.rs) participate in current-state decisions.
 [Observation](../../crates/barca-core/src/observation.rs) and
-[source observations](../../crates/barca-core/src/source_observation.rs) provide evidence;
+[source observations](../../crates/barca-model/src/source_observation.rs) provide evidence;
 their hashes do not supply a monotonic reconciliation order. Result history, current
 membership/selection and freshness evidence need explicit responsibilities before multiple
 versions can publish concurrently.

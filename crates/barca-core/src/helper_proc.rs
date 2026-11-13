@@ -588,7 +588,7 @@ mod tests {
             }
             let text = std::fs::read_to_string(&path).unwrap();
             let this_module = path.ends_with("barca-core/src/helper_proc.rs")
-                || path.ends_with("barca-core/src/spawn_lock.rs");
+                || path.ends_with("barca-model/src/spawn_lock.rs");
             // `process::Command` as well as `Command::new`: a file that imports the type under
             // another name, or is handed a `Command` built elsewhere, still names the type.
             let has_command = text.contains(&builds_a_command) || text.contains(&names_the_type);

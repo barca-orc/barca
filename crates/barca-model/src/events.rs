@@ -54,7 +54,7 @@ pub enum RunEvent {
         import_seconds: Option<f64>,
     },
     /// The run finished. Terminal: nothing follows it. `outcome` is the run's full result
-    /// ([`crate::outcome`]), absent only from events recorded by an older server.
+    /// (`barca_core::outcome`), absent only from events recorded by an older server.
     RunFinished {
         run_id: String,
         ok: bool,
@@ -93,13 +93,13 @@ impl LogStream {
 }
 
 /// Now, as a log line's `ts`: RFC 3339, UTC, with milliseconds.
-pub(crate) fn log_timestamp() -> String {
+pub fn log_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// A time in seconds since the epoch (as Python's `time.time()`), as a log line's `ts`.
 /// One that cannot be a time reads as now.
-pub(crate) fn epoch_timestamp(seconds: f64) -> String {
+pub fn epoch_timestamp(seconds: f64) -> String {
     match chrono::DateTime::from_timestamp_micros((seconds * 1e6) as i64) {
         Some(at) if seconds.is_finite() && seconds > 0.0 => {
             at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)

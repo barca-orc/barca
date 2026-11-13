@@ -14,7 +14,7 @@ pub(crate) const PROTOCOL_VERSION: &str = "1.0.0";
 /// Compute the definition hash for a node.
 ///
 /// Inputs:
-/// - the node's definition text ([`crate::definition::node_definition`]): the decorator parts
+/// - the node's definition text (`barca_core::definition::node_definition`): the decorator parts
 ///   that count, in canonical form, then the function from `def` on
 /// - the dependency cone hash (helpers, constants)
 /// - the node kind, as JSON
@@ -23,11 +23,7 @@ pub(crate) const PROTOCOL_VERSION: &str = "1.0.0";
 /// [`PROTOCOL_VERSION`] was not bumped when 0.19 changed the first input (#283): how the
 /// inputs are combined is the same, and the run hash, which also carries the version, did not
 /// change at all.
-pub(crate) fn definition_hash(
-    function_source: &str,
-    cone_source: &str,
-    metadata_json: &str,
-) -> String {
+pub fn definition_hash(function_source: &str, cone_source: &str, metadata_json: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"definition:");
     hasher.update(PROTOCOL_VERSION.as_bytes());
@@ -98,7 +94,7 @@ pub fn run_hash(
 /// A short digest of `bytes` (the first 16 hex digits of its SHA-256): what a materialization
 /// records per component of its run hash, to say later which one changed (#558). Never part of
 /// a cache key.
-pub(crate) fn short_digest(bytes: &[u8]) -> String {
+pub fn short_digest(bytes: &[u8]) -> String {
     let mut hex = format!("{:x}", Sha256::digest(bytes));
     hex.truncate(16);
     hex
@@ -111,7 +107,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// The SHA-256 of the file at `path`, as lowercase hex.
-pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
+pub fn file_sha256(path: &Path) -> std::io::Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();

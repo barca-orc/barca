@@ -65,12 +65,12 @@ impl ErrorPhase {
     }
 
     /// Whether the failure is in barca's own code rather than the step's.
-    pub(crate) const fn in_barca(self) -> bool {
+    pub const fn in_barca(self) -> bool {
         !matches!(self, ErrorPhase::UserCode)
     }
 
     /// What barca was doing, for a failure in its own code: `loading its inputs`.
-    pub(crate) const fn doing(self) -> &'static str {
+    pub const fn doing(self) -> &'static str {
         match self {
             ErrorPhase::LoadInputs => "loading its inputs",
             ErrorPhase::UserCode => "running it",
@@ -83,7 +83,7 @@ impl ErrorPhase {
 
 /// A structured failure reported by a worker for a single step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct StepError {
+pub struct StepError {
     pub error_type: String,
     pub message: String,
     /// User-relevant traceback (barca-internal frames filtered out).
@@ -106,7 +106,7 @@ pub(crate) struct StepError {
 
 /// A permanently-failed step (retry budget exhausted), for the metadata DB.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct StepFailure {
+pub struct StepFailure {
     pub node_id: String,
     pub error: StepError,
 }

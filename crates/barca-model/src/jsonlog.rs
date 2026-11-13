@@ -196,7 +196,7 @@ pub fn line(level: Level, node: Option<&str>, text: &str) {
 /// A line of a step's captured output, under `barca serve` with structured lines on: an `info`
 /// line with the run and the node. Without structured lines nothing is written: the output is
 /// kept with the run (`barca logs`).
-pub(crate) fn step_output(node: &str, text: &str) {
+pub fn step_output(node: &str, text: &str) {
     if enabled() {
         let rendered = object(
             chrono::Utc::now(),
