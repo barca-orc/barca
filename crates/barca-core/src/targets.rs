@@ -1,8 +1,8 @@
 //! Target resolution, cone selection, and per-target outcomes.
-use crate::dispatch;
 use crate::planner::{self, ExecutionPlan, ResourceConfig};
 use crate::recover;
-use crate::{BarcaError, dag::Dag, dispatch::OutputRef, results::TargetOutcome};
+use crate::step_result;
+use crate::{BarcaError, dag::Dag, reports::TargetOutcome, step_result::OutputRef};
 use std::collections::HashMap;
 
 /// Does a target `name` identify node `id`? A name is a function name (`deploy`), a full id
@@ -295,10 +295,11 @@ pub(crate) fn target_outcomes(
     dag: &Dag,
     targets: &[(String, String)],
     all_outputs: &HashMap<String, OutputRef>,
-    failures: &[dispatch::StepFailure],
+    failures: &[step_result::StepFailure],
     selection: Option<&crate::selection::PartitionSelection>,
 ) -> Vec<(String, TargetOutcome)> {
-    let base = |f: &dispatch::StepFailure| crate::StepId::parse(&f.node_id).base_id().to_string();
+    let base =
+        |f: &step_result::StepFailure| crate::StepId::parse(&f.node_id).base_id().to_string();
     targets
         .iter()
         .map(|(name, tid)| {
@@ -536,10 +537,10 @@ def lone() -> int:
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    fn failure(node_id: &str, message: &str) -> dispatch::StepFailure {
-        dispatch::StepFailure {
+    fn failure(node_id: &str, message: &str) -> step_result::StepFailure {
+        step_result::StepFailure {
             node_id: node_id.to_string(),
-            error: dispatch::StepError {
+            error: step_result::StepError {
                 error_type: "WorkerError".to_string(),
                 message: message.to_string(),
                 traceback: String::new(),
@@ -774,7 +775,7 @@ def lone() -> int:
 
     #[test]
     fn a_batched_node_has_one_line_with_its_calls_keys_and_phases() {
-        let b = crate::results::BatchExecution {
+        let b = crate::reports::BatchExecution {
             calls: 1,
             keys: 3077,
             import_seconds: 0.12,
