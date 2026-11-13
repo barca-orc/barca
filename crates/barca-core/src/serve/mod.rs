@@ -3,11 +3,10 @@
 //! A `barca get` or `barca run` on its own uses none of it: the hot loop reaches what is
 //! here only through [`crate::run_host::RunHost`], as [`ServeHost`].
 
-mod auth;
 pub mod capacity;
 pub mod claims;
 mod host;
 pub mod run_queue;
 
-pub use auth::AuthMode;
+pub use crate::config::AuthMode;
 pub use host::ServeHost;

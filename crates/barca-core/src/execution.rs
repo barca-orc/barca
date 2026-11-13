@@ -490,7 +490,7 @@ async fn execute_started(
     // With a server, its ledger answers the cache lookups (RFC-0007 section 4.1): check the
     // server, post what this machine could not post before, then ask once for every run hash
     // known before anything runs.
-    if let Some(ledger) = &request.cfg.ledger {
+    if let Some(ledger) = crate::ledger::attached(request.cfg) {
         ledger.prepare(request.cfg, true).await?;
         ledger
             .prefetch(crate::cache::cone_keys(
@@ -1614,7 +1614,7 @@ async fn return_outputs(
     };
     // With a server, the run is posted to its ledger now that its uploads are confirmed. A
     // step the ledger already held with other bytes gets the same warning.
-    if let Some(ledger) = &session.request.cfg.ledger {
+    if let Some(ledger) = crate::ledger::attached(session.request.cfg) {
         for node in ledger
             .record_run(
                 session.request.cfg,

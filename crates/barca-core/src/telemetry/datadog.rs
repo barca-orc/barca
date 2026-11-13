@@ -183,27 +183,6 @@ fn tracing_enabled(raw: Option<&str>) -> bool {
     raw.is_none_or(|v| v.eq_ignore_ascii_case("true") || v == "1")
 }
 
-/// The Datadog web app for `site` (`DD_SITE`, `[telemetry] datadog_site`): `app.` before a
-/// two-label site (`datadoghq.com`, `datadoghq.eu`, `ddog-gov.com`), a regional site
-/// (`us3.datadoghq.com`, `ap1.datadoghq.com`) as it is. `None` for a value that is not a host
-/// name.
-pub fn app_url(site: &str) -> Option<String> {
-    let site = site.trim().trim_end_matches('/').to_ascii_lowercase();
-    let host_like = !site.is_empty()
-        && site.contains('.')
-        && site.split('.').all(|label| {
-            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        });
-    if !host_like {
-        return None;
-    }
-    if site.starts_with("app.") || site.split('.').count() > 2 {
-        Some(format!("https://{site}"))
-    } else {
-        Some(format!("https://app.{site}"))
-    }
-}
-
 /// The steps of a run whose traces the live path sent (or is sending), so the end-of-run
 /// export sends only the run's own trace and the steps nobody sent.
 #[derive(Default)]

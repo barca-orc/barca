@@ -117,7 +117,7 @@ pub(crate) async fn explain_dag_with_keys(
     // With a server, the dry run is decided against its ledger: check the server (a dry run
     // posts nothing) and ask once for every run hash known before anything runs. The ledger's
     // answers are read through a cache reader, so the database is created if there is none.
-    if let Some(ledger) = &cfg.ledger {
+    if let Some(ledger) = crate::ledger::attached(cfg) {
         ledger.prepare(cfg, false).await?;
         ledger
             .prefetch(crate::cache::cone_keys(dag, &exec_plan.phases))

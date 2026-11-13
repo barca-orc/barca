@@ -374,7 +374,10 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
         // Where a step's `trace_id` opens (`{datadog_url}/apm/trace/{trace_id}`): `null`
         // when no Datadog site is configured and the integration is off.
         "telemetry": {
-            "datadog_url": barca_core::config::datadog_app_url(&state.config.resolved.project_root)
+            "datadog_url": barca_core::config::datadog_app_url(
+                &state.config.resolved.project_root,
+                barca_core::telemetry::is_on("datadog"),
+            )
                 .ok()
                 .flatten(),
         },

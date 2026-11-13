@@ -9,6 +9,7 @@ pub mod artifact_format;
 pub mod backup;
 pub mod batch;
 pub mod cache;
+pub mod cache_size;
 pub mod cache_state;
 pub(crate) mod changes;
 pub mod commands;
@@ -99,6 +100,7 @@ pub mod transfer;
 pub(crate) mod trigger;
 pub(crate) mod unrelated_modules;
 pub(crate) mod unused_inputs;
+pub(crate) mod uri;
 pub mod values;
 pub mod warnings;
 

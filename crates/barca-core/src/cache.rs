@@ -1149,7 +1149,7 @@ impl CacheReader {
     ) -> Result<Self, crate::BarcaError> {
         Ok(Self {
             db: db::CacheReader::for_config(cfg).await?,
-            ledger: cfg.ledger.clone(),
+            ledger: crate::ledger::attached(cfg).cloned(),
         })
     }
 

@@ -34,7 +34,7 @@
 //! leaves a row whose file is missing, which a run handles as before (#252).
 
 pub mod plan;
-pub mod size;
+pub use crate::cache_size as size;
 
 pub use plan::Plan;
 pub(crate) use plan::{Eviction, Goal, LeftoverKind, Protections, Tier};

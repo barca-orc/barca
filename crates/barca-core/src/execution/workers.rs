@@ -84,7 +84,7 @@ pub(super) async fn start_workers(
         // with a server, the runs they held back are posted to its ledger (#507).
         match retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
             Ok(settled) => {
-                if let Some(ledger) = &cfg.ledger {
+                if let Some(ledger) = crate::ledger::attached(cfg) {
                     ledger.post_uploaded(cfg, &settled).await;
                 }
             }
@@ -307,7 +307,7 @@ pub(crate) async fn upload_pending(
     match retried {
         Ok(settled) => {
             client.shutdown().await;
-            if let Some(ledger) = &cfg.ledger {
+            if let Some(ledger) = crate::ledger::attached(cfg) {
                 ledger.post_uploaded(cfg, &settled).await;
             }
             Ok(())
