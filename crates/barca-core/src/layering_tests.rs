@@ -76,6 +76,10 @@ const LAYERS: &[(&str, Layer)] = &[
     ("layout", Model), // `.barca/` paths from the config: `db` and `gc` use them
     ("source_observation", Model), // compact observation values over `keyed`
     ("test_hooks", Model), // `BARCA_TEST_*` reads, used by every layer
+    ("trigger", Model),        // what started a run: `db` records it on the `runs` row
+    ("node_estimate", Model),  // a node's measured cost: `cost` updates it, `db` keeps it
+    ("ledger_post", Model),    // a ledger post's run and step rows: `ledger` sends, `db` records
+    ("trace_ids", Model),      // Datadog trace and span ids, derived from run and step ids
     // ---- compile (barca-compile) ----
     ("parse", Compile),
     ("cone", Compile),
@@ -190,16 +194,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ("lib", "dispatch", "FailedStep.phase: dispatch::ErrorPhase; PartialRun: dispatch::OutputRef"),
     ("selection", "dispatch", "dispatch::OutputRef"),
     ("targets", "dispatch", "dispatch::{OutputRef, StepFailure}"),
-    // ---- step 2, `db` value types move down; DDL moves into db/schema ----
-    ("db", "cache", "cache::READ_STAMP_REFRESH"),
-    ("db", "changes", "changes::DEFINITION_KEY"),
-    ("db", "cost", "cost::NodeEstimate"),
-    ("db", "incremental", "incremental::CREATE (freshness_proofs DDL)"),
-    ("db", "ledger", "ledger::{Ledger, LedgerRun, LedgerStep}"),
-    ("db", "outcome", "outcome::{Trigger, TriggeredBy}"),
-    ("db", "serve", "serve::run_queue::{CREATE_QUEUE, CREATE_SERVER_STATE}"),
-    ("db", "telemetry", "telemetry::is_on, telemetry::datadog::step_trace_ref"),
-    ("persist::recording", "ledger", "ledger::{LedgerPost, PostAccepted}"),
     // ---- step 2, `pid_alive` and host identity move to a shared process module ----
     ("db", "helper_proc", "helper_proc::Until (the deadline helper beside pid_alive)"),
     ("io_loop", "db", "db::pid_alive"),
@@ -225,13 +219,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ("io_loop", "telemetry", "telemetry::datadog::Dispatch"),
     ("jsonlog", "telemetry", "telemetry::datadog::log_ids"),
     ("model", "env_reads", "env_reads::undeclared"),
-    // `db::run_steps::planned_run_nodes` rebuilds a plan: a query, not storage.
-    ("db", "dag", "dag::Dag (planned_run_nodes)"),
-    ("db", "planner", "planner::ResourceConfig (planned_run_nodes)"),
-    ("db", "targets", "targets::{plan_for_targets, blocking_failure} (planned_run_nodes)"),
-    // `pending_uploads` straddles: rows (db) and the upload itself (core).
-    ("pending_uploads", "execution", "execution::upload_pending (upload_now)"),
-    ("persist::recording", "persist", "persist::RunLedger"),
     ("selection", "report", "report::kind_str"),
     ("targets", "recover", "recover::returned_step"),
 ];

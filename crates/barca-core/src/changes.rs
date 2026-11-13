@@ -139,7 +139,7 @@ pub(crate) fn step_components(
 }
 
 /// The key of a recorded row's components that names its definition's (`definition_components`).
-pub(crate) const DEFINITION_KEY: &str = "@definition";
+pub(crate) use crate::db::DEFINITION_KEY;
 
 /// [`step_components`] as the JSON text recorded with a materialization: a definition's digests
 /// are the same for each of its keys and can be tens of KB, so the row names them
@@ -215,7 +215,7 @@ fn rank(key: &str) -> usize {
 /// row recorded its components. `None` when it did not (recorded before 0.29), when there is no
 /// such row, or against a server's ledger (its rows are other machines').
 pub(crate) async fn since_last_success(
-    cache: Option<&crate::db::CacheReader>,
+    cache: Option<&crate::cache::CacheReader>,
     dag: &Dag,
     state: &DecideState,
     display_id: &str,

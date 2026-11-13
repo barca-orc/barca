@@ -339,7 +339,7 @@ async fn check_runtime_key(
             .ok_or_else(|| {
                 BarcaError::Usage(format!("cannot resolve the partition source for {dim}"))
             })?;
-        let reader = db::CacheReader::for_config(cfg).await?;
+        let reader = crate::cache::CacheReader::for_config(cfg).await?;
         let pins = db::pins_on(reader.conn()).await?;
         let output = match pins.get(source) {
             Some(pin) => db::success_at(&reader, source, &pin.run_hash).await,

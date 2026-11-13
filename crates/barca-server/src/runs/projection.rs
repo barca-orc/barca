@@ -188,7 +188,7 @@ pub(crate) async fn view_page(
         } else {
             steps_page.nodes.clone()
         };
-        if let Some(nodes) = db::planned_run_nodes(
+        if let Some(nodes) = barca_core::queries::planned_run_nodes(
             &dag,
             &record.command,
             &targets,

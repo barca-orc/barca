@@ -4,6 +4,12 @@
 use super::*;
 use crate::dispatch::OutputRef;
 
+/// How old a result's `last_read_at` may be before a read of it is stamped again, for the
+/// results of a node with many partition keys. The cache size limit evicts the least recently
+/// read results; an hour does not change that order in any way that matters, and a tick that
+/// reads 200k results does not write 200k rows.
+pub(crate) const READ_STAMP_REFRESH: &str = "-1 hour";
+
 /// A short-lived handle for one phase's cache lookups. It holds the in-process guard
 /// *and* the cross-process lock for as long as it lives, so open it for the lookups
 /// and drop it before any step runs: another barca process can then use the DB while
@@ -16,8 +22,9 @@ pub(crate) struct CacheReader {
     /// The statement of [`CacheReader::lookup_many`], kept the same way.
     lookup_many: tokio::sync::Mutex<Option<libsql::Statement>>,
     local_artifact_dir: Option<String>,
-    /// A server's ledger, which answers cache lookups in place of this database.
-    ledger: Option<crate::ledger::Ledger>,
+    /// A server's ledger answers cache lookups in place of this database
+    /// ([`crate::cache::CacheReader`] holds it).
+    ledger_answers: bool,
     /// The successful rows of a partitioned node's keys, read in one pass the first time a
     /// node with many keys is looked up ([`CacheReader::key_rows`]); `None` for a node whose
     /// keys are looked up one by one.
@@ -37,7 +44,7 @@ impl CacheReader {
             lookup: Default::default(),
             lookup_many: Default::default(),
             local_artifact_dir: None,
-            ledger: None,
+            ledger_answers: false,
             key_rows: Default::default(),
             conn,
             _handle: handle,
@@ -50,13 +57,8 @@ impl CacheReader {
     ) -> Result<Self, BarcaError> {
         let mut cache = Self::open(&cfg.db_path).await?;
         cache.local_artifact_dir = cfg.remote_off.then(|| cfg.local_artifact_dir.clone());
-        cache.ledger = cfg.ledger.clone();
+        cache.ledger_answers = cfg.ledger.is_some();
         Ok(cache)
-    }
-
-    /// The server's ledger, when this command runs against one.
-    pub(crate) fn ledger(&self) -> Option<&crate::ledger::Ledger> {
-        self.ledger.as_ref()
     }
 
     pub(crate) fn allows_artifact(&self, path: &str) -> bool {
@@ -112,7 +114,7 @@ impl CacheReader {
         &self,
         keys: &[(&str, &str)],
     ) -> Option<Vec<Option<OutputRef>>> {
-        if self.ledger.is_some() {
+        if self.ledger_answers {
             return None;
         }
         const CHUNK: usize = 4096;
@@ -177,7 +179,7 @@ impl CacheReader {
         base: &str,
         keys: usize,
     ) -> Option<std::sync::Arc<KeyRows>> {
-        if self.ledger.is_some() {
+        if self.ledger_answers {
             return None;
         }
         if let Some(known) = self.key_rows.lock().unwrap().get(base) {
@@ -217,7 +219,7 @@ impl CacheReader {
                      last_read_at >= datetime('now', '{}') FROM materializations NOT INDEXED \
                      WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
                      AND artifact_path IS NOT NULL",
-                    crate::cache::READ_STAMP_REFRESH
+                    READ_STAMP_REFRESH
                 ),
                 [lo, hi],
             )
@@ -409,7 +411,7 @@ mod lookup_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = db_in(&dir);
         init_db(&path).await.unwrap();
-        let cache = CacheReader::open(&path).await.unwrap();
+        let cache = crate::cache::CacheReader::open(&path).await.unwrap();
         let before = prepares();
         for k in 0..100 {
             crate::cache::lookup_cached(&cache, &format!("p.py:a[k={k}]"), "h").await;
@@ -494,7 +496,7 @@ mod lookup_tests {
             .map(|k| (format!("p.py:a[k={k}]"), format!("h{k}")))
             .collect();
         let pairs: Vec<(&str, &str)> = keys.iter().map(|(n, h)| (n.as_str(), h.as_str())).collect();
-        let cache = CacheReader::open(&path).await.unwrap();
+        let cache = crate::cache::CacheReader::open(&path).await.unwrap();
         let together = cache.lookup_many(&pairs).await.expect("answered together");
         let mut one_by_one = Vec::new();
         for (node, hash) in &pairs {

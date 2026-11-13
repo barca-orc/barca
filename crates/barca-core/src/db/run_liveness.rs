@@ -710,6 +710,7 @@ mod tests {
                 steps_total: Some(1),
                 job: Some("p.py:a"),
                 trigger: &crate::outcome::Trigger::default(),
+                traced: false,
             },
         )
         .await
