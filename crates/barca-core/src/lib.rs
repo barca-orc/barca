@@ -1,3 +1,31 @@
+//! `barca-core`: the one crate `barca-cli` and `barca-server` import (#905). It wires the
+//! engine (`barca-engine`) to the metadata database (`barca-db`) over the compiled DAG
+//! (`barca-compile`) and the shared types (`barca-model`), and owns cache policy, gc, backups,
+//! transfer, the ledger, status, reports and queries. Its `pub` surface is what those two
+//! callers (and this crate's own integration tests) use, and nothing else:
+//!
+//! - **Commands and their results** (this crate): `commands` (run a pipeline), `queries`
+//!   (plan, history, logs, stats, `open_metadata`), `status`, `report`, `results`, `values`,
+//!   `sql`, `gc`, `backup`, `transfer`, `ledger`, `freshness`, `pins`, `pauses`, `schedule`,
+//!   `partition_grid`, `history_filter`, `diagnostics`, `envelope`, `outcome`, `cache`, `http`,
+//!   `telemetry`, and `serve` (what exists only for `barca serve`: run queue, capacity, claims,
+//!   `record_unstarted_run`); `sizing` from the run orchestrator.
+//! - **Metadata reads and the server's own writes**: `db`, a listed subset of `barca_db::db`
+//!   (see that module). An operation of several database calls is a core function above, not a
+//!   sequence in a caller.
+//! - **Shared types** (`barca-model`): `config`, `model` and the root types `BarcaError`,
+//!   `CancellationToken`, `CronExpr`, `FailedStep`, `Freshness`, `LogStream`, `NodeKind`,
+//!   `RunEvent`, `StepId`, `release_free_memory`; `artifact_format`, `cache_state`, `hash`,
+//!   `jsonlog`, `lines`, `step_status`, `suggest`, `time`, `term` with `outln!`/`errln!`, and
+//!   `test_hooks`.
+//! - **Source to DAG** (`barca-compile`): `dag`, `discover`, `groups`, `load`, `parse`,
+//!   `selection`, `targets`, `warnings`.
+//! - **Engine pieces callers name** (`barca-engine`): `batch`, `dispatch`, `helper_proc`,
+//!   `interrupt`; and `run_logs` (`barca-db`), the spool `barca logs -f` follows.
+//!
+//! Everything else of the lower crates is re-exported `pub(crate)` or not at all: callers do
+//! not depend on `barca-model`, `barca-compile`, `barca-db` or `barca-engine` directly.
+
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
@@ -8,6 +36,7 @@ pub mod backup;
 pub mod cache;
 pub(crate) mod changes;
 pub mod commands;
+pub mod db;
 pub mod diagnostics;
 pub mod envelope;
 pub(crate) mod execution;
@@ -33,7 +62,7 @@ pub mod serve;
 mod source_scan;
 pub mod sql;
 pub mod status;
-pub mod store_inspect;
+pub(crate) mod store_inspect;
 mod store_sync;
 pub mod telemetry;
 pub mod transfer;
@@ -43,24 +72,22 @@ pub mod values;
 // `barca_core::` paths.
 #[doc(hidden)]
 pub use barca_model::artifact_format;
-pub use barca_model::cache_size;
 pub use barca_model::cache_state;
 pub use barca_model::config;
-pub use barca_model::dag_error;
 pub(crate) use barca_model::envdeps;
 pub use barca_model::hash;
 pub use barca_model::jsonlog;
 pub(crate) use barca_model::keyed;
-pub use barca_model::layout;
+pub(crate) use barca_model::layout;
 pub(crate) use barca_model::ledger_post;
 pub use barca_model::lines;
 pub use barca_model::model;
-pub use barca_model::model::*;
+pub(crate) use barca_model::model::*;
+pub use barca_model::model::{CronExpr, Freshness, NodeKind, StepId};
 pub(crate) use barca_model::node_estimate;
 pub(crate) use barca_model::process;
-pub use barca_model::reports;
+pub(crate) use barca_model::reports;
 use barca_model::source_observation;
-pub use barca_model::step_result;
 pub use barca_model::step_status;
 pub use barca_model::suggest;
 pub use barca_model::term;
@@ -70,9 +97,10 @@ pub(crate) use barca_model::trace_ids;
 pub(crate) use barca_model::trigger;
 pub(crate) use barca_model::uri;
 pub use barca_model::{
-    BarcaError, CancellationToken, FailedStep, LogStream, PartialRun, RunEvent, errln, outln,
-    release_free_memory, run_line, safe_node_id,
+    BarcaError, CancellationToken, FailedStep, LogStream, RunEvent, errln, outln,
+    release_free_memory,
 };
+pub(crate) use barca_model::{PartialRun, run_line, safe_node_id};
 
 // The compile layer lives in `barca-compile` (#905 step 4); the modules callers of `barca-core`
 // name keep their `barca_core::` paths.
@@ -88,9 +116,8 @@ pub use barca_compile::warnings;
 
 // The metadata database layer lives in `barca-db` (#905 step 4); its modules keep their
 // `barca_core::` paths.
-pub use barca_db::db;
 use barca_db::metadata_size;
-pub use barca_db::pending_uploads;
+pub(crate) use barca_db::pending_uploads;
 pub use barca_db::run_logs;
 use barca_db::run_owner;
 use barca_db::sink_publications;
@@ -111,7 +138,6 @@ pub(crate) use barca_engine::protocol;
 pub(crate) use barca_engine::run_host;
 pub(crate) use barca_engine::step_trace;
 
-pub use dag::Dag;
 pub use execution::sizing;
 
 #[cfg(test)]

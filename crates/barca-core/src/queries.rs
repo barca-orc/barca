@@ -90,6 +90,15 @@ pub(crate) fn plan_selected(
     })
 }
 
+// ─── the metadata DB ──────────────────────────────────────────────────────────
+
+/// Make this environment's metadata DB usable for reads and writes: its directories exist and
+/// the database has barca's tables (a new project's first command creates it).
+pub async fn open_metadata(cfg: &crate::config::ResolvedConfig) -> Result<(), BarcaError> {
+    crate::layout::ensure_env_dirs(&cfg.env)?;
+    db::init_db(&cfg.db_path).await
+}
+
 // ─── history ──────────────────────────────────────────────────────────────────
 
 /// The most recent runs (newest first), at most `limit` of them (`None` = every run), plus the
@@ -99,8 +108,7 @@ pub async fn history(
     limit: Option<usize>,
     filter: &crate::history_filter::HistoryFilter,
 ) -> Result<(Vec<db::RunRecord>, usize), BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     history_at(&cfg.db_path, limit, filter).await
 }
 
@@ -140,8 +148,7 @@ pub async fn run_detail(
     run_id: &str,
     limit: Option<usize>,
 ) -> Result<RunDetail, BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     let Some(run) = db::get_run(&cfg.db_path, run_id).await? else {
         return Err(BarcaError::Usage(format!(
             "run '{run_id}' was not found; use barca history --json to find a run id"
@@ -161,8 +168,7 @@ pub async fn reconcile_run(
     cfg: &crate::config::ResolvedConfig,
     run_id: &str,
 ) -> Result<db::RunRecord, BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     db::reconcile_run(&cfg.db_path, run_id).await
 }
 
@@ -171,8 +177,7 @@ pub async fn reconcile_run(
 pub(crate) async fn latest_run(
     cfg: &crate::config::ResolvedConfig,
 ) -> Result<db::RunRecord, BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     db::get_recent_runs(&cfg.db_path, 1)
         .await?
         .into_iter()
@@ -264,8 +269,7 @@ pub async fn logs(
     step: Option<&str>,
     stream: Option<crate::LogStream>,
 ) -> Result<Vec<db::LogEntry>, BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     logs_at(&cfg.db_path, &cfg.db_path, run_id, step, stream).await
 }
 
@@ -323,8 +327,7 @@ pub async fn run_to_read(
     if !running {
         return latest_run(cfg).await;
     }
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     let recent = db::get_recent_runs(&cfg.db_path, RUNNING_LOOKBACK).await?;
     match pick_run(recent, true) {
         Some(run) => Ok(run),
@@ -337,8 +340,7 @@ pub async fn run_record(
     cfg: &crate::config::ResolvedConfig,
     run_id: &str,
 ) -> Result<Option<db::RunRecord>, BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     db::get_run(&cfg.db_path, run_id).await
 }
 
@@ -357,8 +359,7 @@ pub async fn stats(
 
     let target_id = find_target_id(&dag, target_name)?;
 
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
+    open_metadata(cfg).await?;
     db::get_asset_stats(&cfg.db_path, &target_id).await
 }
 

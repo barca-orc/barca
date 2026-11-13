@@ -55,6 +55,11 @@ const CRATES: &[(&str, &str)] = &[
     ("barca-core", "barca_core"),
 ];
 
+/// Modules of barca-core that narrow a lower crate's module of the same name to what
+/// barca-core's callers use (#905 step 5): `crate::db` in barca-core still names that module,
+/// and its layer is the lower crate's.
+const FACADES: &[&str] = &["db"];
+
 /// The crate a layer's modules live in today. A #905 step 4 PR that gives a layer its own crate
 /// adds it here and to [`CRATES`].
 fn crate_of(layer: Layer) -> &'static str {
@@ -456,6 +461,9 @@ fn modules_only_use_layers_below_them() {
     let mut problems = Vec::new();
     for (dir, _, _, declared) in &crates {
         for m in declared {
+            if *dir == crate_of(Core) && FACADES.contains(&m.as_str()) {
+                continue;
+            }
             match LAYERS.iter().find(|(k, _)| k == m) {
                 None => problems.push(format!(
                     "  module `{m}` of {dir} has no layer: add it to LAYERS in \

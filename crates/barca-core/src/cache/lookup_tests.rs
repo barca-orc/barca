@@ -3,7 +3,7 @@
 
 use crate::cache::{CacheReader, lookup_cached};
 use crate::db::{db_guard, init_db, open_conn, prepares};
-use crate::step_result::OutputRef;
+use barca_model::step_result::OutputRef;
 
 /// A reader compiles its lookup statements once, however many keys it looks up: 0.34.0
 /// compiled the one-key lookup again for every key, a third of `barca status` over a
