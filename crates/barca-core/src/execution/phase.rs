@@ -42,7 +42,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
 
     // With a server, ask its ledger about this phase's run hashes the first lookup could not
     // know (below a sensor, or dynamic partitions), before the database is opened.
-    if let Some(ledger) = &cfg.ledger {
+    if let Some(ledger) = crate::ledger::attached(cfg) {
         ledger
             .prefetch(crate::cache::phase_keys(dag, phase_ref, decide_state))
             .await?;

@@ -72,7 +72,9 @@ const LAYERS: &[(&str, Layer)] = &[
     ("term", Model),               // `outln!`/`errln!` are used by every layer
     ("jsonlog", Model),            // `term` renders through it
     ("events", Model),             // `RunEvent`/`LogStream`: `lines` and `db` name them
-    ("config", Model), // `barca.toml`: `db` and `dag` read it (#905 step 2 cuts its upward edges)
+    ("config", Model), // `barca.toml`: `db` and `dag` read it
+    ("cache_size", Model), // `[cache] max_size` values: `config` parses them, `gc` applies them
+    ("uri", Model),        // URLs and store URIs as shown (credentials out), recorded local paths
     ("layout", Model), // `.barca/` paths from the config: `db` and `gc` use them
     ("source_observation", Model), // compact observation values over `keyed`
     ("test_hooks", Model), // `BARCA_TEST_*` reads, used by every layer
@@ -175,13 +177,6 @@ const ROOT_ITEMS: &[(&str, &str)] = &[
 /// Delete a line when its edge is gone; never add one.
 #[rustfmt::skip]
 const EXCEPTIONS: &[(&str, &str, &str)] = &[
-    // ---- step 2, `config`: its fields take plain types, or the values move down ----
-    ("config", "gc", "MaxSize, gc::size::{parse, DEFAULT}"),
-    ("config", "http", "http::diagnostic_url"),
-    ("config", "ledger", "ledger::Ledger (the config value, not the client)"),
-    ("config", "serve", "serve::AuthMode"),
-    ("config", "telemetry", "telemetry::is_on, telemetry::datadog::app_url"),
-    ("config", "transfer", "transfer::{diagnostic_uri, local_path}"),
     // ---- step 2, `planner` and `dag`: helpers move to the compile side ----
     ("dag", "changes", "changes::definition_components"),
     ("planner", "cache", "cache::folds_output"),

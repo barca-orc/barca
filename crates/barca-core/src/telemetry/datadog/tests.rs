@@ -803,34 +803,3 @@ fn step_trace_ref_is_the_trace_the_step_was_sent_as() {
         step_trace_ref("r2", "p.py:orders").0
     );
 }
-
-#[test]
-fn app_url_follows_datadog_sites() {
-    assert_eq!(
-        app_url("datadoghq.com").as_deref(),
-        Some("https://app.datadoghq.com")
-    );
-    assert_eq!(
-        app_url("datadoghq.eu").as_deref(),
-        Some("https://app.datadoghq.eu")
-    );
-    assert_eq!(
-        app_url("us3.datadoghq.com").as_deref(),
-        Some("https://us3.datadoghq.com")
-    );
-    assert_eq!(
-        app_url(" AP1.datadoghq.com/ ").as_deref(),
-        Some("https://ap1.datadoghq.com")
-    );
-    assert_eq!(
-        app_url("ddog-gov.com").as_deref(),
-        Some("https://app.ddog-gov.com")
-    );
-    assert_eq!(
-        app_url("app.datadoghq.com").as_deref(),
-        Some("https://app.datadoghq.com")
-    );
-    assert_eq!(app_url(""), None);
-    assert_eq!(app_url("https://evil.example/x"), None);
-    assert_eq!(app_url("localhost"), None);
-}

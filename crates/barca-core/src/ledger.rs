@@ -247,6 +247,13 @@ struct Inner {
     source: Option<String>,
 }
 
+/// The ledger `cfg` runs against ([`Ledger::attach`]), when its command runs against a server.
+pub fn attached(cfg: &crate::config::ResolvedConfig) -> Option<&Ledger> {
+    cfg.ledger
+        .as_ref()
+        .and_then(crate::config::AttachedLedger::get)
+}
+
 /// One command's link to a server's ledger. Cheap to clone; clones share the answers.
 #[derive(Clone)]
 pub struct Ledger {
@@ -281,6 +288,12 @@ impl Ledger {
 
     pub fn url(&self) -> &str {
         self.inner.transport.url()
+    }
+
+    /// This client as a command's `cfg.ledger`, which [`attached`] reads back.
+    pub fn attach(self) -> crate::config::AttachedLedger {
+        let url = self.url().to_string();
+        crate::config::AttachedLedger::new(&url, self)
     }
 
     fn transport(&self) -> &dyn LedgerTransport {

@@ -50,7 +50,7 @@ impl CacheReader {
     ) -> Result<Self, BarcaError> {
         let mut cache = Self::open(&cfg.db_path).await?;
         cache.local_artifact_dir = cfg.remote_off.then(|| cfg.local_artifact_dir.clone());
-        cache.ledger = cfg.ledger.clone();
+        cache.ledger = crate::ledger::attached(cfg).cloned();
         Ok(cache)
     }
 

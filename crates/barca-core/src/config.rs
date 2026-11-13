@@ -9,13 +9,36 @@
 //! > built-in default.
 
 use crate::BarcaError;
-use crate::serve::AuthMode;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "barca.toml";
 pub const DEFAULT_ENV: &str = "default";
+
+// ─── Server auth ─────────────────────────────────────────────────────────────
+
+// `[server] auth`, `BARCA_SERVER_AUTH` and `barca serve --auth`: whether the server requires
+// project API tokens (#187).
+
+/// Whether the server requires project API tokens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    #[default]
+    Off,
+    Token,
+}
+impl std::str::FromStr for AuthMode {
+    type Err = String;
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "off" => Ok(Self::Off),
+            "token" => Ok(Self::Token),
+            _ => Err("server auth must be off or token".into()),
+        }
+    }
+}
 
 // ─── Raw file shape ──────────────────────────────────────────────────────────
 
@@ -45,15 +68,11 @@ pub struct TelemetryToml {
 
 /// The Datadog web app a step's trace link opens (`https://app.datadoghq.com`): from `DD_SITE`,
 /// else `[telemetry] datadog_site`, else Datadog's default site `datadoghq.com` when
-/// `BARCA_TELEMETRY` switches the Datadog integration on. `None` when none applies; a usage
-/// error for a site that is not a host name.
-pub fn datadog_app_url(cwd: &Path) -> Result<Option<String>, BarcaError> {
+/// `datadog_on` (`telemetry::is_on("datadog")`: `BARCA_TELEMETRY` switches the Datadog
+/// integration on). `None` when none applies; a usage error for a site that is not a host name.
+pub fn datadog_app_url(cwd: &Path, datadog_on: bool) -> Result<Option<String>, BarcaError> {
     let file = load_toml(cwd)?.unwrap_or_default();
-    datadog_app_url_with(
-        Vars::Process,
-        file.telemetry.as_ref(),
-        crate::telemetry::is_on("datadog"),
-    )
+    datadog_app_url_with(Vars::Process, file.telemetry.as_ref(), datadog_on)
 }
 
 fn datadog_app_url_with(
@@ -70,7 +89,7 @@ fn datadog_app_url_with(
         (None, None) if datadog_on => ("datadoghq.com".to_string(), "default"),
         (None, None) => return Ok(None),
     };
-    crate::telemetry::datadog::app_url(&site)
+    datadog_site_app_url(&site)
         .map(Some)
         .ok_or_else(|| {
             BarcaError::Usage(format!(
@@ -156,6 +175,27 @@ fn execution_with(
         capacity_setting_with(vars, file.execution.as_ref())?,
         pool_setting_with(vars, file.execution.as_ref())?,
     ))
+}
+
+/// The Datadog web app for `site` (`DD_SITE`, `[telemetry] datadog_site`): `app.` before a
+/// two-label site (`datadoghq.com`, `datadoghq.eu`, `ddog-gov.com`), a regional site
+/// (`us3.datadoghq.com`, `ap1.datadoghq.com`) as it is. `None` for a value that is not a host
+/// name.
+pub fn datadog_site_app_url(site: &str) -> Option<String> {
+    let site = site.trim().trim_end_matches('/').to_ascii_lowercase();
+    let host_like = !site.is_empty()
+        && site.contains('.')
+        && site.split('.').all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    if !host_like {
+        return None;
+    }
+    if site.starts_with("app.") || site.split('.').count() > 2 {
+        Some(format!("https://{site}"))
+    } else {
+        Some(format!("https://app.{site}"))
+    }
 }
 
 /// `[cache]`: how much disk `.barca/` may use (RFC-0012, see `gc`).
@@ -329,6 +369,38 @@ impl EnvSource {
     }
 }
 
+/// A server's ledger client, attached to a command's config. The client type lives above the
+/// config (in `ledger`, which attaches and reads it back), so the config holds it opaquely,
+/// with the URL it shows in `Debug` (credentials left out).
+#[derive(Clone)]
+pub struct AttachedLedger {
+    shown_url: String,
+    client: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl AttachedLedger {
+    /// Hold `client`, whose server is at `url`.
+    pub fn new<T: std::any::Any + Send + Sync>(url: &str, client: T) -> Self {
+        Self {
+            shown_url: crate::uri::diagnostic_url(url),
+            client: std::sync::Arc::new(client),
+        }
+    }
+
+    /// The client, when it is a `T`.
+    pub fn get<T: std::any::Any>(&self) -> Option<&T> {
+        self.client.downcast_ref()
+    }
+}
+
+impl std::fmt::Debug for AttachedLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ledger")
+            .field("url", &self.shown_url)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     /// Project root used for project-wide state, independent of environment.
@@ -362,7 +434,7 @@ pub struct ResolvedConfig {
     pub storage_options_json: Option<String>,
     /// How much disk `.barca/` may use: `BARCA_CACHE_MAX_SIZE` > `[cache] max_size` > 10% of
     /// the filesystem.
-    pub cache_max_size: crate::gc::MaxSize,
+    pub cache_max_size: crate::cache_size::MaxSize,
     /// Where [`Self::cache_max_size`] came from, for messages.
     pub cache_max_size_source: &'static str,
     /// `[server] drain_timeout`: seconds `barca serve` waits for in-flight runs once told to
@@ -389,8 +461,9 @@ pub struct ResolvedConfig {
     /// may start. `None`: the cores, or the capacity when it is smaller (#628).
     pub pool_size: PoolSetting,
     /// The ledger this command runs against: attached by the CLI's `get` and `run` from the
-    /// configured server unless `--local`, never by `barca serve`, which is the ledger.
-    pub ledger: Option<crate::ledger::Ledger>,
+    /// configured server unless `--local`, never by `barca serve`, which is the ledger. The
+    /// client lives above the config, which holds it opaquely ([`AttachedLedger`]).
+    pub ledger: Option<AttachedLedger>,
     /// Check the artifact store at the start of a run even when it was checked in the last 5
     /// minutes (#593): set by `get -o url`, which signs objects the store must hold.
     pub check_store: bool,
@@ -468,7 +541,7 @@ impl ResolvedConfig {
 
     fn env_and_store(&self) -> String {
         let store = if self.remote_artifacts() {
-            crate::transfer::diagnostic_uri(&self.artifact_root)
+            crate::uri::diagnostic_uri(&self.artifact_root)
         } else {
             format!("local ({})", self.local_artifact_dir)
         };
@@ -482,7 +555,7 @@ impl ResolvedConfig {
 
 /// A path in this environment's local artifact directory, without accessing any store.
 pub(crate) fn local_artifact(path: &str, artifact_dir: &str) -> bool {
-    let Some(path) = crate::transfer::local_path(path) else {
+    let Some(path) = crate::uri::local_path(path) else {
         return false;
     };
     let root = Path::new(artifact_dir);
@@ -924,14 +997,14 @@ pub fn resolve_with(
     })
 }
 
-/// `BARCA_CACHE_MAX_SIZE` > `[cache] max_size` > [`crate::gc::size::DEFAULT`], and which one it
+/// `BARCA_CACHE_MAX_SIZE` > `[cache] max_size` > [`crate::cache_size::DEFAULT`], and which one it
 /// was. An invalid value is a usage error naming where it came from.
 fn cache_max_size(
     vars: Vars<'_>,
     file: Option<&CacheToml>,
-) -> Result<(crate::gc::MaxSize, &'static str), BarcaError> {
+) -> Result<(crate::cache_size::MaxSize, &'static str), BarcaError> {
     let parse = |raw: &str, source: &'static str| {
-        crate::gc::size::parse(raw)
+        crate::cache_size::parse(raw)
             .map(|size| (size, source))
             .map_err(|e| BarcaError::Usage(format!("{source}: {e}")))
     };
@@ -939,7 +1012,7 @@ fn cache_max_size(
         return parse(&raw, "BARCA_CACHE_MAX_SIZE");
     }
     match file.and_then(|c| c.max_size.as_ref()) {
-        None => Ok((crate::gc::size::DEFAULT, "default")),
+        None => Ok((crate::cache_size::DEFAULT, "default")),
         Some(toml::Value::String(raw)) => parse(raw, "[cache] max_size"),
         Some(toml::Value::Integer(n)) => parse(&n.to_string(), "[cache] max_size"),
         Some(other) => Err(BarcaError::Usage(format!(
@@ -1090,7 +1163,7 @@ pub fn check_server_url(url: &str, what: &str) -> Result<String, BarcaError> {
         Some(host) if !host.is_empty() && !host.starts_with('/') => Ok(trimmed.to_string()),
         _ => Err(BarcaError::Usage(format!(
             "{what}: '{}' is not a server URL\nGive the URL of a running `barca serve`, starting with http:// or https://, e.g. https://barca.example.com.",
-            crate::http::diagnostic_url(url)
+            crate::uri::diagnostic_url(url)
         ))),
     }
 }
@@ -1099,6 +1172,37 @@ pub fn check_server_url(url: &str, what: &str) -> Result<String, BarcaError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn app_url_follows_datadog_sites() {
+        assert_eq!(
+            super::datadog_site_app_url("datadoghq.com").as_deref(),
+            Some("https://app.datadoghq.com")
+        );
+        assert_eq!(
+            super::datadog_site_app_url("datadoghq.eu").as_deref(),
+            Some("https://app.datadoghq.eu")
+        );
+        assert_eq!(
+            super::datadog_site_app_url("us3.datadoghq.com").as_deref(),
+            Some("https://us3.datadoghq.com")
+        );
+        assert_eq!(
+            super::datadog_site_app_url(" AP1.datadoghq.com/ ").as_deref(),
+            Some("https://ap1.datadoghq.com")
+        );
+        assert_eq!(
+            super::datadog_site_app_url("ddog-gov.com").as_deref(),
+            Some("https://app.ddog-gov.com")
+        );
+        assert_eq!(
+            super::datadog_site_app_url("app.datadoghq.com").as_deref(),
+            Some("https://app.datadoghq.com")
+        );
+        assert_eq!(super::datadog_site_app_url(""), None);
+        assert_eq!(super::datadog_site_app_url("https://evil.example/x"), None);
+        assert_eq!(super::datadog_site_app_url("localhost"), None);
+    }
+
     #[test]
     fn datadog_app_url_prefers_dd_site_then_the_file_then_the_default() {
         use super::{TelemetryToml, Vars, datadog_app_url_with};
