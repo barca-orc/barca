@@ -595,6 +595,9 @@ pub struct RunView {
 }
 
 #[cfg(test)]
+mod metadata_envelope_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::results::TargetOutcome;

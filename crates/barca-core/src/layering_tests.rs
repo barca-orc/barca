@@ -50,6 +50,7 @@ use Layer::{Compile, Core, Db, Engine, Model};
 const CRATES: &[(&str, &str)] = &[
     ("barca-model", "barca_model"),
     ("barca-compile", "barca_compile"),
+    ("barca-db", "barca_db"),
     ("barca-core", "barca_core"),
 ];
 
@@ -59,7 +60,8 @@ fn crate_of(layer: Layer) -> &'static str {
     match layer {
         Model => "barca-model",
         Compile => "barca-compile",
-        Db | Engine | Core => "barca-core",
+        Db => "barca-db",
+        Engine | Core => "barca-core",
     }
 }
 
@@ -76,8 +78,8 @@ impl Layer {
 }
 
 /// Every top-level module (and `lib`, `barca-model`'s crate root and its own items;
-/// `barca_compile`, the root of `barca-compile`; `barca_core`, the root of `barca-core`, which only
-/// declares and re-exports), with its layer. Modules the
+/// `barca_compile` and `barca_db`, the roots of `barca-compile` and `barca-db`; `barca_core`, the
+/// root of `barca-core`, which only declares and re-exports), with its layer. Modules the
 /// #905 Target table names are placed as it says; the others by what they use and who uses them.
 #[rustfmt::skip]
 const LAYERS: &[(&str, Layer)] = &[
@@ -85,6 +87,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("lib", Model), // `BarcaError`, `FailedStep`, `PartialRun`, `safe_node_id`: used everywhere
     ("barca_compile", Compile), // the root of `barca-compile`: module declarations, `Dag`
     ("barca_core", Core), // the root of `barca-core`: module declarations and re-exports
+    ("barca_db", Db), // the root of `barca-db`: module declarations only
     ("model", Model),
     ("keyed", Model),
     ("step_status", Model),
@@ -136,7 +139,7 @@ const LAYERS: &[(&str, Layer)] = &[
                              // `batch::spec` in barca-core
     // ---- db (barca-db) ----
     ("db", Db),
-    ("persist::recording", Db),
+    ("recording", Db), // a run's rows at its end; `persist` re-exports it as `persist::recording`
     ("run_owner", Db),
     ("state_validate", Db),
     ("metadata_size", Db),
@@ -465,8 +468,7 @@ fn modules_only_use_layers_below_them() {
     for (k, _) in LAYERS {
         let top = k.split("::").next().unwrap();
         let known = *k == "lib"
-            || *k == "barca_compile"
-            || *k == "barca_core"
+            || CRATES.iter().any(|(_, name)| name == k)
             || crates.iter().any(|(_, root, _, declared)| {
                 declared.contains(top)
                     && (!k.contains("::") || {
@@ -502,10 +504,8 @@ fn modules_only_use_layers_below_them() {
             let from = if module.is_empty() {
                 if *dir == crate_of(Model) {
                     "lib"
-                } else if *dir == crate_of(Compile) {
-                    "barca_compile"
                 } else {
-                    "barca_core"
+                    CRATES.iter().find(|(d, _)| d == dir).unwrap().1
                 }
             } else {
                 key_of(&module)

@@ -155,7 +155,7 @@ runs the long version weekly, with `--strict-reads`: a read the `--read-only` se
 writer fails it. Those reads (`database disk image is malformed`) came from the server's own check
 of the database file's header, which closed a descriptor of the file and so dropped the process's
 SQLite locks on it; `looking_at_the_database_file_keeps_this_process_s_locks` in
-`crates/barca-core/src/db/snapshots.rs` covers it. `BARCA_TEST_CACHE_CHECKPOINT_SECS` shortens the server's
+`crates/barca-db/src/db/snapshots.rs` covers it. `BARCA_TEST_CACHE_CHECKPOINT_SECS` shortens the server's
 one-minute size check for it; long waits (`STUCK_FOR`, `SURVEY_EVERY`) are skipped by rewriting
 `gc-state.json`.
 

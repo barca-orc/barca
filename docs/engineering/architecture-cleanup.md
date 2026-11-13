@@ -99,7 +99,7 @@ uses an unbounded channel and run state retains per-key maps: current warm incre
 optimizations are not a bound on cold/full-domain execution.
 
 [Freshness state](../../crates/barca-core/src/freshness.rs), incremental proof saving and
-[database operations](../../crates/barca-core/src/db/mod.rs) participate in current-state decisions.
+[database operations](../../crates/barca-db/src/db/mod.rs) participate in current-state decisions.
 [Observation](../../crates/barca-core/src/observation.rs) and
 [source observations](../../crates/barca-model/src/source_observation.rs) provide evidence;
 their hashes do not supply a monotonic reconciliation order. Result history, current
@@ -107,7 +107,7 @@ membership/selection and freshness evidence need explicit responsibilities befor
 versions can publish concurrently.
 
 [Store synchronization](../../crates/barca-core/src/store_sync.rs),
-[transfer](../../crates/barca-core/src/transfer.rs), [pending uploads](../../crates/barca-core/src/pending_uploads.rs)
+[transfer](../../crates/barca-core/src/transfer.rs), [pending uploads](../../crates/barca-db/src/pending_uploads.rs)
 and the [server ledger](../../crates/barca-core/src/ledger.rs) handle availability and sharing
 of completed artifacts. [Upload receipts](../../specs/interfaces/artifact-upload-receipts.md) protect producer
 upload evidence, not every downstream reader's input lifetime. [GC](../../crates/barca-core/src/gc/mod.rs)
@@ -124,7 +124,7 @@ events with cache state. A metadata read snapshot is not an execution input snap
 Explicit checking revisions, independent availability and bounded cold inspection remain
 acceptance obligations in [inspection](../../specs/behavior/inspection.md).
 
-[Run owner diagnosis](../../crates/barca-core/src/run_owner.rs) distinguishes proven alive,
+[Run owner diagnosis](../../crates/barca-db/src/run_owner.rs) distinguishes proven alive,
 proven gone and unknown owners. This protects against treating an unreachable owner as dead;
 retain that distinction. [Recover](../../crates/barca-core/src/recover.rs) primarily recovers
 missing cached artifacts; it is not the proposed shared-computation ownership manager.
@@ -275,6 +275,6 @@ refactor, snapshot isolation, shared execution or performance improvement ships 
 
 The [behavioral conformance series](behavior-conformance.md) records the first implementation
 slices, exact obligation scenarios and remaining decision gates. Durable result-history writes
-now share [one recording owner](../../crates/barca-core/src/persist/recording.rs); receipt
+now share [one recording owner](../../crates/barca-db/src/recording.rs); receipt
 eligibility and transaction lifetimes remain with their existing callers. This is a structural
 boundary, not ordered current-state publication.

@@ -1436,6 +1436,7 @@ fn every_barca_env_var_is_in_the_contract() {
     for krate in [
         "barca-model",
         "barca-compile",
+        "barca-db",
         "barca-core",
         "barca-cli",
         "barca-server",
