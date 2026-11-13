@@ -1,0 +1,17 @@
+[package]
+name = "barca-engine"
+version = "0.42.0"
+edition = "2024"
+description = "Engine layer — plan in, results out: the coordinator, the worker pool, the wire protocol"
+
+# Only barca-model and barca-compile among barca crates; no metadata database (#905).
+[dependencies]
+barca-model = { path = "../barca-model" }
+barca-compile = { path = "../barca-compile" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "process"] }
+tokio-util = { workspace = true }
+libc = { workspace = true }
+tempfile = { workspace = true }

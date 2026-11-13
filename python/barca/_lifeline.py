@@ -2,7 +2,7 @@
 
 The coordinator starts its helpers (`barca._transfer`, `barca._state`) deaf to Ctrl-C: what an
 interrupt means for a run is the coordinator's decision, and it stops the helpers itself
-(crates/barca-core/src/helper_proc.rs). If the coordinator is killed outright, nobody is left
+(crates/barca-engine/src/helper_proc.rs). If the coordinator is killed outright, nobody is left
 to stop them. So it hands each helper the read end of a pipe as stdin and keeps the write end.
 When the coordinator is gone, however it went, the pipe reaches end-of-file: the helper removes
 the temp files it was writing and exits, without a word.

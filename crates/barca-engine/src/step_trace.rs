@@ -1,15 +1,15 @@
 //! What a step's trace says about it: where its node sits in the pipeline ([`NodeContext`])
 //! and the trace context a worker's `barca.execute` span joins ([`StepTrace::context`]). The
 //! worker loop attaches it to each step it sends; the Datadog exporter
-//! ([`crate::telemetry::datadog`]) sends the traces themselves.
+//! (`barca_core::telemetry::datadog`) sends the traces themselves.
 
-use crate::trace_ids::{step_span_id, step_trace_id, step_trace_id_high};
+use barca_model::trace_ids::{step_span_id, step_trace_id, step_trace_id_high};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// barca's own version, the `barca.version` tag of every span and metric.
-pub(crate) const BARCA_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BARCA_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Where a node sits in the pipeline: what every report of one of its steps says about it,
 /// whichever partition key or attempt the step is.
@@ -57,10 +57,10 @@ pub fn short_name(base_id: &str) -> &str {
 }
 
 /// The [`NodeContext`] of every node of `dag`, by base id.
-pub(crate) fn node_contexts(
-    dag: &crate::dag::Dag,
+pub fn node_contexts(
+    dag: &barca_compile::dag::Dag,
 ) -> std::collections::HashMap<String, NodeContext> {
-    use crate::model::{Freshness, NodeKind};
+    use barca_model::model::{Freshness, NodeKind};
     use std::collections::HashMap;
 
     let mut name_count: HashMap<&str, usize> = HashMap::new();
@@ -68,7 +68,7 @@ pub(crate) fn node_contexts(
         *name_count.entry(short_name(id)).or_default() += 1;
     }
     // Groups name their members by node id or group id; a member has at most one parent.
-    let mut parent: HashMap<&str, &crate::groups::NodeGroup> = HashMap::new();
+    let mut parent: HashMap<&str, &barca_compile::groups::NodeGroup> = HashMap::new();
     for group in &dag.groups {
         for member in &group.members {
             parent.insert(member.as_str(), group);
@@ -124,7 +124,7 @@ pub(crate) fn node_contexts(
 }
 
 /// The tags that place a node in the pipeline.
-pub(crate) fn node_meta(meta: &mut Map<String, Value>, node: &NodeContext) {
+pub fn node_meta(meta: &mut Map<String, Value>, node: &NodeContext) {
     meta.insert("barca.asset".into(), json!(node.name));
     meta.insert("barca.file".into(), json!(node.file));
     meta.insert("barca.kind".into(), json!(node.kind));
@@ -140,18 +140,18 @@ pub(crate) fn node_meta(meta: &mut Map<String, Value>, node: &NodeContext) {
 /// One run's trace context: what each step sent to a worker carries, so the worker's
 /// `barca.execute` span joins the step's trace.
 #[derive(Debug, Clone)]
-pub(crate) struct StepTrace {
-    pub(crate) run_id: String,
+pub struct StepTrace {
+    pub run_id: String,
     /// `DD_SERVICE`, or `barca`: the one service every span reports as.
-    pub(crate) service: String,
-    pub(crate) project: Option<String>,
-    pub(crate) job: String,
-    pub(crate) nodes: HashMap<String, Arc<NodeContext>>,
+    pub service: String,
+    pub project: Option<String>,
+    pub job: String,
+    pub nodes: HashMap<String, Arc<NodeContext>>,
 }
 
 impl StepTrace {
-    pub(crate) fn new(
-        dag: &crate::dag::Dag,
+    pub fn new(
+        dag: &barca_compile::dag::Dag,
         job: &str,
         run_id: &str,
         service: String,
@@ -169,7 +169,7 @@ impl StepTrace {
         }
     }
 
-    pub(crate) fn node(&self, base: &str) -> Arc<NodeContext> {
+    pub fn node(&self, base: &str) -> Arc<NodeContext> {
         self.nodes
             .get(base)
             .cloned()
@@ -179,7 +179,7 @@ impl StepTrace {
     /// The `datadog` object of a step sent to a worker: the step's trace and its root span.
     /// `reported` is the step whose trace the execution belongs in (itself, or a `parallel()`
     /// call's nearest reported ancestor).
-    pub(crate) fn context(&self, reported: &crate::StepId, attempt: u32) -> Value {
+    pub fn context(&self, reported: &barca_model::StepId, attempt: u32) -> Value {
         let base = reported.base_id();
         let display = reported.display();
         let node = self.node(base);

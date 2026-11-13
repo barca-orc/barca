@@ -14,21 +14,21 @@ mod outcomes;
 // ─── ID types ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct ItemId(pub u64);
+pub struct ItemId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct GroupId(pub u64);
+pub struct GroupId(pub u64);
 
 // ─── Dependency ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DepKind {
+pub enum DepKind {
     Data,
     Ordering,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Dep {
+pub struct Dep {
     pub upstream: ItemId,
     pub kind: DepKind,
 }
@@ -36,7 +36,7 @@ pub(crate) struct Dep {
 // ─── Item specification ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub(crate) struct ItemSpec {
+pub struct ItemSpec {
     pub fn_ref: String,
     pub function_name: String,
     pub source_file: String,
@@ -51,7 +51,7 @@ pub(crate) struct ItemSpec {
     pub retry_backoff_seconds: f64,
     pub serializer: Option<String>,
     /// Sink outputs from stacked `@sink(...)` decorators.
-    pub sinks: Vec<crate::model::SinkDecl>,
+    pub sinks: Vec<barca_model::model::SinkDecl>,
     /// Content-addressing run hash for this item's artifact (None → legacy
     /// node-id-keyed layout, e.g. parallel() children).
     pub run_hash: Option<String>,
@@ -65,21 +65,21 @@ pub(crate) struct ItemSpec {
     /// collected param resolves to a *list* of artifacts.
     pub collected_inputs: HashMap<String, Vec<crate::dispatch::OutputRef>>,
     /// Parameter frame types from function annotations.
-    pub param_types: HashMap<String, crate::model::ValueType>,
+    pub param_types: HashMap<String, barca_model::model::ValueType>,
     /// Return frame type from the function's return annotation.
-    pub return_type: Option<crate::model::ValueType>,
+    pub return_type: Option<barca_model::model::ValueType>,
     pub kind: String,
-    /// A dict `partitions_from` source's value for this key (`crate::keyed`): param ->
+    /// A dict `partitions_from` source's value for this key (`barca_model::keyed`): param ->
     /// (the source's JSON artifact, the key). The worker reads the value from the artifact.
     pub keyed_inputs: HashMap<String, (String, String)>,
     /// The step's output is read by a `partitions_from(...)` for keys: the worker checks it is
-    /// a list or a dict it can write as JSON (`crate::keyed`).
+    /// a list or a dict it can write as JSON (`barca_model::keyed`).
     pub partition_source: bool,
     pub previous_sensor: Option<crate::dispatch::OutputRef>,
 }
 
 impl ItemSpec {
-    pub(crate) fn from_step(step: &crate::planner::StreamStep) -> Self {
+    pub(crate) fn from_step(step: &barca_compile::planner::StreamStep) -> Self {
         Self {
             fn_ref: format!("{}:{}", step.source_file, step.function_name),
             function_name: step.function_name.to_string(),
@@ -140,7 +140,7 @@ pub(crate) enum FailureAction {
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: ItemId,
-    pub step_id: crate::StepId,
+    pub step_id: barca_model::StepId,
     pub spec: ItemSpec,
     pub attempts: u32,
     pub group: Option<GroupId>,
@@ -150,7 +150,7 @@ pub struct Item {
 // ─── Parallel group ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub(crate) struct ParallelGroup {
+pub struct ParallelGroup {
     pub parent: ItemId,
     pub items: Vec<ItemId>,
     pub completed_count: usize,
@@ -239,7 +239,7 @@ impl ReadyQueue {
 
 // ─── Coordinator ──────────────────────────────────────────────────────────────
 
-pub(crate) struct Coordinator {
+pub struct Coordinator {
     /// All items.
     items: HashMap<ItemId, Item>,
     /// Reverse dep graph: item → items that depend on it.
@@ -424,10 +424,7 @@ impl Coordinator {
     }
 
     /// The ready items in the order `next_ready` hands them out, left in the queue.
-    pub(crate) fn sensor_previous(
-        &mut self,
-        previous: &HashMap<String, crate::dispatch::OutputRef>,
-    ) {
+    pub fn sensor_previous(&mut self, previous: &HashMap<String, crate::dispatch::OutputRef>) {
         for item in self.items.values_mut() {
             if item.spec.kind == "sensor" {
                 item.spec.previous_sensor = previous.get(&item.step_id.display()).cloned();

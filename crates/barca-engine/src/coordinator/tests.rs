@@ -26,10 +26,10 @@ fn spec(name: &str) -> ItemSpec {
     }
 }
 
-fn dummy_step_id(name: &str) -> crate::StepId {
-    crate::StepId {
+fn dummy_step_id(name: &str) -> barca_model::StepId {
+    barca_model::StepId {
         base: std::sync::Arc::from(format!("test.py:{name}")),
-        partition: crate::model::PartitionKey(std::collections::BTreeMap::new()),
+        partition: barca_model::model::PartitionKey(std::collections::BTreeMap::new()),
     }
 }
 
@@ -178,7 +178,11 @@ fn parallel_creates_children_in_ready_queue() {
 #[test]
 fn an_abandoned_group_drops_the_branches_that_have_not_started() {
     let mut c = Coordinator::new();
-    let parent = c.add_item(crate::StepId::unpartitioned("p"), spec("p"), Vec::new());
+    let parent = c.add_item(
+        barca_model::StepId::unpartitioned("p"),
+        spec("p"),
+        Vec::new(),
+    );
     assert_eq!(c.next_ready(), Some(parent));
     let (group, children) =
         c.on_parallel_requested(parent, vec![spec("c0"), spec("c1"), spec("c2")]);
@@ -511,9 +515,12 @@ fn ten_thousand_items_no_panic() {
 
 /// One stream of partitioned steps over `keys`; each `(name, upstream)` step reads
 /// `upstream`'s aligned key when it has one.
-fn partition_stream(keys: &[String], steps: &[(&str, Option<&str>)]) -> crate::planner::Phase {
-    use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
-    use crate::{PartitionKey, StepId};
+fn partition_stream(
+    keys: &[String],
+    steps: &[(&str, Option<&str>)],
+) -> barca_compile::planner::Phase {
+    use barca_compile::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+    use barca_model::{PartitionKey, StepId};
     let pks: Vec<PartitionKey> = keys
         .iter()
         .map(|k| PartitionKey::from(HashMap::from([("k".to_string(), k.clone())])))
@@ -522,7 +529,7 @@ fn partition_stream(keys: &[String], steps: &[(&str, Option<&str>)]) -> crate::p
         .iter()
         .map(|&(name, upstream)| StreamStep {
             step_id: StepId::unpartitioned(name),
-            kind: crate::NodeKind::Asset,
+            kind: barca_model::NodeKind::Asset,
             function_name: std::sync::Arc::from(name.rsplit(':').next().unwrap()),
             source_file: std::sync::Arc::from("f"),
             inputs: upstream
@@ -826,8 +833,8 @@ fn a_recorded_output_is_found_by_its_display_id() {
 
 #[test]
 fn load_phase_assigns_run_hashes_per_item_and_partition() {
-    use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
-    use crate::{PartitionKey, StepId};
+    use barca_compile::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+    use barca_model::{PartitionKey, StepId};
 
     let pk_a = PartitionKey::from(HashMap::from([("t".to_string(), "A".to_string())]));
     let pk_b = PartitionKey::from(HashMap::from([("t".to_string(), "B".to_string())]));
@@ -840,7 +847,7 @@ fn load_phase_assigns_run_hashes_per_item_and_partition() {
 
     let mk = |name: &str, hashes: HashMap<String, String>, pks: Vec<PartitionKey>| StreamStep {
         step_id: StepId::unpartitioned(name),
-        kind: crate::NodeKind::Asset,
+        kind: barca_model::NodeKind::Asset,
         function_name: std::sync::Arc::from(name.rsplit(':').next().unwrap()),
         source_file: std::sync::Arc::from("f"),
         inputs: HashMap::new(),
@@ -907,14 +914,14 @@ fn load_phase_assigns_run_hashes_per_item_and_partition() {
 /// the `fetch` instance they depend on.
 #[test]
 fn load_phase_wires_partition_aligned_deps_regardless_of_stream_order() {
-    use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
-    use crate::{PartitionKey, StepId};
+    use barca_compile::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+    use barca_model::{PartitionKey, StepId};
 
     let pk = |k: &str| PartitionKey::from(HashMap::from([("t".to_string(), k.to_string())]));
 
     let mk = |name: &str, inputs: HashMap<String, String>, pks: Vec<PartitionKey>| StreamStep {
         step_id: StepId::unpartitioned(name),
-        kind: crate::NodeKind::Asset,
+        kind: barca_model::NodeKind::Asset,
         function_name: std::sync::Arc::from(name.rsplit(':').next().unwrap()),
         source_file: std::sync::Arc::from("f"),
         inputs,
@@ -1001,13 +1008,13 @@ fn load_phase_wires_partition_aligned_deps_regardless_of_stream_order() {
 /// argument (`TypeError: leaf() missing 1 required positional argument: 'm'`).
 #[test]
 fn load_phase_resolves_unpartitioned_upstream_of_partitioned_step() {
-    use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
-    use crate::{PartitionKey, StepId};
+    use barca_compile::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+    use barca_model::{PartitionKey, StepId};
 
     let pk = |k: &str| PartitionKey::from(HashMap::from([("k".to_string(), k.to_string())]));
     let mk = |name: &str, inputs: HashMap<String, String>, pks: Vec<PartitionKey>| StreamStep {
         step_id: StepId::unpartitioned(name),
-        kind: crate::NodeKind::Asset,
+        kind: barca_model::NodeKind::Asset,
         function_name: std::sync::Arc::from(name.rsplit(':').next().unwrap()),
         source_file: std::sync::Arc::from("f"),
         inputs,
@@ -1083,13 +1090,13 @@ fn load_phase_resolves_unpartitioned_upstream_of_partitioned_step() {
 /// phase's completed outputs.
 #[test]
 fn load_phase_delivers_full_collected_list_cross_phase() {
-    use crate::StepId;
     use crate::dispatch::{OutputRef, ProvidedInput};
-    use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+    use barca_compile::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+    use barca_model::StepId;
 
     let step = StreamStep {
         step_id: StepId::unpartitioned("f:sink"),
-        kind: crate::NodeKind::Asset,
+        kind: barca_model::NodeKind::Asset,
         function_name: std::sync::Arc::from("sink"),
         source_file: std::sync::Arc::from("f"),
         inputs: HashMap::from([("data".to_string(), "f:source".to_string())]),
@@ -1242,13 +1249,13 @@ fn parallel_branches_take_the_weight_of_the_step_that_called_parallel() {
 
 #[test]
 fn every_partition_key_takes_its_nodes_weight() {
-    use crate::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
-    use crate::{PartitionKey, StepId};
+    use barca_compile::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
+    use barca_model::{PartitionKey, StepId};
 
     let pk = |k: &str| PartitionKey::from(HashMap::from([("k".to_string(), k.to_string())]));
     let step = StreamStep {
         step_id: StepId::unpartitioned("f:heavy"),
-        kind: crate::NodeKind::Asset,
+        kind: barca_model::NodeKind::Asset,
         function_name: std::sync::Arc::from("heavy"),
         source_file: std::sync::Arc::from("f"),
         inputs: HashMap::new(),

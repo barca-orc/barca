@@ -40,8 +40,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::coordinator::{Coordinator, FailureAction, GroupId, ItemId, ItemSpec};
 use crate::cost::CostModel;
-use crate::events::RunEvent;
 use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage, read_frame, write_frame};
+use barca_model::events::RunEvent;
 
 mod leases;
 mod lifecycle;
@@ -56,7 +56,7 @@ use shared::{Share, Steps, share_changed};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-pub(crate) struct IoConfig {
+pub struct IoConfig {
     pub upload_snapshot_prefix: Option<String>,
     pub python: PathBuf,
     pub pool_size: usize,
@@ -85,10 +85,10 @@ pub(crate) struct IoConfig {
 
 /// Callback invoked on each step completion with (node_id, artifact_json, attempts made).
 /// `Send` so the whole run future can be spawned onto a multi-thread runtime.
-pub(crate) type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value, u32) + Send + 'a>;
+pub type StepCallback<'a> = Box<dyn FnMut(&str, &serde_json::Value, u32) + Send + 'a>;
 
 /// Callback invoked with each live [`RunEvent`] as a run progresses.
-pub(crate) type EventCallback<'a> = Box<dyn FnMut(RunEvent) + Send + 'a>;
+pub type EventCallback<'a> = Box<dyn FnMut(RunEvent) + Send + 'a>;
 
 /// Called periodically while steps are running, with `(node_id, seconds running)` for each
 /// step that has been in flight longer than the progress interval.
@@ -149,7 +149,7 @@ enum IoEvent {
     RetryReady {
         item_id: ItemId,
     },
-    /// Another run's claim on a step this run waited for ended ([`crate::serve::claims`]): with the
+    /// Another run's claim on a step this run waited for ended (`barca_core::serve::claims`): with the
     /// owner's artifact when it finished the step, `None` when this run must execute it.
     Settled {
         item_id: ItemId,
@@ -326,7 +326,7 @@ async fn worker_io_task(
 /// Workers keep their interpreter (and imported user modules) warm between
 /// phases — the dominant per-spawn cost is `importlib` + heavy imports, not
 /// the fork itself.
-pub(crate) struct WorkerPool {
+pub struct WorkerPool {
     config: IoConfig,
     socket_path: PathBuf,
     /// Takes connections to the socket ([`accept_connections`]); stopped at shutdown, or when

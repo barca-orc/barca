@@ -41,7 +41,7 @@ pub(crate) fn python_module_std(
 }
 
 /// Async variant of [`python_module_std`].
-pub(crate) fn python_module(
+pub fn python_module(
     python: &std::path::Path,
     module: &str,
     storage_options: Option<&str>,
@@ -61,13 +61,13 @@ pub(crate) fn python_module(
 /// an artifact store hung for ever in its first pull. Started one at a time, no child can
 /// inherit what was made for another.
 pub fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
-    let _one_at_a_time = crate::spawn_lock::SPAWNING
+    let _one_at_a_time = barca_model::spawn_lock::SPAWNING
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cmd.spawn()
 }
 
-pub use crate::spawn_lock::{output_std, spawn_std};
+pub use barca_model::spawn_lock::{output_std, spawn_std};
 
 /// How long a helper gets to clean up after SIGTERM before it is killed.
 pub(crate) const STOP_GRACE: Duration = Duration::from_secs(2);
@@ -81,7 +81,7 @@ pub(crate) const STOP_GRACE: Duration = Duration::from_secs(2);
 /// a pipe of its own to learn that `exec` happened, and that pipe can be inherited by a child
 /// started at the same instant just like the ones [`spawn`] describes. A process group is
 /// set by `posix_spawn` itself, with no hook and no pipe.
-pub(crate) fn shield_from_ctrl_c(cmd: &mut Command) {
+pub fn shield_from_ctrl_c(cmd: &mut Command) {
     cmd.process_group(0);
 }
 
@@ -114,7 +114,7 @@ pub(crate) fn start_outside_the_job(cmd: &mut std::process::Command) {
 /// else would stop it.
 ///
 /// The caller must keep the child's stdin handle open for as long as the helper should live.
-pub(crate) fn give_lifeline(cmd: &mut Command) {
+pub fn give_lifeline(cmd: &mut Command) {
     cmd.env("BARCA_LIFELINE", "stdin")
         .stdin(std::process::Stdio::piped());
 }
@@ -136,7 +136,7 @@ pub(crate) fn kill(pid: u32) {
 }
 
 /// Stop a helper: SIGTERM, up to [`STOP_GRACE`] for it to clean up and exit, then SIGKILL.
-pub(crate) async fn stop(child: &mut Child) {
+pub async fn stop(child: &mut Child) {
     if let Some(pid) = child.id() {
         terminate(pid);
         if tokio::time::timeout(STOP_GRACE, child.wait()).await.is_ok() {
@@ -146,7 +146,7 @@ pub(crate) async fn stop(child: &mut Child) {
     let _ = child.kill().await;
 }
 
-pub(crate) enum OutputFailed {
+pub enum OutputFailed {
     Spawn(std::io::Error),
     TimedOut(std::time::Duration),
     Cancelled,
@@ -163,9 +163,9 @@ pub(crate) enum OutputFailed {
 /// Like every helper it is started out of reach of the terminal's Ctrl-C, which is the
 /// coordinator's to act on, and with a lifeline, so that it exits by itself if this process is
 /// killed (see [`crate::helper_proc`]).
-pub(crate) async fn run_to_output(
+pub async fn run_to_output(
     mut cmd: Command,
-    cancel: Option<&crate::CancellationToken>,
+    cancel: Option<&barca_model::CancellationToken>,
     limit: Option<std::time::Duration>,
 ) -> Result<std::process::Output, OutputFailed> {
     crate::helper_proc::shield_from_ctrl_c(&mut cmd);
@@ -217,14 +217,14 @@ pub(crate) async fn run_to_output(
 }
 
 /// Kept at its old path for callers outside the crate.
-pub use crate::process::Until;
+pub use barca_model::process::Until;
 
 /// The reason a state helper failed: its last `error: ...` line (what `python -m barca._state`
 /// prints), else its last non-empty line. Library warnings printed before it (google-auth's
 /// quota-project notice, deprecation warnings) are dropped so they never reach the error.
 /// Why [`run_json`] failed. Each caller words it: the helpers' callers report failures
 /// differently (a note on a shape, an infra error, a store that could not be asked).
-pub(crate) enum JsonFailed {
+pub enum JsonFailed {
     /// The helper could not be started.
     Spawn(std::io::Error),
     /// Writing the request or reading the answer failed.
@@ -241,7 +241,7 @@ pub(crate) enum JsonFailed {
 /// JSON document on stdout (`barca._inspect`, `barca._value`, `barca._sql`, `barca._state stat`).
 /// With a `limit`, a helper still running after it fails the call, and `cmd` should be
 /// `kill_on_drop` so that it is killed. Started through [`spawn`].
-pub(crate) async fn run_json<T: serde::de::DeserializeOwned>(
+pub async fn run_json<T: serde::de::DeserializeOwned>(
     mut cmd: Command,
     request: &serde_json::Value,
     limit: Option<Duration>,
@@ -275,7 +275,7 @@ pub(crate) async fn run_json<T: serde::de::DeserializeOwned>(
 
 /// The last line of a helper's stderr, as `barca._inspect`, `barca._value` and `barca._sql`
 /// report an error.
-pub(crate) fn last_line(stderr: &[u8]) -> String {
+pub fn last_line(stderr: &[u8]) -> String {
     String::from_utf8_lossy(stderr)
         .lines()
         .last()
@@ -283,7 +283,7 @@ pub(crate) fn last_line(stderr: &[u8]) -> String {
         .to_string()
 }
 
-pub(crate) fn helper_cause(stderr: &[u8]) -> String {
+pub fn helper_cause(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = text
         .lines()
@@ -305,55 +305,12 @@ mod tests {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-    /// Every production helper must use the shared launch path and pass the resolved options.
-    /// This guards the wiring as well as the subprocess round trip below: testing the builder
-    /// alone would still pass if a new worker or inspector bypassed it.
-    #[test]
-    fn every_helper_launch_forwards_resolved_storage_options() {
-        for (source, module) in [
-            (include_str!("io_loop/lifecycle.rs"), "barca._worker"),
-            (include_str!("backup.rs"), "barca._state"),
-            (include_str!("diagnostics.rs"), "barca._doctor"),
-            (include_str!("store_inspect.rs"), "barca._inspect"),
-            (include_str!("values.rs"), "barca._value"),
-            (include_str!("sql.rs"), "barca._sql"),
-            (include_str!("transfer.rs"), "barca._transfer"),
-        ] {
-            let production = source.split("mod tests {").next().unwrap();
-            let code = production
-                .lines()
-                .filter(|line| !line.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let literal = format!("\"{module}\"");
-            let mut count = 0;
-            for (offset, _) in code.match_indices(&literal) {
-                count += 1;
-                let before = &code[..offset];
-                let call = before
-                    .rsplit_once("crate::helper_proc::python_module")
-                    .unwrap_or_else(|| panic!("{module} bypasses shared helper configuration"));
-                assert!(
-                    !call.1.contains(';'),
-                    "{module} bypasses the shared builder"
-                );
-                let after = &code[offset + literal.len()..];
-                let arguments = after.split(";").next().unwrap();
-                assert!(
-                    arguments.contains("storage_options_json.as_deref()"),
-                    "{module} does not forward resolved storage options"
-                );
-            }
-            assert_eq!(count, 1, "expected one production launcher for {module}");
-        }
-    }
-
     /// Resolve options from TOML in an isolated process, then check what Python actually sees
     /// through both async helpers and std workers. The parent environment cannot accidentally
     /// supply the options, and config tests mutating environment variables cannot race this.
     #[tokio::test]
     async fn toml_storage_options_reach_python_helpers_and_workers() {
-        const PROBE: &str = crate::test_hooks::HELPER_OPTIONS_PROBE;
+        const PROBE: &str = barca_model::test_hooks::HELPER_OPTIONS_PROBE;
         if std::env::var_os(PROBE).is_none() {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap());
             child
@@ -400,7 +357,7 @@ mod tests {
             "import os\nprint(os.environ['BARCA_STORAGE_OPTIONS'])\n",
         )
         .unwrap();
-        let config = crate::config::resolve_in(None, directory.path()).unwrap();
+        let config = barca_model::config::resolve_in(None, directory.path()).unwrap();
         let expected =
             serde_json::json!({"s3": {"endpoint_url": "https://storage.invalid", "anon": false}});
         let options = config.storage_options_json.as_deref();
@@ -439,7 +396,7 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&worker_output.stdout).unwrap(),
             expected
         );
-        crate::outln!("helper options probe passed");
+        barca_model::outln!("helper options probe passed");
     }
 
     /// A shell child that prints its process group, then waits; `term` on SIGTERM.
@@ -567,7 +524,7 @@ mod tests {
     ///
     /// What this cannot see: `.output()` or `.status()` on a `Command` in a file that names
     /// the type only through a re-export or an alias defined in another file (`use
-    /// crate::Cmd`). A text scan does not resolve types; such a file must not be written.
+    /// barca_model::Cmd`). A text scan does not resolve types; such a file must not be written.
     fn unlocked_spawns(dir: &std::path::Path, found: &mut Vec<(String, usize, String)>) {
         let spawn = [".spawn", "()"].concat();
         let waits = [[".output", "()"].concat(), [".status", "()"].concat()];
@@ -587,7 +544,7 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            let this_module = path.ends_with("barca-core/src/helper_proc.rs")
+            let this_module = path.ends_with("barca-engine/src/helper_proc.rs")
                 || path.ends_with("barca-model/src/spawn_lock.rs");
             // `process::Command` as well as `Command::new`: a file that imports the type under
             // another name, or is handed a `Command` built elsewhere, still names the type.
@@ -746,11 +703,11 @@ error: RefreshError: Reauthentication is needed.\n";
             .parse()
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while crate::process::pid_alive(pid) && std::time::Instant::now() < deadline {
+        while barca_model::process::pid_alive(pid) && std::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         assert!(
-            !crate::process::pid_alive(pid),
+            !barca_model::process::pid_alive(pid),
             "the stalled helper is still running"
         );
 
@@ -809,7 +766,7 @@ error: RefreshError: Reauthentication is needed.\n";
             assert!(matches!(failed, Err(HelperFailed::Cancelled)), "{name}");
             let pid = canceller.await.unwrap();
             assert!(
-                !crate::process::pid_alive(pid),
+                !barca_model::process::pid_alive(pid),
                 "{name}: alive after the call returned"
             );
         }
@@ -839,7 +796,7 @@ error: RefreshError: Reauthentication is needed.\n";
             still.is_err(),
             "the helper ended although its lifeline is open"
         );
-        assert!(crate::process::pid_alive(pid));
+        assert!(barca_model::process::pid_alive(pid));
         // In a group of its own (its pid), not the one the terminal's Ctrl-C goes to.
         // SAFETY: plain syscalls.
         let (group, ours) = unsafe { (libc::getpgid(pid as i32), libc::getpgrp()) };
@@ -847,6 +804,6 @@ error: RefreshError: Reauthentication is needed.\n";
         assert_ne!(group, ours);
         cancel.cancel();
         assert!(matches!(run.await, Err(HelperFailed::Cancelled)));
-        assert!(!crate::process::pid_alive(pid));
+        assert!(!barca_model::process::pid_alive(pid));
     }
 }

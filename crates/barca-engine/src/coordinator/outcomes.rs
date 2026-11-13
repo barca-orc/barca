@@ -98,7 +98,7 @@ impl Coordinator {
         }
     }
 
-    pub(crate) fn failed_items(&self) -> Vec<(ItemId, &str)> {
+    pub fn failed_items(&self) -> Vec<(ItemId, &str)> {
         self.failed
             .iter()
             .map(|(id, msg)| (*id, msg.as_str()))
@@ -107,7 +107,7 @@ impl Coordinator {
 
     /// When a permanently failed item's first attempt started, and the wall time from then
     /// to its permanent failure (retries and backoff included).
-    pub(crate) fn failure_clock(
+    pub fn failure_clock(
         &self,
         item_id: ItemId,
     ) -> Option<(std::time::SystemTime, std::time::Duration)> {
@@ -115,11 +115,11 @@ impl Coordinator {
     }
 
     /// Where a permanently failed item failed, when its worker reported it.
-    pub(crate) fn failure_phase(&self, item_id: ItemId) -> Option<crate::dispatch::ErrorPhase> {
+    pub fn failure_phase(&self, item_id: ItemId) -> Option<crate::dispatch::ErrorPhase> {
         self.failure_phases.get(&item_id).copied()
     }
 
-    pub(crate) fn skipped_items(&self) -> Vec<ItemId> {
+    pub fn skipped_items(&self) -> Vec<ItemId> {
         self.skipped.iter().copied().collect()
     }
 

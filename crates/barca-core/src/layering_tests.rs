@@ -51,6 +51,7 @@ const CRATES: &[(&str, &str)] = &[
     ("barca-model", "barca_model"),
     ("barca-compile", "barca_compile"),
     ("barca-db", "barca_db"),
+    ("barca-engine", "barca_engine"),
     ("barca-core", "barca_core"),
 ];
 
@@ -61,7 +62,8 @@ fn crate_of(layer: Layer) -> &'static str {
         Model => "barca-model",
         Compile => "barca-compile",
         Db => "barca-db",
-        Engine | Core => "barca-core",
+        Engine => "barca-engine",
+        Core => "barca-core",
     }
 }
 
@@ -78,9 +80,10 @@ impl Layer {
 }
 
 /// Every top-level module (and `lib`, `barca-model`'s crate root and its own items;
-/// `barca_compile` and `barca_db`, the roots of `barca-compile` and `barca-db`; `barca_core`, the
-/// root of `barca-core`, which only declares and re-exports), with its layer. Modules the
-/// #905 Target table names are placed as it says; the others by what they use and who uses them.
+/// `barca_compile`, `barca_db` and `barca_engine`, the roots of `barca-compile`, `barca-db` and
+/// `barca-engine`; `barca_core`, the root of `barca-core`, which only declares and re-exports),
+/// with its layer. Modules the #905 Target table names are placed as it says; the others by what
+/// they use and who uses them.
 #[rustfmt::skip]
 const LAYERS: &[(&str, Layer)] = &[
     // ---- model (barca-model) ----
@@ -88,6 +91,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("barca_compile", Compile), // the root of `barca-compile`: module declarations, `Dag`
     ("barca_core", Core), // the root of `barca-core`: module declarations and re-exports
     ("barca_db", Db), // the root of `barca-db`: module declarations only
+    ("barca_engine", Engine), // the root of `barca-engine`: module declarations only
     ("model", Model),
     ("keyed", Model),
     ("step_status", Model),

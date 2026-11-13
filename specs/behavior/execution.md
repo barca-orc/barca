@@ -148,8 +148,8 @@ separately from cache hits and preserve completed peers.
 
 Conformance: [task CLI](../../python/tests/test_task_logs.py),
 [scheduler](../../python/tests/test_serve_schedule.py),
-[coordinator](../../crates/barca-core/src/coordinator.rs),
-[worker ownership](../../crates/barca-core/src/io_loop.rs),
+[coordinator](../../crates/barca-engine/src/coordinator.rs),
+[worker ownership](../../crates/barca-engine/src/io_loop.rs),
 [progress](../../python/tests/test_progress_counts.py).
 
 Conformance: [batched partitions](../../python/tests/test_batched_partitions.py),
@@ -163,7 +163,7 @@ Conformance: [incremental persistence](../../python/tests/test_incremental_persi
 [run queue/restart](../../python/tests/test_serve_queue.py),
 [runtime limits](../../python/tests/test_serve_runtime_limits.py),
 [worker failures](../../python/tests/test_worker_survives_exceptions.py),
-[helper shutdown](../../crates/barca-core/src/helper_proc.rs).
+[helper shutdown](../../crates/barca-engine/src/helper_proc.rs).
 
 Conformance: [process storage overrides](../../python/tests/test_process_storage_overrides.py).
 Configuration details: [remote manual](../../crates/barca-cli/docs/remote.md).

@@ -214,10 +214,10 @@ may retain a version when both readers have documented defaults. Changed meaning
 framing, required fields or incompatible variants require a version bump. Older
 packages are rejected before work; no legacy inline negotiation fallback exists.
 
-[wire.rs](../../crates/barca-core/src/wire.rs) tests an actual Rust → Python stdlib → Rust
+[wire.rs](../../crates/barca-engine/src/wire.rs) tests an actual Rust → Python stdlib → Rust
 round trip of 10,000 execution rows and mixed completion/error/blocked rows, including
 null/missing values and private upload references. Malformed shapes and inline data
-are negative controls. [result_journal.rs](../../crates/barca-core/src/result_journal.rs)
+are negative controls. [result_journal.rs](../../crates/barca-engine/src/result_journal.rs)
 checks partial writes, duplicates, invalid receipts and deletion. The worker I/O conformance
 test queues valid stdout/checkpoint/results traffic ahead of the reader and rejects
 publication of receipts before their own stdout frames.
@@ -226,7 +226,7 @@ multi-item result frames and prove crash/exception retry accounting without repl
 earlier side effects. [parallel tests](../../python/tests/test_parallel_results.py) cover
 nested handoff and file-only values; [handshake tests](../../python/tests/test_protocol_handshake.py)
 cover wrong versions, cancellation and reaping. The worker-pool shutdown test in
-[io_loop.rs](../../crates/barca-core/src/io_loop.rs) holds a kill/wait job behind a gate
+[io_loop.rs](../../crates/barca-engine/src/io_loop.rs) holds a kill/wait job behind a gate
 and requires shutdown to wait for it. Runtime framing tests cover size limits.
 
 Plan documents independently carry `plan_version:1` on CLI and HTTP output. Consumers

@@ -8,6 +8,7 @@ description = "Core library — models, parsing, DAG, execution planning, hashin
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }
 barca-db = { path = "../barca-db" }
+barca-engine = { path = "../barca-engine" }
 ruff_python_parser = { workspace = true }
 ruff_python_ast = { workspace = true }
 ruff_text_size = { workspace = true }

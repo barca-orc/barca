@@ -150,12 +150,12 @@ fn build_step_json_includes_sinks() {
         serializer: Some("parquet".to_string()),
         run_hash: Some("abc123".to_string()),
         sinks: vec![
-            crate::model::SinkDecl {
+            barca_model::model::SinkDecl {
                 path: "abfss://cont@acct.dfs.core.windows.net/exports/a.parquet".to_string(),
-                serializer: Some(crate::model::SerializerKind::Parquet),
+                serializer: Some(barca_model::model::SerializerKind::Parquet),
                 ..Default::default()
             },
-            crate::model::SinkDecl {
+            barca_model::model::SinkDecl {
                 path: "exports/a.pkl".to_string(),
                 serializer: None,
                 ..Default::default()
@@ -170,7 +170,11 @@ fn build_step_json_includes_sinks() {
         partition_source: false,
         previous_sensor: None,
     };
-    let id = coord.add_item(crate::StepId::unpartitioned("f.py:a"), spec, Vec::new());
+    let id = coord.add_item(
+        barca_model::StepId::unpartitioned("f.py:a"),
+        spec,
+        Vec::new(),
+    );
     let step = build_step_json(coord.item(id), &coord);
 
     assert_eq!(
@@ -185,7 +189,7 @@ fn build_step_json_includes_sinks() {
 
 #[test]
 fn build_step_json_includes_param_types_from_spec() {
-    use crate::model::ValueType;
+    use barca_model::model::ValueType;
 
     let mut coord = Coordinator::new();
     let spec = ItemSpec {
@@ -212,7 +216,7 @@ fn build_step_json_includes_param_types_from_spec() {
         previous_sensor: None,
     };
     let id = coord.add_item(
-        crate::StepId::unpartitioned("f.py:downstream"),
+        barca_model::StepId::unpartitioned("f.py:downstream"),
         spec,
         Vec::new(),
     );
@@ -248,7 +252,11 @@ fn build_step_json_empty_sinks_serializes_as_empty_array() {
         partition_source: false,
         previous_sensor: None,
     };
-    let id = coord.add_item(crate::StepId::unpartitioned("f.py:a"), spec, Vec::new());
+    let id = coord.add_item(
+        barca_model::StepId::unpartitioned("f.py:a"),
+        spec,
+        Vec::new(),
+    );
     let step = build_step_json(coord.item(id), &coord);
     assert_eq!(step["sinks"], serde_json::json!([]));
     assert_eq!(step["run_hash"], serde_json::Value::Null);
@@ -302,7 +310,11 @@ fn build_step_json_sends_collected_param_as_artifact_list() {
             },
         ],
     );
-    let id = coord.add_item(crate::StepId::unpartitioned("f.py:sink"), spec, Vec::new());
+    let id = coord.add_item(
+        barca_model::StepId::unpartitioned("f.py:sink"),
+        spec,
+        Vec::new(),
+    );
     let step = build_step_json(coord.item(id), &coord);
 
     assert_eq!(
@@ -409,7 +421,7 @@ fn build_step_json_marks_parallel_branches() {
         previous_sensor: None,
     };
     let parent = coord.add_item(
-        crate::StepId::unpartitioned("f.py:a"),
+        barca_model::StepId::unpartitioned("f.py:a"),
         spec.clone(),
         Vec::new(),
     );
@@ -450,7 +462,7 @@ fn build_step_json_gives_a_branch_its_own_result_path() {
         previous_sensor: None,
     };
     let parent = coord.add_item(
-        crate::StepId::unpartitioned("f.py:a"),
+        barca_model::StepId::unpartitioned("f.py:a"),
         spec.clone(),
         Vec::new(),
     );
@@ -626,7 +638,7 @@ async fn shutdown_stops_a_worker_that_never_connected() {
         .parse()
         .unwrap();
     assert!(
-        !crate::process::pid_alive(pid),
+        !barca_model::process::pid_alive(pid),
         "the worker is still running"
     );
 }
@@ -704,9 +716,9 @@ async fn the_workers_a_wave_needs_start_together_and_no_more() {
         for i in 0..ready {
             let name = format!("n{i}");
             coord.add_item(
-                crate::StepId {
+                barca_model::StepId {
                     base: std::sync::Arc::from(format!("p.py:{name}")),
-                    partition: crate::model::PartitionKey(Default::default()),
+                    partition: barca_model::model::PartitionKey(Default::default()),
                 },
                 test_spec(&name),
                 vec![],

@@ -122,7 +122,7 @@ impl WorkerPool {
                     .iter()
                     .map(|&iid| coord.item(iid).step_id.display())
                     .collect();
-                crate::errln!(
+                barca_model::errln!(
                     "[trace]  {:>8.1}ms  dispatch -> worker {wid}: {names:?}",
                     self.trace_start.elapsed().as_secs_f64() * 1000.0
                 );

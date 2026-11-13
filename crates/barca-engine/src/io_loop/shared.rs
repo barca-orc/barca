@@ -9,9 +9,9 @@ use tokio::task::JoinHandle;
 
 use super::{EventCallback, IoEvent, WorkerPool};
 use crate::coordinator::{Coordinator, ItemId};
-use crate::events::RunEvent;
+use barca_model::events::RunEvent;
 
-/// This run's part of a capacity the server's runs share ([`crate::serve::capacity`]).
+/// This run's part of a capacity the server's runs share (`barca_core::serve::capacity`).
 ///
 /// `held` is what the run has taken from it: the weight of the steps its workers have leased
 /// (as [`WorkerPool::running_weight`] counts them, against the shared capacity) plus `grant`,
@@ -36,7 +36,7 @@ impl Drop for Share {
     }
 }
 
-/// This run's claims on the asset steps the server's runs share ([`crate::serve::claims`]).
+/// This run's claims on the asset steps the server's runs share (`barca_core::serve::claims`).
 pub(super) struct Steps {
     pub(super) host: std::sync::Arc<dyn crate::run_host::RunHost>,
     pub(super) run_id: String,
@@ -81,8 +81,8 @@ pub(super) async fn share_changed(share: &mut Option<Share>) {
 
 impl WorkerPool {
     /// The steps another run of the server finished while this run waited for them
-    /// ([`crate::serve::claims`]), by display id, since the last call: cache hits for this run.
-    pub(crate) fn take_from_other_runs(&mut self) -> Vec<String> {
+    /// (`barca_core::serve::claims`), by display id, since the last call: cache hits for this run.
+    pub fn take_from_other_runs(&mut self) -> Vec<String> {
         self.steps
             .as_mut()
             .map(|s| std::mem::take(&mut s.from_others))
@@ -128,7 +128,7 @@ impl WorkerPool {
         true
     }
 
-    /// Claim the asset steps of `batch` for this run ([`crate::serve::claims`]) and return the ones
+    /// Claim the asset steps of `batch` for this run (`barca_core::serve::claims`) and return the ones
     /// to lease. A step another run is executing is kept out: it waits for that run's claim
     /// to end ([`IoEvent::Settled`]), leased to no worker.
     pub(super) fn claim_batch(&mut self, coord: &Coordinator, batch: Vec<ItemId>) -> Vec<ItemId> {
@@ -148,7 +148,7 @@ impl WorkerPool {
                 }
                 crate::run_host::StepClaim::Theirs { owner, settled } => {
                     if self.trace_on {
-                        crate::errln!(
+                        barca_model::errln!(
                             "[trace]  {:>8.1}ms  {} waits for run {owner}, which is computing it",
                             self.trace_start.elapsed().as_secs_f64() * 1000.0,
                             key.0

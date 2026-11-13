@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 /// under two seconds to an object store, so ten seconds covers a slow link. It is also about
 /// as long as someone who pressed Ctrl-C will wait before pressing it again, which ends the
 /// wait anyway.
-pub(crate) const WRAP_UP_LIMIT: Duration = Duration::from_secs(10);
+pub const WRAP_UP_LIMIT: Duration = Duration::from_secs(10);
 
 /// The two stop signals of a run. A plain [`CancellationToken`] converts into one whose
 /// wrap-up is never abandoned, only bounded by [`WRAP_UP_LIMIT`].

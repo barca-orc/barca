@@ -19,7 +19,7 @@ pub(crate) fn revision(
     }
 }
 
-pub(crate) fn from_artifact(
+pub fn from_artifact(
     artifact: &serde_json::Value,
     previous: Option<&String>,
     run_id: &str,
