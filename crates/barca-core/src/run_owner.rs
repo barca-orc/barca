@@ -334,7 +334,7 @@ pub(crate) fn is_this_process(pid: Option<i64>, host: &str, owner_json: &str) ->
         return false;
     }
     if owner_json.is_empty() {
-        return host == crate::db::local_host();
+        return host == crate::process::local_host();
     }
     match serde_json::from_str::<Identity>(owner_json) {
         Ok(id) => {
@@ -392,7 +392,7 @@ impl Observer for System {
         Here {
             boot: sys::boot_id(),
             machine: sys::machine_id(),
-            host: crate::db::local_host(),
+            host: crate::process::local_host(),
             pidns: sys::namespace("pid"),
             timens: sys::namespace("time"),
             handles: cfg!(target_os = "linux"),

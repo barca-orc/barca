@@ -40,8 +40,12 @@
 
 use super::dogstatsd;
 use super::{Integration, NodeContext, RunReport, ServerReport, StepOutcome, StepReport};
+use crate::step_trace::{StepTrace, node_meta};
+pub use crate::trace_ids::step_trace_ref;
+pub(crate) use crate::trace_ids::{
+    run_span_id, step_span_id, step_trace_id, step_trace_id_high, trace_id, trace_id_high,
+};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -52,8 +56,7 @@ const INTAKE_PATH: &str = "/v0.4/traces";
 /// oversized payload makes the Agent refuse the trace, which loses the failed step.
 const MAX_MESSAGE_CHARS: usize = 2000;
 const MAX_STACK_CHARS: usize = 4000;
-/// barca's own version, the `barca.version` tag of every span and metric.
-pub(crate) const BARCA_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) use crate::step_trace::BARCA_VERSION;
 
 /// The first `max_chars` characters of `text`, marked when something was dropped.
 fn cut(text: &str, max_chars: usize) -> String {
@@ -173,78 +176,11 @@ pub(crate) fn parse_tags(raw: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// A non-zero 63-bit id derived from `parts`, so a run's ids are the same however often
-/// it is exported.
-pub(crate) fn span_id(parts: &[&str]) -> u64 {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part.as_bytes());
-        hasher.update([0]);
-    }
-    let digest = hasher.finalize();
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&digest[..8]);
-    (u64::from_be_bytes(bytes) >> 1).max(1)
-}
-
 /// `DD_TRACE_ENABLED`: on when unset, and when set only for `true` or `1` (any case). This is
 /// what Python's `ddtrace` does, so `false`, `0`, `no`, `off` and an empty value all silence
 /// barca together with the services around it.
 fn tracing_enabled(raw: Option<&str>) -> bool {
     raw.is_none_or(|v| v.eq_ignore_ascii_case("true") || v == "1")
-}
-
-/// A non-zero 64-bit id derived from `parts`: the upper half of a 128-bit trace id.
-fn wide_id(parts: &[&str]) -> u64 {
-    (span_id(parts) << 1 | 1).max(1)
-}
-
-/// The lower 64 bits of a run's trace id: the `trace_id` of its `barca.run` span, and the
-/// `dd.trace_id` of a `BARCA_LOG=json` line with no node.
-pub(crate) fn trace_id(run_id: &str) -> u64 {
-    span_id(&["trace", run_id])
-}
-
-/// The upper 64 bits of a run's 128-bit trace id, sent as `_dd.p.tid` (16 hex digits).
-pub(crate) fn trace_id_high(run_id: &str) -> u64 {
-    wide_id(&["trace-high", run_id])
-}
-
-/// The id of a run's `barca.run` span.
-pub(crate) fn run_span_id(run_id: &str) -> u64 {
-    span_id(&["run", run_id])
-}
-
-/// The lower 64 bits of the trace id of the step `node` (a node id, with its partition key
-/// when it has one) in a run: deterministic in the run and the step, so a worker's Python
-/// spans, the step's log lines and the coordinator's root span agree without a message.
-pub(crate) fn step_trace_id(run_id: &str, node: &str) -> u64 {
-    span_id(&["step-trace", run_id, node])
-}
-
-/// The upper 64 bits of a step's 128-bit trace id.
-pub(crate) fn step_trace_id_high(run_id: &str, node: &str) -> u64 {
-    wide_id(&["step-trace-high", run_id, node])
-}
-
-/// The id of the `barca.step` span of `node` in a run: the root of the step's trace.
-pub(crate) fn step_span_id(run_id: &str, node: &str) -> u64 {
-    span_id(&["step", run_id, node])
-}
-
-/// The ids of the trace the step `node` (its display id) of a run was sent as, as Datadog's
-/// UI writes them: the 128-bit trace id in 32 hex digits (what `https://app.<site>/apm/trace/`
-/// takes) and the root `barca.step` span's id in decimal. Derived, never stored: a run's row
-/// records only that it was traced (`runs.trace`), so these must stay the ids the run sent.
-pub fn step_trace_ref(run_id: &str, node: &str) -> (String, String) {
-    (
-        format!(
-            "{:016x}{:016x}",
-            step_trace_id_high(run_id, node),
-            step_trace_id(run_id, node)
-        ),
-        step_span_id(run_id, node).to_string(),
-    )
 }
 
 /// The Datadog web app for `site` (`DD_SITE`, `[telemetry] datadog_site`): `app.` before a
@@ -265,16 +201,6 @@ pub fn app_url(site: &str) -> Option<String> {
         Some(format!("https://{site}"))
     } else {
         Some(format!("https://app.{site}"))
-    }
-}
-
-/// The trace and span a `BARCA_LOG=json` line belongs to, as `(trace_id, span_id)`: the
-/// step's own trace and its root span for a line about `node`; the run's for a line with no
-/// node.
-pub(crate) fn log_ids(run_id: &str, node: Option<&str>) -> (u64, u64) {
-    match node {
-        Some(node) => (step_trace_id(run_id, node), step_span_id(run_id, node)),
-        None => (trace_id(run_id), run_span_id(run_id)),
     }
 }
 
@@ -328,11 +254,8 @@ pub(crate) fn service_from_env() -> String {
 /// and sends a step's trace the moment the step ends.
 #[derive(Debug, Clone)]
 pub(crate) struct Dispatch {
-    run_id: String,
-    service: String,
-    project: Option<String>,
-    job: String,
-    nodes: HashMap<String, Arc<NodeContext>>,
+    /// What each step sent to a worker carries; the worker loop holds it too.
+    trace: Arc<StepTrace>,
     /// Each node's direct upstream node ids, sorted, by base id.
     upstream: HashMap<String, Vec<String>>,
     /// `None` when `DD_TRACE_ENABLED` switches tracing off or the settings are malformed;
@@ -354,54 +277,31 @@ impl Dispatch {
             })
             .collect();
         Self {
-            run_id: run_id.to_string(),
-            service: service_from_env(),
-            project: project_from_cwd(),
-            job: job.to_string(),
-            nodes: super::node_contexts(dag)
-                .into_iter()
-                .map(|(id, ctx)| (id, Arc::new(ctx)))
-                .collect(),
+            trace: Arc::new(StepTrace::new(
+                dag,
+                job,
+                run_id,
+                service_from_env(),
+                project_from_cwd(),
+            )),
             upstream,
             exporter: Datadog::from_env().ok().flatten().map(Arc::new),
         }
     }
 
-    fn node(&self, base: &str) -> Arc<NodeContext> {
-        self.nodes
-            .get(base)
-            .cloned()
-            .unwrap_or_else(|| Arc::new(NodeContext::unknown(base)))
+    /// The trace context the worker loop attaches to each step it sends.
+    pub(crate) fn trace(&self) -> Arc<StepTrace> {
+        Arc::clone(&self.trace)
     }
 
-    /// The `datadog` object of a step sent to a worker: the step's trace and its root span.
-    /// `reported` is the step whose trace the execution belongs in (itself, or a `parallel()`
-    /// call's nearest reported ancestor).
+    fn node(&self, base: &str) -> Arc<NodeContext> {
+        self.trace.node(base)
+    }
+
+    /// The `datadog` object of a step sent to a worker ([`StepTrace::context`]).
+    #[cfg(test)]
     pub fn context(&self, reported: &crate::StepId, attempt: u32) -> Value {
-        let base = reported.base_id();
-        let display = reported.display();
-        let node = self.node(base);
-        let mut tags = Map::new();
-        tags.insert("barca.run_id".into(), json!(self.run_id));
-        tags.insert("barca.job".into(), json!(self.job));
-        tags.insert("barca.node_id".into(), json!(display));
-        node_meta(&mut tags, &node);
-        if !reported.partition.is_empty() {
-            tags.insert("barca.partition".into(), json!(reported.partition.suffix()));
-        }
-        tags.insert("barca.version".into(), json!(BARCA_VERSION));
-        if let Some(project) = &self.project {
-            tags.insert("barca.project".into(), json!(project));
-        }
-        json!({
-            "trace_id": step_trace_id(&self.run_id, &display),
-            "trace_id_high": step_trace_id_high(&self.run_id, &display),
-            "parent_id": step_span_id(&self.run_id, &display),
-            "service": self.service,
-            "resource": node.name,
-            "tags": tags,
-            "attempt": attempt,
-        })
+        self.trace.context(reported, attempt)
     }
 
     fn report(&self, node_id: &str, outcome: StepOutcome, start: u64, duration: u64) -> StepReport {
@@ -502,7 +402,7 @@ impl Dispatch {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let body = exporter.step_trace(&self.run_id, &self.job, &step);
+        let body = exporter.step_trace(&self.trace.run_id, &self.trace.job, &step);
         let what = format!("step {}", step.node_id);
         let delivery = runtime.spawn(async move {
             let result = tokio::time::timeout(super::EXPORT_TIMEOUT, exporter.send(&body))
@@ -515,21 +415,7 @@ impl Dispatch {
                 });
             super::delivered("datadog", &what, result);
         });
-        note_sent(&self.run_id, step.node_id, delivery);
-    }
-}
-
-/// The tags that place a node in the pipeline.
-fn node_meta(meta: &mut Map<String, Value>, node: &NodeContext) {
-    meta.insert("barca.asset".into(), json!(node.name));
-    meta.insert("barca.file".into(), json!(node.file));
-    meta.insert("barca.kind".into(), json!(node.kind));
-    meta.insert("barca.freshness".into(), json!(node.freshness));
-    if let Some(group) = &node.group {
-        meta.insert("barca.group".into(), json!(group));
-    }
-    if let Some(cron) = &node.schedule {
-        meta.insert("barca.schedule".into(), json!(cron));
+        note_sent(&self.trace.run_id, step.node_id, delivery);
     }
 }
 

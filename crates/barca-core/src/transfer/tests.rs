@@ -616,12 +616,15 @@ async fn a_helper_that_never_connected_is_gone_after_stop_and_after_drop() {
         };
         if stopped {
             within(launching.stop()).await;
-            assert!(!crate::db::pid_alive(pid), "alive after stop() returned");
+            assert!(
+                !crate::process::pid_alive(pid),
+                "alive after stop() returned"
+            );
             assert!(!sock.exists());
         } else {
             drop(launching);
             // Killed on the spot; the runtime reaps it a moment later.
-            while crate::db::pid_alive(pid) {
+            while crate::process::pid_alive(pid) {
                 assert!(
                     Instant::now() < deadline,
                     "alive after its launch was dropped"

@@ -59,7 +59,7 @@ pub(super) async fn republish_sinks<'p>(
     }
     let published =
         crate::sink_publications::published(&session.request.cfg.db_path, &wanted).await?;
-    let host = crate::db::local_host();
+    let host = crate::process::local_host();
     let run_hashes = session.state.decide_state.run_hashes();
     let mut stale: Vec<(String, Vec<crate::model::SinkDecl>)> = Vec::new();
     for id in &ids {

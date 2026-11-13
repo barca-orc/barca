@@ -625,7 +625,10 @@ async fn shutdown_stops_a_worker_that_never_connected() {
         .trim()
         .parse()
         .unwrap();
-    assert!(!crate::db::pid_alive(pid), "the worker is still running");
+    assert!(
+        !crate::process::pid_alive(pid),
+        "the worker is still running"
+    );
 }
 
 /// Connect to the pool's socket as a worker would, with `worker_id` in the hello.

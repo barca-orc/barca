@@ -498,9 +498,9 @@ fn sweep_dead_sockets(dir: &std::path::Path) {
         let owner = name
             .split_once('-')
             .and_then(|(pid, _)| pid.parse::<i64>().ok());
-        if owner
-            .is_some_and(|pid| pid != i64::from(std::process::id()) && !crate::db::pid_alive(pid))
-        {
+        if owner.is_some_and(|pid| {
+            pid != i64::from(std::process::id()) && !crate::process::pid_alive(pid)
+        }) {
             let path = entry.path();
             if path.is_dir() {
                 std::fs::remove_dir_all(&path).ok();

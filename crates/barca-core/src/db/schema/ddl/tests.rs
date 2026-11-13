@@ -394,7 +394,7 @@ async fn future_versions_are_refused_by_readers_writers_snapshots_and_publicatio
             &path,
             &dir.path().join("backup.db"),
             None,
-            crate::helper_proc::Until::done(),
+            crate::process::Until::done(),
         )
         .await
         .err()

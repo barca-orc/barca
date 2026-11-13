@@ -110,7 +110,7 @@ pub async fn list(db_path: &str) -> Result<Vec<PendingUpload>, BarcaError> {
     }
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
-    read(&conn, &db::local_host()).await
+    read(&conn, &crate::process::local_host()).await
 }
 
 /// Keep `uploads` as pending (replacing an earlier row for the same object).
@@ -123,7 +123,7 @@ pub(crate) async fn record(db_path: &str, uploads: &[PendingUpload]) -> Result<(
     conn.execute(CREATE, ())
         .await
         .map_err(failed("creating the table"))?;
-    let host = db::local_host();
+    let host = crate::process::local_host();
     let mut insert = db::uploads::RecordPending::prepare(&conn)
         .await
         .map_err(failed("recording"))?;

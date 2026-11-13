@@ -60,7 +60,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
         let uncached_steps = &mut uncached[stream_idx];
         if step.kind == crate::NodeKind::Sensor {
             let id = step.step_id.display();
-            if let Some((revision, output)) = crate::observation::previous(&cache, &id).await? {
+            if let Some((revision, output)) = cache.previous_observation(&id).await? {
                 let output = crate::cache::accept_cache_hit(store, &id, output);
                 decide_state.sensor_outputs.insert(id.clone(), revision);
                 decide_state.sensor_previous.insert(id, output);
@@ -190,6 +190,8 @@ pub(super) struct DispatchPhase<'a> {
     pub(super) calls: Vec<(String, Vec<String>)>,
     pub(super) provided: &'a HashMap<String, dispatch::ProvidedInput>,
     pub(super) pool: &'a mut crate::io_loop::WorkerPool,
+    /// The run's Datadog exporter, when that integration is on.
+    pub(super) datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
     pub(super) cost_model: &'a mut crate::cost::CostModel,
     pub(super) decide_state: &'a DecideState,
     pub(super) store: &'a mut Option<StoreSync>,
@@ -223,6 +225,7 @@ pub(super) async fn dispatch_phase(
         provided,
         calls,
         pool,
+        datadog,
         cost_model,
         decide_state,
         store,
@@ -264,7 +267,6 @@ pub(super) async fn dispatch_phase(
 
     // Progress callback — update bar as each step completes.
     let run_hashes = decide_state.run_hashes();
-    let datadog = pool.datadog();
     let on_step_cb: crate::io_loop::StepCallback<'_> = Box::new(
         |node_id: &str, artifact: &serde_json::Value, attempts: u32| {
             let handling = std::time::Instant::now();
