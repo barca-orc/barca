@@ -127,7 +127,7 @@ pub(crate) async fn explain_dag_with_keys(
     }
     // No metadata DB yet means nothing is cached. Do not create one just to look.
     let cache = if std::path::Path::new(&cfg.db_path).exists() {
-        Some(db::CacheReader::for_config(cfg).await?)
+        Some(crate::cache::CacheReader::for_config(cfg).await?)
     } else {
         None
     };
@@ -305,7 +305,7 @@ pub(super) struct Prediction<'a> {
     pub(super) user_pins: &'a [db::AssetPin],
     pub(super) dag: &'a Dag,
     pub(super) policy: &'a CachePolicy,
-    pub(super) cache: Option<&'a db::CacheReader>,
+    pub(super) cache: Option<&'a crate::cache::CacheReader>,
     pub(super) layout: Option<&'a ArtifactLayout>,
     pub(super) evicted: &'a std::collections::HashSet<String>,
     pub(super) pool_size: usize,

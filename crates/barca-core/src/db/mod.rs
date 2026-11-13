@@ -60,7 +60,7 @@ mod write_boundary_tests;
 // family calls in another; each family file starts with `use super::*`.
 pub(crate) use asset_pauses::CREATE as CREATE_ASSET_PAUSES;
 pub use asset_pauses::{AssetPause, get_asset_pauses, pause_assets, resume_assets};
-pub(crate) use cache_reader::CacheReader;
+pub(crate) use cache_reader::{CacheReader, READ_STAMP_REFRESH};
 pub(crate) use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;
 pub use failure::{FailureFacts, LastSuccess, SourceLine, failure_facts, raised_at};
@@ -76,7 +76,7 @@ pub(crate) use materializations::last_output_hashes;
 pub use materializations::persist_outputs;
 use materializations::record_definitions;
 pub(crate) use materializations::{
-    adopt_store_digests, confirmed_object, evicted_among, evicted_paths, key_range,
+    DEFINITION_KEY, adopt_store_digests, confirmed_object, evicted_among, evicted_paths, key_range,
     last_success_components, latest_success, latest_success_id, partition_artifacts_for_config,
     touch_read, touch_read_in, touch_read_on,
 };
@@ -99,8 +99,8 @@ pub(crate) use run_steps::get_run_steps;
 #[cfg(test)]
 pub(crate) use run_steps::worker_exit;
 pub use run_steps::{
-    RUN_STEPS_LIMIT, RunStep, StepRow, StepsPage, attach_trace_ids, get_run_steps_page,
-    get_run_traced, planned_run_nodes, read_step_rows, run_node_summaries,
+    RUN_STEPS_LIMIT, RunNodeSummary, RunStep, StepRow, StepsPage, attach_trace_ids,
+    get_run_steps_page, get_run_traced, read_step_rows, run_node_summaries,
 };
 #[cfg(test)]
 pub(crate) use runs::create_run_with;

@@ -5,12 +5,53 @@
 //! these operations do not establish concurrent publication ordering or stable input-byte
 //! lifetime.
 
-use super::RunLedger;
 use crate::db::materializations::{FailedStepInsert, NewMaterialization, StepInsert};
-use crate::ledger::{LedgerPost, PostAccepted};
+use crate::ledger_post::{LedgerPost, PostAccepted};
 use crate::step_status::StepStatus;
 use crate::{BarcaError, db};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// Everything one run wants written to the metadata DB at its end, held in memory until then.
+pub(crate) struct RunLedger<'a> {
+    pub(crate) run_id: &'a str,
+    pub(crate) status: &'a str,
+    pub(crate) command: &'a str,
+    pub(crate) files: String,
+    pub(crate) target: Option<&'a str>,
+    /// Canonical resolved job ids (`RunReport.job`), recorded with the outcome.
+    pub(crate) job: &'a str,
+    pub(crate) steps_total: usize,
+    pub(crate) steps_executed: usize,
+    pub(crate) steps_cached: usize,
+    pub(crate) elapsed: f64,
+    pub(crate) all_outputs: &'a HashMap<String, crate::step_result::OutputRef>,
+    /// The batched call (RFC-0013) of each key that ran in one: `batch_id` on its row.
+    pub(crate) batches: &'a HashMap<String, String>,
+    pub(crate) all_failures: &'a [crate::step_result::StepFailure],
+    pub(crate) all_sinks: &'a HashMap<String, String>,
+    /// The run hash each sink of a step now holds: the steps that ran and wrote their sinks,
+    /// and the cache hits republished or found current (`crate::sink_publications`).
+    pub(crate) sink_publications: &'a [crate::sink_publications::Publication],
+    pub(crate) all_attempts: &'a HashMap<String, u32>,
+    /// Per-node worker self-timing: (cpu_seconds, max_rss_bytes).
+    pub(crate) all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
+    pub(crate) cached_node_ids: &'a std::collections::HashSet<String>,
+    pub(crate) run_hashes: &'a HashMap<String, String>,
+    /// Executed step -> its run hash's components as JSON ([`crate::changes`]).
+    pub(crate) components: &'a HashMap<String, String>,
+    /// Sensor step -> content hash of the output it returned in this run. Other steps
+    /// record the hash on their `OutputRef`, when the artifact went through a store.
+    pub(crate) output_hashes: &'a HashMap<String, String>,
+    /// Artifact-store location of each uploaded output, recorded instead of
+    /// its local path so cache hits resolve on every machine.
+    pub(crate) store_paths: &'a HashMap<String, String>,
+    /// Run-end snapshot of the measured-cost EWMA, seeding the next run.
+    pub(crate) cost_snapshot: &'a [(String, crate::node_estimate::NodeEstimate)],
+    /// Recorded artifact paths the run read (its inputs, and the outputs it returns): their
+    /// `last_read_at` is set first, on the ledger's connection, so the run's backup carries it
+    /// (RFC-0012). It was a connection of its own (#560).
+    pub(crate) touched: &'a [String],
+}
 
 /// The steps of `run_id` already recorded, by node id and run hash: an earlier attempt of a
 /// requeued run may have recorded a node under a run hash this attempt no longer computes.

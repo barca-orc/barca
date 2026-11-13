@@ -26,7 +26,7 @@ impl UpsertEstimate {
         &mut self,
         node_id: &str,
         base_id: &str,
-        est: &crate::cost::NodeEstimate,
+        est: &crate::node_estimate::NodeEstimate,
     ) -> Result<u64, libsql::Error> {
         self.0
             .execute([
@@ -46,7 +46,7 @@ impl UpsertEstimate {
 /// in-memory `CostModel` so batch sizing starts pre-warmed).
 pub(crate) async fn load_cost_estimates(
     db_path: &str,
-) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
+) -> Result<Vec<(String, crate::node_estimate::NodeEstimate)>, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     cost_estimates_on(&conn, None).await
@@ -55,14 +55,14 @@ pub(crate) async fn load_cost_estimates(
 pub(crate) async fn cost_estimates_for(
     conn: &libsql::Connection,
     ids: &[String],
-) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
+) -> Result<Vec<(String, crate::node_estimate::NodeEstimate)>, BarcaError> {
     cost_estimates_on(conn, Some(ids)).await
 }
 
 pub(super) async fn cost_estimates_on(
     conn: &libsql::Connection,
     ids: Option<&[String]>,
-) -> Result<Vec<(String, crate::cost::NodeEstimate)>, BarcaError> {
+) -> Result<Vec<(String, crate::node_estimate::NodeEstimate)>, BarcaError> {
     let columns =
         "SELECT node_id, estimate_seconds, cpu_seconds, max_rss_bytes, samples FROM cost_estimates";
     let queries = match ids {
@@ -92,7 +92,7 @@ pub(super) async fn cost_estimates_on(
             }
             out.push((
                 node_id,
-                crate::cost::NodeEstimate {
+                crate::node_estimate::NodeEstimate {
                     estimate_seconds: row.get::<f64>(1).unwrap_or(0.0),
                     cpu_seconds: row.get::<f64>(2).unwrap_or(0.0),
                     max_rss_bytes: row.get::<i64>(3).unwrap_or(0).max(0) as u64,
@@ -109,7 +109,7 @@ pub(super) async fn cost_estimates_on(
 /// run skips the cold-start probe entirely).
 pub(crate) async fn upsert_cost_estimates(
     db_path: &str,
-    estimates: &[(String, crate::cost::NodeEstimate)],
+    estimates: &[(String, crate::node_estimate::NodeEstimate)],
 ) -> Result<(), BarcaError> {
     if estimates.is_empty() {
         return Ok(());
@@ -151,7 +151,7 @@ mod tests {
 
         assert!(load_cost_estimates(&db_path).await.unwrap().is_empty());
 
-        let est = |s: f64, n: u64| crate::cost::NodeEstimate {
+        let est = |s: f64, n: u64| crate::node_estimate::NodeEstimate {
             estimate_seconds: s,
             cpu_seconds: s * 0.9,
             max_rss_bytes: 1024,

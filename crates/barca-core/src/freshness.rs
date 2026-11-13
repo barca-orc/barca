@@ -204,7 +204,7 @@ pub(crate) struct Pins {
 /// Look up each stop's latest successful result. `cache` is `None` when there is no metadata
 /// database yet (nothing was ever computed).
 pub(crate) async fn load_pins(
-    cache: Option<&db::CacheReader>,
+    cache: Option<&crate::cache::CacheReader>,
     dag: &Dag,
     stops: &[String],
     user: &std::collections::BTreeMap<String, db::AssetPin>,
@@ -262,7 +262,7 @@ pub(crate) async fn load_pins(
 /// its latest recorded result. `false` when that cannot be told (an input is partitioned or has
 /// no result).
 pub(crate) async fn is_stale(
-    cache: &db::CacheReader,
+    cache: &crate::cache::CacheReader,
     dag: &Dag,
     id: &str,
     run_hash: &str,

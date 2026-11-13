@@ -50,7 +50,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
     // Open the DB only for this phase's cache lookups and release it before any
     // step runs, so other barca processes can use the metadata DB while Python
     // executes.
-    let cache = db::CacheReader::for_config(cfg).await?;
+    let cache = crate::cache::CacheReader::for_config(cfg).await?;
 
     // Decide all upstream chunks before any consumer, independently of the worker split.
     let mut uncached: Vec<Vec<crate::planner::StreamStep>> =

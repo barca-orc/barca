@@ -76,6 +76,9 @@ const LAYERS: &[(&str, Layer)] = &[
     ("layout", Model), // `.barca/` paths from the config: `db` and `gc` use them
     ("source_observation", Model), // compact observation values over `keyed`
     ("test_hooks", Model), // `BARCA_TEST_*` reads, used by every layer
+    ("trigger", Model),        // what started a run: `db` records it on the `runs` row
+    ("node_estimate", Model),  // a node's measured cost: `cost` updates it, `db` keeps it
+    ("ledger_post", Model),    // a ledger post's run and step rows: `ledger` sends, `db` records
     ("process", Model),    // `pid_alive`, `local_host`, `Until`: db, engine and core share them
     ("trace_ids", Model),  // Datadog trace and span ids: `jsonlog` and the exporter derive them
     ("step_result", Model), // `OutputRef`, `ErrorPhase`, `StepFailure`: what a step produced
@@ -191,16 +194,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // ---- step 2, `planner` and `dag`: helpers move to the compile side ----
     ("dag", "changes", "changes::definition_components"),
     ("planner", "cache", "cache::folds_output"),
-    // ---- step 2, `db` value types move down; DDL moves into db/schema ----
-    ("db", "cache", "cache::READ_STAMP_REFRESH"),
-    ("db", "changes", "changes::DEFINITION_KEY"),
-    ("db", "cost", "cost::NodeEstimate"),
-    ("db", "incremental", "incremental::CREATE (freshness_proofs DDL)"),
-    ("db", "ledger", "ledger::{Ledger, LedgerRun, LedgerStep}"),
-    ("db", "outcome", "outcome::{Trigger, TriggeredBy}"),
-    ("db", "serve", "serve::run_queue::{CREATE_QUEUE, CREATE_SERVER_STATE}"),
-    ("db", "telemetry", "telemetry::is_on, telemetry::datadog::step_trace_ref"),
-    ("persist::recording", "ledger", "ledger::{LedgerPost, PostAccepted}"),
     // ---- no #905 step names these yet; each needs a decision before step 4 ----
     // `batch` straddles compile (parsing `batch=`, evaluating groups) and engine (calls).
     ("load", "batch", "batch::{evaluate_groups, check_label_function}"),
@@ -208,13 +201,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // The partition-key resolver runs a project subprocess (RFC-0013).
     ("load", "helper_proc", "helper_proc::spawn_std"),
     ("model", "env_reads", "env_reads::undeclared"),
-    // `db::run_steps::planned_run_nodes` rebuilds a plan: a query, not storage.
-    ("db", "dag", "dag::Dag (planned_run_nodes)"),
-    ("db", "planner", "planner::ResourceConfig (planned_run_nodes)"),
-    ("db", "targets", "targets::{plan_for_targets, blocking_failure} (planned_run_nodes)"),
-    // `pending_uploads` straddles: rows (db) and the upload itself (core).
-    ("pending_uploads", "execution", "execution::upload_pending (upload_now)"),
-    ("persist::recording", "persist", "persist::RunLedger"),
     ("selection", "report", "report::kind_str"),
     ("targets", "recover", "recover::returned_step"),
 ];

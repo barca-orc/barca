@@ -716,7 +716,7 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
     if session.prepared.pinned.is_empty() || request.rules.tick.is_some() {
         return Ok(());
     }
-    let cache = db::CacheReader::for_config(request.cfg).await?;
+    let cache = crate::cache::CacheReader::for_config(request.cfg).await?;
     let dag = &session.prepared.dag;
     let state = &session.state.decide_state;
     let mut found: Vec<(&str, bool)> = Vec::new();
@@ -802,6 +802,9 @@ async fn open_state(
             steps_total: Some(exec_plan.total_steps),
             job: Some(&prepared.job_name),
             trigger: &request.options.trigger,
+            // The run's steps are traced with the integration `execution::workers` starts for
+            // the same `BARCA_TELEMETRY`.
+            traced: crate::telemetry::is_on("datadog"),
         },
         &node_ids,
         &base_ids,

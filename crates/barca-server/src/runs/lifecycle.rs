@@ -454,6 +454,7 @@ async fn persist_outcome(
             steps_total: None,
             job: None,
             trigger: &spec.trigger,
+            traced: false,
         },
         status,
         outcome.text(),
