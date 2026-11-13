@@ -203,7 +203,7 @@ artifact file if another task consumes it).
 Content-addressing (§4.1) is the direct mechanism behind the provenance-based freshness
 invariant in [Core Constraints](/core-constraints/): a `run_hash` match means the exact
 same artifact bytes would be produced, so the existing artifact is reused rather than
-recomputed. SHA-256 is the hash function (`crates/barca-core/src/hash.rs`). Every
+recomputed. SHA-256 is the hash function (`crates/barca-model/src/hash.rs`). Every
 remote backend (S3, GCS, Azure ADLS Gen2, R2) is held to the same conformance suite —
 conditional create, cross-machine cache hit, concurrent-writer conflict → replay — run
 against local emulators (MinIO, fake-gcs-server, Azurite) on every PR. Local-mode

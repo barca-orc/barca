@@ -82,7 +82,7 @@ RFC covers only `freshness` and the kind each decorator declares.
 
 ### 4.1 Public API Surface
 
-**Node kinds** (`NodeKind` in `crates/barca-core/src/model.rs`):
+**Node kinds** (`NodeKind` in `crates/barca-model/src/model.rs`):
 
 | Kind | Decorator | Cached | Valid as input to |
 |---|---|---|---|

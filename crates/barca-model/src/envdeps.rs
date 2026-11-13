@@ -198,10 +198,7 @@ fn expand(
 }
 
 /// [`resolve`] with an injectable lookup (tests).
-pub(crate) fn resolve_with(
-    names: &[String],
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Vec<EnvValue> {
+pub fn resolve_with(names: &[String], lookup: impl Fn(&str) -> Option<String>) -> Vec<EnvValue> {
     let mut out: Vec<EnvValue> = names.iter().map(|n| (n.clone(), lookup(n))).collect();
     out.sort();
     out.dedup_by(|a, b| a.0 == b.0);
@@ -210,7 +207,7 @@ pub(crate) fn resolve_with(
 
 /// The canonical string folded into the run hash, or `None` when nothing is declared — so a node
 /// without `env=` hashes exactly as it did before this feature existed.
-pub(crate) fn hash_input(values: &[EnvValue]) -> Option<String> {
+pub fn hash_input(values: &[EnvValue]) -> Option<String> {
     if values.is_empty() {
         return None;
     }
@@ -242,7 +239,7 @@ pub fn report(values: &[EnvValue]) -> BTreeMap<String, Option<String>> {
 
 /// The suffix for an `--agent` step line: ` env NAME=value OTHER=<unset>` (empty when nothing is
 /// declared). Values containing whitespace or quotes, or empty values, are double-quoted.
-pub(crate) fn agent_suffix(values: &[EnvValue]) -> String {
+pub fn agent_suffix(values: &[EnvValue]) -> String {
     if values.is_empty() {
         return String::new();
     }
@@ -261,10 +258,7 @@ pub(crate) fn agent_suffix(values: &[EnvValue]) -> String {
 
 /// The names of `reads` that `declared` does not cover, sorted: a literal name is covered when
 /// it is declared, a pattern (`*_CSV`) when a declared name matches it.
-pub(crate) fn undeclared(
-    reads: &std::collections::BTreeSet<String>,
-    declared: &[String],
-) -> Vec<String> {
+pub fn undeclared(reads: &std::collections::BTreeSet<String>, declared: &[String]) -> Vec<String> {
     reads
         .iter()
         .filter(|name| !declared.iter().any(|d| matches(name, d)))

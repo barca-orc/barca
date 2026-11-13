@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 /// This machine's host name ("" when it cannot be read). Stored on a run row next to the pid:
 /// a database restored from another machine's backup holds that machine's runs, whose pids
 /// mean nothing here.
-pub(crate) fn local_host() -> String {
+pub fn local_host() -> String {
     let mut buf = [0u8; 256];
     // SAFETY: gethostname writes at most `buf.len()` bytes into `buf`.
     let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
@@ -20,7 +20,7 @@ pub(crate) fn local_host() -> String {
 
 /// True unless the process is known to be gone. (A pid reused by an unrelated process reads as
 /// alive: the run then stays `running`, which is what it was before pids were recorded.)
-pub(crate) fn pid_alive(pid: i64) -> bool {
+pub fn pid_alive(pid: i64) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return true;
     };
@@ -43,7 +43,7 @@ pub struct Until<'a> {
 }
 
 impl<'a> Until<'a> {
-    pub(crate) fn check(self) -> Result<(), BarcaError> {
+    pub fn check(self) -> Result<(), BarcaError> {
         if self.cancel.is_some_and(CancellationToken::is_cancelled)
             || self.remaining().is_some_and(|left| left.is_zero())
         {
@@ -54,7 +54,7 @@ impl<'a> Until<'a> {
     }
 
     /// Only wrap cancellable admission, never an admitted database mutation.
-    pub(crate) async fn admit<T>(
+    pub async fn admit<T>(
         self,
         work: impl std::future::Future<Output = T>,
     ) -> Result<T, BarcaError> {
@@ -92,7 +92,7 @@ impl<'a> Until<'a> {
     }
 
     /// The time left, when there is a deadline (zero once it has passed).
-    pub(crate) fn remaining(&self) -> Option<std::time::Duration> {
+    pub fn remaining(&self) -> Option<std::time::Duration> {
         self.deadline
             .map(|d| d.saturating_duration_since(std::time::Instant::now()))
     }

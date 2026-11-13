@@ -55,24 +55,29 @@ fn scan(src: &str) -> Scan {
 
 #[test]
 fn metadata_writes_go_through_an_owner() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    rust_files(&root, &mut files);
-    files.sort();
+    // This crate's files by their path under `src/`; `barca-model`'s (#905 step 4), which owns
+    // no table, as `barca-model/src/...`.
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut test_files = Vec::new();
     let mut found = Vec::new();
-    for file in &files {
-        let rel = file
-            .strip_prefix(&root)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .replace('\\', "/");
-        let scanned = scan(&std::fs::read_to_string(file).unwrap());
-        for m in &scanned.test_modules {
-            test_files.extend(test_module_files(&root, file, m));
+    for (krate, prefix) in [("barca-core", ""), ("barca-model", "barca-model/src/")] {
+        let root = crates.join(krate).join("src");
+        let mut files = Vec::new();
+        rust_files(&root, &mut files);
+        files.sort();
+        let rel_of = |file: &Path| {
+            let rel = file.strip_prefix(&root).unwrap().to_str().unwrap();
+            format!("{prefix}{}", rel.replace('\\', "/"))
+        };
+        for file in &files {
+            let scanned = scan(&std::fs::read_to_string(file).unwrap());
+            for m in &scanned.test_modules {
+                for t in test_module_files(&root, file, m) {
+                    test_files.push(format!("{prefix}{t}"));
+                }
+            }
+            found.push((rel_of(file), scanned.writes));
         }
-        found.push((rel, scanned.writes));
     }
     let mut offenders = Vec::new();
     let mut allowed_used = Vec::new();

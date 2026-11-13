@@ -1,0 +1,33 @@
+[package]
+name = "barca-model"
+version = "0.42.0"
+edition = "2024"
+description = "Model layer — the values, ids, hashes, terminal output and config every barca crate shares"
+
+# No other barca crate, no libsql, no HTTP client (#905). tokio only for task-local output
+# streams, `process::Until`'s timer and the cancellation token.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+croner = { workspace = true }
+chrono = { workspace = true }
+smallvec = { version = "1.13", features = ["serde"] }
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros"] }
+tokio-util = { workspace = true }
+indicatif = "0.18.4"
+libc = { workspace = true }
+toml = { workspace = true }
+# Optional: TypeScript binding generation (enable with --features ts). Kept out
+# of the production binary; used only to regenerate ui/src/lib/generated/.
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+ruff_python_parser = { workspace = true }
+ruff_python_ast = { workspace = true }
+
+[features]
+# Generate TS type bindings for the frontend. Off by default.
+ts = ["dep:ts-rs"]

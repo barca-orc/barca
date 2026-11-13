@@ -34,7 +34,7 @@ pub fn diagnostic_uri(uri: &str) -> String {
 /// The file a recorded artifact path names on this machine: a plain path or a
 /// `file://` URI. None for a remote URI. The same rule as
 /// `barca._storage.local_path_of`, which is what a worker applies to the path.
-pub(crate) fn local_path(recorded: &str) -> Option<&Path> {
+pub fn local_path(recorded: &str) -> Option<&Path> {
     if let Some(file) = recorded.strip_prefix("file://") {
         return Some(Path::new(file));
     }

@@ -1,12 +1,12 @@
 //! The ids of a run's and a step's Datadog traces: derived from the run id and the step, never
 //! stored, so a worker's Python spans, a `BARCA_LOG=json` line and the coordinator's spans
-//! agree without a message. The exporter itself is [`crate::telemetry::datadog`].
+//! agree without a message. The exporter itself is `barca_core::telemetry::datadog`.
 
 use sha2::{Digest, Sha256};
 
 /// A non-zero 63-bit id derived from `parts`, so a run's ids are the same however often
 /// it is exported.
-pub(crate) fn span_id(parts: &[&str]) -> u64 {
+pub fn span_id(parts: &[&str]) -> u64 {
     let mut hasher = Sha256::new();
     for part in parts {
         hasher.update(part.as_bytes());
@@ -25,34 +25,34 @@ fn wide_id(parts: &[&str]) -> u64 {
 
 /// The lower 64 bits of a run's trace id: the `trace_id` of its `barca.run` span, and the
 /// `dd.trace_id` of a `BARCA_LOG=json` line with no node.
-pub(crate) fn trace_id(run_id: &str) -> u64 {
+pub fn trace_id(run_id: &str) -> u64 {
     span_id(&["trace", run_id])
 }
 
 /// The upper 64 bits of a run's 128-bit trace id, sent as `_dd.p.tid` (16 hex digits).
-pub(crate) fn trace_id_high(run_id: &str) -> u64 {
+pub fn trace_id_high(run_id: &str) -> u64 {
     wide_id(&["trace-high", run_id])
 }
 
 /// The id of a run's `barca.run` span.
-pub(crate) fn run_span_id(run_id: &str) -> u64 {
+pub fn run_span_id(run_id: &str) -> u64 {
     span_id(&["run", run_id])
 }
 
 /// The lower 64 bits of the trace id of the step `node` (a node id, with its partition key
 /// when it has one) in a run: deterministic in the run and the step, so a worker's Python
 /// spans, the step's log lines and the coordinator's root span agree without a message.
-pub(crate) fn step_trace_id(run_id: &str, node: &str) -> u64 {
+pub fn step_trace_id(run_id: &str, node: &str) -> u64 {
     span_id(&["step-trace", run_id, node])
 }
 
 /// The upper 64 bits of a step's 128-bit trace id.
-pub(crate) fn step_trace_id_high(run_id: &str, node: &str) -> u64 {
+pub fn step_trace_id_high(run_id: &str, node: &str) -> u64 {
     wide_id(&["step-trace-high", run_id, node])
 }
 
 /// The id of the `barca.step` span of `node` in a run: the root of the step's trace.
-pub(crate) fn step_span_id(run_id: &str, node: &str) -> u64 {
+pub fn step_span_id(run_id: &str, node: &str) -> u64 {
     span_id(&["step", run_id, node])
 }
 
@@ -74,7 +74,7 @@ pub fn step_trace_ref(run_id: &str, node: &str) -> (String, String) {
 /// The trace and span a `BARCA_LOG=json` line belongs to, as `(trace_id, span_id)`: the
 /// step's own trace and its root span for a line about `node`; the run's for a line with no
 /// node.
-pub(crate) fn log_ids(run_id: &str, node: Option<&str>) -> (u64, u64) {
+pub fn log_ids(run_id: &str, node: Option<&str>) -> (u64, u64) {
     match node {
         Some(node) => (step_trace_id(run_id, node), step_span_id(run_id, node)),
         None => (trace_id(run_id), run_span_id(run_id)),

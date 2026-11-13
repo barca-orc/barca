@@ -6,7 +6,7 @@
 //! workers and helpers. See `crate::helper_proc` for why the lock exists.
 
 /// Held while a child process is being started.
-pub(crate) static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// `helper_proc::spawn` for a `std::process::Command`.
 pub fn spawn_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {

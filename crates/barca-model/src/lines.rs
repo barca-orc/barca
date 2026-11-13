@@ -33,7 +33,7 @@ tokio::task_local! {
 }
 
 impl Lines {
-    pub(crate) fn new(events: Option<UnboundedSender<RunEvent>>) -> Self {
+    pub fn new(events: Option<UnboundedSender<RunEvent>>) -> Self {
         Self { events }
     }
 
@@ -43,7 +43,7 @@ impl Lines {
     }
 
     /// Run `fut` with these as the current lines.
-    pub(crate) async fn scope<F: std::future::Future>(self, fut: F) -> F::Output {
+    pub async fn scope<F: std::future::Future>(self, fut: F) -> F::Output {
         CURRENT.scope(self, fut).await
     }
 
@@ -58,7 +58,7 @@ impl Lines {
     }
 
     /// Tell the stream that `node_id` was served from cache.
-    pub(crate) fn cached_step(&self, node_id: &str) {
+    pub fn cached_step(&self, node_id: &str) {
         if let Some(events) = &self.events {
             let _ = events.send(RunEvent::StepFinished {
                 node_id: node_id.to_string(),
@@ -80,7 +80,7 @@ impl Lines {
 
     /// Print a line above the progress bar (or on stderr when there is no visible bar) and
     /// hand it to the stream.
-    pub(crate) fn note(&self, pb: Option<&indicatif::ProgressBar>, msg: &str) {
+    pub fn note(&self, pb: Option<&indicatif::ProgressBar>, msg: &str) {
         match pb {
             Some(bar) if !bar.is_hidden() => bar.println(msg),
             _ => crate::errln!("{msg}"),

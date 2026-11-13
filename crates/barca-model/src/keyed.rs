@@ -63,7 +63,7 @@ pub struct StepKeyed {
 }
 
 impl StepKeyed {
-    pub(crate) fn remember_order(&mut self, keys: &[crate::PartitionKey]) {
+    pub fn remember_order(&mut self, keys: &[crate::PartitionKey]) {
         self.order = Some(Arc::new(
             keys.iter()
                 .enumerate()
@@ -83,7 +83,7 @@ impl StepKeyed {
 
 /// What a `partitions_from` source returned.
 #[derive(Debug, PartialEq)]
-pub(crate) enum SourceKeys {
+pub enum SourceKeys {
     /// A list: its values are the keys (strings, and numbers in their JSON form).
     List(Vec<String>),
     /// A dict: its keys in artifact order, and each key's value hash.
@@ -116,7 +116,7 @@ impl<'de> serde::de::Visitor<'de> for OrderedSource {
 
 /// Read a source's JSON artifact text: a list of keys, or a dict of key -> value. Anything else
 /// is an error in words naming the types a source may return.
-pub(crate) fn read_source(text: &str) -> Result<SourceKeys, String> {
+pub fn read_source(text: &str) -> Result<SourceKeys, String> {
     match text.trim_start().as_bytes().first() {
         Some(b'[') => {
             let values: Vec<Value> =

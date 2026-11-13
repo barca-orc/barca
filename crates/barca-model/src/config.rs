@@ -111,7 +111,7 @@ pub struct ExecutionToml {
 }
 
 /// A pool size that was set (`BARCA_POOL_SIZE` > `[execution] pool_size`), and where.
-pub(crate) type PoolSetting = Option<(usize, &'static str)>;
+pub type PoolSetting = Option<(usize, &'static str)>;
 
 fn pool_setting_with(
     vars: Vars<'_>,
@@ -136,7 +136,7 @@ fn pool_setting_with(
 }
 
 /// A capacity that was set (`BARCA_CAPACITY` > `[execution] capacity`), and where.
-pub(crate) type CapacitySetting = Option<(usize, &'static str)>;
+pub type CapacitySetting = Option<(usize, &'static str)>;
 
 fn capacity_setting_with(
     vars: Vars<'_>,
@@ -162,7 +162,7 @@ fn capacity_setting_with(
 
 /// The capacity and pool size settings of the project at `cwd` (its barca.toml and the
 /// environment), for commands that resolve nothing else (`barca plan`).
-pub(crate) fn execution_in(cwd: &Path) -> Result<(CapacitySetting, PoolSetting), BarcaError> {
+pub fn execution_in(cwd: &Path) -> Result<(CapacitySetting, PoolSetting), BarcaError> {
     execution_with(cwd, Vars::Process)
 }
 
@@ -271,7 +271,7 @@ pub struct RemoteToml {
 pub(crate) const SHARED_HISTORY_REMOVED_IN: &str = "0.26.0";
 
 /// How many metadata backups are kept, in the store and in the local backup directory each.
-pub(crate) const BACKUPS_KEPT: usize = 5;
+pub const BACKUPS_KEPT: usize = 5;
 
 /// Routine metadata backup policy. `None` disables routine work, never final backups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -471,7 +471,7 @@ pub struct ResolvedConfig {
 
 impl ResolvedConfig {
     /// Disposable evidence must outlive a server reader's temporary metadata view.
-    pub(crate) fn inspection_cache_path(&self) -> PathBuf {
+    pub fn inspection_cache_path(&self) -> PathBuf {
         self.project_root
             .join(".barca/inspection-cache")
             .join(format!("{}.json", self.env))
@@ -485,7 +485,7 @@ impl ResolvedConfig {
             .map_or_else(|| PathBuf::from("backups"), |dir| dir.join("backups"))
     }
 
-    pub(crate) fn allows_artifact(&self, path: &str) -> bool {
+    pub fn allows_artifact(&self, path: &str) -> bool {
         !self.remote_off || local_artifact(path, &self.local_artifact_dir)
     }
 
@@ -554,7 +554,7 @@ impl ResolvedConfig {
 }
 
 /// A path in this environment's local artifact directory, without accessing any store.
-pub(crate) fn local_artifact(path: &str, artifact_dir: &str) -> bool {
+pub fn local_artifact(path: &str, artifact_dir: &str) -> bool {
     let Some(path) = crate::uri::local_path(path) else {
         return false;
     };
@@ -602,7 +602,7 @@ pub fn rebase_onto_root(path: &Path, cwd: &Path, root: &Path) -> PathBuf {
     normalize_lexically(&rel_cwd.join(path))
 }
 
-pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
+pub fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out: Vec<Component> = Vec::new();
     for c in path.components() {
         match c {

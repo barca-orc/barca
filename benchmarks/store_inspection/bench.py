@@ -55,7 +55,7 @@ def main():
     source_root = Path(__file__).resolve().parents[2]
     source_files = [
         "crates/barca-core/src/status.rs",
-        "crates/barca-core/src/config.rs",
+        "crates/barca-model/src/config.rs",
         "crates/barca-core/src/transfer.rs",
         "python/barca/_transfer.py",
         "python/barca/_inspection_cache.py",
