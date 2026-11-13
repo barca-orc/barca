@@ -247,6 +247,8 @@ pub fn safe_node_id(node_id: &str) -> String {
 
 #[cfg(test)]
 mod failed_step_tests;
+#[cfg(test)]
+mod layering_tests;
 
 mod wire;
 
