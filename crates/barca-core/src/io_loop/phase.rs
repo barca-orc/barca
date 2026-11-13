@@ -11,11 +11,6 @@ impl WorkerPool {
         out
     }
 
-    /// The run's Datadog exporter, when that integration is on.
-    pub(crate) fn datadog(&self) -> Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>> {
-        self.config.datadog.clone()
-    }
-
     /// Report steps that stay in flight longer than the progress interval, so a long
     /// step does not look like a hang.
     pub(crate) fn on_running(&mut self, hook: RunningHook) {

@@ -17,6 +17,7 @@ pub mod config;
 pub(crate) mod coordinator;
 pub(crate) mod cost;
 pub mod dag;
+pub mod dag_error;
 mod dataset_sinks;
 pub mod db;
 pub(crate) mod decorator_args;
@@ -44,11 +45,13 @@ pub mod jsonlog;
 pub(crate) mod keyed;
 pub mod layout;
 pub mod ledger;
+pub(crate) mod ledger_post;
 pub mod lines;
 pub mod load;
 mod metadata_size;
 mod mismatch;
 pub mod model;
+pub(crate) mod node_estimate;
 pub mod outcome;
 pub mod parse;
 pub mod partition_grid;
@@ -57,11 +60,13 @@ pub mod pending_uploads;
 mod persist;
 pub mod pins;
 pub(crate) mod planner;
+pub(crate) mod process;
 pub(crate) mod project_modules;
 pub(crate) mod protocol;
 pub mod queries;
 mod recover;
 pub mod report;
+pub mod reports;
 mod result_journal;
 pub mod results;
 pub(crate) mod run_host;
@@ -78,7 +83,9 @@ mod spawn_lock;
 pub mod sql;
 pub(crate) mod state_validate;
 pub mod status;
+pub mod step_result;
 pub mod step_status;
+pub(crate) mod step_trace;
 pub mod store_inspect;
 mod store_sync;
 pub mod suggest;
@@ -87,7 +94,9 @@ pub mod telemetry;
 pub mod term;
 pub mod test_hooks;
 pub mod time;
+pub(crate) mod trace_ids;
 pub mod transfer;
+pub(crate) mod trigger;
 pub(crate) mod unrelated_modules;
 pub(crate) mod unused_inputs;
 pub mod values;
@@ -116,7 +125,7 @@ pub enum BarcaError {
     AmbiguousTarget(String),
 
     #[error("DAG error: {0}")]
-    Dag(#[from] dag::DagError),
+    Dag(#[from] dag_error::DagError),
 
     #[error("Parse error: {0}")]
     Parse(String),
@@ -170,7 +179,7 @@ pub struct FailedStep {
     /// Where the step failed, when its worker said so (#664). `None` for a worker that died
     /// without reporting, or a step barca failed without running it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub phase: Option<dispatch::ErrorPhase>,
+    pub phase: Option<step_result::ErrorPhase>,
     /// Where this step's artifacts are stored (`{artifact_root}/{safe node id}`): a local
     /// directory or a remote URI. It may not exist if the step never succeeded.
     pub artifact_dir: Option<String>,
@@ -187,16 +196,16 @@ pub struct PartialRun {
     pub steps_executed: usize,
     pub phases: usize,
     /// What happened to each step that was reached; the failed step has status `failed`.
-    pub steps: Vec<results::StepReport>,
+    pub steps: Vec<reports::StepReport>,
     /// Plan-time warnings for the steps this run planned (the same list a successful run has).
-    pub warnings: Vec<warnings::PlanWarning>,
+    pub warnings: Vec<reports::PlanWarning>,
     /// A partitioned target's keys that succeeded before the run stopped (failed keys are
     /// absent); `None` for an unpartitioned target.
     #[serde(default, skip)]
-    pub partitions: Option<Vec<(String, dispatch::OutputRef)>>,
+    pub partitions: Option<Vec<(String, step_result::OutputRef)>>,
     /// See [`results::GetResult::key_summary`].
     #[serde(default, skip)]
-    pub key_summary: Option<results::KeySummary>,
+    pub key_summary: Option<reports::KeySummary>,
 }
 
 impl FailedStep {

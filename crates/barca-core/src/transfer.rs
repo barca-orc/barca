@@ -866,6 +866,18 @@ async fn io_task(mut stream: tokio::net::UnixStream, mut req_rx: mpsc::Unbounded
     }
 }
 
+/// Upload this host's pending results ([`crate::pending_uploads`]) among `store_paths` now (see
+/// [`crate::execution::upload_pending`]): `barca get -o url` calls it before signing, so a
+/// `local only` result is uploaded and then signed rather than reported missing.
+pub async fn upload_pending_now(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    store_paths: &[String],
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), crate::BarcaError> {
+    crate::execution::upload_pending(python, cfg, store_paths, cancel).await
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

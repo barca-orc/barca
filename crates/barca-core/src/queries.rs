@@ -2,6 +2,9 @@
 //!
 //! None of these run a step. They read the project's source (statically) or the metadata DB.
 
+mod planned_nodes;
+pub use planned_nodes::planned_run_nodes;
+
 use crate::BarcaError;
 use crate::db;
 use crate::load::build_dag;

@@ -311,7 +311,7 @@ impl Reader<'_> {
         // first, so it is signed rather than reported missing from the store.
         let stored: Vec<String> = requests.iter().map(|r| r.uri.clone()).collect();
         let interrupt = super::execute::cancel_on_ctrl_c();
-        barca_core::pending_uploads::upload_now(self.python, self.cfg, &stored, &interrupt.cancel)
+        barca_core::transfer::upload_pending_now(self.python, self.cfg, &stored, &interrupt.cancel)
             .await?;
         let answers = barca_core::values::sign_urls(self.python, self.cfg, &requests, secs).await;
         let mut out = Vec::with_capacity(answers.len());

@@ -447,7 +447,7 @@ async fn a_live_run_in_another_process_limits_eviction_to_tiers_1_and_2() {
         "INSERT INTO runs (run_id, command, files, status, pid, host) VALUES \
          ('elsewhere', 'get', '[]', 'running', {}, '{}')",
         std::process::id(),
-        crate::db::local_host()
+        crate::process::local_host()
     ))
     .await;
     let predicted = f.gc(MaxSize::Bytes(1), true).await;
@@ -890,7 +890,7 @@ async fn files_no_row_names_stay_while_a_run_is_in_flight() {
         "INSERT INTO runs (run_id, command, files, status, pid, host) VALUES \
          ('elsewhere', 'get', '[]', 'running', {}, '{}')",
         std::process::id(),
-        crate::db::local_host()
+        crate::process::local_host()
     ))
     .await;
     let result = f.gc(MaxSize::Bytes(1), false).await;

@@ -5,14 +5,13 @@
 pub(crate) mod recording;
 use crate::db::materializations::{NewMaterialization, StepInsert};
 use crate::db::runs::advance_steps_executed;
-pub(crate) use recording::record_post;
 use recording::write_terminal_ledger;
+pub(crate) use recording::{RunLedger, record_post};
 
 use crate::BarcaError;
 use crate::dag::Dag;
 use crate::db;
 use crate::dispatch;
-use crate::helper_proc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,48 +32,6 @@ pub(crate) async fn cancel_recorded_run(
         l.elapsed,
     )
     .await
-}
-
-/// Everything one run wants written to the metadata DB at its end, held in memory until then.
-pub(crate) struct RunLedger<'a> {
-    pub(crate) run_id: &'a str,
-    pub(crate) status: &'a str,
-    pub(crate) command: &'a str,
-    pub(crate) files: String,
-    pub(crate) target: Option<&'a str>,
-    /// Canonical resolved job ids (`RunReport.job`), recorded with the outcome.
-    pub(crate) job: &'a str,
-    pub(crate) steps_total: usize,
-    pub(crate) steps_executed: usize,
-    pub(crate) steps_cached: usize,
-    pub(crate) elapsed: f64,
-    pub(crate) all_outputs: &'a HashMap<String, dispatch::OutputRef>,
-    /// The batched call (RFC-0013) of each key that ran in one: `batch_id` on its row.
-    pub(crate) batches: &'a HashMap<String, String>,
-    pub(crate) all_failures: &'a [dispatch::StepFailure],
-    pub(crate) all_sinks: &'a HashMap<String, String>,
-    /// The run hash each sink of a step now holds: the steps that ran and wrote their sinks,
-    /// and the cache hits republished or found current (`crate::sink_publications`).
-    pub(crate) sink_publications: &'a [crate::sink_publications::Publication],
-    pub(crate) all_attempts: &'a HashMap<String, u32>,
-    /// Per-node worker self-timing: (cpu_seconds, max_rss_bytes).
-    pub(crate) all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
-    pub(crate) cached_node_ids: &'a std::collections::HashSet<String>,
-    pub(crate) run_hashes: &'a HashMap<String, String>,
-    /// Executed step -> its run hash's components as JSON ([`crate::changes`]).
-    pub(crate) components: &'a HashMap<String, String>,
-    /// Sensor step -> content hash of the output it returned in this run. Other steps
-    /// record the hash on their `OutputRef`, when the artifact went through a store.
-    pub(crate) output_hashes: &'a HashMap<String, String>,
-    /// Artifact-store location of each uploaded output, recorded instead of
-    /// its local path so cache hits resolve on every machine.
-    pub(crate) store_paths: &'a HashMap<String, String>,
-    /// Run-end snapshot of the measured-cost EWMA, seeding the next run.
-    pub(crate) cost_snapshot: &'a [(String, crate::cost::NodeEstimate)],
-    /// Recorded artifact paths the run read (its inputs, and the outputs it returns): their
-    /// `last_read_at` is set first, on the ledger's connection, so the run's backup carries it
-    /// (RFC-0012). It was a connection of its own (#560).
-    pub(crate) touched: &'a [String],
 }
 
 /// How often, at most, the recorder writes finished steps to the metadata DB. A finished step
@@ -186,7 +143,7 @@ impl StepRecorder {
                         let writing = std::time::Instant::now();
                         let recorded = record_steps_with_until(
                             &db_path, &run_id, &pending,
-                            helper_proc::Until::cancelled(&stopped),
+                            crate::process::Until::cancelled(&stopped),
                         ).await;
                         add_busy(&writes, writing);
                         if let Ok(inserted) = recorded {
@@ -203,7 +160,7 @@ impl StepRecorder {
                         }
                         let snapshot_generation = generation;
                         let b = backups.as_ref().expect("backups enabled");
-                        let outcome = crate::backup::take_requested(&b.python, &b.cfg, Some(&run_id), crate::backup::Request::Routine, helper_proc::Until {
+                        let outcome = crate::backup::take_requested(&b.python, &b.cfg, Some(&run_id), crate::backup::Request::Routine, crate::process::Until {
                             cancel: Some(&stopped),
                             deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
                         }).await;
@@ -307,14 +264,14 @@ async fn record_steps(
     run_id: &str,
     rows: &[NewMaterialization],
 ) -> Result<u64, BarcaError> {
-    record_steps_with_until(db_path, run_id, rows, helper_proc::Until::done()).await
+    record_steps_with_until(db_path, run_id, rows, crate::process::Until::done()).await
 }
 
 async fn record_steps_with_until(
     db_path: &str,
     run_id: &str,
     rows: &[NewMaterialization],
-    until: helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<u64, BarcaError> {
     let _g = until.admit(db::db_guard()).await?;
     let (_db, conn) = db::open_conn_with_until(db_path, until).await?;
@@ -581,7 +538,7 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
 /// of every run that executed something.
 async fn upsert_cost_estimates(
     conn: &libsql::Connection,
-    snapshot: &[(String, crate::cost::NodeEstimate)],
+    snapshot: &[(String, crate::node_estimate::NodeEstimate)],
 ) {
     if snapshot.is_empty() {
         return;
@@ -1139,7 +1096,7 @@ sys.exit(_state.main())
         db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(1))
             .await
             .unwrap();
-        crate::backup::take(&python, &cfg, Some("r1"), helper_proc::Until::done())
+        crate::backup::take(&python, &cfg, Some("r1"), crate::process::Until::done())
             .await
             .unwrap();
         let local = cfg.local_backup_dir();
@@ -1305,7 +1262,7 @@ sys.exit(_state.main())
             fx.failures.push(failure);
             recorded.push(fx.row(&format!("f.py:p[k={k}]")));
         }
-        let estimate = crate::cost::NodeEstimate {
+        let estimate = crate::node_estimate::NodeEstimate {
             estimate_seconds: 0.1,
             cpu_seconds: 0.1,
             max_rss_bytes: 1,

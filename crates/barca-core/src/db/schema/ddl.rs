@@ -139,11 +139,29 @@ pub(crate) const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_mat_failed ON materializations(run_id, id) WHERE status = 'failed'",
 ];
 
+/// Derived per-node freshness witnesses (`crate::incremental`); never a second ledger.
+pub(crate) const FRESHNESS_PROOFS: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, snapshot TEXT NOT NULL)";
+
+/// The run queue of `barca serve` (`crate::serve::run_queue`).
+pub(crate) const RUN_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
+    run_id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    spec TEXT NOT NULL,
+    queued_at TEXT NOT NULL
+)";
+
+/// Settings `barca serve` keeps across restarts (`crate::serve::run_queue`).
+pub(crate) const SERVER_STATE: &str = "CREATE TABLE IF NOT EXISTS server_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)";
+
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
 /// Created by `init_db`, and by the additive migration in a version-1 database that lacks one.
 pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     // Derived per-node freshness witnesses; never a second ledger.
-    ("freshness_proofs", crate::incremental::CREATE),
+    ("freshness_proofs", FRESHNESS_PROOFS),
     // Results whose upload failed after their step succeeded (#390).
     ("pending_uploads", crate::pending_uploads::CREATE),
     // The last post a notification integration (Slack) made about a job, so a job that keeps
@@ -175,9 +193,9 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     ),
     // The run queue of `barca serve` (0.29.4): every run it accepted and has not finished, in
     // order, with the request that describes it, so a restart resumes them.
-    ("run_queue", crate::serve::run_queue::CREATE_QUEUE),
+    ("run_queue", RUN_QUEUE),
     // Settings `barca serve` keeps across restarts: whether its run queue is paused.
-    ("server_state", crate::serve::run_queue::CREATE_SERVER_STATE),
+    ("server_state", SERVER_STATE),
     // The run hash each `@sink` of a step last published (#662, 0.34.0), so a cache hit
     // under another run hash republishes its sinks from the cached artifact.
     ("sink_publications", crate::sink_publications::CREATE),

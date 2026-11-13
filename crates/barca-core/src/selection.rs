@@ -19,9 +19,9 @@
 
 use crate::BarcaError;
 use crate::dag::Dag;
-use crate::dispatch::OutputRef;
 use crate::model::PartitionKey;
 use crate::planner::{ExecutionPlan, Phase};
+use crate::step_result::OutputRef;
 use crate::step_status::StepStatus;
 use crate::targets::short_name;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -500,7 +500,7 @@ fn note_of(fan_ins: &[&str], skipped: usize) -> Option<String> {
 
 /// The note of a dry run, rebuilt from its result (a dry run on a server prints it on the
 /// client): the skipped nodes whose step reads a narrowed node itself are the fan-ins.
-pub fn explain_note(result: &crate::results::ExplainResult) -> Option<String> {
+pub fn explain_note(result: &crate::reports::ExplainResult) -> Option<String> {
     let selection = result.partition_selection.as_ref()?;
     let fan_ins: Vec<&str> = selection
         .skipped_nodes
@@ -630,10 +630,10 @@ impl Narrowing {
         &self,
         dag: &Dag,
         dry_run: bool,
-    ) -> Vec<crate::results::StepReport> {
+    ) -> Vec<crate::reports::StepReport> {
         self.skipped
             .iter()
-            .map(|s| crate::results::StepReport {
+            .map(|s| crate::reports::StepReport {
                 id: s.id.clone(),
                 kind: crate::model::kind_str(dag.get_node(&s.id).map(|n| n.kind())),
                 status: (!dry_run).then(|| StepStatus::Skipped.to_string()),
@@ -657,8 +657,8 @@ impl Narrowing {
     }
 
     /// The `partition_selection` object of the JSON results.
-    pub fn report(&self) -> crate::results::PartitionSelectionReport {
-        crate::results::PartitionSelectionReport {
+    pub fn report(&self) -> crate::reports::PartitionSelectionReport {
+        crate::reports::PartitionSelectionReport {
             exact_keys: self.selection.exact_keys.clone(),
             selection: self
                 .selection
@@ -669,7 +669,7 @@ impl Narrowing {
             nodes: self
                 .nodes
                 .iter()
-                .map(|(id, c)| crate::results::SelectedNode {
+                .map(|(id, c)| crate::reports::SelectedNode {
                     id: id.clone(),
                     selected: c.map(|c| c.selected),
                     skipped: c.map(|c| c.skipped),

@@ -13,18 +13,7 @@ use crate::BarcaError;
 use crate::db;
 use libsql::Connection;
 
-pub(crate) const CREATE_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
-    run_id TEXT PRIMARY KEY,
-    seq INTEGER NOT NULL,
-    state TEXT NOT NULL DEFAULT 'queued',
-    spec TEXT NOT NULL,
-    queued_at TEXT NOT NULL
-)";
-
-pub(crate) const CREATE_SERVER_STATE: &str = "CREATE TABLE IF NOT EXISTS server_state (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-)";
+use crate::db::schema::ddl::{RUN_QUEUE as CREATE_QUEUE, SERVER_STATE as CREATE_SERVER_STATE};
 
 /// The `server_state` key of a paused queue; its value is when it was paused (unix seconds).
 const PAUSED_AT: &str = "queue_paused_at";

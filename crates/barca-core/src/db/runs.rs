@@ -82,7 +82,7 @@ pub struct RunRecord {
     /// What started the run: `manual` (a command typed on a machine), `api`, `schedule` or
     /// `client`. `null` for runs recorded before barca recorded it.
     #[serde(default)]
-    pub triggered_by: Option<crate::outcome::TriggeredBy>,
+    pub triggered_by: Option<crate::trigger::TriggeredBy>,
     /// For a scheduled run: the tick it was started for (RFC 3339, UTC).
     #[serde(default)]
     pub scheduled_at: Option<String>,
@@ -167,7 +167,7 @@ impl RunFailure {
 /// What a run reads from the metadata DB as it starts ([`start_run`]).
 pub(crate) struct StartedRun {
     /// Logical-node scheduling priors for the requested plan.
-    pub cost_estimates: Vec<(String, crate::cost::NodeEstimate)>,
+    pub cost_estimates: Vec<(String, crate::node_estimate::NodeEstimate)>,
     /// [`get_avg_elapsed`] of the run's unpartitioned nodes.
     pub avg_elapsed: HashMap<String, f64>,
     /// [`get_avg_elapsed_for_partitioned`] of its partitioned base ids.
@@ -238,7 +238,8 @@ pub async fn create_run(
             target,
             steps_total,
             job: None,
-            trigger: &crate::outcome::Trigger::default(),
+            trigger: &crate::trigger::Trigger::default(),
+            traced: false,
         },
     )
     .await
@@ -256,7 +257,10 @@ pub struct NewRun<'a> {
     /// the row, so a `barca serve` on the same project sees which nodes a running CLI run
     /// covers and skips their ticks (#479). [`crate::persist`] writes it again at the end.
     pub job: Option<&'a str>,
-    pub trigger: &'a crate::outcome::Trigger,
+    pub trigger: &'a crate::trigger::Trigger,
+    /// Whether the run's steps send a Datadog trace each (`runs.trace`): the caller asks
+    /// `crate::telemetry::is_on("datadog")`. An unstarted run sends none.
+    pub traced: bool,
 }
 
 /// Create a new run record at the start of execution.
@@ -281,7 +285,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             run.target.unwrap_or("").to_string(),
             run.steps_total.map(|n| n.to_string()).unwrap_or_default(),
             std::process::id().to_string(),
-            local_host(),
+            crate::process::local_host(),
             owner,
             run.trigger.triggered_by.as_str().to_string(),
             run.trigger.scheduled_at.clone().unwrap_or_default(),
@@ -289,7 +293,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             run.job.unwrap_or("").to_string(),
             // The run's steps are traced with the integration `crate::execution` starts for
             // the same `BARCA_TELEMETRY` (`execution::workers`).
-            if crate::telemetry::is_on("datadog") {
+            if run.traced {
                 "datadog".to_string()
             } else {
                 String::new()
@@ -644,7 +648,7 @@ async fn read_runs(
             triggered_by: row
                 .get::<String>(12)
                 .ok()
-                .and_then(|t| crate::outcome::TriggeredBy::parse(&t)),
+                .and_then(|t| crate::trigger::TriggeredBy::parse(&t)),
             scheduled_at: row.get::<String>(13).ok().filter(|t| !t.is_empty()),
             schedule_id: row.get::<String>(14).ok().filter(|t| !t.is_empty()),
             client_run_id: row.get::<String>(15).ok().filter(|t| !t.is_empty()),
@@ -712,7 +716,7 @@ pub(crate) async fn insert_run_if_absent(
             target.unwrap_or("").to_string(),
             steps_total.to_string(),
             std::process::id().to_string(),
-            local_host(),
+            crate::process::local_host(),
         ],
     )
     .await
@@ -748,7 +752,7 @@ pub(crate) async fn finish_run_in(
 pub(crate) async fn insert_posted_run(
     conn: &Connection,
     run_id: &str,
-    run: &crate::ledger::LedgerRun,
+    run: &crate::ledger_post::LedgerRun,
 ) -> Result<u64, libsql::Error> {
     conn.execute(
         "INSERT INTO runs (run_id, command, files, target, status, steps_total, \
@@ -786,7 +790,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
         init_db(&db_path).await.unwrap();
-        let trigger = crate::outcome::Trigger::schedule("p.py:a", 0);
+        let trigger = crate::trigger::Trigger::schedule("p.py:a", 0);
         create_run_with(
             &db_path,
             NewRun {
@@ -797,6 +801,7 @@ mod tests {
                 steps_total: Some(1),
                 job: Some("p.py:a"),
                 trigger: &trigger,
+                traced: false,
             },
         )
         .await
@@ -804,7 +809,7 @@ mod tests {
         let run = get_run(&db_path, "tick").await.unwrap().unwrap();
         assert_eq!(
             run.triggered_by,
-            Some(crate::outcome::TriggeredBy::Schedule)
+            Some(crate::trigger::TriggeredBy::Schedule)
         );
         assert_eq!(run.scheduled_at.as_deref(), Some("1970-01-01T00:00:00Z"));
         assert_eq!(run.schedule_id.as_deref(), Some("p.py:a"));
@@ -832,7 +837,8 @@ mod tests {
                 target: Some("t"),
                 steps_total: None,
                 job: None,
-                trigger: &crate::outcome::Trigger::api(),
+                trigger: &crate::trigger::Trigger::api(),
+                traced: false,
             },
             "cancelled",
             r#"{"status":"cancelled"}"#,
@@ -841,7 +847,7 @@ mod tests {
         .unwrap();
         let run = get_run(&db_path, "queued").await.unwrap().unwrap();
         assert_eq!(run.status, "cancelled");
-        assert_eq!(run.triggered_by, Some(crate::outcome::TriggeredBy::Api));
+        assert_eq!(run.triggered_by, Some(crate::trigger::TriggeredBy::Api));
         assert!(run.finished_at.is_some());
         // An ordinary run is recorded as started by hand.
         create_run(&db_path, "cli", "get", "[]", None, Some(1))
@@ -853,7 +859,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .triggered_by,
-            Some(crate::outcome::TriggeredBy::Manual)
+            Some(crate::trigger::TriggeredBy::Manual)
         );
     }
 

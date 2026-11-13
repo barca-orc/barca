@@ -2,7 +2,13 @@
 //! partitioned node's successful rows read in one pass.
 
 use super::*;
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
+
+/// How old a result's `last_read_at` may be before a read of it is stamped again, for the
+/// results of a node with many partition keys. The cache size limit evicts the least recently
+/// read results; an hour does not change that order in any way that matters, and a tick that
+/// reads 200k results does not write 200k rows.
+pub(crate) const READ_STAMP_REFRESH: &str = "-1 hour";
 
 /// A short-lived handle for one phase's cache lookups. It holds the in-process guard
 /// *and* the cross-process lock for as long as it lives, so open it for the lookups
@@ -16,8 +22,9 @@ pub(crate) struct CacheReader {
     /// The statement of [`CacheReader::lookup_many`], kept the same way.
     lookup_many: tokio::sync::Mutex<Option<libsql::Statement>>,
     local_artifact_dir: Option<String>,
-    /// A server's ledger, which answers cache lookups in place of this database.
-    ledger: Option<crate::ledger::Ledger>,
+    /// A server's ledger answers cache lookups in place of this database
+    /// ([`crate::cache::CacheReader`] holds it).
+    ledger_answers: bool,
     /// The successful rows of a partitioned node's keys, read in one pass the first time a
     /// node with many keys is looked up ([`CacheReader::key_rows`]); `None` for a node whose
     /// keys are looked up one by one.
@@ -37,7 +44,7 @@ impl CacheReader {
             lookup: Default::default(),
             lookup_many: Default::default(),
             local_artifact_dir: None,
-            ledger: None,
+            ledger_answers: false,
             key_rows: Default::default(),
             conn,
             _handle: handle,
@@ -50,13 +57,8 @@ impl CacheReader {
     ) -> Result<Self, BarcaError> {
         let mut cache = Self::open(&cfg.db_path).await?;
         cache.local_artifact_dir = cfg.remote_off.then(|| cfg.local_artifact_dir.clone());
-        cache.ledger = cfg.ledger.clone();
+        cache.ledger_answers = cfg.ledger.is_some();
         Ok(cache)
-    }
-
-    /// The server's ledger, when this command runs against one.
-    pub(crate) fn ledger(&self) -> Option<&crate::ledger::Ledger> {
-        self.ledger.as_ref()
     }
 
     pub(crate) fn allows_artifact(&self, path: &str) -> bool {
@@ -112,7 +114,7 @@ impl CacheReader {
         &self,
         keys: &[(&str, &str)],
     ) -> Option<Vec<Option<OutputRef>>> {
-        if self.ledger.is_some() {
+        if self.ledger_answers {
             return None;
         }
         const CHUNK: usize = 4096;
@@ -177,7 +179,7 @@ impl CacheReader {
         base: &str,
         keys: usize,
     ) -> Option<std::sync::Arc<KeyRows>> {
-        if self.ledger.is_some() {
+        if self.ledger_answers {
             return None;
         }
         if let Some(known) = self.key_rows.lock().unwrap().get(base) {
@@ -217,7 +219,7 @@ impl CacheReader {
                      last_read_at >= datetime('now', '{}') FROM materializations NOT INDEXED \
                      WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
                      AND artifact_path IS NOT NULL",
-                    crate::cache::READ_STAMP_REFRESH
+                    READ_STAMP_REFRESH
                 ),
                 [lo, hi],
             )
@@ -409,7 +411,7 @@ mod lookup_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = db_in(&dir);
         init_db(&path).await.unwrap();
-        let cache = CacheReader::open(&path).await.unwrap();
+        let cache = crate::cache::CacheReader::open(&path).await.unwrap();
         let before = prepares();
         for k in 0..100 {
             crate::cache::lookup_cached(&cache, &format!("p.py:a[k={k}]"), "h").await;
@@ -494,7 +496,7 @@ mod lookup_tests {
             .map(|k| (format!("p.py:a[k={k}]"), format!("h{k}")))
             .collect();
         let pairs: Vec<(&str, &str)> = keys.iter().map(|(n, h)| (n.as_str(), h.as_str())).collect();
-        let cache = CacheReader::open(&path).await.unwrap();
+        let cache = crate::cache::CacheReader::open(&path).await.unwrap();
         let together = cache.lookup_many(&pairs).await.expect("answered together");
         let mut one_by_one = Vec::new();
         for (node, hash) in &pairs {
@@ -518,5 +520,78 @@ mod lookup_tests {
                 None
             ]
         );
+    }
+}
+
+const PREVIOUS_OBSERVATION: &str = "SELECT COALESCE(observation_hash, output_hash), artifact_path, artifact_format, artifact_size_bytes, output_hash FROM materializations INDEXED BY idx_mat_node_latest WHERE node_id = ?1 AND status = 'success' AND artifact_path IS NOT NULL ORDER BY id DESC LIMIT 1";
+
+impl CacheReader {
+    /// A sensor's latest observation: its freshness revision and the output it last reported
+    /// ([`crate::observation`] decides the next revision from it).
+    pub(crate) async fn previous_observation(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<(String, OutputRef)>, BarcaError> {
+        let fail = |e| BarcaError::Db(format!("failed to read sensor observation: {e}"));
+        let mut rows = self
+            .conn()
+            .query(PREVIOUS_OBSERVATION, [node_id.to_owned()])
+            .await
+            .map_err(fail)?;
+        let Some(row) = rows.next().await.map_err(fail)? else {
+            return Ok(None);
+        };
+        let Ok(revision) = row.get::<String>(0) else {
+            return Ok(None);
+        };
+        Ok(Some((
+            revision,
+            OutputRef {
+                path: row.get::<String>(1).map_err(fail)?,
+                format: row.get::<String>(2).map_err(fail)?,
+                size_bytes: row.get::<i64>(3).unwrap_or(0).max(0) as u64,
+                elapsed_seconds: None,
+                content_hash: row.get::<String>(4).ok(),
+            },
+        )))
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    #[tokio::test]
+    async fn the_latest_sensor_observation_does_not_sort_its_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        crate::db::init_db(&path).await.unwrap();
+        let cache = crate::db::CacheReader::open(&path).await.unwrap();
+        for (definition, digest) in [("old", "first"), ("new", "second"), ("old", "latest")] {
+            cache.conn().execute(
+                "INSERT INTO materializations (node_id,run_hash,status,artifact_path,artifact_format,artifact_size_bytes,output_hash) VALUES ('p.py:source',?1,'success',?2,'json',1,?2)",
+                (definition, digest),
+            ).await.unwrap();
+        }
+        let (revision, output) = cache
+            .previous_observation("p.py:source")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(revision, "latest");
+        assert_eq!(output.path, "latest");
+        let mut plan = cache
+            .conn()
+            .query(
+                &format!("EXPLAIN QUERY PLAN {}", super::PREVIOUS_OBSERVATION),
+                ["p.py:source"],
+            )
+            .await
+            .unwrap();
+        while let Some(row) = plan.next().await.unwrap() {
+            let detail = row.get::<String>(3).unwrap();
+            assert!(
+                !detail.contains("TEMP B-TREE"),
+                "latest observation must not sort every prior poll: {detail}"
+            );
+        }
     }
 }

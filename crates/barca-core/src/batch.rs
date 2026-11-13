@@ -191,7 +191,7 @@ fn calls_for(n: usize, grouping: &Grouping) -> Option<usize> {
 }
 
 /// "3 keys in 1 call (batch=all)".
-pub(crate) fn grouping_line(plan: &crate::results::BatchPlan) -> String {
+pub(crate) fn grouping_line(plan: &crate::reports::BatchPlan) -> String {
     let keys = format!("{} key{}", plan.keys, if plan.keys == 1 { "" } else { "s" });
     match plan.calls {
         Some(c) => format!(
@@ -207,7 +207,7 @@ pub(crate) fn grouping_line(plan: &crate::results::BatchPlan) -> String {
 /// and the line at the end of `detail`.
 pub(crate) fn annotate(
     dag: &crate::dag::Dag,
-    steps: &mut [crate::results::StepReport],
+    steps: &mut [crate::reports::StepReport],
     over: &BatchOverride,
     python: &std::path::Path,
 ) -> Result<(), crate::BarcaError> {
@@ -244,7 +244,7 @@ pub(crate) fn annotate(
                     .len(),
             );
         }
-        let plan = crate::results::BatchPlan {
+        let plan = crate::reports::BatchPlan {
             grouping: grouping.describe(),
             keys: n,
             calls,

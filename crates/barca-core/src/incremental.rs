@@ -18,8 +18,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, snapshot TEXT NOT NULL)";
-
 use crate::db::BY_NODE_RUN;
 use crate::source_observation::Source;
 use crate::step_status::StepStatus;
@@ -93,7 +91,7 @@ impl Incremental {
                 serde_json::to_vec(&(&cfg.artifact_root, &cfg.local_artifact_dir)).unwrap()
             )
         );
-        let cache = db::CacheReader::for_config(cfg).await?;
+        let cache = crate::cache::CacheReader::for_config(cfg).await?;
         let generation = generation(cache.conn()).await?;
         let mut previous = Snapshot::default();
         let mut lookup = db::prepare(
@@ -535,7 +533,7 @@ impl Incremental {
         }
         let needs_rows = cfg.remote_artifacts() || ids.iter().any(|(_, key)| key.is_some());
         let cache = if needs_rows {
-            Some(db::CacheReader::for_config(cfg).await?)
+            Some(crate::cache::CacheReader::for_config(cfg).await?)
         } else {
             None
         };
@@ -788,7 +786,7 @@ impl Incremental {
         {
             return Ok(());
         }
-        let cache = db::CacheReader::for_config(cfg).await?;
+        let cache = crate::cache::CacheReader::for_config(cfg).await?;
         let generation = generation(cache.conn()).await?;
         let mut proofs = self.next.nodes.clone();
         // A cache hit can select an older successful result. MAX(materialization.id)
@@ -880,7 +878,7 @@ async fn generation(conn: &libsql::Connection) -> Result<i64, BarcaError> {
 }
 /// Fetch only needed identities, in bounded SQL calls rather than one call per returned key.
 async fn latest_many(
-    cache: &db::CacheReader,
+    cache: &crate::cache::CacheReader,
     ids: &[String],
     through: i64,
     selected: &HashMap<String, String>,

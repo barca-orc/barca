@@ -6,7 +6,7 @@
 //! cache lookups are [`super::CacheReader`]'s.
 
 use super::*;
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 use libsql::Connection;
 
 fn id_list(ids: &[i64]) -> String {
@@ -169,6 +169,10 @@ pub(crate) async fn latest_success(cache: &CacheReader, node_id: &str) -> Option
     None
 }
 
+/// The key of a recorded row's components that names its definition's
+/// (`definition_components`, [`crate::changes`]).
+pub(crate) const DEFINITION_KEY: &str = "@definition";
+
 /// The run-hash components the latest successful materialization of `node_id` (a display id)
 /// recorded ([`crate::changes`]); `None` when it recorded none (before 0.29) or never succeeded.
 pub(crate) async fn last_success_components(cache: &CacheReader, node_id: &str) -> Option<String> {
@@ -186,7 +190,7 @@ pub(crate) async fn last_success_components(cache: &CacheReader, node_id: &str) 
     drop(rows);
     let mut own: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&recorded).ok()?;
-    let Some(definition) = own.remove(crate::changes::DEFINITION_KEY) else {
+    let Some(definition) = own.remove(DEFINITION_KEY) else {
         return Some(recorded);
     };
     let mut rows = cache
@@ -514,7 +518,7 @@ impl FailedStepInsert {
     /// count is recorded: dispatches for a worker failure, transfer attempts for an upload.
     pub(crate) async fn run(
         &mut self,
-        failure: &crate::dispatch::StepFailure,
+        failure: &crate::step_result::StepFailure,
         run_hash: String,
         run_id: &str,
         batch: String,
@@ -567,7 +571,7 @@ pub(crate) async fn held_hashes(
 pub(crate) async fn insert_posted_step(
     conn: &Connection,
     run_id: &str,
-    step: &crate::ledger::LedgerStep,
+    step: &crate::ledger_post::LedgerStep,
 ) -> Result<u64, libsql::Error> {
     conn.execute(
         "INSERT INTO materializations (node_id, run_hash, artifact_path, \
@@ -961,7 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn round_trip_persist_output_ref() {
-        use crate::dispatch::OutputRef;
+        use crate::step_result::OutputRef;
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
@@ -1007,7 +1011,7 @@ mod tests {
 
     #[tokio::test]
     async fn persist_multiple_output_refs() {
-        use crate::dispatch::OutputRef;
+        use crate::step_result::OutputRef;
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
@@ -1113,7 +1117,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_lookup_returns_output_ref() {
-        use crate::dispatch::OutputRef;
+        use crate::step_result::OutputRef;
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();

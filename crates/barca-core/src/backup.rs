@@ -27,8 +27,8 @@
 
 use crate::BarcaError;
 use crate::config::{BACKUPS_KEPT, ResolvedConfig};
-use crate::helper_proc::Until;
 use crate::helper_proc::{OutputFailed, run_to_output};
+use crate::process::Until;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -83,7 +83,7 @@ impl Writer {
             .to_path_buf();
         let project = std::fs::canonicalize(&dir).unwrap_or(dir);
         Self {
-            host: crate::db::local_host(),
+            host: crate::process::local_host(),
             project: project.to_string_lossy().into_owned(),
         }
     }
@@ -130,7 +130,7 @@ pub fn warn_interleaved(store: &str, other: &str, name: &str) {
 pub(crate) fn name_at(at: chrono::DateTime<chrono::Utc>, db_path: &str, digest: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(crate::db::local_host().as_bytes());
+    h.update(crate::process::local_host().as_bytes());
     h.update(b"\n");
     h.update(db_path.as_bytes());
     h.update(b"\n");
@@ -1324,7 +1324,7 @@ impl ServeLock {
             file,
             "barca serve, pid {} on {}, {what}",
             std::process::id(),
-            crate::db::local_host()
+            crate::process::local_host()
         )
         .ok()?;
         Some(Self { _file: file })
@@ -1638,7 +1638,10 @@ mod tests {
             .name
             .unwrap();
         let side = read_sidecar(&sidecar_path(&store, &first_a)).unwrap();
-        assert_eq!(side.host.as_deref(), Some(crate::db::local_host().as_str()));
+        assert_eq!(
+            side.host.as_deref(),
+            Some(crate::process::local_host().as_str())
+        );
         assert_eq!(
             side.project.as_deref(),
             Some(root_path.join("a").to_str().unwrap())
