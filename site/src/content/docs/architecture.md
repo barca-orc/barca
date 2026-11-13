@@ -17,32 +17,42 @@ This page describes the current source layout. The reasons behind the main choic
 
 ```text wrap=false
 crates/
-  barca-core/src/             library: no HTTP dependencies
+  barca-model/src/            shared vocabulary: no other barca crate, no database
+    model.rs, step_status.rs  node, step and plan values; the step status vocabulary
+    hash.rs, envdeps.rs       run hash pieces; declared env= variables
+    config.rs, layout.rs      project root, barca.toml, environment, flags; the .barca/ paths
+    term.rs, lines.rs         ordered output (`outln!`, `errln!`) and child streams that tolerate closed pipes
+  barca-compile/src/          source in, DAG and plan out (no database)
     parse.rs, discover.rs     read decorated functions from source with ruff's parser; find the project's .py files
     load.rs                   from source files to a DAG, with dynamic partitions resolved
     dag.rs, planner.rs        petgraph graph, validation, phases and streams of the plan
-    hash.rs, cone.rs, envdeps.rs   run hash: the function, the helper code it reaches, declared env= variables
+    cone.rs                   the helper code a function reaches (part of its run hash)
     definition.rs             which decorator arguments are part of the hash, and their canonical form
-    cache.rs, recover.rs      cache lookups; recompute a cached step whose artifact file is gone
+    targets.rs                target resolution, refresh-name checks and target planning
+    decorator_args.rs         accepted decorator/helper arguments and static validation
+  barca-db/src/               the metadata database (libSQL)
+    db/                       schema, migrations and the owner of every write
+    recording.rs              a run's run and step rows
+    run_owner.rs              conservative process-liveness evidence for interrupted runs
+  barca-engine/src/           plan in, step results out (no database)
     coordinator.rs            ready queue, dependencies, retries, parallel groups (no I/O)
     io_loop.rs, protocol.rs   worker pool, leased batches, length-prefixed JSON over a Unix socket
+    dispatch.rs, wire.rs      what a step is sent; compact wire tables
     cost.rs                   measured step cost and batch sizing
-    db/, config.rs            the metadata database; project root, barca.toml, environment, flags
-    run_owner.rs              conservative process-liveness evidence for interrupted runs
+    helper_proc.rs            Python command construction, serialized spawning and helper lifetime
+  barca-core/src/             wires the crates above; no HTTP dependencies
+    commands.rs               get and run entry points
+    execution.rs              prepare, decide, dispatch and finalize a run
+    cache.rs, recover.rs      cache lookups; recompute a cached step whose artifact file is gone
+    freshness.rs              what Always and Manual freshness do at run time
     transfer.rs, backup.rs    remote store: artifact transfer, and backups of the metadata DB
     store_sync.rs             a run's link to the store: upload results, fetch remote inputs, wait at the end
-    persist.rs                recording a run: run and step rows, the final write, the minute backup
-    commands.rs               get and run entry points
-    targets.rs                target resolution, refresh-name checks and target planning
-    execution.rs              prepare, decide, dispatch and finalize a run
+    persist.rs                recording a run: drives the final write and the minute backup
     queries.rs, status.rs, sql.rs   read-only commands: plan, history, stats, list; status; sql
     results.rs                what a command returns (serde types shared by the CLI and the server)
     report.rs, report/        shared result formatting, field projection and progress lines
     envelope.rs               error classification, remediation and error envelopes
     schedule.rs               schedule discovery and next-fire descriptions
-    decorator_args.rs         accepted decorator/helper arguments and static validation
-    term.rs                   ordered output and child streams that tolerate closed pipes
-    helper_proc.rs            Python command construction, serialized spawning and helper lifetime
     telemetry/                run reports; Datadog traces, one per step and one per run
   barca-server/src/           axum HTTP API, cron scheduler, file watcher, embedded web UI
   barca-cli/                  the `barca` binary; only `serve` calls barca-server
@@ -63,6 +73,13 @@ python/barca/
 ui/                           web UI (TypeScript, Vite); its build output is compiled into barca-server
 pyproject.toml                maturin build: binary and Python package in one wheel
 ```
+
+The crate dependencies point one way. `barca-compile` and `barca-db` use `barca-model` and not
+each other; `barca-engine` uses `barca-model` and `barca-compile` and never the database;
+`barca-core` uses all four; `barca-cli` and `barca-server` use only `barca-core`, which
+re-exports the lower crates' modules under its own paths. A test in `barca-core`
+(`layering_tests.rs`) checks the manifests keep this shape and that only `barca-db` and
+`barca-core` link libsql.
 
 ## A run
 

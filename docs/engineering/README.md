@@ -6,6 +6,7 @@ change those contracts.
 
 - [Pre-merge specification audit](spec-audit.md): separate unconsidered boundaries, implementation disagreements and spec-quality blockers.
 - [Architecture map and cleanup sequence](architecture-cleanup.md): the October 2026 map and refactor sequence, closed out with what shipped where and what remains (scheduled in DIRECTION.md).
+- [Crate split](crate-split.md): the November 2026 split of `barca-core` into five crates (#905), its decisions, measurements and follow-ups.
 - [Requirements discussion handoff](requirements-handoff.md): unanswered proposals and remaining decisions.
 - [User API rationale](user-api-decisions.md): reasons behind declaration choices.
 - [DuckDB lifetime investigation](history/duckdb-step-isolation.md): retained empirical evidence and rejected isolation alternatives.
