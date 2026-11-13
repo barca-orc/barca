@@ -7,8 +7,9 @@
 //! model   <  db                  <  core
 //! ```
 //!
-//! `compile` and `db` are siblings: both use `model`, neither uses the other. `engine` uses
-//! `model` and `compile` but not `db` (it takes the storage traits of #905 step 3). `core` (the
+//! `compile` and `db` are siblings: both use `model`, neither uses the other. `engine` (the
+//! per-step scheduler and worker loop) uses `model` and `compile` but not `db`. `execution`, the
+//! run orchestrator that decides caching, freshness and publication, is `core`. `core` (the
 //! remainder) uses everything, and nothing uses `core`. A layer is the crate it becomes in
 //! #905 step 4 (`barca-model`, `barca-compile`, `barca-db`, `barca-engine`, `barca-core`).
 //!
@@ -104,7 +105,6 @@ const LAYERS: &[(&str, Layer)] = &[
     ("run_logs", Db),          // a run's recorded output: the `logs` rows and their spool
     ("pending_uploads", Db),   // uploads still owed: rows `db` reads
     // ---- engine (barca-engine) ----
-    ("execution", Engine),
     ("coordinator", Engine),
     ("dispatch", Engine),
     ("io_loop", Engine),
@@ -119,6 +119,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("dataset_sinks", Engine), // a step's `@sink` writes, through `helper_proc`
     ("observation", Engine),   // a sensor's freshness revision from its result
     // ---- core (barca-core, the remainder) ----
+    ("execution", Core), // the run orchestrator: cache, freshness, publication, backup (#905)
     ("persist", Core), // the run's recording driver and telemetry report; `recording` is db
     ("backup", Core),
     ("cache", Core),
@@ -203,36 +204,9 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ("db", "helper_proc", "helper_proc::Until (the deadline helper beside pid_alive)"),
     ("io_loop", "db", "db::pid_alive"),
     ("protocol", "db", "db::pid_alive"),
-    // ---- step 3, the engine and storage seam: execution takes a run recorder and a cache reader ----
-    ("execution", "db", "db::{encode_files, local_host, materializations::NewMaterialization, ...}"),
-    ("execution", "pending_uploads", "pending_uploads::{list, record, report, settle, ...}"),
-    ("execution", "run_logs", "run_logs::{Recorder, RecordedLine, spool_path}"),
-    ("execution", "sink_publications", "sink_publications::{Publication, Verdict, published}"),
+    // ---- step 3, the engine and storage seam: the engine reads no metadata ----
     ("observation", "db", "db::CacheReader"),
     // ---- no #905 step names these yet; each needs a decision before step 4 ----
-    // `execution` reaches into the remainder: cache policy, stores, reports, history. Either
-    // these move behind the step 3 traits too, or the orchestrating half of `execution`
-    // (prepare/predict/finalize) stays in core and only the per-step loop moves to the engine.
-    ("execution", "backup", "backup::{covered, mark_covered, Request, take_requested}"),
-    ("execution", "cache", "cache::{decide_step, CachePolicy, Decision, phase_keys, ...}"),
-    ("execution", "changes", "changes::{step_components_json, since_last_success, ...}"),
-    ("execution", "freshness", "freshness::{RunRules, Pin, walk_with, load_pins, ...}"),
-    ("execution", "gc", "gc::{pin, after_command, Own, store_check, size::human}"),
-    ("execution", "incremental", "incremental::Incremental"),
-    ("execution", "ledger", "ledger::{posts::forget_steps, bytes_changed_warning}"),
-    ("execution", "mismatch", "mismatch::mark"),
-    ("execution", "outcome", "outcome::{Trigger, RunOptions}"),
-    ("execution", "pauses", "pauses::detail"),
-    ("execution", "persist", "persist::{RunLedger, StepRecorder, persist_run, ...}"),
-    ("execution", "pins", "pins::{prune_expanded_inputs, prune_partition_inputs}"),
-    ("execution", "queries", "queries::filter_plan_to_subgraph"),
-    ("execution", "recover", "recover::Work"),
-    ("execution", "report", "report::{RunOutcome, failed_step_line, kind_str, ...}"),
-    ("execution", "results", "results::{StepReport, GetResult, KeySummary, ...}"),
-    ("execution", "status", "status::trace_since"),
-    ("execution", "store_sync", "store_sync::{StoreSync, transfer_remedy, store_check_fix}"),
-    ("execution", "telemetry", "telemetry::{Integration, export, datadog::Dispatch, ...}"),
-    ("execution", "transfer", "transfer::{TransferClient, ArtifactLayout, diagnostic_uri, ...}"),
     // `results` holds report types every layer returns: the ones below it use move to model.
     ("batch", "results", "results::{BatchPlan, StepReport}"),
     ("lib", "results", "PartialRun: results::{StepReport, KeySummary}"),
