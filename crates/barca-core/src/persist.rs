@@ -2,9 +2,9 @@
 //! backup of the metadata DB (RFC-0009). Also the telemetry report a finished run hands to the
 //! configured integration.
 
-pub(crate) mod recording;
 use crate::db::materializations::{NewMaterialization, StepInsert};
 use crate::db::runs::advance_steps_executed;
+pub(crate) use barca_db::recording;
 use recording::write_terminal_ledger;
 pub(crate) use recording::{RunLedger, record_post};
 

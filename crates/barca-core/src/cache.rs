@@ -1351,6 +1351,9 @@ pub enum CachePolicy {
 pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
 
 #[cfg(test)]
+mod lookup_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{PartitionKey, StepId};

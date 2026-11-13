@@ -47,14 +47,19 @@ enum Layer {
 use Layer::{Compile, Core, Db, Engine, Model};
 
 /// The crates the guard scans, bottom up: (directory under `crates/`, name in a path).
-const CRATES: &[(&str, &str)] = &[("barca-model", "barca_model"), ("barca-core", "barca_core")];
+const CRATES: &[(&str, &str)] = &[
+    ("barca-model", "barca_model"),
+    ("barca-db", "barca_db"),
+    ("barca-core", "barca_core"),
+];
 
 /// The crate a layer's modules live in today. A #905 step 4 PR that gives a layer its own crate
 /// adds it here and to [`CRATES`].
 fn crate_of(layer: Layer) -> &'static str {
     match layer {
         Model => "barca-model",
-        Compile | Db | Engine | Core => "barca-core",
+        Db => "barca-db",
+        Compile | Engine | Core => "barca-core",
     }
 }
 
@@ -78,6 +83,7 @@ const LAYERS: &[(&str, Layer)] = &[
     // ---- model (barca-model) ----
     ("lib", Model), // `BarcaError`, `FailedStep`, `PartialRun`, `safe_node_id`: used everywhere
     ("barca_core", Core), // the root of `barca-core`: module declarations and re-exports
+    ("barca_db", Db), // the root of `barca-db`: module declarations only
     ("model", Model),
     ("keyed", Model),
     ("step_status", Model),
@@ -127,7 +133,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("warnings", Compile), // plan-time warnings, over `dag` and `planner`
     // ---- db (barca-db) ----
     ("db", Db),
-    ("persist::recording", Db),
+    ("recording", Db), // a run's rows at its end; `persist` re-exports it as `persist::recording`
     ("run_owner", Db),
     ("state_validate", Db),
     ("metadata_size", Db),
@@ -457,7 +463,7 @@ fn modules_only_use_layers_below_them() {
     for (k, _) in LAYERS {
         let top = k.split("::").next().unwrap();
         let known = *k == "lib"
-            || *k == "barca_core"
+            || CRATES.iter().any(|(_, name)| name == k)
             || crates.iter().any(|(_, root, _, declared)| {
                 declared.contains(top)
                     && (!k.contains("::") || {
@@ -494,7 +500,7 @@ fn modules_only_use_layers_below_them() {
                 if *dir == crate_of(Model) {
                     "lib"
                 } else {
-                    "barca_core"
+                    CRATES.iter().find(|(d, _)| d == dir).unwrap().1
                 }
             } else {
                 key_of(&module)

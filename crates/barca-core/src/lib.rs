@@ -14,7 +14,6 @@ pub(crate) mod coordinator;
 pub(crate) mod cost;
 pub mod dag;
 mod dataset_sinks;
-pub mod db;
 pub(crate) mod decorator_args;
 pub(crate) mod definition;
 pub mod diagnostics;
@@ -35,13 +34,11 @@ pub mod interrupt;
 pub(crate) mod io_loop;
 pub mod ledger;
 pub mod load;
-mod metadata_size;
 mod mismatch;
 pub mod outcome;
 pub mod parse;
 pub mod partition_grid;
 pub mod pauses;
-pub mod pending_uploads;
 mod persist;
 pub mod pins;
 pub(crate) mod planner;
@@ -53,17 +50,13 @@ pub mod report;
 mod result_journal;
 pub mod results;
 pub(crate) mod run_host;
-pub mod run_logs;
-mod run_owner;
 pub mod schedule;
 pub mod selection;
 pub mod serve;
 mod sink_args;
-mod sink_publications;
 #[cfg(test)]
 mod source_scan;
 pub mod sql;
-pub(crate) mod state_validate;
 pub mod status;
 pub(crate) mod step_trace;
 pub mod store_inspect;
@@ -113,6 +106,16 @@ pub use barca_model::{
     release_free_memory, run_line, safe_node_id,
 };
 
+// The metadata database layer lives in `barca-db` (#905 step 4); its modules keep their
+// `barca_core::` paths.
+pub use barca_db::db;
+use barca_db::metadata_size;
+pub use barca_db::pending_uploads;
+pub use barca_db::run_logs;
+use barca_db::run_owner;
+use barca_db::sink_publications;
+pub(crate) use barca_db::state_validate;
+
 pub use dag::Dag;
 pub use execution::sizing;
 
@@ -120,6 +123,8 @@ pub use execution::sizing;
 mod layering_tests;
 #[cfg(test)]
 mod step_status_literals_tests;
+#[cfg(test)]
+mod write_boundary_tests;
 
 mod wire;
 

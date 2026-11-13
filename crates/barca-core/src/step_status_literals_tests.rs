@@ -1,5 +1,5 @@
 //! No bare step-status literal outside the vocabulary (`barca_model::step_status`): a source
-//! scan over `barca-model` and `barca-core`, which lives here beside `source_scan`.
+//! scan over `barca-model`, `barca-db` and `barca-core`, which lives here beside `source_scan`.
 
 use crate::source_scan;
 use std::path::Path;
@@ -53,7 +53,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
 fn no_bare_step_status_literal_outside_the_vocabulary() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut offenders = Vec::new();
-    let sources = ["barca-model", "barca-core"]
+    let sources = ["barca-model", "barca-db", "barca-core"]
         .iter()
         .flat_map(|krate| source_scan::non_test_sources(&crates.join(krate).join("src")));
     for (rel, src) in sources {

@@ -58,8 +58,8 @@ EMULATORS = ALWAYS + [
     "crates/barca-core/src/store_sync.rs",
     "crates/barca-core/src/backup.rs",
     "crates/barca-core/src/backup/*",
-    "crates/barca-core/src/state_validate.rs",
-    "crates/barca-core/src/pending_uploads.rs",
+    "crates/barca-db/src/state_validate.rs",
+    "crates/barca-db/src/pending_uploads.rs",
     "crates/barca-core/src/ledger.rs",
     "crates/barca-core/src/dataset_sinks.rs",
     "crates/barca-core/src/gc/*",
@@ -90,7 +90,7 @@ DUCKDB1 = ALWAYS + [
 # takes, the helper process that runs it, the store side, `barca state backups|restore`, and
 # the test with the helpers it imports.
 CHECKPOINT = ALWAYS + [
-    "crates/barca-core/src/db/*",
+    "crates/barca-db/src/db/*",
     "crates/barca-model/src/config.rs",
     "crates/barca-core/src/backup/*",
     "crates/barca-server/src/lib.rs",

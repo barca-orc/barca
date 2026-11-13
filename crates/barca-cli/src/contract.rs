@@ -1433,7 +1433,13 @@ fn every_barca_env_var_is_in_the_contract() {
         return; // an sdist of this crate alone
     }
     let mut files = Vec::new();
-    for krate in ["barca-model", "barca-core", "barca-cli", "barca-server"] {
+    for krate in [
+        "barca-model",
+        "barca-db",
+        "barca-core",
+        "barca-cli",
+        "barca-server",
+    ] {
         source_files(
             &root.join("crates").join(krate).join("src"),
             "rs",

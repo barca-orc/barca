@@ -7,7 +7,7 @@ Scope: choosing CSV artifacts and sinks, dataset sinks, reading them and inspect
 results.
 Conformance: `python/tests/test_artifact_extensions.py`, `crates/barca-model/src/artifact_format.rs`
 (`format_of_agrees_with_the_spec_table`), `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
-`python/tests/test_sink_republish.py`, `crates/barca-core/src/sink_publications.rs`,
+`python/tests/test_sink_republish.py`, `crates/barca-db/src/sink_publications.rs`,
 `crates/barca-core/src/sink_args.rs`, `crates/barca-core/tests/grammar_spec.rs`.
 
 Frames continue to default to Parquet. A literal `serializer="csv"` on an asset,

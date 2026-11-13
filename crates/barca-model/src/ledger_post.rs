@@ -1,6 +1,6 @@
 //! The body of a ledger post (`POST /ledger/runs`) and the answer to it: a finished run and its
 //! step rows as the posting machine recorded them. Plain data: `barca_core::ledger` sends and
-//! accepts them, and the metadata DB records them (`ledger_posts`, `persist::recording`).
+//! accepts them, and the metadata DB records them (`ledger_posts`, barca-db's `recording`).
 
 use serde::{Deserialize, Serialize};
 

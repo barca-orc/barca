@@ -254,7 +254,7 @@ early cutoff in [cache.rs](../../crates/barca-core/src/cache.rs) (`cutoff_tests`
 (`a_cutoff_asset_reached_by_name_adds_a_marker_not_its_code`) and
 [test_asset_cutoff.py](../../python/tests/test_asset_cutoff.py),
 persistence tests in [persist.rs](../../crates/barca-core/src/persist.rs),
-run owners in [run_owner.rs](../../crates/barca-core/src/run_owner.rs) and
+run owners in [run_owner.rs](../../crates/barca-db/src/run_owner.rs) and
 [reconciliation](../../python/tests/test_history_reconcile.py).
 
 Conformance: [incremental DAG regressions](../../python/tests/test_incremental_dag.py),

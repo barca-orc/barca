@@ -2,7 +2,7 @@
 """Apply a release's version bump to the working tree (scripts/release.sh runs this).
 
 Edits exactly what a release commit changes: `version` in crates/*/Cargo.toml, the barca,
-barca-core, barca-model and barca-server entries in Cargo.lock, `version` in pyproject.toml,
+barca-core, barca-model, barca-db and barca-server entries in Cargo.lock, `version` in pyproject.toml,
 the barca entry in uv.lock, `__version__` in python/barca/__init__.py, and CHANGELOG.md, where
 the `## Pending` notes become `## X.Y.Z (YYYY-MM-DD)` under a new empty `## Pending`.
 
@@ -22,8 +22,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]  # --root overrides
-CRATES = ["barca-cli", "barca-core", "barca-model", "barca-server"]
-LOCKED = {"barca", "barca-core", "barca-model", "barca-server"}  # Cargo.lock package names
+CRATES = ["barca-cli", "barca-core", "barca-db", "barca-model", "barca-server"]
+LOCKED = {"barca", "barca-core", "barca-db", "barca-model", "barca-server"}  # Cargo.lock package names
 HEADINGS = {"Breaking", "Features", "Bug Fixes", "Performance", "Removed", "Documentation"}
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 

@@ -216,6 +216,7 @@ dependencies = [
 name = "barca-core"
 version = "0.42.0"
 dependencies = [
+ "barca-db",
  "barca-model",
  "chrono",
  "chrono-tz",
@@ -239,6 +240,22 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
+ "ts-rs",
+]
+
+[[package]]
+name = "barca-db"
+version = "0.42.0"
+dependencies = [
+ "barca-model",
+ "libc",
+ "libsql",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
  "ts-rs",
 ]
 

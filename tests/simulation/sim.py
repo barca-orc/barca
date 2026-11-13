@@ -53,7 +53,7 @@ from typing import ClassVar
 REPO = Path(__file__).resolve().parents[2]
 SCRUB = ("BARCA_", "FSSPEC_", "AWS_", "AZURE_", "GOOGLE_", "GCSFS_", "STORAGE_EMULATOR_HOST")
 
-# The binary's constants (crates/barca-core/src/metadata_size.rs): a change there fails here.
+# The binary's constants (crates/barca-db/src/metadata_size.rs): a change there fails here.
 ALLOWANCE_PERCENT = 10
 LARGEST_ALLOWANCE = 1 << 30
 JOURNAL_LIMIT = 64 * 1024 * 1024
@@ -666,7 +666,7 @@ class Sim:
     def failed_lookups(self) -> int:
         """Reads a `--read-only` server lost to the writer: a cache lookup the database could not
         answer. `database disk image is malformed` here was barca dropping its own SQLite locks
-        (`HELD_FILES` in crates/barca-core/src/db/mod.rs)."""
+        (`HELD_FILES` in crates/barca-db/src/db/mod.rs)."""
         return self.reader.log.read_text(errors="replace").count("cache lookup of")
 
     def close(self) -> None:

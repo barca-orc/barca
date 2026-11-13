@@ -2,7 +2,7 @@
 
 Scope: metadata format compatibility, not the full table/DDL contract.
 Status: implemented. Specification version: 1 (database versions are described below).
-Conformance: `crates/barca-core/src/db/schema/ddl.rs`, `state_validate.rs`, and the tests in
+Conformance: `crates/barca-db/src/db/schema/ddl.rs`, `state_validate.rs`, and the tests in
 `db/schema.rs` and `db/snapshots.rs`. See [boundary inventory](../README.md).
 
 The metadata database contains durable run history, logs and schedules alongside
@@ -288,7 +288,7 @@ by eviction.
 ## Bounded size
 
 The database keeps to its own share of `[cache] max_size`, a tenth up to 1 GiB (`barca docs disk`,
-"The metadata database"; `crates/barca-core/src/metadata_size.rs`). Past it, in order: `components`
+"The metadata database"; `crates/barca-db/src/metadata_size.rs`). Past it, in order: `components`
 of superseded rows and oversized older ones become `NULL`, `runs.outcome_json` becomes `NULL` but
 for the last 100 runs, rows older than their node's latest success whose artifact is evicted or
 which have none are deleted, and all but the last 1000 runs are deleted with their logs. A row
