@@ -259,6 +259,39 @@ pub(crate) fn agent_suffix(values: &[EnvValue]) -> String {
     format!(" env {}", parts.join(" "))
 }
 
+/// The names of `reads` that `declared` does not cover, sorted: a literal name is covered when
+/// it is declared, a pattern (`*_CSV`) when a declared name matches it.
+pub(crate) fn undeclared(
+    reads: &std::collections::BTreeSet<String>,
+    declared: &[String],
+) -> Vec<String> {
+    reads
+        .iter()
+        .filter(|name| !declared.iter().any(|d| matches(name, d)))
+        .cloned()
+        .collect()
+}
+
+/// Does the literal `name` match `pattern`, where `*` in the pattern stands for any text?
+pub fn matches(pattern: &str, name: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or("");
+    let Some(mut rest) = name.strip_prefix(first) else {
+        return false;
+    };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

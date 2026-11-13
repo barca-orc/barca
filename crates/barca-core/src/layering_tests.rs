@@ -76,6 +76,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("layout", Model), // `.barca/` paths from the config: `db` and `gc` use them
     ("source_observation", Model), // compact observation values over `keyed`
     ("test_hooks", Model), // `BARCA_TEST_*` reads, used by every layer
+    ("spawn_lock", Model), // one child process started at a time: loading and the engine both start them
     // ---- compile (barca-compile) ----
     ("parse", Compile),
     ("cone", Compile),
@@ -113,6 +114,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("result_journal", Engine),
     ("helper_proc", Engine),
     ("batch", Engine),
+    ("batch::spec", Compile), // reading `batch=`, `--batch`, evaluating `batches(...)` at load
     ("run_host", Engine),
     ("interrupt", Engine),     // how a run is told to stop
     ("cost", Engine),          // measured cost and adaptive batch sizing for the dispatcher
@@ -182,9 +184,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ("config", "serve", "serve::AuthMode"),
     ("config", "telemetry", "telemetry::is_on, telemetry::datadog::app_url"),
     ("config", "transfer", "transfer::{diagnostic_uri, local_path}"),
-    // ---- step 2, `planner` and `dag`: helpers move to the compile side ----
-    ("dag", "changes", "changes::definition_components"),
-    ("planner", "cache", "cache::folds_output"),
     // ---- step 2, `dispatch` types: OutputRef, StepFailure, ErrorPhase move to model ----
     ("db", "dispatch", "dispatch::{OutputRef, StepFailure}"),
     ("lib", "dispatch", "FailedStep.phase: dispatch::ErrorPhase; PartialRun: dispatch::OutputRef"),
@@ -216,15 +215,9 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // The crate root's error types name compile-side types.
     ("lib", "dag", "BarcaError::Dag(dag::DagError)"),
     ("lib", "warnings", "PartialRun.warnings: warnings::PlanWarning"),
-    // `batch` straddles compile (parsing `batch=`, evaluating groups) and engine (calls).
-    ("load", "batch", "batch::{evaluate_groups, check_label_function}"),
-    ("parse", "batch", "batch::{FIX, extract, scalar_annotation, BatchOverride}"),
-    // The partition-key resolver runs a project subprocess (RFC-0013).
-    ("load", "helper_proc", "helper_proc::spawn_std"),
     // `telemetry` straddles: the Datadog dispatch and log ids are used below it.
     ("io_loop", "telemetry", "telemetry::datadog::Dispatch"),
     ("jsonlog", "telemetry", "telemetry::datadog::log_ids"),
-    ("model", "env_reads", "env_reads::undeclared"),
     // `db::run_steps::planned_run_nodes` rebuilds a plan: a query, not storage.
     ("db", "dag", "dag::Dag (planned_run_nodes)"),
     ("db", "planner", "planner::ResourceConfig (planned_run_nodes)"),
@@ -232,8 +225,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // `pending_uploads` straddles: rows (db) and the upload itself (core).
     ("pending_uploads", "execution", "execution::upload_pending (upload_now)"),
     ("persist::recording", "persist", "persist::RunLedger"),
-    ("selection", "report", "report::kind_str"),
-    ("targets", "recover", "recover::returned_step"),
 ];
 
 /// One reference: the crate-relative path it names and the line it is on.

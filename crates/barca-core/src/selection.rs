@@ -635,7 +635,7 @@ impl Narrowing {
             .iter()
             .map(|s| crate::results::StepReport {
                 id: s.id.clone(),
-                kind: crate::report::kind_str(dag.get_node(&s.id).map(|n| n.kind())),
+                kind: crate::model::kind_str(dag.get_node(&s.id).map(|n| n.kind())),
                 status: (!dry_run).then(|| StepStatus::Skipped.to_string()),
                 action: dry_run.then(|| StepStatus::Skipped.to_string()),
                 reason: Some("partition_selection".to_string()),
