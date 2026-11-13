@@ -638,7 +638,7 @@ async fn build_post(
             started_at: run.started_at,
             finished_at: run.finished_at,
             elapsed_seconds: run.elapsed_seconds,
-            host: Some(db::local_host()),
+            host: Some(crate::process::local_host()),
         },
         steps,
         bytes_unchecked,

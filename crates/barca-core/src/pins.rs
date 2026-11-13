@@ -114,7 +114,7 @@ pub fn local_actor() -> Option<String> {
         .or_else(|_| std::env::var("USERNAME"))
         .ok()
         .filter(|u| !u.is_empty())?;
-    let host = db::local_host();
+    let host = crate::process::local_host();
     Some(if host.is_empty() {
         user
     } else {

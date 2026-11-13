@@ -158,7 +158,7 @@ fn object(
         quoted(&mut out, node);
     }
     if trace_ids && let Some(run_id) = run_id {
-        let (trace, span) = crate::telemetry::datadog::log_ids(run_id, node);
+        let (trace, span) = crate::trace_ids::log_ids(run_id, node);
         let _ = write!(
             out,
             ",\"dd.trace_id\":\"{trace}\",\"dd.span_id\":\"{span}\""
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn trace_ids_are_the_ids_the_step_and_run_traces_use() {
-        use crate::telemetry::datadog::span_id;
+        use crate::trace_ids::span_id;
         let step: serde_json::Value = serde_json::from_str(&object(
             ts(),
             Level::Info,

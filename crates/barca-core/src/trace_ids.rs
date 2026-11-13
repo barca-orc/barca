@@ -1,7 +1,6 @@
-//! The Datadog trace and span ids of a run and its steps: deterministic in the run id and the
-//! step, so every process that sends or shows one (the coordinator, a worker's spans, a log
-//! line, `GET /runs/{run_id}`) derives the same id without a message.
-//! [`crate::telemetry::datadog`] sends them.
+//! The ids of a run's and a step's Datadog traces: derived from the run id and the step, never
+//! stored, so a worker's Python spans, a `BARCA_LOG=json` line and the coordinator's spans
+//! agree without a message. The exporter itself is [`crate::telemetry::datadog`].
 
 use sha2::{Digest, Sha256};
 
@@ -70,4 +69,14 @@ pub fn step_trace_ref(run_id: &str, node: &str) -> (String, String) {
         ),
         step_span_id(run_id, node).to_string(),
     )
+}
+
+/// The trace and span a `BARCA_LOG=json` line belongs to, as `(trace_id, span_id)`: the
+/// step's own trace and its root span for a line about `node`; the run's for a line with no
+/// node.
+pub(crate) fn log_ids(run_id: &str, node: Option<&str>) -> (u64, u64) {
+    match node {
+        Some(node) => (step_trace_id(run_id, node), step_span_id(run_id, node)),
+        None => (trace_id(run_id), run_span_id(run_id)),
+    }
 }

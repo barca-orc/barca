@@ -9,7 +9,6 @@ use crate::db;
 use crate::db::materializations::NewMaterialization;
 use crate::dispatch;
 use crate::dispatch::OutputRef;
-use crate::helper_proc;
 use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
 use crate::recover::{self, Work};
 use crate::report::{
@@ -423,6 +422,8 @@ struct RunSession<'a, 'r> {
     state: RunState,
     recorder: Option<StepRecorder>,
     pool: Option<crate::io_loop::WorkerPool>,
+    /// The run's Datadog exporter, when that integration is on.
+    datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
     store: Option<StoreSync>,
     pb: Option<indicatif::ProgressBar>,
     cost_model: crate::cost::CostModel,
@@ -923,41 +924,42 @@ async fn open_run<'a, 'r>(
         &partitioned_avg_times,
         request.agent_mode,
     );
-    let (store, pool, recorder) = match start_workers(request, prepared, &mut started, &pb).await {
-        Ok(workers) => workers,
-        Err(error) => {
-            if let Some(bar) = &pb {
-                bar.finish_and_clear();
-            }
-            let status = if matches!(error, BarcaError::Cancelled) {
-                "cancelled"
-            } else {
-                "failed"
-            };
-            let line = match crate::interrupt::cancel_reason() {
-                Some(reason) if matches!(error, BarcaError::Cancelled) => {
-                    format!("[barca] run cancelled: {reason}")
+    let (store, pool, datadog, recorder) =
+        match start_workers(request, prepared, &mut started, &pb).await {
+            Ok(workers) => workers,
+            Err(error) => {
+                if let Some(bar) = &pb {
+                    bar.finish_and_clear();
                 }
-                _ => format!("[barca] {error}"),
-            };
-            db::insert_logs(
-                &request.cfg.db_path,
-                &started.run_id,
-                &[crate::run_logs::RecordedLine::barca(line)],
-            )
-            .await?;
-            db::finish_run(
-                &request.cfg.db_path,
-                &started.run_id,
-                status,
-                0,
-                0,
-                started.trace.start.elapsed().as_secs_f64(),
-            )
-            .await?;
-            return Err(error);
-        }
-    };
+                let status = if matches!(error, BarcaError::Cancelled) {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                let line = match crate::interrupt::cancel_reason() {
+                    Some(reason) if matches!(error, BarcaError::Cancelled) => {
+                        format!("[barca] run cancelled: {reason}")
+                    }
+                    _ => format!("[barca] {error}"),
+                };
+                db::insert_logs(
+                    &request.cfg.db_path,
+                    &started.run_id,
+                    &[crate::run_logs::RecordedLine::barca(line)],
+                )
+                .await?;
+                db::finish_run(
+                    &request.cfg.db_path,
+                    &started.run_id,
+                    status,
+                    0,
+                    0,
+                    started.trace.start.elapsed().as_secs_f64(),
+                )
+                .await?;
+                return Err(error);
+            }
+        };
     let mut state = RunState {
         total_steps: prepared.exec_plan.total_steps,
         total_estimated,
@@ -988,6 +990,7 @@ async fn open_run<'a, 'r>(
         pb,
         store,
         pool: Some(pool),
+        datadog,
         recorder: Some(recorder),
     })
 }
@@ -1006,6 +1009,7 @@ async fn dispatch_ready(
             provided,
             calls,
             pool: session.pool.as_mut().expect("workers started"),
+            datadog: session.datadog.clone(),
             cost_model: &mut session.cost_model,
             decide_state: &session.state.decide_state,
             store: &mut session.store,
@@ -1200,7 +1204,7 @@ async fn collect_failures(
             phase,
         );
         // The failed step's trace goes out now, not at the end of the run.
-        if let Some(datadog) = session.pool.as_ref().and_then(|p| p.datadog()) {
+        if let Some(datadog) = &session.datadog {
             datadog.step_failed(failure);
         }
     }

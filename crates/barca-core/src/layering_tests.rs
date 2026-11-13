@@ -79,7 +79,8 @@ const LAYERS: &[(&str, Layer)] = &[
     ("trigger", Model),        // what started a run: `db` records it on the `runs` row
     ("node_estimate", Model),  // a node's measured cost: `cost` updates it, `db` keeps it
     ("ledger_post", Model),    // a ledger post's run and step rows: `ledger` sends, `db` records
-    ("trace_ids", Model),      // Datadog trace and span ids, derived from run and step ids
+    ("process", Model),    // `pid_alive`, `local_host`, `Until`: db, engine and core share them
+    ("trace_ids", Model),  // Datadog trace and span ids: `jsonlog` and the exporter derive them
     ("step_result", Model), // `OutputRef`, `ErrorPhase`, `StepFailure`: what a step produced
     ("reports", Model),     // the report values `results` re-exports, returned below core
     ("dag_error", Model),   // `DagError`, wrapped by the crate root's `BarcaError`
@@ -125,6 +126,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("cost", Engine),          // measured cost and adaptive batch sizing for the dispatcher
     ("dataset_sinks", Engine), // a step's `@sink` writes, through `helper_proc`
     ("observation", Engine),   // a sensor's freshness revision from its result
+    ("step_trace", Engine),    // the trace context the worker loop attaches to each step
     // ---- core (barca-core, the remainder) ----
     ("execution", Core), // the run orchestrator: cache, freshness, publication, backup (#905)
     ("persist", Core), // the run's recording driver and telemetry report; `recording` is db
@@ -192,21 +194,12 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // ---- step 2, `planner` and `dag`: helpers move to the compile side ----
     ("dag", "changes", "changes::definition_components"),
     ("planner", "cache", "cache::folds_output"),
-    // ---- step 2, `pid_alive` and host identity move to a shared process module ----
-    ("db", "helper_proc", "helper_proc::Until (the deadline helper beside pid_alive)"),
-    ("io_loop", "db", "db::pid_alive"),
-    ("protocol", "db", "db::pid_alive"),
-    // ---- step 3, the engine and storage seam: the engine reads no metadata ----
-    ("observation", "db", "db::CacheReader"),
     // ---- no #905 step names these yet; each needs a decision before step 4 ----
     // `batch` straddles compile (parsing `batch=`, evaluating groups) and engine (calls).
     ("load", "batch", "batch::{evaluate_groups, check_label_function}"),
     ("parse", "batch", "batch::{FIX, extract, scalar_annotation, BatchOverride}"),
     // The partition-key resolver runs a project subprocess (RFC-0013).
     ("load", "helper_proc", "helper_proc::spawn_std"),
-    // `telemetry` straddles: the Datadog dispatch and log ids are used below it.
-    ("io_loop", "telemetry", "telemetry::datadog::Dispatch"),
-    ("jsonlog", "telemetry", "telemetry::datadog::log_ids"),
     ("model", "env_reads", "env_reads::undeclared"),
     ("selection", "report", "report::kind_str"),
     ("targets", "recover", "recover::returned_step"),

@@ -12,7 +12,6 @@ use crate::BarcaError;
 use crate::dag::Dag;
 use crate::db;
 use crate::dispatch;
-use crate::helper_proc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -144,7 +143,7 @@ impl StepRecorder {
                         let writing = std::time::Instant::now();
                         let recorded = record_steps_with_until(
                             &db_path, &run_id, &pending,
-                            helper_proc::Until::cancelled(&stopped),
+                            crate::process::Until::cancelled(&stopped),
                         ).await;
                         add_busy(&writes, writing);
                         if let Ok(inserted) = recorded {
@@ -161,7 +160,7 @@ impl StepRecorder {
                         }
                         let snapshot_generation = generation;
                         let b = backups.as_ref().expect("backups enabled");
-                        let outcome = crate::backup::take_requested(&b.python, &b.cfg, Some(&run_id), crate::backup::Request::Routine, helper_proc::Until {
+                        let outcome = crate::backup::take_requested(&b.python, &b.cfg, Some(&run_id), crate::backup::Request::Routine, crate::process::Until {
                             cancel: Some(&stopped),
                             deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
                         }).await;
@@ -265,14 +264,14 @@ async fn record_steps(
     run_id: &str,
     rows: &[NewMaterialization],
 ) -> Result<u64, BarcaError> {
-    record_steps_with_until(db_path, run_id, rows, helper_proc::Until::done()).await
+    record_steps_with_until(db_path, run_id, rows, crate::process::Until::done()).await
 }
 
 async fn record_steps_with_until(
     db_path: &str,
     run_id: &str,
     rows: &[NewMaterialization],
-    until: helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<u64, BarcaError> {
     let _g = until.admit(db::db_guard()).await?;
     let (_db, conn) = db::open_conn_with_until(db_path, until).await?;
@@ -1097,7 +1096,7 @@ sys.exit(_state.main())
         db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(1))
             .await
             .unwrap();
-        crate::backup::take(&python, &cfg, Some("r1"), helper_proc::Until::done())
+        crate::backup::take(&python, &cfg, Some("r1"), crate::process::Until::done())
             .await
             .unwrap();
         let local = cfg.local_backup_dir();

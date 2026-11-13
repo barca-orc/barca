@@ -99,7 +99,7 @@ pub(crate) async fn copy_for_backup(
     db_path: &str,
     copy: &Path,
     unless: Option<&str>,
-    until: crate::helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<Option<String>, BarcaError> {
     let pin = {
         let _lock = lock_db_with_until(db_path, until).await?;
@@ -215,7 +215,7 @@ fn copy_held(path: &Path, target: &Path) -> Result<(), BarcaError> {
 async fn copy_snapshot_bytes(
     db_path: &str,
     target_path: &Path,
-    until: crate::helper_proc::Until<'_>,
+    until: crate::process::Until<'_>,
 ) -> Result<(), BarcaError> {
     use std::io::Write;
     use std::os::unix::fs::FileExt;
@@ -326,7 +326,7 @@ mod tests {
         let work = super::copy_snapshot_bytes(
             &source_path,
             &target_path,
-            crate::helper_proc::Until::cancelled(&cancel),
+            crate::process::Until::cancelled(&cancel),
         );
         tokio::pin!(work);
         tokio::select! {

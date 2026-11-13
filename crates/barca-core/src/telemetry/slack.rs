@@ -344,7 +344,7 @@ impl Slack {
         if let Some(env) = &run.env {
             context.push(format!("env {env}"));
         }
-        let host = crate::db::local_host();
+        let host = crate::process::local_host();
         if !host.is_empty() {
             context.push(format!("host {host}"));
         }

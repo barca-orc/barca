@@ -3,34 +3,9 @@
 //! ([`crate::run_owner`] judges the owners).
 
 use super::*;
-
-/// This machine's host name ("" when it cannot be read). Stored on a run row next to the pid:
-/// a database restored from another machine's backup holds that machine's runs, whose pids
-/// mean nothing here.
-pub(crate) fn local_host() -> String {
-    let mut buf = [0u8; 256];
-    // SAFETY: gethostname writes at most `buf.len()` bytes into `buf`.
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
-    if rc != 0 {
-        return String::new();
-    }
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..len]).into_owned()
-}
-
-/// True unless the process is known to be gone. (A pid reused by an unrelated process reads as
-/// alive: the run then stays `running`, which is what it was before pids were recorded.)
-pub(crate) fn pid_alive(pid: i64) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return true;
-    };
-    if pid <= 0 {
-        return true;
-    }
-    // SAFETY: signal 0 sends nothing; it only checks that the pid exists.
-    let rc = unsafe { libc::kill(pid, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-}
+#[cfg(test)]
+use crate::process::local_host;
+use crate::process::pid_alive;
 
 /// The `running` runs whose process is known to be gone (killed, out of memory, power loss):
 /// they will never record an outcome themselves.

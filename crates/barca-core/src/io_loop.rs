@@ -69,7 +69,7 @@ pub(crate) struct IoConfig {
     pub host: std::sync::Arc<dyn crate::run_host::RunHost>,
     pub run_id: String,
     /// Present only when the Datadog integration successfully configured.
-    pub datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
+    pub datadog: Option<std::sync::Arc<crate::step_trace::StepTrace>>,
     /// Local artifact directory workers write to and read from. Always local:
     /// a separate artifact store is synced by `transfer::TransferClient`.
     /// Set explicitly on every worker so env-separated layouts work
