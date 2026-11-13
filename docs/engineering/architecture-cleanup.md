@@ -31,6 +31,13 @@ input bytes), the rest of step 4 (#654) and step 5 (#655, #656). The structural 
 `runs.rs`/`client.rs` splits, store inspection out of `status.rs`, a narrower `barca-core` pub
 surface) come from a second audit on 2026-11-04 and are listed only in DIRECTION.md.
 
+Crate split, 2026-11-13: `barca-core` was split into `barca-model`, `barca-compile`,
+`barca-db` and `barca-engine` ([#905](https://github.com/barca-orc/barca/issues/905), PRs
+#906–#916 and the close-out after them), which also narrows the `barca-core` pub surface
+listed above. The crate map now lives in [CLAUDE.md](../../CLAUDE.md) and on the site's
+Architecture page; decisions, measurements and follow-ups are in [crate-split.md](crate-split.md).
+The source links below point at the files' current crates.
+
 Behavior owners remain in [the specification index](../../specs/README.md). The target responsibilities
 below follow [approved ownership](../../specs/behavior/current-state-and-execution.md),
 [operations](../../specs/behavior/operations.md), and [resource bounds](../../specs/behavior/resources.md).

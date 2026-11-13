@@ -26,6 +26,12 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 An issue's milestone is the release it ships in; the items below are the order.
 
+**Crate split ([#905](https://github.com/barca-orc/barca/issues/905)):** `barca-core` split into
+`barca-model`, `barca-compile`, `barca-db` and `barca-engine`, with `barca-cli` and
+`barca-server` reaching only `barca-core`. Internal only, no new surface; it lands on `main` as
+one change from the `integrate/modularize` branch. Record:
+[crate-split.md](docs/engineering/crate-split.md).
+
 0.39.5 (2026-11-04) was the 0.39 cleanup ([#800](https://github.com/barca-orc/barca/issues/800)):
 no new surface, every item of its list landed (the row below). A repo-wide audit on the day it
 shipped found a second layer of the same kind of debt, so **0.39.6 is a second cleanup pass**,
@@ -39,7 +45,7 @@ again with no commands, flags, keys, routes, decorator arguments or UI features.
    cache states; one artifact format map (extension, reader, writer) instead of the copies in
    core, status and the Python bridge; `barca-server`'s `runs.rs` and the CLI's `client.rs` split
    by route family; store inspection out of `status.rs` into its own module; the `barca-core`
-   `pub` surface narrowed to what `barca-cli` and `barca-server` call.
+   `pub` surface narrowed to what `barca-cli` and `barca-server` call (done by #905 step 5).
 3. **Python:** `_worker.py` split (daemon loop, step execution, result writing), the import
    cycles between `_runtime`, `_artifacts` and `_batch` removed, one shared `serve` test fixture
    in place of the per-file copies, and typed public decorators (`@asset`, `@task`, `@sensor`,

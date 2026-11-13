@@ -14,7 +14,11 @@ stubs for decorators.
 ```
 Cargo.toml              ← Rust workspace root
 crates/
-  barca-core/           ← Core library: models, parser, DAG, execution planning, hashing
+  barca-model/          ← Shared vocabulary: ids, values, hashes, time, `term` (outln!/errln!), barca.toml config
+  barca-compile/        ← Source in, `Dag` and `ExecutionPlan` out: parser, decorator args, DAG, planner
+  barca-db/             ← The metadata database (`.barca/metadata.db`, libSQL): schema, owners of every write
+  barca-engine/         ← The per-step scheduler and worker loop: coordinator, dispatch, wire protocol
+  barca-core/           ← Wires them: run orchestration (`execution`: cache, freshness, publication), stores, commands
   barca-cli/            ← CLI binary (the `barca` command)
     docs/               ← The manual: markdown topics embedded in the binary (`barca docs`)
   barca-server/         ← `barca serve`: axum HTTP API, cron scheduler, file watcher, embedded UI
@@ -58,6 +62,12 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
   py.typed              ← PEP 561 marker
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)
 ```
+
+Crate dependencies point one way (`crates/barca-core/src/layering_tests.rs` checks the
+manifests): barca-compile and barca-db use barca-model and not each other; barca-engine uses
+barca-model and barca-compile, never barca-db; barca-core uses all four; barca-cli and
+barca-server use only barca-core, which re-exports the lower crates' modules under their old
+paths (`barca_core::config`). Only barca-db and barca-core link libsql.
 
 ### How it works
 
@@ -179,7 +189,7 @@ computing it over some keys) rather than describing intended behavior.
 
 ## Output and decorator arguments
 
-`barca-compile/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
+`crates/barca-compile/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
 Its tests keep Python stubs and documentation tables in sync. Use `outln!` / `errln!` for
 lines, or `term::stdout_str` / `stderr_str` for rendered chunks; direct print macros are denied
 by Clippy. Use `term::child_output()` for uncaptured child streams and `term::exit` to drain
