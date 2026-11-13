@@ -396,11 +396,19 @@ fn layer_of(key: &str) -> Layer {
     LAYERS.iter().find(|(k, _)| *k == key).unwrap().1
 }
 
+/// One crate of [`CRATES`]: its directory, its `src`, its non-test sources (path under `src`,
+/// text) and the modules its `lib.rs` declares.
+type Scanned = (
+    &'static str,
+    PathBuf,
+    Vec<(String, String)>,
+    BTreeSet<String>,
+);
+
 #[test]
 fn modules_only_use_layers_below_them() {
     let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    // (crate directory, its `src`, its non-test sources, the modules its `lib.rs` declares)
-    let crates: Vec<(&str, PathBuf, Vec<(String, String)>, BTreeSet<String>)> = CRATES
+    let crates: Vec<Scanned> = CRATES
         .iter()
         .map(|(dir, _)| {
             let root = crates_dir.join(dir).join("src");
