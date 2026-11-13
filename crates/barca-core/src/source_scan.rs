@@ -1,8 +1,7 @@
 //! A small Rust lexer for the tests that audit this crate's own source: string literals
 //! (plain, byte, raw), identifiers and punctuation, with comments, char literals, lifetimes
 //! and numbers dropped, and `#[cfg(test)]` items skipped. Used by the metadata write boundary
-//! (`write_boundary_tests.rs`), the step-status vocabulary (`step_status_literals_tests.rs`) and the
-//! layering guard (`layering_tests.rs`).
+//! (`write_boundary_tests.rs`) and the step-status vocabulary (`step_status_literals_tests.rs`).
 
 use std::path::{Path, PathBuf};
 

@@ -8,6 +8,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Internal: barca-core split into barca-model, barca-compile, barca-db and barca-engine crates; no behavior change.
 - UI-only PRs and merge groups run UI checks and browser tests without unrelated backend suites; releases keep full coverage.
 
 ### Documentation
