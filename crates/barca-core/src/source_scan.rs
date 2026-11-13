@@ -1,7 +1,8 @@
 //! A small Rust lexer for the tests that audit this crate's own source: string literals
 //! (plain, byte, raw), identifiers and punctuation, with comments, char literals, lifetimes
 //! and numbers dropped, and `#[cfg(test)]` items skipped. Used by the metadata write boundary
-//! (`db/write_boundary_tests.rs`) and the step-status vocabulary (`step_status.rs`).
+//! (`db/write_boundary_tests.rs`), the step-status vocabulary (`step_status.rs`) and the
+//! layering guard (`layering_tests.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -15,8 +16,14 @@ pub(crate) enum Tok {
 /// A small Rust lexer: string literals (plain, byte, raw), identifiers and punctuation;
 /// comments, char literals, lifetimes and numbers are dropped.
 pub(crate) fn lex(src: &str) -> Vec<Tok> {
+    lex_with_lines(src).0
+}
+
+/// [`lex`], with the line each token starts on (a parallel vector).
+pub(crate) fn lex_with_lines(src: &str) -> (Vec<Tok>, Vec<usize>) {
     let s: Vec<char> = src.chars().collect();
     let (mut i, mut line, mut out) = (0usize, 1usize, Vec::new());
+    let mut lines = Vec::new();
     let at = |i: usize| s.get(i).copied().unwrap_or('\0');
     while i < s.len() {
         let c = s[i];
@@ -79,6 +86,7 @@ pub(crate) fn lex(src: &str) -> Vec<Tok> {
                 i += 1;
             }
             out.push(Tok::Str(text, start_line));
+            lines.push(start_line);
         } else if c == '"' || (c == 'b' && at(i + 1) == '"') {
             i += if c == 'b' { 2 } else { 1 };
             let start_line = line;
@@ -106,6 +114,7 @@ pub(crate) fn lex(src: &str) -> Vec<Tok> {
             }
             i += 1;
             out.push(Tok::Str(text, start_line));
+            lines.push(start_line);
         } else if c == '\'' {
             // A char literal ('x', '\n', '\u{..}') or a lifetime ('a).
             if at(i + 1) == '\\' {
@@ -128,12 +137,14 @@ pub(crate) fn lex(src: &str) -> Vec<Tok> {
                 i += 1;
             }
             out.push(Tok::Ident(s[start..i].iter().collect()));
+            lines.push(line);
         } else {
             out.push(Tok::Punct(c));
+            lines.push(line);
             i += 1;
         }
     }
-    out
+    (out, lines)
 }
 
 pub(crate) fn is_cfg_test(toks: &[Tok], i: usize) -> bool {
