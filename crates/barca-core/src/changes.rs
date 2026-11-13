@@ -208,8 +208,8 @@ pub(crate) fn causes(changed: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::definition::definition_components;
     use crate::model::ExtractedNode;
+    use barca_compile::definition::definition_components;
 
     #[test]
     fn causes_split_code_inputs_and_env() {

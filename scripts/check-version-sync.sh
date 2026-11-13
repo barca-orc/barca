@@ -17,11 +17,12 @@ CORE=$(extract crates/barca-core/Cargo.toml '^version')
 CLI=$(extract crates/barca-cli/Cargo.toml '^version')
 SERVER=$(extract crates/barca-server/Cargo.toml '^version')
 MODEL=$(extract crates/barca-model/Cargo.toml '^version')
+COMPILE=$(extract crates/barca-compile/Cargo.toml '^version')
 PY_TOML=$(extract pyproject.toml '^version')
 PY_INIT=$(extract python/barca/__init__.py '__version__')
 
 ERRORS=0
-for name_ver in "barca-cli:$CLI" "barca-server:$SERVER" "barca-model:$MODEL" "pyproject.toml:$PY_TOML" "__init__.py:$PY_INIT"; do
+for name_ver in "barca-cli:$CLI" "barca-server:$SERVER" "barca-model:$MODEL" "barca-compile:$COMPILE" "pyproject.toml:$PY_TOML" "__init__.py:$PY_INIT"; do
     name="${name_ver%%:*}"
     ver="${name_ver#*:}"
     if [ "$ver" != "$CORE" ]; then

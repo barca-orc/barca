@@ -55,12 +55,16 @@ fn scan(src: &str) -> Scan {
 
 #[test]
 fn metadata_writes_go_through_an_owner() {
-    // This crate's files by their path under `src/`; `barca-model`'s (#905 step 4), which owns
-    // no table, as `barca-model/src/...`.
+    // This crate's files by their path under `src/`; `barca-model`'s and `barca-compile`'s (#905
+    // step 4), which own no table, as `barca-model/src/...` and `barca-compile/src/...`.
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut test_files = Vec::new();
     let mut found = Vec::new();
-    for (krate, prefix) in [("barca-core", ""), ("barca-model", "barca-model/src/")] {
+    for (krate, prefix) in [
+        ("barca-core", ""),
+        ("barca-model", "barca-model/src/"),
+        ("barca-compile", "barca-compile/src/"),
+    ] {
         let root = crates.join(krate).join("src");
         let mut files = Vec::new();
         rust_files(&root, &mut files);

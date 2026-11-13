@@ -81,7 +81,7 @@ DUCKDB1 = ALWAYS + [
     "crates/barca-core/src/sql.rs",
     "crates/barca-core/src/sql/*",
     "crates/barca-core/src/dataset_sinks.rs",
-    "crates/barca-core/src/sink_args.rs",
+    "crates/barca-compile/src/sink_args.rs",
     "crates/barca-cli/src/commands/sql.rs",
     "python/tests/conftest.py",
 ]

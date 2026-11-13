@@ -47,14 +47,19 @@ enum Layer {
 use Layer::{Compile, Core, Db, Engine, Model};
 
 /// The crates the guard scans, bottom up: (directory under `crates/`, name in a path).
-const CRATES: &[(&str, &str)] = &[("barca-model", "barca_model"), ("barca-core", "barca_core")];
+const CRATES: &[(&str, &str)] = &[
+    ("barca-model", "barca_model"),
+    ("barca-compile", "barca_compile"),
+    ("barca-core", "barca_core"),
+];
 
 /// The crate a layer's modules live in today. A #905 step 4 PR that gives a layer its own crate
 /// adds it here and to [`CRATES`].
 fn crate_of(layer: Layer) -> &'static str {
     match layer {
         Model => "barca-model",
-        Compile | Db | Engine | Core => "barca-core",
+        Compile => "barca-compile",
+        Db | Engine | Core => "barca-core",
     }
 }
 
@@ -70,13 +75,15 @@ impl Layer {
     }
 }
 
-/// Every top-level module (and `lib`, `barca-model`'s crate root and its own items; `barca_core`,
-/// the root of `barca-core`, which only declares and re-exports), with its layer. Modules the
+/// Every top-level module (and `lib`, `barca-model`'s crate root and its own items;
+/// `barca_compile`, the root of `barca-compile`; `barca_core`, the root of `barca-core`, which only
+/// declares and re-exports), with its layer. Modules the
 /// #905 Target table names are placed as it says; the others by what they use and who uses them.
 #[rustfmt::skip]
 const LAYERS: &[(&str, Layer)] = &[
     // ---- model (barca-model) ----
     ("lib", Model), // `BarcaError`, `FailedStep`, `PartialRun`, `safe_node_id`: used everywhere
+    ("barca_compile", Compile), // the root of `barca-compile`: module declarations, `Dag`
     ("barca_core", Core), // the root of `barca-core`: module declarations and re-exports
     ("model", Model),
     ("keyed", Model),
@@ -125,6 +132,8 @@ const LAYERS: &[(&str, Layer)] = &[
     ("discover", Compile), // which `.py` files make up the project
     ("load", Compile),     // project to `Dag` (#905: "source in, Dag out")
     ("warnings", Compile), // plan-time warnings, over `dag` and `planner`
+    ("batch_spec", Compile), // reading `batch=`, `--batch`, evaluating `batches(...)` at load;
+                             // `batch::spec` in barca-core
     // ---- db (barca-db) ----
     ("db", Db),
     ("persist::recording", Db),
@@ -143,7 +152,6 @@ const LAYERS: &[(&str, Layer)] = &[
     ("result_journal", Engine),
     ("helper_proc", Engine),
     ("batch", Engine),
-    ("batch::spec", Compile), // reading `batch=`, `--batch`, evaluating `batches(...)` at load
     ("run_host", Engine),
     ("interrupt", Engine),     // how a run is told to stop
     ("cost", Engine),          // measured cost and adaptive batch sizing for the dispatcher
@@ -457,6 +465,7 @@ fn modules_only_use_layers_below_them() {
     for (k, _) in LAYERS {
         let top = k.split("::").next().unwrap();
         let known = *k == "lib"
+            || *k == "barca_compile"
             || *k == "barca_core"
             || crates.iter().any(|(_, root, _, declared)| {
                 declared.contains(top)
@@ -493,6 +502,8 @@ fn modules_only_use_layers_below_them() {
             let from = if module.is_empty() {
                 if *dir == crate_of(Model) {
                     "lib"
+                } else if *dir == crate_of(Compile) {
+                    "barca_compile"
                 } else {
                     "barca_core"
                 }

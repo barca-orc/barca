@@ -175,7 +175,7 @@ elif [ "$PYTHON_MODE" != none ] && [ "$HAVE_VENV" -eq 1 ]; then
                 < <(grep -lw -- "$mod" python/tests/test_*.py)
         done < <(grep -E '^python/barca/[^/]*\.py$' <<<"$CHANGED" | sed -E 's#.*/([^/]*)\.py#\1#')
         # The CLI surface and the manual: contract snapshots and the manual's examples.
-        if changed '^crates/barca-cli/(src|docs|snapshots)/|^python/tests/snapshots/|^crates/barca-core/src/decorator_args\.rs'; then
+        if changed '^crates/barca-cli/(src|docs|snapshots)/|^python/tests/snapshots/|^crates/barca-compile/src/decorator_args\.rs'; then
             SELECTED+=(python/tests/test_cli_contract.py python/tests/test_docs_examples.py)
         fi
         UNIQUE=()

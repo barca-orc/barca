@@ -1,6 +1,6 @@
 //! Static check: which environment variables does a step's code read? (#574)
 //!
-//! A step's run hash covers the variables it declares with `env=[...]` ([`crate::envdeps`]) and
+//! A step's run hash covers the variables it declares with `env=[...]` ([`barca_model::envdeps`]) and
 //! nothing else from the environment. A variable it reads without declaring it can change while
 //! the step stays `cached`, so barca reports those reads, without changing any hash.
 //!
@@ -295,7 +295,7 @@ fn is_class_var(annotation: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::envdeps::{matches, undeclared};
+    use barca_model::envdeps::{matches, undeclared};
 
     fn reads(source: &str) -> Vec<String> {
         in_source(source).into_iter().collect()

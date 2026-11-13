@@ -179,7 +179,7 @@ computing it over some keys) rather than describing intended behavior.
 
 ## Output and decorator arguments
 
-`barca-core/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
+`barca-compile/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
 Its tests keep Python stubs and documentation tables in sync. Use `outln!` / `errln!` for
 lines, or `term::stdout_str` / `stderr_str` for rendered chunks; direct print macros are denied
 by Clippy. Use `term::child_output()` for uncaptured child streams and `term::exit` to drain

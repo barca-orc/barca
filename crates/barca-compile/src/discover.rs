@@ -11,8 +11,8 @@
 //! (built-in excludes then do not apply). Patterns are root-relative, `/`-separated, and support
 //! `*` (within a path segment), `**` (any number of segments) and `?`.
 
-use crate::BarcaError;
-use crate::config::DiscoveryToml;
+use barca_model::BarcaError;
+use barca_model::config::DiscoveryToml;
 use std::path::{Path, PathBuf};
 
 /// Directory names never walked (unless `include` names files in them).
