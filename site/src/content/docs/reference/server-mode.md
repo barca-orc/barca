@@ -362,7 +362,7 @@ For a bearer-authenticated proxy, set `BARCA_SERVER_TOKEN` in the client environ
 The CLI and deprecated Python `Client` send it as `Authorization: Bearer` on every server
 request, including ledger requests, event streams and cancellation. URL userinfo instead
 sends Basic credentials. Combining userinfo with `BARCA_SERVER_TOKEN` is a usage error
-(exit 2); a present token must be nonempty ASCII without whitespace or control characters.
+(exit 2); an empty value counts as unset, and any other token must be ASCII without whitespace or control characters.
 These rules apply to URLs from `--server`, `BARCA_SERVER` and `[server] url` alike.
 Redirects must stay within the configured origin and proxy path. Known credentials reflected
 in HTTP errors are redacted. The reserved `BARCA_SERVER_TOKEN` variable is removed from

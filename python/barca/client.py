@@ -146,7 +146,7 @@ class Client:
         except (ValueError, UnicodeError):
             raise BarcaError("invalid server URL (host, port or proxy path)") from None
         has_basic = parts.username is not None or parts.password is not None
-        token = os.environ.get("BARCA_SERVER_TOKEN")
+        token = os.environ.get("BARCA_SERVER_TOKEN") or None  # blank means unset
         if token is not None and has_basic:
             raise BarcaError("BARCA_SERVER_TOKEN and server URL userinfo cannot be combined")
         self._authorization = None
