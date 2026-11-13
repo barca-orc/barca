@@ -80,6 +80,9 @@ const LAYERS: &[(&str, Layer)] = &[
     ("node_estimate", Model),  // a node's measured cost: `cost` updates it, `db` keeps it
     ("ledger_post", Model),    // a ledger post's run and step rows: `ledger` sends, `db` records
     ("trace_ids", Model),      // Datadog trace and span ids, derived from run and step ids
+    ("step_result", Model), // `OutputRef`, `ErrorPhase`, `StepFailure`: what a step produced
+    ("reports", Model),     // the report values `results` re-exports, returned below core
+    ("dag_error", Model),   // `DagError`, wrapped by the crate root's `BarcaError`
     // ---- compile (barca-compile) ----
     ("parse", Compile),
     ("cone", Compile),
@@ -189,11 +192,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // ---- step 2, `planner` and `dag`: helpers move to the compile side ----
     ("dag", "changes", "changes::definition_components"),
     ("planner", "cache", "cache::folds_output"),
-    // ---- step 2, `dispatch` types: OutputRef, StepFailure, ErrorPhase move to model ----
-    ("db", "dispatch", "dispatch::{OutputRef, StepFailure}"),
-    ("lib", "dispatch", "FailedStep.phase: dispatch::ErrorPhase; PartialRun: dispatch::OutputRef"),
-    ("selection", "dispatch", "dispatch::OutputRef"),
-    ("targets", "dispatch", "dispatch::{OutputRef, StepFailure}"),
     // ---- step 2, `pid_alive` and host identity move to a shared process module ----
     ("db", "helper_proc", "helper_proc::Until (the deadline helper beside pid_alive)"),
     ("io_loop", "db", "db::pid_alive"),
@@ -201,15 +199,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     // ---- step 3, the engine and storage seam: the engine reads no metadata ----
     ("observation", "db", "db::CacheReader"),
     // ---- no #905 step names these yet; each needs a decision before step 4 ----
-    // `results` holds report types every layer returns: the ones below it use move to model.
-    ("batch", "results", "results::{BatchPlan, StepReport}"),
-    ("lib", "results", "PartialRun: results::{StepReport, KeySummary}"),
-    ("pending_uploads", "results", "results::UploadsReport"),
-    ("selection", "results", "results::{ExplainResult, StepReport, PartitionSelectionReport, ...}"),
-    ("targets", "results", "results::TargetOutcome"),
-    // The crate root's error types name compile-side types.
-    ("lib", "dag", "BarcaError::Dag(dag::DagError)"),
-    ("lib", "warnings", "PartialRun.warnings: warnings::PlanWarning"),
     // `batch` straddles compile (parsing `batch=`, evaluating groups) and engine (calls).
     ("load", "batch", "batch::{evaluate_groups, check_label_function}"),
     ("parse", "batch", "batch::{FIX, extract, scalar_annotation, BatchOverride}"),

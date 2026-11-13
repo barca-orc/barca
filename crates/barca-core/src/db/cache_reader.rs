@@ -2,7 +2,7 @@
 //! partitioned node's successful rows read in one pass.
 
 use super::*;
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 
 /// How old a result's `last_read_at` may be before a read of it is stamped again, for the
 /// results of a node with many partition keys. The cache size limit evicts the least recently

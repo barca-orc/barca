@@ -6,7 +6,7 @@
 //! cache lookups are [`super::CacheReader`]'s.
 
 use super::*;
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 use libsql::Connection;
 
 fn id_list(ids: &[i64]) -> String {
@@ -518,7 +518,7 @@ impl FailedStepInsert {
     /// count is recorded: dispatches for a worker failure, transfer attempts for an upload.
     pub(crate) async fn run(
         &mut self,
-        failure: &crate::dispatch::StepFailure,
+        failure: &crate::step_result::StepFailure,
         run_hash: String,
         run_id: &str,
         batch: String,
@@ -965,7 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn round_trip_persist_output_ref() {
-        use crate::dispatch::OutputRef;
+        use crate::step_result::OutputRef;
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
@@ -1011,7 +1011,7 @@ mod tests {
 
     #[tokio::test]
     async fn persist_multiple_output_refs() {
-        use crate::dispatch::OutputRef;
+        use crate::step_result::OutputRef;
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();
@@ -1117,7 +1117,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_lookup_returns_output_ref() {
-        use crate::dispatch::OutputRef;
+        use crate::step_result::OutputRef;
 
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db").to_string_lossy().to_string();

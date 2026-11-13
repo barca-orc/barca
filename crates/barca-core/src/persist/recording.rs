@@ -24,10 +24,10 @@ pub(crate) struct RunLedger<'a> {
     pub(crate) steps_executed: usize,
     pub(crate) steps_cached: usize,
     pub(crate) elapsed: f64,
-    pub(crate) all_outputs: &'a HashMap<String, crate::dispatch::OutputRef>,
+    pub(crate) all_outputs: &'a HashMap<String, crate::step_result::OutputRef>,
     /// The batched call (RFC-0013) of each key that ran in one: `batch_id` on its row.
     pub(crate) batches: &'a HashMap<String, String>,
-    pub(crate) all_failures: &'a [crate::dispatch::StepFailure],
+    pub(crate) all_failures: &'a [crate::step_result::StepFailure],
     pub(crate) all_sinks: &'a HashMap<String, String>,
     /// The run hash each sink of a step now holds: the steps that ran and wrote their sinks,
     /// and the cache hits republished or found current (`crate::sink_publications`).
