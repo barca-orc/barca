@@ -2,7 +2,7 @@
 
 Until 0.18.1 `@asset(after=other)`, `@task(when=...)` or a misspelt `input=` planned and ran
 with exit 0 and did nothing. The rule is in `barca docs assets`, "Accepted arguments". The
-accepted names live in `crates/barca-core/src/decorator_args.rs` (where a Rust test holds the
+accepted names live in `crates/barca-compile/src/decorator_args.rs` (where a Rust test holds the
 Python stubs and the documentation tables to them); the parser cases are in
 `crates/barca-core/tests/grammar_spec.rs`. This file tests what a user sees: the exit code and
 the error on every command that reads the file, which commands a bad file stops, and what the

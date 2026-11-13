@@ -15,7 +15,7 @@
 
 use crate::model::BatchSpec;
 
-pub(crate) mod spec;
+pub(crate) use barca_compile::batch_spec as spec;
 
 pub(crate) use spec::evaluate_labels;
 pub use spec::{BatchOverride, OverrideValue};

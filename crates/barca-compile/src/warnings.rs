@@ -7,11 +7,11 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-pub use crate::reports::PlanWarning;
+pub use barca_model::reports::PlanWarning;
 
 use crate::dag::Dag;
-use crate::model::{DagNode, NodeKind};
 use crate::planner::ExecutionPlan;
+use barca_model::model::{DagNode, NodeKind};
 
 /// Print `[barca] warning: <message>` on stderr unless this process already printed the same
 /// message. Returns whether it printed.
@@ -28,10 +28,10 @@ pub fn warn_once(message: &str) -> bool {
         .unwrap_or(true);
     let line = format!("[barca] warning: {message}");
     if first {
-        crate::errln!("{line}");
+        barca_model::errln!("{line}");
     }
     // A served run's client prints it every time, as a local run would.
-    crate::lines::Lines::current().emit(crate::lines::LineWhen::Always, &line);
+    barca_model::lines::Lines::current().emit(barca_model::lines::LineWhen::Always, &line);
     first
 }
 

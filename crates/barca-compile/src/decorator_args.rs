@@ -206,7 +206,7 @@ pub(crate) const SIGNATURES: &[Signature] = &[
 
 /// How an argument is passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Passing {
+pub enum Passing {
     /// By position only (`partitions(values)`, the path of `@sink`).
     Positional,
     /// By keyword only (`inputs=`, `serializer=`).
@@ -285,10 +285,10 @@ impl Signature {
     }
 
     /// The accepted keywords the user most likely meant (`input` -> `inputs`, `serialiser` ->
-    /// `serializer`), by the one "did you mean" rule ([`crate::suggest::closest`]): the best
+    /// `serializer`), by the one "did you mean" rule ([`barca_model::suggest::closest`]): the best
     /// match, or two that tie.
     pub fn closest(&self, unknown: &str) -> Vec<&'static str> {
-        crate::suggest::closest(unknown, self.keywords.iter().copied())
+        barca_model::suggest::closest(unknown, self.keywords.iter().copied())
     }
 }
 
@@ -425,7 +425,7 @@ pub(crate) fn check_call(call: &ast::ExprCall, sig: &Signature) -> Option<Proble
             });
         }
         let guess = sig.closest(name);
-        let meant = crate::suggest::did_you_mean(&guess, '`')
+        let meant = barca_model::suggest::did_you_mean(&guess, '`')
             .map(|m| format!(" {m}"))
             .unwrap_or_default();
         let fix = match guess.as_slice() {
@@ -1290,7 +1290,7 @@ mod tests {
             assert_eq!(
                 keywords, sig.keywords,
                 "keyword arguments of `{name}` in python/barca/__init__.py differ from \
-                 SIGNATURES in crates/barca-core/src/decorator_args.rs"
+                 SIGNATURES in crates/barca-compile/src/decorator_args.rs"
             );
             assert_eq!(
                 positional, sig.positional,

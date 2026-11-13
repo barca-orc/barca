@@ -9,43 +9,31 @@ pub mod batch;
 pub mod cache;
 pub(crate) mod changes;
 pub mod commands;
-pub(crate) mod cone;
 pub(crate) mod coordinator;
 pub(crate) mod cost;
-pub mod dag;
 mod dataset_sinks;
 pub mod db;
-pub(crate) mod decorator_args;
-pub(crate) mod definition;
 pub mod diagnostics;
-pub mod discover;
 pub mod dispatch;
-pub(crate) mod env_reads;
 pub mod envelope;
 pub(crate) mod execution;
 pub mod freshness;
 pub mod gc;
-pub mod groups;
 pub mod helper_proc;
 pub mod history_filter;
 pub mod http;
 mod incremental;
-mod input_params;
 pub mod interrupt;
 pub(crate) mod io_loop;
 pub mod ledger;
-pub mod load;
 mod metadata_size;
 mod mismatch;
 pub mod outcome;
-pub mod parse;
 pub mod partition_grid;
 pub mod pauses;
 pub mod pending_uploads;
 mod persist;
 pub mod pins;
-pub(crate) mod planner;
-pub(crate) mod project_modules;
 pub(crate) mod protocol;
 pub mod queries;
 mod recover;
@@ -56,9 +44,7 @@ pub(crate) mod run_host;
 pub mod run_logs;
 mod run_owner;
 pub mod schedule;
-pub mod selection;
 pub mod serve;
-mod sink_args;
 mod sink_publications;
 #[cfg(test)]
 mod source_scan;
@@ -68,13 +54,9 @@ pub mod status;
 pub(crate) mod step_trace;
 pub mod store_inspect;
 mod store_sync;
-pub mod targets;
 pub mod telemetry;
 pub mod transfer;
-pub(crate) mod unrelated_modules;
-pub(crate) mod unused_inputs;
 pub mod values;
-pub mod warnings;
 
 // The model layer lives in `barca-model` (#905 step 4); its modules and root items keep their
 // `barca_core::` paths.
@@ -113,11 +95,25 @@ pub use barca_model::{
     release_free_memory, run_line, safe_node_id,
 };
 
+// The compile layer lives in `barca-compile` (#905 step 4); the modules callers of `barca-core`
+// name keep their `barca_core::` paths.
+pub use barca_compile::dag;
+pub use barca_compile::discover;
+pub use barca_compile::groups;
+pub use barca_compile::load;
+pub use barca_compile::parse;
+pub(crate) use barca_compile::planner;
+pub use barca_compile::selection;
+pub use barca_compile::targets;
+pub use barca_compile::warnings;
+
 pub use dag::Dag;
 pub use execution::sizing;
 
 #[cfg(test)]
 mod layering_tests;
+#[cfg(test)]
+mod selection_tests;
 #[cfg(test)]
 mod step_status_literals_tests;
 

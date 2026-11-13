@@ -33,7 +33,7 @@
 //!
 //! 8. **Cutoff assets.** An `@asset(cutoff=True)` reached by name (a consumer's parameter named
 //!    after it, rule 2) adds a constant marker, not its definition or what it uses: what reads it
-//!    folds in the bytes it wrote instead of its run hash (`crate::cache::is_cutoff`), so its
+//!    folds in the bytes it wrote instead of its run hash (`barca_core::cache::is_cutoff`), so its
 //!    code must not reach its consumers another way (#628). Pipelines without `cutoff=True`
 //!    hash as before.
 //!
@@ -398,7 +398,7 @@ impl Cone<'_> {
             by_label
                 .entry(shown)
                 .or_default()
-                .push(crate::hash::short_digest(text.as_bytes()));
+                .push(barca_model::hash::short_digest(text.as_bytes()));
         }
         by_label
             .into_iter()

@@ -7,10 +7,10 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 
-use crate::hash;
-use crate::model::{DagNode, EdgeKind, ExtractedNode, NodeKind};
+use barca_model::hash;
+use barca_model::model::{DagNode, EdgeKind, ExtractedNode, NodeKind};
 
-pub use crate::dag_error::DagError;
+pub use barca_model::dag_error::DagError;
 
 /// The constructed DAG — validated, acyclic, ready for plan generation.
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ pub struct Dag {
 
 /// Reject mixed static/evaluated and runtime-derived dimensions before Python evaluation.
 pub(crate) fn validate_partition_dimensions(nodes: &[ExtractedNode]) -> Result<(), DagError> {
-    use crate::model::PartitionSpec;
+    use barca_model::model::PartitionSpec;
     for node in nodes {
         let derived = node
             .partitions
@@ -77,7 +77,7 @@ pub(crate) fn validate_partition_dimensions(nodes: &[ExtractedNode]) -> Result<(
 /// `partitions_from(<unpartitioned asset>)` is left alone: its keys are the values of the list
 /// that asset returns, read at dispatch time (`dispatch::expand_pending_partitions`).
 fn resolve_partitions_from(nodes: &[ExtractedNode]) -> Result<Vec<ExtractedNode>, DagError> {
-    use crate::model::{DeclaredInput, NodeRef, PartitionSpec};
+    use barca_model::model::{DeclaredInput, NodeRef, PartitionSpec};
 
     #[derive(Clone, Copy, PartialEq)]
     enum State {
@@ -229,7 +229,7 @@ enum Miss {
 }
 
 fn norm_path(p: &std::path::Path) -> String {
-    crate::config::normalize_lexically(p)
+    barca_model::config::normalize_lexically(p)
         .to_string_lossy()
         .replace('\\', "/")
 }
@@ -291,7 +291,7 @@ impl Resolver {
     pub(crate) fn resolve_id(
         &self,
         file: &str,
-        reference: &crate::model::NodeRef,
+        reference: &barca_model::model::NodeRef,
     ) -> Option<String> {
         self.resolve(file, reference)
             .ok()
@@ -346,8 +346,8 @@ impl Resolver {
         out
     }
 
-    fn resolve(&self, from_file: &str, r: &crate::model::NodeRef) -> Result<usize, Miss> {
-        use crate::model::NodeRef;
+    fn resolve(&self, from_file: &str, r: &barca_model::model::NodeRef) -> Result<usize, Miss> {
+        use barca_model::model::NodeRef;
         match r {
             NodeRef::FunctionName(name) => self
                 .in_file(std::path::Path::new(from_file), name)
@@ -386,12 +386,12 @@ impl Resolver {
         &self,
         node: &ExtractedNode,
         param: &str,
-        r: &crate::model::NodeRef,
+        r: &barca_model::model::NodeRef,
     ) -> Result<usize, DagError> {
         self.resolve(&node.source_file, r).map_err(|miss| {
             let node_id = node.continuity_key();
             let upstream = match r {
-                crate::model::NodeRef::Canonical(s) => s.clone(),
+                barca_model::model::NodeRef::Canonical(s) => s.clone(),
                 other => other.resolution_name().to_string(),
             };
             match miss {
@@ -441,10 +441,7 @@ impl Dag {
     }
 
     /// Topologically order only these nodes, visiting their incoming edges once.
-    pub(crate) fn order_for<'a, 'b>(
-        &'a self,
-        ids: impl IntoIterator<Item = &'b str>,
-    ) -> Vec<&'a str> {
+    pub fn order_for<'a, 'b>(&'a self, ids: impl IntoIterator<Item = &'b str>) -> Vec<&'a str> {
         use std::collections::{BTreeSet, HashSet};
         let nodes: HashSet<_> = ids
             .into_iter()
@@ -509,7 +506,7 @@ impl Dag {
                 .iter()
                 .map(|i| (&i.param_name, &i.upstream, true))
                 .chain(node.partitions.iter().filter_map(|(dim, p)| match p {
-                    crate::model::PartitionSpec::DerivedFrom { source_ref } => {
+                    barca_model::model::PartitionSpec::DerivedFrom { source_ref } => {
                         Some((dim, source_ref, false))
                     }
                     _ => None,
@@ -519,7 +516,9 @@ impl Dag {
                 // cannot hide an earlier healthy binding, and an earlier failed
                 // source cannot redirect to a later healthy same-named node.
                 let candidates = match upstream {
-                    crate::model::NodeRef::Canonical(value) if !refs.by_id.contains_key(value) => {
+                    barca_model::model::NodeRef::Canonical(value)
+                        if !refs.by_id.contains_key(value) =>
+                    {
                         value.rsplit_once(':').map(|(file, name)| {
                             (
                                 vec![
@@ -530,7 +529,7 @@ impl Dag {
                             )
                         })
                     }
-                    crate::model::NodeRef::Imported { module, name } => Some((
+                    barca_model::model::NodeRef::Imported { module, name } => Some((
                         Resolver::module_files(&node.source_file, module),
                         name.as_str(),
                     )),
@@ -746,7 +745,7 @@ impl Dag {
 
             // Add partition_source edges for partitions_from.
             for spec in node.partitions.values() {
-                if let crate::model::PartitionSpec::DerivedFrom { source_ref } = spec
+                if let barca_model::model::PartitionSpec::DerivedFrom { source_ref } = spec
                     && let Ok(j) = refs.resolve(&node.source_file, source_ref)
                 {
                     let source_idx = index[refs.ids[j].as_str()];
@@ -775,7 +774,7 @@ impl Dag {
 
     /// Get the subgraph of all nodes upstream of (and including) target.
     /// Returns node IDs in topological order (dependencies first).
-    pub(crate) fn subgraph(&self, target_id: &str) -> Vec<&str> {
+    pub fn subgraph(&self, target_id: &str) -> Vec<&str> {
         self.subgraph_many(&[target_id])
     }
 
@@ -825,10 +824,10 @@ impl Dag {
     /// the worker's import of the file would fail, after the steps before it had run. Only the
     /// steps given are looked at, so a command whose steps do not import the module is not
     /// affected. The first such step, in the order given, is named.
-    pub(crate) fn check_imports<'a>(
+    pub fn check_imports<'a>(
         &self,
         step_ids: impl IntoIterator<Item = &'a str>,
-    ) -> Result<(), crate::BarcaError> {
+    ) -> Result<(), barca_model::BarcaError> {
         if self.broken_imports.is_empty() {
             return Ok(());
         }
@@ -845,7 +844,7 @@ impl Dag {
             } else {
                 format!(" through {}", broken.imported_by)
             };
-            return Err(crate::BarcaError::Parse(format!(
+            return Err(barca_model::BarcaError::Parse(format!(
                 "syntax error in {}: {} (imported by {file}{via}, so step '{id}' cannot run)\n\
                  {}:{}:{}:\n{}\n\
                  Fix the syntax error: the worker imports {} when it loads {file}, so no step of \
@@ -874,7 +873,7 @@ impl Dag {
     }
 
     /// The nodes whose output `id`'s `partitions_from(...)` reads for its keys.
-    pub(crate) fn partition_sources(&self, id: &str) -> Vec<&str> {
+    pub fn partition_sources(&self, id: &str) -> Vec<&str> {
         let Some(&idx) = self.index.get(id) else {
             return vec![];
         };
@@ -886,7 +885,7 @@ impl Dag {
     }
 
     /// Whether a `partitions_from(...)` reads `id`'s output for its keys.
-    pub(crate) fn feeds_partitions(&self, id: &str) -> bool {
+    pub fn feeds_partitions(&self, id: &str) -> bool {
         let Some(&idx) = self.index.get(id) else {
             return false;
         };
@@ -912,7 +911,7 @@ impl Dag {
     /// (fan-in) deps must also force a phase break: a `collect()` consumer
     /// has to wait for *every* partition of its upstream to finish, which a
     /// fused single-succ/single-pred chain cannot guarantee (see #97).
-    pub(crate) fn execution_upstream(&self, id: &str) -> Vec<&str> {
+    pub fn execution_upstream(&self, id: &str) -> Vec<&str> {
         let Some(&idx) = self.index.get(id) else {
             return vec![];
         };
@@ -947,16 +946,16 @@ impl Dag {
 /// is and refreshed by hand with the same code and inputs, so its run hash stays the same when
 /// a refresh gives new bytes; its output is what tells what reads it that it changed.
 ///
-/// And an `@asset(cutoff=True)` (#628, `crate::cache::is_cutoff`), whose output replaces its run hash.
+/// And an `@asset(cutoff=True)` (#628, `barca_core::cache::is_cutoff`), whose output replaces its run hash.
 /// Either way the node ends its chain in the planner and its consumers are decided in a later
 /// phase, once its output is known.
-pub(crate) fn folds_output(dag: &Dag, id: &str) -> bool {
+pub fn folds_output(dag: &Dag, id: &str) -> bool {
     dag.get_node(id).is_some_and(|n| match n.kind() {
-        crate::NodeKind::Sensor => true,
-        crate::NodeKind::Asset => {
-            n.extracted.freshness == crate::Freshness::Manual || n.extracted.cutoff
+        barca_model::NodeKind::Sensor => true,
+        barca_model::NodeKind::Asset => {
+            n.extracted.freshness == barca_model::Freshness::Manual || n.extracted.cutoff
         }
-        crate::NodeKind::Task => false,
+        barca_model::NodeKind::Task => false,
     })
 }
 
@@ -969,7 +968,7 @@ mod tests {
             kind: NodeKind::Asset,
             function_name: name.to_string(),
             explicit_name: None,
-            freshness: crate::model::Freshness::Always,
+            freshness: barca_model::model::Freshness::Always,
             max_failures: None,
             schedule_timeout: None,
             inputs: smallvec::SmallVec::new(),
@@ -1230,7 +1229,7 @@ def margin(region: str, s: dict) -> dict:\n    return s\n"
         assert!(n.resolved_inputs.is_empty());
         assert!(matches!(
             n.extracted.partitions["k"],
-            crate::model::PartitionSpec::DerivedFrom { .. }
+            barca_model::model::PartitionSpec::DerivedFrom { .. }
         ));
     }
 
@@ -1364,7 +1363,7 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
     fn definition_hash_ignores_what_does_not_count() {
         let plain = node("a");
         let mut other = node("a");
-        other.freshness = crate::model::Freshness::Manual;
+        other.freshness = barca_model::model::Freshness::Manual;
         other.retries = 5;
         other.retry_backoff_seconds = 2.0;
         other.timeout_seconds = 10;

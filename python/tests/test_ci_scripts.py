@@ -63,7 +63,7 @@ def test_unrelated_changes_turn_nothing_on(monkeypatch):
     monkeypatch.setattr(
         ci_changes, "changed_lines_mention", lambda base, path, pattern, head="HEAD": False
     )
-    why = ci_changes.decide("base", ["README.md", "crates/barca-core/src/dag.rs", "ui/src/x.ts"])
+    why = ci_changes.decide("base", ["README.md", "crates/barca-compile/src/dag.rs", "ui/src/x.ts"])
     assert why == {"emulators": [], "duckdb1": [], "checkpoint": []}
 
 
@@ -126,7 +126,7 @@ def test_checkpoint_paths_turn_the_minute_test_on(monkeypatch):
         "crates/barca-core/src/backup.rs",
         "python/barca/_state.py",
         "python/tests/test_minute_checkpoints.py",
-        "crates/barca-core/src/dag.rs",
+        "crates/barca-compile/src/dag.rs",
     ]
     assert ci_changes.decide("base", files)["checkpoint"] == files[:4]
 
