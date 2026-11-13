@@ -49,9 +49,6 @@ pub(crate) fn python_module(
     python_module_std(python, module, storage_options).into()
 }
 
-/// Held while a child process is being started.
-static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Start a child process. Only one is started at a time, across the whole program.
 ///
 /// Starting a child with a pipe (its stdout, its lifeline) creates the pipe first and marks
@@ -64,28 +61,13 @@ static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// an artifact store hung for ever in its first pull. Started one at a time, no child can
 /// inherit what was made for another.
 pub fn spawn(cmd: &mut Command) -> std::io::Result<Child> {
-    let _one_at_a_time = SPAWNING
+    let _one_at_a_time = crate::spawn_lock::SPAWNING
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cmd.spawn()
 }
 
-/// [`spawn`] for a `std::process::Command`.
-pub fn spawn_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
-    let _one_at_a_time = SPAWNING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cmd.spawn()
-}
-
-/// Run `cmd` to completion and collect its output, started through [`spawn_std`]: what
-/// `Command::output` does, one at a time.
-pub fn output_std(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    spawn_std(cmd)?.wait_with_output()
-}
+pub use crate::spawn_lock::{output_std, spawn_std};
 
 /// How long a helper gets to clean up after SIGTERM before it is killed.
 pub(crate) const STOP_GRACE: Duration = Duration::from_secs(2);
@@ -605,7 +587,8 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            let this_module = path.ends_with("barca-core/src/helper_proc.rs");
+            let this_module = path.ends_with("barca-core/src/helper_proc.rs")
+                || path.ends_with("barca-core/src/spawn_lock.rs");
             // `process::Command` as well as `Command::new`: a file that imports the type under
             // another name, or is handed a `Command` built elsewhere, still names the type.
             let has_command = text.contains(&builds_a_command) || text.contains(&names_the_type);

@@ -84,6 +84,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("step_result", Model), // `OutputRef`, `ErrorPhase`, `StepFailure`: what a step produced
     ("reports", Model),     // the report values `results` re-exports, returned below core
     ("dag_error", Model),   // `DagError`, wrapped by the crate root's `BarcaError`
+    ("spawn_lock", Model), // one child process started at a time: loading and the engine both start them
     // ---- compile (barca-compile) ----
     ("parse", Compile),
     ("cone", Compile),
@@ -121,6 +122,7 @@ const LAYERS: &[(&str, Layer)] = &[
     ("result_journal", Engine),
     ("helper_proc", Engine),
     ("batch", Engine),
+    ("batch::spec", Compile), // reading `batch=`, `--batch`, evaluating `batches(...)` at load
     ("run_host", Engine),
     ("interrupt", Engine),     // how a run is told to stop
     ("cost", Engine),          // measured cost and adaptive batch sizing for the dispatcher
@@ -191,18 +193,6 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ("config", "serve", "serve::AuthMode"),
     ("config", "telemetry", "telemetry::is_on, telemetry::datadog::app_url"),
     ("config", "transfer", "transfer::{diagnostic_uri, local_path}"),
-    // ---- step 2, `planner` and `dag`: helpers move to the compile side ----
-    ("dag", "changes", "changes::definition_components"),
-    ("planner", "cache", "cache::folds_output"),
-    // ---- no #905 step names these yet; each needs a decision before step 4 ----
-    // `batch` straddles compile (parsing `batch=`, evaluating groups) and engine (calls).
-    ("load", "batch", "batch::{evaluate_groups, check_label_function}"),
-    ("parse", "batch", "batch::{FIX, extract, scalar_annotation, BatchOverride}"),
-    // The partition-key resolver runs a project subprocess (RFC-0013).
-    ("load", "helper_proc", "helper_proc::spawn_std"),
-    ("model", "env_reads", "env_reads::undeclared"),
-    ("selection", "report", "report::kind_str"),
-    ("targets", "recover", "recover::returned_step"),
 ];
 
 /// One reference: the crate-relative path it names and the line it is on.

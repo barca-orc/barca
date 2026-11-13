@@ -24,7 +24,7 @@
 use crate::cache::RunReason;
 use crate::dispatch::{OutputRef, ProvidedInput, build_provided_inputs};
 use crate::model::NodeKind;
-use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream};
+use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream, returned_step};
 use crate::results::{ExplainSummary, PartitionSummary, StepReport};
 use crate::step_status::StepStatus;
 use crate::store_sync::StoreSync;
@@ -88,21 +88,6 @@ pub(crate) fn flags<T: Sync>(items: &[T], test: impl Fn(&T) -> bool + Sync) -> V
 /// The base node id of a step or output id (`p.py:a[k=1]` -> `p.py:a`).
 pub(crate) fn base_of(id: &str) -> &str {
     id.split('[').next().unwrap_or(id)
-}
-
-/// The step whose value a run with no target returns as `final_output`: the last planned asset
-/// (a sensor or task only when the plan has no asset).
-pub(crate) fn returned_step(plan: &ExecutionPlan) -> Option<&StreamStep> {
-    let steps = || {
-        plan.phases
-            .iter()
-            .flat_map(|p| &p.streams)
-            .flat_map(|s| &s.steps)
-    };
-    steps()
-        .rev()
-        .find(|st| st.kind == NodeKind::Asset)
-        .or_else(|| steps().next_back())
 }
 
 /// The base ids of the outputs a command returns to its caller: its targets, or with no target

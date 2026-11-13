@@ -79,6 +79,7 @@ mod sink_args;
 mod sink_publications;
 #[cfg(test)]
 mod source_scan;
+mod spawn_lock;
 pub mod sql;
 pub(crate) mod state_validate;
 pub mod status;

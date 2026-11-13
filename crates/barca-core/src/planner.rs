@@ -251,7 +251,7 @@ fn detect_chains(dag: &Dag, topo: &[&str]) -> Vec<Chain> {
             }
             // A sensor or a `Manual` asset ends its chain (#183, #548): its consumers' run
             // hashes include its output, so they are decided in a later phase, after it ran.
-            if crate::cache::folds_output(dag, &current) {
+            if crate::dag::folds_output(dag, &current) {
                 break;
             }
             nodes.push(next.to_string());
@@ -328,7 +328,7 @@ fn reads_sensor_of(dag: &Dag, phase: &Phase, prev: &Phase) -> bool {
         .streams
         .iter()
         .flat_map(|s| &s.steps)
-        .filter(|st| crate::cache::folds_output(dag, st.step_id.base_id()))
+        .filter(|st| crate::dag::folds_output(dag, st.step_id.base_id()))
         .map(|st| st.step_id.base_id())
         .collect();
     !sensors.is_empty()
@@ -839,6 +839,21 @@ pub(crate) fn plan_for_nodes(
 ) -> ExecutionPlan {
     let topology = decompose_ordered(dag, dag.order_for(nodes.iter().copied()));
     plan_narrowed(dag, &topology, config, selection)
+}
+
+/// The step whose value a run with no target returns as `final_output`: the last planned asset
+/// (a sensor or task only when the plan has no asset).
+pub(crate) fn returned_step(plan: &ExecutionPlan) -> Option<&StreamStep> {
+    let steps = || {
+        plan.phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+    };
+    steps()
+        .rev()
+        .find(|st| st.kind == crate::model::NodeKind::Asset)
+        .or_else(|| steps().next_back())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

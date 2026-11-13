@@ -728,6 +728,60 @@ fn write_expr(expr: &Expr, source: &str, out: &mut String) {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
+/// The components of `node`'s definition hash and a digest of each: the counted decorator
+/// parts, the function, the helpers in its cone, the kind.
+pub(crate) fn definition_components(node: &crate::model::ExtractedNode) -> Vec<(String, String)> {
+    let mut parts: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    let mut add = |key: String, text: &str| {
+        parts
+            .entry(key)
+            .or_default()
+            .push(crate::hash::short_digest(text.as_bytes()));
+    };
+    // The definition text is the counted parts, one per line, then the function from `def` on
+    // ([`crate::definition::node_definition`]).
+    let mut rest = node.source_text.as_str();
+    loop {
+        let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        if let Some(argument) = line.strip_prefix("argument ") {
+            let name = argument.split('=').next().unwrap_or(argument);
+            add(format!("decorator argument {name}"), line);
+        } else if let Some(decorator) = line.strip_prefix("decorator ") {
+            let name = decorator.split('(').next().unwrap_or(decorator);
+            add(format!("decorator {name}"), line);
+        } else {
+            break;
+        }
+        rest = after;
+    }
+    add("code".to_string(), rest);
+    for (label, digest) in &node.cone_parts {
+        // A definition of the node's own file is labelled by its bare name.
+        let label = if label.contains(':') || label.ends_with(".py") {
+            label.clone()
+        } else {
+            format!("{}:{label}", node.source_file)
+        };
+        parts
+            .entry(format!("helper {label}"))
+            .or_default()
+            .push(digest.clone());
+    }
+    let mut out: Vec<(String, String)> = parts
+        .into_iter()
+        .map(|(key, mut digests)| {
+            digests.sort();
+            (key, digests.join(","))
+        })
+        .collect();
+    out.push((
+        "kind".to_string(),
+        format!("{:?}", node.kind).to_lowercase(),
+    ));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

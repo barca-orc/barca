@@ -154,7 +154,7 @@ pub(super) fn returned_node(
         [one] => Some(one.to_string()),
         _ if several_targets => None,
         _ => Some(
-            recover::returned_step(exec_plan)?
+            crate::planner::returned_step(exec_plan)?
                 .step_id
                 .base_id()
                 .to_string(),

@@ -1,6 +1,5 @@
 //! Target resolution, cone selection, and per-target outcomes.
 use crate::planner::{self, ExecutionPlan, ResourceConfig};
-use crate::recover;
 use crate::step_result;
 use crate::{BarcaError, dag::Dag, reports::TargetOutcome, step_result::OutputRef};
 use std::collections::HashMap;
@@ -458,7 +457,7 @@ pub(crate) fn final_output_of(
     if several_targets {
         return None;
     }
-    let last_planned_id = recover::returned_step(exec_plan)
+    let last_planned_id = planner::returned_step(exec_plan)
         .map(|s| s.step_id.display())
         .unwrap_or_default();
     all_outputs.get(&last_planned_id).cloned().or_else(|| {

@@ -676,7 +676,7 @@ impl Dag {
                 resolved_inputs: HashMap::new(),
                 resolved_collected: HashMap::new(),
                 definition_hash: def_hash,
-                components: crate::changes::definition_components(node),
+                components: crate::definition::definition_components(node),
             };
 
             let idx = graph.add_node(dag_node);
@@ -941,6 +941,24 @@ impl Dag {
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+/// Whether the output of `id` (a base id) is folded into its consumers' run hashes, not only
+/// its run hash: a sensor (#183), and a `Manual` asset (#548). A `Manual` asset is read as it
+/// is and refreshed by hand with the same code and inputs, so its run hash stays the same when
+/// a refresh gives new bytes; its output is what tells what reads it that it changed.
+///
+/// And an `@asset(cutoff=True)` (#628, `crate::cache::is_cutoff`), whose output replaces its run hash.
+/// Either way the node ends its chain in the planner and its consumers are decided in a later
+/// phase, once its output is known.
+pub(crate) fn folds_output(dag: &Dag, id: &str) -> bool {
+    dag.get_node(id).is_some_and(|n| match n.kind() {
+        crate::NodeKind::Sensor => true,
+        crate::NodeKind::Asset => {
+            n.extracted.freshness == crate::Freshness::Manual || n.extracted.cutoff
+        }
+        crate::NodeKind::Task => false,
+    })
+}
 
 #[cfg(test)]
 mod tests {
