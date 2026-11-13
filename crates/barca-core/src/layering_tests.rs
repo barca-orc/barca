@@ -86,7 +86,9 @@ fn crates_depend_only_on_crates_below_them() {
     }
     for (dir, _) in ALLOWED {
         if !dirs.iter().any(|d| d == dir) {
-            problems.push(format!("  ALLOWED names crates/{dir}, which does not exist"));
+            problems.push(format!(
+                "  ALLOWED names crates/{dir}, which does not exist"
+            ));
         }
     }
     assert!(

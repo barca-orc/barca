@@ -73,7 +73,7 @@ Release builds (fat LTO), `hyperfine -N`, interleaved runs; numbers from each PR
   their new crates, and some rustdoc links now point across a crate boundary. No CI job runs
   `cargo doc`, so these are not caught.
 - **Always-compiled test hooks.** `cfg(test)` items do not reach a dependent's tests, so the
-  hooks core's tests use (`test_hooks` items, `dispatch::expand_pending_partitions`,
+  hooks core's tests use (three items of barca-model's test-hooks module, `dispatch::expand_pending_partitions`,
   `StepTrace::context`) are compiled into release builds, marked `#[doc(hidden)]`.
 - **`scripts/check-fast.sh` diffs against `origin/main` by default**, not the PR's base, so on
   an integration branch it picks Python tests from the whole branch unless given
