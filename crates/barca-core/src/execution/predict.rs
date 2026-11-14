@@ -169,11 +169,6 @@ pub(crate) async fn explain_dag_with_keys(
             }
         }
     }
-    // Results the cache size limit evicted: predicted as `evicted` rather than missing.
-    let evicted = match &cache {
-        Some(cache) => db::evicted_paths(cache).await,
-        None => std::collections::HashSet::new(),
-    };
     // What a run would compute again because an artifact it needs is missing (#252): the same
     // rule as `execute`, predicted from what is on this disk.
     let layout = cfg
@@ -203,7 +198,6 @@ pub(crate) async fn explain_dag_with_keys(
         policy: &policy,
         cache: cache.as_ref(),
         layout: layout.as_ref(),
-        evicted: &evicted,
         pool_size,
         state: &mut state,
         all_outputs: &mut all_outputs,
@@ -221,7 +215,6 @@ pub(crate) async fn explain_dag_with_keys(
         predict_phase(&mut prediction, phase).await?;
         crate::status::trace_since(&format!("dry run: phase {}", i + 1), tp);
     }
-    drop(cache);
     crate::status::trace_since("dry run: decided", t0);
 
     // The outputs the command was asked for are read by whoever ran it.
@@ -235,11 +228,13 @@ pub(crate) async fn explain_dag_with_keys(
         &mut cached_steps,
         &mut all_outputs,
         layout.as_ref(),
-        &evicted,
+        cache.as_ref(),
         &mut steps,
         &mut summary,
         &state.pinned,
-    )?;
+    )
+    .await?;
+    drop(cache);
 
     let mut steps = merge_partition_reports(steps);
     if let Some(n) = &narrowing {
@@ -307,7 +302,6 @@ pub(super) struct Prediction<'a> {
     pub(super) policy: &'a CachePolicy,
     pub(super) cache: Option<&'a crate::cache::CacheReader>,
     pub(super) layout: Option<&'a ArtifactLayout>,
-    pub(super) evicted: &'a std::collections::HashSet<String>,
     pub(super) pool_size: usize,
     pub(super) state: &'a mut DecideState,
     pub(super) all_outputs: &'a mut HashMap<String, OutputRef>,
@@ -331,7 +325,7 @@ pub(super) fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: Str
     }
 }
 
-pub(super) fn expand_prediction(
+pub(super) async fn expand_prediction(
     ctx: &mut Prediction<'_>,
     phase: &Phase,
 ) -> Result<Phase, BarcaError> {
@@ -346,11 +340,12 @@ pub(super) fn expand_prediction(
         ctx.cached_steps,
         ctx.all_outputs,
         ctx.layout,
-        ctx.evicted,
+        ctx.cache,
         ctx.steps,
         ctx.summary,
         &ctx.state.pinned,
-    )?;
+    )
+    .await?;
 
     // Dynamic partitions need their source's output to know their keys. If the source is
     // not available (it would have to run first) the step cannot be expanded.
@@ -661,7 +656,7 @@ pub(super) async fn predict_phase(
     ctx: &mut Prediction<'_>,
     phase: &Phase,
 ) -> Result<(), BarcaError> {
-    let ready = expand_prediction(ctx, phase)?;
+    let ready = expand_prediction(ctx, phase).await?;
     let expansion = dispatch::expand_pending_partitions_filtered(
         ctx.dag,
         &ready,
@@ -712,10 +707,11 @@ pub(super) async fn predict_phase(
         ctx.cached_steps,
         ctx.all_outputs,
         ctx.layout,
-        ctx.evicted,
+        ctx.cache,
         ctx.steps,
         ctx.summary,
         &ctx.state.pinned,
-    )?;
+    )
+    .await?;
     Ok(())
 }

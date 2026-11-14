@@ -556,6 +556,101 @@ pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
     out
 }
 
+/// [`history_json`] serialized straight from the record, keys in the same (sorted) order: a
+/// `serde_json::Value` per run allocates every file name again, which made `GET /history` of
+/// 17k runs spend most of its 330 ms in the allocator.
+#[derive(serde::Serialize)]
+struct HistoryItem<'a> {
+    attempts: &'a Option<i64>,
+    client_run_id: &'a Option<String>,
+    command: &'a str,
+    elapsed_seconds: &'a Option<f64>,
+    error: Option<&'a str>,
+    failed_node: Option<&'a str>,
+    failure: Option<HistoryFailure<'a>>,
+    files: &'a [String],
+    finished_at: &'a Option<String>,
+    job: &'a Option<String>,
+    run_id: &'a str,
+    schedule_id: &'a Option<String>,
+    scheduled_at: &'a Option<String>,
+    started_at: &'a str,
+    status: &'a str,
+    steps_cached: i64,
+    steps_executed: i64,
+    steps_total: &'a Option<i64>,
+    target: &'a Option<String>,
+    triggered_by: &'a Option<crate::outcome::TriggeredBy>,
+}
+
+#[derive(serde::Serialize)]
+struct HistoryFailure<'a> {
+    error: &'a str,
+    node: &'a str,
+}
+
+impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
+    fn from(run: &'a crate::db::RunRecord) -> Self {
+        let crate::db::RunRecord {
+            run_id,
+            command,
+            files,
+            target,
+            job,
+            status,
+            steps_total,
+            steps_executed,
+            steps_cached,
+            steps_failed: _,
+            attempts,
+            started_at,
+            finished_at,
+            elapsed_seconds,
+            triggered_by,
+            scheduled_at,
+            schedule_id,
+            client_run_id,
+            failure,
+        } = run;
+        let failure = failure.as_ref().map(|f| HistoryFailure {
+            error: &f.error,
+            node: &f.node,
+        });
+        HistoryItem {
+            attempts,
+            client_run_id,
+            command,
+            elapsed_seconds,
+            error: failure.as_ref().map(|f| f.error),
+            failed_node: failure.as_ref().map(|f| f.node),
+            failure,
+            files,
+            finished_at,
+            job,
+            run_id,
+            schedule_id,
+            scheduled_at,
+            started_at,
+            status,
+            steps_cached: *steps_cached,
+            steps_executed: *steps_executed,
+            steps_total,
+            target,
+            triggered_by,
+        }
+    }
+}
+
+/// [`Page::envelope`] of [`HistoryItem`]s.
+#[derive(serde::Serialize)]
+struct HistoryPage<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+    runs: Vec<HistoryItem<'a>>,
+    total: usize,
+    truncated: bool,
+}
+
 pub fn render_history(
     runs: &[crate::db::RunRecord],
     total: usize,
@@ -564,6 +659,16 @@ pub fn render_history(
 ) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
     let page = Page::new(runs.len(), total);
+    if json && fields.is_none() {
+        let out = HistoryPage {
+            hint: page.truncated.then(|| page.hint("runs")),
+            runs: runs.iter().map(HistoryItem::from).collect(),
+            total: page.total,
+            truncated: page.truncated,
+        };
+        rendered.stdout_line(serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
     if json || fields.is_some() {
         let mut items: Vec<serde_json::Value> = runs.iter().map(history_json).collect();
         if let Some(f) = fields {
@@ -1814,5 +1919,92 @@ fn history_target_tests_run() -> crate::db::RunRecord {
         schedule_id: None,
         client_run_id: None,
         failure: None,
+    }
+}
+
+#[cfg(test)]
+mod history_json_tests {
+    use super::*;
+    use crate::db::{RunFailure, RunRecord};
+
+    /// What `render_history` printed before it serialized records directly.
+    fn through_values(runs: &[RunRecord], total: usize) -> String {
+        let page = Page::new(runs.len(), total);
+        let items = runs.iter().map(history_json).collect();
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&page.envelope("runs", items, "runs")).unwrap()
+        )
+    }
+
+    fn stdout(rendered: RenderedOutput) -> String {
+        rendered
+            .chunks
+            .into_iter()
+            .map(|c| match c {
+                OutputChunk::Stdout(s) => s,
+                OutputChunk::Stderr(s) => panic!("stderr: {s}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn history_json_is_the_same_bytes_as_the_record_through_values() {
+        let full = RunRecord {
+            run_id: "run-1".into(),
+            command: "run".into(),
+            files: vec!["a.py".into(), "dir/b \"q\".py".into()],
+            target: Some("kpis".into()),
+            job: Some("a.py:kpis".into()),
+            status: "failed".into(),
+            steps_total: Some(7),
+            steps_executed: 3,
+            steps_cached: 2,
+            steps_failed: Some(1),
+            attempts: Some(4),
+            started_at: "2026-11-13T10:00:00Z".into(),
+            finished_at: Some("2026-11-13T10:01:00Z".into()),
+            elapsed_seconds: Some(60.25),
+            triggered_by: Some(crate::outcome::TriggeredBy::Schedule),
+            scheduled_at: Some("2026-11-13T10:00:00Z".into()),
+            schedule_id: Some("a.py:kpis".into()),
+            client_run_id: Some("laptop-run".into()),
+            failure: Some(RunFailure {
+                node: "a.py:kpis[2026-01]".into(),
+                error: "ValueError: bad\tvalue é".into(),
+            }),
+        };
+        let bare = RunRecord {
+            run_id: "run-0".into(),
+            command: "get".into(),
+            files: vec![],
+            target: None,
+            job: None,
+            status: "running".into(),
+            steps_total: None,
+            steps_executed: 0,
+            steps_cached: 0,
+            steps_failed: None,
+            attempts: None,
+            started_at: String::new(),
+            finished_at: None,
+            elapsed_seconds: Some(f64::NAN),
+            triggered_by: None,
+            scheduled_at: None,
+            schedule_id: None,
+            client_run_id: None,
+            failure: None,
+        };
+        for (runs, total) in [
+            (vec![], 0),
+            (vec![full.clone()], 1),
+            (vec![full.clone(), bare.clone()], 2),
+            (vec![bare, full], 9),
+        ] {
+            assert_eq!(
+                stdout(render_history(&runs, total, true, None)),
+                through_values(&runs, total)
+            );
+        }
     }
 }

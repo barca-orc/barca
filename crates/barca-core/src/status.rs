@@ -1136,6 +1136,7 @@ mod tests {
                 created_at: String::new(),
             }),
             ever_succeeded: ever,
+            ..Default::default()
         }
     }
 

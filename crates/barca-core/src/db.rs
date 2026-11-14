@@ -27,9 +27,9 @@ pub use barca_db::db::{
 
 // Assets: stats, ages, durations, partitions, step rows, pins and their versions.
 pub use barca_db::db::{
-    AssetPin, AssetRunEntry, AssetStats, BytesChange, NodeAge, PartitionKeys, PartitionKeysFilter,
-    StepRow, Version, failure_facts, get_asset_stats, node_ages, partition_keys, read_step_rows,
-    recent_durations,
+    AssetPin, AssetRunEntry, AssetStats, BytesChange, NodeAge, NodeAgesIndex, PartitionKeys,
+    PartitionKeysFilter, StepRow, Version, failure_facts, get_asset_stats, node_ages,
+    partition_keys, read_step_rows, recent_durations,
 };
 
 // The scheduler's durable state: last ticks, schedule pauses, failure streaks.

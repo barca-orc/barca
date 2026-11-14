@@ -11,6 +11,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Internal: barca-core split into barca-model, barca-compile, barca-db and barca-engine crates; no behavior change.
 - UI-only PRs and merge groups run UI checks and browser tests without unrelated backend suites; releases keep full coverage.
 
+### Performance
+
+- **`barca serve` read routes stay fast while runs write results.** Every read route used to recompute from the whole history each time the metadata DB changed, which on a busy server is several times a second. On a copy of a real project's database (470k results, 645 nodes) with results written at its production rate and a run in flight, `GET /state` took 2.4 s and the asset, schema, partition grid and `GET /nodes` routes 0.5 to 1 s each; they now take 60 to 120 ms (p95), and `GET /sql/views` 70 ms instead of 1.5 s. Node ages, last materializations and typical durations are kept between reads and updated from the rows added since (rows deleted by `barca gc` or a reset make them be read in full again), and they share one count of the table while the database files are unchanged. `GET /history` without a limit (every run, 17k on that copy, 51 MB) writes each run straight to JSON, the same bytes, in 255 ms instead of 370. A dry run asks only about the missing results whether they were evicted instead of reading every evicted path, failed keys are read from `idx_mat_failed`, and `GET /sql/views` no longer re-parses the pipeline on each call. A new index, `idx_mat_run_node (run_id, node_id)`, is built when a database is first opened, under half a second for 470k rows. `benchmarks/read_routes/under_writes.py` measures every read route under that load.
+
 ### Documentation
 
 - **barca.sh deploys from main:** a merge that changes the site is live a few minutes later instead of at the next release, and a pull request that changes it gets a preview link in a comment (`.github/workflows/site.yml`; the release workflow no longer deploys the site). CI runs no clippy, wheel build, Python tests or performance tests for a change only to the site.

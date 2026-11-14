@@ -427,12 +427,12 @@ fn predicted_gone(oref: &OutputRef, layout: Option<&ArtifactLayout>) -> bool {
 /// `needed` and finds it missing (and, for each such step, what it reads in turn). Their report
 /// lines become `run` with reason `artifact_missing`, and they leave `all_outputs`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn predict_recomputes(
+pub(crate) async fn predict_recomputes(
     needed: Vec<String>,
     cached_steps: &mut CachedSteps,
     all_outputs: &mut HashMap<String, OutputRef>,
     layout: Option<&ArtifactLayout>,
-    evicted: &HashSet<String>,
+    cache: Option<&crate::cache::CacheReader>,
     steps: &mut [StepReport],
     summary: &mut ExplainSummary,
     pins: &HashMap<String, crate::freshness::Pin>,
@@ -440,10 +440,23 @@ pub(crate) fn predict_recomputes(
     let gone = |oref: &&OutputRef| predicted_gone(oref, layout);
     // Each lost output's path is taken as it leaves `all_outputs`: copying every path first
     // cost a string per output per phase, 200k for a 200k-key node.
-    for (id, path) in lose(cached_steps, all_outputs, &needed, gone) {
-        if pins.get(&id).is_some_and(|pin| pin.user.is_some()) {
-            return Err(crate::BarcaError::Usage(crate::freshness::pin_lost(&id)));
+    let lost = lose(cached_steps, all_outputs, &needed, gone);
+    if let Some((id, _)) = lost
+        .iter()
+        .find(|(id, _)| pins.get(id).is_some_and(|pin| pin.user.is_some()))
+    {
+        return Err(crate::BarcaError::Usage(crate::freshness::pin_lost(id)));
+    }
+    // Which of them the cache size limit deleted: asked about these paths only. Reading every
+    // evicted path up front cost half a second per dry run with 283k of them.
+    let evicted = match cache {
+        Some(cache) if !lost.is_empty() => {
+            let paths: Vec<&str> = lost.iter().map(|(_, path)| path.as_str()).collect();
+            crate::db::evicted_among_on(cache.conn(), &paths).await
         }
+        _ => HashSet::new(),
+    };
+    for (id, path) in lost {
         let was_evicted = evicted.contains(&path);
         if mark_recomputed(steps, &id, true, was_evicted) {
             summary.cached = summary.cached.saturating_sub(1);
