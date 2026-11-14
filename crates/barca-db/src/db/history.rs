@@ -455,8 +455,9 @@ pub struct NodeHistory {
     pub latest: Option<MaterializationRecord>,
     /// Whether any attempt ever succeeded.
     pub ever_succeeded: bool,
-    /// The row ids of `latest` and `last_bytes_change`: their digests can be recorded after the
-    /// row is written (an upload's, #576), so a kept history reads them again ([`node_histories`]).
+    /// The row ids of `latest` and `last_bytes_change`, which a kept history reads again
+    /// ([`node_histories`]): a digest can be recorded after the row is written (an upload's,
+    /// #576), and another writer can change any column.
     pub latest_id: Option<i64>,
     pub bytes_id: Option<i64>,
 }
@@ -517,7 +518,9 @@ impl HistoriesIndex {
         self.answer(conn, base_ids).await
     }
 
-    /// The histories of `base_ids`: kept ones with their digests read again, the others read.
+    /// The histories of `base_ids`: kept ones with the rows they report read again (a digest is
+    /// recorded on a row after it is written, #576, and another writer may change any column),
+    /// the others read in full.
     async fn answer(
         &mut self,
         conn: &libsql::Connection,
@@ -525,9 +528,11 @@ impl HistoriesIndex {
     ) -> Result<HashMap<String, NodeHistory>, BarcaError> {
         let mut out = HashMap::with_capacity(base_ids.len());
         let mut kept_ids = Vec::new();
+        let mut was_kept = HashSet::new();
         for base in base_ids {
             match self.nodes.get(base) {
                 Some(h) => {
+                    was_kept.insert(base.as_str());
                     kept_ids.extend(h.latest_id);
                     kept_ids.extend(h.bytes_id);
                 }
@@ -537,20 +542,13 @@ impl HistoriesIndex {
                 }
             }
         }
-        let digests = output_hashes(conn, &kept_ids).await?;
+        let rows = reported_rows(conn, kept_ids).await?;
         for base in base_ids {
             let Some(h) = self.nodes.get_mut(base) else {
                 continue;
             };
-            if let (Some(id), Some(latest)) = (h.latest_id, h.latest.as_mut())
-                && let Some(digest) = digests.get(&id)
-            {
-                latest.content_hash = digest.clone();
-            }
-            if let (Some(id), Some(change)) = (h.bytes_id, h.last_bytes_change.as_mut())
-                && let Some(digest) = digests.get(&id)
-            {
-                change.content_hash = digest.clone().unwrap_or_default();
+            if was_kept.contains(base.as_str()) {
+                h.report(&rows);
             }
             out.insert(base.clone(), h.clone());
         }
@@ -658,6 +656,14 @@ struct FileStamp {
     index_header: Option<[u8; 48]>,
 }
 
+/// The first `N` bytes of the file at `path`, read through its held descriptor.
+fn header<const N: usize>(path: &std::path::Path) -> Option<[u8; N]> {
+    use std::os::unix::fs::FileExt;
+    let file = super::held_file(path).ok()?;
+    let mut header = [0u8; N];
+    file.read_exact_at(&mut header, 0).ok().map(|()| header)
+}
+
 /// One file's identity, size, and modification and change times (seconds, nanoseconds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileState {
@@ -670,7 +676,6 @@ struct FileState {
 
 impl FileStamp {
     fn of(file: &std::path::Path) -> Self {
-        use std::io::Read;
         use std::os::unix::fs::MetadataExt;
         let state = |path: &std::path::Path| {
             std::fs::metadata(path).ok().map(|m| FileState {
@@ -684,21 +689,16 @@ impl FileStamp {
         let mut wal = file.as_os_str().to_owned();
         wal.push("-wal");
         let wal = std::path::PathBuf::from(wal);
-        let log_header = std::fs::File::open(&wal).ok().and_then(|mut f| {
-            let mut header = [0u8; 32];
-            f.read_exact(&mut header).ok().map(|()| header)
-        });
+        // Through held descriptors: closing one of a file drops this process's SQLite locks on
+        // it ([`held_file`]), which let another process's writer reset the log index under
+        // this one's connections.
+        let log_header = header::<32>(&wal);
         // An empty log holds nothing, the same as none: a reader recreates one where the last
         // connection to close removed it (as `barca serve`'s read cache counts it).
         let log = state(&wal).filter(|s| s.len > 0);
         let mut shm = file.as_os_str().to_owned();
         shm.push("-shm");
-        let index_header = std::fs::File::open(std::path::Path::new(&shm))
-            .ok()
-            .and_then(|mut f| {
-                let mut header = [0u8; 48];
-                f.read_exact(&mut header).ok().map(|()| header)
-            });
+        let index_header = header::<48>(std::path::Path::new(&shm));
         Self {
             files: [state(file), log],
             log_header: log.and(log_header),
@@ -728,31 +728,6 @@ async fn bases_between(
         bases.insert(base_of(&node).to_string());
     }
     Ok((n, bases))
-}
-
-/// The digest (`output_hash`) of each of the rows `ids`, by id: `None` for a row without one.
-async fn output_hashes(
-    conn: &libsql::Connection,
-    ids: &[i64],
-) -> Result<HashMap<i64, Option<String>>, BarcaError> {
-    let failure = |e| BarcaError::Db(format!("failed to read digests: {e}"));
-    let mut out = HashMap::with_capacity(ids.len());
-    for chunk in ids.chunks(1000) {
-        let list = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string());
-        let mut rows = conn
-            .query(
-                "SELECT m.id, m.output_hash FROM json_each(?1) j \
-                 JOIN materializations m ON m.id = j.value",
-                [list],
-            )
-            .await
-            .map_err(failure)?;
-        while let Some(row) = rows.next().await.map_err(failure)? {
-            let digest = row.get::<String>(1).ok().filter(|s| !s.is_empty());
-            out.insert(row.get::<i64>(0).unwrap_or_default(), digest);
-        }
-    }
-    Ok(out)
 }
 
 /// [`node_histories`] of one node. Each question is asked of the node's own rows and of its keys'
@@ -808,59 +783,80 @@ async fn node_history(conn: &libsql::Connection, base: &str) -> Result<NodeHisto
     };
     h.latest_id = latest;
     h.bytes_id = bytes;
-    if let Some(id) = latest {
-        let mut rows = conn
-            .query(
-                "SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, \
-                 elapsed_seconds, status, error_message, created_at, output_hash \
-                 FROM materializations WHERE id = ?1",
-                [id],
-            )
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
-        if let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
-        {
-            let opt = |i: i32| row.get::<String>(i).ok().filter(|s| !s.is_empty());
-            h.latest = Some(MaterializationRecord {
-                content_hash: opt(9),
-                node_id: row.get::<String>(0).unwrap_or_default(),
-                run_hash: opt(1),
-                artifact_path: opt(2),
-                artifact_format: opt(3),
-                artifact_size_bytes: row.get::<i64>(4).ok(),
-                elapsed_seconds: row.get::<f64>(5).ok(),
-                status: opt(6).unwrap_or_else(|| "success".to_string()),
-                error_message: opt(7),
-                created_at: row.get::<String>(8).unwrap_or_default(),
-            });
-        }
-    }
-    if let Some(id) = bytes {
-        let mut rows = conn
-            .query(
-                "SELECT node_id, run_hash, output_hash, created_at FROM materializations \
-                 WHERE id = ?1",
-                [id],
-            )
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to query byte change: {e}")))?;
-        if let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to read byte change: {e}")))?
-        {
-            h.last_bytes_change = Some(BytesChange {
-                node_id: row.get::<String>(0).unwrap_or_default(),
-                run_hash: row.get::<String>(1).unwrap_or_default(),
-                content_hash: row.get::<String>(2).unwrap_or_default(),
-                created_at: row.get::<String>(3).unwrap_or_default(),
-            });
-        }
-    }
+    let rows = reported_rows(conn, h.latest_id.iter().chain(&h.bytes_id).copied()).await?;
+    h.report(&rows);
     Ok(h)
+}
+
+/// One row as [`node_histories`] reports it: the columns of its [`MaterializationRecord`], and
+/// of its [`BytesChange`] when it is a node's last change.
+struct ReportedRow {
+    record: MaterializationRecord,
+    run_hash: String,
+}
+
+impl NodeHistory {
+    /// `latest` and `last_bytes_change` as the rows `latest_id` and `bytes_id` read now.
+    fn report(&mut self, rows: &HashMap<i64, ReportedRow>) {
+        self.latest = self
+            .latest_id
+            .and_then(|id| rows.get(&id))
+            .map(|r| r.record.clone());
+        self.last_bytes_change = self
+            .bytes_id
+            .and_then(|id| rows.get(&id))
+            .map(|r| BytesChange {
+                node_id: r.record.node_id.clone(),
+                run_hash: r.run_hash.clone(),
+                content_hash: r.record.content_hash.clone().unwrap_or_default(),
+                created_at: r.record.created_at.clone(),
+            });
+    }
+}
+
+/// The rows `ids` as [`node_histories`] reports them, by id; one query per thousand ids.
+async fn reported_rows(
+    conn: &libsql::Connection,
+    ids: impl IntoIterator<Item = i64>,
+) -> Result<HashMap<i64, ReportedRow>, BarcaError> {
+    let failure = |e| BarcaError::Db(format!("failed to query materializations: {e}"));
+    let ids: Vec<i64> = ids.into_iter().collect();
+    let mut out = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(1000) {
+        let list = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string());
+        let mut rows = conn
+            .query(
+                "SELECT m.id, m.node_id, m.run_hash, m.artifact_path, m.artifact_format, \
+                 m.artifact_size_bytes, m.elapsed_seconds, m.status, m.error_message, \
+                 m.created_at, m.output_hash \
+                 FROM json_each(?1) j JOIN materializations m ON m.id = j.value",
+                [list],
+            )
+            .await
+            .map_err(failure)?;
+        while let Some(row) = rows.next().await.map_err(failure)? {
+            let opt = |i: i32| row.get::<String>(i).ok().filter(|s| !s.is_empty());
+            out.insert(
+                row.get::<i64>(0).unwrap_or_default(),
+                ReportedRow {
+                    run_hash: row.get::<String>(2).unwrap_or_default(),
+                    record: MaterializationRecord {
+                        content_hash: opt(10),
+                        node_id: row.get::<String>(1).unwrap_or_default(),
+                        run_hash: opt(2),
+                        artifact_path: opt(3),
+                        artifact_format: opt(4),
+                        artifact_size_bytes: row.get::<i64>(5).ok(),
+                        elapsed_seconds: row.get::<f64>(6).ok(),
+                        status: opt(7).unwrap_or_else(|| "success".to_string()),
+                        error_message: opt(8),
+                        created_at: row.get::<String>(9).unwrap_or_default(),
+                    },
+                },
+            );
+        }
+    }
+    Ok(out)
 }
 
 /// The row [`node_history`] reports for a node whose latest row is `latest`: the row of the
@@ -1060,8 +1056,9 @@ mod tests {
                         .await
                         .unwrap();
                     } else if roll == 1 {
-                        // A digest recorded later on the row a history reports: the newest of a
-                        // node, or its newest whose bytes changed.
+                        // A digest recorded later on the row a history reports (the newest of a
+                        // node, or its newest whose bytes changed), and a column another writer
+                        // changed on it.
                         let changed = if rng.next(2) == 0 {
                             ""
                         } else {
@@ -1070,7 +1067,8 @@ mod tests {
                         let base = bases[rng.next(3) as usize];
                         conn.execute(
                             &format!(
-                                "UPDATE materializations SET output_hash = ?1 WHERE id = (SELECT \
+                                "UPDATE materializations SET output_hash = ?1, \
+                                 artifact_size_bytes = length(?1) WHERE id = (SELECT \
                                  max(id) FROM materializations WHERE node_id >= ?2 AND node_id < ?3 \
                                  {changed})"
                             ),
