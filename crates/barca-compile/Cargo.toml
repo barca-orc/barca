@@ -1,6 +1,6 @@
 [package]
 name = "barca-compile"
-version = "0.42.0"
+version = "0.42.1"
 edition = "2024"
 description = "Compile layer — source in, DAG and execution plan out: parsing, the DAG, targets, selection and planning"
 
