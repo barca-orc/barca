@@ -10,6 +10,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - UI-only PRs and merge groups run UI checks and browser tests without unrelated backend suites; releases keep full coverage.
 
+### Bug Fixes
+
+- **A requested run goes ahead of scheduled work on `barca serve`.** A run asked for over the API, the UI or a `--server` client starts before waiting scheduled runs, and when every `--max-runs` slot is held while a scheduled run executes, it takes one extra slot of its own instead of waiting. `GET /queue` positions follow the new order.
+- **A run's progress no longer reads past 100%.** `steps_total` counted a dynamic `partitions_from` step as one step, from the plan, while `steps_executed` counted each of its keys (one run showed 2,560 of 316). The total is raised to the expanded count once keys are known, and never stays below executed plus cached steps.
+- **A blank `BARCA_SERVER_TOKEN` counts as unset** for the CLI and the Python `Client`, instead of failing every server command with exit 2. Containers and `.env` files that export `BARCA_SERVER_TOKEN=` for an unauthenticated server work without unsetting it.
+
 ### Documentation
 
 - **barca.sh deploys from main:** a merge that changes the site is live a few minutes later instead of at the next release, and a pull request that changes it gets a preview link in a comment (`.github/workflows/site.yml`; the release workflow no longer deploys the site). CI runs no clippy, wheel build, Python tests or performance tests for a change only to the site.

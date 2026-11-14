@@ -434,7 +434,7 @@ pub async fn finish_run(
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let updated = conn.execute(
-        "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
+        "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, steps_total = MAX(COALESCE(steps_total, 0), ?2 + ?3), elapsed_seconds = ?4, finished_at = datetime('now') WHERE run_id = ?5",
         [
             status.to_string(),
             steps_executed.to_string(),
@@ -678,6 +678,25 @@ pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
     Ok(n.max(0) as usize)
 }
 
+/// Raise `run_id`'s `steps_total` to `total` while it runs: a dynamic `partitions_from` step
+/// counts as one step at plan time and as its keys once they are known, so a run's progress
+/// (`steps_executed` of `steps_total`) never reads past 100%. Never lowers the total.
+pub async fn raise_steps_total(
+    db_path: &str,
+    run_id: &str,
+    total: usize,
+) -> Result<(), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "UPDATE runs SET steps_total = MAX(COALESCE(steps_total, 0), ?1) WHERE run_id = ?2 AND status = 'running'",
+        [total.to_string(), run_id.to_string()],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to update the run's step total: {e}")))?;
+    Ok(())
+}
+
 // ─── Recording (driven by `crate::persist`) ──────────────────────────────────
 
 /// Count `written` more executed steps of `run_id`, while it is running. Rows updated: 1, or 0
@@ -688,7 +707,7 @@ pub(crate) async fn advance_steps_executed(
     written: u64,
 ) -> Result<u64, libsql::Error> {
     conn.execute(
-        "UPDATE runs SET steps_executed = steps_executed + ?1 WHERE run_id = ?2 AND status = 'running'",
+        "UPDATE runs SET steps_executed = steps_executed + ?1, steps_total = MAX(COALESCE(steps_total, 0), steps_executed + steps_cached + ?1) WHERE run_id = ?2 AND status = 'running'",
         [written.to_string(), run_id.to_string()],
     )
     .await
@@ -730,7 +749,7 @@ pub(crate) async fn finish_run_in(
     job: &str,
 ) -> Result<u64, libsql::Error> {
     conn.execute(
-        "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, elapsed_seconds = ?4, finished_at = datetime('now'), job = NULLIF(?6, '') WHERE run_id = ?5",
+        "UPDATE runs SET status = ?1, steps_executed = ?2, steps_cached = ?3, steps_total = MAX(COALESCE(steps_total, 0), ?2 + ?3), elapsed_seconds = ?4, finished_at = datetime('now'), job = NULLIF(?6, '') WHERE run_id = ?5",
         [
             status.to_string(),
             steps_executed.to_string(),

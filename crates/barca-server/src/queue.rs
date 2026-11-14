@@ -2,7 +2,9 @@
 //! UI, `--server` clients, scheduled ticks) joins it, and is recorded in the metadata DB
 //! (`run_queue`) before the server answers, under the run id it answers with. Runs start in the
 //! order they were accepted, at most `--max-runs` at once (`[server] max_runs`, default one per
-//! core), while the queue is neither paused nor draining.
+//! core), while the queue is neither paused nor draining. A run someone asked for (API, UI,
+//! CLI) starts ahead of waiting scheduled runs, and when every slot is taken it may use one
+//! extra slot of its own, so an interactive `get` never waits behind cron work.
 //!
 //! A run leaves the queue when it has recorded how it ended. A server that starts resumes the runs
 //! it finds queued, in order ([`resume_at_startup`]). A run the stopping server stopped at its
@@ -70,12 +72,15 @@ impl Queue {
         *self.paused_at.lock().unwrap() = at;
     }
 
-    /// The ids of the runs waiting, in order.
+    /// The ids of the runs waiting, in the order they will start: runs someone asked for
+    /// first, then scheduled runs, each in the order they were accepted.
     pub fn waiting_ids(&self) -> Vec<String> {
-        self.waiting
-            .lock()
-            .unwrap()
-            .iter()
+        let waiting = self.waiting.lock().unwrap();
+        let (asked, scheduled): (Vec<_>, Vec<_>) =
+            waiting.iter().partition(|w| !is_scheduled(&w.spec));
+        asked
+            .into_iter()
+            .chain(scheduled)
             .map(|w| w.run_id.clone())
             .collect()
     }
@@ -261,6 +266,19 @@ pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError
     })
 }
 
+/// A run a cron tick started, rather than a person or client.
+fn is_scheduled(spec: &RunSpec) -> bool {
+    spec.trigger.triggered_by == TriggeredBy::Schedule
+}
+
+/// Whether a scheduled run is executing now.
+fn scheduled_running(state: &AppState) -> bool {
+    state
+        .runs
+        .iter()
+        .any(|r| r.status == RunStatus::Running && r.trigger.triggered_by == TriggeredBy::Schedule)
+}
+
 /// The live record and event channel of a run that joins the queue.
 fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, channel: RunChannel) {
     // Child of the server-wide shutdown token: DELETE /runs/{id} cancels just this run;
@@ -297,22 +315,33 @@ pub fn dispatch(state: &AppState) {
         if state.is_draining() || state.queue.paused_at().is_some() {
             return;
         }
-        let Ok(permit) = state.run_slots.clone().try_acquire_owned() else {
+        let mut waiting = state.queue.waiting.lock().unwrap();
+        // The first run someone asked for goes ahead of scheduled runs.
+        let Some(at) = waiting
+            .iter()
+            .position(|w| !is_scheduled(&w.spec))
+            .or((!waiting.is_empty()).then_some(0))
+        else {
             return;
         };
-        let next = {
-            let mut waiting = state.queue.waiting.lock().unwrap();
-            let next = waiting.pop_front();
-            if let Some(w) = &next
-                && let Some(mut run) = state.runs.get_mut(&w.run_id)
-            {
-                run.status = RunStatus::Running;
+        let interactive = !is_scheduled(&waiting[at].spec);
+        let permit = match state.run_slots.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            // The extra slot is for running past scheduled work, not for running two
+            // requested runs past `max_runs`.
+            Err(_) if interactive && scheduled_running(state) => {
+                match state.interactive_slot.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                }
             }
-            next
+            Err(_) => return,
         };
-        let Some(next) = next else {
-            return;
-        };
+        let next = waiting.remove(at).expect("index in range");
+        drop(waiting);
+        if let Some(mut run) = state.runs.get_mut(&next.run_id) {
+            run.status = RunStatus::Running;
+        }
         crate::runs::launch(state.clone(), next, permit);
     }
 }
@@ -726,6 +755,45 @@ mod tests {
                 next.queue.waiting_ids(),
                 [ids[2].clone()],
                 "one run at a time"
+            );
+        });
+    }
+
+    #[test]
+    fn a_requested_run_starts_ahead_of_scheduled_runs_with_a_slot_of_its_own() {
+        crate::test_support::bounded(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let state = state(dir.path());
+            let _ = pause(State(state.clone())).await.unwrap();
+            let scheduled = |target: &str| RunSpec {
+                trigger: Trigger::schedule("p.py:a", 0),
+                ..RunSpec::api(RunCommand::Get, vec![target.into()], vec![])
+            };
+            let busy = admit(&state, scheduled("busy")).await.unwrap().run_id;
+            let s1 = admit(&state, scheduled("s1")).await.unwrap().run_id;
+            let a1 = admit(
+                &state,
+                RunSpec::api(RunCommand::Get, vec!["a1".into()], vec![]),
+            )
+            .await
+            .unwrap();
+            assert_eq!(a1.position, Some(1), "ahead of the scheduled runs");
+            let a2 = admit(
+                &state,
+                RunSpec::api(RunCommand::Get, vec!["a2".into()], vec![]),
+            )
+            .await
+            .unwrap()
+            .run_id;
+            // A scheduled run holds the only slot.
+            state.queue.take(&busy).unwrap();
+            let _held = state.run_slots.clone().try_acquire_owned().unwrap();
+            state.runs.get_mut(&busy).unwrap().status = RunStatus::Running;
+            let _ = resume(State(state.clone())).await.unwrap();
+            assert_eq!(
+                state.queue.waiting_ids(),
+                [a2, s1],
+                "one requested run takes the extra slot; the next waits, still ahead of cron"
             );
         });
     }
