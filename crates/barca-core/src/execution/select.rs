@@ -428,6 +428,13 @@ pub(super) async fn expand_and_decide<'p>(
             if let Some(bar) = session.pb.as_ref() {
                 bar.set_length(session.state.total_steps as u64);
             }
+            // Best effort: the total is progress display, never a reason to fail the run.
+            let _ = db::runs::raise_steps_total(
+                &session.request.cfg.db_path,
+                &session.started.run_id,
+                session.state.total_steps,
+            )
+            .await;
         }
     }
 

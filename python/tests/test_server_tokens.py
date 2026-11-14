@@ -303,3 +303,12 @@ def test_bootstrap_is_consumed_once_across_two_server_processes(project):
         if second:
             second.kill()
         first.kill()
+
+
+def test_a_blank_token_is_unset_for_the_cli_and_client(project, monkeypatch):
+    # A container or `.env` that exports `BARCA_SERVER_TOKEN=` means "no token", not a bad one.
+    result = cli(project, "queue", "--server", "http://127.0.0.1:9", "--json", token="")
+    assert result.returncode != 2, result.stderr
+    assert "BARCA_SERVER_TOKEN" not in result.stderr
+    monkeypatch.setenv("BARCA_SERVER_TOKEN", "")
+    assert Client("http://127.0.0.1:9")._authorization is None

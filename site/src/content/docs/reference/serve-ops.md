@@ -20,7 +20,8 @@ Every run the server accepts joins its run queue: `POST /runs` and the older tri
 start in the order they were accepted, at most `--max-runs` at once (`[server] max_runs` in
 `barca.toml`, default one per core); the others wait with status `pending`. `POST /runs` answers
 `202 {"run_id", "status", "position"}`: `running` when it started at once, or `pending` and its
-place in the queue (1 = next).
+place in the queue (1 = next). A run someone asked for (API, UI, CLI) starts ahead of waiting scheduled runs, and while a
+scheduled run holds a slot and every slot is taken, it may use one extra slot of its own.
 
 ```bash
 barca serve pipeline.py --max-runs 2           # two runs at a time; the rest wait, in order
