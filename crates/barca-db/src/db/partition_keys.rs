@@ -13,25 +13,24 @@ pub struct FailedKeys {
     pub keys: Vec<String>,
 }
 
+/// The keys whose latest attempt failed, in key order (see [`failed_partition_keys`]).
+pub(super) const FAILED_KEYS: &str = "SELECT DISTINCT f.node_id FROM materializations f \
+     WHERE f.status = 'failed' AND instr(f.node_id, '[') > 0 AND NOT EXISTS ( \
+     SELECT 1 FROM materializations s WHERE s.node_id = f.node_id AND s.status = 'success' \
+     AND s.artifact_path IS NOT NULL AND s.id > f.id) \
+     ORDER BY +f.node_id";
+
 /// [`FailedKeys`] of every partitioned node with some. Reads `idx_mat_failed`, then one
-/// `idx_mat_node_latest` probe per failed key, so a node's healthy keys cost nothing.
+/// `idx_mat_node_latest` probe per failed key, so a node's healthy keys cost nothing. The `+`
+/// keeps the sort from choosing a `node_id` index, which read every row of the table to find
+/// the failed ones (160 ms for 470k rows, on each status read).
 pub async fn failed_partition_keys(
     db_path: &str,
 ) -> Result<HashMap<String, FailedKeys>, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     let failure = |e: libsql::Error| BarcaError::Db(format!("failed to query failed keys: {e}"));
-    let mut rows = conn
-        .query(
-            "SELECT DISTINCT f.node_id FROM materializations f \
-             WHERE f.status = 'failed' AND instr(f.node_id, '[') > 0 AND NOT EXISTS ( \
-               SELECT 1 FROM materializations s WHERE s.node_id = f.node_id AND s.status = 'success' \
-               AND s.artifact_path IS NOT NULL AND s.id > f.id) \
-             ORDER BY f.node_id",
-            (),
-        )
-        .await
-        .map_err(failure)?;
+    let mut rows = conn.query(FAILED_KEYS, ()).await.map_err(failure)?;
     let mut out: HashMap<String, FailedKeys> = HashMap::new();
     while let Some(row) = rows.next().await.map_err(failure)? {
         let node = row.get::<String>(0).unwrap_or_default();

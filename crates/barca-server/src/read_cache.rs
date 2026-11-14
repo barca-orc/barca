@@ -238,6 +238,9 @@ pub struct ReadCache {
     /// The last node ages read, and the database state they are of ([`AppState::cached_ages`]).
     /// An async lock, held while they are read, so that concurrent polls read them once.
     ages: tokio::sync::Mutex<Option<(Stamp, NodeAges)>>,
+    /// What node ages are folded from, kept so that a read after a run recorded a few rows
+    /// reads those rows only ([`barca_core::db::NodeAgesIndex`]).
+    ages_index: Arc<tokio::sync::Mutex<barca_core::db::NodeAgesIndex>>,
     /// Bumped each time a recomputation of the latest results ends.
     caught_up: tokio::sync::watch::Sender<u64>,
     /// Held while a status result is computed, so that concurrent polls compute it once.
@@ -575,25 +578,21 @@ impl AppState {
 
     /// Every node's age for the database in state `db`: one pass over its rows, kept until it
     /// changes, so that a view polling one group does not pay for it on every poll.
-    pub(crate) async fn cached_ages<F, Fut>(
+    pub(crate) async fn cached_ages(
         &self,
         db: &Stamp,
-        compute: F,
-    ) -> Result<NodeAges, BarcaError>
-    where
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: std::future::Future<
-                Output = Result<HashMap<String, barca_core::db::NodeAge>, BarcaError>,
-            > + Send
-            + 'static,
-    {
+        db_path: &str,
+    ) -> Result<NodeAges, BarcaError> {
         let mut kept = self.reads.ages.lock().await;
         if let Some((stamp, ages)) = kept.as_ref()
             && stamp == db
         {
             return Ok(ages.clone());
         }
-        let ages = Arc::new(off_the_workers(compute).await?);
+        let (index, db_path) = (self.reads.ages_index.clone(), db_path.to_string());
+        let ages = Arc::new(
+            off_the_workers(move || async move { index.lock().await.read(&db_path).await }).await?,
+        );
         *kept = Some((db.clone(), ages.clone()));
         Ok(ages)
     }

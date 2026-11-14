@@ -223,6 +223,11 @@ every database from before 0.29.2 (#629):
   that read every row of each run). Opening an older database builds them, a few seconds for
   400k rows and about ten for 3M; older binaries ignore them. A node's partition-key rows (`<node>[...]`) are read as the range `node_id >=
   '<node>[' AND node_id < '<node>\'` of `idx_mat_node_run`.
+- `idx_mat_run_node (run_id, node_id)` (added after 0.42.0, a full index): one node's rows in one
+  run, which `GET /state` totals for each node's newest run, as two seeks (the node's own row,
+  then its keys' range). With `idx_mat_run` alone that read every row of the run once per node.
+  Opening an older database builds it, under half a second for 470k rows; older binaries ignore
+  it.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
   `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,
   `running`, or `draining` (0.31.0: in flight when the server was told to stop); `spec` is the server's description of the run (JSON: command, targets, nodes,

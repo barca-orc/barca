@@ -211,12 +211,7 @@ async fn state_rows_for_targets(
     let db_state = state.db_state();
     let snapshot = snapshot_db(state).await?;
     // Read at most once per database state, whatever the scope (`read_cache`).
-    let ages = state
-        .cached_ages(&db_state, {
-            let snapshot = snapshot.clone();
-            move || async move { db::node_ages(&snapshot.path).await }
-        })
-        .await?;
+    let ages = state.cached_ages(&db_state, &snapshot.path).await?;
     let (status, durations) = if targets.is_empty() {
         // Together: after a change, each waits a moment for its new value (`read_cache`).
         let (status, durations) = tokio::join!(

@@ -67,9 +67,11 @@ pub struct AssetRunEntry {
 
 /// The elapsed seconds of each node's last `window` successful materializations, its partition
 /// keys' rows folded into the node (newest first). What `GET /state` reports as typical
-/// durations. Both the node's own rows and its keys' rows are read through the node id
-/// index, so sparse or failed-only partition histories never scan unrelated nodes. Each
-/// query returns at most `window` successes; merging them preserves global recency.
+/// durations. Kept per database file and window in this process: a read after a run recorded
+/// a few rows reads the durations of the nodes those rows belong to, not of all of them (two
+/// queries per node, 250 ms for 650 nodes on every poll of a busy server). The columns read are
+/// never updated, so only added rows can change a node's durations; rows deleted since make
+/// every node's be read again ([`super::history::changed_since`]).
 pub async fn recent_durations(
     db_path: &str,
     base_ids: &[String],
@@ -77,67 +79,125 @@ pub async fn recent_durations(
 ) -> Result<HashMap<String, Vec<f64>>, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_h, conn) = open_conn(db_path).await?;
-    let mut out = HashMap::new();
-    for base in base_ids {
-        // (row id, elapsed)
-        let mut found: Vec<(i64, f64)> = Vec::new();
-        let mut rows = conn
-            .query(
-                concat!(
-                    "SELECT id, elapsed_seconds FROM materializations ",
-                    by_node_run!(),
-                    " WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
-                     ORDER BY id DESC LIMIT ?2"
-                ),
-                vec![
-                    libsql::Value::Text(base.clone()),
-                    libsql::Value::Integer(window as i64),
-                ],
-            )
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
-        {
-            if let (Ok(id), Ok(e)) = (row.get::<i64>(0), row.get::<f64>(1)) {
-                found.push((id, e));
+    let failure = |e| BarcaError::Db(format!("failed to read durations: {e}"));
+    let file = std::fs::canonicalize(db_path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| db_path.to_string());
+    let mut kept = DURATIONS.lock().await;
+    let key = (file, window);
+    super::history::make_room(&mut kept, &key);
+    let index = kept.entry(key).or_default();
+    conn.execute("BEGIN", ()).await.map_err(failure)?;
+    let result = index.read(&conn, db_path, base_ids, window).await;
+    let _ = conn.execute("COMMIT", ()).await;
+    result
+}
+
+static DURATIONS: std::sync::LazyLock<
+    tokio::sync::Mutex<HashMap<(String, usize), DurationsIndex>>,
+> = std::sync::LazyLock::new(Default::default);
+
+#[derive(Default)]
+struct DurationsIndex {
+    mark: Option<super::history::Mark>,
+    /// base id -> its durations, empty for a node with none.
+    nodes: HashMap<String, Vec<f64>>,
+}
+
+impl DurationsIndex {
+    async fn read(
+        &mut self,
+        conn: &libsql::Connection,
+        db_path: &str,
+        base_ids: &[String],
+        window: usize,
+    ) -> Result<HashMap<String, Vec<f64>>, BarcaError> {
+        match super::history::changed_since(conn, db_path, &mut self.mark).await? {
+            Some(touched) => {
+                for base in touched {
+                    self.nodes.remove(&base);
+                }
+            }
+            None => self.nodes.clear(),
+        }
+        let mut out = HashMap::new();
+        for base in base_ids {
+            if !self.nodes.contains_key(base) {
+                let found = durations_of(conn, base, window).await?;
+                self.nodes.insert(base.clone(), found);
+            }
+            let found = &self.nodes[base];
+            if !found.is_empty() {
+                out.insert(base.clone(), found.clone());
             }
         }
-        drop(rows);
-        let (lo, hi) = key_range(base);
-        // Restrict the scan to this node's keys. Walking global row-id windows can
-        // read the entire database once per sparse or failed-only partitioned node.
-        let mut rows = conn
-            .query(
-                concat!(
-                    "SELECT id, elapsed_seconds FROM materializations ",
-                    by_node_run!(),
-                    " WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
-                     AND elapsed_seconds IS NOT NULL ORDER BY id DESC LIMIT ?3"
-                ),
-                libsql::params![lo, hi, window as i64],
-            )
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
-        {
-            if let (Ok(id), Ok(elapsed)) = (row.get::<i64>(0), row.get::<f64>(1)) {
-                found.push((id, elapsed));
-            }
-        }
-        if found.is_empty() {
-            continue;
-        }
-        found.sort_unstable_by_key(|(id, _)| std::cmp::Reverse(*id));
-        found.truncate(window);
-        out.insert(base.clone(), found.into_iter().map(|(_, e)| e).collect());
+        Ok(out)
     }
-    Ok(out)
+}
+
+/// [`recent_durations`] of one node. Both the node's own rows and its keys' rows are read
+/// through the node id index, so sparse or failed-only partition histories never scan
+/// unrelated nodes. Each query returns at most `window` successes; merging them preserves
+/// global recency.
+pub(super) async fn durations_of(
+    conn: &libsql::Connection,
+    base: &str,
+    window: usize,
+) -> Result<Vec<f64>, BarcaError> {
+    // (row id, elapsed)
+    let mut found: Vec<(i64, f64)> = Vec::new();
+    let mut rows = conn
+        .query(
+            concat!(
+                "SELECT id, elapsed_seconds FROM materializations ",
+                by_node_run!(),
+                " WHERE node_id = ?1 AND status = 'success' AND elapsed_seconds IS NOT NULL \
+                 ORDER BY id DESC LIMIT ?2"
+            ),
+            vec![
+                libsql::Value::Text(base.to_string()),
+                libsql::Value::Integer(window as i64),
+            ],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
+    {
+        if let (Ok(id), Ok(e)) = (row.get::<i64>(0), row.get::<f64>(1)) {
+            found.push((id, e));
+        }
+    }
+    drop(rows);
+    let (lo, hi) = key_range(base);
+    // Restrict the scan to this node's keys. Walking global row-id windows can
+    // read the entire database once per sparse or failed-only partitioned node.
+    let mut rows = conn
+        .query(
+            concat!(
+                "SELECT id, elapsed_seconds FROM materializations ",
+                by_node_run!(),
+                " WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                 AND elapsed_seconds IS NOT NULL ORDER BY id DESC LIMIT ?3"
+            ),
+            libsql::params![lo, hi, window as i64],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to query durations: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read durations: {e}")))?
+    {
+        if let (Ok(id), Ok(elapsed)) = (row.get::<i64>(0), row.get::<f64>(1)) {
+            found.push((id, elapsed));
+        }
+    }
+    found.sort_unstable_by_key(|(id, _)| std::cmp::Reverse(*id));
+    found.truncate(window);
+    Ok(found.into_iter().map(|(_, e)| e).collect())
 }
 
 /// Get aggregated stats for a specific asset/node.

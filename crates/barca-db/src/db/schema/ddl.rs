@@ -137,6 +137,10 @@ pub(crate) const INDEXES: &[&str] = &[
     // listed: the rows in this index, not every row of the run (115k for a run of a 115k-key
     // node, read again on each poll of the runs list).
     "CREATE INDEX IF NOT EXISTS idx_mat_failed ON materializations(run_id, id) WHERE status = 'failed'",
+    // One node's rows in one run, which `GET /state` totals for every node's newest run: a
+    // seek to the node's rows, not every row of the run (95k rows across 295 nodes for one
+    // run of a real project, read once per node on each poll).
+    "CREATE INDEX IF NOT EXISTS idx_mat_run_node ON materializations(run_id, node_id)",
 ];
 
 /// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.

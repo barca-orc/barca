@@ -67,7 +67,7 @@ pub use failure::{FailureFacts, LastSuccess, SourceLine, failure_facts, raised_a
 pub use history::MaterializationRecord;
 pub use history::changed_bytes_in_run;
 use history::query_i64;
-pub use history::{BytesChange, NodeAge, RunTotals, node_ages};
+pub use history::{BytesChange, NodeAge, NodeAgesIndex, RunTotals, node_ages};
 pub use history::{NodeHistory, node_histories};
 pub use logs::insert_logs;
 pub use logs::{LogEntry, get_logs};
@@ -75,9 +75,9 @@ pub use materializations::last_output_hashes;
 pub use materializations::persist_outputs;
 use materializations::record_definitions;
 pub use materializations::{
-    DEFINITION_KEY, adopt_store_digests, confirmed_object, evicted_among, evicted_paths, key_range,
-    last_success_components, latest_success, latest_success_id, partition_artifacts_for_config,
-    touch_read, touch_read_in, touch_read_on,
+    DEFINITION_KEY, adopt_store_digests, confirmed_object, evicted_among, evicted_among_on,
+    key_range, last_success_components, latest_success, latest_success_id,
+    partition_artifacts_for_config, touch_read, touch_read_in, touch_read_on,
 };
 pub use materializations::{max_materialization_id, succeeded_since};
 pub use partition_keys::FailedKeys;

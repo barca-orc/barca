@@ -179,7 +179,7 @@ pub async fn sql_views(
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect();
-    let dag = state.current_dag().await?;
+    let dag = state.inspect_dag().await?;
     let snapshot = snapshot_db(&state).await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();

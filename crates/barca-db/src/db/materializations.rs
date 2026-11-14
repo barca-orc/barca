@@ -685,56 +685,42 @@ pub async fn touch_read_in(conn: &libsql::Connection, paths: &[String]) -> bool 
 /// Of `paths` (recorded artifact paths), those whose latest successful row was evicted to stay
 /// under the cache limit: their missing file is an eviction, not a deletion behind barca's back.
 pub async fn evicted_among(db_path: &str, paths: &[&str]) -> std::collections::HashSet<String> {
-    let mut out = std::collections::HashSet::new();
     if paths.is_empty() || !Path::new(db_path).exists() {
-        return out;
+        return Default::default();
     }
     let _g = db_guard_for(db_path).await;
     let Ok((_db, conn)) = open_conn(db_path).await else {
-        return out;
+        return Default::default();
     };
-    for path in paths {
+    evicted_among_on(&conn, paths).await
+}
+
+/// [`evicted_among`] on an open connection: of `paths`, those whose newest successful result
+/// the cache size limit deleted. One query per thousand paths, each a seek of `idx_mat_path`.
+pub async fn evicted_among_on(
+    conn: &libsql::Connection,
+    paths: &[&str],
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for chunk in paths.chunks(1000) {
+        let Ok(list) = serde_json::to_string(chunk) else {
+            return out;
+        };
         let Ok(mut rows) = conn
             .query(
-                "SELECT evicted_at IS NOT NULL FROM materializations WHERE artifact_path = ?1 \
-                 AND status = 'success' ORDER BY id DESC LIMIT 1",
-                [*path],
+                "SELECT p.value FROM json_each(?1) p WHERE (SELECT evicted_at IS NOT NULL \
+                 FROM materializations WHERE artifact_path = p.value AND status = 'success' \
+                 ORDER BY id DESC LIMIT 1)",
+                [list],
             )
             .await
         else {
             return out;
         };
-        if let Ok(Some(row)) = rows.next().await
-            && row.get::<i64>(0).unwrap_or(0) != 0
-        {
-            out.insert(path.to_string());
-        }
-    }
-    out
-}
-
-/// Every recorded artifact path whose latest successful row is evicted (`barca status`,
-/// `--dry-run`). Empty when the database predates the column.
-pub async fn evicted_paths(cache: &CacheReader) -> std::collections::HashSet<String> {
-    let mut out = std::collections::HashSet::new();
-    let Ok(mut rows) = cache
-        .conn()
-        .query(
-            "WITH evicted AS (SELECT artifact_path, MAX(id) AS id \
-             FROM materializations INDEXED BY idx_mat_evicted WHERE evicted_at IS NOT NULL \
-             AND status = 'success' GROUP BY artifact_path) \
-             SELECT e.artifact_path FROM evicted e WHERE NOT EXISTS ( \
-             SELECT 1 FROM materializations n INDEXED BY idx_mat_path \
-             WHERE n.artifact_path = e.artifact_path AND n.status = 'success' AND n.id > e.id)",
-            (),
-        )
-        .await
-    else {
-        return out;
-    };
-    while let Ok(Some(row)) = rows.next().await {
-        if let Ok(path) = row.get::<String>(0) {
-            out.insert(path);
+        while let Ok(Some(row)) = rows.next().await {
+            if let Ok(path) = row.get::<String>(0) {
+                out.insert(path);
+            }
         }
     }
     out
@@ -856,7 +842,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            super::evicted_paths(&cache).await,
+            super::evicted_among_on(cache.conn(), &["a", "b"]).await,
             std::collections::HashSet::from(["b".into()])
         );
         assert!(
