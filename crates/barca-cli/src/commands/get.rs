@@ -31,7 +31,7 @@ pub(crate) async fn get_cmd(
 ) -> Result<(), barca_core::BarcaError> {
     let mut cfg = barca_core::config::resolve(env)?;
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
-    cfg.ledger = ledger;
+    cfg.ledger = ledger.map(barca_core::ledger::Ledger::attach);
     // The server backs up the ledger; this machine backs up nothing (barca docs server-mode).
     cfg.as_server_client();
     if mode.url_expires.is_some() {
@@ -311,7 +311,7 @@ impl Reader<'_> {
         // first, so it is signed rather than reported missing from the store.
         let stored: Vec<String> = requests.iter().map(|r| r.uri.clone()).collect();
         let interrupt = super::execute::cancel_on_ctrl_c();
-        barca_core::pending_uploads::upload_now(self.python, self.cfg, &stored, &interrupt.cancel)
+        barca_core::transfer::upload_pending_now(self.python, self.cfg, &stored, &interrupt.cancel)
             .await?;
         let answers = barca_core::values::sign_urls(self.python, self.cfg, &requests, secs).await;
         let mut out = Vec::with_capacity(answers.len());

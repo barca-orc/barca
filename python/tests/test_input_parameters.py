@@ -4,7 +4,7 @@ The worker calls a step as `fn(**kwargs)`. Until 0.28 an `inputs=` key that is n
 or a parameter that nothing fills, failed as a `TypeError` in the worker after every upstream
 had run, and `barca list` and `--dry-run` said nothing. Now both are a usage error (exit 2) on
 every command that reads the file, before any step runs. The parser cases are in
-`crates/barca-core/src/input_params.rs`; this file tests what a user sees.
+`crates/barca-compile/src/input_params.rs`; this file tests what a user sees.
 """
 
 from __future__ import annotations

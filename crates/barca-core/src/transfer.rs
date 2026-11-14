@@ -29,20 +29,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-/// Display a location without URI passwords or signed query parameters.
-pub fn diagnostic_uri(uri: &str) -> String {
-    if local_path(uri).is_some() {
-        return uri.to_string();
-    }
-    let plain = uri.split(['?', '#']).next().unwrap_or(uri);
-    if let Some((scheme, rest)) = plain.split_once("://")
-        && let Some((credentials, host)) = rest.split_once('@')
-        && credentials.contains(':')
-    {
-        return format!("{scheme}://<redacted>@{host}");
-    }
-    plain.to_string()
-}
+pub use crate::uri::diagnostic_uri;
+pub(crate) use crate::uri::local_path;
 
 /// Shared run-owned upload staging identity, handed to workers and the helper.
 pub(crate) fn upload_snapshot_prefix(run_id: &str) -> std::io::Result<PathBuf> {
@@ -111,16 +99,6 @@ impl ArtifactLayout {
         }
         Some(out)
     }
-}
-
-/// The file a recorded artifact path names on this machine: a plain path or a
-/// `file://` URI. None for a remote URI. The same rule as
-/// `barca._storage.local_path_of`, which is what a worker applies to the path.
-pub(crate) fn local_path(recorded: &str) -> Option<&Path> {
-    if let Some(file) = recorded.strip_prefix("file://") {
-        return Some(Path::new(file));
-    }
-    (!recorded.contains("://")).then(|| Path::new(recorded))
 }
 
 // ─── Client ──────────────────────────────────────────────────────────────────
@@ -864,6 +842,18 @@ async fn io_task(mut stream: tokio::net::UnixStream, mut req_rx: mpsc::Unbounded
     while let Some(Request { reply: tx, .. }) = req_rx.recv().await {
         let _ = tx.send(Err(Failed::helper_exited()));
     }
+}
+
+/// Upload this host's pending results ([`crate::pending_uploads`]) among `store_paths` now (see
+/// [`crate::execution::upload_pending`]): `barca get -o url` calls it before signing, so a
+/// `local only` result is uploaded and then signed rather than reported missing.
+pub async fn upload_pending_now(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    store_paths: &[String],
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(), crate::BarcaError> {
+    crate::execution::upload_pending(python, cfg, store_paths, cancel).await
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

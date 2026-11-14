@@ -1,0 +1,178 @@
+//! The metadata write boundary (architecture-cleanup step 2b, #800 item 16): every
+//! `INSERT`/`UPDATE`/`DELETE`/`REPLACE` of `.barca/metadata.db` is issued by an owner in `db/`
+//! (`barca-db/src/db/` since #905 step 4; `db/schema/` holds the migrations). Everything else,
+//! barca-db's `recording.rs` included, calls a named owner function and keeps its own
+//! transaction and eligibility rules. `sql/` (read-only) is outside the rule, and so is test
+//! code. Every crate is scanned.
+
+use crate::source_scan::{
+    Tok, is_cfg_test, lex, rust_files, skip_cfg_test_item, test_module_files,
+};
+use std::path::Path;
+
+/// Owners: a file here, or under a directory here, may write. Paths are as
+/// [`metadata_writes_go_through_an_owner`] names them: barca-core's under its `src/`, another
+/// crate's as `<crate>/src/...`.
+const OWNERS: &[&str] = &["barca-db/src/db/", "sql/"];
+
+/// Files that still write outside an owner, or whose matches are not SQL, each with why.
+const ALLOWED: &[(&str, &str)] = &[
+    (
+        "barca-cli/src/client/pins.rs",
+        "`DELETE {path}` names an HTTP request to a server, not SQL",
+    ),
+    (
+        "barca-cli/src/client/runs.rs",
+        "`DELETE {path}` names an HTTP request to a server, not SQL",
+    ),
+];
+
+/// What a scan of one file found: write statements in non-test code (line, start of the SQL)
+/// and the `#[cfg(test)] mod name;` files it declares.
+#[derive(Debug, Default)]
+struct Scan {
+    writes: Vec<(usize, String)>,
+    test_modules: Vec<String>,
+}
+
+fn starts_a_write(text: &str) -> bool {
+    let text = text.trim_start();
+    ["INSERT", "UPDATE", "DELETE", "REPLACE"].iter().any(|kw| {
+        text.strip_prefix(kw)
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+    })
+}
+
+fn scan(src: &str) -> Scan {
+    let toks = lex(src);
+    let mut out = Scan::default();
+    let mut i = 0;
+    while i < toks.len() {
+        if is_cfg_test(&toks, i) {
+            let (next, name) = skip_cfg_test_item(&toks, i);
+            out.test_modules.extend(name);
+            i = next;
+            continue;
+        }
+        if let Tok::Str(text, line) = &toks[i]
+            && starts_a_write(text)
+        {
+            let sql: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            out.writes.push((*line, sql.chars().take(60).collect()));
+        }
+        i += 1;
+    }
+    out
+}
+
+#[test]
+fn metadata_writes_go_through_an_owner() {
+    // This crate's files by their path under `src/`; every other crate's (#905 step 4) as
+    // `<crate>/src/...`, so `barca-db/src/db/` is the owner wherever the scan runs from.
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut names: Vec<String> = std::fs::read_dir(&crates)
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.unwrap();
+            let name = e.file_name().into_string().unwrap();
+            e.path().join("src").is_dir().then_some(name)
+        })
+        .collect();
+    names.sort();
+    assert!(
+        names.iter().any(|n| n == "barca-db") && names.iter().any(|n| n == "barca-core"),
+        "the scan finds the crates: {names:?}"
+    );
+    let mut test_files = Vec::new();
+    let mut found = Vec::new();
+    for krate in &names {
+        let prefix = if krate == "barca-core" {
+            String::new()
+        } else {
+            format!("{krate}/src/")
+        };
+        let root = crates.join(krate).join("src");
+        let mut files = Vec::new();
+        rust_files(&root, &mut files);
+        files.sort();
+        let rel_of = |file: &Path| {
+            let rel = file.strip_prefix(&root).unwrap().to_str().unwrap();
+            format!("{prefix}{}", rel.replace('\\', "/"))
+        };
+        for file in &files {
+            let scanned = scan(&std::fs::read_to_string(file).unwrap());
+            for m in &scanned.test_modules {
+                for t in test_module_files(&root, file, m) {
+                    test_files.push(format!("{prefix}{t}"));
+                }
+            }
+            found.push((rel_of(file), scanned.writes));
+        }
+    }
+    let mut offenders = Vec::new();
+    let mut allowed_used = Vec::new();
+    for (rel, writes) in found {
+        if writes.is_empty()
+            || test_files.contains(&rel)
+            || OWNERS
+                .iter()
+                .any(|o| rel == *o || (o.ends_with('/') && rel.starts_with(o)))
+        {
+            continue;
+        }
+        if ALLOWED.iter().any(|(f, _)| *f == rel) {
+            allowed_used.push(rel);
+            continue;
+        }
+        for (line, sql) in writes {
+            offenders.push(format!("  {rel}:{line}: {sql}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "metadata writes outside an owner (move each into a named function in barca-db's db/, \
+         keeping the caller's transaction):\n{}",
+        offenders.join("\n")
+    );
+    let stale: Vec<_> = ALLOWED
+        .iter()
+        .filter(|(f, _)| !allowed_used.iter().any(|u| u == f))
+        .map(|(f, _)| *f)
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "allowlisted files no longer write: {stale:?}"
+    );
+}
+
+#[test]
+fn the_scan_sees_writes_and_skips_test_code() {
+    let src = r####"
+        const A: &str = "SELECT 1";
+        fn f() {
+            conn.execute("
+                INSERT INTO t VALUES (1)", ());
+            let _c = '"'; let _l: &'static str = "x";
+            conn.execute(r#"UPDATE t SET a = "b""#, ());
+            // "DELETE FROM in a comment"
+            /* "DELETE FROM in /* nested */ block" */
+            conn.execute("\n DELETE FROM t", ());
+            conn.execute(b"REPLACE INTO t VALUES (2)", ());
+            let _words = "UPDATED is not a statement";
+        }
+        #[cfg(test)]
+        fn helper() { conn.execute("DELETE FROM t", ()); }
+        #[cfg(test)]
+        mod tests {
+            fn g() { conn.execute("INSERT INTO t VALUES (3)", ()); }
+        }
+        #[cfg(test)]
+        mod more_tests;
+        fn after() { conn.execute("DELETE FROM after", ()); }
+    "####;
+    let scanned = scan(src);
+    let lines: Vec<usize> = scanned.writes.iter().map(|(l, _)| *l).collect();
+    assert_eq!(lines, vec![4, 7, 10, 11, 22], "{:?}", scanned.writes);
+    assert_eq!(scanned.writes[0].1, "INSERT INTO t VALUES (1)");
+    assert_eq!(scanned.test_modules, vec!["more_tests".to_string()]);
+}

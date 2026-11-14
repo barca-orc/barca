@@ -5,7 +5,7 @@ The rule is in `barca docs assets`, "Unused inputs"; the JSON shape in `barca do
 (stderr line and the `warnings` array, the same list on both), for which steps (the planned cone
 only, once per step input), and that it never changes an exit code. The static rule itself
 (what counts as a use, what is never reported) is unit-tested in
-`crates/barca-core/src/unused_inputs.rs`; the cases a user is most likely to meet are repeated
+`crates/barca-compile/src/unused_inputs.rs`; the cases a user is most likely to meet are repeated
 here through the real binary.
 """
 
@@ -724,7 +724,7 @@ def test_a_call_on_a_project_module_is_never_narrowed_but_a_known_package_is(tmp
 def test_the_manual_lists_exactly_the_packages_the_check_knows_to_be_unrelated(tmp_path):
     topic = barca(tmp_path, "docs", "assets").stdout
     documented = manual_list(topic, "Unrelated packages:")
-    source = Path(__file__).resolve().parents[2] / "crates/barca-core/src/unrelated_modules.rs"
+    source = Path(__file__).resolve().parents[2] / "crates/barca-compile/src/unrelated_modules.rs"
     if not source.exists():
         pytest.skip("the Rust sources are not in this checkout")
     block = source.read_text().split("pub const THIRD_PARTY: &[&str] = &[")[1].split("];")[0]

@@ -112,8 +112,7 @@ pub(crate) async fn pin_cmd(
             choice,
             reason,
         } => {
-            barca_core::layout::ensure_env_dirs(&cfg.env).map_err(engine)?;
-            barca_core::db::init_db(&cfg.db_path)
+            barca_core::queries::open_metadata(&cfg)
                 .await
                 .map_err(engine)?;
             let pinned = barca_core::pins::pin(
@@ -134,8 +133,7 @@ pub(crate) async fn pin_cmd(
             reason,
         } => {
             let supplied = read_supplied(path)?;
-            barca_core::layout::ensure_env_dirs(&cfg.env).map_err(engine)?;
-            barca_core::db::init_db(&cfg.db_path)
+            barca_core::queries::open_metadata(&cfg)
                 .await
                 .map_err(engine)?;
             let pinned = barca_core::pins::pin_upload(

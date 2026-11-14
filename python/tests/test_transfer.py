@@ -2,7 +2,7 @@
 
 The helper is driven in-process over a socketpair (the coordinator's end is
 `peer`), so the memory:// filesystem is shared with the test. Wire format is
-pinned by crates/barca-core/src/protocol.rs (TransferRequest/TransferReply).
+pinned by crates/barca-engine/src/protocol.rs (TransferRequest/TransferReply).
 """
 
 import hashlib
@@ -536,7 +536,7 @@ def _store_file(tmp_path, body: bytes):
 
 class TestSignals:
     """Ctrl-C is the coordinator's to act on; it stops the helper with SIGTERM
-    (crates/barca-core/src/helper_proc.rs)."""
+    (crates/barca-engine/src/helper_proc.rs)."""
 
     def test_sigint_is_ignored_and_the_helper_keeps_serving(self, process_helper, tmp_path):
         h = process_helper()

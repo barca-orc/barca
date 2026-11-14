@@ -31,6 +31,13 @@ input bytes), the rest of step 4 (#654) and step 5 (#655, #656). The structural 
 `runs.rs`/`client.rs` splits, store inspection out of `status.rs`, a narrower `barca-core` pub
 surface) come from a second audit on 2026-11-04 and are listed only in DIRECTION.md.
 
+Crate split, 2026-11-13: `barca-core` was split into `barca-model`, `barca-compile`,
+`barca-db` and `barca-engine` ([#905](https://github.com/barca-orc/barca/issues/905), PRs
+#906–#916 and the close-out after them), which also narrows the `barca-core` pub surface
+listed above. The crate map now lives in [CLAUDE.md](../../CLAUDE.md) and on the site's
+Architecture page; decisions, measurements and follow-ups are in [crate-split.md](crate-split.md).
+The source links below point at the files' current crates.
+
 Behavior owners remain in [the specification index](../../specs/README.md). The target responsibilities
 below follow [approved ownership](../../specs/behavior/current-state-and-execution.md),
 [operations](../../specs/behavior/operations.md), and [resource bounds](../../specs/behavior/resources.md).
@@ -70,11 +77,11 @@ in structural refactors; change them explicitly to meet the approved operations 
 
 ### Preparation, decisions and execution
 
-[Loading](../../crates/barca-core/src/load.rs), [project import analysis](../../crates/barca-core/src/project_modules.rs),
-[target resolution](../../crates/barca-core/src/targets.rs) and [planning](../../crates/barca-core/src/planner.rs)
+[Loading](../../crates/barca-compile/src/load.rs), [project import analysis](../../crates/barca-compile/src/project_modules.rs),
+[target resolution](../../crates/barca-compile/src/targets.rs) and [planning](../../crates/barca-compile/src/planner.rs)
 prepare a dependency cone. [Cache decisions](../../crates/barca-core/src/cache.rs) and
 [incremental proofs](../../crates/barca-core/src/incremental.rs) decide which work can be reused.
-[Dispatch](../../crates/barca-core/src/dispatch.rs) expands partitions and builds provided inputs.
+[Dispatch](../../crates/barca-engine/src/dispatch.rs) expands partitions and builds provided inputs.
 
 [Execution](../../crates/barca-core/src/execution.rs) joins these pieces. Its `RunSession` owns
 a recorder, worker pool and store synchronization; `RunState` retains decision state, outputs,
@@ -83,8 +90,8 @@ recovery and finalization. This is the main concentration of responsibilities to
 The existing `selection.rs` narrows requested partitions; its name does not make it an owner
 of ordered current-result publication.
 
-[Coordinator](../../crates/barca-core/src/coordinator.rs) already separates scheduling state
-from [worker I/O](../../crates/barca-core/src/io_loop.rs). Keep that separation. The worker pool
+[Coordinator](../../crates/barca-engine/src/coordinator.rs) already separates scheduling state
+from [worker I/O](../../crates/barca-engine/src/io_loop.rs). Keep that separation. The worker pool
 is reused across phases of one run, while [capacity](../../crates/barca-core/src/serve/capacity.rs)
 can be shared across server runs. Sharing capacity does not deduplicate matching work.
 The coordinator's per-item retries are also distinct from a new user-requested invocation attempt.
@@ -99,15 +106,15 @@ uses an unbounded channel and run state retains per-key maps: current warm incre
 optimizations are not a bound on cold/full-domain execution.
 
 [Freshness state](../../crates/barca-core/src/freshness.rs), incremental proof saving and
-[database operations](../../crates/barca-core/src/db/mod.rs) participate in current-state decisions.
-[Observation](../../crates/barca-core/src/observation.rs) and
-[source observations](../../crates/barca-core/src/source_observation.rs) provide evidence;
+[database operations](../../crates/barca-db/src/db/mod.rs) participate in current-state decisions.
+[Observation](../../crates/barca-engine/src/observation.rs) and
+[source observations](../../crates/barca-model/src/source_observation.rs) provide evidence;
 their hashes do not supply a monotonic reconciliation order. Result history, current
 membership/selection and freshness evidence need explicit responsibilities before multiple
 versions can publish concurrently.
 
 [Store synchronization](../../crates/barca-core/src/store_sync.rs),
-[transfer](../../crates/barca-core/src/transfer.rs), [pending uploads](../../crates/barca-core/src/pending_uploads.rs)
+[transfer](../../crates/barca-core/src/transfer.rs), [pending uploads](../../crates/barca-db/src/pending_uploads.rs)
 and the [server ledger](../../crates/barca-core/src/ledger.rs) handle availability and sharing
 of completed artifacts. [Upload receipts](../../specs/interfaces/artifact-upload-receipts.md) protect producer
 upload evidence, not every downstream reader's input lifetime. [GC](../../crates/barca-core/src/gc/mod.rs)
@@ -124,7 +131,7 @@ events with cache state. A metadata read snapshot is not an execution input snap
 Explicit checking revisions, independent availability and bounded cold inspection remain
 acceptance obligations in [inspection](../../specs/behavior/inspection.md).
 
-[Run owner diagnosis](../../crates/barca-core/src/run_owner.rs) distinguishes proven alive,
+[Run owner diagnosis](../../crates/barca-db/src/run_owner.rs) distinguishes proven alive,
 proven gone and unknown owners. This protects against treating an unreachable owner as dead;
 retain that distinction. [Recover](../../crates/barca-core/src/recover.rs) primarily recovers
 missing cached artifacts; it is not the proposed shared-computation ownership manager.
@@ -275,6 +282,6 @@ refactor, snapshot isolation, shared execution or performance improvement ships 
 
 The [behavioral conformance series](behavior-conformance.md) records the first implementation
 slices, exact obligation scenarios and remaining decision gates. Durable result-history writes
-now share [one recording owner](../../crates/barca-core/src/persist/recording.rs); receipt
+now share [one recording owner](../../crates/barca-db/src/recording.rs); receipt
 eligibility and transaction lifetimes remain with their existing callers. This is a structural
 boundary, not ordered current-state publication.

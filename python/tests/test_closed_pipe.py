@@ -324,7 +324,7 @@ def test_a_write_that_fails_for_another_reason_is_an_error(materialized: Path) -
 # ─── What a step does below Python's print ────────────────────────────────────
 #
 # A worker's stdout and stderr are barca's stderr. When that is a pipe, the workers get a pipe
-# barca owns and barca forwards (`crates/barca-core/src/term.rs`), so nothing a step does can
+# barca owns and barca forwards (`crates/barca-model/src/term.rs`), so nothing a step does can
 # meet a pipe without a reader: not a child process, not a raw write, not a C library.
 
 CHILDREN = """

@@ -34,7 +34,7 @@
 //! leaves a row whose file is missing, which a run handles as before (#252).
 
 pub mod plan;
-pub mod size;
+pub use barca_model::cache_size as size;
 
 pub use plan::Plan;
 pub(crate) use plan::{Eviction, Goal, LeftoverKind, Protections, Tier};
@@ -779,7 +779,7 @@ fn staging_leftovers(project: &Project) -> Vec<plan::Leftover> {
         .filter(|e| e.path().is_dir())
         .filter_map(|e| {
             let pid: i64 = e.file_name().to_str()?.parse().ok()?;
-            (pid != i64::from(std::process::id()) && !crate::db::pid_alive(pid)).then(|| {
+            (pid != i64::from(std::process::id()) && !crate::process::pid_alive(pid)).then(|| {
                 let (bytes, modified) = du(&e.path());
                 plan::Leftover {
                     kind: LeftoverKind::Staging,

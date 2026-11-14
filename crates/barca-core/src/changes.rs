@@ -25,61 +25,7 @@
 
 use crate::cache::DecideState;
 use crate::dag::Dag;
-use crate::model::ExtractedNode;
 use std::collections::BTreeMap;
-
-/// The components of `node`'s definition hash and a digest of each: the counted decorator
-/// parts, the function, the helpers in its cone, the kind.
-pub(crate) fn definition_components(node: &ExtractedNode) -> Vec<(String, String)> {
-    let mut parts: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut add = |key: String, text: &str| {
-        parts
-            .entry(key)
-            .or_default()
-            .push(crate::hash::short_digest(text.as_bytes()));
-    };
-    // The definition text is the counted parts, one per line, then the function from `def` on
-    // ([`crate::definition::node_definition`]).
-    let mut rest = node.source_text.as_str();
-    loop {
-        let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
-        if let Some(argument) = line.strip_prefix("argument ") {
-            let name = argument.split('=').next().unwrap_or(argument);
-            add(format!("decorator argument {name}"), line);
-        } else if let Some(decorator) = line.strip_prefix("decorator ") {
-            let name = decorator.split('(').next().unwrap_or(decorator);
-            add(format!("decorator {name}"), line);
-        } else {
-            break;
-        }
-        rest = after;
-    }
-    add("code".to_string(), rest);
-    for (label, digest) in &node.cone_parts {
-        // A definition of the node's own file is labelled by its bare name.
-        let label = if label.contains(':') || label.ends_with(".py") {
-            label.clone()
-        } else {
-            format!("{}:{label}", node.source_file)
-        };
-        parts
-            .entry(format!("helper {label}"))
-            .or_default()
-            .push(digest.clone());
-    }
-    let mut out: Vec<(String, String)> = parts
-        .into_iter()
-        .map(|(key, mut digests)| {
-            digests.sort();
-            (key, digests.join(","))
-        })
-        .collect();
-    out.push((
-        "kind".to_string(),
-        format!("{:?}", node.kind).to_lowercase(),
-    ));
-    out
-}
 
 /// Every component of the run hash of `display_id` (`pipeline.py:p` or `pipeline.py:p[k=a]`)
 /// as this run computed it, as a JSON object. `None` for a node not in the DAG. The upstream
@@ -139,7 +85,7 @@ pub(crate) fn step_components(
 }
 
 /// The key of a recorded row's components that names its definition's (`definition_components`).
-pub(crate) const DEFINITION_KEY: &str = "@definition";
+pub(crate) use crate::db::DEFINITION_KEY;
 
 /// [`step_components`] as the JSON text recorded with a materialization: a definition's digests
 /// are the same for each of its keys and can be tens of KB, so the row names them
@@ -215,7 +161,7 @@ fn rank(key: &str) -> usize {
 /// row recorded its components. `None` when it did not (recorded before 0.29), when there is no
 /// such row, or against a server's ledger (its rows are other machines').
 pub(crate) async fn since_last_success(
-    cache: Option<&crate::db::CacheReader>,
+    cache: Option<&crate::cache::CacheReader>,
     dag: &Dag,
     state: &DecideState,
     display_id: &str,
@@ -262,6 +208,8 @@ pub(crate) fn causes(changed: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ExtractedNode;
+    use barca_compile::definition::definition_components;
 
     #[test]
     fn causes_split_code_inputs_and_env() {

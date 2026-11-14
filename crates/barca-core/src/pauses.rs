@@ -108,6 +108,44 @@ pub async fn check_request(db_path: &str, targets: &[String]) -> Result<(), Barc
     }
 }
 
+/// Every paused node of the metadata DB at `db_path`, with when and through what it was paused.
+pub async fn list(db_path: &str) -> Result<Vec<crate::db::AssetPause>, BarcaError> {
+    crate::db::get_asset_pauses(db_path).await
+}
+
+/// Pause `ids` (the [`scope`] of `via`, the target as given) at `now` (unix seconds), creating
+/// the metadata DB when there is none.
+pub async fn pause(
+    cfg: &crate::config::ResolvedConfig,
+    ids: &[String],
+    via: &str,
+    now: i64,
+) -> Result<(), BarcaError> {
+    crate::queries::open_metadata(cfg).await?;
+    crate::db::pause_assets(&cfg.db_path, ids, via, now).await
+}
+
+/// Resume `ids` (every paused node with `None`) in the metadata DB at `db_path`. Answers the
+/// ids it resumed: those of `ids` that were paused.
+pub async fn resume(db_path: &str, ids: Option<Vec<String>>) -> Result<Vec<String>, BarcaError> {
+    let paused = crate::db::get_asset_pauses(db_path).await?;
+    match ids {
+        None => {
+            let ids: Vec<String> = paused.into_iter().map(|p| p.id).collect();
+            crate::db::resume_assets(db_path, None).await?;
+            Ok(ids)
+        }
+        Some(ids) => {
+            let ids: Vec<String> = ids
+                .into_iter()
+                .filter(|id| paused.iter().any(|p| &p.id == id))
+                .collect();
+            crate::db::resume_assets(db_path, Some(&ids)).await?;
+            Ok(ids)
+        }
+    }
+}
+
 /// The usage error for a request that names the paused node `id`.
 pub fn refused(id: &str) -> BarcaError {
     let name = short_name(id);

@@ -7,7 +7,7 @@ use crate::error::ApiError;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
-use barca_core::db;
+use barca_core::pauses;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -28,7 +28,7 @@ pub struct PauseRequest {
 
 /// `{paused: [{id, paused_at, via}], total}`: every paused node.
 async fn body(state: &AppState, changed: (&str, Vec<String>)) -> Result<Json<Value>, ApiError> {
-    let paused = db::get_asset_pauses(&state.config.resolved.db_path).await?;
+    let paused = pauses::list(&state.config.resolved.db_path).await?;
     Ok(Json(json!({
         changed.0: changed.1,
         "total": paused.len(),
@@ -38,7 +38,7 @@ async fn body(state: &AppState, changed: (&str, Vec<String>)) -> Result<Json<Val
 
 /// `GET /pauses` — every paused node, with when and through what it was paused.
 pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let paused = db::get_asset_pauses(&state.config.resolved.db_path).await?;
+    let paused = pauses::list(&state.config.resolved.db_path).await?;
     Ok(Json(json!({ "total": paused.len(), "paused": paused })))
 }
 
@@ -49,7 +49,7 @@ async fn scope(state: &AppState, req: &PauseRequest) -> Result<Vec<String>, ApiE
         ));
     };
     let dag = state.loaded_dag().await?;
-    Ok(barca_core::pauses::scope(&dag, target, req.downstream)?)
+    Ok(pauses::scope(&dag, target, req.downstream)?)
 }
 
 /// `POST /pauses` — pause `target` (and with `downstream`, everything below it). Answers the
@@ -66,10 +66,8 @@ pub async fn pause(
     }
     let ids = scope(&state, &req).await?;
     let cfg = &state.config.resolved;
-    db::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await?;
     let via = req.target.clone().unwrap_or_default();
-    db::pause_assets(&cfg.db_path, &ids, &via, chrono::Utc::now().timestamp()).await?;
+    pauses::pause(cfg, &ids, &via, chrono::Utc::now().timestamp()).await?;
     barca_core::errln!("[barca] paused {} node(s) via {via}", ids.len());
     body(&state, ("added", ids)).await
 }
@@ -83,22 +81,9 @@ pub async fn resume(
     crate::runs::refuse_if_read_only(&state)?;
     let db_path = &state.config.resolved.db_path;
     let removed = if req.all {
-        let ids: Vec<String> = db::get_asset_pauses(db_path)
-            .await?
-            .into_iter()
-            .map(|p| p.id)
-            .collect();
-        db::resume_assets(db_path, None).await?;
-        ids
+        pauses::resume(db_path, None).await?
     } else {
-        let ids = scope(&state, &req).await?;
-        let paused = db::get_asset_pauses(db_path).await?;
-        let ids: Vec<String> = ids
-            .into_iter()
-            .filter(|id| paused.iter().any(|p| &p.id == id))
-            .collect();
-        db::resume_assets(db_path, Some(&ids)).await?;
-        ids
+        pauses::resume(db_path, Some(scope(&state, &req).await?)).await?
     };
     barca_core::errln!("[barca] resumed {} node(s)", removed.len());
     body(&state, ("removed", removed)).await

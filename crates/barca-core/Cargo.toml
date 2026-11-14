@@ -5,6 +5,10 @@ edition = "2024"
 description = "Core library — models, parsing, DAG, execution planning, hashing, dispatch, caching"
 
 [dependencies]
+barca-model = { path = "../barca-model" }
+barca-compile = { path = "../barca-compile" }
+barca-db = { path = "../barca-db" }
+barca-engine = { path = "../barca-engine" }
 ruff_python_parser = { workspace = true }
 ruff_python_ast = { workspace = true }
 ruff_text_size = { workspace = true }
@@ -33,4 +37,4 @@ ts-rs = { workspace = true, optional = true }
 
 [features]
 # Generate TS type bindings for the frontend. Off by default.
-ts = ["dep:ts-rs"]
+ts = ["dep:ts-rs", "barca-model/ts", "barca-compile/ts", "barca-db/ts"]

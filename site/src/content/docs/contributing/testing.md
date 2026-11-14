@@ -56,7 +56,7 @@ the `test` extra.
 barca prints through `barca_core::outln!` and `errln!`, which do not panic when the reader of
 stdout or stderr has gone; clippy denies `println!` and `eprintln!` in the three crates.
 Workers do not hold barca's stderr when it is a pipe: they write to a pipe barca reads and
-forwards (`crates/barca-core/src/term.rs`), so a step's child processes cannot meet a closed
+forwards (`crates/barca-model/src/term.rs`), so a step's child processes cannot meet a closed
 pipe either. `python/tests/test_closed_pipe.py` starts barca with a pipe whose read end is
 already closed, so the first write fails every time and no test waits for a reader to exit.
 
@@ -155,7 +155,7 @@ runs the long version weekly, with `--strict-reads`: a read the `--read-only` se
 writer fails it. Those reads (`database disk image is malformed`) came from the server's own check
 of the database file's header, which closed a descriptor of the file and so dropped the process's
 SQLite locks on it; `looking_at_the_database_file_keeps_this_process_s_locks` in
-`crates/barca-core/src/db/snapshots.rs` covers it. `BARCA_TEST_CACHE_CHECKPOINT_SECS` shortens the server's
+`crates/barca-db/src/db/snapshots.rs` covers it. `BARCA_TEST_CACHE_CHECKPOINT_SECS` shortens the server's
 one-minute size check for it; long waits (`STUCK_FOR`, `SURVEY_EVERY`) are skipped by rewriting
 `gc-state.json`.
 
@@ -197,8 +197,8 @@ These keep the documentation and the command line in agreement.
   with `python/tests/snapshots/cli_contract/`.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
   what the text says about them.
-- `cargo test -p barca-core decorator_args` compares the arguments each decorator and helper
-  accepts (`SIGNATURES` in `crates/barca-core/src/decorator_args.rs`) with the signatures in
+- `cargo test -p barca-compile decorator_args` compares the arguments each decorator and helper
+  accepts (`SIGNATURES` in `crates/barca-compile/src/decorator_args.rs`) with the signatures in
   `python/barca/__init__.py` and with the "Accepted arguments" tables in `barca docs assets`
   and on the decorators page. Adding an argument means changing all four.
 

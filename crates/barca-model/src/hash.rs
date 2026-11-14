@@ -1,0 +1,158 @@
+//! Hashing — content-addressed identity for nodes and materializations.
+//!
+//! Hash protocol:
+//! - definition_hash: identity of the code (what determines the result: the function from `def`
+//!   on, the decorator parts that count, the dependency cone; see `crate::definition`)
+//! - run_hash: identity of a specific execution (definition + inputs + partition)
+
+use sha2::{Digest, Sha256};
+use std::path::Path;
+
+/// Protocol version — bump when hash computation changes.
+pub(crate) const PROTOCOL_VERSION: &str = "1.0.0";
+
+/// Compute the definition hash for a node.
+///
+/// Inputs:
+/// - the node's definition text (`barca_core::definition::node_definition`): the decorator parts
+///   that count, in canonical form, then the function from `def` on
+/// - the dependency cone hash (helpers, constants)
+/// - the node kind, as JSON
+/// - protocol version
+///
+/// [`PROTOCOL_VERSION`] was not bumped when 0.19 changed the first input (#283): how the
+/// inputs are combined is the same, and the run hash, which also carries the version, did not
+/// change at all.
+pub fn definition_hash(function_source: &str, cone_source: &str, metadata_json: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"definition:");
+    hasher.update(PROTOCOL_VERSION.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(function_source.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(cone_source.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(metadata_json.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Compute the run hash for a materialization.
+///
+/// Inputs:
+/// - definition_hash of this node
+/// - partition key (if any)
+/// - upstream materialization IDs (sorted for determinism)
+/// - ad-hoc params (if any)
+/// - declared env values (if any; see [`crate::envdeps::hash_input`])
+///
+/// `None` sections contribute nothing, so a node without params or declared env hashes exactly
+/// as it did before those sections existed.
+pub fn run_hash(
+    definition_hash: &str,
+    partition_key: Option<&str>,
+    upstream_ids: &[&str],
+    params: Option<&str>,
+    env: Option<&str>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"run:");
+    hasher.update(PROTOCOL_VERSION.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(definition_hash.as_bytes());
+    hasher.update(b"\n");
+
+    if let Some(pk) = partition_key {
+        hasher.update(b"partition:");
+        hasher.update(pk.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    // Sort upstream IDs for deterministic hashing.
+    let mut sorted_upstream: Vec<&str> = upstream_ids.to_vec();
+    sorted_upstream.sort();
+    for id in sorted_upstream {
+        hasher.update(b"upstream:");
+        hasher.update(id.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    if let Some(p) = params {
+        hasher.update(b"params:");
+        hasher.update(p.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    if let Some(e) = env {
+        hasher.update(b"env:");
+        hasher.update(e.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    format!("{:x}", hasher.finalize())
+}
+
+/// A short digest of `bytes` (the first 16 hex digits of its SHA-256): what a materialization
+/// records per component of its run hash, to say later which one changed (#558). Never part of
+/// a cache key.
+pub fn short_digest(bytes: &[u8]) -> String {
+    let mut hex = format!("{:x}", Sha256::digest(bytes));
+    hex.truncate(16);
+    hex
+}
+
+/// The SHA-256 of `bytes` as lowercase hex (a deployed file's digest in `GET /project`, and
+/// what the CLI compares its copy against).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// The SHA-256 of the file at `path`, as lowercase hex.
+pub fn file_sha256(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_definition_hash_deterministic() {
+        let h1 = definition_hash("def foo(): pass", "# no deps", "{}");
+        let h2 = definition_hash("def foo(): pass", "# no deps", "{}");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_definition_hash_changes_with_source() {
+        let h1 = definition_hash("def foo(): return 1", "", "{}");
+        let h2 = definition_hash("def foo(): return 2", "", "{}");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_run_hash_with_partition() {
+        let def_h = definition_hash("def foo(): pass", "", "{}");
+        let h1 = run_hash(&def_h, Some("AAPL"), &[], None, None);
+        let h2 = run_hash(&def_h, Some("MSFT"), &[], None, None);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_run_hash_upstream_order_independent() {
+        let def_h = definition_hash("def foo(): pass", "", "{}");
+        let h1 = run_hash(&def_h, None, &["a", "b", "c"], None, None);
+        let h2 = run_hash(&def_h, None, &["c", "a", "b"], None, None);
+        assert_eq!(h1, h2); // sorted internally
+    }
+}

@@ -1,4 +1,5 @@
 use super::*;
+use crate::trace_ids::{log_ids, span_id};
 
 #[test]
 fn malformed_agent_url_diagnostics_do_not_echo_secret_values() {
@@ -591,15 +592,17 @@ async fn the_end_of_the_run_sends_only_what_the_live_path_did_not() {
 
 fn dispatch() -> Dispatch {
     Dispatch {
-        run_id: "dispatch-test".to_string(),
-        service: "planning".to_string(),
-        project: Some("shop".to_string()),
-        job: "p.py:orders".to_string(),
-        nodes: [
-            ("p.py:orders".to_string(), node("p.py:orders")),
-            ("p.py:weekly".to_string(), node("p.py:weekly")),
-        ]
-        .into(),
+        trace: Arc::new(StepTrace {
+            run_id: "dispatch-test".to_string(),
+            service: "planning".to_string(),
+            project: Some("shop".to_string()),
+            job: "p.py:orders".to_string(),
+            nodes: [
+                ("p.py:orders".to_string(), node("p.py:orders")),
+                ("p.py:weekly".to_string(), node("p.py:weekly")),
+            ]
+            .into(),
+        }),
         upstream: [("p.py:weekly".to_string(), vec!["p.py:orders".to_string()])].into(),
         exporter: None,
     }
@@ -802,35 +805,4 @@ fn step_trace_ref_is_the_trace_the_step_was_sent_as() {
         step_trace_ref("r1", "p.py:orders").0,
         step_trace_ref("r2", "p.py:orders").0
     );
-}
-
-#[test]
-fn app_url_follows_datadog_sites() {
-    assert_eq!(
-        app_url("datadoghq.com").as_deref(),
-        Some("https://app.datadoghq.com")
-    );
-    assert_eq!(
-        app_url("datadoghq.eu").as_deref(),
-        Some("https://app.datadoghq.eu")
-    );
-    assert_eq!(
-        app_url("us3.datadoghq.com").as_deref(),
-        Some("https://us3.datadoghq.com")
-    );
-    assert_eq!(
-        app_url(" AP1.datadoghq.com/ ").as_deref(),
-        Some("https://ap1.datadoghq.com")
-    );
-    assert_eq!(
-        app_url("ddog-gov.com").as_deref(),
-        Some("https://app.ddog-gov.com")
-    );
-    assert_eq!(
-        app_url("app.datadoghq.com").as_deref(),
-        Some("https://app.datadoghq.com")
-    );
-    assert_eq!(app_url(""), None);
-    assert_eq!(app_url("https://evil.example/x"), None);
-    assert_eq!(app_url("localhost"), None);
 }

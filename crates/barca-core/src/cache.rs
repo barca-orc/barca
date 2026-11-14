@@ -276,11 +276,8 @@ pub(crate) struct DecideState {
     pub(crate) recently_read: HashSet<String>,
 }
 
-/// How old a result's `last_read_at` may be before a read of it is stamped again, for the
-/// results of a node with many partition keys. The cache size limit evicts the least recently
-/// read results; an hour does not change that order in any way that matters, and a tick that
-/// reads 200k results does not write 200k rows.
-pub(crate) const READ_STAMP_REFRESH: &str = "-1 hour";
+/// How old a result's `last_read_at` may be before a read of it is stamped again.
+pub(crate) use crate::db::READ_STAMP_REFRESH;
 
 /// One dict source's value hashes, as a step's keys fold them in ([`DecideState::keyed`]).
 #[derive(Clone, Debug)]
@@ -418,23 +415,7 @@ impl DecideState {
     }
 }
 
-/// Whether the output of `id` (a base id) is folded into its consumers' run hashes, not only
-/// its run hash: a sensor (#183), and a `Manual` asset (#548). A `Manual` asset is read as it
-/// is and refreshed by hand with the same code and inputs, so its run hash stays the same when
-/// a refresh gives new bytes; its output is what tells what reads it that it changed.
-///
-/// And an `@asset(cutoff=True)` (#628, [`is_cutoff`]), whose output replaces its run hash.
-/// Either way the node ends its chain in the planner and its consumers are decided in a later
-/// phase, once its output is known.
-pub(crate) fn folds_output(dag: &Dag, id: &str) -> bool {
-    dag.get_node(id).is_some_and(|n| match n.kind() {
-        crate::NodeKind::Sensor => true,
-        crate::NodeKind::Asset => {
-            n.extracted.freshness == crate::Freshness::Manual || n.extracted.cutoff
-        }
-        crate::NodeKind::Task => false,
-    })
-}
+pub(crate) use crate::dag::folds_output;
 
 /// Whether `id` (a base id) is an `@asset(cutoff=True)` (#628): what reads it folds in the
 /// content hash of its output ([`cutoff_token`]) instead of its run hash, so a rerun that
@@ -507,7 +488,7 @@ pub(crate) fn has_sensor_output(state: &DecideState, sensor: &str) -> bool {
 }
 
 pub(crate) async fn lookup_in(
-    cache: Option<&db::CacheReader>,
+    cache: Option<&CacheReader>,
     node_id: &str,
     run_hash: &str,
 ) -> Option<OutputRef> {
@@ -757,7 +738,7 @@ const KEYS_READ_TOGETHER: usize = 256;
 pub(crate) async fn decide_step(
     dag: &Dag,
     policy: &CachePolicy,
-    cache: Option<&db::CacheReader>,
+    cache: Option<&CacheReader>,
     state: &mut DecideState,
     step: &crate::planner::StreamStep,
 ) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
@@ -1120,7 +1101,7 @@ fn remember_refresh(state: &mut DecideState, display: &str, base: &str, reason: 
 /// successfully since. `None` means it fires (also outside a tick, and for a partitioned task).
 async fn task_up_to_date(
     dag: &Dag,
-    cache: Option<&db::CacheReader>,
+    cache: Option<&CacheReader>,
     state: &DecideState,
     step: &crate::planner::StreamStep,
 ) -> Option<OutputRef> {
@@ -1154,11 +1135,52 @@ async fn task_up_to_date(
     Some(last.output)
 }
 
+/// One phase's cache lookups: the metadata DB's [`db::CacheReader`] and, when this command runs
+/// against a server, its ledger, which answers them in place of this machine's history
+/// (RFC-0007 section 4.1). It is the database reader everywhere one is expected.
+pub(crate) struct CacheReader {
+    db: db::CacheReader,
+    ledger: Option<crate::ledger::Ledger>,
+}
+
+impl CacheReader {
+    pub(crate) async fn for_config(
+        cfg: &crate::config::ResolvedConfig,
+    ) -> Result<Self, crate::BarcaError> {
+        Ok(Self {
+            db: db::CacheReader::for_config(cfg).await?,
+            ledger: crate::ledger::attached(cfg).cloned(),
+        })
+    }
+
+    /// A reader of the database at `db_path`, with no ledger.
+    #[cfg(test)]
+    pub(crate) async fn open(db_path: &str) -> Result<Self, crate::BarcaError> {
+        Ok(Self {
+            db: db::CacheReader::open(db_path).await?,
+            ledger: None,
+        })
+    }
+
+    /// The server's ledger, when this command runs against one.
+    pub(crate) fn ledger(&self) -> Option<&crate::ledger::Ledger> {
+        self.ledger.as_ref()
+    }
+}
+
+impl std::ops::Deref for CacheReader {
+    type Target = db::CacheReader;
+
+    fn deref(&self) -> &db::CacheReader {
+        &self.db
+    }
+}
+
 /// The most recent successful materialization of `node_id` with this run hash, if any. The row
 /// is the cache hit; whether its artifact can still be read is settled only when something
 /// needs to read it (see [`crate::recover`]).
 pub(crate) async fn lookup_cached(
-    cache: &db::CacheReader,
+    cache: &CacheReader,
     node_id: &str,
     run_hash: &str,
 ) -> Option<dispatch::OutputRef> {
@@ -1327,6 +1349,9 @@ pub enum CachePolicy {
 /// (`barca._storage.ArtifactPathError`): the state of barca's own artifact directory, not a
 /// fault of the step that was writing there.
 pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
+
+#[cfg(test)]
+mod lookup_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1923,7 +1948,7 @@ def report(values: list) -> int:
         )
         .await
         .unwrap();
-        let cache = db::CacheReader::open(&db_path).await.unwrap();
+        let cache = CacheReader::open(&db_path).await.unwrap();
         let result = decide_step(
             &dag,
             &CachePolicy::CacheAware,

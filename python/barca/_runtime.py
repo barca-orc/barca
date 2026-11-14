@@ -306,7 +306,7 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
             "type": "submit",
             "items": work_items,
             # This worker reads results from their artifacts: send where they are, not the
-            # values (crates/barca-core/src/protocol.rs, `Submit::artifact_results`).
+            # values (crates/barca-engine/src/protocol.rs, `Submit::artifact_results`).
             "artifact_results": True,
         }
     )

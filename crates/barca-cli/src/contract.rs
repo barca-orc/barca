@@ -1387,7 +1387,7 @@ const INTERNAL_ENV_VARS: &[(&str, &str)] = &[
 ];
 
 /// The only file that may name a `BARCA_TEST_*` variable (hooks for barca's own tests).
-const TEST_HOOKS: &str = "crates/barca-core/src/test_hooks.rs";
+const TEST_HOOKS: &str = "crates/barca-model/src/test_hooks.rs";
 
 /// Every `"BARCA_..."` or `'BARCA_...'` string literal in `text`. A bare prefix (`"BARCA_"`, a
 /// name ending in `_`) is not a variable.
@@ -1433,7 +1433,15 @@ fn every_barca_env_var_is_in_the_contract() {
         return; // an sdist of this crate alone
     }
     let mut files = Vec::new();
-    for krate in ["barca-core", "barca-cli", "barca-server"] {
+    for krate in [
+        "barca-model",
+        "barca-compile",
+        "barca-db",
+        "barca-engine",
+        "barca-core",
+        "barca-cli",
+        "barca-server",
+    ] {
         source_files(
             &root.join("crates").join(krate).join("src"),
             "rs",

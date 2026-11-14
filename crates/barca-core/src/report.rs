@@ -798,15 +798,7 @@ pub(crate) fn env_suffix(dag: &Dag, node_id: &str) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) fn kind_str(kind: Option<crate::NodeKind>) -> String {
-    match kind {
-        Some(crate::NodeKind::Asset) => "asset",
-        Some(crate::NodeKind::Task) => "task",
-        Some(crate::NodeKind::Sensor) => "sensor",
-        None => "unknown",
-    }
-    .to_string()
-}
+pub(crate) use crate::model::kind_str;
 
 /// Build the report line for one decided step. `dry` selects the vocabulary: a dry run says what
 /// will happen (`action`), a real run says what happened (`status`).
@@ -1098,6 +1090,58 @@ mod key_summary_output_tests {
         assert_eq!(out[super::KEY_SUMMARY]["truncated"], true);
         assert!(
             super::key_summary_note(&cold).contains(&format!("{} computed", 5000 - LISTED_KEYS))
+        );
+    }
+}
+
+#[cfg(test)]
+mod run_line_tests {
+    use super::{RunOutcome, batch_line, end_of_run_line, failed_step_line};
+
+    #[test]
+    fn a_batched_node_has_one_line_with_its_calls_keys_and_phases() {
+        let b = barca_model::reports::BatchExecution {
+            calls: 1,
+            keys: 3077,
+            import_seconds: 0.12,
+            load_seconds: 1.2,
+            compute_seconds: 8.44,
+            split_seconds: 3.1,
+            write_seconds: 14.2,
+        };
+        assert_eq!(
+            batch_line("p.py:orders", &b),
+            "[barca] batch:p.py:orders 1 call, 3077 keys | import 0.1s, load 1.2s, compute 8.4s, split 3.1s, write 14.2s"
+        );
+    }
+
+    #[test]
+    fn end_of_run_line_is_one_format_and_never_says_done_on_failure() {
+        assert_eq!(
+            end_of_run_line(3, 3, 1.26, RunOutcome::Done),
+            "[barca] 3/3 steps | done in 1.3s"
+        );
+        let failed = end_of_run_line(0, 3, 0.0, RunOutcome::Failed);
+        assert_eq!(failed, "[barca] 0/3 steps | failed in 0.0s");
+        assert!(!failed.contains("done"));
+        assert_eq!(
+            end_of_run_line(1, 3, 2.0, RunOutcome::Cancelled),
+            "[barca] 1/3 steps | cancelled after 2.0s"
+        );
+    }
+
+    #[test]
+    fn failed_step_line_names_the_step_and_the_first_error_line() {
+        assert_eq!(
+            failed_step_line(
+                "p.py:broken",
+                "\nValueError: boom\n  File \"p.py\", line 3, in broken"
+            ),
+            "[barca] step:p.py:broken failed: ValueError: boom"
+        );
+        assert_eq!(
+            failed_step_line("p.py:x", ""),
+            "[barca] step:p.py:x failed: unknown error"
         );
     }
 }
