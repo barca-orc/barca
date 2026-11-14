@@ -19,6 +19,11 @@ export const latest = versions[0];
 
 ## Highlights
 
+**0.42.1 (2026-11-14).** A busy `barca serve` stays responsive: while runs write results, the
+web UI's read routes answer in about 100 ms on a 470k-result database, where `GET /state` took
+2.4 s. barca.sh is organized by task, with new pages on why a step did or didn't run, the
+server, tokens and the web UI.
+
 **0.42.0 (2026-11-09).** Repair one key of a partitioned asset: upload replacement data or pin
 an earlier version of just that key, from the web UI's key explorer or with
 `barca pin 'asset[dimension=value]'`. The web UI has one navigation in the sidebar, a key
@@ -28,9 +33,6 @@ explorer that shows every key of a partitioned asset at once, and a quieter layo
 Retry and Copy incident summary, and links each step to its Datadog trace. *Breaking, web UI
 only:* a node reads `fresh` where it read `cached`, and a node whose last attempt failed reads
 `failing`; the CLI and JSON keep their words.
-
-**0.40.0 (2026-11-05).** *Breaking, Datadog only:* each step is its own trace, sent as soon as
-the step ends, so a failure shows in Datadog seconds after it happens.
 
 Every change, by version:
 
