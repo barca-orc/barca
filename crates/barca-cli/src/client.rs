@@ -243,6 +243,9 @@ fn transport_reason(e: &reqwest::Error) -> String {
 impl Server {
     fn new(url: String, source: Option<ServerSource>, implicit: bool) -> Result<Self, CliError> {
         let token = match std::env::var("BARCA_SERVER_TOKEN") {
+            // A blank token is unset: container images and `.env` files often export
+            // `BARCA_SERVER_TOKEN=` for an unauthenticated server.
+            Ok(token) if token.is_empty() => None,
             Ok(token) => Some(token),
             Err(std::env::VarError::NotPresent) => None,
             Err(_) => {

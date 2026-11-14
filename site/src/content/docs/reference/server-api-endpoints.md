@@ -306,7 +306,7 @@ Every run the server accepts (`POST /runs`, the older trigger routes, the UI, a 
 client, a scheduled tick) is recorded in the metadata DB (`run_queue`) under its run id before
 the server answers. Runs start in the order they were accepted, at most `--max-runs` at once
 (`[server] max_runs`, default one per core), while the queue is neither paused nor draining; the
-others are `pending`. A run leaves the queue once it has recorded how it ended; `DELETE
+others are `pending` (requested runs ahead of scheduled ones, see Serve Operations). A run leaves the queue once it has recorded how it ended; `DELETE
 /runs/{run_id}` takes a queued run off it and records it `cancelled`.
 
 `POST /queue/pause` holds every queued run back; runs in flight finish, new runs and scheduled
