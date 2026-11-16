@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { match } from 'ts-pattern'
@@ -45,6 +45,14 @@ export function RunsPage() {
   const runs = useRuns(model.limit)
   const detail = useRunDetail(selected)
 
+  // A running run's start, as the run list has it: the queue counts its time from it.
+  const listed = runs.data?.runs
+  const startedAt = useMemo(() => {
+    const at = new Map<string, string>()
+    for (const run of listed ?? []) for (const id of [run.id, run.run_id, run.handle]) if (id) at.set(id, run.started_at)
+    return (runId: string) => at.get(runId) ?? null
+  }, [listed])
+
   const { scopeRun } = usePageTopbarRun((handle) => dispatch({ type: 'run_selected', id: handle }))
 
   const durableId = detail.data?.run_id
@@ -57,7 +65,7 @@ export function RunsPage() {
       model={model}
       runs={remote(runs)}
       selected={selected ? { id: selected, run: remote(detail), eventGap: params.get('event_gap') === '1' } : null}
-      queue={<QueuePanel readOnly={health.data?.read_only} />}
+      queue={<QueuePanel readOnly={health.data?.read_only} startedAt={startedAt} />}
       now={runs.dataUpdatedAt}
       root={root}
       datadogUrl={project?.telemetry?.datadog_url ?? null}

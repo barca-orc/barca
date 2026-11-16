@@ -4,12 +4,15 @@ import { queuePollInterval } from '@/lib/queue'
 import { recovering } from './polling'
 import type { QueueView } from '@/lib/types'
 
-/** The run queue (`GET /queue`): polled faster while anything runs or waits. */
-export function useQueue() {
+/**
+ * The run queue (`GET /queue`): polled faster while anything runs or waits, or every `pollMs`
+ * (the app-wide queue line, which needs no more than that).
+ */
+export function useQueue({ pollMs }: { pollMs?: number } = {}) {
   return useQuery({
     queryKey: ['queue'],
     queryFn: api.queue,
-    refetchInterval: recovering<QueueView>((q) => queuePollInterval(q.state.data)),
+    refetchInterval: recovering<QueueView>((q) => pollMs ?? queuePollInterval(q.state.data)),
     retry: false,
   })
 }

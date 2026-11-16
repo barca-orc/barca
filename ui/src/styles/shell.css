@@ -140,6 +140,11 @@
 .barca-side-links { display: flex; flex-direction: column; gap: 1px; }
 .barca-side-links .barca-nav { font-weight: 400; color: var(--text-muted); }
 .barca-side-links .barca-nav:hover { color: var(--text-strong); }
+/* The queue in brief (components/QueueStatus.tsx): two quiet lines, while runs wait. */
+.barca-side-links .barca-queue-status { height: auto; min-height: 28px; padding-top: 4px; padding-bottom: 4px; }
+.barca-queue-status .barca-nav-label { display: flex; flex-direction: column; }
+.barca-queue-status .barca-nav-label > span { overflow: hidden; text-overflow: ellipsis; }
+.barca-queue-status-detail { font-size: var(--text-xs); color: var(--text-faint); }
 .barca-side-settings { display: flex; align-items: center; gap: 2px; min-height: 28px; padding-left: 2px; }
 .barca-side-settings .barca-conn { margin-right: auto; padding: 0 6px; height: 28px; }
 .barca-side-settings .barca-zone { height: 26px; padding: 0 6px; }
@@ -1015,7 +1020,7 @@
 .barca-run-error-head { white-space: pre-wrap; overflow-wrap: break-word; }
 /* Run table beside the run panel: the panel says the rest, so the low-priority columns leave
    first (trigger, duration, then steps) instead of the table scrolling sideways. */
-.barca-assets-split > .barca-view-body .barca-run-table td { overflow: hidden; text-overflow: ellipsis; }
+.barca-runs-history .barca-run-table td { overflow: hidden; text-overflow: ellipsis; }
 @container (max-width: 960px) {
   .barca-run-table th:nth-child(3), .barca-run-table td:nth-child(3) { display: none; }
 }
@@ -1031,20 +1036,36 @@
 }
 .barca-run-result { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
 .barca-run-more { padding: 16px; }
-.barca-queue { padding: 0 24px 12px; flex: none; }
+/* The Runs page: the run's panel beside the whole view (toolbar, queue and history), full height. */
+.barca-runs { display: flex; height: 100%; min-height: 0; }
+.barca-runs > .barca-view { flex: 1; min-width: 0; }
+.barca-runs-history { container-type: inline-size; }
+/* A run's remediation names a step id with its key: one long word, broken anywhere rather than widening the panel. */
+.barca-runs .barca-sidepanel .barca-note { overflow-wrap: anywhere; }
+/* The queue never takes the page: its list scrolls past a few rows, and folds to the bar. */
+.barca-queue { padding: 0 24px 12px; flex: none; container-type: inline-size; }
 .barca-queue-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   min-height: 34px; padding: 4px 12px;
   border: 1px solid var(--border-default); border-radius: var(--radius-sm);
   font-family: var(--font-sans); font-size: var(--text-sm);
 }
+.barca-queue-bar > .barca-iconbtn { margin-left: -6px; margin-right: -6px; }
 .barca-queue-title { font-weight: 600; color: var(--text-strong); }
 .barca-queue-count { display: inline-flex; align-items: center; gap: 6px; color: var(--text-default); }
+.barca-queue-summary { min-width: 0; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barca-queue-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
 .barca-queue-bar .barca-note { margin: 0; }
 .barca-queue-error { margin: 8px 0 0; }
-.barca-queue-table { margin-top: 8px; }
+.barca-queue-list { margin-top: 8px; max-height: min(260px, 30vh); overflow: auto; scrollbar-gutter: stable; }
+.barca-queue-table + .barca-queue-table { margin-top: 8px; }
 .barca-queue-table tbody tr { cursor: default; }
+.barca-queue-place { color: var(--text-muted); }
+/* Beside a run's panel: the trigger and the queued time leave first; place, run, target and elapsed stay. */
+@container (max-width: 640px) {
+  .barca-queue-runs th:nth-child(4), .barca-queue-runs td:nth-child(4),
+  .barca-queue-runs th:nth-child(5), .barca-queue-runs td:nth-child(5) { display: none; }
+}
 .barca-queue-table td { white-space: nowrap; }
 
 /* The last day of runs, hour by hour (RunsView's ActivityStrip): the page's width, 56px of
@@ -1071,20 +1092,31 @@
 .barca-activity-axis .barca-activity-now { transform: translateX(-100%); color: var(--text-muted); }
 .barca-run-failure { font-size: var(--text-xs); }
 
+/* A run's Steps (RunsView's RunSteps): only the rows in view are rendered, each placed at its
+   offset in a box as tall as every row; past 480px the box scrolls on its own. */
+.barca-run-nodes { overflow: auto; scrollbar-gutter: stable; }
+.barca-run-nodes-inner { position: relative; }
+.barca-run-row { position: absolute; top: 0; left: 0; right: 0; }
 .barca-run-node { border-bottom: 1px solid var(--border-default); }
-/* The section's hairline follows the last row: no second rule under it. */
-.barca-run-nodes > .barca-run-node:last-child, .barca-run-steps > li:last-child { border-bottom: 0; }
-.barca-run-node > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0; cursor: pointer; font-size: var(--text-sm); }
-.barca-run-node > summary > span:last-child { margin-left: auto; color: var(--text-muted); }
-.barca-run-node .barca-run-steps { max-height: 420px; overflow: auto; }
 .barca-run-node-time { margin-left: auto; color: var(--text-muted); font-size: var(--text-xs); }
-.barca-run-node-one { padding: 10px 0; }
-.barca-run-node-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: var(--text-sm); }
+.barca-run-node-one, .barca-run-node-group { padding: 10px 0; }
+.barca-run-node-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: var(--text-sm); min-width: 0; }
 /* The actions at the end of the line: after the time, which goes right, or after the state. */
 .barca-run-node-line > :not(.barca-run-node-time) + .barca-run-step-actions { margin-left: auto; }
 .barca-run-node-idle { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0; font-size: var(--text-sm); }
 .barca-run-node-detail { color: var(--text-muted); font-size: var(--text-xs); }
-.barca-run-node-ok > summary { padding: 8px 0; cursor: pointer; font-size: var(--text-xs); color: var(--text-muted); }
+/* A node's keys open under it: a disclosure that is the node's name. */
+.barca-run-node-toggle {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left;
+}
+.barca-run-node-toggle > svg { flex: none; color: var(--text-muted); }
+.barca-run-node-toggle:hover .barca-step-name { text-decoration: underline; }
+/* An opened node's keys, indented under its name. */
+.barca-run-key { padding-left: 17px; border-bottom: 1px solid var(--border-subtle); }
+.barca-run-key.barca-note { margin: 0; padding-top: 8px; padding-bottom: 8px; }
+.barca-run-step { padding: 8px 0; }
+.barca-run-node-ok { padding: 8px 0; font-size: var(--text-xs); color: var(--text-muted); }
 .barca-run-target-line { margin: 8px 0 0; font-size: var(--text-sm); color: var(--text-strong); }
 
 /* A state and the facts beside it: the word, its reason, a failed last attempt. */

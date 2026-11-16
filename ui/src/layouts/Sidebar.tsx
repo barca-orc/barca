@@ -2,6 +2,7 @@ import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router
 import { useMemo, type CSSProperties, type ReactNode } from 'react'
 import { BookOpen, ChevronDown, ChevronRight, KeyRound, Layers, LogOut, Moon, PanelLeft, Search, Sun } from 'lucide-react'
 import { Button, ConnectionBadge, IconButton, RunsInProgress, StatusGlyph } from '@/components'
+import { QueueStatus } from '@/components/QueueStatus'
 import { useAssetStates, useWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
 import { useGroups } from '@/hooks/useGroups'
@@ -208,6 +209,7 @@ function SidebarFooter() {
   return (
     <>
       <div className="barca-side-links">
+        <QueueStatus />
         <a className="barca-nav" href="https://barca.sh/" target="_blank" rel="noreferrer noopener" aria-label="Docs" title="Docs (barca.sh)">
           <BookOpen size={15} /><span className="barca-nav-label">Docs</span>
         </a>

@@ -61,7 +61,7 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 |---|---|---|
 | `lib/runStream.ts` | `reduceRunEvent(state, event)` — fold an SSE event stream into UI state | `runStream.test.ts` |
 | `lib/runs.ts` | `runStatus`, `runIsLive`, `triggeredByLabel`, `parseOutcome` — a run's status, trigger and outcome → display | `runs.test.ts` |
-| `lib/queue.ts` | `queueState`, `queueControl`, `queueRows`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list | `queue.test.ts` |
+| `lib/queue.ts` | `queueState`, `queueControl`, `queueRows` (running runs first, then the waiting ones, each with its elapsed time), `queueSummary`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list; `queueStatus`, `queueStatusLabel` — the queue in brief that every page shows while runs wait (`components/QueueStatus.tsx`) | `queue.test.ts` |
 | `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause | `schedules.test.ts` |
 | `lib/runFeedback.ts` | `runFeedback(status, logs, error)` — map a node's status to a feedback descriptor | `runFeedback.test.ts` |
 | `lib/cacheStateDisplay.ts` | the one table from `CacheState` to display: each of the CLI's eight words with its tone and rank; `lastAttemptFailed` — the fact shown beside a state | `cacheStateDisplay.test.ts` |
@@ -83,7 +83,7 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/partitionGrid.ts` | `gridOf`, `filterCells`, `issueGroups`, `heatmap`, `filterSelection`, `issueSelection` — every key of a partitioned node (`GET /assets/{id}/partitions/grid`) decoded and filtered, its problems grouped with where they are, binned into the overview, and a filter or a problem turned into a run's `partition` | `partitionGrid.test.ts` |
 | `lib/keysPage.ts` | `keysParams`, `keysSearch`, `keysHref` — the key explorer's URL (node, open key, filters) | `keysPage.test.ts` |
-| `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
+| `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity`; `runsCountLabel` (a filtered count over the runs loaded says it is partial), `runStepRows` (a run's Steps as rows: a node's keys one row with their count, listed when opened) | `*.test.ts` |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.
 `runFeedback` returns `{ kind: 'failed', error, logs }`, not an `<ErrorPanel>`.
@@ -217,6 +217,11 @@ A project can have thousands of nodes; a view must not render all of them at onc
   sticky header and the scrollbar behave as before. Keyboard navigation goes through
   `focusWindowRow`, which scrolls to a row that is not rendered yet. A table short enough to fit
   renders no spacer, so it has only its own rows. The assets and the groups tables use it.
+- **Run details render what is in view.** `LogViewer` renders only the log lines in view
+  (TanStack Virtual, each line measured, since a long line wraps), and a run's Steps are rows
+  from `runStepRows` in a box of their own, rendered the same way: a node's keys are one row with
+  their count until it is opened. A failed run of 5,000 keys and 30,000 log lines renders about
+  1,700 elements, not 150,000.
 - **Big graphs are laid out in a worker.** `hooks/useGraphLayout.ts` lays out a graph of 300
   nodes or more in `lib/graphLayout.worker.ts` and shows "Laying out N nodes…" in the canvas
   until it arrives; a smaller one is laid out in place, with its data. A poll that returns the

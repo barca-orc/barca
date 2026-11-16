@@ -1,4 +1,5 @@
 import { LogViewer, RunningBadge } from '@/components'
+import { QueueStatusView } from '@/components/QueueStatus'
 import { ResetDatabaseDialog } from '@/components/ResetDatabase'
 import { ArtifactSchema } from '@/components/assets/ArtifactSchema'
 import { NodeInspector } from '@/components/graph/NodeInspector'
@@ -8,6 +9,7 @@ import {
   NOW_MS,
   feedbackInputs,
   logLines,
+  queueStatusStates,
   resetPhases,
   runningByStep,
   runningPartitioned,
@@ -42,6 +44,14 @@ export function Runs() {
         <Variant label="empty"><LogViewer lines={[]} height={120} style={{ width: 360 }} /></Variant>
         <Variant label="stdout + stderr"><LogViewer lines={logLines} height={160} style={{ width: 460 }} /></Variant>
         <Variant label="live"><LogViewer lines={logLines.slice(0, 3)} live height={120} style={{ width: 360 }} /></Variant>
+      </Spec>
+
+      <Spec title="QueueStatus" note="The sidebar's queue line, on every page while runs wait or the queue holds them; links to Runs. Nothing without a queue.">
+        {Object.entries(queueStatusStates).map(([label, status]) => (
+          <Variant key={label} label={label}>
+            <div className="barca-side-links" style={{ width: 215 }}><QueueStatusView status={status} /></div>
+          </Variant>
+        ))}
       </Spec>
 
       <Spec title="RunningBadge" note="A node a run works on now, with elapsed time; links to the run.">
