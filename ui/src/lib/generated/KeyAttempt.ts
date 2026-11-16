@@ -3,4 +3,8 @@
 /**
  * One recorded attempt of one key (`GET /assets/{name}/partitions/key`).
  */
-export type KeyAttempt = { status: string, created_at: string, elapsed_seconds: number | null, error: string | null, run_id: string | null, artifact_path: string | null, format: string | null, size_bytes: number | null, };
+export type KeyAttempt = { status: string, created_at: string, elapsed_seconds: number | null, error: string | null, run_id: string | null, artifact_path: string | null, format: string | null, size_bytes: number | null,
+/**
+ * Rows its result holds, when its worker counted them.
+ */
+rows: number | null, };

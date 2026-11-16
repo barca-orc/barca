@@ -26,6 +26,16 @@ cpu_seconds: number | null,
  */
 max_rss_bytes: number | null,
 /**
+ * Rows the result holds, when its worker counted them (#925); `null` otherwise. A
+ * partitioned node's entry: the rows of the run's successful keys added up, `null` unless
+ * every one of them was counted.
+ */
+rows: number | null,
+/**
+ * A partitioned node's entry: how many of the run's keys wrote no rows. Absent otherwise.
+ */
+empty_keys?: number,
+/**
  * A partitioned node's entry is one run: the keys it recorded, and how many failed.
  * Absent otherwise.
  */

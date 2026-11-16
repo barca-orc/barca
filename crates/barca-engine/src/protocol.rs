@@ -147,6 +147,11 @@ pub(crate) struct ArtifactRef {
     /// Peak RSS of the worker process in bytes at task completion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rss_bytes: Option<u64>,
+    /// Rows of a tabular result: an in-memory frame's length, or the row count in the written
+    /// parquet file's footer. Absent when the worker could not tell cheaply (not a frame, a CSV
+    /// written from a lazy frame or relation, a worker from before it was sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u64>,
     /// Outcomes of `@sink` writes performed alongside this artifact.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sinks: Vec<SinkOutcome>,

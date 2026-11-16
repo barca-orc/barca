@@ -41,7 +41,7 @@ describe('searchPalette', () => {
   })
 })
 
-const row = (key: string, status: string, created_at = '2026-10-30 00:00:00') => ({ key, status, created_at, elapsed_seconds: null, error: null, run_id: null, artifact_path: null, size_bytes: null })
+const row = (key: string, status: string, created_at = '2026-10-30 00:00:00') => ({ key, status, created_at, elapsed_seconds: null, error: null, run_id: null, artifact_path: null, size_bytes: null, rows: null })
 
 describe('isKeyQuery', () => {
   it('is anything with a digit, =, -, _ or /, of two characters or more', () => {

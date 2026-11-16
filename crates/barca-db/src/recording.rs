@@ -36,6 +36,8 @@ pub struct RunLedger<'a> {
     pub all_attempts: &'a HashMap<String, u32>,
     /// Per-node worker self-timing: (cpu_seconds, max_rss_bytes).
     pub all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
+    /// Rows of each executed step's tabular result, when its worker counted them.
+    pub all_rows: &'a HashMap<String, u64>,
     pub cached_node_ids: &'a std::collections::HashSet<String>,
     pub run_hashes: &'a HashMap<String, String>,
     /// Executed step -> its run hash's components as JSON (`barca_core::changes`).
@@ -117,6 +119,7 @@ pub async fn write_terminal_ledger(
         row.sinks_json = l.all_sinks.get(node_id).cloned();
         row.cpu_seconds = cpu;
         row.max_rss_bytes = rss;
+        row.rows = l.all_rows.get(node_id).copied();
         row.output_hash = oref.content_hash.clone();
         row.observation_hash = l.output_hashes.get(node_id).cloned();
         row.components = l.components.get(node_id).cloned();

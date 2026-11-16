@@ -133,6 +133,16 @@ journal is removed when its I/O task ends the batch, disconnects or is aborted. 
 contains metadata and file references, never artifact values. Dead coordinator PID
 staging cleanup remains the crash backstop. Workers never access the metadata DB.
 
+## Result row counts
+
+A successful completion's artifact metadata optionally carries `rows` (a non-negative integer):
+the rows of a tabular result, the length of an in-memory pandas or polars DataFrame or pyarrow
+Table, or the row count in the footer of the parquet file written (a lazy frame, a DuckDB
+relation, a key of a batched call). Missing means not counted, never zero; a `parallel()`
+branch's file carries none. The coordinator records it as `materializations.rows`
+([metadata](metadata-schema.md)). This additive optional field is introduced within version 5.
+Conformance: [row counts](../../python/tests/test_row_counts.py).
+
 ## Step timing metadata
 
 Completion artifact metadata and error details optionally include `import_seconds`

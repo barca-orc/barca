@@ -251,7 +251,8 @@ the order they were written, without the traceback). A hint on stderr names the 
 prints all of the failed step's stderr. JSON is `{run, steps, hint?}`: `run` is the run as
 `barca history --json` lists it, and each step has `node_id`, `partition_key`, `status`
 (`success` or `failed`), `attempts`, `elapsed_seconds`, `cpu_seconds`, `max_rss_bytes`,
-`run_hash`, `artifact_path`, `artifact_format`, `artifact_size_bytes`, `error` (as recorded),
+`rows` (rows of a tabular result, `null` when not counted: `barca docs status-fields`, "Row
+counts"), `run_hash`, `artifact_path`, `artifact_format`, `artifact_size_bytes`, `error` (as recorded),
 `error_type`, `error_message`, `error_traceback`, `error_phase` (where it failed: `user_code`,
 or barca's own `load_inputs`, `split_output`, `write_output` or `sink`; `null` when unknown),
 `worker_exit` and `output_tail` (a failed step's last lines, `null` for the others). A step that

@@ -425,6 +425,11 @@ pub struct PartitionState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub changed: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// Keys whose latest successful result wrote no rows (its row count was recorded and is 0).
+    /// Absent when none is.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
+    pub empty: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -444,6 +449,12 @@ pub struct LastMaterialization {
     pub format: Option<String>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub size_bytes: Option<i64>,
+    /// Rows of a successful tabular result, as its worker counted them: a frame's length or a
+    /// parquet file's footer. `null` when not counted (not a frame, a failed attempt, a CSV of a
+    /// lazy frame or relation, a row recorded by an older barca).
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub rows: Option<i64>,
     /// For a partitioned node: which key this was (e.g. `k=a`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition: Option<String>,
@@ -662,6 +673,11 @@ pub(crate) async fn status_from_dag_with_membership(
     } else {
         HashMap::new()
     };
+    let empty_keys = if Path::new(&cfg.db_path).exists() {
+        db::empty_partition_keys(&cfg.db_path).await?
+    } else {
+        HashMap::new()
+    };
 
     let mut nodes: Vec<NodeStatus> = Vec::new();
     let mut states: HashMap<String, CacheState> = HashMap::new();
@@ -696,6 +712,7 @@ pub(crate) async fn status_from_dag_with_membership(
                     Vec::new()
                 },
                 changed: p.changed.clone(),
+                empty: empty_keys.get(id).copied().unwrap_or(0),
             });
         let mut cache = cache_status(report, &inputs, &states, &history);
         local_only(
@@ -735,6 +752,7 @@ pub(crate) async fn status_from_dag_with_membership(
             artifact: m.artifact_path,
             format: m.artifact_format,
             size_bytes: m.artifact_size_bytes,
+            rows: m.rows,
             error: m.error_message,
         });
         nodes.push(NodeStatus {
@@ -1134,6 +1152,7 @@ mod tests {
                 status: s.into(),
                 error_message: Some("boom".into()),
                 created_at: String::new(),
+                rows: None,
             }),
             ever_succeeded: ever,
             ..Default::default()
@@ -1246,6 +1265,7 @@ mod tests {
             artifact: None,
             format: None,
             size_bytes: None,
+            rows: None,
             partition: None,
             error: Some(error.into()),
         });

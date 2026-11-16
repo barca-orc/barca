@@ -6,12 +6,12 @@ function node(id: string, inputs: string[], over: Partial<NodeState> = {}): Node
   return {
     id, name: id.split(':')[1]!, kind: 'asset', inputs, partitioned: false,
     cache: { state: 'cached', reason: 'materialized', detail: '' },
-    last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null },
-    shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, ...over,
+    last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null },
+    shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, ...over,
   }
 }
 const failedAt = (at: string, error: string) => ({
-  last_materialization: { status: 'failed', created_at: at, elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error },
+  last_materialization: { status: 'failed', created_at: at, elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error },
 })
 
 // raw → clean → (report, check); orphan fails alone.
@@ -111,7 +111,7 @@ describe('partitioned failures', () => {
   const SAMPLE = 'BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14\n  File "p.py", line 9'
   const page: PartitionKeys = {
     total: 7, recorded: 3077, failed: 7,
-    keys: [{ key: 'account=ra-02541', status: 'failed', created_at: '2026-10-31 15:30:12', elapsed_seconds: null, error: SAMPLE, run_id: 'd9becbdf4a92', artifact_path: null, size_bytes: null }],
+    keys: [{ key: 'account=ra-02541', status: 'failed', created_at: '2026-10-31 15:30:12', elapsed_seconds: null, error: SAMPLE, run_id: 'd9becbdf4a92', artifact_path: null, size_bytes: null, rows: null }],
     errors: [{ error: KEY_ERROR, keys: 5 }, { error: 'KeyError: <key>', keys: 2 }],
   }
   const forecast = (over: Partial<NodeState> = {}) =>

@@ -34,7 +34,7 @@ describe('BlastRadius', () => {
   })
 
   it('shows each downstream node in the same words as the assets list: blocked by a failing upstream, not never run', () => {
-    const st = (id: string, cache: NodeState['cache']['state'], failed = false): NodeState => ({ id, name: id, kind: 'asset', inputs: [], partitioned: false, cache: { state: cache, reason: 'no_record', detail: '' }, last_materialization: failed ? { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error: 'boom' } : null, shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null })
+    const st = (id: string, cache: NodeState['cache']['state'], failed = false): NodeState => ({ id, name: id, kind: 'asset', inputs: [], partitioned: false, cache: { state: cache, reason: 'no_record', detail: '' }, last_materialization: failed ? { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'boom' } : null, shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0, running: null })
     const states = new Map([['p.py:raw', st('p.py:raw', 'never_run', true)], ['p.py:clean', st('p.py:clean', 'never_run')], ['p.py:report', st('p.py:report', 'never_run')]])
     const shown = render(<BlastRadius id="p.py:raw" graph={graph} states={states} paused={new Set()} onSelect={() => {}} />, (c) => c.setQueryData(['pins'], { pins: [] }))
     expect(shown).toContain('clean blocked')

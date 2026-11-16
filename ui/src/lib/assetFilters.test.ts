@@ -38,13 +38,14 @@ function node(
           artifact: null,
           format: null,
           size_bytes: null,
+          rows: null,
           error: failed ? 'boom' : null,
         }
       : null,
     shape: null,
     env: [],
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     ...rest,
   }

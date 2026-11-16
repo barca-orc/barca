@@ -18,4 +18,9 @@ failed_keys?: Array<string>,
  * run hash since then (`value ID` when a dict `partitions_from` source returned a new value
  * for it). A new key is absent. Absent when no key has an earlier result.
  */
-changed?: { [key in string]: Array<string> }, };
+changed?: { [key in string]: Array<string> },
+/**
+ * Keys whose latest successful result wrote no rows (its row count was recorded and is 0).
+ * Absent when none is.
+ */
+empty?: number, };

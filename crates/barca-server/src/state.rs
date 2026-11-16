@@ -232,6 +232,19 @@ pub struct NodeState {
     /// Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub next_run: Option<i64>,
+    /// The most recent cron fire time at or before now (unix epoch seconds) in the server's
+    /// `--timezone`, if scheduled: the slot it last had.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub prev_run: Option<i64>,
+    /// For a scheduled node that missed a slot: the first slot (unix epoch seconds) after the
+    /// tick of the newest run its schedule started (`runs.scheduled_at`), when that slot is at
+    /// or before now, so no run has started for it yet. `null` while on time, while paused, and
+    /// when no scheduled run is recorded.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub late_since: Option<i64>,
+    /// What its recorded results say about its data (`empty`, `rows_changed`,
+    /// `behind_input`); empty when nothing does.
+    pub signals: Vec<crate::signals::DataSignal>,
     /// The run working on this node now, whoever started it (`null` when none is).
     pub running: Option<crate::running::NodeRunning>,
     /// When its newest successful result was written (UTC `YYYY-MM-DD HH:MM:SS`, like

@@ -40,6 +40,7 @@ steps[].max_rss_bytes : integer|null
 steps[].node_id : string
 steps[].output_tail : array|null
 steps[].partition_key : null
+steps[].rows : null
 steps[].run_hash : string
 steps[].status : string
 steps[].worker_exit : null

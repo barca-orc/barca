@@ -60,6 +60,12 @@ cpu_seconds: number | null,
  */
 max_rss_bytes: number | null,
 /**
+ * Rows the step's tabular result holds, when its worker counted them (#925): a frame's
+ * length or a parquet file's footer. `null` when not counted (a failed step, a result that
+ * is not a frame, a CSV of a lazy frame or relation, a row from an older barca).
+ */
+rows: number | null,
+/**
  * A failed step's last lines of output, stdout and stderr in the order they were written,
  * without the traceback barca already shows (at most [`OUTPUT_TAIL_LINES`]; `barca logs
  * RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it

@@ -14,7 +14,7 @@ function node(id: string, inputs: string[] = []): NodeState {
     shape: null,
     env: [],
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
   }
 }
@@ -42,6 +42,7 @@ describe('historyBars', () => {
     run_id: null,
     cpu_seconds: null,
     max_rss_bytes: null,
+    rows: null,
   })
 
   it('oldest first, heights relative to the slowest run, failures marked', () => {
@@ -89,6 +90,7 @@ const timed = (elapsed: number | null, status = 'success'): AssetRunEntry => ({
   run_id: null,
   cpu_seconds: null,
   max_rss_bytes: null,
+  rows: null,
 })
 
 describe('durationHistogram', () => {
@@ -253,7 +255,7 @@ describe('failure facts', () => {
   })
 
   it('a history of only failures has nothing to summarize', () => {
-    const r = (status: string): AssetRunEntry => ({ status, elapsed_seconds: null, created_at: '', error_message: null, attempts: 1, run_id: null, cpu_seconds: null, max_rss_bytes: null })
+    const r = (status: string): AssetRunEntry => ({ status, elapsed_seconds: null, created_at: '', error_message: null, attempts: 1, run_id: null, cpu_seconds: null, max_rss_bytes: null, rows: null })
     expect(onlyFailures([r('failed')])).toBe(true)
     expect(onlyFailures([r('failed'), r('success')])).toBe(false)
     expect(onlyFailures([])).toBe(false)

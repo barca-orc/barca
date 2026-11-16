@@ -21,6 +21,9 @@ pub struct MaterializationRecord {
     pub status: String,
     pub error_message: Option<String>,
     pub created_at: String,
+    /// Rows of a successful tabular result, when its worker counted them (#925).
+    #[serde(default)]
+    pub rows: Option<i64>,
 }
 
 /// The last observed change in bytes for unchanged code and inputs.
@@ -67,6 +70,154 @@ pub struct NodeAge {
     pub consecutive_failures: u32,
     /// Its newest run as a whole; `None` until a run recorded a row for it.
     pub last_run: Option<RunTotals>,
+    /// The row counts of its latest successful results (#925); `None` until one succeeded.
+    pub rows: Option<RowFacts>,
+    /// For a scheduled node: the tick (`runs.scheduled_at`, unix seconds) of the newest run its
+    /// schedule started; `None` when no scheduled run is recorded.
+    pub last_tick: Option<i64>,
+}
+
+/// What a node's latest successful results say about their rows: each key's (the node's own,
+/// for a node without keys) latest success against the success before it (#925). Only row
+/// counts a worker recorded are read; a key whose count is unknown is left out of every figure.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RowFacts {
+    /// Whether the rows are of partition keys (`node[k=v]`).
+    pub partitioned: bool,
+    /// Keys whose latest success recorded a row count.
+    pub counted: u32,
+    /// Of them, those that wrote no rows.
+    pub empty: u32,
+    /// Keys that were empty as of before the node's newest run (each key's latest success
+    /// older than that run, or the success before it for a key that run wrote); `None` when no
+    /// key had a counted success before it.
+    pub previous_empty: Option<u32>,
+    /// Keys whose latest count differs from the one before it by more than half of it
+    /// ([`rows_changed`]).
+    pub changed: u32,
+    /// The largest of those changes, relative to the count before it.
+    pub largest_change: Option<RowChange>,
+    /// The newest successful row of any key, and its run: what "the node's newest run" is.
+    pub newest: (i64, Option<String>),
+}
+
+/// One key's row count against the one before it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowChange {
+    /// The key (`k=a`); `None` for a node without keys.
+    pub key: Option<String>,
+    pub rows: i64,
+    pub previous_rows: i64,
+}
+
+/// Whether a count moved from `previous` to `rows` by more than half of `previous` (any rows
+/// after an empty result count; empty after empty does not).
+pub fn rows_changed(rows: i64, previous: i64) -> bool {
+    (rows - previous).abs() * 2 > previous
+}
+
+/// A step's newest successful row, as [`NodeAgesIndex`] keeps it for its row counts.
+#[derive(Debug, Clone, PartialEq)]
+struct Success {
+    id: i64,
+    run: Option<String>,
+    rows: Option<i64>,
+}
+
+/// A step's two newest successful rows.
+#[derive(Debug, Clone, Default)]
+struct KeySuccesses {
+    latest: Option<Success>,
+    previous: Option<Success>,
+}
+
+impl KeySuccesses {
+    /// Fold in a row, in any order: the two with the highest ids are kept.
+    fn add(&mut self, row: Success) {
+        match &self.latest {
+            Some(latest) if latest.id == row.id => {}
+            Some(latest) if latest.id > row.id => {
+                if self.previous.as_ref().is_none_or(|p| p.id < row.id) {
+                    self.previous = Some(row);
+                }
+            }
+            _ => self.previous = self.latest.replace(row),
+        }
+    }
+}
+
+impl RowFacts {
+    /// From each step's two newest successes (`steps`: node id -> them).
+    fn of<'a>(
+        base: &str,
+        steps: impl Iterator<Item = (&'a String, &'a KeySuccesses)>,
+    ) -> Option<Self> {
+        let steps: Vec<(&String, &KeySuccesses)> = steps.collect();
+        let newest = steps
+            .iter()
+            .filter_map(|(_, s)| s.latest.as_ref())
+            .max_by_key(|s| s.id)
+            .map(|s| (s.id, s.run.clone()))?;
+        let mut facts = RowFacts {
+            partitioned: steps.iter().any(|(id, _)| id.len() > base.len()),
+            newest: newest.clone(),
+            ..Default::default()
+        };
+        let mut before_counted = 0u32;
+        let mut before_empty = 0u32;
+        let mut largest: Option<(f64, RowChange)> = None;
+        for (id, s) in &steps {
+            let Some(latest) = &s.latest else { continue };
+            let key = (id.len() > base.len()).then(|| {
+                id[base.len()..]
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string()
+            });
+            if let Some(rows) = latest.rows {
+                facts.counted += 1;
+                if rows == 0 {
+                    facts.empty += 1;
+                }
+            }
+            // As of before the newest run: this key's latest, unless the newest run wrote it.
+            let in_newest = latest.id == newest.0 || (newest.1.is_some() && latest.run == newest.1);
+            let before = if in_newest {
+                s.previous.as_ref()
+            } else {
+                Some(latest)
+            };
+            if let Some(rows) = before.and_then(|b| b.rows) {
+                before_counted += 1;
+                if rows == 0 {
+                    before_empty += 1;
+                }
+            }
+            if let (Some(rows), Some(previous)) =
+                (latest.rows, s.previous.as_ref().and_then(|p| p.rows))
+                && rows_changed(rows, previous)
+            {
+                facts.changed += 1;
+                let relative = (rows - previous).abs() as f64 / previous.max(1) as f64;
+                if largest
+                    .as_ref()
+                    .is_none_or(|(r, c)| relative > *r || (relative == *r && key < c.key))
+                {
+                    largest = Some((
+                        relative,
+                        RowChange {
+                            key: key.clone(),
+                            rows,
+                            previous_rows: previous,
+                        },
+                    ));
+                }
+            }
+        }
+        facts.previous_empty = (before_counted > 0).then_some(before_empty);
+        facts.largest_change = largest.map(|(_, c)| c);
+        Some(facts)
+    }
 }
 
 /// One run's rows for one node, keys folded into their base id: what the run cost on the node
@@ -123,6 +274,14 @@ pub struct NodeAgesIndex {
     success: HashMap<String, (i64, String, i64)>,
     /// base id -> its newest run's totals ([`RunTotals`]).
     last_run: HashMap<String, RunTotals>,
+    /// base id -> each of its steps (the node itself, or its keys) -> its two newest successes.
+    successes: HashMap<String, HashMap<String, KeySuccesses>>,
+    /// base id -> [`RowFacts`], computed again for the bases a read touched.
+    rows: HashMap<String, RowFacts>,
+    /// schedule (node id) -> the newest tick a run of it started for (unix seconds), and the
+    /// highest `runs` row id read for them.
+    ticks: HashMap<String, i64>,
+    runs_read: i64,
 }
 
 /// One row as [`NodeAgesIndex`] folds it in.
@@ -131,15 +290,19 @@ struct AgeRow {
     node: String,
     run: Option<String>,
     created_at: String,
+    /// The `rows` column (#925); always `None` for a failed row.
+    rows: Option<i64>,
 }
 
 impl AgeRow {
+    /// Columns `id, node_id, run_id, created_at, rows`.
     fn of(row: &libsql::Row) -> Self {
         Self {
             id: row.get::<i64>(0).unwrap_or_default(),
             node: row.get::<String>(1).unwrap_or_default(),
             run: row.get::<String>(2).ok().filter(|r| !r.is_empty()),
             created_at: row.get::<String>(3).unwrap_or_default(),
+            rows: row.get::<i64>(4).ok(),
         }
     }
 }
@@ -186,6 +349,17 @@ impl NodeAgesIndex {
         };
         self.mark = Some(now);
         self.read_last_runs(conn, &touched).await?;
+        for base in &touched {
+            match self
+                .successes
+                .get(base)
+                .and_then(|steps| RowFacts::of(base, steps.iter()))
+            {
+                Some(facts) => self.rows.insert(base.clone(), facts),
+                None => self.rows.remove(base),
+            };
+        }
+        self.read_ticks(conn).await?;
         Ok(self.ages())
     }
 
@@ -200,7 +374,7 @@ impl NodeAgesIndex {
         let mut touched = HashSet::new();
         let mut rows = conn
             .query(
-                "SELECT id, node_id, run_id, created_at FROM materializations \
+                "SELECT id, node_id, run_id, created_at, NULL FROM materializations \
                  WHERE status = 'failed' ORDER BY run_id, id",
                 (),
             )
@@ -215,7 +389,7 @@ impl NodeAgesIndex {
         drop(rows);
         let mut rows = conn
             .query(
-                "SELECT id, node_id, run_id, created_at FROM materializations \
+                "SELECT id, node_id, run_id, created_at, rows FROM materializations \
                  WHERE status = 'success' AND id <= ?1",
                 [max_id],
             )
@@ -281,6 +455,19 @@ impl NodeAgesIndex {
     fn fold_success(&mut self, row: AgeRow, touched: &mut HashSet<String>) {
         let base = base_of(&row.node);
         note_newest(&mut self.newest, base, row.id, row.run.clone());
+        let steps = match self.successes.get_mut(base) {
+            Some(steps) => steps,
+            None => self.successes.entry(base.to_string()).or_default(),
+        };
+        let success = Success {
+            id: row.id,
+            run: row.run.clone(),
+            rows: row.rows,
+        };
+        match steps.get_mut(&row.node) {
+            Some(step) => step.add(success),
+            None => steps.entry(row.node.clone()).or_default().add(success),
+        }
         let clean = self
             .failed
             .get(base)
@@ -371,6 +558,47 @@ impl NodeAgesIndex {
         Ok(())
     }
 
+    /// The newest tick of each schedule that a run started for, from the `runs` rows added
+    /// since the last read (all of them when rows were deleted below what was read).
+    async fn read_ticks(&mut self, conn: &libsql::Connection) -> Result<(), BarcaError> {
+        let failure = |e| BarcaError::Db(format!("failed to read scheduled runs: {e}"));
+        let mut rows = conn
+            .query("SELECT COALESCE(max(id), 0) FROM runs", ())
+            .await
+            .map_err(failure)?;
+        let max_id = match rows.next().await.map_err(failure)? {
+            Some(row) => row.get::<i64>(0).unwrap_or(0),
+            None => 0,
+        };
+        drop(rows);
+        if max_id < self.runs_read {
+            self.ticks.clear();
+            self.runs_read = 0;
+        }
+        if max_id == self.runs_read {
+            return Ok(());
+        }
+        let mut rows = conn
+            .query(
+                "SELECT schedule_id, scheduled_at FROM runs \
+                 WHERE id > ?1 AND id <= ?2 AND schedule_id IS NOT NULL AND scheduled_at IS NOT NULL",
+                [self.runs_read, max_id],
+            )
+            .await
+            .map_err(failure)?;
+        while let Some(row) = rows.next().await.map_err(failure)? {
+            let (Ok(schedule), Ok(at)) = (row.get::<String>(0), row.get::<String>(1)) else {
+                continue;
+            };
+            if let Some(at) = barca_model::time::parse_rfc3339(&at) {
+                let tick = self.ticks.entry(schedule).or_insert(at);
+                *tick = (*tick).max(at);
+            }
+        }
+        self.runs_read = max_id;
+        Ok(())
+    }
+
     fn ages(&self) -> HashMap<String, NodeAge> {
         let mut out: HashMap<String, NodeAge> = HashMap::with_capacity(self.success.len());
         for (base, runs) in &self.failed {
@@ -382,7 +610,7 @@ impl NodeAgesIndex {
                     last_success_at: None,
                     failing_since: trailing.clone().map(|(_, at)| at.clone()).min(),
                     consecutive_failures: trailing.count() as u32,
-                    last_run: None,
+                    ..NodeAge::default()
                 },
             );
         }
@@ -391,6 +619,12 @@ impl NodeAgesIndex {
         }
         for (base, totals) in &self.last_run {
             out.entry(base.clone()).or_default().last_run = Some(totals.clone());
+        }
+        for (base, facts) in &self.rows {
+            out.entry(base.clone()).or_default().rows = Some(facts.clone());
+        }
+        for (schedule, tick) in &self.ticks {
+            out.entry(schedule.clone()).or_default().last_tick = Some(*tick);
         }
         out
     }
@@ -413,7 +647,7 @@ async fn rows_between(
     let failure = |e| BarcaError::Db(format!("failed to read node ages: {e}"));
     let mut rows = conn
         .query(
-            "SELECT id, node_id, run_id, created_at, status = 'failed' FROM materializations \
+            "SELECT id, node_id, run_id, created_at, rows, status = 'failed' FROM materializations \
              WHERE id > ?1 AND id <= ?2 AND status IN ('success', 'failed') ORDER BY id",
             [after, upto],
         )
@@ -421,7 +655,7 @@ async fn rows_between(
         .map_err(failure)?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().await.map_err(failure)? {
-        let failed = row.get::<i64>(4).unwrap_or(0) != 0;
+        let failed = row.get::<i64>(5).unwrap_or(0) != 0;
         out.push((AgeRow::of(&row), failed));
     }
     Ok(out)
@@ -828,7 +1062,7 @@ async fn reported_rows(
             .query(
                 "SELECT m.id, m.node_id, m.run_hash, m.artifact_path, m.artifact_format, \
                  m.artifact_size_bytes, m.elapsed_seconds, m.status, m.error_message, \
-                 m.created_at, m.output_hash \
+                 m.created_at, m.output_hash, m.rows \
                  FROM json_each(?1) j JOIN materializations m ON m.id = j.value",
                 [list],
             )
@@ -851,6 +1085,7 @@ async fn reported_rows(
                         status: opt(7).unwrap_or_else(|| "success".to_string()),
                         error_message: opt(8),
                         created_at: row.get::<String>(9).unwrap_or_default(),
+                        rows: row.get::<i64>(11).ok(),
                     },
                 },
             );
@@ -1221,6 +1456,134 @@ mod tests {
 mod failure_index_tests {
     use super::*;
 
+    async fn insert_rows(path: &str, rows: &[(&str, &str, &str, Option<i64>)]) {
+        let _g = db_guard().await;
+        let (_db, conn) = open_conn(path).await.unwrap();
+        for (run, node, status, count) in rows {
+            conn.execute(
+                "INSERT INTO materializations (run_id, node_id, status, artifact_path, rows) \
+                 VALUES (?1, ?2, ?3, 'a.parquet', ?4)",
+                libsql::params![*run, *node, *status, *count],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    /// Row counts (#925): each key's latest success against the one before it, read in full
+    /// and again after a run recorded more rows; unknown counts are left out; the newest tick
+    /// of each schedule is read from `runs`.
+    #[tokio::test]
+    async fn row_facts_compare_each_keys_latest_success_with_the_one_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        insert_rows(
+            &path,
+            &[
+                ("r1", "p.py:a", "success", Some(100)),
+                ("r1", "p.py:k[d=1]", "success", Some(10)),
+                ("r1", "p.py:k[d=2]", "success", Some(0)),
+                ("r1", "p.py:k[d=3]", "success", Some(10)),
+                ("r1", "p.py:unknown", "success", None),
+                ("r2", "p.py:a", "success", Some(140)),
+                ("r2", "p.py:k[d=1]", "success", Some(0)),
+                ("r2", "p.py:k[d=2]", "success", Some(4)),
+                ("r2", "p.py:k[d=4]", "success", Some(0)),
+                ("r2", "p.py:k[d=3]", "failed", None),
+            ],
+        )
+        .await;
+        let mut index = NodeAgesIndex::default();
+        let ages = index.read(&path).await.unwrap();
+        let a = ages["p.py:a"].rows.clone().unwrap();
+        assert_eq!((a.partitioned, a.counted, a.empty), (false, 1, 0));
+        assert_eq!(a.previous_empty, Some(0));
+        assert_eq!(
+            (a.changed, a.largest_change),
+            (0, None),
+            "+40% is not a change"
+        );
+        let k = ages["p.py:k"].rows.clone().unwrap();
+        // d=1 and d=4 empty now; before r2 only d=2 was (d=4 is new, d=3 kept r1's 10).
+        assert_eq!((k.partitioned, k.counted, k.empty), (true, 4, 2));
+        assert_eq!(k.previous_empty, Some(1));
+        // d=1 10 -> 0 and d=2 0 -> 4 both moved; 0 -> 4 is the larger relative change.
+        assert_eq!(k.changed, 2);
+        assert_eq!(
+            k.largest_change,
+            Some(RowChange {
+                key: Some("d=2".into()),
+                rows: 4,
+                previous_rows: 0
+            })
+        );
+        let unknown = ages["p.py:unknown"].rows.clone().unwrap();
+        assert_eq!(
+            (unknown.counted, unknown.empty, unknown.previous_empty),
+            (0, 0, None)
+        );
+
+        // A third run halves `a` and fills d=1: only the touched node is folded again.
+        insert_rows(
+            &path,
+            &[
+                ("r3", "p.py:a", "success", Some(60)),
+                ("r3", "p.py:k[d=1]", "success", Some(12)),
+            ],
+        )
+        .await;
+        {
+            let _g = db_guard().await;
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            for (id, at) in [
+                ("s1", "2026-11-16T12:00:00Z"),
+                ("s2", "2026-11-16T12:05:00Z"),
+            ] {
+                conn.execute(
+                    "INSERT INTO runs (run_id, command, files, schedule_id, scheduled_at) \
+                     VALUES (?1, 'get', '[]', 'p.py:a', ?2)",
+                    [id, at],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let ages = index.read(&path).await.unwrap();
+        let a = ages["p.py:a"].rows.clone().unwrap();
+        assert_eq!(
+            (a.changed, a.largest_change),
+            (
+                1,
+                Some(RowChange {
+                    key: None,
+                    rows: 60,
+                    previous_rows: 140
+                })
+            )
+        );
+        assert_eq!(a.newest.1.as_deref(), Some("r3"));
+        let k = ages["p.py:k"].rows.clone().unwrap();
+        // Before r3: d=1 empty (r2) and d=4 empty; now only d=4.
+        assert_eq!((k.empty, k.previous_empty), (1, Some(2)));
+        assert_eq!(ages["p.py:a"].last_tick, Some(1_794_830_700));
+        assert_eq!(ages["p.py:k"].last_tick, None);
+        // Read in full, the same facts.
+        let full = node_ages(&path).await.unwrap();
+        assert_eq!(full["p.py:k"].rows, ages["p.py:k"].rows);
+        assert_eq!(full["p.py:a"].last_tick, ages["p.py:a"].last_tick);
+    }
+
+    #[test]
+    fn a_change_is_more_than_half_of_the_count_before() {
+        assert!(!rows_changed(150, 100));
+        assert!(rows_changed(151, 100));
+        assert!(rows_changed(49, 100));
+        assert!(!rows_changed(50, 100));
+        assert!(rows_changed(1, 0), "rows after an empty result");
+        assert!(!rows_changed(0, 0));
+    }
+
     /// Age is counted in runs: a run with a failed key is one failed attempt, a clean run ends
     /// the streak, and a key's row counts toward its base node.
     #[tokio::test]
@@ -1258,13 +1621,14 @@ mod failure_index_tests {
             assert_eq!(
                 NodeAge {
                     last_run: None,
+                    rows: None,
                     ..ages[id].clone()
                 },
                 NodeAge {
                     last_success_at: ok.map(str::to_string),
                     failing_since: since.map(str::to_string),
                     consecutive_failures: n,
-                    last_run: None,
+                    ..NodeAge::default()
                 },
                 "{id}"
             );

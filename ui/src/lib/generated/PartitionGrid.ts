@@ -34,7 +34,12 @@ states: string, counts: GridCounts,
  * `attempted_base` (unix seconds); how long it took (milliseconds); its artifact's size;
  * and its run, an index into `runs`.
  */
-attempted_base: number, attempted_at: Array<number | null>, elapsed_ms: Array<number | null>, size_bytes: Array<number | null>, run: Array<number | null>,
+attempted_base: number, attempted_at: Array<number | null>, elapsed_ms: Array<number | null>, size_bytes: Array<number | null>,
+/**
+ * The rows each cell's latest attempt wrote, where its worker counted them: null for a
+ * failed attempt, a result that is not a frame or an older barca's row.
+ */
+rows: Array<number | null>, run: Array<number | null>,
 /**
  * Each failed cell's error, an index into `errors`, by cell index.
  */

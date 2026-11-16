@@ -87,6 +87,7 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[(&str, &str)] = &[
     ("content_hash", V),
     ("error_type", V),
     ("error_message", V),
+    ("rows", I),
 ];
 
 /// `barca status --json`'s node, flattened: `cache.*` without the prefix, `partitions.*` and
@@ -107,6 +108,7 @@ pub(crate) const NODE_COLUMNS: &[(&str, &str)] = &[
     ("partitions_total", I),
     ("partitions_cached", I),
     ("partitions_missing", I),
+    ("partitions_empty", I),
     ("last_status", V),
     ("last_created_at", V),
     ("last_elapsed_seconds", F),
@@ -114,6 +116,7 @@ pub(crate) const NODE_COLUMNS: &[(&str, &str)] = &[
     ("last_artifact", V),
     ("last_format", V),
     ("last_size_bytes", I),
+    ("last_rows", I),
     ("last_content_hash", V),
     ("last_error", V),
 ];
@@ -177,6 +180,7 @@ fn node_row(n: &NodeStatus) -> Value {
         "partitions_total": p.map(|p| p.total),
         "partitions_cached": p.map(|p| p.cached),
         "partitions_missing": p.map(|p| p.missing),
+        "partitions_empty": p.map(|p| p.empty),
         "last_status": m.map(|m| &m.status),
         "last_created_at": m.map(|m| &m.created_at),
         "last_elapsed_seconds": m.and_then(|m| m.elapsed_seconds),
@@ -184,6 +188,7 @@ fn node_row(n: &NodeStatus) -> Value {
         "last_artifact": m.and_then(|m| m.artifact.as_ref()),
         "last_format": m.and_then(|m| m.format.as_ref()),
         "last_size_bytes": m.and_then(|m| m.size_bytes),
+        "last_rows": m.and_then(|m| m.rows),
         "last_content_hash": m.and_then(|m| m.content_hash.as_ref()),
         "last_error": m.and_then(|m| m.error.as_ref()),
     })
@@ -284,6 +289,7 @@ mod tests {
             content_hash: None,
             error_type: None,
             error_message: None,
+            rows: None,
         };
         let value = serde_json::to_value(&row).unwrap();
         let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
