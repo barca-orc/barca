@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { GraphEntry } from './graph'
 import {
   compareEntries,
+  groupOutputNote,
   contentsSummary,
   lastRunDuration,
   distinctNames,
@@ -235,5 +236,15 @@ describe('lastRunDuration', () => {
     expect(lastRunDuration({ ...base, last_materialization: { ...base.last_materialization!, elapsed_seconds: 61 } })).toEqual({ text: '1.0m' })
     expect(lastRunDuration({ ...base, last_materialization: null })).toBeNull()
     expect(lastRunDuration(undefined)).toBeNull()
+  })
+})
+
+describe('groupOutputNote', () => {
+  const output = (detail: string) => ({ cache: { state: 'unknown', reason: 'upstream_failed', detail } }) as unknown as Pick<NodeState, 'cache'>
+
+  it("explains a group's output that is not up to date: what failed upstream of it, then the server's reason", () => {
+    expect(groupOutputNote(output('an input failed'), ['p.py:a', 'p.py:b'])).toBe('Not up to date: 2 failed nodes upstream of it (a, b). An input failed.')
+    expect(groupOutputNote(output(''), ['p.py:a', 'p.py:b', 'p.py:c', 'p.py:d'])).toBe('Not up to date: 4 failed nodes upstream of it (a, b, c and 1 more).')
+    expect(groupOutputNote(output('cached'), [])).toBe('Cached')
   })
 })

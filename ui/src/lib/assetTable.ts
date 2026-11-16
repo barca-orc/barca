@@ -11,6 +11,7 @@
 import { match } from 'ts-pattern'
 import { CACHE_STATES, cacheStateRank, lastAttemptFailed, nodeStateDisplay, type CacheState } from './cacheStateDisplay'
 import type { Glyph } from './glyph'
+import { streakLabel } from './health'
 import { formatAgo, parseTime } from './time'
 import type { CacheStatus, NodeRunning, NodeState } from './types'
 
@@ -41,11 +42,11 @@ export interface AssetRow {
   last: { status: string; ago: string; error: string | null } | null
   /** When the latest attempt was recorded (ms since epoch). */
   lastAtMs: number | null
-  /** When it last succeeded; null if it never did. */
+  /** When it last succeeded (a partitioned node: its newest successful key); null if it never did. */
   lastSuccessAt: string | null
   /** The first failed attempt after its last clean run, while it fails. */
   failingSince: string | null
-  /** Runs in a row that failed it. */
+  /** Runs in a row that failed it (`streakLabel`). */
   failures: number
   /** Median of recent successful runs, formatted (`~2.3s / run` over a partitioned node's keys); null if it never succeeded. */
   typical: string | null
@@ -239,21 +240,22 @@ export function formatSeconds(s: number): string {
 /**
  * The Last run cell: one short line, no glyph (the state column has it), the time and, after a
  * failed attempt, when it last went well. `17m ago`, `failed 17m ago · last ok 2d ago`,
- * `failed 17m ago · never succeeded`, `not run`.
+ * `failed 17m ago · a key last ok 2d ago` (a partitioned node's newest successful key, which may
+ * be in a run where other keys failed), `failed 17m ago · never succeeded`, `not run`.
  */
-export function lastRunText(row: Pick<AssetRow, 'last' | 'lastFailed' | 'lastSuccessAt'>, nowMs: number): string {
+export function lastRunText(row: Pick<AssetRow, 'last' | 'lastFailed' | 'lastSuccessAt' | 'partitioned'>, nowMs: number): string {
   if (!row.last) return 'not run'
   if (row.lastFailed || row.last.status === 'failed') {
-    return `failed ${row.last.ago} · ${row.lastSuccessAt ? `last ok ${formatAgo(row.lastSuccessAt, nowMs)}` : 'never succeeded'}`
+    return `failed ${row.last.ago} · ${row.lastSuccessAt ? `${row.partitioned ? 'a key last ok' : 'last ok'} ${formatAgo(row.lastSuccessAt, nowMs)}` : 'never succeeded'}`
   }
   return row.last.status === 'success' ? row.last.ago : `${row.last.status} ${row.last.ago}`
 }
 
-/** The Last run cell's tooltip: the rest of the story while it fails, how long and how often. */
-export function lastRunTitle(row: Pick<AssetRow, 'last' | 'lastFailed' | 'lastSuccessAt' | 'failingSince' | 'failures'>, nowMs: number): string {
+/** The Last run cell's tooltip: the rest of the story while it fails, how long and how many runs in a row. */
+export function lastRunTitle(row: Pick<AssetRow, 'last' | 'lastFailed' | 'lastSuccessAt' | 'partitioned' | 'failingSince' | 'failures'>, nowMs: number): string {
   const line = lastRunText(row, nowMs)
   if (!row.failingSince) return line
-  return `${line} · failing since ${formatAgo(row.failingSince, nowMs)} · ${row.failures} ${row.failures === 1 ? 'run' : 'runs'}`
+  return `${line} · failing since ${formatAgo(row.failingSince, nowMs)} · ${streakLabel(row.failures)}`
 }
 
 /** Below this a typical duration says nothing a reader can use, and reads as a dash. */

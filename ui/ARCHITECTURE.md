@@ -69,12 +69,12 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/tone.ts` | `Tone`, `toneMeta` — the status hues both tables map onto; colour is never the only carrier | — |
 | `lib/graphState.ts` | `graphState(node)` — a node's box: its cache state (word, tone, detail, failed last attempt), the run on it, or no state yet | `graphState.test.ts` |
 | `lib/graphView.ts` | `fitTarget`, `neighborInDirection`, `waitsOn` — what a fit shows, where the keyboard goes, what a never-run node waits on | `graphView.test.ts` |
-| `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation | `groupedPage.test.ts` |
+| `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation, header counts (`scopeCountsLabel`), rows held in place under the pointer (`holdOrder`, `hooks/useHeldOrder.ts`) | `groupedPage.test.ts` |
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre per connected part, parts packed in rows, no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
 | `lib/domainMap.ts` | `domainMap(assets)` — All pipelines as a card per file, weighted edges between files | `domainMap.test.ts` |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count and state, through `assetTable.fileDisplay`, as its table header shows it); `mergeStates` for the sidebar | `pipeline.test.ts` |
-| `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
+| `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge`, `ageCell`, `streakLabel` — what is broken in a scope, why, and how late; a failing streak is always "N failed runs in a row", a partitioned node's success is "any key"'s, a group's "oldest member"'s | `health.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
 | `lib/sidebar.ts` | `updateSidebar`, `fileGroups` — the sidebar's collapse and the tree of groups under a file | `sidebar.test.ts` |
 | `lib/names.ts` | `splitMiddle` — a long name's cuttable head and its kept tail (`MiddleName`) | `names.test.ts` |

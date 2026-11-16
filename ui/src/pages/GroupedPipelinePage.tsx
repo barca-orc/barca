@@ -1,5 +1,5 @@
 import { StreamNotice } from '@/components/StreamNotice'
-import { useDeferredValue, useEffect, useMemo, useRef } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { match } from 'ts-pattern'
 import { ArrowLeft, ChevronRight, FolderOpen } from 'lucide-react'
@@ -31,6 +31,8 @@ import {
   parseGroupedParams,
   revealChanges,
   rootName,
+  groupsUnder,
+  scopeCountsLabel,
   selectChanges,
   visibleFailures,
   type ParamChanges,
@@ -41,6 +43,7 @@ import { healthCounts } from '@/lib/health'
 import { FailuresView } from './FailuresView'
 import { GroupedTable, GroupPanel, LineagePicker } from './GroupedView'
 import { usePinNotes } from '@/hooks/usePins'
+import { useHeldOrder } from '@/hooks/useHeldOrder'
 
 /** The hash route's query, as it is now (`#/assets?pipeline=…`). */
 function currentParams(): URLSearchParams {
@@ -75,12 +78,18 @@ export function GroupedPipelinePage() {
     () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live }),
     [view, query, tree, allAssets, states, stateQuery.isError, live],
   )
-  const { assets, byId, leaves, sole, scope, entries, map, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, visibleEntries, isHit, pathOf, placeOf } = level
+  const { assets, byId, leaves, sole, scope, entries, map, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, isHit, pathOf, placeOf } = level
+  // Rows never move under the pointer: while it is over the table, states that arrive (a group's
+  // Checking… resolving) keep the order shown until it leaves or the sort, scope or search changes.
+  const [pointerOver, setPointerOver] = useState(false)
+  const visibleEntries = useHeldOrder(level.visibleEntries, JSON.stringify([pipeline, scope, flat, show, sort, query]), pointerOver)
   const canvas = useRef<GraphCanvasHandle>(null)
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
+  const kindOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.kind])), [allAssets])
+  const inputsOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.inputs])), [allAssets])
   const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, live), [scopeIds, byId, live])
   const graphKnown = !!assetQuery.data
   const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scopedStates), [scopedStates]))
@@ -193,9 +202,10 @@ export function GroupedPipelinePage() {
               </span>
             ))}
           </nav>
-          <span className="barca-count">
-            {plural(scopeIds.length, 'node')}
-            {!flat && show === 'items' && ` · ${map ? plural(map.entries.length, 'pipeline') : plural(entries.length, scope ? 'item' : 'group')}`}
+          <span className="barca-count" title="The nodes in view by kind, and the groups they are organized in at any depth; the toolbar counts the rows shown">
+            {/* The pipeline's one group, opened at once, is in view too. */}
+            {scopeCountsLabel(scopeIds, kindOf, groupsUnder(scope, tree) + (scope !== null && scope === sole ? 1 : 0))}
+            {map && ` · ${plural(map.entries.length, 'pipeline')}`}
           </span>
           {runningHere > 0 && (
             <span className="barca-count barca-count-running">
@@ -324,7 +334,7 @@ export function GroupedPipelinePage() {
               )}
             </div>
           ) : (
-            <div className="barca-view-body barca-table-scroll" ref={scroller}>
+            <div className="barca-view-body barca-table-scroll" ref={scroller} onPointerEnter={() => setPointerOver(true)} onPointerLeave={() => setPointerOver(false)}>
               <GroupedTable
                 entries={visibleEntries}
                 tree={tree}
@@ -357,6 +367,7 @@ export function GroupedPipelinePage() {
               live={live}
               state={groupState}
               statesFailed={stateQuery.isError}
+              inputs={inputsOf}
               nowMs={nowMs}
               onOpen={openGroup}
               onReveal={revealNode}

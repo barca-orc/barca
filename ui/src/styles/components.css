@@ -356,3 +356,6 @@ a.barca-btn { text-decoration: none; }
 .barca-panel-tabs button:hover { color: var(--text-strong); }
 .barca-panel-tabs button[aria-selected='true'] { color: var(--text-strong); border-bottom-color: var(--text-strong); }
 .barca-panel-tabs + .barca-section { border-top: 0; margin-top: 4px; }
+
+/* A Last success cell's failing line wraps rather than cutting its streak off. */
+.barca-age-failing { white-space: normal; }

@@ -154,18 +154,18 @@ test('failures are grouped by cause, and a failure row retries its node and open
 test('All pipelines is a map of files, and a pipeline of one group opens that group', async ({ page }) => {
   await page.goto('/ui/#/assets?view=graph')
   await expect(page.locator('.react-flow__node')).toHaveCount(3)
-  await expect(page.getByText('32 nodes · 3 pipelines')).toBeVisible()
+  await expect(page.getByText('28 assets · 4 tasks in 5 groups · 3 pipelines')).toBeVisible()
   // The one edge between files carries how many inputs cross it.
   await expect(page.locator('.react-flow__edge-text')).toHaveText('22')
   await page.locator(`.react-flow__node[data-id="domain:${FILE}"]`).dblclick()
   await expect(page).toHaveURL(/pipeline=grouped\.py/)
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText(FILE)
-  await expect(page.getByText('9 nodes · 3 groups')).toBeVisible()
+  await expect(page.getByText('5 assets · 4 tasks in 4 groups')).toBeVisible()
   // marts.py is one group: it opens at once, its 22 marts in a grid fed by one port.
   await page.goto('/ui/#/assets?view=graph')
   await page.locator('.react-flow__node[data-id="domain:marts.py"]').dblclick()
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText('marts.py')
-  await expect(page.getByText('22 nodes · 22 items')).toBeVisible()
+  await expect(page.getByText('22 assets in 1 group')).toBeVisible()
   await expect(page.locator('.barca-port-node')).toHaveText('summary')
   const rows = await page.locator('.react-flow__node-asset').evaluateAll((all) => new Set(all.map((n) => n.getBoundingClientRect().top)).size)
   expect(rows).toBeLessThan(8)
@@ -287,6 +287,6 @@ test('mixed groups and nodes keep their columns readable at laptop width', async
   const widths = await table.locator('th').evaluateAll(cells => cells.map(c => ({ name: c.textContent?.trim(), width: c.getBoundingClientRect().width })))
   for (const cell of widths) {
     if (cell.name === 'Contents') expect(cell.width).toBeGreaterThanOrEqual(140)
-    if (cell.name === 'Age' || cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
+    if (cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
   }
 })

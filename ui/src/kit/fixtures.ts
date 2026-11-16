@@ -421,5 +421,10 @@ export const failureLists = {
     failureOf('check__ledger', "KeyError: 'currency'", 0, 'task'),
   ],
   'graph loading': [failureOf('invoices_00', 'row count fell 64% day over day', null)],
+  // A long error heads its cause wrapped (its count stays in view); rows with the same words do not repeat it.
+  'long error, said once': [
+    failureOf('invoices_by_account', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 58),
+    failureOf('invoices_by_region', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 3),
+  ],
   nothing: [],
 } satisfies Record<string, Failure[]>

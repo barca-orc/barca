@@ -157,11 +157,13 @@ const [query, setQuery] = useState('')
       <Variant label="wide, every part named"><HealthBar counts={healthStates['every state']!} labelLimit={10} width={200} /></Variant>
     </Spec>
 
-    <Spec title="Age / LastSuccess" note="Relative, absolute in the chosen zone on hover; a failing row adds since when and how many runs.">
+    <Spec title="Age / LastSuccess" note="Relative, absolute in the chosen zone on hover; whose success it is when not the row's own; a failing row adds since when and how many runs in a row, a group how many members fail.">
       <Variant label="minutes"><Age at={new Date(NOW_MS - 300_000).toISOString()} nowMs={NOW_MS} /></Variant>
-      <Variant label="healthy"><LastSuccess at={new Date(NOW_MS - 3_600_000).toISOString()} failingSince={null} failures={0} nowMs={NOW_MS} /></Variant>
-      <Variant label="failing"><LastSuccess at={new Date(NOW_MS - 172_800_000).toISOString()} failingSince={new Date(NOW_MS - 50_400_000).toISOString()} failures={3} nowMs={NOW_MS} /></Variant>
-      <Variant label="never succeeded"><LastSuccess at={null} failingSince={new Date(NOW_MS - 3_600_000).toISOString()} failures={1} nowMs={NOW_MS} /></Variant>
+      <Variant label="healthy"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 3_600_000).toISOString(), of: 'node' }, failing: null }} nowMs={NOW_MS} /></Variant>
+      <Variant label="failing"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 172_800_000).toISOString(), of: 'node' }, failing: { lead: 'failing', since: new Date(NOW_MS - 50_400_000).toISOString(), tail: ' · 3 failed runs in a row' } }} nowMs={NOW_MS} /></Variant>
+      <Variant label="partitioned"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 600_000).toISOString(), of: 'any key' }, failing: { lead: 'failing', since: new Date(NOW_MS - 10_800_000).toISOString(), tail: ' · 130 failed runs in a row' } }} nowMs={NOW_MS} /></Variant>
+      <Variant label="group"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 432_000_000).toISOString(), of: 'oldest member' }, failing: { lead: '3 failing · oldest', since: new Date(NOW_MS - 10_800_000).toISOString(), tail: '' } }} nowMs={NOW_MS} /></Variant>
+      <Variant label="never succeeded"><LastSuccess cell={{ success: null, failing: { lead: 'failing', since: new Date(NOW_MS - 3_600_000).toISOString(), tail: ' · 1 failed run' } }} nowMs={NOW_MS} /></Variant>
     </Spec>
     <Spec title="ConnectionBadge">
       {variants(connections).map((kind) => (

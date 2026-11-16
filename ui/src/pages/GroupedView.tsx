@@ -1,7 +1,6 @@
 import { useState, type RefObject } from 'react'
 import { ChevronRight, FolderOpen, X } from 'lucide-react'
 import {
-  Age,
   Button,
   HealthBar,
   IconButton,
@@ -19,8 +18,8 @@ import {
 } from '@/components'
 import { shortName, type GraphEntry } from '@/lib/graph'
 import { cacheGraphState, isLive, memberHealth, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
-import { lastRunDuration, groupOutput, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
-import { healthCounts, isFailed, scopeAge, type Failure, type HealthCounts } from '@/lib/health'
+import { groupOutput, groupOutputNote, lastRunDuration, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
+import { ageCell, failedUpstream, healthCounts, isFailed, scopeAge, type Failure, type HealthCounts } from '@/lib/health'
 import { isCheck, nodeKindLabel } from '@/lib/status'
 import type { TableWindow } from '@/hooks/useTableWindow'
 import { sourceFile } from '@/lib/pipeline'
@@ -59,15 +58,14 @@ export interface GroupedTableProps {
 export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
   const hasGroups = entries.some((e) => e.kind === 'group')
   const hasLeaves = entries.some((e) => e.kind !== 'group')
-  const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 2 : 0)
+  const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 1 : 0)
   const counts = (id: string): HealthCounts => healthCounts(leaves(id), byId, live)
   return (
-    <table className="barca-table barca-group-table" style={{ minWidth: 240 + 240 + 250 + (hasGroups ? 260 : 0) + (hasLeaves ? 200 : 0) }}>
+    <table className="barca-table barca-group-table" style={{ minWidth: 240 + 240 + 250 + (hasGroups ? 260 : 0) + (hasLeaves ? 100 : 0) }}>
       <colgroup>
         <col style={{ width: 240 }} /><col style={{ width: 240 }} /><col style={{ width: 250 }} />
         {hasGroups && <col style={{ width: 150 }} />}
         {hasGroups && <col style={{ width: 70 }} />}
-        {hasLeaves && <col style={{ width: 100 }} />}
         {hasLeaves && <col style={{ width: 100 }} />}
         {hasGroups && <col style={{ width: 40 }} />}
       </colgroup>
@@ -75,10 +73,9 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
         <tr>
           <th className="barca-group-col-name">Name</th>
           <th className="barca-group-col-state">State</th>
-          <th title="A group shows its oldest member's">Last success</th>
+          <th title="A node's last success (a partitioned node's newest successful key, any key); a group's oldest member's, and how many members are failing">Last success</th>
           {hasGroups && <th>Contents</th>}
           {hasGroups && <th className="num" title="Members whose last attempt failed">Failed</th>}
-          {hasLeaves && <th title="Since the last attempt">Age</th>}
           {hasLeaves && <th className="num" title="The last attempt's">Duration</th>}
           {hasGroups && <th className="barca-group-col-open" />}
         </tr>
@@ -92,10 +89,9 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
           const nestedGroups = group?.members.filter((id) => tree.groups.has(id)).length ?? 0
           const state = visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE
           const node = group ? undefined : byId.get(entry.id)
-          const last = node?.last_materialization
           const running = node?.running
           const duration = group ? null : lastRunDuration(node)
-          const { lastSuccessAt, failingSince, failures: failed } = scopeAge(group ? leaves(entry.id) : [entry.id], byId)
+          const age = ageCell(scopeAge(group ? leaves(entry.id) : [entry.id], byId), { group: !!group, partitioned: node?.partitioned ?? false })
           return (
             <tr
               key={entry.id}
@@ -144,13 +140,12 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
                 )}
               </td>
               <td>
-                {statesLoaded && <LastSuccess at={lastSuccessAt} failingSince={failingSince} failures={failed} nowMs={nowMs} />}
+                {statesLoaded && <LastSuccess cell={age} nowMs={nowMs} />}
               </td>
               {hasGroups && <td>{group && entry.summary}</td>}
               {hasGroups && (
                 <td className="num">{group && statesLoaded && counts(entry.id).lastFailed.toLocaleString()}</td>
               )}
-              {hasLeaves && <td>{last && <Age at={last.created_at} nowMs={nowMs} />}</td>}
               {hasLeaves && (
                 <td className="num" title={duration?.title}>{duration?.text}</td>
               )}
@@ -189,6 +184,8 @@ export interface GroupPanelProps {
   /** The group's box: its most urgent fact, or Checking… while members load. */
   state: GraphState
   statesFailed: boolean
+  /** Each node's inputs (`GET /assets`): what keeps the group's output from being up to date. */
+  inputs: ReadonlyMap<string, readonly string[]>
   nowMs: number
   onOpen: (id: string) => void
   onReveal: (id: string) => void
@@ -196,11 +193,13 @@ export interface GroupPanelProps {
 }
 
 /** The selected group's details: its members by state, its failed members, and its output. */
-export function GroupPanel({ group, tree, byId, leaves, live, state, statesFailed, nowMs, onOpen, onReveal, onClose }: GroupPanelProps) {
+export function GroupPanel({ group, tree, byId, leaves, live, state, statesFailed, inputs, nowMs, onOpen, onReveal, onClose }: GroupPanelProps) {
   // Members whose last attempt failed, by their resting state (a running member is being retried).
   const failedMembers = leaves.map((id) => byId.get(id)).filter((node): node is NodeState => !!node && isFailed(cacheGraphState(node)))
   const outputId = groupOutput(group.id, tree)
   const output = byId.get(outputId)
+  // Why the output is not up to date when it did not fail itself: what failed upstream of it.
+  const outputNote = output && !isFailed(cacheGraphState(output)) ? groupOutputNote(output, failedUpstream(outputId, inputs, byId)) : null
   return (
     <SidePanel
       label={`${group.name} group details`}
@@ -246,7 +245,10 @@ export function GroupPanel({ group, tree, byId, leaves, live, state, statesFaile
           <ChevronRight size={14} />
         </button>
         {output ? (
-          <OutputState node={output} nowMs={nowMs} />
+          <>
+            <OutputState node={output} nowMs={nowMs} />
+            {outputNote && <p className="barca-note">{outputNote}</p>}
+          </>
         ) : (
           <StatusBadge glyph={statesFailed ? 'unknown' : 'pending'} label={statesFailed ? 'State unavailable' : 'Checking…'} size="sm" />
         )}
