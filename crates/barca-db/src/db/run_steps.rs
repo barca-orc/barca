@@ -353,7 +353,8 @@ pub async fn get_run_steps_page(
 }
 
 /// Every node `run_id` recorded steps for, with their counts: failed nodes first, then in the
-/// order they were first recorded. `batch` is the batch id column, or `NULL` without one.
+/// order they were first recorded. Keys are counted once each: a run requeued onto new code can
+/// hold two rows for a key, one per run hash (#794), and a key with a failed row counts as failed. `batch` is the batch id column, or `NULL` without one.
 async fn node_summaries(
     conn: &libsql::Connection,
     run_id: &str,
@@ -362,7 +363,7 @@ async fn node_summaries(
     let mut summary = conn
         .query(
             &format!(
-                "SELECT substr(node_id, 1, instr(node_id || '[', '[') - 1) AS base, COUNT(*), SUM(status = 'failed'), SUM(elapsed_seconds), COUNT(DISTINCT {batch}) \
+                "SELECT substr(node_id, 1, instr(node_id || '[', '[') - 1) AS base, COUNT(DISTINCT node_id), COUNT(DISTINCT CASE WHEN status = 'failed' THEN node_id END), SUM(elapsed_seconds), COUNT(DISTINCT {batch}) \
                  FROM materializations WHERE run_id = ?1 GROUP BY base ORDER BY SUM(status = 'failed') > 0 DESC, MIN(id)"
             ),
             [run_id],

@@ -365,7 +365,9 @@ async fn has_key_rows(conn: &libsql::Connection, node_id: &str) -> Result<bool, 
 }
 
 /// [`AssetStats`] of a partitioned node: one execution per run, its time and CPU summed over
-/// the run's keys and its memory the largest of them.
+/// the run's keys and its memory the largest of them. A key counts once per run, as failed when
+/// it has a failed row, however many rows the run holds for it (#794): the same keys and failed
+/// keys as `GET /state`'s `last_run` and the run's node summary.
 async fn partitioned_stats(
     conn: &libsql::Connection,
     node_id: &str,
@@ -374,7 +376,7 @@ async fn partitioned_stats(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT SUM(elapsed_seconds), MAX(created_at), MIN(error_message), MAX(attempts), MAX(NULLIF(run_id, '')), SUM(cpu_seconds), MAX(max_rss_bytes), COUNT(*), SUM(status = 'failed') \
+                "SELECT SUM(elapsed_seconds), MAX(created_at), MIN(error_message), MAX(attempts), MAX(NULLIF(run_id, '')), SUM(cpu_seconds), MAX(max_rss_bytes), COUNT(DISTINCT node_id), COUNT(DISTINCT CASE WHEN status = 'failed' THEN node_id END) \
                  FROM materializations WHERE {KEY_ROWS} \
                  GROUP BY COALESCE(NULLIF(run_id, ''), 'row:' || id) ORDER BY MAX(id) DESC"
             ),
@@ -642,5 +644,49 @@ mod duration_tests {
         assert_eq!(d["p.py:g"], vec![7.0], "found below 3000 other rows");
         assert!(!d.contains_key("p.py:missing"));
         assert!(!d.contains_key("p.py:failed_only"));
+    }
+}
+
+#[cfg(test)]
+mod key_count_tests {
+    /// A run requeued onto new code can hold two rows for a key, one per run hash (#794). Every
+    /// per-node figure counts the key once: the node's history entry, `GET /state`'s `last_run`
+    /// and the run's node summary agree on 2 keys, 1 failed.
+    #[tokio::test]
+    async fn a_key_recorded_twice_in_one_run_counts_once_everywhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        {
+            let _guard = super::db_guard().await;
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            for (node, hash, status) in [
+                ("p.py:k[x=1]", "old", "failed"),
+                ("p.py:k[x=1]", "new", "failed"),
+                ("p.py:k[x=2]", "old", "success"),
+                ("p.py:k[x=2]", "new", "success"),
+            ] {
+                conn.execute(
+                    "INSERT INTO materializations (run_id, node_id, run_hash, status) \
+                     VALUES ('r1', ?1, ?2, ?3)",
+                    [node, hash, status],
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let stats = super::get_asset_stats(&path, "p.py:k").await.unwrap();
+        assert_eq!(stats.total_runs, 1);
+        assert_eq!(stats.recent_runs[0].keys, Some(2));
+        assert_eq!(stats.recent_runs[0].failed_keys, Some(1));
+
+        let ages = super::super::history::node_ages(&path).await.unwrap();
+        let run = ages["p.py:k"].last_run.clone().unwrap();
+        assert_eq!((run.keys, run.failed), (2, 1));
+
+        let nodes = super::super::run_steps::run_node_summaries(&path, "r1")
+            .await
+            .unwrap();
+        assert_eq!((nodes[0].keys, nodes[0].failed), (2, 1));
     }
 }
