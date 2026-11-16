@@ -223,8 +223,10 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
     return { name: entry.name ?? entry.id, failed: counts.lastFailed, stale: needsAttention(counts), lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
   }
   const sorted = entries.map((entry) => ({ entry, rank: rankOf(entry) })).sort((a, b) => compareEntries(params.sort, a.rank, b.rank)).map(({ entry }) => entry)
+  // A search lists what matches by its own name: a group because of its name, never because a
+  // member deep inside it (or its output) matches; that member is listed itself, with its path.
   const visibleEntries = [
-    ...sorted.filter((entry) => !needle || `${entry.name} ${entry.outputName ?? ''} ${leaves(entry.id).join(' ')}`.toLowerCase().includes(needle)),
+    ...sorted.filter((entry) => !needle || (entry.name ?? entry.id).toLowerCase().includes(needle)),
     ...hits,
   ]
   return {
@@ -247,10 +249,10 @@ interface SearchInput {
 }
 
 /**
- * A search reaches every node in scope, not just this level: a match deep in a nested group is
- * listed with its path, what needs attention first (a failed last attempt, then a state other
- * than cached), then by name; at most `SEARCH_LIMIT`. Nothing in a flat view, the failures list
- * or the graph.
+ * A search reaches every node in scope, not just this level: a node whose name matches, deep in
+ * a nested group, is listed with its path, what needs attention first (a failed last attempt,
+ * then a state other than cached), then by name; at most `SEARCH_LIMIT`. Nothing in a flat
+ * view, the failures list or the graph.
  */
 export function searchHits({ needle, flat, show, graph, entries, scope, leavesOf, assets, byId, byKind }: SearchInput): GraphEntry[] {
   if (!needle || flat || show === 'failures' || graph) return []
@@ -261,7 +263,7 @@ export function searchHits({ needle, flat, show, graph, entries, scope, leavesOf
     return isFailed(box) ? 0 : box.kind === 'cache' && box.state !== 'cached' ? 1 : 2
   }
   return ids
-    .filter((id) => !level.has(id) && id.toLowerCase().includes(needle))
+    .filter((id) => !level.has(id) && shortName(id).toLowerCase().includes(needle))
     .map((id) => ({ id, rank: rank(id), name: shortName(id) }))
     .sort((a, b) => a.rank - b.rank || NAME_ORDER.compare(a.name, b.name))
     .slice(0, SEARCH_LIMIT)

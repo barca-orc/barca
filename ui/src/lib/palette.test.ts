@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { NodeState } from './types'
 import { INITIAL_PALETTE, isKeyQuery, keyItems, paletteActions, paletteIndex, searchPalette, updatePalette } from './palette'
 
 const index = paletteIndex(
@@ -18,6 +19,38 @@ describe('paletteIndex', () => {
   })
   it('lists what the project is made of before its runs', () => {
     expect(index.map((i) => i.section)).toEqual(['Files', 'Files', 'Groups', 'Nodes', 'Nodes', 'Nodes', 'Runs'])
+  })
+})
+
+describe('a result\'s state', () => {
+  const node = (id: string, failed: boolean) => ({
+    id, name: id, kind: 'asset', inputs: [], partitioned: false, cache: { state: 'cached', reason: 'materialized', detail: '' },
+    last_materialization: { status: failed ? 'failed' : 'success', created_at: '2026-10-30 00:00:00', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null },
+    shape: null, env: [], durations: null, next_run: null, running: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+  }) as NodeState
+  const assets = [{ id: 'a.py:orders', kind: 'asset' as const }, { id: 'a.py:orders_daily', kind: 'asset' as const }, { id: 'b.py:orders_bad', kind: 'asset' as const }]
+  const states = {
+    byId: new Map([['a.py:orders', node('a.py:orders', false)], ['a.py:orders_daily', node('a.py:orders_daily', false)], ['b.py:orders_bad', node('b.py:orders_bad', true)]]),
+    leavesOf: new Map([['group:a.py:raw', ['a.py:orders', 'a.py:orders_daily']]]),
+  }
+  const withStates = paletteIndex(assets, [{ id: 'group:a.py:raw', name: 'Raw' }], [{ id: 'run-9', target: null, status: 'failed' }], states)
+  const of = (key: string) => withStates.find((i) => i.key === key)?.state
+
+  it('draws each node, group, file and run with its glyph', () => {
+    expect(of('a.py:orders')).toMatchObject({ glyph: 'fresh', label: 'fresh' })
+    expect(of('b.py:orders_bad')).toMatchObject({ glyph: 'failed', label: 'failing', tone: 'failed' })
+    expect(of('group:a.py:raw')).toMatchObject({ glyph: 'fresh' })
+    expect(of('file:b.py')).toMatchObject({ glyph: 'failed', label: '1 failing' })
+    expect(of('run:run-9')).toMatchObject({ glyph: 'failed', label: 'failed' })
+  })
+  it('has none for what is not loaded yet', () => {
+    expect(index.every((i) => i.section === 'Runs' || i.state === null)).toBe(true)
+  })
+  it('ranks failing results first among equal matches, never above a better match', () => {
+    // Three name-prefix matches: the failing one first, then index order.
+    expect(searchPalette(withStates, 'orders').filter((i) => i.section === 'Nodes').map((i) => i.key)).toEqual(['b.py:orders_bad', 'a.py:orders', 'a.py:orders_daily'])
+    // `daily` is a name match for one node only: a failing detail match does not outrank it.
+    expect(searchPalette(withStates, 'daily').map((i) => i.key)[0]).toBe('a.py:orders_daily')
   })
 })
 

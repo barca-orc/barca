@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { PaletteItem } from '@/lib/palette'
+import { StatusGlyph } from './StatusGlyph'
 
 
 export interface CommandPaletteViewProps {
@@ -14,7 +15,11 @@ export interface CommandPaletteViewProps {
   onClose: () => void
 }
 
-/** barca · CommandPalette: one field that reaches any node, group, file, run or partition key. */
+/**
+ * barca · CommandPalette: one field that reaches any node, group, file, run or partition key,
+ * each result with its state's glyph (an action, or a state not loaded yet, keeps the glyph's
+ * room empty), failing results first among equal matches.
+ */
 export function CommandPaletteView({ query, items, active, searching = false, onQuery, onMove, onPick, onClose }: CommandPaletteViewProps) {
   const list = useRef<HTMLUListElement>(null)
   useEffect(() => {
@@ -49,6 +54,9 @@ export function CommandPaletteView({ query, items, active, searching = false, on
           <ul id="barca-palette-list" role="listbox" ref={list} aria-label="Results">
             {items.map((item, i) => (
               <li key={item.key} role="option" aria-selected={i === active} onClick={() => onPick(item)}>
+                {item.state
+                  ? <StatusGlyph glyph={item.state.glyph} live={item.state.live} size={12} label={item.state.label} />
+                  : <span className="barca-palette-noglyph" aria-hidden="true" />}
                 <b title={item.label}>{item.label}</b>
                 <span>{item.detail}</span>
               </li>
