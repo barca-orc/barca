@@ -377,7 +377,7 @@ a.barca-btn { text-decoration: none; }
 .barca-healthmap-center-label, .barca-healthmap-center-sub, .barca-healthmap-arc-label { text-anchor: middle; pointer-events: none; font-family: var(--font-sans); }
 .barca-healthmap-center-label { font-size: var(--text-sm); font-weight: 600; fill: var(--text-strong); }
 .barca-healthmap-center-sub { font-size: var(--text-xs); fill: var(--text-muted); }
-.barca-healthmap-arc-label { font-size: var(--text-xs); font-weight: 600; fill: var(--text-on-signal); paint-order: stroke; stroke: var(--bg-canvas); stroke-opacity: 0.5; stroke-width: 2px; }
+.barca-healthmap-arc-label { font-size: var(--text-xs); font-weight: 600; fill: var(--text-strong); paint-order: stroke; stroke: var(--bg-canvas); stroke-opacity: 0.75; stroke-width: 3px; stroke-linejoin: round; }
 .barca-healthmap-caption { display: flex; flex-direction: column; align-items: center; gap: 2px; max-width: 100%; min-height: 36px; font-size: var(--text-xs); color: var(--text-muted); text-align: center; }
 .barca-healthmap-path { color: var(--text-default); overflow-wrap: anywhere; }
 

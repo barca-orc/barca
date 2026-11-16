@@ -78,7 +78,7 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
             />
           )
         })}
-        {arcs.filter((a) => a.depth === 1 && a.end - a.start > 0.07).map((a) => {
+        {arcs.filter((a) => a.depth === 1 && a.end - a.start > 0.1).map((a) => {
           const [inner, outer] = radii(a)
           const c = arcCentroid(a.start, a.end, inner, outer)
           return <text key={`l:${a.id}`} className="barca-healthmap-arc-label" x={c.x} y={c.y + 4}>{shorten(a.label, 12)}</text>

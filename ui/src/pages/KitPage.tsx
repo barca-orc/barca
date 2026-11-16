@@ -2,6 +2,7 @@ import { Moon, Sun } from 'lucide-react'
 import { IconButton } from '@/components'
 import { useTheme } from '@/context/theme'
 import { Graph } from '@/kit/sections/Graph'
+import { Health } from '@/kit/sections/Health'
 import { Pages } from '@/kit/sections/Pages'
 import { Primitives } from '@/kit/sections/Primitives'
 import { Runs } from '@/kit/sections/Runs'
@@ -9,6 +10,7 @@ import { Runs } from '@/kit/sections/Runs'
 const CONTENTS = [
   { id: 'kit-primitives', label: 'Primitives' },
   { id: 'kit-graph', label: 'Graph' },
+  { id: 'kit-health', label: 'Health' },
   { id: 'kit-runs', label: 'Runs and panels' },
   { id: 'kit-pages', label: 'Pages' },
 ]
@@ -45,6 +47,7 @@ export function KitPage() {
         <div id="kit-primitives" />
         <Primitives />
         <Graph />
+        <Health />
         <Runs />
         <Pages />
       </div>
