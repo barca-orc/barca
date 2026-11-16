@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test'
 
+const API = process.env.BARCA_E2E_API ?? 'http://127.0.0.1:8274'
+
 test('incident controls put replacement data beside containment', async ({ page }) => {
   await page.route(/\/assets\/[^/]+\/versions/, route => route.fulfill({ json: { node_id: 'pipeline.py:numbers', pinnable: true, pin: null, versions: [] } }))
   await page.goto('/ui/#/assets?node=pipeline.py%3Anumbers')
@@ -11,7 +13,7 @@ test('incident controls put replacement data beside containment', async ({ page 
 
 
 test('resume a pipeline preserves pauses in other files', async ({ page, request }) => {
-  await request.post('http://127.0.0.1:8274/pauses', { data: { target: 'other.py' } })
+  await request.post(`${API}/pauses`, { data: { target: 'other.py' } })
   try {
     await page.goto('/ui/#/assets?node=pipeline.py%3Anumbers')
     const panel = page.getByRole('complementary', { name: 'numbers details' })
@@ -24,15 +26,15 @@ test('resume a pipeline preserves pauses in other files', async ({ page, request
     await expect(page.getByRole('dialog')).toContainText('pipeline.py')
     await page.getByRole('dialog').getByRole('button', { name: 'Resume pipeline', exact: true }).click()
     await expect(panel.getByRole('button', { name: 'Pause pipeline (file)' })).toBeVisible()
-    const paused = await (await request.get('http://127.0.0.1:8274/pauses')).json()
+    const paused = await (await request.get(`${API}/pauses`)).json()
     expect(paused.paused.map((p: { id: string }) => p.id)).toEqual(['other.py:history_asset'])
   } finally {
-    await request.post('http://127.0.0.1:8274/pauses/resume', { data: { all: true } })
+    await request.post(`${API}/pauses/resume`, { data: { all: true } })
   }
 })
 
 test('cancel a queued run confirms, reports an error, and allows retry', async ({ page, request }) => {
-  const api = 'http://127.0.0.1:8274'
+  const api = API
   await request.post(`${api}/queue/pause`, { data: {} })
   let id = ''
   try {

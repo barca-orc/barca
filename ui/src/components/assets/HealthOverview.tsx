@@ -63,7 +63,8 @@ export function HealthOverview({ scope, pipeline, onScope, onOpen, onShowFailure
     [tree, scoped, consumers, keyErrors, signals, within],
   )
 
-  if (!whole.data) return null
+  // Its space is held while the project's state loads, so the table below never jumps.
+  if (!whole.data) return <section className="barca-health-overview" aria-label="Health" aria-busy="true" />
   const center = tree.nodes.get(focus)!
   if (center.leaves === 0) return null
   return (
