@@ -667,11 +667,28 @@ pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, Ap
 }
 
 /// `queue` of `GET /health`: whether the queue is paused and how many runs wait and execute.
-pub fn health(state: &AppState) -> serde_json::Value {
+/// A `--read-only` server runs nothing itself, so it reports the queue the metadata DB records
+/// (what `GET /queue` lists), not its own empty one; the in-memory counts are the fallback when
+/// that record cannot be read.
+pub async fn health(state: &AppState) -> serde_json::Value {
+    let mut paused = state.queue.paused_at().is_some();
+    let mut queued = state.queue.waiting_ids().len();
+    let mut running = state
+        .runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Running)
+        .count();
+    if state.config.read_only
+        && let Ok(recorded) = recorded_view(state).await
+    {
+        paused = recorded.paused;
+        queued = recorded.queued.len();
+        running = recorded.running.len();
+    }
     serde_json::json!({
-        "paused": state.queue.paused_at().is_some(),
-        "queued": state.queue.waiting_ids().len(),
-        "running": state.runs.iter().filter(|r| r.status == RunStatus::Running).count(),
+        "paused": paused,
+        "queued": queued,
+        "running": running,
         "max_runs": state.queue.max_runs,
         "capacity": state.capacity.as_ref().map(|c| {
             let s = c.snapshot();
@@ -690,6 +707,10 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     fn state(dir: &std::path::Path) -> AppState {
+        state_with(dir, false)
+    }
+
+    fn state_with(dir: &std::path::Path, read_only: bool) -> AppState {
         let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
         resolved.db_path = dir.join("metadata.db").display().to_string();
         resolved.server_max_runs = Some(1);
@@ -702,8 +723,28 @@ mod tests {
             timezone: "utc".into(),
             python: "/nonexistent-barca-python".into(),
             resolved,
-            read_only: false,
+            read_only,
         })
+    }
+
+    #[test]
+    fn a_read_only_server_reports_the_recorded_queue_in_health() {
+        crate::test_support::bounded(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let writer = state(dir.path());
+            let _ = pause(State(writer.clone())).await.unwrap();
+            for target in ["a", "b"] {
+                let spec = RunSpec::api(RunCommand::Get, vec![target.into()], vec![]);
+                admit(&writer, spec).await.unwrap();
+            }
+            let reader = state_with(dir.path(), true);
+            let health = health(&reader).await;
+            assert_eq!(health["queued"], 2, "{health}");
+            assert_eq!(health["paused"], true, "{health}");
+            assert_eq!(health["running"], 0, "{health}");
+            let listed = get(State(reader.clone())).await.unwrap().0;
+            assert_eq!(listed.queued.len(), 2, "/health and /queue agree");
+        });
     }
 
     #[test]
