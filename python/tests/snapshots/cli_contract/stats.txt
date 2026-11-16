@@ -15,6 +15,7 @@ recent_runs[].created_at : string
 recent_runs[].elapsed_seconds : number
 recent_runs[].error_message : null
 recent_runs[].max_rss_bytes : integer
+recent_runs[].rows : null
 recent_runs[].run_id : string
 recent_runs[].status : string
 total_runs : integer

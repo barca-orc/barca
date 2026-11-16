@@ -66,6 +66,12 @@ pub struct RunStep {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub max_rss_bytes: Option<i64>,
+    /// Rows the step's tabular result holds, when its worker counted them (#925): a frame's
+    /// length or a parquet file's footer. `null` when not counted (a failed step, a result that
+    /// is not a frame, a CSV of a lazy frame or relation, a row from an older barca).
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub rows: Option<i64>,
     /// A failed step's last lines of output, stdout and stderr in the order they were written,
     /// without the traceback barca already shows (at most [`OUTPUT_TAIL_LINES`]; `barca logs
     /// RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it
@@ -226,6 +232,7 @@ pub async fn get_run_steps_page(
         "max_rss_bytes",
         "batch_id",
         "error_phase",
+        "rows",
     ] {
         columns.push(if has_column(&conn, "materializations", name).await? {
             name
@@ -233,8 +240,8 @@ pub async fn get_run_steps_page(
             "NULL"
         });
     }
-    let (attempts, error_type, cpu, rss, batch, phase) = (
-        columns[0], columns[1], columns[2], columns[3], columns[4], columns[5],
+    let (attempts, error_type, cpu, rss, batch, phase, counted) = (
+        columns[0], columns[1], columns[2], columns[3], columns[4], columns[5], columns[6],
     );
     let total = match limit {
         None => None,
@@ -261,7 +268,7 @@ pub async fn get_run_steps_page(
         _ => String::new(),
     };
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase}, {counted} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &libsql::Row, i: i32| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -303,6 +310,7 @@ pub async fn get_run_steps_page(
             error: raw_error,
             cpu_seconds: row.get::<f64>(11).ok(),
             max_rss_bytes: row.get::<i64>(12).ok().filter(|rss| *rss > 0),
+            rows: row.get::<i64>(15).ok(),
             output_tail: None,
             batch: text(&row, 13),
             error_phase: text(&row, 14),
@@ -481,6 +489,9 @@ pub struct StepRow {
     pub content_hash: Option<String>,
     pub error_type: Option<String>,
     pub error_message: Option<String>,
+    /// Rows the result holds, when its worker counted them (#925).
+    #[serde(default)]
+    pub rows: Option<i64>,
 }
 
 /// Step results, newest first: at most `limit` rows from `offset`, and how many there are in
@@ -509,6 +520,7 @@ pub async fn read_step_rows(
         "output_hash",
         "error_type",
         "error_message",
+        "rows",
     ] {
         if has_column(&conn, "materializations", column).await? {
             select.push(column.to_string());
@@ -566,6 +578,7 @@ pub async fn read_step_rows(
             content_hash: text(12),
             error_type: text(13),
             error_message: text(14),
+            rows: row.get::<i64>(15).ok(),
         });
     }
     Ok((out, total))

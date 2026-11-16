@@ -30,10 +30,10 @@ const assets = [asset('p.py:x'), asset('p.py:y'), asset('p.py:check__y', 'task',
 const state = (id: string, over: Partial<NodeState> = {}): NodeState => ({
   id, name: id.split(':')[1]!, kind: id.includes('check__') ? 'task' : 'asset', inputs: [], partitioned: false,
   cache: { state: id.includes('check__') ? 'always_runs' : 'cached', reason: 'materialized', detail: 'd' },
-  last_materialization: null, shape: null, env: [], durations: null, next_run: null, last_success_at: null,
+  last_materialization: null, shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null,
   failing_since: null, consecutive_failures: 0, running: null, ...over,
 })
-const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error: 'boom' }
+const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'boom' }
 const states = assets.map((a) => state(a.id))
 const params = (search: string) => parseGroupedParams(new URLSearchParams(search), tree)
 

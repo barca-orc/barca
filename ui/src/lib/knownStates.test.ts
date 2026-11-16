@@ -6,7 +6,7 @@ const state = (id: string, cache: NodeState['cache']['state']): NodeState => ({
   id, name: id, kind: 'asset', inputs: [], partitioned: false,
   cache: { state: cache, reason: 'materialized', detail: 'd' },
   last_materialization: null, shape: null, env: [], durations: null, next_run: null, last_success_at: null,
-  failing_since: null, consecutive_failures: 0, running: null,
+  failing_since: null, consecutive_failures: 0, running: null, prev_run: null, late_since: null, signals: [],
 })
 
 describe('knownStates', () => {

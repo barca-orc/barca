@@ -85,6 +85,7 @@ pub(crate) const STEP_COLUMNS: &[&str] = &[
     "components",
     "batch_id",
     "error_phase",
+    "rows",
 ];
 
 /// Every column of `logs` except its row id.

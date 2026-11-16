@@ -569,6 +569,7 @@ mod persist_tests {
         empty: HashMap<String, String>,
         attempts: HashMap<String, u32>,
         timings: HashMap<String, (Option<f64>, Option<u64>)>,
+        rows: HashMap<String, u64>,
     }
 
     const EXECUTED: [&str; 3] = ["f.py:a", "f.py:part[k=1]", "f.py:part[k=2]"];
@@ -633,6 +634,7 @@ mod persist_tests {
                 empty: HashMap::new(),
                 attempts: HashMap::new(),
                 timings: HashMap::new(),
+                rows: HashMap::new(),
             }
         }
 
@@ -655,6 +657,7 @@ mod persist_tests {
                 sink_publications: &[],
                 all_attempts: &self.attempts,
                 all_timings: &self.timings,
+                all_rows: &self.rows,
                 cached_node_ids: &self.cached,
                 touched: &[],
                 run_hashes: &self.run_hashes,

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 4. Status: implemented behavior and explicit limits.
+Specification version: 5. Status: implemented behavior and explicit limits.
 Scope: what inspection says about computation validity, execution and stored bytes.
 Terms: [glossary](../../GLOSSARY.md). Exact JSON keys, status enums and response bodies remain
 owned by [OpenAPI](../interfaces/server-api.openapi.yaml) and the [CLI
@@ -128,6 +128,25 @@ Cold and post-run inspection can rebuild per-key state:
 [#656](https://github.com/barca-orc/barca/issues/656). Millisecond cached responses are not a
 cold-latency or memory guarantee. The [performance contract](performance.md) distinguishes them.
 
+### Row counts and data-health signals
+
+A successful step's worker records how many rows its result holds when that is exact and cheap:
+the length of an in-memory frame (pandas, polars DataFrame, pyarrow Table) in any format, or the
+row count in a written parquet file's footer (a lazy frame, a DuckDB relation, a batched call's
+key). Anything else records no count; a count is never estimated. `barca serve` derives
+signals on `GET /state` rows from those counts and from when each result was written, never by
+reading an artifact:
+
+| Signal | Raised when | Cleared when |
+| --- | --- | --- |
+| `empty` | a key's (or the node's) latest successful result recorded 0 rows | a later success of that key writes rows |
+| `rows_changed` | a key's latest counted success differs from its previous counted success by more than half of the previous count (or follows an empty one with rows) | the next success of that key is within half of the one before |
+| `behind_input` | the node's cache state is `unknown` and its latest success is older (by row id) than an asset input's newest success from another run | the node succeeds again, or its state becomes decidable |
+
+Scheduled nodes also report the slot they last had (`prev_run`) and, when the newest run their
+schedule started (`runs.scheduled_at`) is older than a slot that has passed, the first such slot
+(`late_since`). Neither changes cache decisions or what a run executes.
+
 ### Approved replacement, not yet a public status
 
 The user approved an explicit **checking** state while freshness is being revalidated,
@@ -146,6 +165,9 @@ OpenAPI/CLI owners, snapshots, UI and executable conformance in the implementati
 
 - **INV-INSPECT-03:** Historical success must not be relabeled as newly executed work.
 
+- **INV-INSPECT-04:** Row counts and data-health signals come from recorded facts only: a result
+  whose worker counted no rows raises no row signal, and deriving a signal reads no artifact.
+
 ## Failures and recovery
 
 A failed attempt does not erase earlier results. Missing bytes and digest mismatches are
@@ -163,11 +185,20 @@ Conformance: [status](../../crates/barca-core/src/status.rs),
 [current SQL membership](../../python/tests/test_sql_current_partitions.py),
 [server ledger status](../../python/tests/test_server_ledger.py),
 [read-route cache](../../crates/barca-server/src/read_cache.rs),
-[inspection evidence](../../python/tests/test_inspection_cache.py), and the
-[real CLI payload-read regression](../../python/tests/test_store_inspection_cost.py).
+[inspection evidence](../../python/tests/test_inspection_cache.py), the
+[real CLI payload-read regression](../../python/tests/test_store_inspection_cost.py),
+[recorded row counts and signals](../../python/tests/test_row_counts.py), the
+[signal rules](../../crates/barca-server/src/signals.rs), the
+[per-key row facts](../../crates/barca-db/src/db/history.rs) and
+[schedule slots](../../crates/barca-core/src/schedule.rs).
 
 ## Open questions and gaps
 
 Explicit checking revisions, independent status tracking and bounded cold inspection are
 approved obligations in [ownership](current-state-and-execution.md). Their public fields and
 implementation evidence remain outstanding; #656 tracks inspection cost.
+
+Data-health signals (#925) cannot be acknowledged yet, and their thresholds (more than half;
+any empty result) are fixed. Row counts are not sent to a server's ledger, so a result a laptop
+posted has none there. A CSV written from a lazy frame or a relation, and non-frame results,
+are never counted.

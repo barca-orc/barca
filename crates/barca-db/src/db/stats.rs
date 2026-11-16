@@ -55,6 +55,16 @@ pub struct AssetRunEntry {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub max_rss_bytes: Option<i64>,
+    /// Rows the result holds, when its worker counted them (#925); `null` otherwise. A
+    /// partitioned node's entry: the rows of the run's successful keys added up, `null` unless
+    /// every one of them was counted.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub rows: Option<i64>,
+    /// A partitioned node's entry: how many of the run's keys wrote no rows. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
+    pub empty_keys: Option<i64>,
     /// A partitioned node's entry is one run: the keys it recorded, and how many failed.
     /// Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -305,7 +315,7 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
     // Recent runs (last 10).
     let mut rows = conn
         .query(
-            "SELECT elapsed_seconds, status, created_at, error_message, attempts, run_id, cpu_seconds, max_rss_bytes FROM materializations WHERE node_id = ?1 ORDER BY id DESC LIMIT 10",
+            "SELECT elapsed_seconds, status, created_at, error_message, attempts, run_id, cpu_seconds, max_rss_bytes, rows FROM materializations WHERE node_id = ?1 ORDER BY id DESC LIMIT 10",
             [node_id.to_string()],
         )
         .await
@@ -327,6 +337,8 @@ pub async fn get_asset_stats(db_path: &str, node_id: &str) -> Result<AssetStats,
             run_id: row.get::<String>(5).ok().filter(|id| !id.is_empty()),
             cpu_seconds: row.get::<f64>(6).ok(),
             max_rss_bytes: row.get::<i64>(7).ok().filter(|rss| *rss > 0),
+            rows: row.get::<i64>(8).ok(),
+            empty_keys: None,
             keys: None,
             failed_keys: None,
         });
@@ -376,7 +388,8 @@ async fn partitioned_stats(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT SUM(elapsed_seconds), MAX(created_at), MIN(error_message), MAX(attempts), MAX(NULLIF(run_id, '')), SUM(cpu_seconds), MAX(max_rss_bytes), COUNT(DISTINCT node_id), COUNT(DISTINCT CASE WHEN status = 'failed' THEN node_id END) \
+                "SELECT SUM(elapsed_seconds), MAX(created_at), MIN(error_message), MAX(attempts), MAX(NULLIF(run_id, '')), SUM(cpu_seconds), MAX(max_rss_bytes), COUNT(DISTINCT node_id), COUNT(DISTINCT CASE WHEN status = 'failed' THEN node_id END), \
+                 CASE WHEN COUNT(rows) = SUM(status = 'success') THEN SUM(rows) END, COUNT(DISTINCT CASE WHEN status = 'success' AND rows = 0 THEN node_id END) \
                  FROM materializations WHERE {KEY_ROWS} \
                  GROUP BY COALESCE(NULLIF(run_id, ''), 'row:' || id) ORDER BY MAX(id) DESC"
             ),
@@ -396,6 +409,8 @@ async fn partitioned_stats(
             run_id: row.get::<String>(4).ok(),
             cpu_seconds: row.get::<f64>(5).ok(),
             max_rss_bytes: row.get::<i64>(6).ok().filter(|rss| *rss > 0),
+            rows: row.get::<i64>(9).ok(),
+            empty_keys: Some(row.get::<i64>(10).unwrap_or(0)),
             keys: row.get::<i64>(7).ok(),
             failed_keys: Some(failed_keys),
         });

@@ -25,8 +25,8 @@ describe('paletteIndex', () => {
 describe('a result\'s state', () => {
   const node = (id: string, failed: boolean) => ({
     id, name: id, kind: 'asset', inputs: [], partitioned: false, cache: { state: 'cached', reason: 'materialized', detail: '' },
-    last_materialization: { status: failed ? 'failed' : 'success', created_at: '2026-10-30 00:00:00', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null },
-    shape: null, env: [], durations: null, next_run: null, running: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    last_materialization: { status: failed ? 'failed' : 'success', created_at: '2026-10-30 00:00:00', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null },
+    shape: null, env: [], durations: null, next_run: null, running: null, last_success_at: null, failing_since: null, consecutive_failures: 0, prev_run: null, late_since: null, signals: [],
   }) as NodeState
   const assets = [{ id: 'a.py:orders', kind: 'asset' as const }, { id: 'a.py:orders_daily', kind: 'asset' as const }, { id: 'b.py:orders_bad', kind: 'asset' as const }]
   const states = {
@@ -74,7 +74,7 @@ describe('searchPalette', () => {
   })
 })
 
-const row = (key: string, status: string, created_at = '2026-10-30 00:00:00') => ({ key, status, created_at, elapsed_seconds: null, error: null, run_id: null, artifact_path: null, size_bytes: null })
+const row = (key: string, status: string, created_at = '2026-10-30 00:00:00') => ({ key, status, created_at, elapsed_seconds: null, error: null, run_id: null, artifact_path: null, size_bytes: null, rows: null })
 
 describe('isKeyQuery', () => {
   it('is anything with a digit, =, -, _ or /, of two characters or more', () => {

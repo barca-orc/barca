@@ -18,6 +18,12 @@ created_at: string, elapsed_seconds: number | null, run_hash: string | null, art
  */
 format: string | null, size_bytes: number | null,
 /**
+ * Rows of a successful tabular result, as its worker counted them: a frame's length or a
+ * parquet file's footer. `null` when not counted (not a frame, a failed attempt, a CSV of a
+ * lazy frame or relation, a row recorded by an older barca).
+ */
+rows: number | null,
+/**
  * For a partitioned node: which key this was (e.g. `k=a`).
  */
 partition?: string | null,

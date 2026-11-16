@@ -18,6 +18,7 @@ import type { ResetPhase } from '@/components/ResetDatabase'
 import type { TokensModel } from '@/lib/tokensPage'
 import { INITIAL_TOKENS } from '@/lib/tokensPage'
 import type {
+  DataSignal,
   IssuedToken,
   LastMaterialization,
   LogLine,
@@ -68,6 +69,7 @@ const materialized = (overrides: Partial<LastMaterialization> = {}): LastMateria
   artifact: '.barca/artifacts/orders_clean/9f2c0a41be77.parquet',
   format: 'parquet',
   size_bytes: 482_113,
+  rows: null,
   ...overrides,
 })
 
@@ -84,6 +86,9 @@ function node(name: string, overrides: Partial<NodeState>): NodeState {
     env: [],
     durations: { median_seconds: 4.1, p95_seconds: 6.3, samples: 12 },
     next_run: null,
+    prev_run: null,
+    late_since: null,
+    signals: [],
     running: null,
     last_success_at: ago(3_600),
     failing_since: null,
@@ -126,6 +131,24 @@ export const nodeByState = {
   }),
   cached: node('orders_clean', {}),
 } satisfies Record<CacheState, NodeState>
+
+/** A node carrying each data-health signal (`NodeState.signals`), as `GET /state` sends it. */
+export const nodeBySignal = {
+  empty: node('orders_by_region', {
+    partitioned: true,
+    partitions: { total: 1205, cached: 1205, missing: 0, missing_keys: [], empty: 3 },
+    signals: [{ kind: 'empty', empty_keys: 3, keys: 1205, previous_empty_keys: 0 }],
+  }),
+  rows_changed: node('invoices_clean', {
+    last_materialization: materialized({ rows: 300 }),
+    signals: [{ kind: 'rows_changed', changed_keys: 1, key: null, rows: 300, previous_rows: 1200 }],
+  }),
+  behind_input: node('orders_all', {
+    cache: { state: 'unknown', reason: 'cutoff_pending', detail: 'an input with cutoff=True runs first' },
+    last_success_at: ago(2 * 86_400),
+    signals: [{ kind: 'behind_input', input: 'pipeline.py:orders_by_region', input_success_at: sqlTime(3_600), last_success_at: sqlTime(2 * 86_400) }],
+  }),
+} satisfies Record<DataSignal['kind'], NodeState>
 
 /**
  * A node whose last attempt failed: the fact shown beside its state. `stale` with reason `failed`
@@ -285,7 +308,7 @@ function step(node_id: string, status: string, error: string | null = null): Run
     node_id, status, elapsed_seconds: 4.2, error, partition_key: null, attempts: 1, run_hash: null,
     artifact_path: null, artifact_format: null, artifact_size_bytes: null, error_type: null,
     error_message: null, error_traceback: null, error_phase: null, worker_exit: null,
-    cpu_seconds: null, max_rss_bytes: null, output_tail: null, batch: null,
+    cpu_seconds: null, max_rss_bytes: null, rows: null, output_tail: null, batch: null,
   }
 }
 

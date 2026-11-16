@@ -68,6 +68,13 @@ pub fn parse_db_utc(at: &str) -> Option<i64> {
         .map(|t| t.and_utc().timestamp())
 }
 
+/// An RFC 3339 time (`2026-10-22T06:00:00Z`, any offset) as unix seconds.
+pub fn parse_rfc3339(at: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(at)
+        .ok()
+        .map(|t| t.timestamp())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

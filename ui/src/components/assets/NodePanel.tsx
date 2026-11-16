@@ -590,7 +590,7 @@ function keyOutput(node: NodeStatus, output: KeyArtifact, at: string | null, key
       run_hash: null,
       artifact: output.artifact_path,
       format: output.format,
-      size_bytes: output.size_bytes,
+      size_bytes: output.size_bytes, rows: null,
       partition: key,
     },
   }

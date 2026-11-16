@@ -87,6 +87,11 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // `write_output` or `sink` (`dispatch::ErrorPhase`). NULL on success rows, on failures its
     // worker did not report one for (it died) and on rows from older versions.
     "error_phase TEXT",
+    // Rows of a successful tabular result, as its worker counted them (#925): an in-memory
+    // frame's length or the row count in the written parquet file's footer. NULL when unknown
+    // (not a frame, a CSV of a lazy frame or relation, a failed row, rows from older versions and
+    // rows a server's ledger received from a client).
+    "rows INTEGER",
 ];
 
 /// Every table's columns added within format 1, by table. The one list that the pre-migration
@@ -141,6 +146,9 @@ pub(crate) const INDEXES: &[&str] = &[
     // seek to the node's rows, not every row of the run (95k rows across 295 nodes for one
     // run of a real project, read once per node on each poll).
     "CREATE INDEX IF NOT EXISTS idx_mat_run_node ON materializations(run_id, node_id)",
+    // The successful results that wrote no rows (#925): `barca status` counts a partitioned
+    // node's keys whose latest result is empty from these, a probe each, not every key's rows.
+    "CREATE INDEX IF NOT EXISTS idx_mat_empty ON materializations(node_id, id) WHERE rows = 0 AND status = 'success'",
 ];
 
 /// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.

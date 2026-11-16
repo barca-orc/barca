@@ -47,7 +47,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/history?limit=N&all=1` | `barca history --json` (`-l N`, `--all`) |
 | `GET`  | `/stats/{name}` | `barca stats --json` |
 | `GET`  | `/sql/views?files=a.py,b.py` | Which result each `barca sql` view reads in the ledger: `{"views": [{name, node, kind, partitioned, format, files: [{path, partition, content_hash}], stale, run_hash}], "missing": [{name, node, kind, partitioned, command, keys_unknown?}], "duplicates": [{name, ids}]}`, by the function a local `barca sql` uses. The client runs the query; the server runs no SQL. |
-| `GET`  | `/materializations?limit=N&offset=M` | Step results, newest first: `{"materializations": [{node_id, partition, run_id, run_hash, status, created_at, elapsed_seconds, cpu_seconds, max_rss_bytes, attempts, format, size_bytes, artifact, content_hash, error_type, error_message}], total, limit, offset}`; `limit` defaults to 1000, at most 10000. `barca sql`'s `barca.materializations`. |
+| `GET`  | `/materializations?limit=N&offset=M` | Step results, newest first: `{"materializations": [{node_id, partition, run_id, run_hash, status, created_at, elapsed_seconds, cpu_seconds, max_rss_bytes, attempts, format, size_bytes, artifact, content_hash, error_type, error_message, rows}], total, limit, offset}` (`rows`: a tabular result's row count, `null` when not counted); `limit` defaults to 1000, at most 10000. `barca sql`'s `barca.materializations`. |
 | `GET`  | `/project` | The deployed tree: `{api_version, root, env, deployed_at, commit, files: [{path, sha256}], telemetry: {datadog_url}}` |
 | `GET`  | `/health` | Liveness (or `draining`), `api_version`, `env`, the artifact store (`store_uri`), read-only, scheduler, load diagnostics, the cache size against its limit, `started_at` (changes on a restart) and `queue: {paused, queued, running, max_runs, capacity}` (`capacity: {total, in_use, waiting}` with `--capacity`, else `null`). |
 
@@ -61,9 +61,9 @@ client prints it as it would print the local command's.
 | `GET`  | `/assets` | Every node as `barca list --json` shows it. |
 | `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body, the run working on it now, and `failure` when its latest execution failed: the project line that raised (`raised_at`), the failed run hash and the last success to compare it with. |
 | `GET`  | `/assets/{name}/schema` | Selected node and direct inputs as `NodeStatus[]`, with artifact shapes inspected on demand. `?sample=N` adds up to 20 first rows of json/csv/parquet artifacts as `shape.sample`. |
-| `GET`  | `/assets/{name}/partitions` | A partitioned node's keys with a recorded attempt, each with its latest (`?status=failed`, `?q=`, `?limit=`, `?offset=`), and its failed keys' errors grouped. Experimental. |
-| `GET`  | `/assets/{name}/partitions/grid` | Every key of a partitioned node in one compact body: the dimensions and their values, each key's state (fresh, stale, never run, failed, or blocked behind the same key of a failed input), its latest attempt's time, duration, size and run, and the failed keys' errors grouped. Decided across the node's chain, the partitioned nodes it shares its keys with. Experimental. |
-| `GET`  | `/assets/{name}/partitions/key?key=` | One key (`?key=day=2026-01-01,region=apac`, `?sample=`): its state in each node of the chain, its latest attempts, and the shape and first rows of its result and of what it read (the same key of each input in the chain). `404` for a key the node does not have. Experimental. |
+| `GET`  | `/assets/{name}/partitions` | A partitioned node's keys with a recorded attempt, each with its latest (`?status=failed`, `?q=`, `?limit=`, `?offset=`) and the `rows` it wrote (`null` when not counted), and its failed keys' errors grouped. Experimental. |
+| `GET`  | `/assets/{name}/partitions/grid` | Every key of a partitioned node in one compact body: the dimensions and their values, each key's state (fresh, stale, never run, failed, or blocked behind the same key of a failed input), its latest attempt's time, duration, size, rows (`rows`, `null` where not counted) and run, how many keys last wrote no rows (`counts.empty`), and the failed keys' errors grouped. Decided across the node's chain, the partitioned nodes it shares its keys with. Experimental. |
+| `GET`  | `/assets/{name}/partitions/key?key=` | One key (`?key=day=2026-01-01,region=apac`, `?sample=`): its state in each node of the chain, its latest attempts (each with its `rows`), and the shape and first rows of its result and of what it read (the same key of each input in the chain). `404` for a key the node does not have. Experimental. |
 | `GET`  | `/assets/{name}/versions` | The asset's recent successful materializations (one per run hash, newest first, `?limit=N`, default 20) and its pin, as `barca pin <name> --versions --json`. Experimental. |
 | `POST` | `/assets/{name}/pin` | Pin the asset to `{"run_hash": "..."}` (or a unique prefix) or `{"previous": true}`, with an optional `"reason"`, as `barca pin`; `pinned_by` is the request's token name. `403` read-only. Experimental ([Pinning and Rollback](/reference/cli/pin/)). |
 | `POST` | `/assets/{name}/pin/upload` | Pin the asset to the request body (a file's bytes), as `barca pin --from-file`: `?file_name=` (its extension gives the format) or `?format=json\|parquet\|csv\|pickle`, and `?reason=`. At most 256 MiB (`413`); a body that does not load is `400`; `403` read-only. Experimental ([Pinning and Rollback](/reference/cli/pin/)). |
@@ -172,7 +172,15 @@ to the selected cone; clients can render `/assets` and `/groups` before requesti
 Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,
 `cache`, `partitions`, `last_materialization`, `shape`, `env`) plus `durations` — `{ median_seconds,
 p95_seconds, samples }` over the last 20 successful runs, or `null` — and `next_run`, the next cron
-fire time in unix seconds for scheduled nodes. `last_success_at` is when its newest successful
+fire time in unix seconds for scheduled nodes, with `prev_run`, the most recent fire time at or
+before now, and `late_since`, the first slot no run of the schedule has started for when one has
+passed (`null` while on time, paused, or never fired). `signals` lists what the node's recorded
+results say about its data: `empty` (its latest result wrote no rows; `empty_keys` of `keys` for
+a partitioned node, with `previous_empty_keys`), `rows_changed` (a row count moved by more than
+half against the previous result of the same key: `rows`, `previous_rows`, `key`,
+`changed_keys`) and `behind_input` (an `unknown` node whose latest result is older than its
+input's newest one: `input`, `input_success_at`, `last_success_at`); `[]` when nothing does. See
+[server mode](/reference/server-mode/#data-health). Experimental. `last_success_at` is when its newest successful
 result was written (UTC `YYYY-MM-DD HH:MM:SS`, like `last_materialization.created_at`), or `null`.
 `failing_since` is the first failed attempt after its last clean run, and `consecutive_failures` how
 many runs in a row failed it; they are `null` and `0` unless its latest attempts failed. An attempt
@@ -378,8 +386,9 @@ cron expression in `schedule` and the next fire time in `next_fire` (local time)
 matches by function name or full node id; an unknown name returns `404`. `Stats` is the
 `barca stats --json` body: `{ id, total_runs, cache_hit_rate, avg_elapsed_seconds,
 median_elapsed_seconds, p95_elapsed_seconds, max_elapsed_seconds, max_rss_bytes,
-median_max_rss_bytes, recent_runs }`, each recent run with its `run_id`, `cpu_seconds` and
-`max_rss_bytes`; the timings are `null` until the node has run.
+median_max_rss_bytes, recent_runs }`, each recent run with its `run_id`, `cpu_seconds`,
+`max_rss_bytes` and `rows` (and `empty_keys` for a partitioned node); the timings are `null`
+until the node has run.
 
 ### Plan
 

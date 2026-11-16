@@ -67,7 +67,9 @@ pub use failure::{FailureFacts, LastSuccess, SourceLine, failure_facts, raised_a
 pub use history::MaterializationRecord;
 pub use history::changed_bytes_in_run;
 use history::query_i64;
-pub use history::{BytesChange, NodeAge, NodeAgesIndex, RunTotals, node_ages};
+pub use history::{
+    BytesChange, NodeAge, NodeAgesIndex, RowChange, RowFacts, RunTotals, node_ages, rows_changed,
+};
 pub use history::{NodeHistory, node_histories};
 pub use logs::insert_logs;
 pub use logs::{LogEntry, get_logs};
@@ -81,11 +83,11 @@ pub use materializations::{
 };
 pub use materializations::{max_materialization_id, succeeded_since};
 pub use partition_keys::FailedKeys;
-pub use partition_keys::failed_partition_keys;
 pub use partition_keys::{
     KeyAttempt, LatestAttempt, PartitionErrorGroup, PartitionKeyRow, PartitionKeys,
     PartitionKeysFilter, error_shape, key_attempts, latest_attempts, partition_keys,
 };
+pub use partition_keys::{empty_partition_keys, failed_partition_keys};
 pub use pins::{
     AssetPin, Upload, UploadedArtifact, Version, clear_pin, get_pins, get_versions, record_upload,
     set_pin,

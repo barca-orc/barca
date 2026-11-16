@@ -7,11 +7,11 @@ function node(id: string, inputs: string[], over: Partial<NodeState> = {}): Node
   return {
     id, name: id.split(':')[1]!, kind: 'asset', inputs, partitioned: false,
     cache: { state: 'cached', reason: 'materialized', detail: '' },
-    last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null },
-    shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, ...over,
+    last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null },
+    shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, prev_run: null, late_since: null, signals: [], ...over,
   }
 }
-const failed = { last_materialization: { status: 'failed', created_at: '2026-10-29 11:00:00', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error: 'TypeError: x' } }
+const failed = { last_materialization: { status: 'failed', created_at: '2026-10-29 11:00:00', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'TypeError: x' } }
 const unknown = { cache: { state: 'unknown' as const, reason: 'cutoff_pending' as const, detail: '' } }
 
 // a.py: raw (failing, 100 of 120 keys) → clean (unknown: a cutoff) → report (stale)

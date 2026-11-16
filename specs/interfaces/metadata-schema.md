@@ -228,6 +228,15 @@ every database from before 0.29.2 (#629):
   then its keys' range). With `idx_mat_run` alone that read every row of the run once per node.
   Opening an older database builds it, under half a second for 470k rows; older binaries ignore
   it.
+- `materializations.rows` (INTEGER, nullable, 0.43, #925): the rows a successful tabular result
+  holds, as its worker counted them (an in-memory frame's length, or the row count in a written
+  parquet file's footer). NULL when not counted, on failed rows, on older rows and on rows a
+  server's ledger received from a client. Read by `barca status`, `barca history RUN_ID`,
+  `barca stats`, `barca sql` and the server's data-health signals; never part of a cache key.
+  Older binaries ignore it. With it, the partial index `idx_mat_empty (node_id, id) WHERE rows = 0
+  AND status = 'success'`: `barca status` counts a partitioned node's keys whose latest success is
+  empty from these rows, a probe each. Opening an older database adds both; the index is empty
+  until a result is counted.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
   `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,
   `running`, or `draining` (0.31.0: in flight when the server was told to stop); `spec` is the server's description of the run (JSON: command, targets, nodes,

@@ -48,6 +48,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
   // A count next to "not reachable" would be read as current; it is shown only with a live server.
   const current = !offline && assets.kind === "ready" && assets.refreshError === null;
   const canPause = health ? health.scheduler && !health.read_only : false;
+  const late = rows?.filter((r) => r.late !== null).length ?? 0;
 
   return (
     <div className="barca-view">
@@ -58,18 +59,31 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
             {current && rows && <span className="barca-count">{rows.length.toLocaleString()}<span className="barca-sr-only"> scheduled</span></span>}
           </div>
           <div className="barca-view-actions">
-            {current && health && rows?.length !== 0 && <span className="barca-count">{health.scheduler ? "scheduler running" : "scheduler not running on this server"}</span>}
+            {current && health && rows?.length !== 0 && (
+              <span className="barca-count">
+                {health.read_only ? "read-only view" : health.scheduler ? "scheduler running" : "scheduler off (--no-schedule)"}
+                {late > 0 && ` · ${late.toLocaleString()} late`}
+              </span>
+            )}
             {/* No schedules: the page has nothing of its own to run. */}
             {rows?.length !== 0 && actions}
           </div>
         </div>
         {health && !health.scheduler && rows && rows.length > 0 && (
-          <p className="barca-note">
-            This server doesn't fire schedules (
-            {health.read_only ? "--read-only" : "--no-schedule"}
-            ). "Next run" is when each cron next matches — it happens only where
-            a <code>barca serve</code> with the scheduler is running.
-          </p>
+          health.read_only ? (
+            <p className="barca-note">
+              Schedules fire on the server that owns the scheduler (a <code>barca serve</code>{" "}
+              without <code>--read-only</code>). This view only reads their runs and the queue
+              from the shared metadata, as of each refresh: a schedule is late when no run has
+              started for a slot that has passed.
+            </p>
+          ) : (
+            <p className="barca-note">
+              This server doesn't fire schedules (<code>--no-schedule</code>). "Next run" is when
+              each cron next matches — it happens only where a <code>barca serve</code> with the
+              scheduler is running.
+            </p>
+          )
         )}
         {toggle.error && (
           <p className="barca-note" role="alert">
@@ -155,7 +169,17 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
               {r.human && <code className="barca-schedule-cron">{r.cron}</code>}
             </td>
             <td>
-              <Age at={r.nextRunMs} nowMs={nowMs} />
+              {r.late ? (
+                // Missed a slot: the next one is not when it runs, so no countdown.
+                <time
+                  dateTime={new Date(r.late.sinceMs).toISOString()}
+                  title={`no run has started for the ${formatInstant(r.late.sinceMs, zone)} slot${r.nextRunMs !== null ? `; next slot ${formatInstant(r.nextRunMs, zone)}` : ""}`}
+                >
+                  <StatusBadge glyph="stale" label={r.late.by} size="sm" />
+                </time>
+              ) : (
+                <Age at={r.nextRunMs} nowMs={nowMs} />
+              )}
             </td>
             <td>
               {r.last ? (

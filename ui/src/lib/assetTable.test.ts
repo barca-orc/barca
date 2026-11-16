@@ -48,7 +48,7 @@ function node(over: Partial<NodeState> & { id: string }): NodeState {
     shape: null,
     env: [],
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     ...over,
   }
@@ -62,6 +62,7 @@ const failedAttempt = {
   artifact: null,
   format: null,
   size_bytes: null,
+  rows: null,
   error: 'AssertionError: 3 rows with negative units',
 }
 
@@ -130,6 +131,9 @@ describe('buildRows', () => {
             },
             durations: { median_seconds: 3.04, p95_seconds: 9.5, samples: 12 },
             next_run: Date.parse('2026-10-03T06:00:00Z') / 1000,
+            prev_run: null,
+            late_since: null,
+            signals: [],
           }),
         ],
         NOW,
@@ -286,6 +290,9 @@ describe('sorting', () => {
         durations: { median_seconds: 0.5, p95_seconds: 1, samples: 3 },
         last_materialization: { ...failedAttempt, status: 'success', error: null, created_at: '2026-10-02 11:00:00' },
         next_run: Date.parse('2026-10-03T06:00:00Z') / 1000,
+        prev_run: null,
+        late_since: null,
+        signals: [],
       }),
       node({ id: 'p.py:never', cache: cache('never_run', 'no_record') }),
       node({
@@ -293,6 +300,9 @@ describe('sorting', () => {
         cache: cache('stale', 'changed'),
         durations: { median_seconds: 3, p95_seconds: 4, samples: 2 },
         next_run: Date.parse('2026-10-02T13:00:00Z') / 1000,
+        prev_run: null,
+        late_since: null,
+        signals: [],
       }),
     ],
     NOW,

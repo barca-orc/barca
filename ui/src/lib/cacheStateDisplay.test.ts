@@ -43,7 +43,7 @@ describe('cache state display', () => {
   })
 
   it('reads a failed last attempt as a fact of its own', () => {
-    const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error: 'boom' }
+    const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'boom' }
     expect(lastAttemptFailed({ last_materialization: failed })).toBe(true)
     expect(lastAttemptFailed({ last_materialization: { ...failed, status: 'success', error: null } })).toBe(false)
     expect(lastAttemptFailed({ last_materialization: null })).toBe(false)

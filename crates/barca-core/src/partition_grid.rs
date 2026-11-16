@@ -59,6 +59,10 @@ pub struct GridCounts {
     pub failed: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub blocked: usize,
+    /// Keys whose latest attempt succeeded and wrote no rows (its row count recorded as 0),
+    /// whatever their state.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub empty: usize,
 }
 
 /// Every key of a partitioned node.
@@ -92,6 +96,10 @@ pub struct PartitionGrid {
     pub elapsed_ms: Vec<Option<u64>>,
     #[cfg_attr(feature = "ts", ts(type = "Array<number | null>"))]
     pub size_bytes: Vec<Option<i64>>,
+    /// The rows each cell's latest attempt wrote, where its worker counted them: null for a
+    /// failed attempt, a result that is not a frame or an older barca's row.
+    #[cfg_attr(feature = "ts", ts(type = "Array<number | null>"))]
+    pub rows: Vec<Option<i64>>,
     pub run: Vec<Option<u32>>,
     /// Each failed cell's error, an index into `errors`, by cell index.
     #[cfg_attr(feature = "ts", ts(type = "Record<string, number>"))]
@@ -311,6 +319,7 @@ pub(crate) fn grid_of(dag: &Dag, id: &str, chain: &ChainStates) -> PartitionGrid
         attempted_at: Vec::with_capacity(cells),
         elapsed_ms: Vec::with_capacity(cells),
         size_bytes: Vec::with_capacity(cells),
+        rows: Vec::with_capacity(cells),
         run: Vec::with_capacity(cells),
         error: BTreeMap::new(),
         errors: Vec::new(),
@@ -348,6 +357,13 @@ pub(crate) fn grid_of(dag: &Dag, id: &str, chain: &ChainStates) -> PartitionGrid
                 .map(|s| (s * 1000.0).round().max(0.0) as u64),
         );
         grid.size_bytes.push(attempt.and_then(|a| a.size_bytes));
+        let rows = attempt
+            .filter(|a| a.status == "success")
+            .and_then(|a| a.rows);
+        if rows == Some(0) {
+            grid.counts.empty += 1;
+        }
+        grid.rows.push(rows);
         if let Some(a) = attempt.filter(|a| state == state::FAILED && a.status == "failed") {
             let shape = crate::db::error_shape(a.error.as_deref(), &a.key);
             let next = error_index.len() as u32;
