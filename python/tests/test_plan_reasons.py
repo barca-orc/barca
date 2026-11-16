@@ -14,7 +14,7 @@ from barca.api import _find_binary
 
 COMMON = """
 def bump(x):
-    return x + {step}
+    return x + STEP
 """
 
 PIPELINE = """
@@ -24,28 +24,30 @@ from common import bump
 
 @asset()
 def raw() -> dict:
-    return {{"n": bump(1)}}
+    return {"n": bump(1)}
 
 
-@asset(inputs={{"raw": raw}})
+@asset(inputs={"raw": raw})
 def clean(raw: dict) -> dict:
-    return {{"n": raw["n"] + 1}}
+    return {"n": raw["n"] + 1}
 
 
-KEYS = [f"k{{i}}" for i in range({keys})]
+KEYS = [f"k{i}" for i in range(KEY_COUNT)]
 
 
-@asset(inputs={{"clean": clean}}, partitions={{"k": partitions(KEYS)}})
+@asset(inputs={"clean": clean}, partitions={"k": partitions(KEYS)})
 def by_key(clean: dict, k: str) -> dict:
-    if k == "k{fail}":
+    if k == "kFAIL":
         raise ValueError("bad key")
-    return {{"n": clean["n"], "k": k}}
+    return {"n": clean["n"], "k": k}
 """
 
 
 def write(path, step=1, keys=4, fail=-1):
-    (path / "common.py").write_text(COMMON.format(step=step))
-    (path / "pipeline.py").write_text(PIPELINE.format(keys=keys, fail=fail))
+    (path / "common.py").write_text(COMMON.replace("STEP", str(step)))
+    (path / "pipeline.py").write_text(
+        PIPELINE.replace("KEY_COUNT", str(keys)).replace("FAIL", str(fail))
+    )
 
 
 def run(path, *args):
