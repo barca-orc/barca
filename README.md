@@ -255,7 +255,7 @@ source .venv/bin/activate
 uv pip install maturin
 maturin develop --uv --profile fast --extras test   # builds the binary and installs it into .venv; --release is what wheels ship
 cargo test
-scripts/check-fast.sh                               # CI's always-on gates, before pushing
+scripts/check-fast.sh                               # the merge queue's gates for your diff, locally
 ```
 
 Work in a worktree (`scripts/new-worktree.sh <slug>`), as [AGENTS.md](AGENTS.md) describes; see

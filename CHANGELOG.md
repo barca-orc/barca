@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Internal: CI builds and tests only in the merge queue, and only what a change can affect (#945). A pull request runs static checks (the changelog, specifications and prek hooks; the TLA+ models when `specs/models/` changed), so clippy moves to the merge queue, and a UI-only pull request no longer builds the wheel or runs Playwright before it is queued. A merge group runs clippy and the Rust tests only when an input of them changed, the Python tests `scripts/select-python-tests.py` picks from the diff instead of a fixed list, and the docs site build only when `site/` or `CHANGELOG.md` changed. `scripts/check-fast.sh` makes the same choices locally, and the prek pre-push perf hook is gone (the merge queue's `perf` job checks the budgets).
+
 ## 0.43.1 (2026-11-17)
 
 ### Bug Fixes

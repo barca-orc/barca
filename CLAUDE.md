@@ -119,9 +119,11 @@ maturin develop --uv --release --extras test       # release profile (fat LTO), 
 # Tests
 cargo test
 
-# Before pushing: CI's always-on gates locally (changelog, specs, prek hooks incl. pinned ruff
-# and ty, clippy -D warnings, cargo test or nextest, rebuild the venv's barca if Rust changed,
-# Python tests picked from the diff), with a pass/fail summary. Exit 1 if any step failed.
+# Optional before pushing: the merge queue's gates for what the diff touches, locally
+# (changelog, specs, prek hooks incl. pinned ruff and ty; clippy and cargo nextest only when a
+# Rust input changed; rebuild the venv's barca if Rust changed; Python tests picked from the
+# diff), with a pass/fail summary. Exit 1 if any step failed. Run the tests of what you
+# changed while you work; a PR builds nothing in CI, the merge queue builds and tests it.
 scripts/check-fast.sh                # --python-all for the whole Python suite, --no-python
 BARCA_POOL_SIZE=2 scripts/check-fast.sh   # reproduce CI-only worker-pool failures
 
@@ -216,24 +218,32 @@ changes `site/` or `CHANGELOG.md` redeploys barca.sh.
   update branches by hand to keep them up to date with main, the queue tests each PR against
   the main it will land on. To ship several PRs as one release, combine them on one branch, run
   CI once, and squash-merge it with a body that lists each PR and the issues it closes.
-- **What CI runs**: three tiers. A PR runs the fast set (`checks`: the CHANGELOG and
-  specification checks and the prek hooks of `prek.toml`, so ruff, ruff format, ty, cargo fmt,
-  the version sync and `uv lock --check` gate every PR; `clippy`; `changes`) so it enters the
-  queue within about a minute. A merge group runs the merge tier, which gates the merge: the
-  fast set plus the Rust tests (and the UI's generated types against Rust), the wheel, the
-  quick Python subset in `scripts/fast-tests.txt` and `perf` (the performance budgets,
-  `scripts/perf-gate.py`), about two minutes. `scripts/check-fast.sh` runs the same gates
-  locally except `perf` and the generated types, and fails with one line when the tree has no
-  `.venv` to run the Python tests against. A release runs the full tier: everything,
+- **What CI runs**: three tiers, and nothing is built or tested before the merge queue
+  (#945). A PR runs static checks only (`checks`: the CHANGELOG and specification checks and
+  the prek hooks of `prek.toml`, so ruff, ruff format, ty, cargo fmt, the version sync and
+  `uv lock --check` gate every PR; the TLA+ models when `specs/models/` changed; `changes`), so
+  it enters the queue within a minute. A merge group runs the merge tier, which gates the
+  merge, picking what the diff can affect (`scripts/ci-tier.py`): `clippy` and the Rust tests
+  (and the UI's generated types against Rust) when an input of the Rust tests changed (any
+  path but a short list of docs, scripts and Python tests), the wheel, the Python tests
+  `scripts/select-python-tests.py` picks (the quick subset in `scripts/fast-tests.txt` plus
+  the tests of what changed), `perf` (the performance budgets, `scripts/perf-gate.py`) and
+  the docs site build when `site/` or `CHANGELOG.md` changed, about two minutes. A PR that
+  fails a build or test leaves the queue; fix it and queue it again. `scripts/check-fast.sh`
+  runs the same selection locally except `perf` and the generated types, and fails with one
+  line when the tree has no `.venv` to run the Python tests against. A release runs the full
+  tier: everything,
   including integration, the UI checks, the proxy tests, the Python shards, the object-store
   emulator tests, the duckdb 1.x rerun and the real minute checkpoint test
   (`test_minute_checkpoints.py`, about 2 min), as the `release/v*` PR's own run and again in
   its merge group (head commit `chore(release): ...`); its `durations` job uploads the suite's
   per-file durations, which `scripts/release.sh` merges into `scripts/ci-test-durations.json`.
-  A PR labelled `ci-full` runs the full tier too. A site-only diff (`site/**`, optionally
-  `CHANGELOG.md`) skips clippy, the wheel, Python and perf: its PR runs `checks` (which builds
-  the site) and its merge group adds the Rust tests, which read site pages
-  (`scripts/ci-tier.py`). Nothing runs on push to main: main only
+  A PR labelled `ci-full` runs the full tier on every push; add the label only when asked, or
+  when a change needs the whole suite before the release. A UI-only diff runs the UI's
+  typecheck, lint and unit tests on its PR, and adds the wheel and Playwright in its merge
+  group. A site-only diff (`site/**`, optionally `CHANGELOG.md`) skips clippy, the wheel,
+  Python and perf: its PR runs `checks` and its merge group builds the site and adds the Rust
+  tests, which read site pages (`scripts/ci-tier.py`). Nothing runs on push to main: main only
   moves to a merge group's commit, which the queue has tested. The one exception is the
   site: `.github/workflows/site.yml` deploys barca.sh when a commit on main changes `site/`
   or `CHANGELOG.md`, and uploads a preview of a PR that does, linked in a PR comment

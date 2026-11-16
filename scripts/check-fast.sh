@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# The checks to run before pushing: what CI's fast tier (every pull request) and merge tier
-# (the merge queue) gate, locally, in a few minutes (.depot/workflows/ci.yml).
+# The checks for what a change touches, locally: what CI's fast tier (every pull request) and
+# merge tier (the merge queue) gate, skipping what the diff cannot affect, as CI does
+# (.depot/workflows/ci.yml, #945). Optional: a pull request builds nothing, and the merge
+# queue builds and tests it; run this when you want the answer before the queue gives it.
 #
 #   scripts/check-fast.sh                  # everything below, Python tests chosen by the diff
 #   scripts/check-fast.sh --python-all     # the whole Python suite instead of the selection
@@ -17,20 +19,23 @@
 #   clippy      cargo clippy --workspace --all-targets -- -D warnings         [CI: clippy]
 #   cargo-test  cargo nextest run --workspace + doc tests when cargo-nextest is installed,
 #               else cargo test                                               [CI: rust-tests]
+#               Both skipped when no changed path is an input of the Rust build or tests
+#               (scripts/ci-tier.py --rust-inputs, the list CI uses).
 #   build       maturin develop --profile fast into the venv (the release optimization level
 #               without LTO, incremental; what CI's wheel uses), when Rust or UI sources are
 #               newer than the venv's barca binary (the Python tests run that binary). Without
 #               a .venv in the tree, or when the build fails, the python step is skipped and
 #               the run fails: make the venv with scripts/new-worktree.sh, or
 #               `uv venv && maturin develop --uv --profile fast --extras test`.
-#   python      the fast subset (scripts/fast-tests.txt, the same files CI's merge tier runs),
-#               the test files changed since the base, tests that name a changed python/barca
-#               module, and test_cli_contract.py / test_docs_examples.py when the CLI surface
-#               or the manual changed                                         [CI: python (fast)]
+#   python      the tests scripts/select-python-tests.py picks, as CI's merge tier does: the
+#               fast subset (scripts/fast-tests.txt), the test files changed since the base,
+#               tests that name a changed python/barca or test-helper module, and
+#               test_cli_contract.py / test_docs_examples.py when the CLI surface or the
+#               manual changed                                                [CI: python (fast)]
 #
 # Not run here: CI's merge tier also runs `perf` (scripts/perf-gate.py, the performance
-# budgets; the prek pre-push hook runs benchmarks/perf/profile.py) and checks the UI's generated
-# types against Rust (ui/scripts/regen-types.sh). CI's full tier (a release) adds
+# budgets; `python benchmarks/perf/profile.py` measures the venv's barca by hand) and checks
+# the UI's generated types against Rust (ui/scripts/regen-types.sh). CI's full tier (a release) adds
 # tests/integration/*.sh, the benchmark smoke tests, the UI checks, the whole Python suite in
 # shards, the duckdb 1.x pass and the object-store emulator tests (they skip without
 # BARCA_TEST_*). The minute checkpoint test runs when picked (unset
@@ -48,7 +53,7 @@ while [ $# -gt 0 ]; do
         --base) BASE_REF="$2"; shift 2 ;;
         --python-all) PYTHON_MODE=all; shift ;;
         --no-python) PYTHON_MODE=none; shift ;;
-        -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
     esac
 done
@@ -75,7 +80,6 @@ NO_VENV_HINT="no .venv in this tree: run scripts/new-worktree.sh, or: uv venv &&
 
 # Changed since the base: committed, staged, unstaged and untracked.
 CHANGED=$( { git diff --name-only "$BASE"; git ls-files --others --exclude-standard; } | sort -u)
-changed() { grep -qE "$1" <<<"$CHANGED"; }
 
 RESULTS=()
 FAILED=0
@@ -116,13 +120,17 @@ else
     skip hooks "install prek: uv tool install prek"
 fi
 
-step clippy cargo clippy --workspace --all-targets -- -D warnings
-
-if cargo nextest --version >/dev/null 2>&1; then
-    cargo_tests() { cargo nextest run --workspace --no-fail-fast && cargo test --workspace --doc; }
-    step cargo-test cargo_tests
+if printf '%s\n' "$CHANGED" | python3 scripts/ci-tier.py --rust-inputs; then
+    step clippy cargo clippy --workspace --all-targets -- -D warnings
+    if cargo nextest --version >/dev/null 2>&1; then
+        cargo_tests() { cargo nextest run --workspace --no-fail-fast && cargo test --workspace --doc; }
+        step cargo-test cargo_tests
+    else
+        step cargo-test cargo test --workspace --no-fail-fast
+    fi
 else
-    step cargo-test cargo test --workspace --no-fail-fast
+    skip clippy "no input of the Rust build or tests changed"
+    skip cargo-test "no input of the Rust build or tests changed"
 fi
 
 if [ "$PYTHON_MODE" = none ]; then
@@ -155,33 +163,13 @@ if [ "$PYTHON_MODE" != none ] && [ "$HAVE_VENV" -eq 1 ] && [ "$BUILD_OK" -eq 0 ]
     echo "python tests skipped: fix the build first" >&2
 elif [ "$PYTHON_MODE" != none ] && [ "$HAVE_VENV" -eq 1 ]; then
 
-    # The quick subset, shared with CI's merge tier (.depot/workflows/ci.yml).
-    FAST=()
-    while IFS= read -r f; do FAST+=("$f"); done < <(grep -v '^#' scripts/fast-tests.txt | grep .)
+    # The selection CI's merge tier makes from the same diff (.depot/workflows/ci.yml).
     SELECTED=()
     if [ "$PYTHON_MODE" = all ]; then
         SELECTED=(python/tests)
     else
-        for f in "${FAST[@]}"; do
-            [ -f "python/tests/$f" ] && SELECTED+=("python/tests/$f")
-        done
-        while IFS= read -r f; do
-            [ -f "$f" ] && SELECTED+=("$f")
-        done < <(grep -E '^python/tests/test_[^/]*\.py$' <<<"$CHANGED")
-        # Tests that name a changed module (python/barca/_storage.py -> "_storage").
-        while IFS= read -r mod; do
-            case "$mod" in ''|__init__|__main__) continue ;; esac
-            while IFS= read -r f; do SELECTED+=("$f"); done \
-                < <(grep -lw -- "$mod" python/tests/test_*.py)
-        done < <(grep -E '^python/barca/[^/]*\.py$' <<<"$CHANGED" | sed -E 's#.*/([^/]*)\.py#\1#')
-        # The CLI surface and the manual: contract snapshots and the manual's examples.
-        if changed '^crates/barca-cli/(src|docs|snapshots)/|^python/tests/snapshots/|^crates/barca-compile/src/decorator_args\.rs'; then
-            SELECTED+=(python/tests/test_cli_contract.py python/tests/test_docs_examples.py)
-        fi
-        UNIQUE=()
-        while IFS= read -r f; do UNIQUE+=("$f"); done \
-            < <(printf '%s\n' ${SELECTED[@]+"${SELECTED[@]}"} | sort -u)
-        SELECTED=(${UNIQUE[@]+"${UNIQUE[@]}"})
+        while IFS= read -r f; do SELECTED+=("$f"); done \
+            < <(printf '%s\n' "$CHANGED" | python3 scripts/select-python-tests.py)
     fi
     if "$PY" -c "import xdist" 2>/dev/null; then
         XDIST=(-n 4 --dist loadscope)

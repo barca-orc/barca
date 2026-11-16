@@ -209,30 +209,64 @@ The other site pages are written by hand, and no test compares them with the man
 
 ## What CI runs
 
-`.depot/examples/ci.yml` runs on every pull request into `main` and on every merge group in
+`.depot/workflows/ci.yml` runs on every pull request into `main` and on every merge group in
 the merge queue. It does not run on push to `main`: `main` only moves to a merge group's
 commit, which the queue has just tested. The required checks are `CI / test` and
 `CI / backends`. Each is a job that passes when the jobs it needs succeeded.
 
-UI-only diffs (`ui/**`, plus optional `CHANGELOG.md`) run the UI tier on both pull requests and merge groups: repository checks, one wheel build for the real-server browser tests, and UI typecheck, lint, unit and Playwright tests. Clippy, Rust tests, Python suites, proxy tests and performance tests are skipped. Mixed changes retain the tiers below. Releases and `ci-full` override UI scoping; missing diff history retains the broader gates.
+A pull request runs static checks only: nothing is compiled, built or tested until the pull
+request is in the merge queue. The merge group builds and tests what the diff can affect, and
+gates the merge. A pull request that fails a build or a test is found there, about two minutes
+in, and leaves the queue; fix it and queue it again. `scripts/check-fast.sh` gives the same
+answer locally when you want it before the queue does.
 
-Site-only diffs (`site/**`, plus optional `CHANGELOG.md` and `.github/workflows/site.yml`) build no wheel and run no clippy, Python suites or performance tests. On a pull request (the `site` tier) they run the repository checks, which include building the site; in a merge group (`site-merge`) they also run the Rust tests, which read site pages (the sidebar, the pages generated from manual topics, the decorator-argument table and the repository-wide unused-input sweep). A diff that touches `site/src/content/docs/recipes/ordering-only-deps.md`, which a Python test executes, runs the normal tiers. Releases and `ci-full` override site scoping too.
+`scripts/ci-tier.py` picks the tier and its optional parts from the diff against the base:
 
-Other changes run in three tiers. A pull request runs the fast tier, so it can enter the queue about a
-minute after a push. A merge group runs the merge tier, which gates the merge, in about two
-minutes. A release runs the full tier twice: as the `release/v*` pull request's own run, and
-again in that pull request's merge group (recognized by its head commit, `chore(release): ...`).
-A pull request labelled `ci-full` runs the full tier too, on its next push.
+- **rust**: `clippy` and the Rust tests run only when a changed path is an input of the Rust
+  build or tests. That is anything except a short list (`python/tests/`, `docs/`,
+  `specs/behavior/`, `specs/models/`, `specs/proposals/`, `scripts/`, `.github/`, the agent
+  and changelog files, and `benchmarks/` files other than `*.sh`), so a new kind of path runs
+  them.
+- **Python tests**: the merge tier runs what `scripts/select-python-tests.py` picks: the quick
+  subset in `scripts/fast-tests.txt`, the test files that changed, the tests that name a
+  changed `python/barca` module or test helper, `test_cli_contract.py` and
+  `test_docs_examples.py` when the CLI surface or the manual changed, and every test file when
+  `conftest.py` or shared test data changed. `scripts/check-fast.sh` uses the same script.
+- **site**: the docs site is built in a merge group whose diff changed `site/`, `CHANGELOG.md`
+  (the Release Notes page) or the site workflow. On a pull request,
+  `.github/workflows/site.yml` builds a preview instead.
+- **models**: the TLA+ models are checked when `specs/models/` changed.
+
+A change to CI itself (`.depot/`, `scripts/ci-tier.py`, `scripts/select-python-tests.py`), or a
+diff that cannot be computed, runs every optional part.
+
+UI-only diffs (`ui/**`, plus optional `CHANGELOG.md`) run the UI tiers. The pull request
+(`ui`) runs the repository checks and the UI's typecheck, lint and unit tests. The merge group
+(`ui-merge`) adds one wheel build and the Playwright tests against it. Clippy, Rust tests,
+Python suites, proxy tests and performance tests are skipped. Mixed changes take the tiers
+below. Releases and `ci-full` override UI scoping.
+
+Site-only diffs (`site/**`, plus optional `CHANGELOG.md` and `.github/workflows/site.yml`) build no wheel and run no clippy, Python suites or performance tests. On a pull request (the `site` tier) they run the repository checks; in a merge group (`site-merge`) the checks build the site and the Rust tests run, which read site pages (the sidebar, the pages generated from manual topics, the decorator-argument table and the repository-wide unused-input sweep). A diff that touches `site/src/content/docs/recipes/ordering-only-deps.md`, which a Python test executes, runs the normal tiers. Releases and `ci-full` override site scoping too.
+
+Other changes run in three tiers. A pull request runs the fast tier, so it can enter the queue
+within a minute of a push. A merge group runs the merge tier, which gates the merge, in about
+two minutes. A release runs the full tier twice: as the `release/v*` pull request's own run,
+and again in that pull request's merge group (recognized by its head commit,
+`chore(release): ...`). A pull request labelled `ci-full` runs the full tier too, on its next
+push. It runs everything on every push, so add it only when a change needs the whole suite
+before the release runs it.
 
 | Job | Check | Fast (pull request) | Merge (merge group) | Full (release, `ci-full`) |
 | --- | --- | --- | --- | --- |
-| **checks**: the CHANGELOG check, the specification checks, the prek hooks of `prek.toml` (`uvx prek run --all-files`: ruff and ruff format, ty on `python/barca/`, `cargo fmt --check`, the version sync, `uv lock --check`, whitespace and YAML/TOML checks) and the TLA+ models (the jar is cached, its SHA-256 checked each run) | test | yes | yes | yes |
-| **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes | yes |
+| **checks**: the CHANGELOG check, the specification checks, the prek hooks of `prek.toml` (`uvx prek run --all-files`: ruff and ruff format, ty on `python/barca/`, `cargo fmt --check`, the version sync, `uv lock --check`, whitespace and YAML/TOML checks) | test | yes | yes | yes |
+| **checks**, the TLA+ models (the jar is cached, its SHA-256 checked each run) | test | when `specs/models/` changed | when `specs/models/` changed | yes |
+| **checks**, the docs site build | test | | when `site/` or `CHANGELOG.md` changed | yes |
+| **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | | when Rust inputs changed | yes |
 | **changes**: the tier and its optional parts; every test file is in exactly one shard (`scripts/ci-shards.py --check`) and every file in `scripts/fast-tests.txt` exists | backends | yes | yes | yes |
-| **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes | yes |
-| **rust-tests**, generated types: `ui/scripts/regen-types.sh` (what `pnpm gen:types` runs), then `git diff --exit-code` on `ui/src/lib/generated`, so the UI's wire types cannot drift from Rust | test | | yes | yes |
+| **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | when Rust inputs changed | yes |
+| **rust-tests**, generated types: `ui/scripts/regen-types.sh` (what `pnpm gen:types` runs), then `git diff --exit-code` on `ui/src/lib/generated`, so the UI's wire types cannot drift from Rust | test | | when Rust inputs changed | yes |
 | **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes | yes |
-| **python (fast)**: the quick subset in `scripts/fast-tests.txt`, about 20 s of tests | backends | | yes | |
+| **python (fast)**: the tests `scripts/select-python-tests.py` picks from the diff: the quick subset in `scripts/fast-tests.txt` (about 20 s) plus the tests of what changed | backends | | yes | |
 | **perf**: the performance budgets, `scripts/perf-gate.py` against that wheel (see below) | test | | yes | yes |
 | **integration**: the shell integration tests and the benchmark examples, against that wheel | test | | | yes |
 | **ui**: the web UI's typecheck, lint and unit tests, then the Playwright suites in `ui/e2e` and `ui/e2e-auth` against that wheel (not gating yet, see below) | backends | | | yes |
@@ -240,8 +274,8 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **python (1/3 .. 3/3, duckdb 1.x)**: the whole Python suite in shards, with the emulators, the duckdb 1.x rerun and the minute checkpoint test | backends | | | yes |
 | **durations**: merges the shards' JUnit reports into `scripts/ci-test-durations.json` and uploads it as the `ci-test-durations` artifact (not gating; see below) | | | | yes |
 
-The trade: a merge to `main` is checked by the Rust tests and the quick Python subset only, so
-a failure the full tier finds on a release pull request is in one of the pull requests merged
+The trade: a merge to `main` is checked by the Rust tests and the Python tests its diff
+selects only, so a failure the full tier finds on a release pull request is in one of the pull requests merged
 since the previous release. Fix it there (or revert) and push to the release branch. Release
 wheels are built by the release workflow with `--release`, not by CI.
 

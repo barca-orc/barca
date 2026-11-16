@@ -89,15 +89,16 @@ barca/
 
 `prek.toml` configures [prek](https://github.com/j178/prek): whitespace and TOML/YAML checks,
 `ruff` and `ruff-format`, `cargo fmt --all --check`, `ty check python/barca/`,
-`scripts/check-version-sync.sh` and `uv lock --check`. A pre-push hook runs
-`benchmarks/perf/profile.py`.
+`scripts/check-version-sync.sh` and `uv lock --check`. There is no pre-push hook: the merge
+queue's `perf` job checks the performance budgets, and `python benchmarks/perf/profile.py`
+measures the venv's `barca` by hand.
 
 ```bash
 prek install
 prek run --all-files
 ```
 
-CI additionally runs `cargo clippy --workspace --all-targets -- -D warnings`.
+The merge queue additionally runs `cargo clippy --workspace --all-targets -- -D warnings`.
 
 ## Changing the command line or the manual
 
