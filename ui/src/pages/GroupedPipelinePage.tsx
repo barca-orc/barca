@@ -7,6 +7,8 @@ import { Button, HealthBar, IconButton, PageRunButton, ResetDatabaseButton, Sear
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodePanel } from '@/components/assets/NodePanel'
+import { HealthOverview } from '@/components/assets/HealthOverview'
+import { useStoredFlag } from '@/hooks/useStoredFlag'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
@@ -168,6 +170,8 @@ export function GroupedPipelinePage() {
   const root = rootName(pipeline)
   const nowMs = stateQuery.dataUpdatedAt
   const readOnly = healthQuery.data?.read_only ?? false
+  const [mapOpen, setMapOpen] = useStoredFlag('barca.healthMap', true)
+  const showMap = show === 'items' && !graph && !flat && !view.query
 
   return (
     <div className="barca-view">
@@ -244,11 +248,25 @@ export function GroupedPipelinePage() {
               />
             )}
             <span className="barca-count">{(show === 'failures' ? shownFailures.length : rowCount).toLocaleString()} shown</span>
+            {showMap && (
+              <button type="button" className="barca-clear barca-map-toggle" aria-expanded={mapOpen} onClick={() => setMapOpen(!mapOpen)}>
+                {mapOpen ? 'Hide health map' : 'Show health map'}
+              </button>
+            )}
           </div>
         )}
       </div>
 
       <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
+      {showMap && mapOpen && !error && !loading && (
+        <HealthOverview
+          scope={scope}
+          pipeline={pipeline}
+          onScope={openGroup}
+          onOpen={revealNode}
+          onShowFailures={() => update(modeChanges('failures', scope))}
+        />
+      )}
       {error ? (
         <div className="barca-table-empty">
           <p>
