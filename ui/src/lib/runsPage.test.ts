@@ -49,6 +49,7 @@ describe('run list telemetry', () => {
     id, handle: null, run_id: id, command: 'get', files: [], target: `t_${id}`, status, triggered_by: null,
     scheduled_at: null, schedule_id: null, started_at: new Date(NOW - minutesAgo * 60_000).toISOString(),
     finished_at: null, elapsed_seconds: elapsed, steps_total: null, steps_executed: 0, steps_cached: 0, error: null, first_failure: null,
+    principal: null, trigger_reason: null, cancellation: null,
   })
   const NOW = Date.parse('2026-10-29T12:30:00Z')
   const runs = [run('a', 'success', 5, 1), run('b', 'failed', 10, 3), run('c', 'running', 1, null), run('d', 'cancelled', 90, 5), run('e', 'success', 60 * 30)]

@@ -2,6 +2,7 @@ import { LogViewer, RunningBadge } from '@/components'
 import { ResetDatabaseDialog } from '@/components/ResetDatabase'
 import { ArtifactSchema } from '@/components/assets/ArtifactSchema'
 import { NodeInspector } from '@/components/graph/NodeInspector'
+import { RunOverviewView } from '@/components/runs/RunOverview'
 import { liveGraphState } from '@/lib/graphState'
 import type { ListNode, LogLine, StatusKind } from '@/lib/types'
 import {
@@ -9,6 +10,7 @@ import {
   feedbackInputs,
   logLines,
   resetPhases,
+  runOverviews,
   runningByStep,
   runningPartitioned,
   schemaNodes,
@@ -73,6 +75,14 @@ export function Runs() {
               />
             </div>
           )}
+        />
+      </Spec>
+
+      <Spec title="RunOverviewView" note="The top of a run's panel: why its steps ran, who asked and why, attempts against steps, a cancellation, and while it runs how far it is (issue 925).">
+        <States
+          label="Run"
+          states={runOverviews}
+          render={(s) => <div className="barca-kit-panel"><RunOverviewView run={s.run} active={s.active} groups={s.groups} nowMs={s.nowMs} /></div>}
         />
       </Spec>
 

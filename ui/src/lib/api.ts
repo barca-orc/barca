@@ -134,6 +134,11 @@ export const api = {
     ),
   runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
   runDetail: (id: string) => request<RunView>(`/runs/${encodeURIComponent(id)}`),
+  /** One page of a run's steps (`?offset=`, failed steps first): `steps_page.next_offset` is the next. */
+  runStepsPage: (id: string, offset: number, limit = 1000) =>
+    request<RunView>(`/runs/${encodeURIComponent(id)}?${new URLSearchParams({ offset: String(offset), limit: String(limit) })}`),
+  /** The runs in flight, each with the nodes it is working on now (`active_steps`). */
+  runsInFlight: () => request<RunList>('/runs?status=running'),
   startRun,
   /** `barca get` for every asset and sensor. */
   getAll: () => startRun({ command: 'get', targets: [] }),

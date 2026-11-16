@@ -16,13 +16,16 @@ import type { ResetPhase } from '@/components/ResetDatabase'
 import type { TokensModel } from '@/lib/tokensPage'
 import { INITIAL_TOKENS } from '@/lib/tokensPage'
 import type {
+  ActiveStep,
   IssuedToken,
   LastMaterialization,
   LogLine,
+  NodeGroup,
   NodeKind,
   NodeRunning,
   NodeState,
   NodeStatus,
+  PlanReasons,
   RunList,
   RunningStep,
   RunSummary,
@@ -262,6 +265,11 @@ function runView(status: RunViewStatus, overrides: Partial<RunView> = {}): RunVi
     attempts: null,
     client_run_id: null,
     failure: null,
+    principal: null,
+    trigger_reason: null,
+    retries: null,
+    plan_reasons: null,
+    cancellation: null,
     outcome: null,
     error: null,
     steps: status === 'pending' ? [] : [
@@ -322,7 +330,8 @@ function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {})
     status: view.status, triggered_by: view.triggered_by, scheduled_at: null, schedule_id: null,
     started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
     steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
-    error: view.error, first_failure: null, ...overrides,
+    error: view.error, first_failure: null, principal: view.principal, trigger_reason: view.trigger_reason,
+    cancellation: view.cancellation, ...overrides,
   }
 }
 
@@ -358,6 +367,69 @@ export const runDetails: Record<string, Remote<RunView>> = {
   'refresh failed': ready(runByStatus.running, 'connection refused'),
   ...Object.fromEntries(Object.entries(runByStatus).map(([status, view]) => [status, ready(view)])),
   'truncated steps': ready(runTruncated),
+}
+
+// ── A run that explains itself (issue 925) ────────────────────────────────────────
+
+const rebuildReasons: PlanReasons = {
+  nodes: 469,
+  steps: 23_278,
+  omitted: 3,
+  reasons: [
+    { category: 'code_changed', subject: 'helper pipelines/common.py:bucket_ltv', nodes: 412, steps: 21_104, example: 'pipeline.py:ltv_by_account' },
+    { category: 'new_keys', subject: null, nodes: 2, steps: 1_205, example: 'pipeline.py:sessionize' },
+    { category: 'inputs_changed', subject: 'input pipeline.py:orders_clean', nodes: 40, steps: 957, example: 'pipeline.py:revenue_daily' },
+    { category: 'never_run', subject: null, nodes: 12, steps: 12, example: 'pipeline.py:churn_model' },
+  ],
+}
+
+const rebuildActive: ActiveStep[] = [
+  { node_id: 'pipeline.py:sessionize', step: 'running', partitions: { running: 880, done: 3_120, total: 5_000 } },
+  { node_id: 'pipeline.py:ltv_by_account', step: 'running', partitions: null },
+  { node_id: 'pipeline.py:revenue_daily', step: 'queued', partitions: null },
+]
+
+const rebuildGroups: NodeGroup[] = [
+  { id: 'group:web', name: 'web', description: '', members: ['pipeline.py:sessionize'], output: 'pipeline.py:sessionize' },
+  { id: 'group:finance', name: 'finance', description: '', members: ['pipeline.py:ltv_by_account', 'pipeline.py:revenue_daily'], output: 'pipeline.py:revenue_daily' },
+]
+
+/** The run overview (`RunOverviewView`) in each state it says something different in. */
+export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; groups: NodeGroup[]; nowMs: number }> = {
+  'full rebuild in flight': {
+    run: runView('running', {
+      triggered_by: 'api', principal: 'token:ci-bot', trigger_reason: 'backfill after the bucket_ltv fix',
+      started_at: ago(360), steps_total: 23_278, steps_executed: 19_399, steps_cached: 0, attempts: 19_461, retries: 62,
+      plan_reasons: rebuildReasons,
+      steps_page: { total: 19_399, truncated: true, nodes: [
+        { node_id: 'pipeline.py:sessionize', keys: 3_120, failed: 0, elapsed_seconds: 1_840.5, calls: 0 },
+        { node_id: 'pipeline.py:ltv_by_account', keys: 1, failed: 0, elapsed_seconds: 212.3, calls: 0 },
+      ] },
+    }),
+    active: rebuildActive, groups: rebuildGroups, nowMs: NOW_MS,
+  },
+  'just started': {
+    run: runView('running', { triggered_by: 'schedule', started_at: ago(4), steps_total: 23_278, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false } }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
+  'finished, served mostly from cache': {
+    run: runView('success', {
+      attempts: 3, retries: 0,
+      plan_reasons: { nodes: 2, steps: 3, omitted: 0, reasons: [{ category: 'inputs_changed', subject: 'sensor pipeline.py:orders_feed', nodes: 2, steps: 3, example: 'pipeline.py:orders_clean' }] },
+    }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
+  'cancelled before it started': {
+    run: runView('cancelled', {
+      triggered_by: 'api', principal: 'token:ops', steps_total: 0, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false },
+      cancellation: { by: 'request', principal: 'token:ops', started: false, waiting_behind: ['a7e8f06a4890'], same_as: 'a7e8f06a4890' },
+    }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
+  'cancelled by the server stopping': {
+    run: runView('cancelled', { cancellation: { by: 'shutdown', principal: null, started: true, waiting_behind: [], same_as: null } }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
 }
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
