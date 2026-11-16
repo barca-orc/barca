@@ -3,7 +3,7 @@ import { ArrowRight, Copy } from 'lucide-react'
 import { ErrorLine, IconButton, KeyValue } from '@/components'
 import { usePartitionKeys } from '@/hooks/usePartitionKeys'
 import { keyBreakdown } from '@/lib/assetTable'
-import { barSegments } from '@/lib/nodeDetail'
+import { barSegments, runScopeNote } from '@/lib/nodeDetail'
 import { keysHref } from '@/lib/keysPage'
 import type { PartitionState } from '@/lib/types'
 
@@ -41,30 +41,39 @@ export interface NodeKeysProps {
 const PANEL_ERRORS = 3
 
 /**
- * A partitioned node's keys in its panel: what failed, grouped by error, each a way into the key
- * explorer filtered to it, and the explorer itself for everything else. The keys themselves live
- * there, where 10,000 of them fit; the panel stays short.
+ * A partitioned node's failed keys, grouped by error, each a way into the key explorer filtered
+ * to it: what its panel leads with when keys failed, above what changed.
+ */
+export function KeyErrors({ id, failed }: { id: string; failed: number }) {
+  const { data } = usePartitionKeys(id, { status: 'failed', limit: 1 })
+  const errors = failed > 0 ? data?.errors ?? [] : []
+  if (errors.length === 0) return null
+  return (
+    <ul className="barca-keys-errors" aria-label="Errors of the failed keys">
+      {errors.slice(0, PANEL_ERRORS).map((e, i) => (
+        <li key={e.error}>
+          <Link className="barca-keys-error-link" to={keysHref(id, { filter: { states: ['failed'], error: i } })} title="Open these keys in the key explorer">
+            <b>{e.keys.toLocaleString()}</b> <ErrorLine error={e.error} />
+          </Link>
+          <CopyButton label="Copy error" text={e.error} />
+        </li>
+      ))}
+      {errors.length > PANEL_ERRORS && <li className="barca-cell-sub">and {errors.length - PANEL_ERRORS} more errors</li>}
+    </ul>
+  )
+}
+
+/**
+ * A partitioned node's keys in its panel: what a run would compute, and the key explorer for
+ * the keys themselves, where 10,000 of them fit; the panel stays short. Their errors are at the
+ * top of the panel (`KeyErrors`).
  */
 export function NodeKeys({ id, partitions }: NodeKeysProps) {
   const { failed, stale, total } = keyBreakdown(partitions)
-  const { data } = usePartitionKeys(id, { status: 'failed', limit: 1 })
-  const errors = failed > 0 ? data?.errors ?? [] : []
+  const note = runScopeNote(failed + stale, total)
   return (
     <div className="barca-node-keys">
-      {errors.length > 0 && (
-        <ul className="barca-keys-errors" aria-label="Errors of the failed keys">
-          {errors.slice(0, PANEL_ERRORS).map((e, i) => (
-            <li key={e.error}>
-              <Link className="barca-keys-error-link" to={keysHref(id, { filter: { states: ['failed'], error: i } })} title="Open these keys in the key explorer">
-                <b>{e.keys.toLocaleString()}</b> <ErrorLine error={e.error} />
-              </Link>
-              <CopyButton label="Copy error" text={e.error} />
-            </li>
-          ))}
-          {errors.length > PANEL_ERRORS && <li className="barca-cell-sub">and {errors.length - PANEL_ERRORS} more errors</li>}
-        </ul>
-      )}
-      {(failed > 0 || stale > 0) && <p className="barca-note">Run computes only these {(failed + stale).toLocaleString()} keys; the others stay cached.</p>}
+      {note && <p className="barca-note">{note}</p>}
       <Link className="barca-keys-explore" to={keysHref(id)}>
         {failed + stale > 0 ? 'See where they are' : total === 1 ? 'Explore the key' : `Explore all ${total.toLocaleString()} keys`} <ArrowRight size={12} aria-hidden />
       </Link>

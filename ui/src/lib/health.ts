@@ -178,7 +178,7 @@ export interface Failure {
   at: string | null
   /** The first failed attempt after its last clean run. */
   failingSince: string | null
-  /** Runs in a row that failed it. */
+  /** Runs in a row that failed it (`streakLabel`). */
   failures: number
   /** How many nodes downstream of it, transitively, are waiting on it; null until the graph is loaded. */
   impact: number | null
@@ -222,17 +222,20 @@ export function keysLine(keys: FailedKeys): string {
 }
 
 /** How late a group is: its members' worst, so one old failure is not averaged away. */
-interface ScopeAge {
+export interface ScopeAge {
   /** The oldest member's last success; null when no member has succeeded. */
   lastSuccessAt: string | null
+  /** The oldest of the members' failing streaks: when it started. */
   failingSince: string | null
   /** The most runs in a row that failed one member. */
   failures: number
+  /** How many members are failing now (have a failing streak). */
+  failing: number
 }
 
 /** The ages of `ids`, for those with a loaded state. Times are compared as they are recorded. */
 export function scopeAge(ids: readonly string[], byId: ReadonlyMap<string, NodeState>): ScopeAge {
-  const age: ScopeAge = { lastSuccessAt: null, failingSince: null, failures: 0 }
+  const age: ScopeAge = { lastSuccessAt: null, failingSince: null, failures: 0, failing: 0 }
   const older = (a: string | null, b: string | null) => (a === null || (b !== null && b < a) ? b ?? a : a)
   for (const id of ids) {
     const node = byId.get(id)
@@ -240,8 +243,51 @@ export function scopeAge(ids: readonly string[], byId: ReadonlyMap<string, NodeS
     age.lastSuccessAt = older(age.lastSuccessAt, node.last_success_at)
     age.failingSince = older(age.failingSince, node.failing_since)
     age.failures = Math.max(age.failures, node.consecutive_failures)
+    if (node.failing_since) age.failing += 1
   }
   return age
+}
+
+/**
+ * A failing streak (`consecutive_failures` of `GET /state`): the runs in a row, up to now, that
+ * failed the node, a run counting once however many keys failed. Every surface says it in these
+ * words, so it is never read as the node's total runs (`N runs recorded`, its History).
+ */
+export function streakLabel(failures: number): string {
+  return failures === 1 ? '1 failed run' : `${failures.toLocaleString()} failed runs in a row`
+}
+
+/**
+ * Whose success a Last success time is: the node's own; any key's, for a partitioned node (the
+ * newest successful key, even in a run where other keys failed); a group's oldest member's.
+ */
+export type SuccessOf = 'node' | 'any key' | 'oldest member'
+
+/** What a Last success cell (and the panel's line) says: the time, whose it is, and the failing streak. */
+export interface AgeCell {
+  /** Null: it never succeeded. */
+  success: { at: string; of: SuccessOf } | null
+  /** While failing: `{lead} since <at>{tail}`. */
+  failing: { lead: string; since: string; tail: string } | null
+}
+
+/**
+ * The Last success cell of a node or a group. A node: `failing since 3h ago · 130 failed runs in a
+ * row`. A group summarizes every failing member, not its oldest alone: `3 failing · oldest since
+ * 3h ago`; its time is its oldest member's last success, and says so.
+ */
+export function ageCell(age: ScopeAge, of: { group: boolean; partitioned: boolean }): AgeCell {
+  const whose: SuccessOf = of.group ? 'oldest member' : of.partitioned ? 'any key' : 'node'
+  const success = age.lastSuccessAt ? { at: age.lastSuccessAt, of: whose } : null
+  if (!age.failingSince) return { success, failing: null }
+  if (!of.group) return { success, failing: { lead: 'failing', since: age.failingSince, tail: ` · ${streakLabel(age.failures)}` } }
+  const n = Math.max(age.failing, 1)
+  return { success, failing: { lead: n === 1 ? '1 failing' : `${n.toLocaleString()} failing · oldest`, since: age.failingSince, tail: '' } }
+}
+
+/** The words for a `SuccessOf` beside the time; none for the node's own. */
+export function successOfLabel(of: SuccessOf): string | null {
+  return of === 'node' ? null : of
 }
 
 /** An error's one line: its first, or a bare traceback's last; no frames. */

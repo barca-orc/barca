@@ -158,6 +158,7 @@ test('All pipelines draws what its list lists: the groups and loose nodes, with 
   await expect(page.locator('.barca-group-table tbody tr')).toHaveCount(top.length)
   await page.goto('/ui/#/assets?view=graph')
   await expect(page.locator('.react-flow__node')).toHaveCount(top.length)
+  await expect(page.getByText('28 assets · 4 tasks in 5 groups')).toBeVisible()
   for (const id of top) await expect(page.locator(node(id))).toHaveCount(1)
   // Edges by dependency, never a grid without them: source feeds the folds, which feed the marts and publish.
   for (const [source, target] of [[G('source'), G('cross_validation')], [G('cross_validation'), 'group:marts.py:marts'], [G('cross_validation'), N('publish')]]) {
@@ -173,7 +174,7 @@ test('All pipelines draws what its list lists: the groups and loose nodes, with 
   // marts.py is one group: it opens at once, its 22 marts in a grid fed by one port.
   await page.goto('/ui/#/assets?pipeline=marts.py&view=graph')
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText('marts.py')
-  await expect(page.getByText('22 nodes · 22 items')).toBeVisible()
+  await expect(page.getByText('22 assets in 1 group')).toBeVisible()
   await expect(page.locator('.barca-port-node')).toHaveText('summary')
   const rows = await page.locator('.react-flow__node-asset').evaluateAll((all) => new Set(all.map((n) => n.getBoundingClientRect().top)).size)
   expect(rows).toBeLessThan(8)
@@ -323,6 +324,6 @@ test('mixed groups and nodes keep their columns readable at laptop width', async
   const widths = await table.locator('th').evaluateAll(cells => cells.map(c => ({ name: c.textContent?.trim(), width: c.getBoundingClientRect().width })))
   for (const cell of widths) {
     if (cell.name === 'Contents') expect(cell.width).toBeGreaterThanOrEqual(140)
-    if (cell.name === 'Age' || cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
+    if (cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
   }
 })

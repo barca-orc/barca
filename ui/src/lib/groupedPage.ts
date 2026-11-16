@@ -24,6 +24,7 @@ import {
 import { consumersOf, healthCounts, isFailed, needsAttention, scopeAge, type Failure } from './health'
 import { GRAPH_LIMIT, lineage } from './lineage'
 import { inPipeline, pipelineName, sourceFile } from './pipeline'
+import { plural } from './plural'
 import type { ListNode, NodeState, StatusKind } from './types'
 
 /** How many nodes a search lists beyond the open level. */
@@ -272,4 +273,49 @@ export function visibleFailures(list: readonly Failure[], query: string): Failur
 /** The root of the breadcrumb: the open pipeline's file, or every pipeline. */
 export function rootName(pipeline: string | null): string {
   return pipeline ? pipelineName(pipeline) : 'All pipelines'
+}
+
+/** The groups under `scope` at any depth (every group of the tree for the root). */
+export function groupsUnder(scope: string | null, tree: GroupTree): number {
+  if (scope === null) return tree.groups.size
+  let n = 0
+  const stack = [...(tree.groups.get(scope)?.members ?? [])]
+  while (stack.length) {
+    const group = tree.groups.get(stack.pop()!)
+    if (!group) continue
+    n += 1
+    stack.push(...group.members)
+  }
+  return n
+}
+
+/**
+ * What the header counts, named: the nodes in scope by kind, and the groups they are organized
+ * in at any depth. `541 assets · 82 tasks · 51 sensors in 19 groups`. Checks are tasks here, as
+ * the sidebar counts them; how many rows the table lists is the toolbar's `N shown`.
+ */
+export function scopeCountsLabel(ids: readonly string[], kindOf: ReadonlyMap<string, ListNode['kind']>, groups: number): string {
+  const counts = { asset: 0, task: 0, sensor: 0 }
+  for (const id of ids) counts[kindOf.get(id) ?? 'asset'] += 1
+  const kinds = (['asset', 'task', 'sensor'] as const).filter((k) => counts[k] > 0).map((k) => plural(counts[k], k))
+  const nodes = kinds.length ? kinds.join(' · ') : '0 nodes'
+  return groups > 0 ? `${nodes} in ${plural(groups, 'group')}` : nodes
+}
+
+/**
+ * The rows in the order they were shown (`previous`, ids), new rows after them in `sorted`'s
+ * order: while the pointer is over a table its rows do not move when states arrive or change
+ * (a group's Checking… resolving to failing). The table takes the fresh order when the pointer
+ * leaves, or at once when the sort, the scope or the search changes.
+ */
+export function holdOrder<T extends { id: string }>(previous: readonly string[] | null, sorted: readonly T[]): T[] {
+  if (!previous) return [...sorted]
+  const rank = new Map(previous.map((id, i) => [id, i]))
+  const kept = sorted.filter((e) => rank.has(e.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!)
+  return [...kept, ...sorted.filter((e) => !rank.has(e.id))]
+}
+
+/** Whether two id lists are the same, in the same order. */
+export function sameOrder(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i])
 }

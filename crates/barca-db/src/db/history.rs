@@ -398,7 +398,7 @@ impl NodeAgesIndex {
 
 /// A node's rows in one run, totalled: `?1` the run, `?2` the node, `?3`..`?4` its keys' range.
 const LAST_RUN_TOTALS: &str = "SELECT sum(elapsed_seconds), count(DISTINCT node_id), \
-     count(DISTINCT batch_id), sum(status = 'failed') FROM ( \
+     count(DISTINCT batch_id), count(DISTINCT CASE WHEN status = 'failed' THEN node_id END) FROM ( \
      SELECT node_id, elapsed_seconds, batch_id, status FROM materializations \
      WHERE run_id = ?1 AND node_id = ?2 UNION ALL \
      SELECT node_id, elapsed_seconds, batch_id, status FROM materializations \

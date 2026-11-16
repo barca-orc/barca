@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
-import { NodeKeys, PartitionBar } from './NodeKeys'
+import { KeyErrors, NodeKeys, PartitionBar } from './NodeKeys'
 import type { PartitionKeys, PartitionState } from '@/lib/types'
 
 const text = (html: string) => html.replace(/<[^>]+>/g, '')
@@ -47,12 +47,24 @@ describe('NodeKeys', () => {
   it("names the failed keys' errors, each a link into the key explorer filtered to it", () => {
     const client = new QueryClient()
     client.setQueryData(['partition-keys', ID, { status: 'failed', limit: 1 }], errors(4))
-    const html = render(client)
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={client}><MemoryRouter><KeyErrors id={ID} failed={7} /></MemoryRouter></QueryClientProvider>,
+    )
     expect(text(html)).toContain('5 ValueError: problem 0')
     expect(html).toContain('href="/keys?node=planning.py%3Ademand_forecast&amp;state=failed&amp;error=1"')
     expect(text(html)).toContain('and 1 more errors')
-    expect(text(html)).toContain('Run computes only these 77 keys')
+  })
+
+  it('says what a Run computes and points at the explorer', () => {
+    const html = render(new QueryClient())
+    expect(text(html)).toContain('Run computes only these 77 keys; the other 3,000 keys stay cached.')
     expect(text(html)).toContain('See where they are')
+  })
+
+  it('does not speak of other keys when every key needs computing', () => {
+    const html = render(new QueryClient(), partitions({ total: 1205, cached: 0, missing: 1205, failed: 1205 }))
+    expect(text(html)).toContain('Run computes all 1,205 keys; none is cached.')
+    expect(text(html)).not.toContain('the others stay cached')
   })
 
   it('offers the explorer for a node with nothing wrong', () => {

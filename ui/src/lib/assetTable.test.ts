@@ -345,7 +345,7 @@ describe('one line a row', () => {
     expect(lastRunText(failing!, NOW)).toBe('failed 35m ago · never succeeded')
     const [recovered] = buildRows([node({ id: 'a.py:x', last_materialization: failedAttempt, last_success_at: '2026-09-30 12:00:00', failing_since: '2026-10-01 12:00:00', consecutive_failures: 3 })], NOW)
     expect(lastRunText(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago')
-    expect(lastRunTitle(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago · failing since 1d ago · 3 runs')
+    expect(lastRunTitle(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago · failing since 1d ago · 3 failed runs in a row')
   })
 
   it('shows a typical duration only when it says something', () => {

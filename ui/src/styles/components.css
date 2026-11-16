@@ -397,3 +397,6 @@ a.barca-btn { text-decoration: none; }
 .barca-cause-name { color: var(--text-default); font-family: var(--font-mono); }
 .barca-cause-more { padding: 4px 8px 4px 30px; font-size: var(--text-xs); color: var(--text-muted); }
 .barca-cause-more button { padding: 0; border: 0; background: none; color: var(--text-link); font: inherit; cursor: pointer; }
+
+/* A Last success cell's failing line wraps rather than cutting its streak off. */
+.barca-age-failing { white-space: normal; }

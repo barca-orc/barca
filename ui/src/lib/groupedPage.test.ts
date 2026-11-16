@@ -12,6 +12,10 @@ import {
   searchHits,
   selectChanges,
   visibleFailures,
+  groupsUnder,
+  holdOrder,
+  sameOrder,
+  scopeCountsLabel,
 } from './groupedPage'
 import type { ListNode, NodeState } from './types'
 import type { Failure } from './health'
@@ -151,5 +155,34 @@ describe('grouped level', () => {
     const list = [f('p.py:a', 'KeyError'), f('p.py:b', 'ValueError')]
     expect(visibleFailures(list, 'key').map((x) => x.id)).toEqual(['p.py:a'])
     expect(visibleFailures(list, ' ').length).toBe(2)
+  })
+})
+
+describe('header counts', () => {
+  it('names what it counts: nodes by kind, in the groups at any depth', () => {
+    const kinds = new Map<string, ListNode['kind']>([['a', 'asset'], ['b', 'asset'], ['t', 'task'], ['s', 'sensor']])
+    expect(scopeCountsLabel(['a', 'b', 't', 's'], kinds, 19)).toBe('2 assets · 1 task · 1 sensor in 19 groups')
+    expect(scopeCountsLabel(['a'], kinds, 0)).toBe('1 asset')
+    expect(scopeCountsLabel([], kinds, 0)).toBe('0 nodes')
+  })
+
+  it('counts every group under a scope, nested ones included', () => {
+    expect(groupsUnder(null, tree)).toBe(tree.groups.size)
+    expect(groupsUnder('group:p.py:outer', tree)).toBe(1)
+  })
+})
+
+describe('holdOrder', () => {
+  const rows = (...ids: string[]) => ids.map((id) => ({ id }))
+
+  it('keeps the rows where they were shown; new rows go after them', () => {
+    expect(holdOrder(['b', 'a', 'c'], rows('a', 'c', 'd', 'b')).map((r) => r.id)).toEqual(['b', 'a', 'c', 'd'])
+    expect(holdOrder(['b', 'a'], rows('a')).map((r) => r.id)).toEqual(['a'])
+  })
+
+  it('takes the fresh order with nothing to hold', () => {
+    expect(holdOrder(null, rows('c', 'a')).map((r) => r.id)).toEqual(['c', 'a'])
+    expect(sameOrder(['a', 'b'], ['a', 'b'])).toBe(true)
+    expect(sameOrder(['a', 'b'], ['b', 'a'])).toBe(false)
   })
 })

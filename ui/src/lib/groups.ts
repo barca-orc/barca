@@ -305,3 +305,17 @@ export function lastRunDuration(node: NodeState | undefined): { text: string; ti
     title: keys ? `Summed over ${keys}${run.failed ? `, ${run.failed.toLocaleString()} failed` : ''} (run ${run.run_id})` : `Run ${run.run_id}`,
   }
 }
+
+/**
+ * Why a group's output node is in the state it is, when it did not fail itself: a group can be
+ * failing while its output reads `unknown` or `stale`, because a member upstream of the output
+ * failed. Names up to three of those members, then the server's own reason (`cache.detail`).
+ */
+export function groupOutputNote(output: Pick<NodeState, 'cache'>, failedUp: readonly string[]): string | null {
+  const detail = output.cache.detail ? `${output.cache.detail[0]!.toUpperCase()}${output.cache.detail.slice(1)}` : ''
+  if (failedUp.length === 0) return detail || null
+  const names = failedUp.slice(0, 3).map(shortName).join(', ')
+  const more = failedUp.length > 3 ? ` and ${failedUp.length - 3} more` : ''
+  const waits = `Not up to date: ${plural(failedUp.length, 'failed node')} upstream of it (${names}${more}).`
+  return detail ? `${waits} ${detail}${/[.!?]$/.test(detail) ? '' : '.'}` : waits
+}

@@ -1,4 +1,5 @@
 import { useTimeZone } from '@/context/timeZone'
+import { successOfLabel, type AgeCell } from '@/lib/health'
 import { formatAbsolute, formatAgo, formatInstant } from '@/lib/time'
 
 export interface AgeProps {
@@ -27,19 +28,22 @@ export function Absolute({ at }: AbsoluteProps) {
 }
 
 export interface LastSuccessProps {
-  at: string | null
-  failingSince: string | null
-  failures: number
+  /** What the cell says (`ageCell` in `lib/health.ts`). */
+  cell: AgeCell
   nowMs: number
 }
 
-/** The age a table row answers: its last success and, while failing, since when and how often. */
-export function LastSuccess({ at, failingSince, failures, nowMs }: LastSuccessProps) {
+/**
+ * The age a table row answers: its last success, whose it is when not the row's own (`any key`,
+ * `oldest member`), and, while failing, since when and how many runs in a row.
+ */
+export function LastSuccess({ cell, nowMs }: LastSuccessProps) {
+  const of = cell.success ? successOfLabel(cell.success.of) : null
   return <>
-    {at ? <Age at={at} nowMs={nowMs} /> : <span className="barca-cell-sub">never</span>}
-    {failingSince && (
-      <div className="barca-cell-sub">
-        failing since <Age at={failingSince} nowMs={nowMs} /> · {failures} {failures === 1 ? 'run' : 'runs'}
+    {cell.success ? <><Age at={cell.success.at} nowMs={nowMs} />{of && <span className="barca-cell-sub"> · {of}</span>}</> : <span className="barca-cell-sub">never</span>}
+    {cell.failing && (
+      <div className="barca-cell-sub barca-age-failing">
+        {cell.failing.lead} since <Age at={cell.failing.since} nowMs={nowMs} />{cell.failing.tail}
       </div>
     )}
   </>
