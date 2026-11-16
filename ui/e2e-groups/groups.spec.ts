@@ -151,19 +151,27 @@ test('failures are grouped by cause, and a failure row retries its node and open
   await expect(page.getByRole('complementary', { name: 'Run details' })).toContainText('feature count mismatch')
 })
 
-test('All pipelines is a map of files, and a pipeline of one group opens that group', async ({ page }) => {
+test('All pipelines draws what its list lists: the groups and loose nodes, with the edges between them', async ({ page }) => {
+  // Source data, Cross-validation and Marts; publish and other.py's standalone, which no group holds.
+  const top = [G('source'), G('cross_validation'), 'group:marts.py:marts', N('publish'), 'other.py:standalone']
+  await page.goto('/ui/#/assets')
+  await expect(page.locator('.barca-group-table tbody tr')).toHaveCount(top.length)
   await page.goto('/ui/#/assets?view=graph')
-  await expect(page.locator('.react-flow__node')).toHaveCount(3)
-  await expect(page.getByText('32 nodes · 3 pipelines')).toBeVisible()
-  // The one edge between files carries how many inputs cross it.
-  await expect(page.locator('.react-flow__edge-text')).toHaveText('22')
-  await page.locator(`.react-flow__node[data-id="domain:${FILE}"]`).dblclick()
-  await expect(page).toHaveURL(/pipeline=grouped\.py/)
-  await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText(FILE)
-  await expect(page.getByText('9 nodes · 3 groups')).toBeVisible()
+  await expect(page.locator('.react-flow__node')).toHaveCount(top.length)
+  for (const id of top) await expect(page.locator(node(id))).toHaveCount(1)
+  // Edges by dependency, never a grid without them: source feeds the folds, which feed the marts and publish.
+  for (const [source, target] of [[G('source'), G('cross_validation')], [G('cross_validation'), 'group:marts.py:marts'], [G('cross_validation'), N('publish')]]) {
+    await expect(page.locator(`.react-flow__edge[data-id="${source}->${target}"]`)).toHaveCount(1)
+  }
+  const [x0, x1] = await Promise.all([G('source'), G('cross_validation')].map(async (id) => (await page.locator(node(id)).boundingBox())!.x))
+  expect(x1).toBeGreaterThan(x0!)
+  // A failing group says so first, and the legend lists it.
+  await expect(page.locator(node(G('cross_validation')))).toContainText('1 failing')
+  await expect(page.locator('.barca-legend')).toContainText('failing')
+  await page.locator(node('group:marts.py:marts')).dblclick()
+  await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Marts')
   // marts.py is one group: it opens at once, its 22 marts in a grid fed by one port.
-  await page.goto('/ui/#/assets?view=graph')
-  await page.locator('.react-flow__node[data-id="domain:marts.py"]').dblclick()
+  await page.goto('/ui/#/assets?pipeline=marts.py&view=graph')
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText('marts.py')
   await expect(page.getByText('22 nodes · 22 items')).toBeVisible()
   await expect(page.locator('.barca-port-node')).toHaveText('summary')
@@ -172,6 +180,34 @@ test('All pipelines is a map of files, and a pipeline of one group opens that gr
   // A fold's inputs from outside it are one faded port too.
   await page.goto(`/ui/#/assets?pipeline=${FILE}&view=graph&group=${G('fold_01')}`)
   await expect(page.locator('.barca-port-node')).toHaveText('clean_rows')
+})
+
+test('a group\'s graph keeps its labels at 11px or more, and moving between levels never flashes Checking…', async ({ page }) => {
+  // A group's own state answers late, as it does on a busy server.
+  await page.route(/\/state\?.*targets=/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    await route.continue()
+  })
+  await page.goto(`/ui/#/assets?pipeline=${FILE}&view=graph`)
+  await expect(page.locator(node(G('cross_validation')))).toContainText('1 failing')
+  const pending = page.locator('.react-flow__node [data-glyph="pending"]')
+  for (const group of [G('cross_validation'), G('fold_02'), G('source')]) {
+    await page.evaluate((g) => { location.hash = `/assets?pipeline=grouped.py&view=graph&group=${encodeURIComponent(g)}` }, group)
+    // Sampled while the open group's own state request is in flight.
+    for (let i = 0; i < 6; i++) {
+      expect(await pending.count()).toBe(0)
+      await page.waitForTimeout(40)
+    }
+    await page.waitForTimeout(500)
+    const smallest = await page.evaluate(() => {
+      const zoom = new DOMMatrix(getComputedStyle(document.querySelector('.react-flow__viewport')!).transform).a
+      const sizes = [...document.querySelectorAll('.react-flow__node *')]
+        .filter((el) => [...el.childNodes].some((c) => c.nodeType === Node.TEXT_NODE && c.textContent!.trim()) && !el.closest('.barca-sr-only'))
+        .map((el) => parseFloat(getComputedStyle(el).fontSize))
+      return Math.min(...sizes) * zoom
+    })
+    expect(smallest).toBeGreaterThanOrEqual(11 - 1e-6)
+  }
 })
 
 test('the grouped page header fits a 1280×720 window on one line', async ({ page }) => {

@@ -87,16 +87,21 @@ export function healthCounts(
 
 const PENDING_WORD = 'checking'
 
-/** One part of the label: `3 stale`, `2 running`, `640 checking`. */
-function partText(part: HealthPart, count: number): string {
-  return `${count.toLocaleString()} ${part === 'pending' ? PENDING_WORD : part === 'running' ? part : cacheStateLabel(part)}`
+/** The word of a part: `stale`, `running`, `checking`. */
+function partWord(part: HealthPart): string {
+  return part === 'pending' ? PENDING_WORD : part === 'running' ? part : cacheStateLabel(part)
 }
 
-interface HealthLabelPart {
+export interface HealthLabelPart {
   /** What the part counts: a state, run work, no state yet, or failed last attempts. */
   key: HealthPart | 'lastFailed'
   tone: Tone
   glyph: Glyph
+  /** How many nodes it counts. */
+  count: number
+  /** Its word alone: `failing`, `stale`. */
+  word: string
+  /** The part in words: `3 stale`. */
   text: string
 }
 
@@ -107,10 +112,10 @@ interface HealthLabelPart {
  */
 export function healthParts(counts: HealthCounts, limit = HEALTH_PARTS.length + 1): HealthLabelPart[] {
   const parts: HealthLabelPart[] = []
-  if (counts.lastFailed > 0) parts.push({ key: 'lastFailed', tone: FAILED_TONE, glyph: 'failed', text: `${counts.lastFailed.toLocaleString()} ${LAST_ATTEMPT_FAILED}` })
+  if (counts.lastFailed > 0) parts.push({ key: 'lastFailed', tone: FAILED_TONE, glyph: 'failed', count: counts.lastFailed, word: LAST_ATTEMPT_FAILED, text: `${counts.lastFailed.toLocaleString()} ${LAST_ATTEMPT_FAILED}` })
   for (const part of HEALTH_PARTS) {
     const count = part === 'running' || part === 'pending' ? counts[part] : counts.states[part]
-    if (count > 0) parts.push({ key: part, tone: healthPartTone(part), glyph: healthPartGlyph(part), text: partText(part, count) })
+    if (count > 0) parts.push({ key: part, tone: healthPartTone(part), glyph: healthPartGlyph(part), count, word: partWord(part), text: `${count.toLocaleString()} ${partWord(part)}` })
   }
   return parts.slice(0, limit)
 }

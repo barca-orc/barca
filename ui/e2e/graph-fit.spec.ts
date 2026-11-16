@@ -39,10 +39,42 @@ test.beforeEach(async ({ page }) => {
   await page.waitForTimeout(600)
 })
 
-test('fit-to-screen zooms out a little, never past 0.8, to show the failures together with room around them', async ({ page }) => {
-  for (const box of await page.locator('.react-flow__node').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))) {
-    expect(box).toBeGreaterThanOrEqual(208 * 0.8 - 0.5)
-  }
+/** The zoom of the canvas, and the smallest text any card draws, as rendered on screen (px). */
+async function rendered(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const zoom = new DOMMatrix(getComputedStyle(document.querySelector('.react-flow__viewport')!).transform).a
+    const sizes = [...document.querySelectorAll('.react-flow__node *')]
+      .filter((el) => [...el.childNodes].some((c) => c.nodeType === Node.TEXT_NODE && c.textContent!.trim()) && !el.closest('.barca-sr-only'))
+      .map((el) => parseFloat(getComputedStyle(el).fontSize))
+    return { zoom, smallest: Math.min(...sizes) * zoom }
+  })
+}
+
+/** Edges (by id) whose drawn path passes through a card other than their own ends. */
+async function edgesThroughCards(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const cards = [...document.querySelectorAll('.react-flow__node')].map((n) => ({ id: n.getAttribute('data-id'), r: n.getBoundingClientRect() }))
+    const out: string[] = []
+    for (const edge of document.querySelectorAll<SVGGElement>('.react-flow__edge')) {
+      if (edge.style.visibility === 'hidden') continue
+      const path = edge.querySelector<SVGPathElement>('path.react-flow__edge-path')
+      if (!path) continue
+      const ctm = path.getScreenCTM()!
+      for (let s = 2; s < path.getTotalLength() - 2; s += 3) {
+        const p = path.getPointAtLength(s).matrixTransform(ctm)
+        const hit = cards.find((c) => p.x > c.r.left + 1 && p.x < c.r.right - 1 && p.y > c.r.top + 1 && p.y < c.r.bottom - 1)
+        if (hit) { out.push(`${edge.getAttribute('data-id')} through ${hit.id}`); break }
+      }
+    }
+    return out
+  })
+}
+
+test('fit-to-screen zooms out only as far as 11px labels, and centres the first failure with room around it', async ({ page }) => {
+  // The smallest text on a card (a kind, 12px) never renders below 11px.
+  const { zoom, smallest } = await rendered(page)
+  expect(zoom).toBeGreaterThanOrEqual(11 / 12 - 1e-6)
+  expect(smallest).toBeGreaterThanOrEqual(11 - 1e-6)
   const failed = page.locator(node('demand_forecast'))
   // Its failed keys make it failing: the one state shown, instead of `partial`.
   await expect(failed).toContainText('failing')
@@ -50,13 +82,53 @@ test('fit-to-screen zooms out a little, never past 0.8, to show the failures tog
   const name = failed.locator('.barca-dag-name')
   expect(parseFloat(await name.evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
   await expect(failed.locator('.barca-dag')).toHaveAttribute('title', /^failing/)
-  // Both failures are on screen, clear of the canvas's edges.
+  // The two failures are too far apart to show together at that zoom: the first is on screen,
+  // clear of the canvas's edges, and the other a pan away, not shrunk into view.
   const canvas = (await page.locator('.react-flow').boundingBox())!
-  for (const name of ['demand_forecast', 'publish_plan']) {
-    const box = (await page.locator(node(name)).boundingBox())!
-    expect(box.x).toBeGreaterThanOrEqual(canvas.x + 24)
-    expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width - 24)
-  }
+  const box = (await failed.boundingBox())!
+  expect(box.x).toBeGreaterThanOrEqual(canvas.x + 24)
+  expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width - 24)
+})
+
+test('at laptop width a fit never shrinks the labels: it shows what fits around the failures, and the rest is a pan away', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await page.reload()
+  await expect(page.locator('.react-flow__node')).toHaveCount(9)
+  await page.waitForTimeout(600)
+  expect((await rendered(page)).smallest).toBeGreaterThanOrEqual(11 - 1e-6)
+  const canvas = (await page.locator('.react-flow').boundingBox())!
+  const box = (await page.locator(node('demand_forecast')).boundingBox())!
+  expect(box.x).toBeGreaterThanOrEqual(canvas.x)
+  expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width)
+})
+
+test('edges are routed around the cards, never through one', async ({ page }) => {
+  expect(await edgesThroughCards(page)).toEqual([])
+  await page.getByRole('button', { name: 'Top-down layout' }).click()
+  await page.waitForTimeout(600)
+  expect(await edgesThroughCards(page)).toEqual([])
+})
+
+test('opening a node pans the graph so the panel does not cover it', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await page.getByRole('button', { name: 'Fit to screen' }).click()
+  await page.waitForTimeout(400)
+  // Pan so a node sits at the right edge of the canvas, where the panel opens, then open it.
+  const canvas = (await page.locator('.react-flow').boundingBox())!
+  const target = page.locator(node('promo_plan'))
+  const before = (await target.boundingBox())!
+  await page.mouse.move(canvas.x + 40, canvas.y + canvas.height - 120)
+  await page.mouse.down()
+  await page.mouse.move(canvas.x + 40 + (canvas.x + canvas.width - 220 - before.x), canvas.y + canvas.height - 120, { steps: 8 })
+  await page.mouse.up()
+  await target.click()
+  await expect(page.getByRole('complementary', { name: /promo_plan/ })).toBeVisible()
+  const narrowed = (await page.locator('.react-flow').boundingBox())!
+  expect(narrowed.width).toBeLessThan(canvas.width)
+  await expect.poll(async () => {
+    const box = (await target.boundingBox())!
+    return box.x >= narrowed.x && box.x + box.width <= narrowed.x + narrowed.width
+  }).toBe(true)
 })
 
 test('explicit fit includes every node at laptop width', async ({ page }) => {

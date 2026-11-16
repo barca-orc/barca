@@ -12,7 +12,7 @@ import { useStoredFlag } from '@/hooks/useStoredFlag'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
-import { useAssetStates } from '@/hooks/useAssetStates'
+import { useAssetStates, useKnownStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { useProgram } from '@/hooks/useProgram'
@@ -69,7 +69,9 @@ export function GroupedPipelinePage() {
   // Typing stays ahead of the list: a one-letter search can match thousands of nodes.
   const query = useDeferredValue(view.query)
   const allAssets = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
-  const states = useMemo(() => stateQuery.data ?? [], [stateQuery.data])
+  // While a new scope's state loads, its nodes keep their last known state (not "Checking…").
+  const knownRows = useKnownStates(stateQuery.data)
+  const states = useMemo(() => [...(knownRows ?? [])], [knownRows])
   const selectedAsset = allAssets.find((a) => a.id === selected) ?? null
   const nodeRun = useNodeRun(selectedAsset)
   const live = nodeRun.statuses
@@ -77,7 +79,7 @@ export function GroupedPipelinePage() {
     () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live }),
     [view, query, tree, allAssets, states, stateQuery.isError, live],
   )
-  const { assets, byId, leaves, sole, scope, entries, map, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, visibleEntries, isHit, pathOf, placeOf } = level
+  const { assets, byId, leaves, sole, scope, entries, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, visibleEntries, isHit, pathOf, placeOf } = level
   const canvas = useRef<GraphCanvasHandle>(null)
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -199,7 +201,7 @@ export function GroupedPipelinePage() {
           </nav>
           <span className="barca-count">
             {plural(scopeIds.length, 'node')}
-            {!flat && show === 'items' && ` · ${map ? plural(map.entries.length, 'pipeline') : plural(entries.length, scope ? 'item' : 'group')}`}
+            {!flat && show === 'items' && ` · ${plural(entries.length, scope ? 'item' : 'group')}`}
           </span>
           {runningHere > 0 && (
             <span className="barca-count barca-count-running">
@@ -208,7 +210,7 @@ export function GroupedPipelinePage() {
             </span>
           )}
           <div className="barca-scope-health" title="Every node in view, by state">
-            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={80} />}
+            {knownRows && <HealthBar counts={scopeHealth} labelLimit={3} width={80} />}
           </div>
           {scope && level.external.length > 0 && !flat && !graph && show === 'items' && (
             <span className="barca-group-external" title={level.external.map(shortName).join(', ')}>
@@ -315,7 +317,7 @@ export function GroupedPipelinePage() {
                     pins={pins}
                     handleRef={canvas}
                     onToggleDir={() => update(dirChanges(dir))}
-                    legend={drawn.some((entry) => entry.kind === 'group') && <span><FolderOpen size={12} />{map ? 'Pipeline' : 'Group'}</span>}
+                    legend={drawn.some((entry) => entry.kind === 'group') && <span><FolderOpen size={12} />Group</span>}
                   />
                 </>
               )}

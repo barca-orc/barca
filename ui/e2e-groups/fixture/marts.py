@@ -1,5 +1,5 @@
-"""Twenty-two marts over the grouped pipeline's summary: with them the project has more than
-thirty nodes, so All pipelines draws a map of files, and marts.py is one group, which opens at once.
+"""Twenty-two marts over the grouped pipeline's summary, in one group: All pipelines draws it as one
+card beside the other groups, and marts.py, being one group, opens at once.
 """
 
 from barca import asset, group
