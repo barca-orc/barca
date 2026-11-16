@@ -41,7 +41,10 @@ test('bootstrap, authenticated execution, one-time token display, reload, discon
   await page.getByRole('button', { name: 'Create token', exact: true }).click()
   await expect(page.locator('.barca-token-secret')).toBeVisible()
   await page.getByRole('button', { name: 'Done', exact: true }).click()
-  await expect(page.locator('.barca-token-row').filter({ hasText: 'temporary' })).toContainText('2030')
+  // Times read relative (`expires in 3y`), the absolute time on hover.
+  const temporary = page.locator('.barca-token-row').filter({ hasText: 'temporary' })
+  await expect(temporary).toContainText('expires in')
+  await expect(temporary.locator('time').last()).toHaveAttribute('title', /^2030-01-01 /)
   await page.getByRole('button', { name: 'Revoke temporary' }).click()
   await expect(page.getByRole('button', { name: 'Revoke temporary' })).toHaveCount(0)
   await page.locator('aside').getByRole('button', { name: 'Disconnect', exact: true }).click()

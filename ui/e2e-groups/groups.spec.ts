@@ -10,7 +10,8 @@ const FILE = 'grouped.py'
 const G = (name: string) => `group:${FILE}:${name}`
 const N = (name: string) => `${FILE}:${name}`
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`
-const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'unknown', 'never run', 'always runs', 'fresh', 'failing']
+// A node that always runs shows its last run: `succeeded`, with the fresh check (one legend line for both).
+const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'unknown', 'never run', 'succeeded', 'fresh', 'fresh / succeeded', 'failing']
 
 // The whole pipeline once, and the fold 2 check (which fails) once: a failed last attempt on
 // record beside cached models.
@@ -96,11 +97,11 @@ test('table groups support search, arrow selection and Enter to open', async ({ 
   await expect(page).not.toHaveURL(/group=/)
   await expect(rows).toHaveCount(3)
   await page.getByPlaceholder('Search groups and members').fill('fold_02__model')
-  // The group that holds the matches, then every matching node in it, with its path.
-  await expect(rows).toHaveCount(3)
-  await expect(rows.first()).toContainText('Cross-validation')
+  // Every matching node, with its path; not the group that holds them, which does not match.
+  await expect(rows).toHaveCount(2)
+  await expect(rows.first()).toContainText('in Cross-validation › Fold 2')
   await expect(rows.nth(1)).toContainText('in Cross-validation › Fold 2')
-  await rows.nth(1).click()
+  await rows.first().click()
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Fold 2')
 })
 
@@ -126,9 +127,10 @@ test('groups open worst first, a sort is kept in the URL, and rows read by their
   await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('source')}`)
   await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Contents' })).toHaveCount(0)
-  // A row's state is in plain words; the reason the server gives is beside it.
+  // A row's state is in plain words; the reason the server gives is beside it. A check (a
+  // task) shows its last run: this one never ran.
   const check = page.getByRole('row', { name: /check__clean_rows/ })
-  await expect(check).toContainText('always runs')
+  await expect(check).toContainText('never run')
   await expect(check.locator('.barca-dag[data-failed], .barca-tag[data-tone="failed"]')).toHaveCount(0)
 })
 
@@ -223,7 +225,7 @@ for (const view of ['list', 'graph']) {
     })
   }
 
-  test(`${view}: read-only mode disables the panel's Run`, async ({ page }) => {
+  test(`${view}: read-only mode offers no Run, and says so once`, async ({ page }) => {
     await page.route('**/health', async (route) => {
       const response = await route.fetch()
       await route.fulfill({ json: { ...(await response.json()), read_only: true } })
@@ -231,8 +233,9 @@ for (const view of ['list', 'graph']) {
     const selection = view === 'graph' ? `view=graph&focus=${N('raw_rows')}` : `node=${N('raw_rows')}`
     await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('source')}&${selection}`)
     const panel = page.getByRole('complementary', { name: 'raw_rows details' })
-    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeDisabled()
-    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toHaveAttribute('title', 'This server is read-only')
+    await expect(panel).toBeVisible()
+    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('note').filter({ hasText: 'Read-only.' })).toBeVisible()
   })
 }
 

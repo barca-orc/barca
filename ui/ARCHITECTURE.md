@@ -64,7 +64,7 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/queue.ts` | `queueState`, `queueControl`, `queueRows`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list | `queue.test.ts` |
 | `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause | `schedules.test.ts` |
 | `lib/runFeedback.ts` | `runFeedback(status, logs, error)` — map a node's status to a feedback descriptor | `runFeedback.test.ts` |
-| `lib/cacheStateDisplay.ts` | the one table from `CacheState` to display: each of the CLI's eight words with its tone and rank; `lastAttemptFailed` — the fact shown beside a state | `cacheStateDisplay.test.ts` |
+| `lib/cacheStateDisplay.ts` | the one table from `CacheState` to display: each of the CLI's eight words with its tone and rank; `lastAttemptFailed` — the fact shown beside a state; `shownCacheState` — a node that always runs shows its last run (`succeeded`, or `never run`) | `cacheStateDisplay.test.ts` |
 | `lib/status.ts` | `statusMeta` — the run lifecycle's one table (`StatusKind` → tone and word); `freshnessLabel`, `nodeKindLabel` | `status.test.ts` |
 | `lib/tone.ts` | `Tone`, `toneMeta` — the status hues both tables map onto; colour is never the only carrier | — |
 | `lib/graphState.ts` | `graphState(node)` — a node's box: its cache state (word, tone, detail, failed last attempt), the run on it, or no state yet | `graphState.test.ts` |
@@ -75,10 +75,12 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/domainMap.ts` | `domainMap(assets)` — All pipelines as a card per file, weighted edges between files | `domainMap.test.ts` |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count and state, through `assetTable.fileDisplay`, as its table header shows it); `mergeStates` for the sidebar | `pipeline.test.ts` |
 | `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
-| `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
-| `lib/sidebar.ts` | `updateSidebar`, `fileGroups` — the sidebar's collapse and the tree of groups under a file | `sidebar.test.ts` |
+| `lib/time.ts` | `parseTime`, `formatAgo`, `formatRelative` (`3h ago`, `in 5m`), `formatInstant` — the one time format, drawn by `Age` (relative, absolute on hover) | `time.test.ts` |
+| `lib/sidebar.ts` | `updateSidebar`, `fileGroups`, `listedPipelines` — the sidebar's collapse and width (dragged, by keyboard, reset), the files it lists and the tree of groups under a file | `sidebar.test.ts` |
+| `lib/documentTitle.ts` | `documentTitle` — the tab's title from the route: what is open, the section, the app | `documentTitle.test.ts` |
+| `lib/writeAccess.ts` | `writeAccess`, `writeControl` — whether every write action is drawn: hidden on a read-only server, disabled until `/health` answers | `writeAccess.test.ts` |
 | `lib/names.ts` | `splitMiddle` — a long name's cuttable head and its kept tail (`MiddleName`) | `names.test.ts` |
-| `lib/palette.ts` | `paletteIndex`, `searchPalette`, `updatePalette` — the command palette (⌘K) | `palette.test.ts` |
+| `lib/palette.ts` | `paletteIndex`, `searchPalette`, `updatePalette` — the command palette (⌘K): each result with its state, failing first among equal matches | `palette.test.ts` |
 | `lib/runTarget.ts` | `runTarget`, `runButton` — what a page toolbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/partitionGrid.ts` | `gridOf`, `filterCells`, `issueGroups`, `heatmap`, `filterSelection`, `issueSelection` — every key of a partitioned node (`GET /assets/{id}/partitions/grid`) decoded and filtered, its problems grouped with where they are, binned into the overview, and a filter or a problem turned into a run's `partition` | `partitionGrid.test.ts` |
@@ -92,7 +94,7 @@ These return **descriptors** (plain data / discriminated unions), never JSX. e.g
 
 - `components/`, `pages/`, `layouts/` — map descriptors and state to elements. A component
   should mostly be a `match` over a descriptor's `kind`, one arm per variant.
-- `hooks/` — thin wrappers that connect I/O to the pure core. `useRunStream` opens the
+- `hooks/` — thin wrappers that connect I/O to the pure core. `useWriteControl` is the one place a write button learns whether to draw itself (`lib/writeAccess.ts`); `useNow` is one shared 15 s clock for an `Age` with no fetch time of its own; `useDocumentTitle` keeps the tab's title. `useRunStream` opens the
   `EventSource` and pipes each event through `reduceRunEvent`; all the folding logic lives
   in `lib/runStream.ts`, so the hook itself needs no test.
 
@@ -195,8 +197,10 @@ Rules:
   state has its own glyph, shape and hue (`--state-*`): `failing` a red filled cross, `running`
   a blue turning arc, `fresh` a green filled check, `stale` amber half-filled, `blocked` an
   orange barred ring, `partial` violet three-quarters, `unsynced` teal arrow, `pinned` indigo,
-  and the quiet states (never run dashed, unknown, always runs, paused, queued, cancelled,
-  skipped) grey. A `Tone` (`lib/tone.ts`) is the separate question of urgency, which logic reads
+  and the quiet states (never run dashed, unknown, paused, queued, cancelled, skipped) grey. A
+  node that always runs (a task, a sensor) has no cache to describe: it shows its last run,
+  `succeeded` with the fresh check (the one state that shares a glyph), `failing`, or `never run`;
+  that it always runs is said in its tooltip. A `Tone` (`lib/tone.ts`) is the separate question of urgency, which logic reads
   (what needs attention, what sorts first); states may share a tone, never a glyph. A node's
   cache state is one of the CLI's eight words, mapped once in `lib/cacheStateDisplay.ts`; a run's
   status once in `lib/status.ts`. `--signal` (primary actions, links, selection) is neutral;
