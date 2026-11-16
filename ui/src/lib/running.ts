@@ -13,12 +13,23 @@ import type { NodeRunning, NodeState, StatusKind, TriggeredBy } from './types'
 /** `/state` poll interval while some node is running, and otherwise. */
 export const POLL_RUNNING_MS = 2_000
 export const POLL_IDLE_MS = 10_000
+/**
+ * While something runs in a scope this big, `/state` is asked less often: each answer is real
+ * server work on every node of it, and a run on a big scope takes long enough for 5s to be live.
+ */
+export const LARGE_SCOPE = 1_000
+export const POLL_RUNNING_LARGE_MS = 5_000
 /** The sidebar's whole-project state: seconds of server work on a big project, so rarely. */
 export const POLL_WHOLE_MS = 60_000
 
-/** How often to poll `/state`: faster while anything runs. */
+/**
+ * How often to poll `/state`: every 2s while anything in scope runs (5s on a scope of a
+ * thousand nodes or more), every 10s otherwise. A hidden tab polls nothing at all (TanStack
+ * Query's `refetchIntervalInBackground: false`, set for every query in `App.tsx`).
+ */
 export function statePollInterval(nodes: NodeState[] | undefined): number {
-  return nodes?.some((n) => n.running) ? POLL_RUNNING_MS : POLL_IDLE_MS
+  if (!nodes?.some((n) => n.running)) return POLL_IDLE_MS
+  return nodes.length >= LARGE_SCOPE ? POLL_RUNNING_LARGE_MS : POLL_RUNNING_MS
 }
 
 /** The visual status of a node a run is working on. */

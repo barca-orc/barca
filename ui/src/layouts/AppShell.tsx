@@ -8,6 +8,7 @@ import { OfflineBanner } from '@/components/OfflineBanner'
 import { PausedBanner } from '@/components/PausedBanner'
 import { PinnedBanner } from '@/components/PinnedBanner'
 import { ReadOnlyBanner } from '@/components/ReadOnlyBanner'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import type { AppShellContext, TopbarRun } from './shellContext'
 
 /**
@@ -18,6 +19,7 @@ export function AppShell() {
   const [topbarRun, setTopbarRun] = useState<TopbarRun | null>(null)
   const [palette, setPalette] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  useDocumentTitle()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
