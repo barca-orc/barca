@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { GitBranch, Play, X } from 'lucide-react'
-import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { runGlyph } from '@/lib/runs'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
@@ -25,7 +25,8 @@ import { buildRows, formatSeconds } from '@/lib/assetTable'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { blockedBy as blockedByMap } from '@/lib/graphView'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
-import { EDITOR_ROOTS_KEY, changedSummary, collapseRuns, dataKey, dataKeyNote, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, errorFirstLine, failuresOnlyNote, formatBytes, historyBars, keyFigures, onlyFailures, raisedAtLabel, runPace, runsRecorded, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
+import { signalLine } from '@/lib/dataSignals'
+import { EDITOR_ROOTS_KEY, changedSummary, collapseRuns, dataKey, dataKeyNote, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, errorFirstLine, failuresOnlyNote, formatBytes, historyBars, keyFigures, onlyFailures, rowsLabel, raisedAtLabel, runPace, runsRecorded, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, failedUpstream, headline, isFailed, streakLabel } from '@/lib/health'
 import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
@@ -175,6 +176,17 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               </div>
             ))}
           </div>
+        )}
+        {/* What the recorded row counts and times say about its data: empty, sharply changed, older than an input. */}
+        {(node.signals ?? []).length > 0 && (
+          <ul className="barca-signals" aria-label="Data signals">
+            {(node.signals ?? []).map((signal, i) => (
+              <li key={i}>
+                <StatusGlyph glyph={signal.kind === 'behind_input' ? 'stale' : 'partial'} size={12} />
+                <span>{signal.kind === 'behind_input' ? 'Behind: ' : 'Suspect data: '}{signalLine(signal)}</span>
+              </li>
+            ))}
+          </ul>
         )}
         {node.running && (
           <KeyValue label="now">
@@ -560,7 +572,8 @@ function RunList({ runs, nowMs, said }: { runs: AssetRunEntry[]; nowMs: number; 
               <span title={`${count} runs in a row failed the same way`}>×{count} · <Age at={oldestAt} nowMs={nowMs} /> – <Age at={r.created_at} nowMs={nowMs} /></span>
             ) : <Age at={r.created_at} nowMs={nowMs} />}
             {r.elapsed_seconds !== null && count === 1 && <span>{formatSeconds(r.elapsed_seconds)}</span>}
-            {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}{count > 1 ? ' each' : ''}</span>}
+            {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}{r.empty_keys ? `, ${r.empty_keys.toLocaleString()} empty` : ''}{count > 1 ? ' each' : ''}</span>}
+            {r.status === 'success' && rowsLabel(r.rows) && <span title="Rows the run wrote">{rowsLabel(r.rows)}</span>}
             {r.attempts > 1 && <span>{r.attempts} attempts</span>}
           </div>
           {r.error_message && !(saidLine && (errorFirstLine(r.error_message) === saidLine || saidLine.endsWith(errorFirstLine(r.error_message)))) && (

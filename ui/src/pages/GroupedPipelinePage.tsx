@@ -8,6 +8,7 @@ import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { HealthOverview } from '@/components/assets/HealthOverview'
+import { useHealthTree } from '@/hooks/useHealthTree'
 import { useStoredFlag } from '@/hooks/useStoredFlag'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
@@ -78,9 +79,13 @@ export function GroupedPipelinePage() {
   const selectedAsset = allAssets.find((a) => a.id === selected) ?? null
   const nodeRun = useNodeRun(selectedAsset)
   const live = nodeRun.statuses
+  // One health per node over the whole project, the page's fresher rows in place: every count
+  // here reads it, and the health map draws it.
+  const projectHealth = useHealthTree(pipeline, states)
+  const healthOf = projectHealth.loaded ? projectHealth.tree.healthOf : undefined
   const level = useMemo(
-    () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live }),
-    [view, query, tree, allAssets, states, stateQuery.isError, live],
+    () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live, healthOf }),
+    [view, query, tree, allAssets, states, stateQuery.isError, live, healthOf],
   )
   const { assets, byId, leaves, sole, scope, entries, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, isHit, pathOf, placeOf } = level
   // Rows never move under the pointer: while it is over the table, states that arrive (a group's
@@ -94,7 +99,7 @@ export function GroupedPipelinePage() {
 
   const kindOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.kind])), [allAssets])
   const inputsOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.inputs])), [allAssets])
-  const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, live), [scopeIds, byId, live])
+  const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, live, healthOf), [scopeIds, byId, live, healthOf])
   const graphKnown = !!assetQuery.data
   const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scopedStates), [scopedStates]))
   const failureList = useMemo(() => failures(scopedStates, graphKnown ? level.consumers : null, keyErrors), [scopedStates, graphKnown, level.consumers, keyErrors])
@@ -138,7 +143,7 @@ export function GroupedPipelinePage() {
   const selectedGroup = tree.groups.get(selected ?? '')
   const selectedNode = byId.get(selected ?? '')
   const selectedLeaves = selectedGroup ? leaves(selectedGroup.id) : []
-  const selectedGroupHealth = groupHealth(selectedLeaves, byId, live)
+  const selectedGroupHealth = groupHealth(selectedLeaves, byId, live, healthOf)
   const groupState = selectedGroup
     ? selectedLeaves.some((id) => !byId.has(id)) && !stateQuery.isError && selectedGroupHealth.kind !== 'run'
       ? PENDING_GRAPH_STATE : selectedGroupHealth
@@ -271,8 +276,8 @@ export function GroupedPipelinePage() {
       <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       {showMap && mapOpen && !error && !loading && (
         <HealthOverview
+          health={projectHealth}
           scope={scope}
-          pipeline={pipeline}
           onScope={openGroup}
           onOpen={revealNode}
           onShowFailures={() => update(modeChanges('failures', scope))}
@@ -360,6 +365,7 @@ export function GroupedPipelinePage() {
                 byId={byId}
                 leaves={leaves}
                 live={live}
+                healthOf={healthOf}
                 visualStates={visualStates}
                 labels={labels}
                 isHit={isHit}
@@ -384,6 +390,7 @@ export function GroupedPipelinePage() {
               byId={byId}
               leaves={selectedLeaves}
               live={live}
+              healthOf={healthOf}
               state={groupState}
               statesFailed={stateQuery.isError}
               inputs={inputsOf}

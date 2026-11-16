@@ -1,23 +1,20 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { CausesList } from '@/components/CausesList'
 import { HealthMap } from '@/components/HealthMap'
 import { useAssets } from '@/hooks/useAssets'
-import { useGroups } from '@/hooks/useGroups'
 import { usePartitionErrors } from '@/hooks/usePartitionErrors'
-import { usePinNotes } from '@/hooks/usePins'
-import { useWholeState } from '@/hooks/useAssetStates'
 import { causes } from '@/lib/causes'
 import { consumersOf, failedKeyNodes, failures } from '@/lib/health'
-import { buildHealthTree, healthSummary, leafIds, nearestInTree, ROOT } from '@/lib/healthTree'
-import { inPipeline } from '@/lib/pipeline'
+import { healthSummary, leafIds, nearestInTree, ROOT } from '@/lib/healthTree'
+import { useNow } from '@/hooks/useNow'
+import type { ProjectHealth } from '@/hooks/useHealthTree'
 import { shortName } from '@/lib/graph'
-import { dataSignalSets } from '@/lib/dataSignals'
 
 export interface HealthOverviewProps {
+  /** The project's health, as the page counts it (`useHealthTree`). */
+  health: ProjectHealth
   /** The scope the page has open: a group id, or null for the page's top level. */
   scope: string | null
-  /** The open pipeline (`?pipeline=`), when the page is one file. */
-  pipeline: string | null
   /** Open a scope (a group); null for the top level. */
   onScope: (id: string | null) => void
   /** Select a node. */
@@ -28,31 +25,14 @@ export interface HealthOverviewProps {
 
 /**
  * The top of the Assets page: the health map of the open scope beside its causes, biggest
- * first. Both read one health tree over the whole project's state, so every count the page
- * shows for a scope is the sum of its members'.
+ * first. Both read the page's health tree (`useHealthTree`), so every count the page shows for a
+ * scope is the sum of its members', as the map draws it.
  */
-export function HealthOverview({ scope, pipeline, onScope, onOpen, onShowFailures }: HealthOverviewProps) {
-  const whole = useWholeState()
+export function HealthOverview({ health, scope, onScope, onOpen, onShowFailures }: HealthOverviewProps) {
   const assets = useAssets()
-  const groups = useGroups()
-  const pins = usePinNotes()
-  const [nowMs, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000)
-    return () => clearInterval(t)
-  }, [])
-
-  const states = useMemo(() => (whole.data ?? []).filter((s) => inPipeline(s.id, pipeline)), [whole.data, pipeline])
+  const nowMs = useNow()
+  const { tree, states, signals } = health
   const graph = useMemo(() => (assets.data ?? []).map((a) => ({ id: a.id, inputs: a.inputs })), [assets.data])
-  const groupList = useMemo(
-    () => (groups.data ?? []).filter((g) => !pipeline || g.id.startsWith(`group:${pipeline}:`)),
-    [groups.data, pipeline],
-  )
-  const signals = useMemo(() => dataSignalSets(states), [states])
-  const tree = useMemo(
-    () => buildHealthTree({ states, graph, groups: groupList, pinned: pins, suspect: new Set(signals.suspect.keys()), late: new Set(signals.behind.keys()) }),
-    [states, graph, groupList, pins, signals],
-  )
   const focus = nearestInTree(tree, scope)
   const within = useMemo(() => new Set(leafIds(tree, focus)), [tree, focus])
   const scoped = useMemo(() => states.filter((s) => within.has(s.id)), [states, within])
@@ -64,7 +44,7 @@ export function HealthOverview({ scope, pipeline, onScope, onOpen, onShowFailure
   )
 
   // Its space is held while the project's state loads, so the table below never jumps.
-  if (!whole.data) return <section className="barca-health-overview" aria-label="Health" aria-busy="true" />
+  if (!health.loaded) return <section className="barca-health-overview" aria-label="Health" aria-busy="true" />
   const center = tree.nodes.get(focus)!
   if (center.leaves === 0) return null
   return (

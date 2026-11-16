@@ -421,3 +421,8 @@ a.barca-btn { text-decoration: none; }
 .barca-run-reason-counts { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
 .barca-run-reason-subject { min-width: 0; overflow: hidden; }
 .barca-run-reason-subject code { font-size: var(--text-xs); }
+
+/* A node's data signals, under its state in the panel. */
+.barca-signals { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); color: var(--text-default); }
+.barca-signals li { display: flex; align-items: flex-start; gap: 6px; overflow-wrap: anywhere; }
+.barca-signals .barca-glyph { flex: none; margin-top: 3px; }

@@ -19,6 +19,7 @@ import {
 import { shortName, type GraphEntry } from '@/lib/graph'
 import { cacheGraphState, isLive, memberHealth, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { groupOutput, groupOutputNote, lastRunDuration, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
+import type { Health } from '@/lib/nodeHealth'
 import { ageCell, failedUpstream, healthCounts, isFailed, scopeAge, type Failure, type HealthCounts } from '@/lib/health'
 import { isCheck, nodeKindLabel } from '@/lib/status'
 import type { TableWindow } from '@/hooks/useTableWindow'
@@ -36,6 +37,8 @@ export interface GroupedTableProps {
   byId: ReadonlyMap<string, NodeState>
   leaves: (id: string) => string[]
   live: Readonly<Record<string, StatusKind>>
+  /** Each node's health over the whole project, so the counts agree with the health map. */
+  healthOf?: ReadonlyMap<string, Health>
   visualStates: Readonly<Record<string, GraphState>>
   /** What each row is called in this table, so no two read the same. */
   labels: ReadonlyMap<string, string>
@@ -55,11 +58,11 @@ export interface GroupedTableProps {
 }
 
 /** Groups and nodes of the open level, worst first: a health bar per group, a state per node. */
-export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
+export function GroupedTable({ entries, tree, byId, leaves, live, healthOf, visualStates, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
   const hasGroups = entries.some((e) => e.kind === 'group')
   const hasLeaves = entries.some((e) => e.kind !== 'group')
   const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 1 : 0)
-  const counts = (id: string): HealthCounts => healthCounts(leaves(id), byId, live)
+  const counts = (id: string): HealthCounts => healthCounts(leaves(id), byId, live, healthOf)
   return (
     // The name takes what the fixed columns leave; the low-value columns leave first as the
     // table narrows (shell.css), so it never scrolls sideways at a laptop's width.
@@ -183,6 +186,8 @@ export interface GroupPanelProps {
   byId: ReadonlyMap<string, NodeState>
   leaves: string[]
   live: Readonly<Record<string, StatusKind>>
+  /** Each node's health over the whole project, so the counts agree with the health map. */
+  healthOf?: ReadonlyMap<string, Health>
   /** The group's box: its most urgent fact, or Checking… while members load. */
   state: GraphState
   statesFailed: boolean
@@ -195,7 +200,7 @@ export interface GroupPanelProps {
 }
 
 /** The selected group's details: its members by state, its failed members, and its output. */
-export function GroupPanel({ group, tree, byId, leaves, live, state, statesFailed, inputs, nowMs, onOpen, onReveal, onClose }: GroupPanelProps) {
+export function GroupPanel({ group, tree, byId, leaves, live, healthOf, state, statesFailed, inputs, nowMs, onOpen, onReveal, onClose }: GroupPanelProps) {
   // Members whose last attempt failed, by their resting state (a running member is being retried).
   const failedMembers = leaves.map((id) => byId.get(id)).filter((node): node is NodeState => !!node && isFailed(cacheGraphState(node)))
   const outputId = groupOutput(group.id, tree)
@@ -218,7 +223,7 @@ export function GroupPanel({ group, tree, byId, leaves, live, state, statesFaile
         <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} />
         {state !== PENDING_GRAPH_STATE && (
           <div className="barca-panel-health">
-            <HealthBar counts={healthCounts(leaves, byId, live)} labelLimit={10} width={260} />
+            <HealthBar counts={healthCounts(leaves, byId, live, healthOf)} labelLimit={10} width={260} />
           </div>
         )}
         <p className="barca-note">{group.description}</p>

@@ -21,6 +21,7 @@ import {
   type EntrySort,
   type GroupTree,
 } from './groups'
+import type { Health } from './nodeHealth'
 import { consumersOf, healthCounts, isFailed, needsAttention, scopeAge, type Failure } from './health'
 import { GRAPH_LIMIT, lineage } from './lineage'
 import { inPipeline, pipelineName, sourceFile } from './pipeline'
@@ -133,6 +134,8 @@ interface GroupedInput {
   statesFailed: boolean
   /** The run this page streams: a status per node it has reached. */
   live: Readonly<Record<string, StatusKind>>
+  /** Each node's health over the whole project (`useHealthTree`), so counts agree with the health map. */
+  healthOf?: ReadonlyMap<string, Health>
 }
 
 /** The level the page shows: its scope and what is drawn or listed in it. */
@@ -174,7 +177,7 @@ interface GroupedLevel {
 /** The leaves of `id`: a group's, or the node itself. */
 const leavesIn = (leavesOf: Map<string, string[]>) => (id: string) => leavesOf.get(id) ?? [id]
 
-export function groupedLevel({ params, tree, allAssets, states, statesFailed, live }: GroupedInput): GroupedLevel {
+export function groupedLevel({ params, tree, allAssets, states, statesFailed, live, healthOf }: GroupedInput): GroupedLevel {
   const { pipeline, graph, flat, show, selected, requestedScope, query } = params
   const leavesOf = leavesByGroup(tree)
   const leaves = leavesIn(leavesOf)
@@ -202,7 +205,7 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
     const memberIds = leaves(entry.id)
     const liveStatus = live[entry.id]
     const health = entry.kind === 'group'
-      ? groupHealth(memberIds, byId, live)
+      ? groupHealth(memberIds, byId, live, healthOf)
       : liveStatus
         ? liveGraphState(liveStatus)
         : memberHealth(byId.get(entry.id))
@@ -215,7 +218,7 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
   const scopedStates = states.filter((s) => inScope.has(s.id))
   const rankOf = (entry: GraphEntry): EntryRank => {
     const ids = leaves(entry.id)
-    const counts = healthCounts(ids, byId, live)
+    const counts = healthCounts(ids, byId, live, healthOf)
     return { name: entry.name ?? entry.id, failed: counts.states.failing, stale: needsAttention(counts), lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
   }
   const sorted = entries.map((entry) => ({ entry, rank: rankOf(entry) })).sort((a, b) => compareEntries(params.sort, a.rank, b.rank)).map(({ entry }) => entry)

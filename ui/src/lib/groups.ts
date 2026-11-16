@@ -4,6 +4,7 @@ import { plural } from './plural'
 import { shortName, type GraphEntry } from './graph'
 import type { GraphState } from './graphState'
 import { healthCounts, healthLabel, healthParts } from './health'
+import type { Health } from './nodeHealth'
 import { isCheck } from './status'
 import { formatSeconds } from './assetTable'
 
@@ -155,8 +156,9 @@ export function groupHealth(
   ids: string[],
   states: Map<string, NodeState>,
   live: Record<string, StatusKind> = {},
+  healthOf?: ReadonlyMap<string, Health>,
 ): GraphState {
-  const counts = healthCounts(ids, states, live)
+  const counts = healthCounts(ids, states, live, healthOf)
   const hint = healthLabel(counts) || 'No members with a state.'
   const parts = healthParts(counts).map(({ glyph, tone, count, word, text }) => ({ glyph, tone, count, word, text }))
   const [first] = parts

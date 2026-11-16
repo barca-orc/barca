@@ -363,27 +363,31 @@ export function failuresOnlyNote(total: number, streak: number, listed: number, 
 
 /**
  * A partitioned node's keys at a glance, the first thing its panel says: how many there are, how
- * many have a cached result, and what its newest run did to them. The newest run's figures are
- * left out until a run recorded keys.
- *
- * Extension point: when the server reports empty keys (row counts per key, another workstream of
- * issue 925), they are one more figure here; nothing is invented before then.
+ * many have a cached result, how many of those wrote no rows (when barca counted rows), and what
+ * its newest run did to them. The newest run's figures are left out until a run recorded keys.
  */
-export type KeyFigure = { id: 'total' | 'cached' | 'rebuilt' | 'failed'; label: string; value: number }
+export type KeyFigure = { id: 'total' | 'cached' | 'empty' | 'rebuilt' | 'failed'; label: string; value: number }
 
 export function keyFigures(
-  partitions: Pick<PartitionState, 'total' | 'cached'>,
+  partitions: Pick<PartitionState, 'total' | 'cached' | 'empty'>,
   lastRun: Pick<LastRun, 'keys' | 'failed'> | null | undefined,
 ): KeyFigure[] {
   const figures: KeyFigure[] = [
     { id: 'total', label: 'keys', value: partitions.total },
     { id: 'cached', label: 'cached', value: partitions.cached },
   ]
+  if (partitions.empty) figures.push({ id: 'empty', label: 'wrote 0 rows', value: partitions.empty })
   if (lastRun && lastRun.keys > 0) {
     figures.push({ id: 'rebuilt', label: 'rebuilt in the last run', value: Math.max(lastRun.keys - lastRun.failed, 0) })
     figures.push({ id: 'failed', label: 'failed in the last run', value: lastRun.failed })
   }
   return figures
+}
+
+/** `1,205 rows`, `1 row`; null when barca did not count them. */
+export function rowsLabel(rows: number | null | undefined): string | null {
+  if (rows === null || rows === undefined) return null
+  return `${rows.toLocaleString()} ${rows === 1 ? 'row' : 'rows'}`
 }
 
 /**
