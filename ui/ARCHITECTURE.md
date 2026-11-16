@@ -86,6 +86,7 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/partitionGrid.ts` | `gridOf`, `filterCells`, `issueGroups`, `heatmap`, `filterSelection`, `issueSelection` — every key of a partitioned node (`GET /assets/{id}/partitions/grid`) decoded and filtered, its problems grouped with where they are, binned into the overview, and a filter or a problem turned into a run's `partition` | `partitionGrid.test.ts` |
 | `lib/keysPage.ts` | `keysParams`, `keysSearch`, `keysHref` — the key explorer's URL (node, open key, filters) | `keysPage.test.ts` |
+| `lib/runExplain.ts` | `planExplanation`, `runOverview`, `cancellationNotice`, `attemptsLabel`, `inFlightSummary` — a run's `plan_reasons`, trigger, cancellation and attempts → what the run overview says; a live run's progress, nodes in flight by group, ETA at the rate so far and slowest nodes; one line for a large run in flight | `runExplain.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity`; `runsCountLabel` (a filtered count over the runs loaded says it is partial), `runStepRows` (a run's Steps as rows: a node's keys one row with their count, listed when opened) | `*.test.ts` |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.

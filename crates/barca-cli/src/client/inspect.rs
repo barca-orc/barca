@@ -227,6 +227,7 @@ pub(crate) async fn run_detail(
             total: steps.len(),
             truncated: false,
             nodes: Vec::new(),
+            ..Default::default()
         },
     };
     let detail = barca_core::queries::RunDetail {

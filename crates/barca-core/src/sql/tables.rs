@@ -67,6 +67,12 @@ pub(crate) const RUN_COLUMNS: &[(&str, &str)] = &[
     ("failure", "STRUCT(node VARCHAR, error VARCHAR)"),
     ("failed_node", V),
     ("error", V),
+    ("principal", V),
+    ("trigger_reason", V),
+    (
+        "cancellation",
+        "STRUCT(\"by\" VARCHAR, principal VARCHAR, started BOOLEAN, waiting_behind VARCHAR[], same_as VARCHAR)",
+    ),
 ];
 
 /// [`StepRow`]'s keys.

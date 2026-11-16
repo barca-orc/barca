@@ -289,6 +289,7 @@ impl RunResults {
             store_paths: run.store_paths,
             cost_snapshot: &evidence.cost_snapshot,
             touched: run.touched,
+            plan_reasons: run.decisions.plan_tally.json(),
         }
     }
 }

@@ -401,3 +401,23 @@ a.barca-btn { text-decoration: none; }
 
 /* A Last success cell's failing line wraps rather than cutting its streak off. */
 .barca-age-failing { white-space: normal; }
+/* RunOverview / RunReasons (components/runs/): why a run executes what it does, who asked, how far
+   it is (issue 925). Bars are neutral: a share or progress, never a state. */
+.barca-run-cancel { margin: 0 0 12px; font-size: var(--text-sm); color: var(--text-default); }
+.barca-run-cancel strong { font-weight: 500; color: var(--text-strong); }
+.barca-run-live { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+.barca-run-progress { height: 6px; border-radius: var(--radius-pill); overflow: hidden; background: var(--bg-inset); }
+.barca-run-progress > span { display: block; height: 100%; background: var(--text-muted); }
+.barca-run-reason-label { display: block; margin-top: 12px; font-size: var(--text-xs); color: var(--text-muted); }
+.barca-run-active, .barca-run-groups { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); }
+.barca-run-active li, .barca-run-groups li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.barca-run-active li .barca-cell-sub, .barca-run-groups li .barca-cell-sub { margin-top: 0; flex: none; }
+.barca-run-reasons { display: flex; flex-direction: column; gap: 2px; }
+.barca-run-reasons-head { margin: 4px 0 0; font-size: var(--text-sm); color: var(--text-strong); }
+.barca-run-reason-group ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.barca-run-reason { display: grid; grid-template-columns: 48px minmax(0, max-content) minmax(0, 1fr); align-items: center; gap: 8px; font-size: var(--text-sm); min-width: 0; }
+.barca-run-reason-bar { height: 4px; border-radius: var(--radius-pill); overflow: hidden; background: var(--bg-inset); }
+.barca-run-reason-bar > span { display: block; height: 100%; background: var(--text-muted); }
+.barca-run-reason-counts { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
+.barca-run-reason-subject { min-width: 0; overflow: hidden; }
+.barca-run-reason-subject code { font-size: var(--text-xs); }

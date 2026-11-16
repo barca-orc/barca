@@ -205,6 +205,118 @@ pub async fn last_success_components(cache: &CacheReader, node_id: &str) -> Opti
     serde_json::to_string(&all).ok()
 }
 
+/// What a step's history says about why it was not a cache hit (#925): its latest row, and
+/// its latest success.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StepHistory {
+    /// The latest row's status (`success`, `failed`) and run hash.
+    pub latest_status: String,
+    pub latest_run_hash: String,
+    /// Its latest success, `None` when it never succeeded.
+    pub last_success: Option<SuccessRow>,
+}
+
+/// The latest success of a [`StepHistory`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SuccessRow {
+    pub run_hash: String,
+    /// The components JSON as recorded: since 0.37.1 the row's own digests and the
+    /// [`DEFINITION_KEY`] naming its definition's ([`definition_components`]). `None` when the
+    /// row recorded none.
+    pub components: Option<String>,
+}
+
+/// [`StepHistory`] of each of `ids` (display ids) that has a row, a few thousand ids a query
+/// (the ids as one JSON array, through `idx_mat_node_run`). Best effort: a query that fails
+/// leaves its ids out, and they read as never run.
+pub async fn step_histories(cache: &CacheReader, ids: &[&str]) -> HashMap<String, StepHistory> {
+    const CHUNK: usize = 2048;
+    const SQL: &str = concat!(
+        "SELECT k.value, m.status, COALESCE(m.run_hash, ''), m.components FROM json_each(?1) AS k \
+         JOIN materializations m ",
+        by_node_run!(),
+        " ON m.node_id = k.value ORDER BY k.key, m.id DESC"
+    );
+    let mut out: HashMap<String, StepHistory> = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(CHUNK) {
+        let Ok(list) = serde_json::to_string(chunk) else {
+            continue;
+        };
+        let Ok(mut rows) = cache.conn().query(SQL, [list]).await else {
+            continue;
+        };
+        // Each id's rows newest first: the first is its latest, the first success its last.
+        let mut current = String::new();
+        let mut found = false;
+        while let Ok(Some(row)) = rows.next().await {
+            let Ok(id) = row.get::<String>(0) else {
+                continue;
+            };
+            let status = row.get::<String>(1).unwrap_or_default();
+            if current != id {
+                current.clone_from(&id);
+                found = false;
+                out.insert(
+                    id.clone(),
+                    StepHistory {
+                        latest_status: status.clone(),
+                        latest_run_hash: row.get::<String>(2).unwrap_or_default(),
+                        last_success: None,
+                    },
+                );
+            }
+            if found || status != "success" {
+                continue;
+            }
+            found = true;
+            if let Some(entry) = out.get_mut(&id) {
+                entry.last_success = Some(SuccessRow {
+                    run_hash: row.get::<String>(2).unwrap_or_default(),
+                    components: row.get::<String>(3).ok().filter(|c| !c.is_empty()),
+                });
+            }
+        }
+        drop(rows);
+        tokio::task::yield_now().await;
+    }
+    out
+}
+
+/// Whether some key of the partitioned node `base` has a successful row (#925): a key without
+/// one is then new, not never run.
+pub async fn any_key_succeeded(cache: &CacheReader, base: &str) -> bool {
+    let (lo, hi) = key_range(base);
+    let Ok(mut rows) = cache
+        .conn()
+        .query(
+            concat!(
+                "SELECT 1 FROM materializations ",
+                by_node_run!(),
+                " WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' LIMIT 1"
+            ),
+            [lo, hi],
+        )
+        .await
+    else {
+        return false;
+    };
+    matches!(rows.next().await, Ok(Some(_)))
+}
+
+/// The components of the definition `definition_hash` (`definition_components`), as JSON.
+pub async fn definition_components(cache: &CacheReader, definition_hash: &str) -> Option<String> {
+    let mut rows = cache
+        .conn()
+        .query(
+            "SELECT components FROM definition_components WHERE definition_hash = ?1",
+            [definition_hash.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    row.get::<String>(0).ok()
+}
+
 /// Record the definitions a starting run may name (`barca_core::changes::definition_rows`). Most runs
 /// find them all there and write nothing. Without its row a step says a plain `changed`, so a
 /// failure here is no reason to fail the run.

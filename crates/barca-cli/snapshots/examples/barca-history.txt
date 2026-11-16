@@ -37,7 +37,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure, failed_node, error]
+          [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure, failed_node, error, principal, trigger_reason, cancellation]
 
       --env <ENV>
           Use a separate cache and history for this environment

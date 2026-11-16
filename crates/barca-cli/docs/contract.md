@@ -133,6 +133,7 @@ stability; the row adds the keys and routes that go with it.
 | `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 (`barca docs pins`): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key` | new in 0.42: every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, `barca docs status-fields`, "Row counts"): which results are counted (frames, parquet footers) may widen after field use |
+| `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, the `why:`, `reason:` and `cancelled ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `signals`, `prev_run` and `late_since` (rows of `GET /state`, `barca docs server-mode`, "Data health"), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
@@ -378,7 +379,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit); with a RUN_ID, every step it recorded |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -2205,6 +2206,19 @@ has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled 
 a `client` run had on the laptop that posted it (`barca docs server-mode`), `null` on every other
 run; additive and experimental.
 
+`runs[].principal` and `runs[].trigger_reason` (experimental, #925) say who asked a server for
+the run and why: the project token its `POST /runs` was authenticated with, as `token:<name>`
+(`null` without authentication, and for every run not started over HTTP), and the free-text
+`reason` the request gave (`null` when it gave none). `runs[].cancellation` (experimental,
+#925) is `null` except on a run a server cancelled: `{by, principal, started, waiting_behind,
+same_as}`, where `by` is `request` (`DELETE /runs/{run_id}`: the web UI's Cancel, or the first
+Ctrl-C/SIGTERM of a `--server` client) or `shutdown` (the server stopped), `principal` the
+token of the cancel request, `started` is `false` for a run cancelled while it waited in the
+queue (it executed nothing: 0 steps, 0 seconds), `waiting_behind` the runs executing then (at
+most 10) and `same_as` the one of them with the same command, targets and files, if any. barca
+does not deduplicate requests: two identical requests are two runs, and the second one waits
+or shares in-flight steps with the first (`barca docs server-mode`).
+
 `runs[].job` (additive, 0.29.0) is what the run was for: `all` for a run without targets,
 otherwise its resolved node ids, sorted and comma-separated (`barca.job` in telemetry);
 `null` for runs recorded before barca stored it. `target` stays the target as typed. The human
@@ -2242,7 +2256,27 @@ hex digits) and `span_id` (its root `barca.step` span, decimal); the two keys ar
 every other step (experimental, additive, 0.41.0; `barca docs telemetry`).
 Cached steps are not listed: `run.steps_cached` counts them. `steps_page` is `{total,
 truncated}`: how many steps the run recorded and whether `steps` lists fewer (the table
-prints a note on stderr). `hint`, present when a step
+prints a note on stderr). `run.retries` (experimental, #925) counts the attempts that retried a
+step (`attempts` minus one per recorded step), so `attempts` = steps recorded + `retries`.
+`run.plan_reasons` (experimental, #925), absent for a run that executed nothing and in the
+`barca history` list, says why the run executed the steps it did instead of serving them from
+cache: `{nodes, steps, reasons, omitted}`, recorded as each phase of the run is decided (a run
+in progress has the phases decided so far; a phase it never reached is not in it). `reasons[]`
+are `{category, subject, nodes, steps, example}`, most steps first, at most 64 (`omitted` counts
+the rest); a step with several changed components counts under each. `category` is one the
+engine tells apart: `never_run` (no success recorded, for a partitioned node of none of its
+keys), `new_keys` (keys with no success while other keys of the node have one), `failed` (the
+last attempt at this run hash failed), `code_changed`, `inputs_changed` and `env_changed` (what
+changed since the last success; `subject` is the component as `barca status` words it, `code`,
+`helper pipelines/common.py:bucket_ltv`, `input pipeline.py:orders`, `env TOKEN`), `changed`
+(the run hash differs and the last success recorded no components), `refresh` and
+`refresh_cascade` (`subject`: the node named in `--refresh`), `refresh_all`, `artifact_missing`
+and `evicted` (a valid result whose file is gone), `task` and `sensor` (they always run) and
+`not_examined` (no cache hit, not looked up: a server's ledger answered the lookup, or more than
+10,000 keys of one node ran in one phase). `example` is the first node executed for the reason.
+The table prints the first eight reasons after the `steps:` line as `why: N steps of M nodes
+were not cache hits`, then one line per reason; `reason:` and `cancelled ...` lines follow
+`triggered by`. `hint`, present when a step
 failed, is the `barca logs RUN_ID --step STEP --stream stderr` command for the first failed
 step, with the `--server`, `--local` and `--env` this command was given. An unknown run id is
 exit 2; against a server, one only this machine has adds the remediation `this run is on this
@@ -2257,6 +2291,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs` | array | always |
 | `runs[]` | object | always |
 | `runs[].attempts` | integer | always |
+| `runs[].cancellation` | null | always |
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
@@ -2269,6 +2304,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
 | `runs[].job` | string | always |
+| `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -2278,6 +2314,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].steps_executed` | integer | always |
 | `runs[].steps_total` | integer | always |
 | `runs[].target` | string | always |
+| `runs[].trigger_reason` | null | always |
 | `runs[].triggered_by` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
@@ -2291,6 +2328,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs` | array | always |
 | `runs[]` | object | always |
 | `runs[].attempts` | integer | always |
+| `runs[].cancellation` | null | always |
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | number | always |
@@ -2303,6 +2341,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
 | `runs[].job` | string | always |
+| `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -2312,6 +2351,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].steps_executed` | integer | always |
 | `runs[].steps_total` | integer | always |
 | `runs[].target` | string | always |
+| `runs[].trigger_reason` | null | always |
 | `runs[].triggered_by` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
@@ -2325,6 +2365,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `hint` | string | always |
 | `run` | object | always |
 | `run.attempts` | integer | always |
+| `run.cancellation` | null | always |
 | `run.client_run_id` | null | always |
 | `run.command` | string | always |
 | `run.elapsed_seconds` | number | always |
@@ -2335,6 +2376,19 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `run.files[]` | string | always |
 | `run.finished_at` | string | always |
 | `run.job` | string | always |
+| `run.plan_reasons` | object | always |
+| `run.plan_reasons.nodes` | integer | always |
+| `run.plan_reasons.omitted` | integer | always |
+| `run.plan_reasons.reasons` | array | always |
+| `run.plan_reasons.reasons[]` | object | always |
+| `run.plan_reasons.reasons[].category` | string | always |
+| `run.plan_reasons.reasons[].example` | string | always |
+| `run.plan_reasons.reasons[].nodes` | integer | always |
+| `run.plan_reasons.reasons[].steps` | integer | always |
+| `run.plan_reasons.reasons[].subject` | null | always |
+| `run.plan_reasons.steps` | integer | always |
+| `run.principal` | null | always |
+| `run.retries` | integer | always |
 | `run.run_id` | string | always |
 | `run.schedule_id` | null | always |
 | `run.scheduled_at` | null | always |
@@ -2344,6 +2398,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `run.steps_executed` | integer | always |
 | `run.steps_total` | integer | always |
 | `run.target` | string | always |
+| `run.trigger_reason` | null | always |
 | `run.triggered_by` | string | always |
 | `steps` | array | always |
 | `steps[]` | object | always |
@@ -2394,6 +2449,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs` | array | always |
 | `runs[]` | object | always |
 | `runs[].attempts` | integer | always |
+| `runs[].cancellation` | null | always |
 | `runs[].client_run_id` | null | always |
 | `runs[].command` | string | always |
 | `runs[].elapsed_seconds` | null | always |
@@ -2403,6 +2459,8 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].files` | array | always |
 | `runs[].finished_at` | null | always |
 | `runs[].job` | null | always |
+| `runs[].principal` | null | always |
+| `runs[].retries` | integer | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -2412,6 +2470,7 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].steps_executed` | integer | always |
 | `runs[].steps_total` | integer | always |
 | `runs[].target` | string | always |
+| `runs[].trigger_reason` | null | always |
 | `runs[].triggered_by` | null | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |

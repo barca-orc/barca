@@ -521,6 +521,60 @@ pub fn render_run(
     )
 }
 
+/// How many reasons `barca history RUN_ID` prints; `--json` has them all.
+const REASON_LINES: usize = 8;
+
+/// The `why:` lines of `barca history RUN_ID` (#925): each reason with its steps and nodes,
+/// most steps first.
+pub fn plan_reason_lines(plan: &crate::run_explain::PlanReasons) -> Vec<String> {
+    let mut out = vec![format!(
+        "why: {} steps of {} nodes were not cache hits",
+        plan.steps, plan.nodes
+    )];
+    for reason in plan.reasons.iter().take(REASON_LINES) {
+        let nodes = if reason.nodes == 1 { "node" } else { "nodes" };
+        let what = match &reason.subject {
+            Some(subject) => format!("{}  {subject}", reason.category.as_str()),
+            None => reason.category.as_str().to_string(),
+        };
+        out.push(format!(
+            "  {:>8} steps  {:>6} {nodes:<5}  {what}",
+            reason.steps, reason.nodes
+        ));
+    }
+    let more = plan.reasons.len().saturating_sub(REASON_LINES) as u64 + plan.omitted;
+    if more > 0 {
+        out.push(format!(
+            "  and {more} more reasons (--json lists {})",
+            plan.reasons.len()
+        ));
+    }
+    out
+}
+
+/// The `cancelled` line of `barca history RUN_ID` (#925).
+pub fn cancellation_line(c: &crate::run_explain::Cancellation) -> String {
+    let mut line = match c.by {
+        crate::run_explain::CancelledBy::Request => "cancelled by a request".to_string(),
+        crate::run_explain::CancelledBy::Shutdown => "cancelled by the server stopping".to_string(),
+    };
+    if let Some(principal) = &c.principal {
+        line.push_str(&format!(" as {principal}"));
+    }
+    if !c.started {
+        line.push_str(" before it started");
+        match (&c.same_as, c.waiting_behind.first()) {
+            (Some(same), _) => line.push_str(&format!(": the same work was running as run {same}")),
+            (None, Some(_)) => line.push_str(&format!(
+                ", waiting behind run {}",
+                c.waiting_behind.join(", ")
+            )),
+            (None, None) => {}
+        }
+    }
+    line
+}
+
 /// Width of the `barca history` TARGET column; longer targets end in `…`.
 const TARGET_WIDTH: usize = 24;
 
@@ -562,6 +616,7 @@ pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
 #[derive(serde::Serialize)]
 struct HistoryItem<'a> {
     attempts: &'a Option<i64>,
+    cancellation: &'a Option<crate::run_explain::Cancellation>,
     client_run_id: &'a Option<String>,
     command: &'a str,
     elapsed_seconds: &'a Option<f64>,
@@ -571,6 +626,11 @@ struct HistoryItem<'a> {
     files: &'a [String],
     finished_at: &'a Option<String>,
     job: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_reasons: &'a Option<crate::run_explain::PlanReasons>,
+    principal: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retries: &'a Option<i64>,
     run_id: &'a str,
     schedule_id: &'a Option<String>,
     scheduled_at: &'a Option<String>,
@@ -580,6 +640,7 @@ struct HistoryItem<'a> {
     steps_executed: i64,
     steps_total: &'a Option<i64>,
     target: &'a Option<String>,
+    trigger_reason: &'a Option<String>,
     triggered_by: &'a Option<crate::outcome::TriggeredBy>,
 }
 
@@ -611,6 +672,11 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             schedule_id,
             client_run_id,
             failure,
+            principal,
+            trigger_reason,
+            cancellation,
+            retries,
+            plan_reasons,
         } = run;
         let failure = failure.as_ref().map(|f| HistoryFailure {
             error: &f.error,
@@ -618,6 +684,7 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
         });
         HistoryItem {
             attempts,
+            cancellation,
             client_run_id,
             command,
             elapsed_seconds,
@@ -627,6 +694,9 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             files,
             finished_at,
             job,
+            plan_reasons,
+            principal,
+            retries,
             run_id,
             schedule_id,
             scheduled_at,
@@ -636,6 +706,7 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             steps_executed: *steps_executed,
             steps_total,
             target,
+            trigger_reason,
             triggered_by,
         }
     }
@@ -902,6 +973,10 @@ pub fn render_run_detail(
     if let Some(n) = r.attempts {
         let s = if n == 1 { "" } else { "s" };
         head.push_str(&format!("  {n} attempt{s}"));
+        if let Some(retries) = r.retries.filter(|n| *n > 0) {
+            let s = if retries == 1 { "y" } else { "ies" };
+            head.push_str(&format!(" ({retries} retr{s})"));
+        }
     }
     line!(rendered, "{head}");
     let mut when = format!("started {}", crate::report::utc_cell(&r.started_at));
@@ -920,7 +995,16 @@ pub fn render_run_detail(
         if let Some(client) = &r.client_run_id {
             by.push_str(&format!("  client run {client}"));
         }
+        if let Some(principal) = &r.principal {
+            by.push_str(&format!("  as {principal}"));
+        }
         line!(rendered, "{by}");
+    }
+    if let Some(reason) = &r.trigger_reason {
+        line!(rendered, "reason: {reason}");
+    }
+    if let Some(c) = &r.cancellation {
+        line!(rendered, "{}", cancellation_line(c));
     }
     if let Some(job) = &r.job
         && job != target
@@ -941,6 +1025,11 @@ pub fn render_run_detail(
         counts.push_str(" (cached steps are not listed)");
     }
     line!(rendered, "steps: {counts}");
+    if let Some(plan) = &r.plan_reasons {
+        for line in plan_reason_lines(plan) {
+            line!(rendered, "{line}");
+        }
+    }
     if !detail.steps.is_empty() {
         let step_row = |s: &crate::db::RunStep| {
             let artifact = match (&s.artifact_path, &s.artifact_format) {
@@ -1710,6 +1799,7 @@ mod history_target_tests {
             schedule_id: None,
             client_run_id: None,
             failure: None,
+            ..Default::default()
         }
     }
 
@@ -1919,6 +2009,7 @@ fn history_target_tests_run() -> crate::db::RunRecord {
         schedule_id: None,
         client_run_id: None,
         failure: None,
+        ..Default::default()
     }
 }
 
@@ -1973,6 +2064,11 @@ mod history_json_tests {
                 node: "a.py:kpis[2026-01]".into(),
                 error: "ValueError: bad\tvalue é".into(),
             }),
+            principal: Some("token:ci".into()),
+            trigger_reason: Some("backfill after the \"fees\" fix".into()),
+            cancellation: None,
+            retries: None,
+            plan_reasons: None,
         };
         let bare = RunRecord {
             run_id: "run-0".into(),
@@ -1994,6 +2090,7 @@ mod history_json_tests {
             schedule_id: None,
             client_run_id: None,
             failure: None,
+            ..Default::default()
         };
         for (runs, total) in [
             (vec![], 0),

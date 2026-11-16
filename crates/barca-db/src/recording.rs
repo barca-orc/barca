@@ -54,6 +54,9 @@ pub struct RunLedger<'a> {
     /// `last_read_at` is set first, on the ledger's connection, so the run's backup carries it
     /// (RFC-0012). It was a connection of its own (#560).
     pub touched: &'a [String],
+    /// Why the run executed what it did (`barca_model::run_explain::PlanReasons` as JSON, #925),
+    /// `None` when it executed nothing.
+    pub plan_reasons: Option<String>,
 }
 
 /// The steps of `run_id` already recorded, by node id and run hash: an earlier attempt of a
@@ -170,6 +173,11 @@ pub async fn write_terminal_ledger(
         return Err(BarcaError::Db(
             "terminal run row was not written".to_string(),
         ));
+    }
+    if let Some(plan) = &l.plan_reasons {
+        db::runs::set_plan_reasons(conn, l.run_id, plan)
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record plan reasons: {e}")))?;
     }
     Ok(())
 }

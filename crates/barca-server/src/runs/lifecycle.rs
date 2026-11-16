@@ -341,6 +341,13 @@ pub(super) async fn finish(
     if let Err(e) = persist_outcome(state, run_id, spec, &outcome, recorded, timed_out).await {
         barca_core::errln!("[barca] could not record the outcome of run {run_id}: {e}");
     }
+    if status == OutcomeStatus::Cancelled
+        && let Some(cancellation) = cancellation_of(state, run_id)
+        && let Err(e) =
+            db::set_cancellation(&state.config.resolved.db_path, run_id, &cancellation).await
+    {
+        barca_core::errln!("[barca] could not record why run {run_id} was cancelled: {e}");
+    }
     // Recorded: it leaves the queue.
     if let Err(e) =
         barca_core::serve::run_queue::remove(&state.config.resolved.db_path, run_id).await
@@ -374,6 +381,26 @@ pub(super) async fn finish(
     // What the run freed (at 200k keys, about a gigabyte) goes back to the system, so the
     // server's resident memory does not stay at the largest run each thread has served.
     tokio::task::spawn_blocking(barca_core::release_free_memory);
+}
+
+/// Why `run_id` was cancelled (#925): what `DELETE /runs/{run_id}` recorded, else the server
+/// stopping it.
+fn cancellation_of(
+    state: &AppState,
+    run_id: &str,
+) -> Option<barca_core::run_explain::Cancellation> {
+    let run = state.runs.get(run_id)?;
+    if let Some(cancellation) = &run.cancellation {
+        return Some(cancellation.clone());
+    }
+    state.cancel_reason.get()?;
+    Some(barca_core::run_explain::Cancellation {
+        by: barca_core::run_explain::CancelledBy::Shutdown,
+        principal: None,
+        started: run.status != RunStatus::Pending,
+        waiting_behind: Vec::new(),
+        same_as: None,
+    })
 }
 
 /// How many bytes of finished runs (their outcomes and event backlogs) the server keeps in

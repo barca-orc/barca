@@ -71,6 +71,9 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "failure",
     "failed_node",
     "error",
+    "principal",
+    "trigger_reason",
+    "cancellation",
 ];
 
 /// Item fields of `steps[]` in `get`/`run` JSON (real and `--dry-run`). Optional fields only
@@ -221,6 +224,7 @@ mod tests {
             schedule_id: None,
             client_run_id: None,
             failure: None,
+            ..Default::default()
         };
         assert_eq!(
             keys(&barca_core::report::history_json(&run)),

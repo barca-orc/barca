@@ -37,7 +37,7 @@ RUN_ID         CMD     TARGET                   STATUS      STEPS CACHED   TIME 
 
 Times are UTC. `--fields` takes `run_id`, `command`, `files`, `target`, `job`, `status`,
 `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`,
-`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`. `triggered_by` says what
+`elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`. `triggered_by` says what
 started the run: `manual` (a command typed on a machine), `api` (an HTTP request to
 `barca serve`), `schedule` (a cron tick, with the tick in `scheduled_at`, RFC 3339 in UTC, and
 the scheduled node in `schedule_id`) or `client`; it is `null` for runs recorded before barca
@@ -94,6 +94,23 @@ stderr names `barca logs RUN_ID --step STEP --stream stderr`. Cached steps are c
 `steps_cached`, not listed: a run records no row for them. With a server configured, both
 forms answer from the server; a run only this machine has is an error whose remediation is
 `barca history RUN_ID --local`.
+
+The run also says why it executed what it did: `run.plan_reasons` in JSON, and after the
+`steps:` line a `why:` line with one line per reason (the first eight), each with its steps and
+nodes: `never_run`, `new_keys`, `failed` (the last attempt at these inputs failed),
+`code_changed` / `inputs_changed` / `env_changed` with the component that changed
+(`helper pipelines/common.py:bucket_ltv`), a refresh, a missing artifact, a task or a sensor.
+It is recorded as the run decides each phase, so a run in progress shows the phases decided so
+far. `run.retries` counts the attempts that retried a step. A run started on a server also
+shows who asked for it (`as token:<name>`, `principal`), the `reason:` its request gave, and,
+when cancelled, who cancelled it and whether it had started (`cancellation`). Details:
+[CLI contract](/reference/cli-contract/).
+
+```
+why: 5492 steps of 469 nodes were not cache hits
+      5000 steps       1 node   new_keys
+        29 steps      29 nodes  code_changed  helper billing.py:_n
+```
 
 ```
 $ barca history 836fdca186c8

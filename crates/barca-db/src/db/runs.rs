@@ -54,7 +54,7 @@ pub(crate) fn decode_files(raw: &str) -> Vec<String> {
 }
 
 /// Record of a single run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: String,
     pub command: String,
@@ -97,6 +97,23 @@ pub struct RunRecord {
     /// error. `null` for every other run (also for a run that failed before any step did).
     #[serde(default)]
     pub failure: Option<RunFailure>,
+    /// Who asked for the run, when a server knows (`token:<name>`, #925). Experimental.
+    #[serde(default)]
+    pub principal: Option<String>,
+    /// The free-text reason the request gave (`reason` of `POST /runs`, #925). Experimental.
+    #[serde(default)]
+    pub trigger_reason: Option<String>,
+    /// For a cancelled run: who cancelled it, and whether it had started (#925). Experimental.
+    #[serde(default)]
+    pub cancellation: Option<barca_model::run_explain::Cancellation>,
+    /// Of `attempts`, those that were retries (an attempt after the first of a step); read for
+    /// one run (`barca history RUN_ID`, `GET /runs/{run_id}`), absent in a list. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retries: Option<i64>,
+    /// Why the run executed what it did, by reason (#925); read for one run, absent in a list
+    /// and for a run that executed nothing. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_reasons: Option<barca_model::run_explain::PlanReasons>,
 }
 
 /// A recorded step error as (type, message, traceback). A worker reports a Python exception as
@@ -277,7 +294,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''))",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -298,6 +315,8 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             } else {
                 String::new()
             },
+            run.trigger.principal.clone().unwrap_or_default(),
+            run.trigger.reason.clone().unwrap_or_default(),
         ],
     )
     .await
@@ -317,7 +336,7 @@ pub async fn record_unstarted_run(
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9) ON CONFLICT(run_id) DO NOTHING",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, '')) ON CONFLICT(run_id) DO NOTHING",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -328,6 +347,8 @@ pub async fn record_unstarted_run(
             run.trigger.scheduled_at.clone().unwrap_or_default(),
             run.trigger.schedule_id.clone().unwrap_or_default(),
             outcome_json.to_string(),
+            run.trigger.principal.clone().unwrap_or_default(),
+            run.trigger.reason.clone().unwrap_or_default(),
         ],
     )
     .await
@@ -453,6 +474,39 @@ pub async fn finish_run(
         return Err(BarcaError::Db("cannot finish a missing run".to_string()));
     }
     crate::run_owner::release(db_path, run_id);
+    Ok(())
+}
+
+/// Record why `run_id` executed what it did (`barca_model::run_explain::PlanReasons` as JSON),
+/// on the caller's connection: the in-run recorder's batch and the terminal ledger (#925).
+pub async fn set_plan_reasons(
+    conn: &Connection,
+    run_id: &str,
+    plan_reasons: &str,
+) -> Result<u64, libsql::Error> {
+    conn.execute(
+        "UPDATE runs SET plan_reasons = ?2 WHERE run_id = ?1",
+        [run_id, plan_reasons],
+    )
+    .await
+}
+
+/// Record why `run_id` was cancelled (`barca_model::run_explain::Cancellation` as JSON, #925).
+pub async fn set_cancellation(
+    db_path: &str,
+    run_id: &str,
+    cancellation: &barca_model::run_explain::Cancellation,
+) -> Result<(), BarcaError> {
+    let json = serde_json::to_string(cancellation)
+        .map_err(|e| BarcaError::Other(format!("failed to encode a cancellation: {e}")))?;
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "UPDATE runs SET cancellation = ?2 WHERE run_id = ?1",
+        [run_id, json.as_str()],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record why a run was cancelled: {e}")))?;
     Ok(())
 }
 
@@ -592,6 +646,25 @@ async fn read_runs(
     } else {
         "NULL"
     };
+    // #925's columns: who asked and why, why it was cancelled, and for one run why it executed
+    // what it did and how many of its attempts were retries.
+    let explain = if has_column(&conn, "runs", "plan_reasons").await? {
+        if run_id.is_some() {
+            "principal, trigger_reason, cancellation, plan_reasons"
+        } else {
+            "principal, trigger_reason, cancellation, NULL"
+        }
+    } else {
+        "NULL, NULL, NULL, NULL"
+    };
+    let retries = if run_id.is_none() || !(names.contains("run_id") && names.contains("attempts")) {
+        "NULL"
+    } else if has_index(&conn, "idx_mat_attempts").await? {
+        "(SELECT COALESCE(SUM(attempts - 1), 0) FROM materializations INDEXED BY idx_mat_attempts \
+          WHERE run_id = runs.run_id AND (attempts IS NULL OR attempts != 1) AND attempts > 1)"
+    } else {
+        "(SELECT COALESCE(SUM(attempts - 1), 0) FROM materializations WHERE run_id = runs.run_id AND attempts > 1)"
+    };
     // The first failed step and its error, joined by the unit separator (a byte no node id,
     // error type or message line holds).
     let (failure, failed) = if !(names.contains("run_id") && names.contains("error_type")) {
@@ -608,7 +681,7 @@ async fn read_runs(
     };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -660,6 +733,17 @@ async fn read_runs(
                 let message = parts.next().unwrap_or_default();
                 Some(RunFailure::new(node, error_type, message))
             }),
+            principal: row.get::<String>(19).ok().filter(|t| !t.is_empty()),
+            trigger_reason: row.get::<String>(20).ok().filter(|t| !t.is_empty()),
+            cancellation: row
+                .get::<String>(21)
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok()),
+            plan_reasons: row
+                .get::<String>(22)
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok()),
+            retries: row.get::<i64>(23).ok(),
         });
     }
     Ok(records)

@@ -17,7 +17,7 @@ use serde_json::value::RawValue;
 /// another major; additive fields do not bump it.
 pub const API_VERSION: u32 = 1;
 
-pub use crate::trigger::{Trigger, TriggeredBy};
+pub use crate::trigger::{MAX_REASON_CHARS, Trigger, TriggeredBy};
 
 // barca-server names this path (`pause.rs`, `queue.rs`, `inspect.rs`); the helper lives in
 // `time`.
@@ -128,6 +128,11 @@ pub struct RunRequest {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
     pub allow_paused: bool,
+    /// Why the caller asks for the run, in free text (at most 500 characters, one line),
+    /// recorded with it and shown as its `trigger_reason`. Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub reason: Option<String>,
 }
 
 impl RunRequest {
@@ -153,6 +158,7 @@ impl RunRequest {
             partition: None,
             batch: Vec::new(),
             allow_paused: false,
+            reason: None,
         }
     }
 
@@ -578,6 +584,22 @@ pub struct RunView {
     pub client_run_id: Option<String>,
     /// The first recorded failed step and the first line of its error (`barca history`).
     pub failure: Option<crate::db::RunFailure>,
+    /// Who asked for the run: the project token its request was authenticated with
+    /// (`token:<name>`); `null` without authentication or when not started over HTTP.
+    /// Experimental.
+    pub principal: Option<String>,
+    /// The free-text `reason` its request gave. Experimental.
+    pub trigger_reason: Option<String>,
+    /// Of `attempts`, those that retried a step (each attempt after a step's first); `null`
+    /// while the run has recorded none. Experimental.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub retries: Option<i64>,
+    /// Why the run executed what it did, by reason, as its phases were decided; `null` before
+    /// it decided to execute anything. Experimental.
+    pub plan_reasons: Option<crate::run_explain::PlanReasons>,
+    /// For a cancelled run: who cancelled it, whether it had started and what it waited behind.
+    /// Experimental.
+    pub cancellation: Option<crate::run_explain::Cancellation>,
     /// The run's full result once it finished; `null` while it runs, and for runs not started
     /// through `barca serve`.
     #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown> | null"))]

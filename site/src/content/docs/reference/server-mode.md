@@ -208,7 +208,21 @@ tracebacks (at most 1000 steps unless `--limit N` or `--all` asks for more; `ste
 many there are). For a finished run whose plan the server can still rebuild from the sources,
 `steps_page.nodes` lists every planned node in plan order with a `status`: `ran`, `cached`, or
 `skipped` with `blocked_by` naming the failed node upstream of it (experimental; the local
-`barca history RUN_ID` lists only the nodes with recorded steps). A run only this machine has (a failed run against the ledger is never posted) fails
+`barca history RUN_ID` lists only the nodes with recorded steps). The run also says why it
+executed what it did (`run.plan_reasons`: never run, new keys, a failed last attempt, which
+code, input or env component changed, a refresh, a missing artifact), who asked for it
+(`principal`, the token of its request) and why (`trigger_reason`, the `reason` its
+`POST /runs` gave), and for a cancelled run who cancelled it and whether it had started
+(`cancellation`; [CLI Contract: history](/reference/cli-contract/#history)). `GET /runs/{run_id}?offset=N` pages through
+the steps (`steps_page.next_offset`), and while a run goes it shows its newest 5,000 spooled
+lines in `logs`.
+
+Two identical requests are two runs: the server does not deduplicate them. With a free run slot
+the second starts at once and waits on the steps the first is computing (it takes their
+results as cache hits); otherwise it waits in the queue. A run cancelled while it waits
+(`DELETE /runs/{run_id}`, which the first Ctrl-C of a `--server` client sends) ends `cancelled`
+with no steps, and its `cancellation` says so: `started: false`, the runs it waited behind, and
+`same_as`, the one doing the same work. A run only this machine has (a failed run against the ledger is never posted) fails
 (exit 2) with the remediation `this run is on this machine: barca history RUN_ID --local`.
 
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`

@@ -302,6 +302,7 @@ fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, chann
             outcome: None,
             cancel,
             cancel_requested: false,
+            cancellation: None,
         },
     );
     state.events.insert(run_id.to_string(), channel);

@@ -35,6 +35,17 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // so this is all a reader needs to link a step to its trace. NULL otherwise and on rows
     // from older versions.
     "trace TEXT",
+    // Who asked for a run the server started (`token:<name>` of the request's project token)
+    // and the free-text reason the request gave (#925). NULL otherwise and on older rows.
+    "principal TEXT",
+    "trigger_reason TEXT",
+    // Why the run executed what it did, by reason (`barca_model::run_explain::PlanReasons`,
+    // JSON): written as each phase is decided and with the outcome (#925). NULL for a run that
+    // executed nothing and on older rows.
+    "plan_reasons TEXT",
+    // Why a cancelled run was cancelled (`barca_model::run_explain::Cancellation`, JSON; #925).
+    // NULL otherwise and on older rows.
+    "cancellation TEXT",
 ];
 
 /// A schedule held back by `POST /schedule/{id}/pause` (#435): since when and until when

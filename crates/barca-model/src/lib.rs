@@ -30,6 +30,7 @@ pub mod node_estimate;
 #[doc(hidden)]
 pub mod process;
 pub mod reports;
+pub mod run_explain;
 #[doc(hidden)]
 pub mod source_observation;
 #[doc(hidden)]

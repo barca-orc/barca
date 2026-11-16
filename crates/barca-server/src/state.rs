@@ -113,6 +113,9 @@ pub struct RunState {
     /// `DELETE /runs/{id}` asked for it: a stopping server does not put it back in the queue.
     #[serde(skip)]
     pub cancel_requested: bool,
+    /// Who cancelled it and whether it had started (#925), recorded with its outcome.
+    #[serde(skip)]
+    pub cancellation: Option<barca_core::run_explain::Cancellation>,
 }
 
 /// The size, modification time and change time of each source file, in the order of

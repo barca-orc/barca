@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, X } from 'lucide-react'
 import { Link } from 'react-router'
 import { match } from 'ts-pattern'
 import { Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
+import { RunOverview } from '@/components/runs/RunOverview'
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
 import { CancelRun, RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
@@ -288,6 +289,7 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
   const logLines = useMemo(() => data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts })), [data.logs])
   return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
     <RunSummary data={data} root={root} datadogUrl={datadogUrl} onStarted={onStarted} onFilter={setLogStep} />
+    <RunOverview run={data} />
     <Section title="Run">
       {/* The run's facts, two to a line. Its state is said once: by the summary above when a
           step failed or the run did, else here. */}

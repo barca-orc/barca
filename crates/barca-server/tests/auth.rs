@@ -310,3 +310,74 @@ async fn cookies_and_query_tokens_do_not_authenticate() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+/// A run records who asked for it and why, and who cancelled it and that it never started
+/// (#925).
+#[tokio::test]
+async fn a_run_records_its_requesting_token_and_reason_and_who_cancelled_it() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("pipeline.py");
+    std::fs::write(
+        &source,
+        "from barca import asset\n@asset()\ndef first() -> dict:\n    return {\"n\": 1}\n",
+    )
+    .unwrap();
+    let mut resolved = resolve_in(None, root.path()).unwrap();
+    resolved.server_auth = AuthMode::Token;
+    resolved.db_path = root.path().join("metadata.db").display().to_string();
+    let router = app(ServeConfig {
+        files: vec![source.display().to_string()],
+        host: "127.0.0.1".parse().unwrap(),
+        port: 0,
+        watch: false,
+        schedule: false,
+        timezone: "utc".into(),
+        python: "python".into(),
+        resolved,
+        read_only: false,
+    });
+    let store = Store::open(root.path()).unwrap();
+    let token = store.create("ci-bot", None).unwrap().token;
+    let paused = call(&router, "POST", "/queue/pause", Some(&token), None).await;
+    assert_eq!(paused.status(), StatusCode::OK);
+    let too_long = call(
+        &router,
+        "POST",
+        "/runs",
+        Some(&token),
+        Some(json!({"command": "get", "reason": "x".repeat(501)})),
+    )
+    .await;
+    assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+    let accepted = call(
+        &router,
+        "POST",
+        "/runs",
+        Some(&token),
+        Some(json!({"command": "get", "targets": ["first"], "reason": "  backfill  "})),
+    )
+    .await;
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let run_id = json_body(accepted).await["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let path = format!("/runs/{run_id}");
+    let queued = json_body(call(&router, "GET", &path, Some(&token), None).await).await;
+    assert_eq!(queued["principal"], "token:ci-bot");
+    assert_eq!(queued["trigger_reason"], "backfill");
+    let cancel = call(&router, "DELETE", &path, Some(&token), None).await;
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let run = json_body(call(&router, "GET", &path, Some(&token), None).await).await;
+    validate("RunView", &run);
+    assert_eq!(run["status"], "cancelled");
+    assert_eq!(run["principal"], "token:ci-bot");
+    assert_eq!(run["trigger_reason"], "backfill");
+    assert_eq!(
+        run["cancellation"],
+        json!({"by": "request", "principal": "token:ci-bot", "started": false, "waiting_behind": [], "same_as": null})
+    );
+    let list = json_body(call(&router, "GET", "/runs", Some(&token), None).await).await;
+    assert_eq!(list["runs"][0]["cancellation"]["started"], false);
+    assert_eq!(list["runs"][0]["principal"], "token:ci-bot");
+}
