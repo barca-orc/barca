@@ -41,6 +41,7 @@ fn live(handle: &str) -> RunState {
         outcome: None,
         cancel: barca_core::CancellationToken::new(),
         cancel_requested: false,
+        cancellation: None,
     }
 }
 #[tokio::test]
@@ -156,4 +157,27 @@ async fn a_slow_subscriber_and_a_reconnect_receive_every_event_once() {
     let stream = orphan.subscribe(0);
     drop(orphan);
     assert_eq!(stream.collect::<Vec<_>>().await.len(), 1);
+}
+
+/// A run cancelled while it waited names the runs it waited behind, and the one doing the same
+/// work (#925).
+#[test]
+fn a_queued_cancellation_names_the_same_work_already_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let mut same = live("same");
+    same.status = RunStatus::Running;
+    same.started_at = 1.0;
+    let mut other = live("other");
+    other.status = RunStatus::Running;
+    other.target = Some("second".into());
+    other.started_at = 0.5;
+    state.runs.insert("same".into(), same);
+    state.runs.insert("other".into(), other);
+    state.runs.insert("queued".into(), live("queued"));
+    let c = super::handlers::queued_cancellation(&state, "queued", Some("token:a".into()));
+    assert!(!c.started);
+    assert_eq!(c.waiting_behind, ["other", "same"]);
+    assert_eq!(c.same_as.as_deref(), Some("same"));
+    assert_eq!(c.principal.as_deref(), Some("token:a"));
 }

@@ -461,6 +461,7 @@ pub(super) async fn expand_and_decide<'p>(
     })
     .await?;
     trace_point!(session.started.trace, "phase{phase_idx}_cache_check_done");
+    record_plan_reasons(session);
     if let Some(pin) = &session.state.pin {
         pin.run_hashes(session.state.decide_state.run_hashes().values());
     }
@@ -714,6 +715,16 @@ pub(super) async fn recover_phase_inputs<'p>(
                 .get(&id)
                 .is_some_and(|o| evicted.contains(&o.path));
             recover::mark_recomputed(&mut session.state.results.reports, &id, false, was_evicted);
+            let why = if was_evicted {
+                crate::run_explain::ReasonCategory::Evicted
+            } else {
+                crate::run_explain::ReasonCategory::ArtifactMissing
+            };
+            session.state.decide_state.plan_tally.add(
+                crate::StepId::parse(&id).base_id(),
+                &[(why, None)],
+                1,
+            );
             session.state.cached_node_ids.remove(&id);
             if let Some(oref) = session.state.results.outputs.remove(&id) {
                 lost.push((id, oref.path));
@@ -722,8 +733,19 @@ pub(super) async fn recover_phase_inputs<'p>(
         for line in recover::recompute_warnings(&lost, &evicted) {
             note(&session.pb, &line);
         }
+        record_plan_reasons(session);
     }
     session.state.read_paths.extend(check);
 
     Ok(Some((filtered_phase, provided)))
+}
+
+/// Hand the run's plan reasons to the recorder when they changed (#925), so `GET /runs/{id}`
+/// and `barca history RUN_ID` say why while the run goes.
+fn record_plan_reasons(session: &mut RunSession<'_, '_>) {
+    if let Some(json) = session.state.decide_state.plan_tally.take_changed()
+        && let Some(recorder) = &session.recorder
+    {
+        recorder.plan_reasons(json);
+    }
 }

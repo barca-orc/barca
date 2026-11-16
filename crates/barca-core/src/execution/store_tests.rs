@@ -124,6 +124,7 @@ async fn persist_run_records_failure_type_and_its_own_attempts() {
         store_paths: &HashMap::new(),
         cost_snapshot: &[],
         touched: &[],
+        plan_reasons: None,
     };
     persist_run(&db_path, &ledger).await.unwrap();
 
@@ -184,6 +185,7 @@ async fn persist_run_records_store_locations() {
         store_paths: &store_paths,
         cost_snapshot: &[],
         touched: &[],
+        plan_reasons: None,
     };
     persist_run(&db_path, &ledger).await.unwrap();
 

@@ -49,7 +49,17 @@ pub struct Trigger {
     pub scheduled_at: Option<String>,
     /// For a scheduled run: the schedule's id, the full id of the scheduled node.
     pub schedule_id: Option<String>,
+    /// Who asked for it, when the server knows (#925): the project token the request was
+    /// authenticated with, as `token:<name>`. `None` without authentication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// The free-text reason the caller attached (`reason` of `POST /runs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
+
+/// The most characters of [`Trigger::reason`] kept; a longer reason is refused.
+pub const MAX_REASON_CHARS: usize = 500;
 
 impl Trigger {
     /// A run started over HTTP.
@@ -66,6 +76,7 @@ impl Trigger {
             triggered_by: TriggeredBy::Schedule,
             scheduled_at: Some(rfc3339(epoch)),
             schedule_id: Some(schedule_id.to_string()),
+            ..Self::default()
         }
     }
 }

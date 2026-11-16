@@ -69,6 +69,8 @@ pub(crate) struct BackupCheckpoints {
 
 pub(crate) struct StepRecorder {
     tx: tokio::sync::mpsc::UnboundedSender<NewMaterialization>,
+    /// The run's plan reasons as JSON (#925), written with the next batch.
+    plan: tokio::sync::watch::Sender<Option<String>>,
     stop: CancellationToken,
     task: Option<tokio::task::JoinHandle<()>>,
     /// Nanoseconds spent handling finished steps and writing their rows.
@@ -108,6 +110,7 @@ impl StepRecorder {
         checkpoint_interval: std::time::Duration,
     ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<NewMaterialization>();
+        let (plan, mut plan_rx) = tokio::sync::watch::channel::<Option<String>>(None);
         let checkpoint_interval = backups
             .as_ref()
             .and_then(|b| b.cfg.backup_interval.0)
@@ -123,6 +126,7 @@ impl StepRecorder {
         let task = tokio::spawn(async move {
             let mut next_write = tokio::time::Instant::now() + record_interval;
             let mut pending = Vec::new();
+            let mut plan_pending: Option<String> = None;
             let mut generation = 0u64;
             let mut backed_up = 0u64;
             // Consecutive checkpoints that did not reach the store, and whether that was said.
@@ -137,18 +141,19 @@ impl StepRecorder {
                 tokio::select! {
                     biased;
                     _ = stopped.cancelled() => break,
-                    _ = tokio::time::sleep_until(next_write), if !pending.is_empty() => {
+                    _ = tokio::time::sleep_until(next_write), if !pending.is_empty() || plan_pending.is_some() => {
                         while let Ok(row) = rx.try_recv() { pending.push(row); }
                         // A successful no-op replay never marks unchanged state dirty.
                         let writing = std::time::Instant::now();
                         let recorded = record_steps_with_until(
-                            &db_path, &run_id, &pending,
+                            &db_path, &run_id, &pending, plan_pending.as_deref(),
                             crate::process::Until::cancelled(&stopped),
                         ).await;
                         add_busy(&writes, writing);
                         if let Ok(inserted) = recorded {
                             generation += inserted;
                             pending.clear();
+                            plan_pending = None;
                         }
                         next_write = tokio::time::Instant::now() + record_interval;
                     }
@@ -192,15 +197,25 @@ impl StepRecorder {
                         Some(row) => pending.push(row),
                         None => break,
                     },
+                    Ok(()) = plan_rx.changed() => {
+                        plan_pending = plan_rx.borrow_and_update().clone();
+                    }
                 }
             }
         });
         Self {
             tx,
+            plan,
             stop,
             task: Some(task),
             busy,
         }
+    }
+
+    /// Record the run's plan reasons (#925) with the next batch, within [`RECORD_INTERVAL`].
+    /// Never blocks; a newer value replaces one not written yet.
+    pub(crate) fn plan_reasons(&self, json: String) {
+        self.plan.send_replace(Some(json));
     }
 
     /// Count coordinator time spent on a finished step since `since`.
@@ -264,13 +279,14 @@ async fn record_steps(
     run_id: &str,
     rows: &[NewMaterialization],
 ) -> Result<u64, BarcaError> {
-    record_steps_with_until(db_path, run_id, rows, crate::process::Until::done()).await
+    record_steps_with_until(db_path, run_id, rows, None, crate::process::Until::done()).await
 }
 
 async fn record_steps_with_until(
     db_path: &str,
     run_id: &str,
     rows: &[NewMaterialization],
+    plan: Option<&str>,
     until: crate::process::Until<'_>,
 ) -> Result<u64, BarcaError> {
     let _g = until.admit(db::db_guard()).await?;
@@ -292,6 +308,11 @@ async fn record_steps_with_until(
             return Err(BarcaError::Db(
                 "cannot record new progress for a missing or finished run".to_string(),
             ));
+        }
+        if let Some(plan) = plan {
+            db::runs::set_plan_reasons(&conn, run_id, plan)
+                .await
+                .map_err(|e| BarcaError::Db(format!("failed to record plan reasons: {e}")))?;
         }
         Ok(written)
     })
@@ -657,6 +678,7 @@ mod persist_tests {
                 all_timings: &self.timings,
                 cached_node_ids: &self.cached,
                 touched: &[],
+                plan_reasons: None,
                 run_hashes: &self.run_hashes,
                 components: &self.empty,
                 output_hashes: &self.empty,
@@ -985,6 +1007,7 @@ mod persist_tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let recorder = StepRecorder {
             tx,
+            plan: tokio::sync::watch::channel(None).0,
             stop: CancellationToken::new(),
             task: Some(tokio::spawn(async {})),
             busy: Arc::new(AtomicU64::new(0)),

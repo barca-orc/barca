@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '22'
+  version: '23'
   description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -2935,6 +2935,14 @@ paths:
           type: integer
           minimum: 0
         description: The most steps to list (default 1000).
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: List the steps from this position of the page order (failed steps first, then
+          as recorded); steps_page.next_offset is where the next page starts.
       - name: all
         in: query
         required: false
@@ -5704,6 +5712,9 @@ components:
       - triggered_by
       - scheduled_at
       - schedule_id
+      - principal
+      - trigger_reason
+      - cancellation
       properties:
         id: *id003
         handle:
@@ -5761,6 +5772,22 @@ components:
           description: Null for runs recorded before barca recorded it.
         scheduled_at: *id042
         schedule_id: *id042
+        principal: &id_principal
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Who asked for the run, the project token its request was authenticated with
+            (token:NAME); null without authentication. Experimental.
+        trigger_reason: &id_trigger_reason
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The reason its request gave (RunRequest.reason). Experimental.
+        cancellation: &id_cancellation
+          anyOf:
+          - $ref: '#/components/schemas/RunCancellation'
+          - type: 'null'
+          description: For a cancelled run, why. Experimental.
         active_steps:
           type: array
           items:
@@ -6151,6 +6178,97 @@ components:
           type: boolean
           description: --allow-paused. Run a target that is paused (POST /pauses); without it a request
             naming a paused node is 400. Experimental.
+        reason:
+          type: string
+          maxLength: 500
+          description: Why the caller asks for the run, in one line of at most 500 characters (trimmed;
+            a control character is 400). Recorded with the run as its trigger_reason. Experimental.
+    RunPlanReasons:
+      type: object
+      additionalProperties: false
+      required: [nodes, steps, reasons, omitted]
+      description: Why a run executed what it did instead of serving it from cache, by reason, recorded as
+        each phase of the run was decided (a run in progress has the phases decided so far). Experimental.
+      properties:
+        nodes:
+          type: integer
+          minimum: 0
+          description: The nodes the run decided to execute.
+        steps:
+          type: integer
+          minimum: 0
+          description: The steps it decided to execute, a partitioned node's keys each counted.
+        reasons:
+          type: array
+          maxItems: 64
+          description: By (category, subject), most steps first. A step with several changed components
+            counts under each.
+          items:
+            $ref: '#/components/schemas/RunPlanReason'
+        omitted:
+          type: integer
+          minimum: 0
+          description: How many (category, subject) entries were left out of reasons.
+    RunPlanReason:
+      type: object
+      additionalProperties: false
+      required: [category, subject, nodes, steps, example]
+      properties:
+        category:
+          type: string
+          enum: [never_run, new_keys, failed, code_changed, inputs_changed, env_changed, changed, refresh,
+            refresh_cascade, refresh_all, artifact_missing, evicted, task, sensor, not_examined]
+          description: 'never_run: no success ever recorded; new_keys: keys of a partitioned node that never
+            succeeded while others did; failed: the last attempt at this run hash failed; code_changed,
+            inputs_changed, env_changed: what changed since the last success (subject: the component, as
+            barca status words it); changed: the run hash differs and the last success recorded no
+            components; refresh, refresh_cascade (subject: the refreshed node), refresh_all; artifact_missing
+            and evicted: a valid result whose artifact is gone; task and sensor always run; not_examined: no
+            cache hit and not looked up (a server ledger answered, or more than 10,000 keys of one node in a
+            phase).'
+        subject:
+          anyOf:
+          - type: string
+          - type: 'null'
+        nodes:
+          type: integer
+          minimum: 0
+        steps:
+          type: integer
+          minimum: 0
+        example:
+          type: string
+          description: The first node executed for this reason.
+    RunCancellation:
+      type: object
+      additionalProperties: false
+      required: [by, principal, started, waiting_behind, same_as]
+      description: Why a cancelled run was cancelled. Experimental.
+      properties:
+        by:
+          type: string
+          enum: [request, shutdown]
+          description: 'request: DELETE /runs/{run_id} (the UI''s Cancel, a --server client''s first stop
+            signal); shutdown: the server stopped.'
+        principal:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The token the cancel request was authenticated with (token:NAME).
+        started:
+          type: boolean
+          description: False for a run cancelled while it waited in the queue; it executed nothing.
+        waiting_behind:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+          description: For a run cancelled before it started, the runs executing then.
+        same_as:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Of those, one with the same command, targets and files.
     Explain:
       type: object
       required:
@@ -6268,6 +6386,11 @@ components:
       - attempts
       - client_run_id
       - failure
+      - principal
+      - trigger_reason
+      - retries
+      - plan_reasons
+      - cancellation
       - outcome
       - error
       - steps
@@ -6331,6 +6454,21 @@ components:
           - $ref: '#/components/schemas/RunFailure'
           - type: 'null'
           description: The first failed step and its error; null for a run with no failed step.
+        principal: *id_principal
+        trigger_reason: *id_trigger_reason
+        retries:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          description: Of attempts, those that retried a step (each attempt after a step's first); null
+            while the run has recorded none. Experimental.
+        plan_reasons:
+          anyOf:
+          - $ref: '#/components/schemas/RunPlanReasons'
+          - type: 'null'
+          description: Why the run executed what it did; null before it decided to execute anything.
+        cancellation: *id_cancellation
         outcome:
           anyOf:
           - $ref: '#/components/schemas/Outcome'
@@ -6339,8 +6477,9 @@ components:
         error: *id042
         steps:
           type: array
-          description: At most ?limit=N steps (default 1000; failed recorded steps are kept first),
-            every one with ?all=true.
+          description: At most ?limit=N steps (default 1000) from ?offset=M, in the page order (failed
+            recorded steps first, then as recorded), every one with ?all=true. Page through the rest
+            with steps_page.next_offset.
           items:
             $ref: '#/components/schemas/RunStep'
         steps_page:
@@ -6353,6 +6492,14 @@ components:
           properties:
             total: *id056
             truncated: *id059
+            offset:
+              type: integer
+              minimum: 1
+              description: The position of the first step listed (?offset=); absent when 0.
+            next_offset:
+              type: integer
+              minimum: 1
+              description: Where the next page starts (?offset=); absent on the last page.
             nodes:
               type: array
               description: Per node over every recorded step, listed or not. For a finished run
@@ -6650,6 +6797,9 @@ components:
       - failure
       - failed_node
       - error
+      - principal
+      - trigger_reason
+      - cancellation
       properties:
         run_id: *id005
         command: *id005
@@ -6695,6 +6845,17 @@ components:
           - string
           - 'null'
           description: failure.error, flat for --fields.
+        principal: *id_principal
+        trigger_reason: *id_trigger_reason
+        cancellation: *id_cancellation
+        retries:
+          type: integer
+          minimum: 0
+          description: For one run (barca history RUN_ID), its retries; absent in a list. Experimental.
+        plan_reasons:
+          $ref: '#/components/schemas/RunPlanReasons'
+          description: For one run (barca history RUN_ID) that executed something, why; absent in a
+            list. Experimental.
     SqlCatalog:
       type: object
       additionalProperties: false

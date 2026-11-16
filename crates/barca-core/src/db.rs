@@ -21,8 +21,9 @@ pub use barca_db::db::{
 pub use barca_db::db::{
     AliveRun, LogEntry, RUN_STEPS_LIMIT, RunRecord, RunStep, RunTotals, StepsPage,
     alive_running_runs, alive_running_runs_in, attach_trace_ids, count_runs, generate_run_id,
-    get_logs, get_recent_runs, get_run, get_run_outcome, get_run_steps_page, get_run_traced,
-    replace_run_outcome, run_artifact, run_node_summaries, set_run_outcome,
+    get_logs, get_recent_runs, get_run, get_run_outcome, get_run_steps_page, get_run_steps_window,
+    get_run_traced, replace_run_outcome, run_artifact, run_node_summaries, set_cancellation,
+    set_run_outcome,
 };
 
 // Assets: stats, ages, durations, partitions, step rows, pins and their versions.

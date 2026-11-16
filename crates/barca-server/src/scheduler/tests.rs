@@ -103,6 +103,7 @@ fn insert_run(
             outcome: None,
             cancel: barca_core::CancellationToken::new(),
             cancel_requested: false,
+            cancellation: None,
         },
     );
 }

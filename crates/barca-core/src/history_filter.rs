@@ -229,6 +229,7 @@ mod tests {
             schedule_id: None,
             client_run_id: None,
             failure: None,
+            ..Default::default()
         }
     }
 

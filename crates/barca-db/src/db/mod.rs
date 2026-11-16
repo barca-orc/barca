@@ -75,9 +75,10 @@ pub use materializations::last_output_hashes;
 pub use materializations::persist_outputs;
 use materializations::record_definitions;
 pub use materializations::{
-    DEFINITION_KEY, adopt_store_digests, confirmed_object, evicted_among, evicted_among_on,
-    key_range, last_success_components, latest_success, latest_success_id,
-    partition_artifacts_for_config, touch_read, touch_read_in, touch_read_on,
+    DEFINITION_KEY, StepHistory, SuccessRow, adopt_store_digests, any_key_succeeded,
+    confirmed_object, definition_components, evicted_among, evicted_among_on, key_range,
+    last_success_components, latest_success, latest_success_id, partition_artifacts_for_config,
+    step_histories, touch_read, touch_read_in, touch_read_on,
 };
 pub use materializations::{max_materialization_id, succeeded_since};
 pub use partition_keys::FailedKeys;
@@ -99,14 +100,14 @@ pub use run_steps::get_run_steps;
 pub use run_steps::worker_exit;
 pub use run_steps::{
     RUN_STEPS_LIMIT, RunNodeSummary, RunStep, StepRow, StepsPage, attach_trace_ids,
-    get_run_steps_page, get_run_traced, read_step_rows, run_node_summaries,
+    get_run_steps_page, get_run_steps_window, get_run_traced, read_step_rows, run_node_summaries,
 };
 #[cfg(test)]
 pub(crate) use runs::create_run_with;
 pub use runs::{
     NewRun, RunRecord, count_runs, create_run, encode_files, finish_run, generate_run_id,
     get_recent_runs, get_run, get_run_outcome, reconcile_run, record_unstarted_run,
-    replace_run_outcome, run_artifact, set_run_outcome,
+    replace_run_outcome, run_artifact, set_cancellation, set_plan_reasons, set_run_outcome,
 };
 pub use runs::{RunFailure, StartedRun, split_exception, start_run};
 pub use schedule::{

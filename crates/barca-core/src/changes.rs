@@ -36,9 +36,24 @@ pub(crate) fn step_components(
     state: &DecideState,
     display_id: &str,
 ) -> Option<BTreeMap<String, String>> {
+    let node = dag.get_node(crate::StepId::parse(display_id).base_id())?;
+    let mut out: BTreeMap<String, String> = node.components.iter().cloned().collect();
+    out.append(&mut own_components(dag, state, display_id)?);
+    Some(out)
+}
+
+/// The components of `display_id`'s run hash that are its own, not its definition's: its
+/// inputs' and sensors' tokens, a dict source's value for its key, its env values. The same for
+/// no two keys of a node in general; the definition's ([`crate::dag::Dag`] node `components`)
+/// are the same for all of them.
+pub(crate) fn own_components(
+    dag: &Dag,
+    state: &DecideState,
+    display_id: &str,
+) -> Option<BTreeMap<String, String>> {
     let step = crate::StepId::parse(display_id);
     let node = dag.get_node(step.base_id())?;
-    let mut out: BTreeMap<String, String> = node.components.iter().cloned().collect();
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
     let partition = (!step.partition.is_empty()).then(|| step.partition.suffix());
     let mut upstreams: Vec<&String> = node
         .resolved_inputs
@@ -96,10 +111,7 @@ pub(crate) fn step_components_json(
     display_id: &str,
 ) -> Option<String> {
     let node = dag.get_node(crate::StepId::parse(display_id).base_id())?;
-    let mut own = step_components(dag, state, display_id)?;
-    for (name, _) in &node.components {
-        own.remove(name);
-    }
+    let mut own = own_components(dag, state, display_id)?;
     own.insert(DEFINITION_KEY.to_string(), node.definition_hash.clone());
     serde_json::to_string(&own).ok()
 }
@@ -139,7 +151,7 @@ pub(crate) fn diff(recorded: &str, current: &BTreeMap<String, String>) -> Option
     (!changed.is_empty()).then(|| changed.into_iter().cloned().collect())
 }
 
-fn rank(key: &str) -> usize {
+pub(crate) fn rank(key: &str) -> usize {
     const ORDER: &[&str] = &[
         "code",
         "decorator argument ",

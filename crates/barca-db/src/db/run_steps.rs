@@ -170,6 +170,16 @@ pub struct StepsPage {
     pub total: usize,
     /// True when `steps` lists fewer than `total`.
     pub truncated: bool,
+    /// The position of the first step listed, in the page order (failed steps first, then as
+    /// recorded): `?offset=` of `GET /runs/{run_id}`. Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub offset: usize,
+    /// Where the next page starts (`?offset=`): absent on the last page. Set by
+    /// `GET /runs/{run_id}` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub next_offset: Option<usize>,
     /// Per node over every recorded step, listed or not, when the run has a partitioned node.
     /// Failed nodes first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -210,10 +220,25 @@ pub const RUN_STEPS_LIMIT: usize = 1000;
 
 /// At most `limit` of `run_id`'s recorded steps (every one with `None`), in the order they were
 /// recorded, failed steps first among those kept; and how many there are.
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 pub async fn get_run_steps_page(
     db_path: &str,
     run_id: &str,
     limit: Option<usize>,
+) -> Result<(Vec<RunStep>, StepsPage), BarcaError> {
+    get_run_steps_window(db_path, run_id, limit, 0).await
+}
+
+/// [`get_run_steps_page`] from the `offset`-th step of the page order (failed steps first, then
+/// as recorded): the page after it starts at `offset + limit`.
+pub async fn get_run_steps_window(
+    db_path: &str,
+    run_id: &str,
+    limit: Option<usize>,
+    offset: usize,
 ) -> Result<(Vec<RunStep>, StepsPage), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
@@ -255,8 +280,8 @@ pub async fn get_run_steps_page(
     };
     // Past the limit, the failed steps are kept before the others.
     let page = match (limit, total) {
-        (Some(limit), Some(total)) if total > limit => format!(
-            " AND id IN (SELECT id FROM materializations WHERE run_id = ?1 ORDER BY (status = 'failed') DESC, id LIMIT {limit})"
+        (Some(limit), Some(total)) if total > limit || offset > 0 => format!(
+            " AND id IN (SELECT id FROM materializations WHERE run_id = ?1 ORDER BY (status = 'failed') DESC, id LIMIT {limit} OFFSET {offset})"
         ),
         _ => String::new(),
     };
@@ -348,6 +373,8 @@ pub async fn get_run_steps_page(
         total,
         truncated: steps.len() < total,
         nodes,
+        offset,
+        next_offset: None,
     };
     Ok((steps, page))
 }
@@ -606,6 +633,7 @@ mod tests {
                 total: 5,
                 truncated: true,
                 nodes: page.nodes.clone(),
+                ..Default::default()
             }
         );
         let (steps, page) = super::get_run_steps_page(&path, "many", None)
@@ -618,6 +646,7 @@ mod tests {
                 total: 5,
                 truncated: false,
                 nodes: page.nodes.clone(),
+                ..Default::default()
             }
         );
         let (steps, page) = super::get_run_steps_page(&path, "many", Some(10))

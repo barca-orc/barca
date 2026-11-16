@@ -12,14 +12,18 @@ use barca_core::time::{rfc3339_millis as timestamp, sql_datetime_rfc3339 as dura
 use serde::{Deserialize, Serialize};
 
 pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError> {
-    view_page(state, id, Some(db::RUN_STEPS_LIMIT)).await
+    view_page(state, id, Some(db::RUN_STEPS_LIMIT), 0).await
 }
 
-/// [`view`], listing at most `limit` steps (every one with `None`).
+/// How many of a live run's lines `GET /runs/{run_id}` reads from its spool: the newest ones.
+const LIVE_LOG_LINES: usize = 5_000;
+
+/// [`view`], listing at most `limit` steps (every one with `None`) from the `offset`-th.
 pub(crate) async fn view_page(
     state: &AppState,
     id: &str,
     limit: Option<usize>,
+    offset: usize,
 ) -> Result<RunView, ApiError> {
     let snapshot = snapshot_db(state).await?;
     let live = state.runs.get(id).map(|r| r.clone());
@@ -53,6 +57,14 @@ pub(crate) async fn view_page(
             attempts: record.attempts,
             client_run_id: record.client_run_id.clone(),
             failure: record.failure.clone(),
+            principal: record.principal.clone(),
+            trigger_reason: record.trigger_reason.clone(),
+            retries: record.retries,
+            plan_reasons: record.plan_reasons.clone(),
+            cancellation: record
+                .cancellation
+                .clone()
+                .or_else(|| live.as_ref().and_then(|r| r.cancellation.clone())),
             outcome: None,
             error: None,
             steps: Vec::new(),
@@ -82,6 +94,11 @@ pub(crate) async fn view_page(
             attempts: None,
             client_run_id: None,
             failure: None,
+            principal: run.trigger.principal.clone(),
+            trigger_reason: run.trigger.reason.clone(),
+            retries: None,
+            plan_reasons: None,
+            cancellation: run.cancellation.clone(),
             outcome: None,
             error: None,
             steps: Vec::new(),
@@ -102,9 +119,20 @@ pub(crate) async fn view_page(
         view.error = outcome.envelope().map(|e| e.error);
     }
     view.outcome = outcome;
-    let (steps, mut steps_page) = db::get_run_steps_page(&snapshot.path, id, limit).await?;
+    let (steps, mut steps_page) =
+        db::get_run_steps_window(&snapshot.path, id, limit, offset).await?;
     view.steps = steps;
     view.logs = db::get_logs(&snapshot.path, id).await?;
+    // A run in progress has its lines in its spool until it records them (#925): its newest.
+    if view.logs.is_empty()
+        && record.is_some()
+        && live
+            .as_ref()
+            .is_some_and(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
+    {
+        view.logs =
+            barca_core::queries::live_log_tail(&state.config.resolved.db_path, id, LIVE_LOG_LINES);
+    }
     if let Some(run) = &live
         && let Some(channel) = state.events.get(&run.handle)
     {
@@ -144,7 +172,8 @@ pub(crate) async fn view_page(
                     ..
                 } if recorded.insert(node_id.clone()) => {
                     steps_page.total += 1;
-                    if limit.is_some_and(|n| view.steps.len() >= n) {
+                    // Listed after the recorded steps: on the page that reaches past them.
+                    if offset > 0 || limit.is_some_and(|n| view.steps.len() >= n) {
                         continue;
                     }
                     view.steps.push(db::RunStep {
@@ -166,6 +195,8 @@ pub(crate) async fn view_page(
         }
     }
     steps_page.truncated = view.steps.len() < steps_page.total;
+    let listed_to = offset + view.steps.len();
+    steps_page.next_offset = (limit.is_some() && listed_to < steps_page.total).then_some(listed_to);
     // The steps streamed and not yet recorded get their trace ids as the recorded ones did.
     if record.is_some() && db::get_run_traced(&snapshot.path, &view.run_id).await? {
         db::attach_trace_ids(&mut view.steps, &view.run_id);
@@ -248,6 +279,12 @@ pub struct RunSummary {
     pub error: Option<String>,
     /// The run's first failed step and its error; `null` when no step failed.
     pub first_failure: Option<FirstFailure>,
+    /// Who asked for the run (`token:<name>`), when the server knows. Experimental.
+    pub principal: Option<String>,
+    /// The free-text `reason` its request gave. Experimental.
+    pub trigger_reason: Option<String>,
+    /// For a cancelled run: who cancelled it and whether it had started. Experimental.
+    pub cancellation: Option<barca_core::run_explain::Cancellation>,
     /// With `?status=running` only: the nodes the run is working on now.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
@@ -314,6 +351,11 @@ pub(super) fn summary(record: db::RunRecord, live: Option<&RunState>) -> RunSumm
             node_id: f.node,
             error: f.error,
         }),
+        principal: record.principal,
+        trigger_reason: record.trigger_reason,
+        cancellation: record
+            .cancellation
+            .or_else(|| live.and_then(|r| r.cancellation.clone())),
         active_steps: None,
     }
 }
@@ -344,6 +386,9 @@ pub(super) fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
         error: run.error.clone(),
         // Not in the database yet: nothing has recorded a failed step.
         first_failure: None,
+        principal: run.trigger.principal.clone(),
+        trigger_reason: run.trigger.reason.clone(),
+        cancellation: run.cancellation.clone(),
         active_steps: None,
     }
 }

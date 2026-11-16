@@ -242,6 +242,8 @@ pub(crate) enum Decision {
 pub(crate) struct DecideState {
     // Monotonic: only this component can insert, and no key is removed during a run.
     run_hashes: HashMap<String, String>,
+    /// Why the steps decided to run so far run (#925, [`crate::plan_reasons`]).
+    pub(crate) plan_tally: crate::plan_reasons::PlanTally,
     expected_steps: BTreeMap<String, BTreeSet<String>>,
     /// Keys a dry run predicts would run, per base id (display ids): every one, not the
     /// report's preview, for a node's key grid (`GET /assets/{name}/partitions/grid`).

@@ -15,6 +15,16 @@ total: number,
  */
 truncated: boolean,
 /**
+ * The position of the first step listed, in the page order (failed steps first, then as
+ * recorded): `?offset=` of `GET /runs/{run_id}`. Absent when 0.
+ */
+offset?: number,
+/**
+ * Where the next page starts (`?offset=`): absent on the last page. Set by
+ * `GET /runs/{run_id}` only.
+ */
+next_offset?: number,
+/**
  * Per node over every recorded step, listed or not, when the run has a partitioned node.
  * Failed nodes first.
  */
