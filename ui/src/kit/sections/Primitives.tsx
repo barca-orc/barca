@@ -31,6 +31,7 @@ import { SidebarNav, SidebarSearch, SidebarView } from '@/layouts/Sidebar'
 import type { PipelineSummary } from '@/lib/pipeline'
 import type { SidebarGroup } from '@/lib/sidebar'
 import { CommandPaletteView, ConfirmDialog } from '@/components'
+import { ReadOnlyNotice } from '@/components/ReadOnlyBanner'
 import { paletteActions, paletteIndex, searchPalette } from '@/lib/palette'
 import { runButton } from '@/lib/runTarget'
 
@@ -147,11 +148,15 @@ const [query, setQuery] = useState('')
       <Variant label="run all"><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><ConfirmDialog {...runButton({ kind: 'all', assets: 8069, sensors: 1 }).confirm!} onConfirm={() => {}} onCancel={() => {}} /></div></Variant>
     </Spec>
 
-    <Spec title="PageRunButton" note="The Run at the end of a page's toolbar: what is open, in runButton()'s short words; the size is in its name and tooltip.">
+    <Spec title="PageRunButton" note="The Run at the end of a page's toolbar: what is open, in runButton()'s short words; the size is in its name and tooltip. Disabled until the server is known to take runs; not there at all on a read-only one (ReadOnlyNotice says so once).">
       {[runButton({ kind: 'pipeline', file: 'billing.py', assets: 505, sensors: 1 }), runButton({ kind: 'all', assets: 8069, sensors: 1 })].map((b) => (
         <Variant key={b.label} label={b.title}><PageRunButton run={{ ...b, onRun: () => {}, disabled: false, loading: false }} /></Variant>
       ))}
-      <Variant label="read-only"><PageRunButton run={{ ...runButton({ kind: 'all', assets: 9, sensors: 0 }), onRun: () => {}, disabled: true, loading: false, title: 'This server is read-only' }} /></Variant>
+      <Variant label="checking the server"><PageRunButton run={{ ...runButton({ kind: 'all', assets: 9, sensors: 0 }), onRun: () => {}, disabled: true, loading: false, title: 'Checking the server…' }} /></Variant>
+    </Spec>
+
+    <Spec title="ReadOnlyNotice" note="The one read-only indicator, across the top of every page of a barca serve --read-only; no write action is drawn there.">
+      <Variant label="read-only server"><div style={{ width: 720 }}><ReadOnlyNotice /></div></Variant>
     </Spec>
 
     <Spec title="HealthBar" note="A scope's nodes by state; a single failure stays visible among thousands.">

@@ -23,6 +23,7 @@ export function PausedTag({ id, paused }: { id: string; paused: ReadonlySet<stri
 export interface IncidentControlsProps {
   node: Pick<ListNode, 'id'>
   graph: ListNode[]
+  /** A `--read-only` server pauses nothing: the controls are not offered, what is paused still shows. */
   readOnly: boolean
 }
 
@@ -50,7 +51,7 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
   const held = radius.schedules.filter((s) => s.job.paused)
   const queuePaused = queue.data?.paused ?? false
   const busy = toggle.isPending || scheduleToggle.isPending || queueToggle.isPending
-  const disabled = readOnly || busy
+  const disabled = busy
   const error = (toggle.error ?? scheduleToggle.error ?? queueToggle.error) as Error | null
   const ask = (c: Confirm) => setConfirm(c)
   const below = radius.downstream.length
@@ -66,7 +67,8 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
           </span>
         </KeyValue>
       )}
-      <div className="barca-incident-actions">
+      {/* A read-only server pauses nothing: what is paused is shown, with no controls (the app says why, once). */}
+      {!readOnly && <div className="barca-incident-actions">
         {pause ? (
           <>
             <Button size="sm" disabled={disabled} onClick={() => toggle.mutate({ pause: false, target: node.id })}>
@@ -139,11 +141,10 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
             Pause the run queue
           </Button>
         )}
-      </div>
+      </div>}
       <p className="barca-cell-sub barca-incident-links">
         <Link to="/assets?paused=1">All paused assets</Link> · <Link to="/schedules">Schedules</Link> · <Link to="/runs">Runs and queue</Link>
       </p>
-      {readOnly && <p className="barca-cell-sub">This server is read-only: nothing can be paused here.</p>}
       {error && <ErrorLine error={error.message} />}
       {confirm && (
         <ConfirmDialog

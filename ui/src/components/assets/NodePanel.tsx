@@ -123,11 +123,11 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       subtitleAction={<CopyButton label="Copy id" text={node.id} />}
       actions={
         <>
-          <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
-            disabled={runAction.readOnly} loading={runAction.triggering}
+          {runAction.writes !== 'hidden' && <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
+            disabled={runAction.writes === 'disabled'} loading={runAction.triggering}
             title={runAction.title} onClick={runGuard.onRun}>
             Run
-          </Button>
+          </Button>}
           <IconButton label="Open in graph" size="sm" onClick={() => onOpenGraph(node.id)}>
             <GitBranch size={14} />
           </IconButton>

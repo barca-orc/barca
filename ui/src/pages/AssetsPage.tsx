@@ -17,7 +17,6 @@ import {
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { RunNotice } from '@/components/RunNotice'
-import { useHealth } from '@/hooks/useHealth'
 import { useTimeZone } from '@/context/timeZone'
 import { formatInstant } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
@@ -89,7 +88,6 @@ function SortHeader({
 }
 
 export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
-  const { data: health } = useHealth()
   const { zone } = useTimeZone()
   const navigate = useNavigate()
   // The sort lives in the URL (#/assets?sort=typical&dir=desc), so it survives
@@ -198,7 +196,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             </p>
             {error instanceof ApiError && error.remediation && <p>{error.remediation}</p>}
             {/* Starting over mends a database barca cannot use, and nothing else. */}
-            {metadataUnusable(error) && <ResetDatabaseButton readOnly={health?.read_only ?? false} />}
+            {metadataUnusable(error) && <ResetDatabaseButton />}
           </div>
         ) : !data ? (
           <div className="barca-table-skeleton" aria-label="Loading">

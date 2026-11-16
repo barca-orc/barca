@@ -11,7 +11,7 @@ import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
 import { useAssetStates } from '@/hooks/useAssetStates'
-import { useHealth } from '@/hooks/useHealth'
+import { useWriteControl } from '@/hooks/useWriteControl'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { useProgram } from '@/hooks/useProgram'
 import { usePartitionErrors } from '@/hooks/usePartitionErrors'
@@ -59,7 +59,7 @@ export function GroupedPipelinePage() {
   const groupsQuery = useGroups()
   const assetQuery = useAssets()
   const stateQuery = useAssetStates()
-  const healthQuery = useHealth()
+  const writes = useWriteControl()
   const pipeline = params.get('pipeline')
   const tree = useMemo(() => groupTree((groupsQuery.data ?? []).filter((g) => !pipeline || g.id.startsWith(`group:${pipeline}:`))), [groupsQuery.data, pipeline])
   const view = useMemo(() => parseGroupedParams(params, tree), [params, tree])
@@ -167,7 +167,7 @@ export function GroupedPipelinePage() {
   const failure = assetQuery.error ?? groupsQuery.error
   const root = rootName(pipeline)
   const nowMs = stateQuery.dataUpdatedAt
-  const readOnly = healthQuery.data?.read_only ?? false
+  const readOnly = writes === 'hidden'
 
   return (
     <div className="barca-view">
@@ -257,7 +257,7 @@ export function GroupedPipelinePage() {
             <Button size="sm" onClick={() => { void assetQuery.refetch(); void groupsQuery.refetch() }}>Retry</Button>
           </p>
           {failure instanceof ApiError && failure.remediation && <p>{failure.remediation}</p>}
-          {metadataUnusable(failure) && <ResetDatabaseButton readOnly={readOnly} />}
+          {metadataUnusable(failure) && <ResetDatabaseButton />}
         </div>
       ) : loading ? (
         <p className="barca-table-empty">Loading pipeline…</p>
@@ -271,7 +271,7 @@ export function GroupedPipelinePage() {
               <span> {stateQuery.error.remediation}</span>
             )}
             {/* Starting over mends a database barca cannot use, and nothing else. */}
-            {metadataUnusable(stateQuery.error) && <ResetDatabaseButton readOnly={readOnly} />}
+            {metadataUnusable(stateQuery.error) && <ResetDatabaseButton />}
           </div>
         )}
         <div className={graph && show === 'items' ? 'barca-graph-wrap' : 'barca-assets-split'}>

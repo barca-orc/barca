@@ -46,7 +46,6 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
             .exhaustive()}
         </>}
         <span className="barca-queue-actions">
-          {readOnly && <Tag tone="bare">read-only</Tag>}
           {match(control)
             .with({ kind: 'hidden' }, () => null)
             .with({ kind: 'pause' }, { kind: 'resume' }, (c) => (

@@ -7,6 +7,7 @@ import { ConfirmDialog } from '@/components'
 import { OfflineBanner } from '@/components/OfflineBanner'
 import { PausedBanner } from '@/components/PausedBanner'
 import { PinnedBanner } from '@/components/PinnedBanner'
+import { ReadOnlyBanner } from '@/components/ReadOnlyBanner'
 import type { AppShellContext, TopbarRun } from './shellContext'
 
 /**
@@ -35,6 +36,7 @@ export function AppShell() {
       <Sidebar onSearch={() => setPalette(true)} />
       <main className="barca-main">
         <OfflineBanner />
+        <ReadOnlyBanner />
         <PausedBanner />
         <PinnedBanner />
         <LoadErrors />

@@ -47,7 +47,7 @@ export { ConnectionBadge } from './ConnectionBadge'
 export type { ConnectionBadgeProps } from './ConnectionBadge'
 
 export { ResetDatabaseButton, ResetDatabaseDialog } from './ResetDatabase'
-export type { ResetDatabaseButtonProps, ResetDatabaseDialogProps, ResetPhase } from './ResetDatabase'
+export type { ResetDatabaseDialogProps, ResetPhase } from './ResetDatabase'
 
 export { RunningBadge } from './RunningBadge'
 export type { RunningBadgeProps } from './RunningBadge'

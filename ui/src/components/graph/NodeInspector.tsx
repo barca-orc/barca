@@ -20,7 +20,7 @@ interface NodeInspectorProps {
   running: boolean
   /** Failure message for this node, if the last run failed. */
   error: string | null
-  /** The server refuses runs (`barca serve --read-only`). */
+  /** The server refuses runs (`barca serve --read-only`): no Run is offered. */
   readOnly: boolean
   /** The node's trigger state (owned by the page, shared with the topbar). */
   triggering: boolean
@@ -100,17 +100,15 @@ export function NodeInspector({
       subtitleAction={<CopyButton label="Copy id" text={asset.id} />}
       actions={
         <>
-          <Button
+          {!readOnly && <Button
             variant="signal"
             size="sm"
             iconLeft={<Play size={12} />}
             loading={triggering || running}
-            disabled={readOnly}
-            title={readOnly ? 'This server is read-only' : undefined}
             onClick={onFire}
           >
             Run
-          </Button>
+          </Button>}
           <IconButton label="Close" size="sm" onClick={onClose}>
             <X size={14} />
           </IconButton>

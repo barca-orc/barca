@@ -8,7 +8,7 @@ import { useAssets } from '@/hooks/useAssets'
 import { useQueryClient } from '@tanstack/react-query'
 import { graphState, liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
-import { useHealth } from '@/hooks/useHealth'
+import { useWriteControl } from '@/hooks/useWriteControl'
 import { useRunStream } from '@/hooks/useRunStream'
 import { useTriggerNode } from '@/hooks/useTriggerNode'
 import { useTopbarRun } from '@/hooks/useTopbarRun'
@@ -28,7 +28,6 @@ export function GraphPage() {
   const filter = useAssetFilter('asset')
   const stateQuery = filter.states
   const queryClient = useQueryClient()
-  const { data: health } = useHealth()
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
   const [searchParams, setSearchParams] = useSearchParams()
   const selected = searchParams.get('focus')
@@ -73,7 +72,7 @@ export function GraphPage() {
     [],
   )
   const trigger = useTriggerNode(selectedAsset, onTrigger)
-  const readOnly = health?.read_only ?? false
+  const readOnly = useWriteControl() === 'hidden'
 
   // The toolbar's Run acts on what is open; the inspector's on its node; the command palette on
   // the selected node, else what is open.

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { match } from "ts-pattern";
-import { Age, Button, EmptyNote, StatusBadge, Tag } from "@/components";
+import { Age, Button, EmptyNote, StatusBadge } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
 import { nodeStateDisplay } from "@/lib/cacheStateDisplay";
 import { inPipeline } from "@/lib/pipeline";
@@ -58,7 +58,6 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
             {current && rows && <span className="barca-count">{rows.length.toLocaleString()}<span className="barca-sr-only"> scheduled</span></span>}
           </div>
           <div className="barca-view-actions">
-            {health?.read_only && <Tag tone="bare">read-only</Tag>}
             {current && health && rows?.length !== 0 && <span className="barca-count">{health.scheduler ? "scheduler running" : "scheduler not running on this server"}</span>}
             {/* No schedules: the page has nothing of its own to run. */}
             {rows?.length !== 0 && actions}

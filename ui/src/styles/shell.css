@@ -1121,6 +1121,11 @@
 .barca-offline-retry { margin-left: auto; }
 /* Some assets are paused (components/PausedBanner.tsx): the offline banner's shape, neutral. */
 .barca-paused-banner { background: var(--bg-raised); border-bottom-color: var(--border-subtle); }
+/* A read-only server (components/ReadOnlyBanner.tsx): the quietest of them, a muted line. */
+.barca-readonly-banner { padding: 6px 20px; background: var(--bg-inset); border-bottom-color: var(--border-subtle); color: var(--text-muted); font-size: var(--text-xs); }
+.barca-readonly-banner > svg { color: var(--text-muted); }
+.barca-readonly-banner strong { color: var(--text-strong); font-weight: 500; }
+.barca-readonly-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The panel's blast radius and incident controls (components/assets/). */
 .barca-blast-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 4px; }
 .barca-blast-list > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }

@@ -28,7 +28,7 @@ export interface AssetVersionsViewProps {
   name: string
   data: Versions
   nowMs: number
-  /** A `--read-only` server refuses pins (403): the buttons are disabled. */
+  /** A `--read-only` server refuses pins (403): no pin, unpin or upload is offered. */
   readOnly: boolean
   pending: boolean
   error: string | null
@@ -43,8 +43,6 @@ export interface AssetVersionsViewProps {
   reason?: string
   onReasonChange?: (reason: string) => void
 }
-
-const READ_ONLY = 'This server is read-only (barca serve --read-only)'
 
 function who(by: string | null): string {
   return by ? ` by ${by}` : ''
@@ -61,7 +59,7 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
   const input = useRef<HTMLInputElement>(null)
   const pinnedUpload = pin ? data.versions.find((v) => v.run_hash === pin.run_hash)?.upload ?? null : null
   return (
-    <Section title="Versions" action={data.pinnable && onPick && (
+    <Section title="Versions" action={data.pinnable && onPick && !readOnly && (
         <div className="barca-version-upload">
           <input ref={input} type="file" hidden accept={UPLOAD_EXTENSIONS.join(',')} aria-label={`Replacement data for ${name}`}
             onChange={(e) => {
@@ -69,7 +67,7 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
               e.target.value = ''
               if (file) onPick(file)
             }} />
-          <Button variant="ghost" size="sm" disabled={readOnly || pending} title={readOnly ? READ_ONLY : 'Pin it to data you supply: .json, .parquet, .csv or .pkl'}
+          <Button variant="ghost" size="sm" disabled={pending} title="Pin it to data you supply: .json, .parquet, .csv or .pkl"
             onClick={() => input.current?.click()}>
             Upload replacement…
           </Button>
@@ -90,10 +88,10 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
               <Age at={pin.pinned_at} nowMs={nowMs} />{who(pin.pinned_by)}{pin.reason ? `: ${pin.reason}` : ''}.
             </p>
           </div>
-          <Button variant="ghost" size="sm" disabled={readOnly || pending} title={readOnly ? READ_ONLY : undefined}
+          {!readOnly && <Button variant="ghost" size="sm" disabled={pending}
             onClick={() => onAsk({ kind: 'unpin' })}>
             Unpin
-          </Button>
+          </Button>}
         </div>
       )}
       {error && <p className="barca-note" role="alert">Could not change the pin: {error}</p>}
@@ -122,9 +120,9 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
                   {v.upload?.file_name && <> · {v.upload.file_name}</>}
                 </span>
               </div>
-              {data.pinnable && !v.pinned && (
-                <Button variant="ghost" size="sm" disabled={readOnly || pending || !v.available}
-                  title={readOnly ? READ_ONLY : !v.available ? 'Its artifact was evicted from this disk' : undefined}
+              {data.pinnable && !v.pinned && !readOnly && (
+                <Button variant="ghost" size="sm" disabled={pending || !v.available}
+                  title={!v.available ? 'Its artifact was evicted from this disk' : undefined}
                   onClick={() => onAsk({ kind: 'pin', version: v })}>
                   {v.current ? 'Pin this version' : 'Roll back to this'}
                 </Button>
@@ -133,7 +131,7 @@ export function AssetVersionsView({ name, data, nowMs, readOnly, pending, error,
           ))}
         </ul>
       )}
-      {!data.pinnable && <p className="barca-note">Select a single partition key to pin its data.</p>}
+      {!data.pinnable && !readOnly && <p className="barca-note">Select a single partition key to pin its data.</p>}
       {confirm?.kind === 'pin' && (
         <ConfirmDialog
           title={`Pin ${name} to ${shortHash(confirm.version.run_hash)}?`}

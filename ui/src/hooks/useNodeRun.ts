@@ -8,6 +8,7 @@ import { overlayRunStatus, shortName } from '@/lib/graph'
 import { liveGraphState, type GraphState } from '@/lib/graphState'
 import { partitionSelection } from '@/lib/nodeDetail'
 import type { ListNode } from '@/lib/types'
+import type { WriteControl } from '@/lib/writeAccess'
 
 /** One action shared by the selected node's panel and the command palette. */
 export interface NodeRunAction {
@@ -18,6 +19,9 @@ export interface NodeRunAction {
   /** The key whose run is being started, while the request is in flight. */
   startingKey: string | null
   triggering: boolean
+  /** How its Run (and the panel's other writes) are drawn: hidden on a read-only server (`lib/writeAccess.ts`). */
+  writes: WriteControl
+  /** The server is read-only: the panel offers no writes. */
   readOnly: boolean
   title: string
   error: Error | null
@@ -48,8 +52,8 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
     follow(handle)
   }, [follow])
   const topbar = useTopbarRun({ node, show: showTopbar, scopes, fireNode: fire, busy: triggering, onStarted })
-  const { readOnly } = topbar
-  const title = readOnly ? topbar.title : node ? `Run ${shortName(node.id)}` : topbar.title
+  const { readOnly, writes } = topbar
+  const title = writes === 'disabled' ? topbar.title : node ? `Run ${shortName(node.id)}` : topbar.title
 
   useEffect(() => {
     if (!run || stream.running) return
@@ -66,7 +70,7 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   const liveStatus = node ? statuses[node.id] : undefined
   const action: NodeRunAction = {
     fire, fireKey, startingKey: keyRun.isPending ? keyRun.variables.key : null,
-    triggering, readOnly, title, error: trigger.error ?? (keyRun.error as Error | null) ?? topbar.error,
+    triggering, writes, readOnly, title, error: trigger.error ?? (keyRun.error as Error | null) ?? topbar.error,
     liveState: liveStatus ? liveGraphState(liveStatus) : undefined,
   }
   return {

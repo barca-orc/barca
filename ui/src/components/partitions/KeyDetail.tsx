@@ -1,6 +1,7 @@
 import { Link } from 'react-router'
 import { AssetVersions } from '@/components/assets/AssetVersions'
 import { useHealth } from '@/hooks/useHealth'
+import { useWriteControl } from '@/hooks/useWriteControl'
 import { Copy, Play, X } from 'lucide-react'
 import { Button, IconButton, KeyValue, Section, SidePanel, Skeleton } from '@/components'
 import { StatusGlyph } from '@/components/StatusGlyph'
@@ -72,6 +73,7 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
   const state = detail ? STATE[detail.state] ?? null : null
   const latest = detail?.attempts[0]
   const health = useHealth()
+  const writes = useWriteControl()
   return (
     <SidePanel
       label={`Key ${keyName}`}
@@ -124,7 +126,7 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
             </ol>
           )}
           <AssetVersions key={`${node}[${keyName}]`} node={{ id: `${node}[${keyName}]`, kind: 'asset' }}
-            nowMs={health.dataUpdatedAt} readOnly={health.data?.read_only ?? true} />
+            nowMs={health.dataUpdatedAt} readOnly={writes !== 'enabled'} />
           {/* What it read comes before what it wrote: for a failed key, the input is the evidence. */}
           {detail.inputs.length > 0 && (
             <Section title={detail.inputs.length === 1 ? `Input · ${shortName(detail.inputs[0]!.id)}` : 'Inputs'}>

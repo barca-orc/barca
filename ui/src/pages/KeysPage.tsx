@@ -8,7 +8,7 @@ import { KeyDetail } from '@/components/partitions/KeyDetail'
 import { KeyHeatmap } from '@/components/partitions/KeyHeatmap'
 import { KeyTable } from '@/components/partitions/KeyTable'
 import { usePartitionGrid, usePartitionKey } from '@/hooks/usePartitionGrid'
-import { useHealth } from '@/hooks/useHealth'
+import { useWriteControl } from '@/hooks/useWriteControl'
 import { usePausedSet } from '@/hooks/usePauses'
 import { useRunDetail } from '@/hooks/useRuns'
 import { runIsLive, runLabel } from '@/lib/runs'
@@ -44,7 +44,9 @@ export function KeysPage() {
   const params = keysParams(search)
   const { node, filter } = params
   const client = useQueryClient()
-  const readOnly = useHealth().data?.read_only ?? true
+  // Runs are offered once the server is known to take them; none at all on a read-only one.
+  const writes = useWriteControl()
+  const readOnly = writes !== 'enabled'
   const paused = usePausedSet().has(node ?? '')
   const [runConfirm, setRunConfirm] = useState<{ node: string; partition: string } | null>(null)
   const gridQuery = usePartitionGrid(node)
@@ -152,16 +154,16 @@ export function KeysPage() {
             </nav>
           )}
           <div className="barca-view-actions">
-            <Button
+            {writes !== 'hidden' && <Button
               size="sm"
               iconLeft={<Play size={11} />}
               disabled={readOnly || scopeNeeding === 0 || selection === null}
               loading={start.isPending}
-              title={readOnly ? 'This server is read-only' : scopeNeeding === 0 ? 'Every key here is fresh' : 'Compute the keys that are not fresh; the rest stay cached'}
+              title={scopeNeeding === 0 ? 'Every key here is fresh' : 'Compute the keys that are not fresh; the rest stay cached'}
               onClick={() => run(selection)}
             >
               {scopeNeeding === 0 ? 'All fresh' : `Run ${plural(scopeNeeding, 'key')} shown`}
-            </Button>
+            </Button>}
           </div>
         </div>
         {(start.data || start.error) && (

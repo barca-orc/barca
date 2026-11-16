@@ -8,11 +8,9 @@ import {
   Select,
   Skeleton,
   StatusGlyph,
-  Tag,
   ViewToggle,
   type PageRun,
 } from '@/components'
-import { useHealth } from '@/hooks/useHealth'
 import { LAST_RUN_LABEL, PAGE_LABEL, toggle, type AssetFilter } from '@/hooks/useAssetFilter'
 import { BLOCKED_UPSTREAM, PINNED, CACHE_STATES, LAST_ATTEMPT_FAILED, cacheStateGlyph, cacheStateLabel } from '@/lib/cacheStateDisplay'
 import { plural } from '@/lib/plural'
@@ -26,7 +24,6 @@ import { EMPTY_FILTERS, LAST_RUNS, isFiltered } from '@/lib/assetFilters'
  */
 export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run: PageRun | null | undefined; extra?: ReactNode }) {
   const { kind, data, pipeline, rows, visible, filters, setFilters, counts, blocked } = filter
-  const { data: health } = useHealth()
   const loaded = data !== undefined
   return (
     <div className="barca-view-bar">
@@ -98,7 +95,6 @@ export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run
       )}
       <div className="barca-view-actions">
         {extra}
-        {health?.read_only && <Tag tone="bare">read-only</Tag>}
         {(rows.length > 0 || !loaded) && <SearchInput
           placeholder={`Search ${PAGE_LABEL[kind].toLowerCase()}`}
           label="Search by name or file"
