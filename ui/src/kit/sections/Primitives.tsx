@@ -22,7 +22,7 @@ import {
   StatusGlyph,
   Tag,
 } from '@/components'
-import { NOW_MS, STATUS_KINDS, connections, healthStates, variants } from '../fixtures'
+import { NOW_MS, STATUS_KINDS, connections, failedNode, healthStates, nodeByState, variants } from '../fixtures'
 import { CACHE_STATES, cacheStateGlyph, cacheStateLabel, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { GLYPHS } from '@/lib/glyph'
 import { statusMeta } from '@/lib/status'
@@ -31,6 +31,7 @@ import { SidebarNav, SidebarSearch, SidebarView } from '@/layouts/Sidebar'
 import type { PipelineSummary } from '@/lib/pipeline'
 import type { SidebarGroup } from '@/lib/sidebar'
 import { CommandPaletteView, ConfirmDialog } from '@/components'
+import { ReadOnlyNotice } from '@/components/ReadOnlyBanner'
 import { paletteActions, paletteIndex, searchPalette } from '@/lib/palette'
 import { runButton } from '@/lib/runTarget'
 
@@ -133,8 +134,12 @@ const [query, setQuery] = useState('')
       ))}
     </Spec>
 
-    <Spec title="CommandPaletteView" note="⌘K: results, and nothing found.">
-      {[{ label: 'results', query: 'inv', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: 'billing.py:invoices_00', kind: 'asset' }, { id: 'billing.py:check__invoices_00', kind: 'task' }], [], [])], 'inv') }, { label: 'nothing found', query: 'zzz', items: [] }].map((v) => (
+    <Spec title="CommandPaletteView" note="⌘K: results with their state's glyph, failing first among equal matches; before states load; nothing found.">
+      {[
+        { label: 'results', query: 'orders', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: nodeByState.cached.id, kind: 'asset' }, { id: failedNode.id, kind: 'asset' }], [], [{ id: 'orders-run', target: failedNode.id, status: 'failed' }], { byId: new Map([[nodeByState.cached.id, nodeByState.cached], [failedNode.id, failedNode]]), leavesOf: new Map() })], 'orders') },
+        { label: 'states not loaded', query: 'inv', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: 'billing.py:invoices_00', kind: 'asset' }, { id: 'billing.py:check__invoices_00', kind: 'task' }], [], [])], 'inv') },
+        { label: 'nothing found', query: 'zzz', items: [] },
+      ].map((v) => (
         <Variant key={v.label} label={v.label}><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><CommandPaletteView query={v.query} items={v.items} active={0} onQuery={() => {}} onMove={() => {}} onPick={() => {}} onClose={() => {}} /></div></Variant>
       ))}
     </Spec>
@@ -143,11 +148,15 @@ const [query, setQuery] = useState('')
       <Variant label="run all"><div style={{ position: 'relative', transform: 'translateZ(0)', height: 200, width: 460 }}><ConfirmDialog {...runButton({ kind: 'all', assets: 8069, sensors: 1 }).confirm!} onConfirm={() => {}} onCancel={() => {}} /></div></Variant>
     </Spec>
 
-    <Spec title="PageRunButton" note="The Run at the end of a page's toolbar: what is open, in runButton()'s short words; the size is in its name and tooltip.">
+    <Spec title="PageRunButton" note="The Run at the end of a page's toolbar: what is open, in runButton()'s short words; the size is in its name and tooltip. Disabled until the server is known to take runs; not there at all on a read-only one (ReadOnlyNotice says so once).">
       {[runButton({ kind: 'pipeline', file: 'billing.py', assets: 505, sensors: 1 }), runButton({ kind: 'all', assets: 8069, sensors: 1 })].map((b) => (
         <Variant key={b.label} label={b.title}><PageRunButton run={{ ...b, onRun: () => {}, disabled: false, loading: false }} /></Variant>
       ))}
-      <Variant label="read-only"><PageRunButton run={{ ...runButton({ kind: 'all', assets: 9, sensors: 0 }), onRun: () => {}, disabled: true, loading: false, title: 'This server is read-only' }} /></Variant>
+      <Variant label="checking the server"><PageRunButton run={{ ...runButton({ kind: 'all', assets: 9, sensors: 0 }), onRun: () => {}, disabled: true, loading: false, title: 'Checking the server…' }} /></Variant>
+    </Spec>
+
+    <Spec title="ReadOnlyNotice" note="The one read-only indicator, across the top of every page of a barca serve --read-only; no write action is drawn there.">
+      <Variant label="read-only server"><div style={{ width: 720 }}><ReadOnlyNotice /></div></Variant>
     </Spec>
 
     <Spec title="HealthBar" note="A scope's nodes by state; a single failure stays visible among thousands.">
@@ -184,16 +193,17 @@ const [query, setQuery] = useState('')
       <Variant label="fits"><MiddleName name="invoices_00" /></Variant>
       <Variant label="cut"><div style={{ display: 'flex', width: 150 }}><MiddleName name="check__risk_review_alerts_01" /></div></Variant>
     </Spec>
-    <Spec title="Sidebar" note="SidebarView: the sections, then the pipelines with the groups of an open file nested under the open group; collapsed to icons and glyphs.">
-      {([['open', false], ['collapsed', true]] as const).map(([name, collapsed]) => (
+    <Spec title="Sidebar" note="SidebarView: the sections, then the pipelines with the groups of an open file nested under the open group; its right edge resizes it (drag, arrow keys; double-click resets). Collapsed: the section icons, and the pipelines as one line with the project's state.">
+      {([['open', false, 232], ['wide', false, 340], ['collapsed', true, 232]] as const).map(([name, collapsed, width]) => (
         <Variant key={name} label={name}>
           <div style={{ display: 'flex', height: 520 }}>
             <SidebarView
               search={<SidebarSearch onOpen={() => undefined} />}
               nav={<SidebarNav counts={{ assets: 1200, tasks: 14, sensors: 3, schedules: 6 }} search="" />}
-              model={{ collapsed, expanded: [] }}
+              model={{ collapsed, width, expanded: [] }}
               total={1200}
               pipelines={KIT_PIPELINES}
+              overall={{ glyph: 'failed', label: 'failing', live: false }}
               groupsOf={(file) => (file === 'billing.py' ? KIT_GROUPS : [])}
               selected="billing.py"
               scope="group:billing.py:raw"

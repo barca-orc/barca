@@ -7,7 +7,9 @@ import { subscribeConnection } from '@/lib/credentials'
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { refetchOnWindowFocus: false },
+    // A hidden tab polls nothing (every poll waits for the tab to be shown again); a shown one
+    // polls at each query's own interval, fast only while a run is live (`lib/running.ts`).
+    queries: { refetchOnWindowFocus: false, refetchIntervalInBackground: false },
   },
 })
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { outcomeResult, parseOutcome, parseRunStatus, runIsLive, runLabel, runStatus, runTone, triggeredByLabel } from './runs'
+import { RUNS_IDLE_POLL_MS, RUNS_LIVE_POLL_MS, outcomeResult, parseOutcome, parseRunStatus, runIsLive, runLabel, runStatus, runTone, runsPollInterval, triggeredByLabel } from './runs'
 
 describe('run status', () => {
   it('pending and running are live; every other status is terminal', () => {
@@ -28,6 +28,15 @@ describe('run status', () => {
     expect(runLabel('pending')).toBe('queued')
     expect(runLabel('complete')).toBe('success')
     expect(runLabel('weird')).toBe('weird')
+  })
+})
+
+describe('runsPollInterval', () => {
+  it('polls the runs list fast only while a listed run is live', () => {
+    expect(runsPollInterval(undefined)).toBe(RUNS_IDLE_POLL_MS)
+    expect(runsPollInterval([{ status: 'success' }, { status: 'failed' }])).toBe(RUNS_IDLE_POLL_MS)
+    expect(runsPollInterval([{ status: 'success' }, { status: 'running' }])).toBe(RUNS_LIVE_POLL_MS)
+    expect(runsPollInterval([{ status: 'pending' }])).toBe(RUNS_LIVE_POLL_MS)
   })
 })
 

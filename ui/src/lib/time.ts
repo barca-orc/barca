@@ -1,6 +1,7 @@
 /**
- * The one time format: relative where it is read at a glance, absolute in the reader's chosen
- * zone everywhere else. The server writes UTC `YYYY-MM-DD HH:MM:SS` (SQLite `datetime('now')`)
+ * The one time format: relative (`3h ago`, `in 5m`), drawn by `Age`, with the absolute time in
+ * the reader's chosen zone on hover; absolute in text only where a time is the subject (a log
+ * line's clock, an axis tick). The server writes UTC `YYYY-MM-DD HH:MM:SS` (SQLite `datetime('now')`)
  * or RFC 3339; both read the same. Every absolute time names its zone (`UTC`, or the reader's
  * own as the browser abbreviates it: `PDT`, `GMT+1`, `GMT+5:30`), so a screen never mixes zones
  * silently. The zone is a setting (`useTimeZone`), persisted next to the theme; `local` is the
@@ -25,12 +26,33 @@ export function parseTime(value: string): number | null {
 /** `3h ago`; a value that is not a time is returned as it is. */
 export function formatAgo(value: string, nowMs: number): string {
   const t = parseTime(value)
-  if (t === null) return value
-  const s = Math.max(0, (nowMs - t) / 1000)
+  return t === null ? value : agoOf(t, nowMs)
+}
+
+/** `3h ago` of a time in ms; a time ahead of `nowMs` reads `just now`. */
+function agoOf(ms: number, nowMs: number): string {
+  const s = Math.max(0, (nowMs - ms) / 1000)
   if (s < 60) return 'just now'
   if (s < 3600) return `${Math.floor(s / 60)}m ago`
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`
   return `${Math.floor(s / 86400)}d ago`
+}
+
+/** `in 12s`, `in 12m`, `in 3h 5m`, `in 2d`; a time already past is `due now` (a next run). */
+export function formatCountdown(atMs: number, nowMs: number): string {
+  const s = Math.floor((atMs - nowMs) / 1000)
+  if (s < 0) return 'due now'
+  if (s < 60) return `in ${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `in ${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `in ${h}h ${m % 60}m`
+  return `in ${Math.floor(h / 24)}d`
+}
+
+/** A time relative to `nowMs`, either way: `3h ago` behind it, `in 5m` ahead of it. */
+export function formatRelative(ms: number, nowMs: number): string {
+  return ms > nowMs ? formatCountdown(ms, nowMs) : agoOf(ms, nowMs)
 }
 
 /** The IANA zone `Intl` formats in; `undefined` is the browser's own. */
@@ -77,12 +99,6 @@ export function formatInstant(ms: number, zone: TimeZone): string {
 export function formatAbsolute(value: string, zone: TimeZone): string {
   const t = parseTime(value)
   return t === null ? value : formatInstant(t, zone)
-}
-
-/** `Oct 31, 12:00 PDT`: a time near enough that the year goes without saying (next run). */
-export function formatShort(ms: number, zone: TimeZone): string {
-  const p = parts(ms, zone, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  return `${p.month} ${p.day}, ${p.hour}:${p.minute} ${zoneName(zone, ms)}`
 }
 
 /** `11:23:56.719 PDT`: a log line's time; a value that is not a time is returned as it is. */

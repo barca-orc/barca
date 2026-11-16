@@ -140,14 +140,17 @@ describe('grouped level', () => {
       byId: new Map([['p.py:check__y', state('p.py:check__y', { last_materialization: failed })], ['p.py:y', state('p.py:y')]]),
       byKind: new Map(assets.map((a) => [a.id, a.kind])),
     })
-    // Every id matches (`.py` has a y): the failed check first, then the rest by name.
-    expect(hits.map((h) => h.id)).toEqual(['p.py:check__y', 'p.py:loose', 'p.py:x', 'p.py:y'])
+    // Names match, not files (`p.py` has a y): the failed check first, then the rest by name.
+    expect(hits.map((h) => h.id)).toEqual(['p.py:check__y', 'p.py:y'])
     expect(hits[0]).toMatchObject({ kind: 'task', name: 'check__y' })
     // Nothing in a flat view, the failures list or the graph.
     expect(searchHits({ needle: 'y', flat: true, show: 'items', graph: false, entries: [], scope: null, leavesOf: new Map(), assets, byId: new Map(), byKind: new Map() })).toEqual([])
+    // The member is the hit, with its path; the group it is in is not listed because of it.
     const level = input('pipeline=p.py&q=check')
-    expect(level.visibleEntries.map((e) => e.id)).toEqual(['group:p.py:outer', 'p.py:check__y'])
+    expect(level.visibleEntries.map((e) => e.id)).toEqual(['p.py:check__y'])
     expect(level.isHit.has('p.py:check__y')).toBe(true)
+    // A group whose own name matches is listed.
+    expect(input('pipeline=p.py&q=outer').visibleEntries.map((e) => e.id)).toEqual(['group:p.py:outer'])
   })
 
   it('filters failures by id or headline', () => {

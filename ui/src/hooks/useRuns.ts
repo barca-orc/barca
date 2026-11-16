@@ -1,15 +1,16 @@
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { runIsLive } from '@/lib/runs'
+import { runIsLive, runsPollInterval } from '@/lib/runs'
 import { recovering } from './polling'
-import type { RunView } from '@/lib/types'
+import type { RunList, RunView } from '@/lib/types'
 
 export function useRuns(limit: number) {
   return useQuery({
     queryKey: ['runs', 'list', limit],
     queryFn: () => api.runs(limit),
-    refetchInterval: recovering(2_000),
+    // Fast while a listed run is live; a run started elsewhere shows within the idle interval.
+    refetchInterval: recovering<RunList>((q) => runsPollInterval(q.state.data?.runs)),
     retry: false,
   })
 }

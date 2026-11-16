@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
-import { Absolute, KeyValue, Section, StatusBadge, Tag } from '@/components'
+import { Age, KeyValue, Section, StatusBadge, Tag } from '@/components'
 import { useSchedule } from '@/hooks/useSchedule'
 import { usePinNotes } from '@/hooks/usePins'
-import { lastAttemptFailed, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { lastAttemptFailed, nodeStateDisplay, shownCacheState } from '@/lib/cacheStateDisplay'
 import { blockedBy } from '@/lib/graphView'
 import { shortName } from '@/lib/graph'
 import { blastRadius, type ScheduleRelation } from '@/lib/pauses'
@@ -45,7 +45,7 @@ export function BlastRadius({ id, graph, states, paused, onSelect }: BlastRadius
         <ul className="barca-blast-list" aria-label="Downstream nodes">
           {radius.downstream.map((d) => {
             const node = states.get(d)
-            const shown = node && nodeStateDisplay({ state: node.cache.state, lastFailed: lastAttemptFailed(node), blockedBy: blockers.get(d) ?? null, pinned: pins.get(d) ?? null })
+            const shown = node && nodeStateDisplay({ state: shownCacheState(node), lastFailed: lastAttemptFailed(node), blockedBy: blockers.get(d) ?? null, pinned: pins.get(d) ?? null })
             return (
               <li key={d}>
                 <button type="button" className="barca-link" onClick={() => onSelect(d)}>{shortName(d)}</button>
@@ -64,7 +64,7 @@ export function BlastRadius({ id, graph, states, paused, onSelect }: BlastRadius
               <span>{shortName(job.id)}</span>
               <span className="barca-cell-sub">{job.kind} · {RELATION[relation]}</span>
               {job.paused ? <Tag size="sm">schedule paused</Tag> : (
-                <span className="barca-cell-sub">next <Absolute at={job.next_fire === null ? null : job.next_fire * 1000} /></span>
+                <span className="barca-cell-sub">next <Age at={job.next_fire === null ? null : job.next_fire * 1000} /></span>
               )}
             </li>
           ))}

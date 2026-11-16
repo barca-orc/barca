@@ -9,7 +9,7 @@
  */
 
 import { match } from 'ts-pattern'
-import { CACHE_STATES, cacheStateRank, lastAttemptFailed, nodeStateDisplay, type CacheState } from './cacheStateDisplay'
+import { CACHE_STATES, cacheStateRank, lastAttemptFailed, nodeStateDisplay, shownCacheState, type CacheState } from './cacheStateDisplay'
 import type { Glyph } from './glyph'
 import { streakLabel } from './health'
 import { formatAgo, parseTime } from './time'
@@ -25,7 +25,7 @@ export interface AssetRow {
   file: string
   kind: NodeState['kind']
   partitioned: boolean
-  /** `cache.state`, as the server says it. */
+  /** `cache.state`, as the server says it (`shownCacheState`: a node that always runs and never ran reads `never_run`). */
   state: CacheState
   /** `cache.reason`, verbatim. */
   reason: CacheStatus['reason']
@@ -48,6 +48,11 @@ export interface AssetRow {
   failingSince: string | null
   /** Runs in a row that failed it (`streakLabel`). */
   failures: number
+  /**
+   * When a run last wrote different bytes for the same code and inputs (`last_bytes_change`):
+   * for a sensor, the last time what it observed changed. Null when never recorded.
+   */
+  changedAt: string | null
   /** Median of recent successful runs, formatted (`~2.3s / run` over a partitioned node's keys); null if it never succeeded. */
   typical: string | null
   typicalSeconds: number | null
@@ -122,7 +127,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMa
         file: fileOf(n.id),
         kind: n.kind,
         partitioned: n.partitioned,
-        state: n.cache.state,
+        state: shownCacheState(n),
         reason: n.cache.reason,
         lastFailed: lastAttemptFailed(n),
         keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total } : null,
@@ -136,6 +141,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMa
         lastSuccessAt: n.last_success_at,
         failingSince: n.failing_since,
         failures: n.consecutive_failures,
+        changedAt: n.last_bytes_change?.created_at ?? null,
         typical: typicalLabel(n),
         typicalSeconds: typicalSeconds(n),
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,

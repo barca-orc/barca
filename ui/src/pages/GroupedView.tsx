@@ -61,22 +61,24 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
   const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 1 : 0)
   const counts = (id: string): HealthCounts => healthCounts(leaves(id), byId, live)
   return (
-    <table className="barca-table barca-group-table" style={{ minWidth: 240 + 240 + 250 + (hasGroups ? 260 : 0) + (hasLeaves ? 100 : 0) }}>
+    // The name takes what the fixed columns leave; the low-value columns leave first as the
+    // table narrows (shell.css), so it never scrolls sideways at a laptop's width.
+    <table className="barca-table barca-group-table">
       <colgroup>
-        <col style={{ width: 240 }} /><col style={{ width: 240 }} /><col style={{ width: 250 }} />
-        {hasGroups && <col style={{ width: 150 }} />}
-        {hasGroups && <col style={{ width: 70 }} />}
-        {hasLeaves && <col style={{ width: 100 }} />}
-        {hasGroups && <col style={{ width: 40 }} />}
+        <col className="gcol-name" /><col className="gcol-state" /><col className="gcol-last" />
+        {hasGroups && <col className="gcol-contents" />}
+        {hasGroups && <col className="gcol-failed" />}
+        {hasLeaves && <col className="gcol-duration" />}
+        {hasGroups && <col className="gcol-open" />}
       </colgroup>
       <thead>
         <tr>
           <th className="barca-group-col-name">Name</th>
           <th className="barca-group-col-state">State</th>
           <th title="A node's last success (a partitioned node's newest successful key, any key); a group's oldest member's, and how many members are failing">Last success</th>
-          {hasGroups && <th>Contents</th>}
-          {hasGroups && <th className="num" title="Members whose last attempt failed">Failed</th>}
-          {hasLeaves && <th className="num" title="The last attempt's">Duration</th>}
+          {hasGroups && <th className="gcol-contents">Contents</th>}
+          {hasGroups && <th className="num gcol-failed" title="Members whose last attempt failed">Failed</th>}
+          {hasLeaves && <th className="num gcol-duration" title="The last attempt's">Duration</th>}
           {hasGroups && <th className="barca-group-col-open" />}
         </tr>
       </thead>
@@ -142,12 +144,12 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
               <td>
                 {statesLoaded && <LastSuccess cell={age} nowMs={nowMs} />}
               </td>
-              {hasGroups && <td>{group && entry.summary}</td>}
+              {hasGroups && <td className="gcol-contents">{group && entry.summary}</td>}
               {hasGroups && (
-                <td className="num">{group && statesLoaded && counts(entry.id).lastFailed.toLocaleString()}</td>
+                <td className="num gcol-failed">{group && statesLoaded && counts(entry.id).lastFailed.toLocaleString()}</td>
               )}
               {hasLeaves && (
-                <td className="num" title={duration?.title}>{duration?.text}</td>
+                <td className="num gcol-duration" title={duration?.title}>{duration?.text}</td>
               )}
               {hasGroups && (
                 <td>

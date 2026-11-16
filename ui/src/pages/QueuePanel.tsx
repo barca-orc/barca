@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { match } from 'ts-pattern'
-import { Button, IconButton, StatusBadge, StatusGlyph, Tag } from '@/components'
+import { Age, Button, IconButton, StatusBadge, StatusGlyph, Tag } from '@/components'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useTimeZone } from '@/context/timeZone'
 import { ApiError } from '@/lib/api'
@@ -91,7 +91,8 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
   const formatTime = (value: string | null) => runTime(value, zone)
   const stateLabel = state ? queueStateLabel(state, formatTime) : null
   const control = data ? queueControl(data, readOnly) : { kind: 'hidden' as const }
-  const rows = data ? queueRows(data, formatTime, nowMs, startedAt) : []
+  // The Queued cell draws its time with `Age`: the row keeps it as the server wrote it.
+  const rows = data ? queueRows(data, (value) => value ?? '', nowMs, startedAt) : []
   const shared = data ? sharedCapacityLabel(data.capacity) : null
   const waiting = data ? waitingRows(data.capacity) : []
   const summary = data ? queueSummary(data, nowMs) : null
@@ -122,7 +123,6 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
           {collapsed && summary && <span className="barca-queue-summary" title={summary}>{summary}</span>}
         </>}
         <span className="barca-queue-actions">
-          {readOnly && <Tag tone="bare">read-only</Tag>}
           {match(control)
             .with({ kind: 'hidden' }, () => null)
             .with({ kind: 'pause' }, { kind: 'resume' }, (c) => (
@@ -166,7 +166,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
                 <td><Link className="barca-run-link" to={row.href}>{row.runId}</Link> <span className="barca-cell-sub">{row.command}</span></td>
                 <td><code className="barca-run-target" title={row.target}>{row.target}</code></td>
                 <td>{row.trigger}{row.scheduleId && <span className="barca-cell-sub"> {row.scheduleId}</span>}</td>
-                <td>{row.queuedAt}</td>
+                <td>{row.queuedAt ? <Age at={row.queuedAt} nowMs={nowMs} /> : '–'}</td>
                 <td className="num" title={row.state === 'running' ? 'Running for' : 'Waiting for'}>{row.elapsed}</td>
               </tr>
             ))}</tbody>

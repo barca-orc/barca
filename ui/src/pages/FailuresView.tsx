@@ -130,9 +130,10 @@ function FailureActions({ failure: f, readOnly, name, dispatch }: {
 }) {
   return (
     <div className="barca-failure-actions">
-      <IconButton size="sm" label={`Retry ${name}`} title={readOnly ? 'This server is read-only' : `Retry ${name}`} disabled={readOnly} onClick={() => dispatch({ type: 'retry', id: f.id, kind: f.kind, name })}>
+      {/* A read-only server retries nothing: no Retry at all. */}
+      {!readOnly && <IconButton size="sm" label={`Retry ${name}`} title={`Retry ${name}`} onClick={() => dispatch({ type: 'retry', id: f.id, kind: f.kind, name })}>
         <RotateCw size={13} />
-      </IconButton>
+      </IconButton>}
       <IconButton size="sm" label={`Copy error of ${name}`} title="Copy error" onClick={() => dispatch({ type: 'copy', error: f.error || f.headline })}>
         <Copy size={13} />
       </IconButton>

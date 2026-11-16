@@ -6,18 +6,7 @@ import { usePausedSet } from './usePauses'
 import { usePinNotes } from './usePins'
 import { blockedBy } from '@/lib/graphView'
 import { inPipeline } from '@/lib/pipeline'
-import {
-  applyFilters,
-  facetCounts,
-  NEEDS_ATTENTION,
-  NO_DEFAULTS,
-  RECENT_MS,
-  onDefaultStates,
-  parseFilters,
-  writeFilters,
-  type Filters,
-  type LastRun,
-} from '@/lib/assetFilters'
+import { applyFilters, facetCounts, parseFilters, writeFilters, type Filters, type LastRun } from '@/lib/assetFilters'
 import { buildRows, sortRows, type Sort } from '@/lib/assetTable'
 import type { NodeKind } from '@/lib/types'
 
@@ -60,22 +49,19 @@ export function useAssetFilter(kind: NodeKind, sort?: Sort) {
     () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, blockers, pins),
     [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused, blockers, pins],
   )
-  // Filters live in the URL with the sort and pipeline, so a filtered view can
-  // be reloaded and shared.
-  const defaultStates = kind === 'task' ? NEEDS_ATTENTION : NO_DEFAULTS
-  const filters = { ...parseFilters(params, defaultStates), kinds: [] }
-  const onDefault = onDefaultStates(filters, defaultStates)
-  const setFilters = (f: Filters) => setParams(writeFilters(params, f, defaultStates), { replace: true })
+  // Filters live in the URL with the sort and pipeline, so a filtered view can be reloaded and
+  // shared. Every page opens unfiltered: what it lists is what its controls say (failures sort
+  // first, so what needs a look is on top without a hidden filter).
+  const filters = { ...parseFilters(params), kinds: [] }
+  const setFilters = (f: Filters) => setParams(writeFilters(params, f), { replace: true })
   const now = dataUpdatedAt
-  // The default also shows what ran recently: a task that just ran is what the page is for.
-  const opts = onDefault ? { recentMs: RECENT_MS } : {}
-  const counts = facetCounts(rows, filters, now, opts)
-  const filtered = applyFilters(rows, filters, now, opts)
+  const counts = facetCounts(rows, filters, now)
+  const filtered = applyFilters(rows, filters, now)
   const visible = sort ? sortRows(filtered, sort) : filtered
   // What fails, and how much of the graph waits on it: the failing segment's tooltip.
   // The blocked count is the rows that read `blocked`, so the tooltip and the chip agree.
   const blocked = rows.filter((r) => !r.lastFailed && r.pinned === null && (r.blockedBy || r.state === 'blocked')).length
-  return { kind, states, data, graph, pipeline, paused, onlyPaused, pins, blockers, rows, filters, onDefault, setFilters, counts, visible, blocked, now }
+  return { kind, states, data, graph, pipeline, paused, onlyPaused, pins, blockers, rows, filters, setFilters, counts, visible, blocked, now }
 }
 
 export type AssetFilter = ReturnType<typeof useAssetFilter>

@@ -7,13 +7,30 @@
 import { keysHref } from './keysPage'
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
+import { graphState, isLive, type GraphState } from './graphState'
+import { groupHealth } from './groups'
+import type { Glyph } from './glyph'
 import { pipelineName, sourceFile } from './pipeline'
 import { only, type Next } from './program'
+import { runGlyph, runLabel as runWord, runStatus } from './runs'
+import { statusMeta } from './status'
 import { formatAgo } from './time'
-import type { ListNode, NodeGroup, PartitionKeyRow, RunSummary } from './types'
+import type { Tone } from './tone'
+import type { ListNode, NodeGroup, NodeState, PartitionKeyRow, RunSummary } from './types'
 
 /** What a result does: go somewhere, or one of the page's actions. */
 type PaletteTarget = { type: 'go'; to: string } | { type: 'run' } | { type: 'open_graph' }
+
+/** A result's state, drawn as its glyph before its name: a failing node and a fresh one never look alike. */
+export interface PaletteState {
+  glyph: Glyph
+  /** The state in words: the glyph's tooltip and its name for a screen reader. */
+  label: string
+  /** A run is working on it: the running glyph turns. */
+  live: boolean
+  /** How urgent: what ranks first among equal matches. */
+  tone: Tone
+}
 
 export interface PaletteItem {
   key: string
@@ -21,6 +38,31 @@ export interface PaletteItem {
   label: string
   detail: string
   target: PaletteTarget
+  /** Null for an action, and for a node, group or file whose state is not loaded. */
+  state: PaletteState | null
+}
+
+/** What the index knows of the project's state: every node's row of `GET /state`, and each group's leaves. */
+export interface PaletteStates {
+  byId: Map<string, NodeState>
+  leavesOf: ReadonlyMap<string, string[]>
+  /** A nested group's ancestors (`Ads › Staging`), so groups of one name tell apart. */
+  placeOf?: ReadonlyMap<string, string>
+}
+
+const NO_STATES: PaletteStates = { byId: new Map(), leavesOf: new Map() }
+
+/** The most urgent first: what a search lists first among results that match equally well. */
+const URGENCY: Record<Tone, number> = { failed: 0, warning: 1, running: 2, queued: 3, neutral: 4, success: 5 }
+
+function shown(box: GraphState): PaletteState {
+  return { glyph: box.glyph, label: box.label, live: isLive(box), tone: box.tone }
+}
+
+/** The state of a scope of nodes (a group's leaves, a file's nodes): null until every one of them is known. */
+function scopeState(ids: string[], states: PaletteStates): PaletteState | null {
+  if (ids.length === 0 || !ids.every((id) => states.byId.has(id))) return null
+  return shown(groupHealth(ids, states.byId))
 }
 
 const PALETTE_LIMIT = 50
@@ -31,10 +73,16 @@ const NAMES = new Intl.Collator(undefined, { numeric: true })
 
 const link = (path: string, params: Record<string, string>) => `${path}?${new URLSearchParams(params)}`
 
-function nodeItem(a: Pick<ListNode, 'id' | 'kind'>): PaletteItem {
+function nodeItem(a: Pick<ListNode, 'id' | 'kind'>, states: PaletteStates): PaletteItem {
   const pipeline = sourceFile(a.id)
   const path = match(a.kind).with('asset', () => '/assets').with('task', () => '/tasks').with('sensor', () => '/sensors').exhaustive()
-  return { key: a.id, section: 'Nodes', label: shortName(a.id), detail: `${a.kind} · ${pipelineName(pipeline)}`, target: { type: 'go', to: link(path, { pipeline, node: a.id }) } }
+  const node = states.byId.get(a.id)
+  return { key: a.id, section: 'Nodes', label: shortName(a.id), detail: `${a.kind} · ${pipelineName(pipeline)}`, target: { type: 'go', to: link(path, { pipeline, node: a.id }) }, state: node ? shown(graphState(node)) : null }
+}
+
+function runState(status: string): PaletteState {
+  const kind = runStatus(status)
+  return { glyph: runGlyph(status), label: runWord(status), live: kind === 'running', tone: statusMeta(kind).tone }
 }
 
 /** `group:billing.py:raw` → `billing.py`. */
@@ -43,19 +91,28 @@ const groupFile = (id: string) => id.split(':')[1] ?? ''
 /**
  * Everything the palette can jump to, in the order an empty search shows it: what the project
  * is made of (files, groups, nodes) before its history (runs), which a run id prefix still
- * reaches first.
+ * reaches first. Each carries its state, as the lists show it: a node's, the worst of a group's
+ * or a file's nodes (once all of them are known), a run's status.
  */
 export function paletteIndex(
   assets: readonly Pick<ListNode, 'id' | 'kind'>[],
   groups: readonly Pick<NodeGroup, 'id' | 'name'>[],
   runs: readonly Pick<RunSummary, 'id' | 'target' | 'status'>[],
+  states: PaletteStates = NO_STATES,
 ): PaletteItem[] {
-  const files = [...new Set(assets.map((a) => sourceFile(a.id)))].sort(NAMES.compare)
+  const byFile = new Map<string, string[]>()
+  for (const a of assets) {
+    const file = sourceFile(a.id)
+    const ids = byFile.get(file)
+    if (ids) ids.push(a.id)
+    else byFile.set(file, [a.id])
+  }
+  const files = [...byFile.keys()].sort(NAMES.compare)
   return [
-    ...files.map((file): PaletteItem => ({ key: `file:${file}`, section: 'Files', label: pipelineName(file), detail: file, target: { type: 'go', to: link('/assets', { pipeline: file }) } })),
-    ...groups.map((g): PaletteItem => ({ key: g.id, section: 'Groups', label: g.name, detail: pipelineName(groupFile(g.id)), target: { type: 'go', to: link('/assets', { pipeline: groupFile(g.id), group: g.id }) } })),
-    ...assets.map(nodeItem),
-    ...runs.map((r): PaletteItem => ({ key: `run:${r.id}`, section: 'Runs', label: r.id, detail: `${r.target ?? 'all assets'} · ${r.status}`, target: { type: 'go', to: link('/runs', { run: r.id }) } })),
+    ...files.map((file): PaletteItem => ({ key: `file:${file}`, section: 'Files', label: pipelineName(file), detail: file, target: { type: 'go', to: link('/assets', { pipeline: file }) }, state: scopeState(byFile.get(file) ?? [], states) })),
+    ...groups.map((g): PaletteItem => ({ key: g.id, section: 'Groups', label: g.name, detail: [states.placeOf?.get(g.id), pipelineName(groupFile(g.id))].filter(Boolean).join(' · '), target: { type: 'go', to: link('/assets', { pipeline: groupFile(g.id), group: g.id }) }, state: scopeState(states.leavesOf.get(g.id) ?? [], states) })),
+    ...assets.map((a) => nodeItem(a, states)),
+    ...runs.map((r): PaletteItem => ({ key: `run:${r.id}`, section: 'Runs', label: r.id, detail: `${r.target ?? 'all assets'} · ${runWord(r.status)}`, target: { type: 'go', to: link('/runs', { run: r.id }) }, state: runState(r.status) })),
   ]
 }
 
@@ -85,17 +142,24 @@ export function keyItems(hits: readonly KeyHits[], nowMs: number): PaletteItem[]
       detail: `${k.status} ${formatAgo(k.created_at, nowMs)}`,
       // The key explorer, at the key: its data, its error and the same key along its chain.
       target: { type: 'go', to: keysHref(node, { key: k.key }) },
+      state: k.status === 'failed'
+        ? { glyph: 'failed', label: 'failed', live: false, tone: 'failed' }
+        : { glyph: 'fresh', label: k.status, live: false, tone: 'success' },
     })),
   )
-  const failed = (item: PaletteItem) => (item.detail.startsWith('failed') ? 0 : 1)
-  return items.sort((a, b) => failed(a) - failed(b))
+  return items.sort((a, b) => urgency(a) - urgency(b))
+}
+
+/** An item's place among equal matches: failing first, then what needs attention; an action or an unknown state in the middle. */
+function urgency(item: PaletteItem): number {
+  return item.state ? URGENCY[item.state.tone] : URGENCY.neutral
 }
 
 /** The page's actions, first in every list. */
 export function paletteActions(runLabel: string | null, canGraph: boolean): PaletteItem[] {
   return [
-    ...(runLabel ? [{ key: 'action:run', section: 'Actions' as const, label: runLabel, detail: 'action', target: { type: 'run' as const } }] : []),
-    ...(canGraph ? [{ key: 'action:graph', section: 'Actions' as const, label: 'Open graph', detail: 'action', target: { type: 'open_graph' as const } }] : []),
+    ...(runLabel ? [{ key: 'action:run', section: 'Actions' as const, label: runLabel, detail: 'action', target: { type: 'run' as const }, state: null }] : []),
+    ...(canGraph ? [{ key: 'action:graph', section: 'Actions' as const, label: 'Open graph', detail: 'action', target: { type: 'open_graph' as const }, state: null }] : []),
   ]
 }
 
@@ -107,7 +171,11 @@ function rank(item: PaletteItem, needle: string): number | null {
   return item.detail.toLowerCase().includes(needle) ? 2 : null
 }
 
-/** The index's matches, then the keys the server found (`keyItems`); at most `limit` in all. */
+/**
+ * The index's matches, then the keys the server found (`keyItems`); at most `limit` in all.
+ * Actions first, then by how well each matches and, among equal matches, failing before
+ * healthy (`URGENCY`); a tie stays in index order.
+ */
 export function searchPalette(items: readonly PaletteItem[], query: string, keys: readonly PaletteItem[] = [], limit = PALETTE_LIMIT): PaletteItem[] {
   const needle = query.trim().toLowerCase()
   if (!needle) return items.slice(0, limit)
@@ -116,7 +184,7 @@ export function searchPalette(items: readonly PaletteItem[], query: string, keys
       const r = rank(item, needle)
       return r === null ? [] : [{ item, r }]
     })
-    .sort((a, b) => a.r - b.r)
+    .sort((a, b) => Number(b.item.section === 'Actions') - Number(a.item.section === 'Actions') || a.r - b.r || urgency(a.item) - urgency(b.item))
     .map(({ item }) => item)
   return [...found, ...keys].slice(0, limit)
 }

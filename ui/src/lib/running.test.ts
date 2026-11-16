@@ -6,6 +6,8 @@ import { buildRows } from './assetTable'
 import {
   POLL_IDLE_MS,
   POLL_RUNNING_MS,
+  POLL_RUNNING_LARGE_MS,
+  LARGE_SCOPE,
   elapsedLabel,
   runningBadge,
   runningCount,
@@ -145,5 +147,11 @@ describe('running state from /state', () => {
     expect(statePollInterval(undefined)).toBe(POLL_IDLE_MS)
     expect(statePollInterval([node('p.py:a')])).toBe(POLL_IDLE_MS)
     expect(statePollInterval([node('p.py:a'), node('p.py:b', run())])).toBe(POLL_RUNNING_MS)
+  })
+
+  it('polls a big scope less often while it runs', () => {
+    const many = Array.from({ length: LARGE_SCOPE }, (_, i) => node(`p.py:n${i}`))
+    expect(statePollInterval(many)).toBe(POLL_IDLE_MS)
+    expect(statePollInterval([...many.slice(1), node('p.py:busy', run())])).toBe(POLL_RUNNING_LARGE_MS)
   })
 })

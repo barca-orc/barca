@@ -1,5 +1,5 @@
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router'
-import { useMemo, type CSSProperties, type ReactNode } from 'react'
+import { useMemo, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { BookOpen, ChevronDown, ChevronRight, KeyRound, Layers, LogOut, Moon, PanelLeft, Search, Sun } from 'lucide-react'
 import { Button, ConnectionBadge, IconButton, RunsInProgress, StatusGlyph } from '@/components'
 import { QueueStatus } from '@/components/QueueStatus'
@@ -11,13 +11,13 @@ import { usePinNotes } from '@/hooks/usePins'
 import { useProgram } from '@/hooks/useProgram'
 import { useTheme } from '@/context/theme'
 import { useTimeZone } from '@/context/timeZone'
-import { buildRows } from '@/lib/assetTable'
+import { buildRows, fileDisplay, type FileDisplay } from '@/lib/assetTable'
 import { connection } from '@/lib/connection'
 import { groupTree, leavesByGroup } from '@/lib/groups'
 import { blockedBy } from '@/lib/graphView'
 import { inPipeline, mergeStates, pipelineSummaries, type PipelineSummary } from '@/lib/pipeline'
 import { plural } from '@/lib/plural'
-import { SIDEBAR_KEY, fileGroups, updateSidebar, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
+import { SIDEBAR_KEY, SIDEBAR_STEP, SIDEBAR_WIDTH, SIDEBAR_WIDTH_KEY, fileGroups, initialSidebar, listedPipelines, updateSidebar, type SidebarEffect, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
 import { zoneName } from '@/lib/time'
 import type { Dispatch } from '@/lib/program'
 import type { NodeKind } from '@/lib/types'
@@ -43,6 +43,8 @@ export interface SidebarViewProps {
   /** What the counts are of: `asset`, `task` or `sensor`. */
   counted?: NodeKind
   pipelines: readonly PipelineSummary[]
+  /** Every counted node of the project as one state: what the collapsed sidebar shows for the pipelines. */
+  overall?: FileDisplay | null
   /** The tree under a file. */
   groupsOf: (file: string) => SidebarGroup[]
   selected: string | null
@@ -63,12 +65,19 @@ export interface SidebarViewProps {
 /**
  * The app's one navigation: the brand, search, the sections (Assets, Runs, Schedules, Tasks,
  * Sensors), then the pipelines (source files) that filter them, and the settings at the foot.
- * Collapsed, every line keeps its icon or glyph and its name in a tooltip.
+ * Its right edge drags (or, focused, takes the arrow keys) to make it wider; a double click puts
+ * it back. Collapsed, every section keeps its icon and its name in a tooltip, and the pipelines
+ * are one line: all of them, with the project's one state.
  */
-export function SidebarView({ model, total, counted = 'asset', pipelines, groupsOf, selected, filtering = true, scope, onSelect, onOpenGroup, dispatch, search, nav, footer }: SidebarViewProps) {
+export function SidebarView({ model, total, counted = 'asset', pipelines, overall = null, groupsOf, selected, filtering = true, scope, onSelect, onOpenGroup, dispatch, search, nav, footer }: SidebarViewProps) {
   const word = KIND_WORD[counted]
   return (
-    <aside className="barca-sidebar" aria-label="Sidebar" data-collapsed={model.collapsed || undefined}>
+    <aside
+      className="barca-sidebar"
+      aria-label="Sidebar"
+      data-collapsed={model.collapsed || undefined}
+      style={model.collapsed ? undefined : ({ '--sidebar-width': `${model.width}px` } as CSSProperties)}
+    >
       <div className="barca-brand">
         <img src={markUrl} width="20" height="20" alt="" />
         <span className="barca-wordmark">barca</span>
@@ -89,9 +98,23 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, groups
       <div className="barca-pipes">
         {total === null && <span className="barca-pipe-empty">loading…</span>}
         {total !== null && pipelines.length === 0 && (
-          <span className="barca-pipe-empty">no pipelines served</span>
+          <span className="barca-pipe-empty">{total === 0 ? `no ${word}s served` : 'no pipelines served'}</span>
         )}
-        {pipelines.length > 1 && (
+        {/* Collapsed: one line for every pipeline, a glyph for the whole project, not a dot per file nobody can tell apart. */}
+        {model.collapsed && pipelines.length > 0 && (
+          <div className="barca-pipe-row">
+            <button
+              type="button"
+              className="barca-pipe"
+              title={`All pipelines · ${plural(total ?? 0, word)}${overall ? ` · ${overall.live ? overall.label : `worst: ${overall.label}`}` : ''}`}
+              aria-label="All pipelines"
+              onClick={() => onSelect(null)}
+            >
+              {overall ? <StatusGlyph glyph={overall.glyph} live={overall.live} size={12} /> : <Layers size={13} className="barca-pipe-icon" />}
+            </button>
+          </div>
+        )}
+        {!model.collapsed && pipelines.length > 1 && (
           <div className="barca-pipe-row">
             <span className="barca-pipe-chevron" aria-hidden="true" />
             <button
@@ -105,8 +128,8 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, groups
             </button>
           </div>
         )}
-        {pipelines.map((p) => {
-          const groups = model.collapsed ? [] : groupsOf(p.file)
+        {!model.collapsed && pipelines.map((p) => {
+          const groups = groupsOf(p.file)
           const forced = selected === p.file || pipelines.length === 1
           const open = forced || model.expanded.includes(p.file)
           return (
@@ -156,8 +179,82 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, groups
         })}
       </div>
       <div className="barca-side-foot">{footer}</div>
+      {!model.collapsed && <SidebarEdge width={model.width} dispatch={dispatch} />}
     </aside>
   )
+}
+
+/**
+ * The sidebar's right edge: drag it to resize, or focus it and use the arrow keys (Shift for a
+ * bigger step, Home and End for the narrowest and the widest); a double click resets the width.
+ */
+function SidebarEdge({ width, dispatch }: { width: number; dispatch: Dispatch<SidebarMsg> }) {
+  const drag = useRef<{ x: number; width: number } | null>(null)
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drag.current = { x: event.clientX, width }
+  }
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (drag.current) dispatch({ type: 'resized', width: drag.current.width + event.clientX - drag.current.x })
+  }
+  const onPointerUp = () => {
+    if (!drag.current) return
+    drag.current = null
+    dispatch({ type: 'resize_ended' })
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? SIDEBAR_STEP * 4 : SIDEBAR_STEP
+    const msg: SidebarMsg | null =
+      event.key === 'ArrowLeft' ? { type: 'nudged', by: -step }
+      : event.key === 'ArrowRight' ? { type: 'nudged', by: step }
+      : event.key === 'Home' ? { type: 'width_set', width: SIDEBAR_WIDTH.min }
+      : event.key === 'End' ? { type: 'width_set', width: SIDEBAR_WIDTH.max }
+      : event.key === 'Enter' ? { type: 'width_reset' }
+      : null
+    if (!msg) return
+    event.preventDefault()
+    dispatch(msg)
+  }
+  return (
+    <div
+      className="barca-side-edge"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuemin={SIDEBAR_WIDTH.min}
+      aria-valuemax={SIDEBAR_WIDTH.max}
+      aria-valuenow={width}
+      title="Drag to resize; double-click to reset"
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={() => dispatch({ type: 'width_reset' })}
+      onKeyDown={onKeyDown}
+    />
+  )
+}
+
+/** A saved value, or null where this browser keeps none (private mode, storage blocked). */
+function readSaved(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+/** Remember the sidebar's collapse and width in this browser; nothing lost but the memory when it cannot. */
+function saveSidebar(effect: SidebarEffect) {
+  try {
+    if (effect.type === 'save_collapsed') localStorage.setItem(SIDEBAR_KEY, effect.collapsed ? '1' : '0')
+    else localStorage.setItem(SIDEBAR_WIDTH_KEY, String(effect.width))
+  } catch {
+    /* Storage unavailable: the sidebar keeps its state until the page closes. */
+  }
 }
 
 export interface SidebarNavProps {
@@ -255,21 +352,27 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // The rows the tables show, built the same way, so a file's line here and its header there agree.
   const blockers = useMemo(() => blockedBy(nodes, assets ?? [], pins), [nodes, assets, pins])
   const rows = useMemo(() => buildRows(nodes.filter((n) => n.kind === kind), 0, blockers, pins), [nodes, kind, blockers, pins])
-  const pipelines = useMemo(() => pipelineSummaries(rows, assets ?? [], kind), [rows, assets, kind])
+  const summaries = useMemo(() => pipelineSummaries(rows, assets ?? [], kind), [rows, assets, kind])
+  // The project's one state, for the collapsed sidebar: none until every counted node's is known.
+  const overall = useMemo(
+    () => (summaries.every((p) => p.shown !== null || p.total === 0) || rows.some((r) => r.running) ? fileDisplay(rows) : null),
+    [summaries, rows],
+  )
   const groups = useGroups()
   const tree = useMemo(() => groupTree(groups.data ?? []), [groups.data])
   const leavesOf = useMemo(() => leavesByGroup(tree), [tree])
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
   const navigate = useNavigate()
   const [params] = useSearchParams()
-  const [model, dispatch] = useProgram<SidebarModel, SidebarMsg, { type: 'save_collapsed'; collapsed: boolean }>(
-    () => ({ collapsed: localStorage.getItem(SIDEBAR_KEY) === '1', expanded: [] }),
+  const [model, dispatch] = useProgram<SidebarModel, SidebarMsg, SidebarEffect>(
+    () => initialSidebar({ collapsed: readSaved(SIDEBAR_KEY), width: readSaved(SIDEBAR_WIDTH_KEY) }),
     updateSidebar,
-    ({ collapsed }) => localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'),
+    saveSidebar,
   )
   // The selected pipeline lives in the URL (?pipeline=<file>) — the one source
   // the Assets table and the graph both read.
   const selected = params.get('pipeline')
+  const pipelines = useMemo(() => listedPipelines(summaries, selected), [summaries, selected])
   const scope = params.get('group')
 
   // Each section's count, in the open pipeline: what its page lists.
@@ -308,6 +411,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       total={assets ? assets.filter((a) => a.kind === kind).length : null}
       counted={kind}
       pipelines={pipelines}
+      overall={overall}
       groupsOf={(file) => fileGroups(file, tree, scope, leavesOf, byId)}
       selected={selected}
       filtering={FILTERABLE.includes(location.pathname)}

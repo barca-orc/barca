@@ -5,9 +5,7 @@ import { nodeStateDisplay } from './cacheStateDisplay'
 import { blockedBy } from './graphView'
 import {
   EMPTY_FILTERS,
-  NEEDS_ATTENTION,
   applyFilters,
-  onDefaultStates,
   facetCounts,
   isFiltered,
   parseFilters,
@@ -138,35 +136,11 @@ describe('URL round-trip', () => {
   })
 })
 
-describe('a page that defaults to what needs attention', () => {
-  it('applies the default until the URL says all', () => {
-    const f = parseFilters(new URLSearchParams(), NEEDS_ATTENTION)
-    expect(onDefaultStates(f, NEEDS_ATTENTION)).toBe(true)
-    expect(writeFilters(new URLSearchParams(), f, NEEDS_ATTENTION).has('state')).toBe(false)
-    const all = writeFilters(new URLSearchParams(), EMPTY_FILTERS, NEEDS_ATTENTION)
-    expect(all.get('state')).toBe('all')
-    expect(parseFilters(all, NEEDS_ATTENTION).states).toEqual([])
-  })
-})
-
-describe('a page that also shows what ran recently', () => {
-  const attention = { ...EMPTY_FILTERS, ...NEEDS_ATTENTION }
-  const recent = { recentMs: 24 * 3_600_000 }
-
-  it('passes a row that ran within the window whatever its state, and only then', () => {
-    // `check` always runs (no attention state) but ran 10 minutes ago; `watch` never ran.
-    expect(applyFilters(rows, attention, NOW).map((r) => r.name).sort()).toEqual(['check', 'parts', 'today'])
-    expect(applyFilters(rows, attention, NOW, recent).map((r) => r.name).sort()).toEqual(['check', 'parts', 'recent', 'today'])
-    expect(applyFilters(rows, { ...attention, kinds: ['task'] }, NOW, recent).map((r) => r.name)).toEqual(['check'])
-  })
-
-  it('counts the last-run buckets over the rows the default shows', () => {
-    // `recent` is healthy: it is in the hour's count only because it ran within the window.
-    expect(facetCounts(rows, attention, NOW, recent).lastRun.hour).toBe(2)
-    expect(facetCounts(rows, attention, NOW).lastRun.hour).toBe(1)
-    expect(facetCounts(rows, attention, NOW, recent).lastRun.never).toBe(0)
-    // The state chips still count every row, as before.
-    expect(facetCounts(rows, attention, NOW, recent).states.cached).toBe(2)
+describe('a page opens unfiltered', () => {
+  it('filters nothing until the URL names a filter, and writes nothing for none', () => {
+    expect(parseFilters(new URLSearchParams())).toEqual(EMPTY_FILTERS)
+    expect(isFiltered(parseFilters(new URLSearchParams()))).toBe(false)
+    expect(writeFilters(new URLSearchParams('pipeline=a.py'), EMPTY_FILTERS).toString()).toBe('pipeline=a.py')
   })
 })
 

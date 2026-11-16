@@ -82,8 +82,8 @@ describe('organizational groups', () => {
       expect(output).toMatchObject({ label: 'fresh', tone: 'success' })
       expect(isFailed(output)).toBe(false)
     }
-    // A fold with no failure: its checks (always_runs) head the summary, its assets are cached.
-    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states)).toMatchObject({ tone: 'neutral', label: expect.stringMatching(/always runs$/) })
+    // A fold with no failure: its checks (always_runs, which ran) head the summary as succeeded, its assets are cached.
+    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states)).toMatchObject({ tone: 'success', label: expect.stringMatching(/succeeded$/) })
     expect(groupPath('group:modeling.py:fold_03__fitting', tree).map((g) => g.name)).toEqual(
       ['Cross-validation', 'Fold 3', 'Model fitting'],
     )
@@ -93,9 +93,9 @@ describe('organizational groups', () => {
     const ids = groupLeaves('group:modeling.py:final_training', tree)
     const states = new Map(ids.map((id) => [id, state(id)]))
     const summary = groupHealth(ids, states)
-    expect(summary.tone).toBe('neutral')
-    expect(summary.label).toMatch(/^\d+ always runs$/)
-    expect(summary.hint).toMatch(/always runs · \d+ fresh$/)
+    expect(summary.tone).toBe('success')
+    expect(summary.label).toMatch(/^\d+ succeeded$/)
+    expect(summary.hint).toMatch(/succeeded · \d+ fresh$/)
     states.delete(ids[0]!)
     expect(groupHealth(ids, states).hint).toContain('1 checking')
     states.set(ids[0]!, {

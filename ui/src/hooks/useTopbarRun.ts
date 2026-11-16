@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOutletContext, useSearchParams } from 'react-router'
 import { useAssets } from './useAssets'
-import { useHealth } from './useHealth'
+import { useWriteControl } from './useWriteControl'
 import { useStateScope } from './useAssetStates'
 import { api } from '@/lib/api'
 import { shortName } from '@/lib/graph'
@@ -31,8 +31,10 @@ const noop = () => {}
 
 export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: TopbarRunOptions) {
   const { setTopbarRun } = useOutletContext<AppShellContext>()
-  const { data: health } = useHealth()
-  const readOnly = health?.read_only ?? false
+  // A read-only server offers no Run, here or in the palette; until it is known, Run is disabled.
+  const writes = useWriteControl()
+  const readOnly = writes === 'hidden'
+  const unknown = writes === 'disabled'
   const assetQuery = useAssets()
   const assets = assetQuery.data
   const [params] = useSearchParams()
@@ -59,7 +61,7 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
   )
   const button = runButton(target)
   const { label, short, confirm } = button
-  const title = readOnly ? 'This server is read-only' : button.title
+  const title = unknown ? 'Checking the server…' : button.title
   const onRun = useCallback(() => {
     if (target.kind === 'node') fireNode()
     else if (target.kind === 'pipeline') mutate(target.file)
@@ -68,22 +70,23 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
   const loading = busy || start.isPending
 
   useEffect(() => {
-    if (!show) return
-    setTopbarRun({ onRun, label, short, disabled: target.kind === 'none' || readOnly, loading, title, confirm })
+    if (!show || readOnly) return
+    setTopbarRun({ onRun, label, short, disabled: target.kind === 'none' || unknown, loading, title, confirm })
     return () => setTopbarRun(null)
     // `confirm` and `short` follow `label`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [show, setTopbarRun, onRun, label, target.kind, readOnly, loading, title])
+  }, [show, setTopbarRun, onRun, label, target.kind, readOnly, unknown, loading, title])
 
   const scopeButton = runButton(scopeTarget)
   const onRunScope = useCallback(() => {
     if (scopeTarget.kind === 'pipeline') mutate(scopeTarget.file)
     else if (scopeTarget.kind === 'all') mutate(null)
   }, [scopeTarget, mutate])
-  // A group open: the toolbar has no Run (the panel runs a node). Before the nodes load, or with
-  // nothing to get, the button is there, disabled, with the same words: the toolbar never moves
-  // when the data arrives (its words come from the URL; the size is in its name and tooltip).
-  const scopeRun: TopbarRun | null = group ? null : scopeTarget.kind === 'none' ? {
+  // A group open, or a read-only server: the toolbar has no Run (the panel runs a node). Before
+  // the nodes load, or with nothing to get, the button is there, disabled, with the same words:
+  // the toolbar never moves when the data arrives (its words come from the URL; the size is in
+  // its name and tooltip).
+  const scopeRun: TopbarRun | null = group || readOnly ? null : scopeTarget.kind === 'none' ? {
     onRun: noop,
     label: pipeline ? `Run ${pipelineName(pipeline)}` : 'Run all',
     short: pipeline ? `Run ${pipelineName(pipeline)}` : 'Run all',
@@ -95,13 +98,13 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
     onRun: onRunScope,
     label: scopeButton.label,
     short: scopeButton.short,
-    disabled: readOnly,
+    disabled: unknown,
     loading: start.isPending,
-    title: readOnly ? 'This server is read-only' : scopeButton.title,
+    title: unknown ? 'Checking the server…' : scopeButton.title,
     confirm: scopeButton.confirm,
   }
 
-  return { readOnly, title, error: start.error, scopeRun }
+  return { readOnly, writes, title, error: start.error, scopeRun }
 }
 
 /**
