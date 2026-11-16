@@ -759,8 +759,14 @@
   color: var(--text-faint);
 }
 /* Short of room, the ancestors (navigation, whole in their tooltip) give way before the
-   heading, which names where you are. */
-.barca-group-crumbs > span:has(> h1) { flex-shrink: 0; }
+   heading, which names where you are: the heading is never cut, at the root either. */
+.barca-group-crumbs > span:has(> h1), .barca-group-crumbs > h1 { flex-shrink: 0; }
+/* After the heading, its counts and its health give way first: cut at their end, and on a
+   narrow page the health is its bar alone (its words are in its tooltip). */
+.barca-view-bar:has(> .barca-group-crumbs) > .barca-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 2; }
+@container (max-width: 900px) {
+  .barca-scope-health .barca-health-label { display: none; }
+}
 .barca-group-crumbs > span > h1 { min-width: 0; }
 .barca-group-crumbs > span > svg { flex: none; }
 .barca-group-crumbs button {
@@ -885,18 +891,40 @@
 .barca-group-row-name > svg {
   color: var(--text-muted);
 }
-/* A wide panel beside it scrolls the table sideways before names lose their width. */
+/* The grouped table fills its scroll area exactly (no width of its own beyond 100%, so the
+   scrollbar's gutter is never counted twice): the fixed columns below, the name takes the rest.
+   Only a panel beside a small window scrolls it sideways, before names lose their width. */
 .barca-group-table {
   table-layout: fixed;
-  min-width: 760px;
+  min-width: 520px;
 }
-.barca-group-table td:first-child {
-  min-width: 200px;
+.barca-group-table col.gcol-state { width: 200px; }
+.barca-group-table col.gcol-last { width: 210px; }
+.barca-group-table col.gcol-contents { width: 140px; }
+.barca-group-table col.gcol-failed { width: 64px; }
+.barca-group-table col.gcol-age { width: 90px; }
+.barca-group-table col.gcol-duration { width: 90px; }
+.barca-group-table col.gcol-open { width: 40px; }
+/* The state's summary wraps under its bar rather than being cut. */
+.barca-group-table .barca-health { flex-wrap: wrap; row-gap: 2px; }
+.barca-group-table .barca-health-label { white-space: normal; }
+/* As the table narrows the columns that repeat another leave first, keeping their place at no
+   width with their contents emptied (a cell of no width still spills what it holds past the
+   table, which would scroll): Failed (the state says "2 failing"), Duration and Age (Last success
+   has it on a leaf), then Contents (the name says "4 groups"). */
+@container (max-width: 1000px) {
+  .barca-group-table col.gcol-failed, .barca-group-table col.gcol-duration, .barca-group-table col.gcol-age { width: 0; }
+  .barca-group-table :is(th, td):is(.gcol-failed, .gcol-duration, .gcol-age) { padding: 0; font-size: 0; visibility: hidden; }
+  .barca-group-table :is(th, td):is(.gcol-failed, .gcol-duration, .gcol-age) > * { display: none; }
 }
-/* Last success: the age and, beside it, how long it has been failing, on one line. A part
-   that still does not fit a fixed-layout cell is cut, not spilled into the next column. */
-.barca-group-table th:nth-child(3) {
-  width: 250px;
+@container (max-width: 860px) {
+  .barca-group-table col.gcol-contents { width: 0; }
+  .barca-group-table :is(th, td).gcol-contents { padding: 0; font-size: 0; visibility: hidden; }
+  .barca-group-table :is(th, td).gcol-contents > * { display: none; }
+  .barca-group-table col.gcol-last { width: 190px; }
+}
+@container (max-width: 640px) {
+  .barca-group-table col.gcol-state { width: 160px; }
 }
 .barca-group-table td > .barca-cell-sub {
   max-width: 100%;
@@ -1145,10 +1173,7 @@
 .barca-failure-col-since { width: 14%; }
 .barca-failure-col-impact { width: 12%; }
 .barca-failure-col-actions { width: 118px; }
-/* The grouped table's columns. */
-.barca-group-col-name { width: 240px; }
-.barca-group-col-state { width: 240px; }
-.barca-group-col-open { width: 40px; }
+
 
 /* ---------- One line a row, everywhere (pages/SchedulesView.tsx, RunsView.tsx) ---------- */
 .barca-schedule-table { table-layout: fixed; }
