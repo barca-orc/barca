@@ -6,7 +6,7 @@
  * `GET /state`, and whether the scheduler has it paused from `GET /schedule`.
  */
 
-import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
 import { sourceFile } from './pipeline'
 import type { ListNode, NodeState, ScheduleJob } from './types'
 
@@ -21,7 +21,7 @@ export interface ScheduleRow {
   nextRunMs: number | null
   /** The latest attempt: how it went, and when (as the server writes it; `Age` draws it). */
   last: { status: string; at: string } | null
-  /** `cache.state`, in the CLI's word; null until `/state` has the node. */
+  /** `cache.state`, in the CLI's word (`shownCacheState`); null until `/state` has the node. */
   state: CacheState | null
   /** Its last attempt failed: a fact beside the state. */
   lastFailed: boolean
@@ -90,7 +90,7 @@ export function scheduleRows(
           human: humanizeCron(cron),
           nextRunMs,
           last: last ? { status: last.status, at: last.created_at } : null,
-          state: st ? st.cache.state : null,
+          state: st ? shownCacheState(st) : null,
           lastFailed: st ? lastAttemptFailed(st) : false,
           paused: job?.paused
             ? { until: job.paused_until !== null ? job.paused_until * 1000 : null }

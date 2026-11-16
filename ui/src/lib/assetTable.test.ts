@@ -69,7 +69,8 @@ describe('rows carry the state as the server says it', () => {
   it('shows every cache state in its own word, never another', () => {
     for (const state of CACHE_STATES) {
       const row = only(buildRows([node({ id: 'a', cache: cache(state, 'no_record') })], NOW))
-      expect(row.state).toBe(state)
+      // A node that always runs and never ran has no last run to show: it reads `never_run`.
+      expect(row.state).toBe(state === 'always_runs' ? 'never_run' : state)
       expect(row.lastFailed).toBe(false)
     }
     // A task keeps `always_runs` whatever its last run did: the run is a second fact.

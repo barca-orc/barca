@@ -114,7 +114,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   // refreshes with every poll. The rows and filters are the graph view's too (`useAssetFilter`).
   const filter = useAssetFilter(kind, sort)
   const { data, dataUpdatedAt, isError, error, refetch } = filter.states
-  const { graph, pipeline, paused, onlyPaused, rows, onDefault, visible, now } = filter
+  const { graph, pipeline, paused, onlyPaused, rows, visible, now } = filter
   // A name repeated across files reads as its id; two rows never show the same label.
   const nameCount = new Map<string, number>()
   for (const r of visible) nameCount.set(r.name, (nameCount.get(r.name) ?? 0) + 1)
@@ -209,7 +209,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
         ) : rows.length === 0 && !onlyPaused ? (
           <EmptyNote title={`No ${PAGE_LABEL[kind].toLowerCase()}${pipeline ? ` in ${pipelineName(pipeline)}` : ''}`}>{EMPTY_HINT[kind]}</EmptyNote>
         ) : visible.length === 0 ? (
-          <p className="barca-table-empty">{onDefault ? 'Nothing needs attention, and nothing ran in the last 24h.' : 'Nothing matches.'}</p>
+          <p className="barca-table-empty">Nothing matches.</p>
         ) : (
           <table className="barca-table barca-asset-table">
             <colgroup>
@@ -282,6 +282,9 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                         <span className="barca-cell-why">
                           {blockedKeys(r.stateHint)!.count.toLocaleString()} of {plural(r.keys.total, 'key')} wait on {blockedKeys(r.stateHint)!.upstream}
                         </span>
+                      ) : r.kind === 'sensor' && r.changedAt ? (
+                        // What a sensor last saw is in its artifact; /state says when it last changed.
+                        <span className="barca-cell-why">output changed <Age at={r.changedAt} nowMs={now} /></span>
                       ) : r.blockedBy && (
                         <span className="barca-cell-why">
                           waits on{' '}

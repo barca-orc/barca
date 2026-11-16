@@ -25,7 +25,7 @@ import { EMPTY_FILTERS, LAST_RUNS, isFiltered } from '@/lib/assetFilters'
  * its segment says how many, and what it blocks. A page with nothing of its kind has no Run.
  */
 export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run: PageRun | null | undefined; extra?: ReactNode }) {
-  const { kind, data, pipeline, rows, visible, filters, onDefault, setFilters, counts, blocked } = filter
+  const { kind, data, pipeline, rows, visible, filters, setFilters, counts, blocked } = filter
   const { data: health } = useHealth()
   const loaded = data !== undefined
   return (
@@ -43,7 +43,7 @@ export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run
       </div>
       {/* The state words, as `barca status` prints them; a failed last attempt is a filter of its own. */}
       <ChipGroup label="State" segmented>
-        {(counts.failed > 0 || (filters.failed && !onDefault)) && (
+        {(counts.failed > 0 || filters.failed) && (
           <Chip
             pressed={filters.failed}
             title={`${counts.failed} ${LAST_ATTEMPT_FAILED}${blocked > 0 ? ` · blocks ${plural(blocked, 'downstream node')}` : ''}`}
@@ -59,13 +59,13 @@ export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run
             <b>{counts.pinned}</b> <span className="barca-chip-word">{PINNED}</span>
           </Chip>
         )}
-        {(counts.blocked > 0 || (filters.blocked && !onDefault)) && (
+        {(counts.blocked > 0 || filters.blocked) && (
           <Chip pressed={filters.blocked} title={`${counts.blocked} ${BLOCKED_UPSTREAM}`} onClick={() => setFilters({ ...filters, blocked: !filters.blocked })}>
             <StatusGlyph glyph="blocked" size={12} />
             <b>{counts.blocked}</b> <span className="barca-chip-word">{BLOCKED_UPSTREAM}</span>
           </Chip>
         )}
-        {CACHE_STATES.filter((state) => counts.states[state] > 0 || (filters.states.includes(state) && !onDefault)).map((state) => (
+        {CACHE_STATES.filter((state) => counts.states[state] > 0 || filters.states.includes(state)).map((state) => (
           <Chip
             key={state}
             pressed={filters.states.includes(state)}
@@ -93,7 +93,7 @@ export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run
       )}
       {isFiltered(filters) && rows.length > 0 && (
         <button type="button" className="barca-clear" onClick={() => setFilters(EMPTY_FILTERS)}>
-          <X size={12} /> {onDefault ? `Show all ${rows.length.toLocaleString()}` : 'Clear'}
+          <X size={12} /> Clear
         </button>
       )}
       <div className="barca-view-actions">

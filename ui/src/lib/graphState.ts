@@ -5,7 +5,7 @@
  * itself and whether the last attempt failed, which are shown as two facts.
  */
 
-import { lastAttemptFailed, nodeStateDisplay, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, nodeStateDisplay, shownCacheState, type CacheState } from './cacheStateDisplay'
 import { statusMeta } from './status'
 import { runningGraphState } from './running'
 import type { Tone } from './tone'
@@ -32,9 +32,9 @@ export interface GraphKeys {
   waiting: number
 }
 
-/** A node's resting state: `cache.state` as the server says it, with the server's `detail`. */
+/** A node's resting state: `cache.state` as the server says it (`shownCacheState`), with the server's `detail`. */
 export function cacheGraphState(node: NodeState): GraphState {
-  const state = node.cache.state
+  const state = shownCacheState(node)
   const lastFailed = lastAttemptFailed(node)
   const shown = nodeStateDisplay({ state, lastFailed })
   const p = node.partitions

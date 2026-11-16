@@ -23,7 +23,9 @@ describe('cache state display', () => {
 
   it('draws each state with a glyph of its own, though tones are shared', () => {
     const glyphs = CACHE_STATES.map((state) => cacheStateDisplay(state).glyph)
-    expect(new Set(glyphs).size).toBe(CACHE_STATES.length)
+    // One exception: a node that always runs shows its last run, `succeeded`, with the success check.
+    expect(new Set(glyphs).size).toBe(CACHE_STATES.length - 1)
+    expect(cacheStateDisplay('always_runs')).toMatchObject({ label: 'succeeded', glyph: cacheStateDisplay('cached').glyph })
     for (const glyph of glyphs) expect(GLYPHS).toContain(glyph)
     // The warnings (blocked, stale, partial, unsynced) share a tone, never a glyph or a hue.
     const warnings = CACHE_STATES.filter((s) => cacheStateDisplay(s).tone === 'warning')
