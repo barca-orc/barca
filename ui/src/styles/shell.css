@@ -17,7 +17,9 @@
 /* The brand, search, the sections, the pipelines and the settings, on a surface a step off the
    page. Lines are 28px on an 8px inset; the open one is a neutral fill, never a colour. */
 .barca-sidebar {
-  width: 232px;
+  /* The reader's width (Sidebar.tsx sets it, dragged or by keyboard), never more than half the window. */
+  width: min(var(--sidebar-width, 232px), 50vw);
+  position: relative;
   flex: none;
   background: var(--bg-inset);
   border-right: 1px solid var(--border-default);
@@ -144,7 +146,21 @@
 .barca-side-settings .barca-conn { margin-right: auto; padding: 0 6px; height: 28px; }
 .barca-side-settings .barca-zone { height: 26px; padding: 0 6px; }
 
-/* Collapsed: 48px, every line its icon or glyph, its name in a tooltip. */
+/* The right edge: a drag handle the width of a few px over the border, a line when it is pointed
+   at or focused. */
+.barca-side-edge {
+  position: absolute; top: 0; bottom: 0; right: -4px; width: 7px; z-index: 5;
+  cursor: col-resize; touch-action: none;
+}
+.barca-side-edge::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px;
+  background: transparent; transition: background-color var(--dur-fast, 120ms) var(--ease-out, ease);
+}
+.barca-side-edge:hover::after { background: var(--border-strong); }
+.barca-side-edge:focus-visible { outline: none; }
+.barca-side-edge:focus-visible::after, .barca-side-edge:active::after { left: 2px; width: 2px; background: var(--accent); }
+
+/* Collapsed: 48px, every section its icon, its name in a tooltip; the pipelines one line. */
 .barca-sidebar[data-collapsed] { width: 48px; }
 .barca-sidebar[data-collapsed] .barca-brand { padding: 0; justify-content: center; }
 .barca-sidebar[data-collapsed] .barca-brand img, .barca-sidebar[data-collapsed] .barca-wordmark,
@@ -214,7 +230,7 @@
 .barca-view-toggle button[aria-pressed='true'] { background: var(--bg-raised); color: var(--text-strong); box-shadow: var(--shadow-sm); }
 .barca-view-toggle button:hover { color: var(--text-strong); }
 @media (max-width: 900px) {
-  .barca-sidebar:not([data-collapsed]) { width: 196px; }
+  .barca-sidebar:not([data-collapsed]) { width: min(var(--sidebar-width, 232px), 33vw); }
 }
 
 /* ---------- View head: one toolbar row ---------- */

@@ -182,16 +182,17 @@ const [query, setQuery] = useState('')
       <Variant label="fits"><MiddleName name="invoices_00" /></Variant>
       <Variant label="cut"><div style={{ display: 'flex', width: 150 }}><MiddleName name="check__risk_review_alerts_01" /></div></Variant>
     </Spec>
-    <Spec title="Sidebar" note="SidebarView: the sections, then the pipelines with the groups of an open file nested under the open group; collapsed to icons and glyphs.">
-      {([['open', false], ['collapsed', true]] as const).map(([name, collapsed]) => (
+    <Spec title="Sidebar" note="SidebarView: the sections, then the pipelines with the groups of an open file nested under the open group; its right edge resizes it (drag, arrow keys; double-click resets). Collapsed: the section icons, and the pipelines as one line with the project's state.">
+      {([['open', false, 232], ['wide', false, 340], ['collapsed', true, 232]] as const).map(([name, collapsed, width]) => (
         <Variant key={name} label={name}>
           <div style={{ display: 'flex', height: 520 }}>
             <SidebarView
               search={<SidebarSearch onOpen={() => undefined} />}
               nav={<SidebarNav counts={{ assets: 1200, tasks: 14, sensors: 3, schedules: 6 }} search="" />}
-              model={{ collapsed, expanded: [] }}
+              model={{ collapsed, width, expanded: [] }}
               total={1200}
               pipelines={KIT_PIPELINES}
+              overall={{ glyph: 'failed', label: 'failing', live: false }}
               groupsOf={(file) => (file === 'billing.py' ? KIT_GROUPS : [])}
               selected="billing.py"
               scope="group:billing.py:raw"
