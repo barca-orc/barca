@@ -241,8 +241,11 @@ a.barca-btn { text-decoration: none; }
 /* ── LogViewer ────────────────────────────────────────────── */
 .barca-log { container-type: inline-size; position: relative; overflow: hidden; background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--radius-lg); }
 .barca-log-scroll { height: 100%; overflow: auto; }
-.barca-log-lines { padding: 8px 0; }
+/* Virtual (LogViewer): the lines' container is as tall as every line, and each line rendered is
+   placed at its offset; the 8px above and below are the virtualizer's padding. */
+.barca-log-lines { position: relative; }
 .barca-log-line {
+  position: absolute; top: 0; left: 0; right: 0;
   display: flex; align-items: baseline; gap: 10px;
   padding: 1px 14px 1px 0;
   font-family: var(--font-mono); font-size: var(--text-sm);

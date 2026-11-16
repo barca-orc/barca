@@ -9,6 +9,7 @@
 import type { Connection } from '@/lib/connection'
 import type { CacheState } from '@/lib/cacheStateDisplay'
 import { emptyHealth, type Failure, type HealthCounts } from '@/lib/health'
+import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Remote } from '@/lib/remote'
 import { ready, failed, loading } from '@/lib/remote'
@@ -23,6 +24,8 @@ import type {
   NodeRunning,
   NodeState,
   NodeStatus,
+  QueueEntry,
+  QueueView,
   RunList,
   RunningStep,
   RunSummary,
@@ -316,6 +319,35 @@ const runTruncated = runView('failed', {
   steps_page: { total: 1440, truncated: true },
 })
 
+/**
+ * A failed run of a partitioned node: 5,000 keys, 1,250 failed, 1,000 listed, and a log line per
+ * key. Its node is one row with the count; the logs and the opened keys render only what is in view.
+ */
+const manyKeys = Array.from({ length: 1000 }, (_, i) => {
+  const key = `account=acct_${String(i * 4 + 1).padStart(6, '0')}`
+  const failedKey = i < 250
+  return { ...step(`billing.py:invoices_by_account[${key}]`, failedKey ? 'failed' : 'success', failedKey ? 'ValueError: 3 rows with a negative total' : null), partition_key: key }
+})
+const runManyKeys = runView('failed', {
+  error: 'invoices_by_account: 1,250 keys failed',
+  steps_total: 7644,
+  steps_executed: 5021,
+  steps: manyKeys,
+  steps_page: {
+    total: 5885,
+    truncated: true,
+    nodes: [
+      { node_id: 'billing.py:invoices_by_account', keys: 5000, failed: 1250, elapsed_seconds: 57.9, calls: 0, status: 'ran' },
+      { node_id: 'billing.py:invoice_totals', keys: 0, failed: 0, elapsed_seconds: 0, calls: 0, status: 'skipped', blocked_by: 'billing.py:invoices_by_account' },
+      { node_id: 'web.py:events_by_day', keys: 0, failed: 0, elapsed_seconds: 0, calls: 0, status: 'cached' },
+    ],
+  },
+  logs: Array.from({ length: 30_000 }, (_, seq) => ({
+    node_id: `billing.py:invoices_by_account[account=acct_${String(Math.floor(seq / 5)).padStart(6, '0')}]`,
+    seq, line: `exporting acct_${String(Math.floor(seq / 5)).padStart(6, '0')}: page ${seq % 5} of 5, 120 rows`, stream: 'stdout' as const, ts: ago(150),
+  })),
+})
+
 function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {}): RunSummary {
   return {
     id, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
@@ -351,6 +383,9 @@ export const runLists = {
   'refresh failed': ready(runList, 'connection refused'),
 } satisfies Record<string, Remote<RunList>>
 
+/** The latest 100 of 37,955 runs: a filter counts over those, and says so. */
+export const partialRunList: Remote<RunList> = ready({ ...runList, total: 37_955, truncated: true })
+
 /** The run panel in each state: its request's, then each run status. */
 export const runDetails: Record<string, Remote<RunView>> = {
   loading,
@@ -358,6 +393,41 @@ export const runDetails: Record<string, Remote<RunView>> = {
   'refresh failed': ready(runByStatus.running, 'connection refused'),
   ...Object.fromEntries(Object.entries(runByStatus).map(([status, view]) => [status, ready(view)])),
   'truncated steps': ready(runTruncated),
+  '5,000 keys, 30,000 log lines': ready(runManyKeys),
+}
+
+// ── Queue ─────────────────────────────────────────────────────────────────────
+
+const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => ({
+  run_id: `a8ba${String(n).padStart(4, '0')}`, status: 'pending', position: n, command: 'get',
+  target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
+  schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30), ...overrides,
+})
+const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
+const deepQueue: QueueView = {
+  paused: false, paused_at: null, draining: false, max_runs: 1,
+  running: [runningEntry], queued: Array.from({ length: 18 }, (_, i) => queued(i + 1)), capacity: null,
+}
+
+/** The Runs page's queue in each state it shows. */
+export const queueStates: Record<string, { queue: QueueView | undefined; collapsed?: boolean; readOnly?: boolean; loadError?: string }> = {
+  '1 running, 18 waiting': { queue: deepQueue },
+  collapsed: { queue: deepQueue, collapsed: true },
+  'running, nothing waiting': { queue: { ...deepQueue, queued: [] } },
+  paused: { queue: { ...deepQueue, paused: true, paused_at: ago(600), running: [] } },
+  draining: { queue: { ...deepQueue, draining: true } },
+  'waiting for capacity': { queue: { ...deepQueue, queued: deepQueue.queued.slice(0, 2), capacity: { total: 4, source: '--capacity', in_use: 3, runs: [{ run_id: runningEntry.run_id, weight: 3 }], waiting: [{ run_id: 'a8ba0001', node: 'web.py:big_join', weight: 3, waiting_seconds: 42 }] } } },
+  'read-only': { queue: deepQueue, readOnly: true },
+  unavailable: { queue: undefined, loadError: 'connection refused' },
+}
+
+/** The queue line every page shows, in each state. */
+export const queueStatusStates: Record<string, QueueStatus | null> = {
+  'no queue': null,
+  'runs waiting': { running: 1, waiting: 18, oldestWaitSeconds: 1200, paused: false, draining: false },
+  'waiting for hours': { running: 4, waiting: 312, oldestWaitSeconds: 3 * 3600 + 12 * 60, paused: false, draining: false },
+  paused: { running: 0, waiting: 3, oldestWaitSeconds: 600, paused: true, draining: false },
+  draining: { running: 1, waiting: 2, oldestWaitSeconds: 45, paused: false, draining: true },
 }
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
