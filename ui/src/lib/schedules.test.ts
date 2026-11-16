@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ListNode, NodeState, ScheduleJob } from './types'
-import { formatCountdown, humanizeCron, scheduleRows } from './schedules'
+import { formatCountdown, formatLate, humanizeCron, lateGraceMs, lateness, scheduleRows } from './schedules'
 
 describe('humanizeCron', () => {
   it('describes common schedules in words', () => {
@@ -74,7 +74,11 @@ function state(id: string, over: Partial<NodeState> = {}): NodeState {
     shape: null,
     env: [],
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null,
+    prev_run: null,
+    late_since: null,
+    signals: [],
+    last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     ...over,
   }
@@ -98,6 +102,7 @@ describe('scheduleRows', () => {
         artifact: null,
         format: null,
         size_bytes: null,
+        rows: null,
         error: 'boom',
       },
     }),
@@ -148,5 +153,56 @@ describe('scheduleRows', () => {
       job('job.py:new', { next_fire: now / 1000 + 60 }),
     ])
     expect(rows[0]).toMatchObject({ nextRunMs: now + 60_000, nextIn: 'in 1m' })
+  })
+})
+
+describe('lateness', () => {
+  const now = Date.parse('2026-11-16T12:21:30Z')
+  const s = (iso: string) => Date.parse(iso) / 1000
+  // Every 5 minutes: slots 12:20 and 12:25 around now.
+  const slots = { prev_run: s('2026-11-16T12:20:00Z'), next_run: s('2026-11-16T12:25:00Z') }
+
+  it('is late once the first missed slot is further back than the grace', () => {
+    expect(lateness({ ...slots, late_since: s('2026-11-16T12:05:00Z') }, now, false)).toEqual({
+      sinceMs: Date.parse('2026-11-16T12:05:00Z'),
+      by: 'late by 16m',
+    })
+    // The 12:20 slot has had 90 s: a minute's grace has passed.
+    expect(lateness({ ...slots, late_since: slots.prev_run }, now, false)?.by).toBe('late by 1m')
+  })
+
+  it('is on time with no missed slot, within the grace, or while paused', () => {
+    expect(lateness({ ...slots, late_since: null }, now, false)).toBeNull()
+    expect(lateness({ ...slots, late_since: slots.prev_run }, Date.parse('2026-11-16T12:20:40Z'), false)).toBeNull()
+    expect(lateness({ ...slots, late_since: s('2026-11-16T12:05:00Z') }, now, true)).toBeNull()
+    expect(lateness(undefined, now, false)).toBeNull()
+  })
+
+  it('gives a frequent schedule half its interval, at most a minute', () => {
+    expect(lateGraceMs(0, 15_000)).toBe(7_500)
+    expect(lateGraceMs(0, 3_600_000)).toBe(60_000)
+    expect(lateGraceMs(null, null)).toBe(60_000)
+    expect(formatLate(now - 2 * 3_600_000 - 5 * 60_000, now)).toBe('late by 2h 5m')
+    expect(formatLate(now - 30_000, now)).toBe('late by 30s')
+  })
+
+  it('a late row says so instead of a countdown, and sorts first', () => {
+    const assets = [asset('job.py:minutely', '* * * * *'), asset('job.py:soon', '*/5 * * * *')]
+    const rows = scheduleRows(
+      assets,
+      [
+        state('job.py:minutely', {
+          prev_run: s('2026-11-16T12:21:00Z'),
+          next_run: s('2026-11-16T12:22:00Z'),
+          late_since: s('2026-11-16T12:09:00Z'),
+        }),
+        state('job.py:soon', { ...slots, late_since: null }),
+      ],
+      now,
+    )
+    expect(rows.map((r) => [r.name, r.nextIn, r.late?.by ?? null])).toEqual([
+      ['minutely', null, 'late by 12m'],
+      ['soon', 'in 3m', null],
+    ])
   })
 })
