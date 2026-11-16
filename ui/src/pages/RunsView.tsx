@@ -3,7 +3,7 @@ import { pathBreaks, relativeTraceback } from '@/lib/health'
 import { X } from 'lucide-react'
 import { Link } from 'react-router'
 import { match } from 'ts-pattern'
-import { Absolute, Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
+import { Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
 import { CancelRun, RetryStep, RunActions } from '@/components/RunActions'
 import { useTimeZone } from '@/context/timeZone'
@@ -245,8 +245,8 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
         <Fact label="Trigger">{triggeredByLabel(data.triggered_by)}</Fact>
         <Fact label="Command"><code>{data.command}</code></Fact>
         <Fact label="Target" wide>{data.target ?? 'all assets'}</Fact>
-        <Fact label="Started"><Absolute at={data.started_at} /></Fact>
-        <Fact label="Finished"><Absolute at={data.finished_at} /></Fact>
+        <Fact label="Started"><Age at={data.started_at} /></Fact>
+        <Fact label="Finished"><Age at={data.finished_at} /></Fact>
         <Fact label="Duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</Fact>
         <Fact label="Steps">{runViewSteps(data, nodes)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</Fact>
       </dl>

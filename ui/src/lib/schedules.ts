@@ -6,7 +6,6 @@
  * `GET /state`, and whether the scheduler has it paused from `GET /schedule`.
  */
 
-import { formatAgo } from './assetTable'
 import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 import { sourceFile } from './pipeline'
 import type { ListNode, NodeState, ScheduleJob } from './types'
@@ -20,9 +19,8 @@ export interface ScheduleRow {
   /** The schedule in words, when it is a common shape; null otherwise. */
   human: string | null
   nextRunMs: number | null
-  /** "in 5m", relative to the data's fetch time. */
-  nextIn: string | null
-  last: { status: string; ago: string } | null
+  /** The latest attempt: how it went, and when (as the server writes it; `Age` draws it). */
+  last: { status: string; at: string } | null
   /** `cache.state`, in the CLI's word; null until `/state` has the node. */
   state: CacheState | null
   /** Its last attempt failed: a fact beside the state. */
@@ -65,22 +63,10 @@ export function humanizeCron(cron: string): string | null {
   return null
 }
 
-export function formatCountdown(atMs: number, nowMs: number): string {
-  const s = Math.floor((atMs - nowMs) / 1000)
-  if (s < 0) return 'due now'
-  if (s < 60) return `in ${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `in ${m}m`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `in ${h}h ${m % 60}m`
-  return `in ${Math.floor(h / 24)}d`
-}
-
 /** Every node with a cron schedule, soonest next run first. */
 export function scheduleRows(
   assets: ListNode[],
   states: NodeState[],
-  nowMs: number,
   jobs: ScheduleJob[] = [],
 ): ScheduleRow[] {
   const byId = new Map(states.map((s) => [s.id, s]))
@@ -103,8 +89,7 @@ export function scheduleRows(
           cron,
           human: humanizeCron(cron),
           nextRunMs,
-          nextIn: nextRunMs === null ? null : formatCountdown(nextRunMs, nowMs),
-          last: last ? { status: last.status, ago: formatAgo(last.created_at, nowMs) } : null,
+          last: last ? { status: last.status, at: last.created_at } : null,
           state: st ? st.cache.state : null,
           lastFailed: st ? lastAttemptFailed(st) : false,
           paused: job?.paused

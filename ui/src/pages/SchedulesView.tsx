@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { match } from "ts-pattern";
-import { Button, EmptyNote, StatusBadge, Tag } from "@/components";
+import { Age, Button, EmptyNote, StatusBadge, Tag } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
 import { nodeStateDisplay } from "@/lib/cacheStateDisplay";
 import { inPipeline } from "@/lib/pipeline";
@@ -43,7 +43,7 @@ export interface SchedulesViewProps {
 export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, jobs, health, offline, toggle, onOpen, onToggle, onRetry, actions }: SchedulesViewProps) {
   const rows =
     assets.kind === "ready" && states
-      ? scheduleRows(assets.data.filter((a) => inPipeline(a.id, pipeline)), states, dataUpdatedAt, jobs ?? [])
+      ? scheduleRows(assets.data.filter((a) => inPipeline(a.id, pipeline)), states, jobs ?? [])
       : null;
   // A count next to "not reachable" would be read as current; it is shown only with a live server.
   const current = !offline && assets.kind === "ready" && assets.refreshError === null;
@@ -103,7 +103,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
                 on a cron schedule while <code>barca serve</code> is running.
               </EmptyNote>
             ) : (
-              <ScheduleTable rows={rows} canPause={canPause} toggle={toggle} onOpen={onOpen} onToggle={onToggle} />
+              <ScheduleTable rows={rows} nowMs={dataUpdatedAt} canPause={canPause} toggle={toggle} onOpen={onOpen} onToggle={onToggle} />
             ),
           )
           .exhaustive()}
@@ -112,10 +112,10 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
   );
 }
 
-function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<SchedulesViewProps, "toggle" | "onOpen" | "onToggle"> & { rows: ScheduleRow[]; canPause: boolean }) {
+function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick<SchedulesViewProps, "toggle" | "onOpen" | "onToggle"> & { rows: ScheduleRow[]; nowMs: number; canPause: boolean }) {
   const { zone } = useTimeZone();
-  // One line a row: the schedule in words with its cron after it, the next run as "in 5m" with
-  // the absolute time on hover, the name with its id on hover.
+  // One line a row: the schedule in words with its cron after it, the next and last runs as
+  // "in 5m" and "3m ago" with the absolute time on hover, the name with its id on hover.
   return (
     <table className="barca-table barca-schedule-table">
       <colgroup>
@@ -156,16 +156,12 @@ function ScheduleTable({ rows, canPause, toggle, onOpen, onToggle }: Pick<Schedu
               {r.human && <code className="barca-schedule-cron">{r.cron}</code>}
             </td>
             <td>
-              {r.nextRunMs !== null ? (
-                <time dateTime={new Date(r.nextRunMs).toISOString()} title={formatInstant(r.nextRunMs, zone)}>{r.nextIn}</time>
-              ) : (
-                "–"
-              )}
+              <Age at={r.nextRunMs} nowMs={nowMs} />
             </td>
             <td>
               {r.last ? (
                 <span className={r.last.status === "failed" ? "barca-cell-failed" : undefined}>
-                  {r.last.status === "success" ? r.last.ago : `${r.last.status} ${r.last.ago}`}
+                  {r.last.status !== "success" && `${r.last.status} `}<Age at={r.last.at} nowMs={nowMs} />
                 </span>
               ) : (
                 "never"

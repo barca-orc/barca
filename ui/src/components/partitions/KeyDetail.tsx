@@ -5,7 +5,7 @@ import { Copy, Play, X } from 'lucide-react'
 import { Button, IconButton, KeyValue, Section, SidePanel, Skeleton } from '@/components'
 import { StatusGlyph } from '@/components/StatusGlyph'
 import { ErrorLine } from '@/components/ErrorLine'
-import { Absolute } from '@/components/Age'
+import { Age } from '@/components/Age'
 import { artifactSchema } from '@/lib/artifactSchema'
 import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
@@ -93,14 +93,14 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
             <div className="barca-keydetail-error" role="alert">
               <ErrorLine error={latest.error} />
               <p className="barca-cell-sub">
-                Failed <Absolute at={latest.created_at} />
+                Failed <Age at={latest.created_at} />
                 {latest.run_id && <> · <Link to={`/runs?run=${encodeURIComponent(latest.run_id)}`}>open the run</Link></>}
               </p>
             </div>
           ) : (
             <p className="barca-keydetail-meaning">
               {KEY_STATE_MEANING[state]}
-              {latest && <span className="barca-cell-sub"> Last attempt <Absolute at={latest.created_at} />{latest.run_id && <> · <Link to={`/runs?run=${encodeURIComponent(latest.run_id)}`}>run</Link></>}</span>}
+              {latest && <span className="barca-cell-sub"> Last attempt <Age at={latest.created_at} />{latest.run_id && <> · <Link to={`/runs?run=${encodeURIComponent(latest.run_id)}`}>run</Link></>}</span>}
             </p>
           )}
           {onRun && needsRun(state) && (
@@ -152,7 +152,7 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
                 {detail.attempts.map((a, i) => (
                   <li key={i}>
                     <StatusGlyph glyph={a.status === 'success' ? 'fresh' : 'failed'} size={12} />
-                    <Absolute at={a.created_at} />
+                    <Age at={a.created_at} />
                     {a.elapsed_seconds !== null && <span className="barca-cell-sub">{formatSeconds(a.elapsed_seconds)}</span>}
                     {a.run_id && <Link className="barca-cell-sub" to={`/runs?run=${encodeURIComponent(a.run_id)}`}>run</Link>}
                   </li>

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { GitBranch, Play, X } from 'lucide-react'
-import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
 import { runGlyph } from '@/lib/runs'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
@@ -340,7 +340,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           {detail ? freshnessLabel(detail.asset) : <Skeleton width={72} height={12} />}
         </KeyValue>
         {row?.nextRunMs != null && (
-          <KeyValue label="next run"><Absolute at={row.nextRunMs} /></KeyValue>
+          <KeyValue label="next run"><Age at={row.nextRunMs} nowMs={nowMs} /></KeyValue>
         )}
         {/* Blast radius lists everything downstream; the direct readers are a detail. */}
         {downstream.length > 0 && (

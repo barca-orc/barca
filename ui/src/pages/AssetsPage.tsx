@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, ChevronDown } from 'lucide-react'
 import {
+  Age,
   Button,
   EmptyNote,
   MiddleName,
@@ -18,7 +19,7 @@ import { NodePanel } from '@/components/assets/NodePanel'
 import { RunNotice } from '@/components/RunNotice'
 import { useHealth } from '@/hooks/useHealth'
 import { useTimeZone } from '@/context/timeZone'
-import { formatShort } from '@/lib/time'
+import { formatInstant } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { ApiError, metadataUnusable } from '@/lib/api'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
@@ -310,7 +311,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                       <StatusBadge glyph={nodeStateDisplay(r).glyph} label={nodeStateDisplay(r).label} size="sm" />
                     )}
                   </td>
-                  <td className="col-last" title={r.last ? lastRunTitle(r, now) : undefined}>
+                  <td className="col-last" title={r.last && r.lastAtMs !== null ? `${lastRunTitle(r, now)} · ${formatInstant(r.lastAtMs, zone)}` : undefined}>
                     {lastRunText(r, now)}
                   </td>
                   {columns.typical && (
@@ -318,7 +319,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                       {typicalText(r)}
                     </td>
                   )}
-                  {columns.next && <td className="col-next">{r.nextRunMs === null ? '–' : formatShort(r.nextRunMs, zone)}</td>}
+                  {columns.next && <td className="col-next"><Age at={r.nextRunMs} nowMs={now} /></td>}
                 </tr>
                 )
               })}

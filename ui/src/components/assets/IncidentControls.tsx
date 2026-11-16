@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { Absolute, Button, ConfirmDialog, ErrorLine, KeyValue, Section, StatusBadge } from '@/components'
+import { Age, Button, ConfirmDialog, ErrorLine, KeyValue, Section, StatusBadge } from '@/components'
 import { usePauses, useTogglePause } from '@/hooks/usePauses'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useSchedule, useToggleSchedulePause } from '@/hooks/useSchedule'
@@ -62,7 +62,7 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
         <KeyValue label="paused">
           <span className="barca-state-line">
             <StatusBadge glyph="paused" label="paused" size="sm" />
-            <span className="barca-cell-sub">since <Absolute at={pause.paused_at * 1000} /> via {shortName(pause.via)}</span>
+            <span className="barca-cell-sub">since <Age at={pause.paused_at * 1000} /> via {shortName(pause.via)}</span>
           </span>
         </KeyValue>
       )}

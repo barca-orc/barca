@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 import { match } from 'ts-pattern'
-import { Button, StatusGlyph, Tag } from '@/components'
+import { Age, Button, StatusGlyph, Tag } from '@/components'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useTimeZone } from '@/context/timeZone'
 import { ApiError } from '@/lib/api'
@@ -14,14 +14,15 @@ import { capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queu
  * back, so a paused queue can still be resumed.
  */
 export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
-  const { data, isError, error, refetch } = useQueue()
+  const { data, dataUpdatedAt, isError, error, refetch } = useQueue()
   const toggle = useToggleQueuePause()
   const { zone } = useTimeZone()
   const state = data ? queueState(data) : null
   const formatTime = (value: string | null) => runTime(value, zone)
   const stateLabel = state ? queueStateLabel(state, formatTime) : null
   const control = data ? queueControl(data, readOnly) : { kind: 'hidden' as const }
-  const rows = data ? queueRows(data.queued, formatTime) : []
+  // The Queued cell draws its time with `Age`: the row keeps it as the server wrote it.
+  const rows = data ? queueRows(data.queued, (value) => value ?? '') : []
   const shared = data ? sharedCapacityLabel(data.capacity) : null
   const waiting = data ? waitingRows(data.capacity) : []
   const toggleError = toggle.error instanceof ApiError ? toggle.error : null
@@ -86,7 +87,7 @@ export function QueuePanel({ readOnly }: { readOnly: boolean | undefined }) {
               <td><Link className="barca-run-link" to={row.href}>{row.runId}</Link><div className="barca-cell-sub">{row.command}</div></td>
               <td><code className="barca-run-target" title={row.target}>{row.target}</code></td>
               <td>{row.trigger}{row.scheduleId && <div className="barca-cell-sub">{row.scheduleId}</div>}</td>
-              <td>{row.queuedAt}</td>
+              <td>{row.queuedAt ? <Age at={row.queuedAt} nowMs={dataUpdatedAt} /> : '–'}</td>
             </tr>
           ))}</tbody>
         </table>
