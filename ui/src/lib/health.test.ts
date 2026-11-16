@@ -26,21 +26,23 @@ const byId = new Map(nodes.map((n) => [n.id, n]))
 const consumers = consumersOf(nodes)
 
 describe('health', () => {
-  it('counts a scope by state word, failed last attempts beside them, a live run first', () => {
+  it('counts a scope by health, each node once: a failure first, then run work, then the rest by severity', () => {
     const ids = nodes.map((n) => n.id)
     const counts = healthCounts(ids, byId)
-    // `raw` and `orphan` are cached assets whose last attempt failed: in the cached count, and in lastFailed.
-    expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, cached: 4, stale: 1 }, lastFailed: 2 })
-    expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ cached: 3 }) })
-    expect(healthLabel(counts)).toBe('2 failing · 1 stale · 4 fresh')
+    // `raw` and `orphan` failed; `clean` (stale, below `raw`) and `report`, `check` (below it) are blocked.
+    expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, failing: 2, blocked: 1, ok: 2 } })
+    expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ ok: 1 }) })
+    expect(healthLabel(counts)).toBe('2 failing · 1 blocked · 2 ok')
     expect(healthParts(counts, 2)).toEqual([
-      { key: 'lastFailed', tone: 'failed', glyph: 'failed', count: 2, word: 'failing', text: '2 failing' },
-      { key: 'stale', tone: 'warning', glyph: 'stale', count: 1, word: 'stale', text: '1 stale' },
+      { key: 'failing', tone: 'failed', glyph: 'failed', count: 2, word: 'failing', text: '2 failing' },
+      { key: 'blocked', tone: 'warning', glyph: 'blocked', count: 1, word: 'blocked', text: '1 blocked' },
     ])
     expect(healthLabel(counts, 1)).toBe('2 failing')
     expect(healthTone(counts)).toBe('failed')
     expect(healthTone(emptyHealth())).toBe('neutral')
-    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 fresh')
+    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 ok')
+    // A whole-project health map, when the page has one, decides instead.
+    expect(healthLabel(healthCounts(['p.py:report'], byId, {}, new Map([['p.py:report', 'blocked']])))).toBe('1 blocked')
   })
 
   it('lists failures by downstream impact, with their headline', () => {

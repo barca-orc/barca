@@ -133,7 +133,7 @@ describe('running state from /state', () => {
     // A failure inside a running group leads: running is shown beside it, never instead (#925).
     const group = groupHealth(['p.py:a', 'p.py:b'], byId)
     expect(group).toMatchObject({ kind: 'group', tone: 'failed', label: '1 failing' })
-    expect(group.kind === 'group' && group.parts?.map((p) => p.text)).toEqual(['1 failing', '1 running', '1 fresh'])
+    expect(group.kind === 'group' && group.parts?.map((p) => p.text)).toEqual(['1 failing', '1 running'])
     // A group with run work and nothing failed pulses as a run.
     expect(groupHealth(['p.py:a'], byId)).toMatchObject({ kind: 'run', tone: 'running', label: '1 running' })
     // Once the run ends, the failed last attempt is the one fact left.

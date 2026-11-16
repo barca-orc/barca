@@ -146,7 +146,7 @@ export function GroupedTable({ entries, tree, byId, leaves, live, visualStates, 
               </td>
               {hasGroups && <td className="gcol-contents">{group && entry.summary}</td>}
               {hasGroups && (
-                <td className="num gcol-failed">{group && statesLoaded && counts(entry.id).lastFailed.toLocaleString()}</td>
+                <td className="num gcol-failed">{group && statesLoaded && counts(entry.id).states.failing.toLocaleString()}</td>
               )}
               {hasLeaves && (
                 <td className="num gcol-duration" title={duration?.title}>{duration?.text}</td>

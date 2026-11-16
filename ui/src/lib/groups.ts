@@ -161,7 +161,7 @@ export function groupHealth(
   const parts = healthParts(counts).map(({ glyph, tone, count, word, text }) => ({ glyph, tone, count, word, text }))
   const [first] = parts
   if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint, parts }
-  if (counts.running > 0 && counts.lastFailed === 0) {
+  if (counts.running > 0 && counts.states.failing === 0) {
     return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: first.text, hint, parts }
   }
   return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint, parts }

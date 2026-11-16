@@ -52,7 +52,9 @@ const DISPLAY = {
   stale: { word: 'stale', label: 'stale', tone: 'warning', glyph: 'stale' },
   partial: { word: 'partial', label: 'partial', tone: 'warning', glyph: 'partial' },
   unsynced: { word: 'unsynced', label: 'unsynced', tone: 'warning', glyph: 'unsynced' },
-  unknown: { word: 'unknown', label: 'unknown', tone: 'neutral', glyph: 'unknown' },
+  // `unknown` is the CLI's word: barca cannot say yet, because a cutoff or sensor upstream has
+  // not decided. Expected, so the UI says what the node is doing: waiting.
+  unknown: { word: 'unknown', label: 'waiting', tone: 'neutral', glyph: 'unknown' },
   never_run: { word: 'never_run', label: 'never run', tone: 'neutral', glyph: 'never_run' },
   always_runs: { word: 'always_runs', label: 'succeeded', tone: 'success', glyph: 'fresh' },
   cached: { word: 'cached', label: 'fresh', tone: 'success', glyph: 'fresh' },

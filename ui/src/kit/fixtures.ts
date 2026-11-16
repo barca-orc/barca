@@ -9,6 +9,7 @@
 import type { Connection } from '@/lib/connection'
 import type { CacheState } from '@/lib/cacheStateDisplay'
 import { emptyHealth, type Failure, type HealthCounts } from '@/lib/health'
+import type { Health } from '@/lib/nodeHealth'
 import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Remote } from '@/lib/remote'
@@ -456,7 +457,7 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-const counts = (states: Partial<Record<CacheState, number>>, extra: Partial<Pick<HealthCounts, 'running' | 'pending' | 'lastFailed'>> = {}): HealthCounts => {
+const counts = (states: Partial<Record<Health, number>>, extra: Partial<Pick<HealthCounts, 'running' | 'pending'>> = {}): HealthCounts => {
   const all = emptyHealth()
   Object.assign(all.states, states)
   Object.assign(all, extra)
@@ -466,12 +467,12 @@ const counts = (states: Partial<Record<CacheState, number>>, extra: Partial<Pick
 
 /** A scope in each state the health bar distinguishes, and the mixes that matter. */
 export const healthStates: Record<string, HealthCounts> = {
-  cached: counts({ cached: 504 }),
-  'one failure in thousands': counts({ stale: 12, cached: 2400 }, { lastFailed: 1 }),
-  'failed and stale': counts({ stale: 121, cached: 380 }, { lastFailed: 3 }),
-  running: counts({ cached: 460, stale: 4 }, { running: 40 }),
-  'every state': counts({ blocked: 2, stale: 3, partial: 1, unsynced: 4, unknown: 1, never_run: 7, always_runs: 20, cached: 60 }, { lastFailed: 2 }),
-  'not run yet': counts({ never_run: 120, cached: 8 }),
+  ok: counts({ ok: 504 }),
+  'one failure in thousands': counts({ failing: 1, behind: 12, ok: 2399 }),
+  'failing and blocking': counts({ failing: 3, blocked: 58, behind: 121, ok: 380 }),
+  running: counts({ ok: 460, behind: 4 }, { running: 40 }),
+  'every health': counts({ failing: 2, blocked: 2, suspect: 1, behind: 8, waiting: 6, never_run: 7, ok: 80 }),
+  'not run yet': counts({ never_run: 120, ok: 8 }),
   checking: counts({}, { pending: 640 }),
   empty: counts({}),
 }

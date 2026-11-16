@@ -4,7 +4,7 @@
  * panel's "Why" section, only render these.
  */
 
-import { CACHE_STATES, cacheStateGlyph, cacheStateLabel, FAILED_TONE, LAST_ATTEMPT_FAILED, cacheStateTone, type CacheState } from './cacheStateDisplay'
+import { blockedCauses, healthDisplay, HEALTH_ORDER, nodeHealth, type Health } from './nodeHealth'
 import type { Glyph } from './glyph'
 import { memberHealth, type GraphState } from './graphState'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
@@ -18,33 +18,30 @@ export interface GraphLink {
 }
 
 /**
- * How many nodes of a scope are in each state, as the health bar shows them: one count per cache
- * state word, plus the nodes a run is working on and those whose state is not loaded. A failed
- * last attempt is counted beside the states, not among them: a node is in one state and may also
- * have failed last.
+ * How many nodes of a scope are in each health (`lib/nodeHealth.ts`), as a health bar shows
+ * them, plus the nodes a run is working on and those whose state is not loaded. A rollup counts
+ * health, not cache states: a scope says `3 failing · 12 blocked · 40 behind`, and each node in
+ * it keeps its own precise state word (`stale`, `partial`) beside its health.
  */
 export interface HealthCounts {
-  states: Record<CacheState, number>
+  states: Record<Health, number>
   running: number
   /** No state loaded for them yet. */
   pending: number
-  /** Whose last attempt failed (`lastAttemptFailed`), whatever their state. */
-  lastFailed: number
   total: number
 }
 
-/** A segment of the bar or a part of its label: a state, run work, or no state yet. */
-type HealthPart = CacheState | 'running' | 'pending'
+/** A segment of the bar or a part of its label: a health, run work, or no state yet. */
+type HealthPart = Health | 'running' | 'pending'
 
-/** Most urgent first: the order of the bar's segments. */
-export const HEALTH_PARTS: readonly HealthPart[] = ['running', ...CACHE_STATES, 'pending']
+/** Most urgent first: the order of the bar's segments. A failure leads, then run work. */
+export const HEALTH_PARTS: readonly HealthPart[] = ['failing', 'running', ...HEALTH_ORDER.filter((h) => h !== 'failing'), 'pending']
 
 export function emptyHealth(total = 0): HealthCounts {
   return {
-    states: Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>,
+    states: Object.fromEntries(HEALTH_ORDER.map((h) => [h, 0])) as Record<Health, number>,
     running: 0,
     pending: 0,
-    lastFailed: 0,
     total,
   }
 }
@@ -53,66 +50,86 @@ export function emptyHealth(total = 0): HealthCounts {
 export function healthPartTone(part: HealthPart): Tone {
   if (part === 'running') return 'running'
   if (part === 'pending') return 'neutral'
-  return cacheStateTone(part)
+  return healthDisplay(part).tone
 }
 
 /** The glyph of a part of the bar: the colour of its segment. */
 export function healthPartGlyph(part: HealthPart): Glyph {
   if (part === 'running') return 'running'
   if (part === 'pending') return 'pending'
-  return cacheStateGlyph(part)
+  return healthDisplay(part).glyph
 }
 
-/** Counts of `ids`; a live run's status (`live`) outranks the polled state. */
+/**
+ * Each node's health within `byId` (its own state rows and their inputs). Computed once per map
+ * and its rows: a table asks for every row's counts over the same map, and a map changed in place
+ * (a new row for a node) is worked out again.
+ */
+const healthCache = new WeakMap<ReadonlyMap<string, NodeState>, { rows: NodeState[]; health: Map<string, Health> }>()
+function healthWithin(byId: ReadonlyMap<string, NodeState>): Map<string, Health> {
+  const known = healthCache.get(byId)
+  if (known && known.rows.length === byId.size) {
+    let i = 0
+    let same = true
+    for (const row of byId.values()) if (known.rows[i++] !== row) { same = false; break }
+    if (same) return known.health
+  }
+  const inputs = new Map<string, readonly string[]>()
+  for (const [id, node] of byId) inputs.set(id, node.inputs)
+  const blocked = blockedCauses(byId, inputs)
+  const out = new Map<string, Health>()
+  for (const [id, node] of byId) out.set(id, nodeHealth(node, { blocked: blocked.has(id) }))
+  healthCache.set(byId, { rows: [...byId.values()], health: out })
+  return out
+}
+
+/**
+ * Counts of `ids`; a live run's status (`live`) outranks the polled state. `healthOf` is each
+ * node's health over the whole project (the page's health tree), so a scope's counts agree with
+ * the health map; without it, health is worked out within `byId`.
+ */
 export function healthCounts(
   ids: readonly string[],
   byId: ReadonlyMap<string, NodeState>,
   live: Readonly<Record<string, StatusKind>> = {},
+  healthOf?: ReadonlyMap<string, Health>,
 ): HealthCounts {
   const counts = emptyHealth(ids.length)
+  const within = healthOf ? null : healthWithin(byId)
   for (const id of ids) {
     const status = live[id]
-    const box = memberHealth(byId.get(id))
-    if (status === 'running' || status === 'queued' || box.kind === 'run') counts.running += 1
-    else if (box.kind === 'cache') {
-      counts.states[box.state] += 1
-      if (box.lastFailed || status === 'failed') counts.lastFailed += 1
-    } else {
-      counts.pending += 1
-      if (status === 'failed') counts.lastFailed += 1
-    }
+    const node = byId.get(id)
+    if (status === 'running' || status === 'queued' || node?.running) counts.running += 1
+    else if (status === 'failed') counts.states.failing += 1
+    else if (node) counts.states[healthOf?.get(id) ?? within?.get(id) ?? nodeHealth(node)] += 1
+    else counts.pending += 1
   }
   return counts
 }
 
 const PENDING_WORD = 'checking'
 
-/** The word of a part: `stale`, `running`, `checking`. */
+/** The word of a part: `behind`, `running`, `checking`. */
 function partWord(part: HealthPart): string {
-  return part === 'pending' ? PENDING_WORD : part === 'running' ? part : cacheStateLabel(part)
+  return part === 'pending' ? PENDING_WORD : part === 'running' ? part : healthDisplay(part).label
 }
 
 export interface HealthLabelPart {
-  /** What the part counts: a state, run work, no state yet, or failed last attempts. */
-  key: HealthPart | 'lastFailed'
+  /** What the part counts: a health, run work, or no state yet. */
+  key: HealthPart
   tone: Tone
   glyph: Glyph
   /** How many nodes it counts. */
   count: number
-  /** Its word alone: `failing`, `stale`. */
+  /** Its word alone: `failing`, `behind`. */
   word: string
-  /** The part in words: `3 stale`. */
+  /** The part in words: `3 behind`. */
   text: string
 }
 
-/**
- * Every non-empty part, most urgent first, as the words a label shows: failed last attempts
- * first (`2 failed last attempt`), then run work, then each state present by rank, then what
- * is not loaded. The state words are the CLI's.
- */
-export function healthParts(counts: HealthCounts, limit = HEALTH_PARTS.length + 1): HealthLabelPart[] {
+/** Every non-empty part, most urgent first, as the words a label shows. */
+export function healthParts(counts: HealthCounts, limit = HEALTH_PARTS.length): HealthLabelPart[] {
   const parts: HealthLabelPart[] = []
-  if (counts.lastFailed > 0) parts.push({ key: 'lastFailed', tone: FAILED_TONE, glyph: 'failed', count: counts.lastFailed, word: LAST_ATTEMPT_FAILED, text: `${counts.lastFailed.toLocaleString()} ${LAST_ATTEMPT_FAILED}` })
   for (const part of HEALTH_PARTS) {
     const count = part === 'running' || part === 'pending' ? counts[part] : counts.states[part]
     if (count > 0) parts.push({ key: part, tone: healthPartTone(part), glyph: healthPartGlyph(part), count, word: partWord(part), text: `${count.toLocaleString()} ${partWord(part)}` })
@@ -120,14 +137,14 @@ export function healthParts(counts: HealthCounts, limit = HEALTH_PARTS.length + 
   return parts.slice(0, limit)
 }
 
-/** `2 last attempt failed · 121 stale · 380 cached`. */
+/** `2 failing · 12 blocked · 380 ok`. */
 export function healthLabel(counts: HealthCounts, limit?: number): string {
   return healthParts(counts, limit).map((p) => p.text).join(' · ')
 }
 
-/** How many nodes are in a state that needs attention (a warning tone: blocked, stale, partial, unsynced). */
+/** How many nodes need attention short of failing: blocked, suspect or behind. */
 export function needsAttention(counts: HealthCounts): number {
-  return CACHE_STATES.filter((s) => cacheStateTone(s) === 'warning').reduce((n, s) => n + counts.states[s], 0)
+  return counts.states.blocked + counts.states.suspect + counts.states.behind
 }
 
 /** The tone of a scope's most urgent part; neutral for an empty scope. */

@@ -206,14 +206,15 @@ export interface WaitsOn { by: string; hint: string }
 
 /**
  * How a node stands in the wait: its last attempt failed, it is waiting to be brought up to
- * date (never run or stale), or neither.
+ * date (never run, stale, or unknown below a cutoff), or neither.
  */
 export type WaitStatus = 'failed' | 'waiting' | 'other'
 
 /** A node's wait status from its box: running and unloaded nodes are neither failed nor waiting. */
 export function waitStatus(state: GraphState): WaitStatus {
   if (isFailed(state)) return 'failed'
-  return state.kind === 'cache' && (state.state === 'never_run' || state.state === 'stale') ? 'waiting' : 'other'
+  // `unknown` waits too: a node below a cutoff below a failure cannot be brought up to date.
+  return state.kind === 'cache' && (state.state === 'never_run' || state.state === 'stale' || state.state === 'unknown') ? 'waiting' : 'other'
 }
 
 /**

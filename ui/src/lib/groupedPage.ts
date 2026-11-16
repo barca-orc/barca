@@ -216,7 +216,7 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
   const rankOf = (entry: GraphEntry): EntryRank => {
     const ids = leaves(entry.id)
     const counts = healthCounts(ids, byId, live)
-    return { name: entry.name ?? entry.id, failed: counts.lastFailed, stale: needsAttention(counts), lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
+    return { name: entry.name ?? entry.id, failed: counts.states.failing, stale: needsAttention(counts), lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
   }
   const sorted = entries.map((entry) => ({ entry, rank: rankOf(entry) })).sort((a, b) => compareEntries(params.sort, a.rank, b.rank)).map(({ entry }) => entry)
   // A search lists what matches by its own name: a group because of its name, never because a

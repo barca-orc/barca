@@ -163,7 +163,7 @@ const [query, setQuery] = useState('')
       {Object.entries(healthStates).map(([label, c]) => (
         <Variant key={label} label={label}><HealthBar counts={c} /></Variant>
       ))}
-      <Variant label="wide, every part named"><HealthBar counts={healthStates['every state']!} labelLimit={10} width={200} /></Variant>
+      <Variant label="wide, every part named"><HealthBar counts={healthStates['every health']!} labelLimit={10} width={200} /></Variant>
     </Spec>
 
     <Spec title="Age / LastSuccess" note="Relative, absolute in the chosen zone on hover; whose success it is when not the row's own; a failing row adds since when and how many runs in a row, a group how many members fail.">
