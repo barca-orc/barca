@@ -46,9 +46,8 @@ describe('grouped page params', () => {
     expect(selectChanges(false, 'p.py:x')).toEqual({ node: 'p.py:x' })
     expect(selectChanges(true, null)).toEqual({ focus: null })
     expect(openGroupChanges('group:p.py:inner', null)).toMatchObject({ group: 'group:p.py:inner', node: null, focus: null, q: null, show: null })
-    // The sole group is the root: opening it clears the scope; a pipeline card opens its file.
+    // The sole group is the root: opening it clears the scope.
     expect(openGroupChanges('group:p.py:outer', 'group:p.py:outer')).toMatchObject({ group: null })
-    expect(openGroupChanges('domain:q.py', null)).toMatchObject({ pipeline: 'q.py', group: null })
     expect(revealChanges('p.py:y', tree, false)).toEqual({ group: 'group:p.py:inner', node: 'p.py:y', focus: null, q: null, show: null })
     expect(revealChanges('p.py:y', tree, true)).toMatchObject({ focus: 'p.py:y', node: null })
     expect(modeChanges('flat', 'group:p.py:inner')).toMatchObject({ flat: '1', group: null })
@@ -82,6 +81,29 @@ describe('grouped level', () => {
     expect(level.entries.map((e) => e.id)).toEqual(['group:p.py:outer', 'p.py:loose'])
     expect(level.visualStates['group:p.py:outer']).toMatchObject({ kind: 'group' })
     expect(level.visualStates['p.py:loose']).toMatchObject({ kind: 'cache', state: 'cached' })
+  })
+
+  it('draws in the graph, at the top level of a project with groups, what the list lists: groups and loose nodes, with edges', () => {
+    // A second file with a chain of forty nodes, none of them grouped, fed by the outer group.
+    const many = [
+      ...assets,
+      ...Array.from({ length: 40 }, (_, i) => asset(`q.py:n${i}`, 'asset', i ? [`q.py:n${i - 1}`] : ['p.py:x'])),
+    ]
+    const manyStates = many.map((a) => state(a.id))
+    const list = groupedLevel({ params: params(''), tree, allAssets: many, states: manyStates, statesFailed: false, live: {} })
+    const graph = groupedLevel({ params: params('view=graph'), tree, allAssets: many, states: manyStates, statesFailed: false, live: {} })
+    expect(graph.drawn.map((e) => e.id)).toEqual(list.entries.map((e) => e.id))
+    expect(graph.drawn.find((e) => e.id === 'q.py:n0')?.inputs).toEqual(['group:p.py:outer'])
+  })
+
+  it('leads a group\'s card with its failure even while a run works inside it', () => {
+    const level = input('pipeline=p.py&view=graph', {
+      states: states.map((s) => (s.id === 'p.py:y' ? state(s.id, { last_materialization: failed as NodeState['last_materialization'] }) : s)),
+      live: { 'p.py:x': 'running' },
+    })
+    expect(level.visualStates['group:p.py:outer']).toMatchObject({ kind: 'group', label: '1 failing' })
+    const parts = (level.visualStates['group:p.py:outer'] as { parts?: { text: string }[] }).parts
+    expect(parts?.map((p) => p.text).slice(0, 2)).toEqual(['1 failing', '1 running'])
   })
 
   it('opens a group to its members and knows its external inputs', () => {

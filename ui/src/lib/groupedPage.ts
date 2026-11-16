@@ -5,7 +5,6 @@
  * effects and renders; everything it decides is here, so it can be tested without a browser.
  */
 
-import { domainFile, domainMap, type DomainMap } from './domainMap'
 import { shortName, type GraphEntry } from './graph'
 import { liveGraphState, memberHealth, PENDING_GRAPH_STATE, type GraphState } from './graphState'
 import {
@@ -86,10 +85,9 @@ export function selectChanges(graph: boolean, id: string | null): ParamChanges {
   return { [graph ? 'focus' : 'node']: id }
 }
 
-/** Open group `id` (null: the root); a pipeline card of the map opens that pipeline. */
+/** Open group `id` (null: the root). */
 export function openGroupChanges(id: string | null, sole: string | null): ParamChanges {
-  const file = id && domainFile(id)
-  return { ...(file ? { pipeline: file, group: null } : { group: id === sole ? null : id }), node: null, focus: null, q: null, show: null }
+  return { group: id === sole ? null : id, node: null, focus: null, q: null, show: null }
 }
 
 /** Jump to node `id` where it lives: its group open, the node selected. */
@@ -149,8 +147,6 @@ interface GroupedLevel {
   entries: GraphEntry[]
   /** Inputs of the open group from outside it. */
   external: string[]
-  /** All pipelines as a map of files, when the graph shows that. */
-  map: DomainMap | null
   /** A graph too big to draw: the lineage of the selected node is drawn, or a picker shown. */
   tooBig: boolean
   lineageOf: string | null
@@ -188,22 +184,21 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
   const scope = requestedScope ?? (flat ? null : sole)
   const projected = projectGroups(assets, tree, scope)
   const entries: GraphEntry[] = flat ? assets.map((a) => ({ ...a, name: shortName(a.id) })) : projected.entries
-  const map = graph && !pipeline && !scope && !flat ? domainMap([...allAssets]) : null
-  const tooBig = graph && !map && entries.length > GRAPH_LIMIT
+  // The graph draws what the list lists at every level, All pipelines included: its groups and
+  // loose nodes, with the edges between them.
+  const tooBig = graph && entries.length > GRAPH_LIMIT
   const lineageOf = tooBig && selected && !tree.groups.has(selected) ? selected : null
   // Lineage crosses pipelines: a consumer in another file is still downstream.
   const consumers = consumersOf(allAssets)
   const pathOf = (id: string) => groupPath(tree.parents.get(id) ?? null, tree).map((g) => g.name).join(' › ')
   const placeOf = (id: string) => groupPath(tree.parents.get(id) ?? null, tree).filter((g) => g.id !== sole).map((g) => g.name).join(' › ') || sourceFile(id)
-  const drawn: GraphEntry[] = map
-    ? map.entries
-    : tooBig
-      ? lineageOf ? lineage(lineageOf, assets, 2, consumers).map((a) => ({ ...a, name: shortName(a.id) })) : []
-      : scope && !flat ? withPorts(entries, projected.consumers, placeOf) : entries
+  const drawn: GraphEntry[] = tooBig
+    ? lineageOf ? lineage(lineageOf, assets, 2, consumers).map((a) => ({ ...a, name: shortName(a.id) })) : []
+    : scope && !flat ? withPorts(entries, projected.consumers, placeOf) : entries
   const needle = query.trim().toLowerCase()
   const hits = searchHits({ needle, flat, show, graph, entries, scope, leavesOf, assets, byId, byKind })
   const stateOf = (entry: GraphEntry): GraphState => {
-    const memberIds = map?.leaves.get(entry.id) ?? leaves(entry.id)
+    const memberIds = leaves(entry.id)
     const liveStatus = live[entry.id]
     const health = entry.kind === 'group'
       ? groupHealth(memberIds, byId, live)
@@ -228,7 +223,7 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
     ...hits,
   ]
   return {
-    assets, byId, leavesOf, sole, scope, entries, external: projected.external, map, tooBig, lineageOf, drawn, hits,
+    assets, byId, leavesOf, sole, scope, entries, external: projected.external, tooBig, lineageOf, drawn, hits,
     consumers, visualStates, scopeIds, scopedStates, visibleEntries, isHit: new Set(hits.map((h) => h.id)), pathOf, placeOf, leaves,
   }
 }

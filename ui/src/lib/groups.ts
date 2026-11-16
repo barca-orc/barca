@@ -144,10 +144,12 @@ export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): num
 }
 
 /**
- * A group's box: its most urgent fact, from its members' counts (`healthCounts`). Run work comes
- * first (the group pulses while a run is inside it), then failed last attempts, then the state
- * most in need of attention by rank; the hint names every part. A group has no state of its own:
- * this summarizes its members in their own words.
+ * A group's box: its most severe fact first, from its members' counts (`healthCounts`, ordered
+ * by `healthParts`): failed last attempts, then run work, then the state most in need of
+ * attention by rank; `parts` carries every part, for a card to show the rest compactly, and the
+ * hint names them all. A group with run work and no failure is a run box (it pulses); a failure
+ * inside a group that is also running still leads. A group has no state of its own: this
+ * summarizes its members in their own words.
  */
 export function groupHealth(
   ids: string[],
@@ -156,12 +158,13 @@ export function groupHealth(
 ): GraphState {
   const counts = healthCounts(ids, states, live)
   const hint = healthLabel(counts) || 'No members with a state.'
-  if (counts.running > 0) {
-    return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: `${counts.running.toLocaleString()} running`, hint }
+  const parts = healthParts(counts).map(({ glyph, tone, count, word, text }) => ({ glyph, tone, count, word, text }))
+  const [first] = parts
+  if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint, parts }
+  if (counts.running > 0 && counts.lastFailed === 0) {
+    return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: first.text, hint, parts }
   }
-  const [first] = healthParts(counts, 1)
-  if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint }
-  return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint }
+  return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint, parts }
 }
 
 /** Collapse only visual edges. Real inputs and the original graph stay intact. */

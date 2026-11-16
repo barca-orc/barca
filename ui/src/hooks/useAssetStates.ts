@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type StateScope } from '@/lib/api'
 import { POLL_WHOLE_MS, statePollInterval } from '@/lib/running'
 import { useSearchParams } from 'react-router'
@@ -9,6 +9,7 @@ import { inPipeline } from '@/lib/pipeline'
 import { groupTree, viewScope } from '@/lib/groups'
 import { recovering } from './polling'
 import type { NodeState } from '@/lib/types'
+import { knownStates } from '@/lib/knownStates'
 
 /** The query key of `scope`'s state; `null` is the whole project. */
 function stateKey(scope: StateScope | null) {
@@ -68,4 +69,20 @@ export function useWholeState() {
     refetchInterval: recovering(POLL_WHOLE_MS),
     retry: false,
   })
+}
+
+/**
+ * The open scope's state rows, or while they load the newest rows already loaded for its nodes
+ * (`knownStates`): a navigation keeps each card's last known state instead of "Checking…".
+ * `undefined` only when no state has ever loaded.
+ */
+export function useKnownStates(data: readonly NodeState[] | undefined): readonly NodeState[] | undefined {
+  const client = useQueryClient()
+  // Read when the scope's own rows change (arrive, or a navigation drops them): the cache as it
+  // is at that moment.
+  return useMemo(() => {
+    if (data) return data
+    const loaded = client.getQueryCache().findAll({ queryKey: ['state'] }).map((q) => ({ data: q.state.data as NodeState[] | undefined, updatedAt: q.state.dataUpdatedAt }))
+    return knownStates(undefined, loaded)
+  }, [data, client])
 }

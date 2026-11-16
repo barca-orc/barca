@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { buildGraph, graphAt, layoutInput, type GraphEntry, type LayoutDir } from '@/lib/graph'
-import type { LayoutPositions } from '@/lib/graphLayout'
+import type { Layout } from '@/lib/graphLayout'
 
 type Graph = ReturnType<typeof buildGraph>
 
@@ -43,10 +43,10 @@ export function useGraphLayout(assets: GraphEntry[], dir: LayoutDir): Graph | nu
     })
     const w = worker.current
     const id = ++requests.current
-    const onMessage = (event: MessageEvent<{ id: number; positions: LayoutPositions }>) => {
+    const onMessage = (event: MessageEvent<{ id: number; layout: Layout }>) => {
       if (event.data.id !== id) return
       const { assets, dir } = latest.current
-      setLaidOut({ key, graph: graphAt(assets, dir, event.data.positions) })
+      setLaidOut({ key, graph: graphAt(assets, dir, event.data.layout) })
     }
     w.addEventListener('message', onMessage)
     const { assets, dir } = latest.current

@@ -68,11 +68,11 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/status.ts` | `statusMeta` — the run lifecycle's one table (`StatusKind` → tone and word); `freshnessLabel`, `nodeKindLabel` | `status.test.ts` |
 | `lib/tone.ts` | `Tone`, `toneMeta` — the status hues both tables map onto; colour is never the only carrier | — |
 | `lib/graphState.ts` | `graphState(node)` — a node's box: its cache state (word, tone, detail, failed last attempt), the run on it, or no state yet | `graphState.test.ts` |
-| `lib/graphView.ts` | `fitTarget`, `neighborInDirection`, `waitsOn` — what a fit shows, where the keyboard goes, what a never-run node waits on | `graphView.test.ts` |
-| `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation | `groupedPage.test.ts` |
-| `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
-| `lib/graphLayout.ts` | `layout(input)` — dagre per connected part, parts packed in rows, no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
-| `lib/domainMap.ts` | `domainMap(assets)` — All pipelines as a card per file, weighted edges between files | `domainMap.test.ts` |
+| `lib/graphView.ts` | `fitViewport`, `fitTarget`, `revealViewport`, `neighborInDirection`, `waitsOn` — the viewport a fit sets (never below the zoom where a card's smallest label is 11px: what fits there around the selected, failed, running node or the start, the rest a pan away), the pan that keeps a selection clear of an opening panel, where the keyboard goes, what a never-run node waits on | `graphView.test.ts` |
+| `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation; the graph draws the same entries as the list at every level, All pipelines included | `groupedPage.test.ts` |
+| `lib/knownStates.ts` | `knownStates(current, loaded)` — while a scope's state loads, each node's newest row already loaded (`useKnownStates`): a navigation keeps the last known state, "Checking…" only for a node never loaded | `knownStates.test.ts` |
+| `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout; `impliedEdges` — in a graph of groups, the edges another path already shows (left out of the layout, drawn for the selection) | `graph.test.ts` |
+| `lib/graphLayout.ts` | `layout(input)` — dagre per connected part (by dependency depth), parts packed in rows, and each edge's route (`routeEdges`: straight through a rank between its boxes, curving only between ranks, so no edge crosses a card; drawn by `routePath` in `components/graph/RoutedEdge.tsx`), no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count and state, through `assetTable.fileDisplay`, as its table header shows it); `mergeStates` for the sidebar | `pipeline.test.ts` |
 | `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
@@ -264,6 +264,10 @@ they arrive. The tests do not exercise that (fonts are local and fast).
   be a second opinion that can disagree).
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
+
+A group card (`groupHealth`) leads with its most severe fact in words (failing beats running beats
+stale, the order of `healthParts`), the other parts beside it as glyph and count; the graph's
+legend lists every state on its cards, each part of a group card included.
 
 Graph state presentation lives in `src/lib/graphState.ts`. A resting node shows its
 `cache.state` from `/state` as its glyph and the CLI's word; a failed last attempt shows as
