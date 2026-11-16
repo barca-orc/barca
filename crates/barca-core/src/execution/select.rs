@@ -460,7 +460,11 @@ pub(super) async fn expand_and_decide<'p>(
         agent_mode: session.request.agent_mode,
     })
     .await?;
-    trace_point!(session.started.trace, "phase{phase_idx}_cache_check_done");
+    trace_point!(
+        session.started.trace,
+        "phase{phase_idx}_cache_check_done (plan reasons so far {:.1}ms)",
+        session.state.decide_state.plan_tally.lookup.as_secs_f64() * 1000.0
+    );
     record_plan_reasons(session);
     if let Some(pin) = &session.state.pin {
         pin.run_hashes(session.state.decide_state.run_hashes().values());

@@ -2,6 +2,7 @@
 runs : array
 runs[] : object
 runs[].attempts : integer
+runs[].cancellation : null
 runs[].client_run_id : null
 runs[].command : string
 runs[].elapsed_seconds : null
@@ -11,6 +12,8 @@ runs[].failure : null
 runs[].files : array
 runs[].finished_at : null
 runs[].job : null
+runs[].principal : null
+runs[].retries : integer
 runs[].run_id : string
 runs[].schedule_id : null
 runs[].scheduled_at : null
@@ -20,6 +23,7 @@ runs[].steps_cached : integer
 runs[].steps_executed : integer
 runs[].steps_total : integer
 runs[].target : string
+runs[].trigger_reason : null
 runs[].triggered_by : null
 total : integer
 truncated : boolean

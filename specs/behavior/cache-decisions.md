@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 6. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 7. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -182,6 +182,24 @@ complete publication, invalid keys and missing siblings).
   for a partially written ledger. Captured output is written separately, after the outcome
   transaction.
 
+### Explaining a run's executions
+
+- When a run decides a phase, every step that is not a cache hit gets the reason the decision
+  has for it, and the run keeps one bounded aggregate of them (`runs.plan_reasons`): by
+  category and subject, how many nodes and steps. Categories name only what the engine
+  decides: a task or sensor, a refresh (named, cascaded, all), a missing or evicted artifact
+  read by the run, and, for a step with no cache hit, its history: no success ever (never run,
+  or new keys of a partitioned node), the last attempt at this run hash failed, or the
+  components that differ from the last success (the `barca status` diff: code, decorator,
+  helper, kind, input, sensor, value, env). A last success without recorded components is a
+  plain `changed`; a step not looked up (a server's ledger answered, or past 10,000 keys of one
+  node in a phase) is `not_examined`.
+- Only steps that run are looked up, a few thousand per query, so a run served from cache pays
+  nothing; the aggregate is written by the progress recorder with its next batch and again with
+  the terminal write. The reasons explain a decision; they never make one.
+- A run in progress has the reasons of the phases decided so far. A phase never reached (the run
+  failed or was cancelled first) adds nothing.
+
 ### Interrupted runs
 
 A run is reported `interrupted` only on an observation that can be made only when its process
@@ -222,6 +240,8 @@ reads the held version even when a newer materialization exists.
   required terminal result rows and status commit together or leave prior committed state.
 - **INV-CACHE-OWNER-01:** Uncertain process ownership alone cannot relabel a run interrupted;
   explicit operator reconciliation refuses a proven live owner.
+- **INV-CACHE-EXPLAIN-01:** A recorded plan reason never changes a cache decision, and every
+  step a run decided to execute is counted under at least one reason of its aggregate.
 
 ## Failures and recovery
 
@@ -256,6 +276,10 @@ early cutoff in [cache.rs](../../crates/barca-core/src/cache.rs) (`cutoff_tests`
 persistence tests in [persist.rs](../../crates/barca-core/src/persist.rs),
 run owners in [run_owner.rs](../../crates/barca-db/src/run_owner.rs) and
 [reconciliation](../../python/tests/test_history_reconcile.py).
+Plan reasons: the tally in [plan_reasons.rs](../../crates/barca-core/src/plan_reasons.rs) (bounded
+entries, nodes counted once) and [real runs](../../python/tests/test_plan_reasons.py) (never run,
+a changed helper and input, new keys, a failed retry, `--refresh-all`, a cached run recording
+none).
 
 Conformance: [incremental DAG regressions](../../python/tests/test_incremental_dag.py),
 [missing artifact recovery](../../python/tests/test_missing_artifact.py), dataset sink,

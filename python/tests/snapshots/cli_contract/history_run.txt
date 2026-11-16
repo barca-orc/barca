@@ -2,6 +2,7 @@
 hint : string
 run : object
 run.attempts : integer
+run.cancellation : null
 run.client_run_id : null
 run.command : string
 run.elapsed_seconds : number
@@ -12,6 +13,19 @@ run.files : array
 run.files[] : string
 run.finished_at : string
 run.job : string
+run.plan_reasons : object
+run.plan_reasons.nodes : integer
+run.plan_reasons.omitted : integer
+run.plan_reasons.reasons : array
+run.plan_reasons.reasons[] : object
+run.plan_reasons.reasons[].category : string
+run.plan_reasons.reasons[].example : string
+run.plan_reasons.reasons[].nodes : integer
+run.plan_reasons.reasons[].steps : integer
+run.plan_reasons.reasons[].subject : null
+run.plan_reasons.steps : integer
+run.principal : null
+run.retries : integer
 run.run_id : string
 run.schedule_id : null
 run.scheduled_at : null
@@ -21,6 +35,7 @@ run.steps_cached : integer
 run.steps_executed : integer
 run.steps_total : integer
 run.target : string
+run.trigger_reason : null
 run.triggered_by : string
 steps : array
 steps[] : object

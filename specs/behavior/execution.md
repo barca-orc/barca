@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 5. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 6. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -88,7 +88,12 @@ least once;
 replay must not duplicate the same run/key result. This is not an exactly-once promise for
 user side effects or external sinks.
 
-An explicit cancellation stops that run's work and reaps its owned helpers. A server drain
+An explicit cancellation stops that run's work and reaps its owned helpers. A server records
+why it cancelled a run (`runs.cancellation`): a request or its own stop, the token of the
+request, and whether the run had started; one cancelled while it waited in the queue executed
+nothing and names the runs it waited behind, among them one doing the same work. A server does
+not deduplicate identical requests: each is a run, and the later one waits in the queue or
+shares the earlier one's in-flight asset steps. A server drain
 stops admission and waits; its configured deadline/requeue rules determine interrupted work.
 Retry after a user exception may use the same worker. Crash, timeout, `sys.exit()` and failed
 import retries use a replacement worker. Backoff is enforced, not merely declared.
@@ -164,6 +169,11 @@ Conformance: [incremental persistence](../../python/tests/test_incremental_persi
 [runtime limits](../../python/tests/test_serve_runtime_limits.py),
 [worker failures](../../python/tests/test_worker_survives_exceptions.py),
 [helper shutdown](../../crates/barca-engine/src/helper_proc.rs).
+
+Conformance (cancellation records, #925): [token, reason and a queued cancellation](../../crates/barca-server/tests/auth.rs)
+(`a_run_records_its_requesting_token_and_reason_and_who_cancelled_it`) and
+[the same work already running](../../crates/barca-server/src/runs/tests.rs)
+(`a_queued_cancellation_names_the_same_work_already_running`).
 
 Conformance: [process storage overrides](../../python/tests/test_process_storage_overrides.py).
 Configuration details: [remote manual](../../crates/barca-cli/docs/remote.md).

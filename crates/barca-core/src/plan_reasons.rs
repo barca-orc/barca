@@ -29,6 +29,8 @@ pub(crate) struct PlanTally {
     steps: u64,
     /// Changed since [`PlanTally::take_changed`] last returned it.
     dirty: bool,
+    /// Time spent looking up reasons, for `BARCA_TRACE_TIMING`.
+    pub(crate) lookup: std::time::Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -150,6 +152,17 @@ pub(crate) async fn explain(
     if missed.is_empty() {
         return;
     }
+    let started = std::time::Instant::now();
+    explain_missed(cache, dag, state, missed).await;
+    state.plan_tally.lookup += started.elapsed();
+}
+
+async fn explain_missed(
+    cache: &crate::cache::CacheReader,
+    dag: &Dag,
+    state: &mut DecideState,
+    missed: Missed,
+) {
     let not_examined = [(ReasonCategory::NotExamined, None)];
     // A server's ledger answered the lookups: this machine's history is not the one to ask.
     if cache.ledger().is_some() {

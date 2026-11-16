@@ -175,6 +175,12 @@ every database from before 0.29.2 (#629):
   ids are not stored: they are derived from the run id and the step id
   (`telemetry::datadog::step_trace_ref`), so `barca history RUN_ID --json` and `GET /runs/{id}`
   serve `trace_id`/`span_id` only for steps of a run with this set. Older binaries ignore it.
+- `runs.principal`, `runs.trigger_reason`, `runs.plan_reasons` and `runs.cancellation` (TEXT,
+  nullable, #925): who asked a server for the run (`token:<name>`) and the free-text reason its
+  request gave; why the run executed what it did (`PlanReasons` JSON: `{nodes, steps, reasons,
+  omitted}`, at most 64 reasons), written as each phase is decided and with the outcome; and for
+  a run a server cancelled, `{by, principal, started, waiting_behind, same_as}`. `NULL` otherwise
+  and on older rows. Older binaries ignore them.
 - `ledger_posts` (0.27.0, RFC-0007): on a machine that runs against a server's ledger, one row per
   run it posted or has yet to post (`client_run_id` primary key, `server`, the post `body` as
   JSON, `state` `unsynced` or `shared`, `server_run_id`, the last `error`, `attempts`,

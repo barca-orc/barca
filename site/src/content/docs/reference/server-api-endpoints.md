@@ -22,9 +22,9 @@ return the corresponding headers without a body.
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/runs` | Start a run of `barca get` or `barca run` on the server. Body: [`RunRequest`](/reference/server-api/#starting-a-run). `202 {"run_id", "status", "position"}` (the run joins the [run queue](#the-run-queue): `running` when it started at once, or `pending` and its place, 1 = next), or `200` with the `--dry-run` JSON when `dry_run` is set. |
-| `GET`  | `/runs/{run_id}` | The run: what started it, its status and, once finished, its [outcome](/reference/server-api/#outcomes), with its steps and captured lines. Survives a restart. At most 1000 steps (`?limit=N`, `?all=true`; failed steps first), with `steps_page: {total, truncated}`. |
+| `GET`  | `/runs/{run_id}` | The run: what started it, its status and, once finished, its [outcome](/reference/server-api/#outcomes), with its steps and captured lines. Survives a restart. At most 1000 steps (`?limit=N`, `?offset=M`, `?all=true`; failed steps first), with `steps_page: {total, truncated, next_offset?}`; why it executed what it did (`plan_reasons`), who asked and why (`principal`, `trigger_reason`), `retries`, and for a cancelled run `cancellation`. |
 | `GET`  | `/runs/{run_id}/events` | Server-sent events, each with an `id:`: `run_started`, `line`, `log`, `step_finished`, `run_finished`. |
-| `DELETE` | `/runs/{run_id}` | Cancel a pending or running run. |
+| `DELETE` | `/runs/{run_id}` | Cancel a pending or running run; the run records who cancelled it and whether it had started (`cancellation`). |
 | `GET`  | `/runs/{run_id}/output` | The final artifact's bytes of a successful single-target run. |
 | `GET`  | `/runs/{run_id}/logs` | What the run's steps wrote (stdout and stderr), so far while it runs: `{run_id, status, logs}`. `?step=` and `?stream=stdout\|stderr` filter as `barca logs` does. |
 | `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
