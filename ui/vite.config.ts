@@ -23,7 +23,9 @@ export default defineConfig(({ command }) => ({
   },
   // Playwright specs in e2e/ run with `pnpm test:e2e`, not vitest.
   test: { exclude: ['e2e/**', 'e2e-groups/**', 'e2e-auth/**', 'node_modules/**'] },
-  server: { proxy: API_PROXY },
+  // The demo projects under demo/ write thousands of artifacts while they run; watching them
+  // stalls the dev server's file watcher.
+  server: { proxy: API_PROXY, watch: { ignored: ['**/demo/**'] } },
   // `pnpm build && pnpm preview`: the production build against the same API, for measuring
   // what users get (React's development build is several times slower).
   preview: { proxy: API_PROXY },
