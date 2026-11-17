@@ -54,10 +54,12 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
     # First start: no prior record, so the job is anchored to now and nothing runs.
     with Serve(tmp_path) as first:
         job = schedule(first)
+        # No tick has fired: `GET /schedule` reports none, whatever the scheduler anchored.
         assert job["last_run"] is None, job
-        anchored = job["last_fired"]
-        assert anchored is not None
+        assert job["last_fired"] is None, job
+        assert job["late"] is False, job
     assert "catch-up" not in first.stderr, first.stderr
+    [anchored] = _last_fired(tmp_path).values()
     assert _last_fired(tmp_path) == {"pipeline.py:yearly": anchored}
     assert _rows(tmp_path).get("yearly", 0) == 0
 
@@ -81,6 +83,8 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
         )
         assert run["status"] == "complete", run
         caught_up = job["last_fired"]
+        done = schedule(second)
+        assert (done["last_run_id"], done["last_status"]) == (handle, "success"), done
     assert f"catch-up run pipeline.py:yearly → {handle}" in second.stderr, second.stderr
     assert second.stderr.count("catch-up run") == 1, second.stderr
     assert _rows(tmp_path) == {"yearly": 1}
@@ -90,7 +94,8 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
     # A third start has nothing to catch up: the run does not repeat.
     with Serve(tmp_path) as third:
         job = schedule(third)
-        assert job["last_run"] is None, job
+        # The last tick and its run are read from the metadata DB, so a restart keeps them.
+        assert (job["last_run"], job["last_status"]) == (handle, "success"), job
         assert job["last_fired"] == caught_up
     assert "catch-up" not in third.stderr, third.stderr
     assert _rows(tmp_path) == {"yearly": 1}

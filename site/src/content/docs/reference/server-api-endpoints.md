@@ -174,8 +174,11 @@ Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`
 `shape`, `env`) plus `durations` — `{ median_seconds,
 p95_seconds, samples }` over the last 20 successful runs, or `null` — and `next_run`, the next cron
 fire time in unix seconds for scheduled nodes, with `prev_run`, the most recent fire time at or
-before now, and `late_since`, the first slot no run of the schedule has started for when one has
-passed (`null` while on time, paused, or never fired). `health` is the node's health word
+before now, and `late_since`, the first slot after its schedule's newest tick when one has
+passed (`null` while on time, paused, or never fired). A scheduled node also has `schedule`, the
+block `barca status --json` prints (`last_fired`, `last_run_id`, `last_status`, `late`,
+`late_since`, `next_fire`, the failure count and the pause, times as RFC 3339): the same values
+as its `GET /schedule` entry. `health` is the node's health word
 (`failing`, `blocked`, `suspect`, `behind`, `undecided`, `never_run`, `ok`) and `health_reason`
 the rule that decided it, classified per response
 ([Health](/reference/cli/status-fields/#health)); `measured` says whether an asset's rows were
@@ -455,8 +458,11 @@ Each `ScheduleEntry` is:
   "kind": "asset",
   "next_fire": 1780740000,
   "last_fired": 1780653600,
+  "last_run_id": "1b942bb33182",
   "last_run": "1b942bb33182",
-  "last_status": "complete",
+  "last_status": "success",
+  "late": false,
+  "late_since": null,
   "last_skipped": 1780657200,
   "skipped_for": "7c0d5e2a91f4",
   "skip_reason": "in_flight",
@@ -471,10 +477,14 @@ Each `ScheduleEntry` is:
 `next_fire` and `last_fired` are unix epoch seconds. `next_fire` is the next match of the cron
 expression in the zone the server evaluates cron in (`--timezone`), so it is when the job will
 fire; `next_run` in `GET /state` is computed the same way. `barca list` cannot know a server's
-zone and always uses the local time of the machine it runs on. A job the scheduler has not seen before
-gets `last_fired` set to the time the server first started with it, so it is not `null` even
-though nothing has run. `last_run` is the most recent scheduled `run_id` and `last_status` its state
-(`pending`/`running`/`complete`/`failed`/`cancelled`, or `null` if none yet).
+zone and always uses the local time of the machine it runs on. `last_fired` is the schedule's newest tick, the slot of the newest run it started or queued
+(`null` until one is recorded), `last_run_id` that run (`last_run` is the same id under its older
+name) and `last_status` its status in the words of `GET /runs`
+(`pending`/`running`/`success`/`failed`/`cancelled`/`error`/`interrupted`; `pending` while it
+waits in the run queue). `late_since` is the first slot after `last_fired` that has passed, and
+`late` whether that is further back than the schedule's grace plus its queue wait
+([Scheduling With Cron](/scheduling/)). `GET /state` and `barca status --json` report the same
+values in each scheduled node's `schedule` block; one function computes them for all three.
 
 A tick is skipped while a run of the same node is pending or running, whether the scheduler, an
 HTTP request or a `barca get` / `barca run` on the same project (`.barca/`, its process alive)

@@ -278,3 +278,68 @@ mod tests {
         );
     }
 }
+
+/// One run a schedule's tick started, as `runs` records it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledRun {
+    pub run_id: String,
+    /// The tick (`runs.scheduled_at`, unix seconds).
+    pub scheduled_at: i64,
+    /// `runs.status`: `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
+    pub status: String,
+    /// When it started executing (unix seconds); `None` when the row's time cannot be read.
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+}
+
+/// How many of a schedule's newest runs [`scheduled_runs`] reads.
+pub const SCHEDULED_RUNS_WINDOW: usize = 20;
+
+/// The newest [`SCHEDULED_RUNS_WINDOW`] runs each of `schedules` started, newest first
+/// (`idx_runs_schedule`: a seek per schedule, not the run history). A run waiting in the run
+/// queue has no row yet and is not here.
+pub async fn scheduled_runs(
+    db_path: &str,
+    schedules: &[String],
+) -> Result<HashMap<String, Vec<ScheduledRun>>, BarcaError> {
+    let failure = |e| BarcaError::Db(format!("failed to read scheduled runs: {e}"));
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut out = HashMap::new();
+    for schedule in schedules {
+        let mut rows = conn
+            .query(
+                "SELECT run_id, scheduled_at, status, started_at, finished_at FROM runs \
+                 WHERE schedule_id = ?1 AND scheduled_at IS NOT NULL ORDER BY id DESC LIMIT ?2",
+                libsql::params![schedule.clone(), SCHEDULED_RUNS_WINDOW as i64],
+            )
+            .await
+            .map_err(failure)?;
+        let mut runs = Vec::new();
+        while let Some(row) = rows.next().await.map_err(failure)? {
+            let Some(scheduled_at) = row
+                .get::<String>(1)
+                .ok()
+                .and_then(|at| barca_model::time::parse_rfc3339(&at))
+            else {
+                continue;
+            };
+            let time = |at: i32| {
+                row.get::<String>(at)
+                    .ok()
+                    .and_then(|t| barca_model::time::parse_db_utc(&t))
+            };
+            runs.push(ScheduledRun {
+                run_id: row.get::<String>(0).unwrap_or_default(),
+                scheduled_at,
+                status: row.get::<String>(2).unwrap_or_default(),
+                started_at: time(3),
+                finished_at: time(4),
+            });
+        }
+        if !runs.is_empty() {
+            out.insert(schedule.clone(), runs);
+        }
+    }
+    Ok(out)
+}

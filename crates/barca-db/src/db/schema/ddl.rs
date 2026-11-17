@@ -160,6 +160,9 @@ pub(crate) const INDEXES: &[&str] = &[
     // The successful results that wrote no rows (#925): `barca status` counts a partitioned
     // node's keys whose latest result is empty from these, a probe each, not every key's rows.
     "CREATE INDEX IF NOT EXISTS idx_mat_empty ON materializations(node_id, id) WHERE rows = 0 AND status = 'success'",
+    // A schedule's newest runs (`db::scheduled_runs`): where it stands is read on every poll
+    // of `GET /state` and `GET /schedule`, a seek per schedule. Only scheduled runs are in it.
+    "CREATE INDEX IF NOT EXISTS idx_runs_schedule ON runs(schedule_id, id) WHERE schedule_id IS NOT NULL",
 ];
 
 /// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.

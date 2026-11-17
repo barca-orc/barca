@@ -250,60 +250,6 @@ pub fn prev_fire(cron: &Cron, zone: &Zone, now: DateTime<Utc>) -> Option<DateTim
     }
 }
 
-/// Where a schedule stands at `now`: its last slot (`prev`), its next (`next`), and the first
-/// slot no run has started for, when one has passed (`late_since`): the first occurrence after
-/// `last_tick`, the tick of the newest run the schedule started (unix seconds). `late_since` is
-/// `None` while on time and when no scheduled run is recorded (a schedule that never fired is
-/// not late: the scheduler anchors a new job at its first start, `barca docs scheduling`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Slots {
-    pub prev: Option<i64>,
-    pub next: Option<i64>,
-    pub late_since: Option<i64>,
-}
-
-pub fn slots(cron: &Cron, zone: &Zone, now: DateTime<Utc>, last_tick: Option<i64>) -> Slots {
-    let prev = prev_fire(cron, zone, now).map(|t| t.timestamp());
-    let late_since = last_tick
-        .and_then(|tick| chrono::DateTime::from_timestamp(tick, 0))
-        .and_then(|tick| next_fire(cron, zone, tick))
-        .map(|t| t.timestamp())
-        .filter(|first| *first <= now.timestamp());
-    Slots {
-        prev,
-        next: next_fire(cron, zone, now).map(|t| t.timestamp()),
-        late_since,
-    }
-}
-
-#[cfg(test)]
-mod slot_tests {
-    use super::*;
-
-    fn at(s: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
-    }
-
-    #[test]
-    fn a_schedule_is_late_from_the_first_slot_after_its_last_started_tick() {
-        let cron = CronExpr::parse("*/5 * * * *").unwrap();
-        let now = at("2026-11-16T12:21:30Z");
-        let slot = |s: &str| at(s).timestamp();
-        // The 12:20 tick started: on time, its last slot 12:20 and its next 12:25.
-        let on_time = slots(&cron, &Zone::Utc, now, Some(slot("2026-11-16T12:20:00Z")));
-        assert_eq!(on_time.prev, Some(slot("2026-11-16T12:20:00Z")));
-        assert_eq!(on_time.next, Some(slot("2026-11-16T12:25:00Z")));
-        assert_eq!(on_time.late_since, None);
-        // The newest tick that started was 12:00: every slot from 12:05 was missed.
-        let behind = slots(&cron, &Zone::Utc, now, Some(slot("2026-11-16T12:00:00Z")));
-        assert_eq!(behind.late_since, Some(slot("2026-11-16T12:05:00Z")));
-        // At a slot exactly, that slot is the last one.
-        let exact = slots(&cron, &Zone::Utc, at("2026-11-16T12:25:00Z"), None);
-        assert_eq!(exact.prev, Some(slot("2026-11-16T12:25:00Z")));
-        assert_eq!(exact.late_since, None, "never fired: not late");
-    }
-}
-
 #[cfg(test)]
 mod timezone_tests {
     use super::*;

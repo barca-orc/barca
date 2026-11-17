@@ -2413,7 +2413,7 @@ fn cache_state(nodes: &serde_json::Value, name: &str) -> String {
 
 /// The tag of a state that has stopped changing: a read with it is a `304` with no body. The
 /// fixture's every-second `ticking` asset may move its slots (`next_run`, `prev_run`,
-/// `late_since`) between two reads, which rightly changes the tag, so that alone is read again;
+/// `late_since`, and its `schedule` block, which holds the same) between two reads, which rightly changes the tag, so that alone is read again;
 /// any other difference fails.
 #[cfg(unix)]
 async fn settled_state_tag(
@@ -2425,7 +2425,7 @@ async fn settled_state_tag(
         let mut nodes = nodes.clone();
         for node in nodes.as_array_mut().unwrap() {
             let node = node.as_object_mut().unwrap();
-            for slot in ["next_run", "prev_run", "late_since"] {
+            for slot in ["next_run", "prev_run", "late_since", "schedule"] {
                 node.remove(slot);
             }
         }

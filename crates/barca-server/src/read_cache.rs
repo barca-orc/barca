@@ -162,6 +162,17 @@ struct SharedSnapshot {
 type NodeAges = Arc<HashMap<String, barca_core::db::NodeAge>>;
 type Pinned = Arc<std::collections::HashSet<String>>;
 
+/// What the metadata database records of every schedule, shared by the polls of one database
+/// state: its ticks and its failed ticks.
+#[derive(Default)]
+pub(crate) struct ScheduleFacts {
+    pub(crate) ticks: HashMap<String, barca_core::schedule_standing::Ticks>,
+    pub(crate) failures: HashMap<String, barca_core::db::ScheduleFailures>,
+}
+
+/// Schedule facts as kept: the database state they are of and the schedules they were read for.
+type KeptScheduleFacts = (Stamp, Vec<String>, Arc<ScheduleFacts>);
+
 /// What a status result was computed from.
 #[derive(Clone)]
 struct StatusKey {
@@ -242,6 +253,9 @@ pub struct ReadCache {
     /// The pinned assets last read, and the database state they are of
     /// ([`AppState::cached_pinned`]).
     pinned: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
+    /// The last recorded ticks read, the database state they are of and the schedules they
+    /// were read for ([`AppState::cached_ticks`]).
+    ticks: tokio::sync::Mutex<Option<KeptScheduleFacts>>,
     /// What node ages are folded from, kept so that a read after a run recorded a few rows
     /// reads those rows only ([`barca_core::db::NodeAgesIndex`]).
     ages_index: Arc<tokio::sync::Mutex<barca_core::db::NodeAgesIndex>>,
@@ -623,6 +637,42 @@ impl AppState {
         );
         *kept = Some((db.clone(), pinned.clone()));
         Ok(pinned)
+    }
+
+    /// What the database in state `db` records of `schedules` (scheduled node ids): their
+    /// ticks ([`barca_core::schedule_standing::recorded`]) and failed ticks. `GET /schedule`,
+    /// `GET /state` and `GET /nodes` all read where a schedule stands from it. Read once per
+    /// database state.
+    pub(crate) async fn cached_ticks(
+        &self,
+        db: &Stamp,
+        db_path: &str,
+        mut schedules: Vec<String>,
+    ) -> Result<Arc<ScheduleFacts>, BarcaError> {
+        if schedules.is_empty() {
+            return Ok(Arc::default());
+        }
+        schedules.sort();
+        schedules.dedup();
+        let mut kept = self.reads.ticks.lock().await;
+        if let Some((stamp, ids, ticks)) = kept.as_ref()
+            && stamp == db
+            && *ids == schedules
+        {
+            return Ok(ticks.clone());
+        }
+        let (ids, db_path) = (schedules.clone(), db_path.to_string());
+        let ticks = Arc::new(
+            off_the_workers(move || async move {
+                Ok(ScheduleFacts {
+                    ticks: barca_core::schedule_standing::recorded(&db_path, &ids).await?,
+                    failures: barca_core::db::get_schedule_failures(&db_path).await?,
+                })
+            })
+            .await?,
+        );
+        *kept = Some((db.clone(), schedules, ticks.clone()));
+        Ok(ticks)
     }
 
     /// Typical durations for the database in state `db`, kept like a status result (read

@@ -67,7 +67,11 @@ failing first, and runs what is open. Filters and the open item are in the addre
 reopens the same view. Every time is relative (`3m ago`, `in 5m`), the exact time on hover.
 
 The Schedules page says when a schedule missed its slot (`late by 12m`) instead of counting down
-to its next one.
+to its next one, lists late schedules first, and shows each schedule's last tick with the status
+of the run it started (`queued` while that run waits for a run slot). Whether a schedule is late
+is the server's answer, the one `barca status --json` and `GET /schedule` give
+([Scheduling With Cron](/scheduling/)): the Assets page's causes and the Schedules page show the
+same value.
 
 ## States
 

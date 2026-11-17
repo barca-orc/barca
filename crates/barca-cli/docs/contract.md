@@ -2003,9 +2003,10 @@ counts every node even when `nodes` is truncated.
   by format `rows`, `columns[]`, `keys`, `key_count`, `sample` (with `--sample`), or only `note`
   when it cannot be read.
 - `schedule` (experimental, 0.29.3) appears on a node with `freshness=Schedule(...)`: `cron`,
-  `next_fire`, `last_fired`, `paused_until` (RFC 3339 UTC or `null`), `last_status`,
-  `skip_reason` (string or `null`), `failures`, `max_failures` (integers), `failing`, `paused`
-  and `live` (booleans; `live` is `true` when a running scheduler reported it). Its types are in
+  `next_fire`, `last_fired`, `late_since`, `paused_until` (RFC 3339 UTC or `null`), `last_status`,
+  `last_run_id`, `skip_reason` (string or `null`), `failures`, `max_failures` (integers),
+  `failing`, `paused`, `late` and `live` (booleans; `live` is `true` when a running scheduler
+  reported it). `last_run_id`, `late` and `late_since` are new in 0.44 (#958). Its types are in
   `specs/interfaces/server-api.openapi.yaml` (`NodeSchedule`).
 
 #### Problems only

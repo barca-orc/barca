@@ -213,7 +213,9 @@ def test_problems_on_the_servers_own_machine_read_the_metadata_db(deployment):
     assert schedule["live"] is False
     assert schedule["failing"] is True
     assert schedule["failures"] == 2
-    assert schedule["last_status"] is None
+    # The last tick and its run are read from the metadata DB, as the server reads them.
+    assert schedule["last_status"] == "failed"
+    assert schedule["last_run_id"] is not None
     assert schedule["last_fired"] is not None
 
 

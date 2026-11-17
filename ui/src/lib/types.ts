@@ -163,9 +163,17 @@ export interface ScheduleJob {
   cron: string
   kind: NodeKind
   next_fire: number | null
+  /** The newest tick the scheduler fired (unix seconds). */
   last_fired: number | null
+  /** The run that tick started; `last_run` is the same id under its older name. */
+  last_run_id: string | null
   last_run: string | null
+  /** That run's status, in the run list's words (`pending` while it waits in the run queue). */
   last_status: string | null
+  /** The server's one answer to "is it late" (`barca docs scheduling`). */
+  late: boolean
+  /** The first slot after `last_fired` that has passed (unix seconds); null while on time or paused. */
+  late_since: number | null
   last_skipped: number | null
   skipped_for: string | null
   /** Why the last due tick was skipped. */

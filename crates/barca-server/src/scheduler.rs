@@ -351,8 +351,8 @@ async fn persist_fired(db_path: &str, node_id: &str, epoch: i64) {
     }
 }
 
-/// Publish the current job set + last-fired/last-handle/last-skip bookkeeping into
-/// shared state for `GET /schedule` to read.
+/// Publish the current job set with its last-skip and failure bookkeeping into shared state
+/// for `GET /schedule` to read.
 fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping) {
     let snapshot: Vec<JobStatus> = jobs
         .iter()
@@ -362,8 +362,6 @@ fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping)
                 id: j.id.clone(),
                 cron: j.cron_str.clone(),
                 kind: j.kind,
-                last_fired: book.last_fired.get(&j.id).copied(),
-                last_handle: book.last_handle.get(&j.id).cloned(),
                 last_skipped: skip.map(|(at, _, _)| *at),
                 skipped_for: skip.and_then(|(_, _, handle)| handle.clone()),
                 skip_reason: skip.map(|(_, reason, _)| *reason),
