@@ -16,7 +16,7 @@ The change is local to the selected environment's metadata database.
 ## Usage
 
 ```txt wrap
-barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N | --all] [--json|--pretty]
+barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [--activity] [-l N | --all] [--json|--pretty]
 barca history --reconcile RUN_ID
 ```
 
@@ -82,6 +82,32 @@ barca history --target clean --triggered-by schedule --json
 barca history 836fdca186c8          # one run in detail
 barca history 836fdca186c8 --json   # {run, steps: [...], hint?}
 ```
+
+## Runs in progress and the last day's activity
+
+With `--status running`, each listed run that is in progress says what it is working on now
+(experimental): a `now: executing 3: orders, clean, report · 12 queued · 240/900 keys` line
+under its row, and in JSON `now` (`running`, `queued`, `keys`, `groups`, `line`), the object
+the web UI's run panel shows. Against a server, a run the server started is followed through
+its step events. Without one, a run streams its steps to nobody: every node of its job with
+no result since the run started counts as executing and `queued` is 0, and a run whose owner
+cannot be seen alive from this machine has no `now`.
+
+`barca history --activity` prints, instead of the runs, how many started in each of the last
+24 hours (experimental), by status and by what started them, counted over every recorded run
+of the window whatever `--limit` would list. JSON is `{"activity": {since, until,
+triggered_by, hours, total, summary}}`; hours are hours of UTC. It takes `--triggered-by`
+only: `--triggered-by manual,api,client` leaves a schedule's runs out.
+
+```bash
+barca history --status running
+barca history --status running --json --fields run_id,now
+barca history --activity
+barca history --activity --triggered-by manual,api,client --json
+```
+
+The full key list and the limits are in [status](/reference/cli/status/), "Runs in progress
+and the last day's activity".
 
 `barca history RUN_ID` prints the run's fields, the steps it recorded (status, attempts, time,
 peak memory, run hash, artifact path, format and size), and for each failed step its error,

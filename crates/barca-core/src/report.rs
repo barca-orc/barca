@@ -6,10 +6,11 @@
 
 mod commands;
 pub use commands::{
-    GetShape, OutputChunk, RenderedOutput, ResultFormat, Returned, Shown, first_multi_failure,
-    history_json, history_target, render_explain, render_failed_get, render_failed_run, render_get,
-    render_get_multi, render_history, render_list, render_multi, render_plan, render_rollup,
-    render_run, render_run_detail, render_sql, render_stats, render_status,
+    GetShape, HistoryExtras, HistoryNow, OutputChunk, RenderedOutput, ResultFormat, Returned,
+    Shown, first_multi_failure, history_json, history_target, render_activity, render_explain,
+    render_failed_get, render_failed_run, render_get, render_get_multi, render_history,
+    render_list, render_multi, render_plan, render_rollup, render_run, render_run_detail,
+    render_sql, render_stats, render_status,
 };
 pub(crate) use commands::{
     failed_run_body, multi_json, multi_parts, render_failed_get_returned, render_get_body,

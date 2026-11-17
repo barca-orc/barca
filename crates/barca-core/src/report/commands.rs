@@ -582,6 +582,9 @@ struct HistoryItem<'a> {
     finished_at: &'a Option<String>,
     job: &'a Option<String>,
     line: crate::run_list::RunLine,
+    /// With `--status running`: what a run in progress is working on now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    now: Option<&'a crate::run_list::RunNow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_reasons: &'a Option<crate::run_explain::PlanReasons>,
     principal: &'a Option<String>,
@@ -651,6 +654,7 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             finished_at,
             job,
             line: crate::run_list::run_line(run.into()),
+            now: None,
             plan_reasons,
             principal,
             retries,
@@ -679,18 +683,121 @@ struct HistoryPage<'a> {
     truncated: bool,
 }
 
+/// What each run in progress is working on now, by run id: `now` of `barca history --status
+/// running` ([`crate::queries::history_now`], or a server's `GET /history?status=running`).
+pub type HistoryNow = std::collections::HashMap<String, crate::run_list::RunNow>;
+
+/// What [`render_history`] prints beside the records, by run id.
+#[derive(Default)]
+pub struct HistoryExtras {
+    /// What a run in progress is working on now; a run without an entry prints none.
+    pub now: HistoryNow,
+    /// A run's `line` as a server computed it: printed as it is, since a record read from a
+    /// server's JSON lacks what the line counts (its failed steps). A run without an entry
+    /// gets the line of its own record.
+    pub line: std::collections::HashMap<String, crate::run_list::RunLine>,
+}
+
+impl HistoryExtras {
+    pub fn now(now: HistoryNow) -> Self {
+        Self {
+            now,
+            line: Default::default(),
+        }
+    }
+
+    /// The extras of `runs` as a server's `GET /history` lists them (`now`, `line`).
+    pub fn of_server_runs(runs: &serde_json::Value) -> Self {
+        let mut extras = Self::default();
+        for run in runs.as_array().into_iter().flatten() {
+            let Some(id) = run["run_id"].as_str() else {
+                continue;
+            };
+            if let Some(now) = run
+                .get("now")
+                .and_then(|now| serde_json::from_value(now.clone()).ok())
+            {
+                extras.now.insert(id.to_string(), now);
+            }
+            if let Some(line) = run
+                .get("line")
+                .and_then(|line| serde_json::from_value(line.clone()).ok())
+            {
+                extras.line.insert(id.to_string(), line);
+            }
+        }
+        extras
+    }
+}
+
+/// `barca history --activity`: the runs of the last 24 hours, hour by hour. JSON is
+/// `{"activity": {...}}`, the `activity` of `GET /runs`; the table lists the hours that had
+/// runs, in UTC.
+pub fn render_activity(activity: &crate::run_list::RunActivity, json: bool) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    if json {
+        let out = serde_json::json!({ "activity": activity });
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    line!(rendered, "{}", activity.summary);
+    let busy: Vec<_> = activity.hours.iter().filter(|h| h.runs > 0).collect();
+    if busy.is_empty() {
+        return rendered;
+    }
+    line!(
+        rendered,
+        "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6}",
+        "HOUR",
+        "RUNS",
+        "NOT OK",
+        "RUNNING",
+        "SCHEDULE",
+        "API",
+        "MANUAL",
+        "CLIENT"
+    );
+    line!(rendered, "{}", "-".repeat(72));
+    for hour in busy {
+        line!(
+            rendered,
+            "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6}",
+            crate::report::utc_cell(hour.at.trim_end_matches(":00Z")),
+            hour.runs,
+            hour.not_successful,
+            hour.in_progress,
+            hour.by_trigger.schedule,
+            hour.by_trigger.api,
+            hour.by_trigger.manual,
+            hour.by_trigger.client,
+        );
+    }
+    rendered
+}
+
 pub fn render_history(
     runs: &[crate::db::RunRecord],
     total: usize,
     json: bool,
     fields: Option<&[String]>,
+    extras: &HistoryExtras,
 ) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
     let page = Page::new(runs.len(), total);
     if json && fields.is_none() {
         let out = HistoryPage {
             hint: page.truncated.then(|| page.hint("runs")),
-            runs: runs.iter().map(HistoryItem::from).collect(),
+            runs: runs
+                .iter()
+                .map(|run| {
+                    let mut item = HistoryItem::from(run);
+                    item.now = extras.now.get(&run.run_id);
+                    if let Some(line) = extras.line.get(&run.run_id) {
+                        item.line = line.clone();
+                    }
+                    item
+                })
+                .collect(),
             total: page.total,
             truncated: page.truncated,
         };
@@ -698,7 +805,24 @@ pub fn render_history(
         return rendered;
     }
     if json || fields.is_some() {
-        let mut items: Vec<serde_json::Value> = runs.iter().map(history_json).collect();
+        let mut items: Vec<serde_json::Value> = runs
+            .iter()
+            .map(|run| {
+                let mut item = history_json(run);
+                if let Some(obj) = item.as_object_mut() {
+                    if let Some(now) = extras.now.get(&run.run_id) {
+                        obj.insert("now".into(), serde_json::to_value(now).unwrap_or_default());
+                    }
+                    if let Some(line) = extras.line.get(&run.run_id) {
+                        obj.insert(
+                            "line".into(),
+                            serde_json::to_value(line).unwrap_or_default(),
+                        );
+                    }
+                }
+                item
+            })
+            .collect();
         if let Some(f) = fields {
             project(&mut items, f);
         }
@@ -746,6 +870,9 @@ pub fn render_history(
         match &r.failure {
             Some(failure) => line!(rendered, "{row}  {}", failure_cell(failure)),
             None => line!(rendered, "{row}"),
+        }
+        if let Some(now) = extras.now.get(&r.run_id) {
+            line!(rendered, "  now: {}", now.line);
         }
     }
     if let Some(note) = page.note(runs.len(), "runs") {
@@ -2210,7 +2337,13 @@ mod history_json_tests {
             (vec![bare, full], 9),
         ] {
             assert_eq!(
-                stdout(render_history(&runs, total, true, None)),
+                stdout(render_history(
+                    &runs,
+                    total,
+                    true,
+                    None,
+                    &Default::default()
+                )),
                 through_values(&runs, total)
             );
         }

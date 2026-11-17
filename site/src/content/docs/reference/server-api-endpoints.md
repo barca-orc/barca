@@ -27,7 +27,7 @@ return the corresponding headers without a body.
 | `DELETE` | `/runs/{run_id}` | Cancel a pending or running run; the run records who cancelled it and whether it had started (`cancellation`). |
 | `GET`  | `/runs/{run_id}/output` | The final artifact's bytes of a successful single-target run. |
 | `GET`  | `/runs/{run_id}/logs` | What the run's steps wrote (stdout and stderr), so far while it runs: `{run_id, status, logs}`. `?step=` and `?stream=stdout\|stderr` filter as `barca logs` does. |
-| `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
+| `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs, and `activity`: the runs started in each of the last 24 hours (UTC), by status and by trigger, counted over every recorded run of the window (`barca history --activity --json`). `?triggered_by=manual,api,client` keeps the runs started that way (here: all but a schedule's) in the list, `total` and `activity`. `?status=running` lists the runs in flight, each with `active_steps` and `now` (the nodes executing, how many wait, keys done, the same by group and in one `line`), without `activity`. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
 
 <a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)).
@@ -44,7 +44,7 @@ client prints it as it would print the local command's.
 |--------|------|---------|
 | `GET`  | `/list` | `barca list --json --all` |
 | `GET`  | `/nodes?targets=a,b&sample=N` | `barca status --json --all`, for the server's ledger |
-| `GET`  | `/history?limit=N&all=1` | `barca history --json` (`-l N`, `--all`) |
+| `GET`  | `/history?limit=N&all=1` | `barca history --json` (`-l N`, `--all`); with `status=running`, each run in flight carries `now` as on `GET /runs?status=running` |
 | `GET`  | `/stats/{name}` | `barca stats --json` |
 | `GET`  | `/sql/views?files=a.py,b.py` | Which result each `barca sql` view reads in the ledger: `{"views": [{name, node, kind, partitioned, format, files: [{path, partition, content_hash}], stale, run_hash}], "missing": [{name, node, kind, partitioned, command, keys_unknown?}], "duplicates": [{name, ids}]}`, by the function a local `barca sql` uses. The client runs the query; the server runs no SQL. |
 | `GET`  | `/materializations?limit=N&offset=M` | Step results, newest first: `{"materializations": [{node_id, partition, run_id, run_hash, status, created_at, elapsed_seconds, cpu_seconds, max_rss_bytes, attempts, format, size_bytes, artifact, content_hash, error_type, error_message, rows}], total, limit, offset}` (`rows`: a tabular result's row count, `null` when not counted); `limit` defaults to 1000, at most 10000. `barca sql`'s `barca.materializations`. |

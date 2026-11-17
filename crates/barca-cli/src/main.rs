@@ -489,6 +489,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             status,
             target,
             triggered_by,
+            activity,
             since,
             limit,
             all,
@@ -522,6 +523,9 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 triggered_by.as_deref(),
                 since.as_deref(),
             )?;
+            if activity {
+                return client::activity(server, &filter, is_json(format), env.as_deref()).await;
+            }
             let json = fields_json(format, fields.as_deref())?;
             let limit = inspection_limit(limit, all, json, 10);
             client::history(
@@ -884,6 +888,7 @@ async fn run_cli(
             status,
             target,
             triggered_by,
+            activity,
             since,
             limit,
             all,
@@ -910,6 +915,11 @@ async fn run_cli(
                 triggered_by.as_deref(),
                 since.as_deref(),
             )?;
+            if activity {
+                return activity_cmd(env.as_deref(), &filter, is_json(format))
+                    .await
+                    .map_err(engine);
+            }
             let json = fields_json(format, fields.as_deref())?;
             let limit = inspection_limit(limit, all, json, 10);
             history_cmd(
@@ -920,6 +930,7 @@ async fn run_cli(
                     fields: fields.as_deref(),
                     reconcile: reconcile.as_deref(),
                     filter,
+                    python: &python,
                 },
             )
             .await

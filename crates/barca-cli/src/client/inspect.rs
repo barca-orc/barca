@@ -203,9 +203,40 @@ pub(crate) async fn history(
     let runs: Vec<barca_core::db::RunRecord> =
         serde_json::from_value(body["runs"].clone()).map_err(bad)?;
     let total = body["total"].as_u64().map_or(runs.len(), |t| t as usize);
+    // The server's own words for each run: its `line`, and with `--status running` what a
+    // run in progress is working on (`now`).
+    let extras = barca_core::report::HistoryExtras::of_server_runs(&body["runs"]);
     crate::commands::emit(barca_core::report::render_history(
-        &runs, total, json, fields,
+        &runs, total, json, fields, &extras,
     ));
+    Ok(())
+}
+
+/// `barca history --activity --server`: `activity` of `GET /runs`, counted by the server over
+/// the runs of the last 24 hours (with `--triggered-by`, over the runs started that way).
+pub(crate) async fn activity(
+    server: &Server,
+    filter: &barca_core::history_filter::HistoryFilter,
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let mut path = "/runs?limit=1".to_string();
+    for (key, value) in filter.query_pairs() {
+        if key == "triggered_by" {
+            path.push_str(&format!("&{key}={}", encode(&value)));
+        }
+    }
+    let body = server.get_json(&path).await?;
+    let Some(activity) = body.get("activity").filter(|a| !a.is_null()) else {
+        return Err(server.unexpected(
+            "GET /runs",
+            "the server sent no `activity`: it runs a barca older than 0.44",
+        ));
+    };
+    let activity: barca_core::run_list::RunActivity = serde_json::from_value(activity.clone())
+        .map_err(|e| server.unexpected("GET /runs", &e.to_string()))?;
+    crate::commands::emit(barca_core::report::render_activity(&activity, json));
     Ok(())
 }
 

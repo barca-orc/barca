@@ -142,3 +142,155 @@ def test_a_killed_cli_run_is_not_shown_as_running(tmp_path):
         assert _get(port, "/runs?status=running")["runs"] == []
     finally:
         _stop_server(serve)
+
+
+def _history(root: Path, *args: str) -> subprocess.CompletedProcess:
+    """`barca history ...` in `root`, as an agent runs it."""
+    return subprocess.run(
+        [_find_binary(), "history", *args],
+        cwd=root,
+        env=clean_env(),
+        capture_output=True,
+        text=True,
+        timeout=RUN,
+    )
+
+
+def _in_flight(root: Path, *args: str) -> list[dict]:
+    """The runs of `barca history --status running --json`."""
+    out = _history(root, "--status", "running", "--json", *args)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)["runs"]
+
+
+def test_history_says_what_a_run_in_flight_is_working_on_here_and_through_a_server(tmp_path):
+    """#991: `now` of `GET /runs?status=running` from the CLI, locally and with `--server`."""
+    _project(tmp_path)
+    serve = _serve(tmp_path)
+    server = ["--server", f"http://127.0.0.1:{serve.port}"]
+    cli = None
+    try:
+        # Nothing in flight: no run, and so no `now`.
+        assert _in_flight(tmp_path) == []
+        cli = _start(tmp_path, "get", "slow", log="cli.log")
+        wait_until(
+            lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run"
+        )
+        assert cli.poll() is None, (tmp_path / "cli.log").read_text()
+
+        # On this machine, from what the run recorded: its target has no result yet.
+        [here] = _in_flight(tmp_path)
+        now = here["now"]
+        assert [n["node_id"] for n in now["running"]] == ["pipeline.py:slow"], now
+        assert (now["queued"], now["keys"], now["groups"]) == (0, None, []), now
+        assert now["line"] == "executing 1: slow", now
+        # The server reads the same run by the same rule, and its route says the same.
+        [there] = wait_until(lambda: _in_flight(tmp_path, *server), "the server to list the run")
+        assert there["run_id"] == here["run_id"]
+        assert there["now"] == now
+        [route] = _get(serve.port, "/runs?status=running")["runs"]
+        assert route["now"] == now
+        # The table prints it under the run's row; `--fields` selects it.
+        table = _history(tmp_path, "--status", "running", "--pretty")
+        assert "\n  now: executing 1: slow\n" in table.stdout, table.stdout
+        fields = _in_flight(tmp_path, "--fields", "run_id,now")
+        assert fields == [{"run_id": here["run_id"], "now": now}]
+        # Not asked for the runs in progress: the list stays as it was.
+        listed = json.loads(_history(tmp_path, "--json").stdout)["runs"]
+        assert all("now" not in run for run in listed), listed
+
+        (tmp_path / "release").write_text("")
+        assert cli.wait(timeout=RUN) == 0, (tmp_path / "cli.log").read_text()
+        assert _in_flight(tmp_path) == []
+        assert _in_flight(tmp_path, *server) == []
+    finally:
+        (tmp_path / "release").write_text("")
+        if cli is not None:
+            _stop(cli)
+        _stop_server(serve)
+
+
+def _post(port: int, path: str, body: dict) -> dict:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as resp:
+        return json.loads(resp.read())
+
+
+def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli(tmp_path):
+    """#991: a run the server started, followed by its events; and `--activity`."""
+    _project(tmp_path)
+    # A node of its own for the first run: `upstream` then runs in the second, which reports
+    # it (a step served from the cache reports nothing, and would read as still executing).
+    with (tmp_path / "pipeline.py").open("a") as source:
+        source.write("\n\n@asset()\ndef apart() -> int:\n    return 2\n")
+    serve = _serve(tmp_path)
+    port = serve.port
+    server = ["--server", f"http://127.0.0.1:{port}"]
+    try:
+        # A finished run first, then one that waits in its slow step.
+        done = _post(port, "/runs", {"command": "get", "targets": ["apart"]})["run_id"]
+        wait_until(
+            lambda: _get(port, f"/runs/{done}")["status"] == "success", "the first run to finish"
+        )
+        slow = _post(port, "/runs", {"command": "get", "targets": ["slow"]})["run_id"]
+        wait_until(lambda: (tmp_path / "cli.started").exists(), "the slow step to start")
+
+        # Followed by its events: `upstream` finished, `slow` is executing.
+        def listed():
+            runs = _in_flight(tmp_path, *server)
+            executing = [n["node_id"] for n in runs[0]["now"]["running"]] if runs else []
+            return runs if executing == ["pipeline.py:slow"] else None
+
+        [run] = wait_until(listed, "the run in flight in barca history --server")
+        assert run["run_id"] == slow, run
+        assert run["now"]["line"] == "executing 1: slow", run
+        [route] = _get(port, "/runs?status=running")["runs"]
+        assert run["now"] == route["now"]
+
+        # The activity: counted by the server over the window, not over the runs listed.
+        out = _history(tmp_path, "--activity", "--json", *server)
+        assert out.returncode == 0, out.stderr
+        activity = json.loads(out.stdout)["activity"]
+        one = _get(port, "/runs?limit=1")
+        assert len(one["runs"]) == 1 and one["total"] == 2, one
+        assert activity == one["activity"]
+        assert len(activity["hours"]) == 24
+        total = activity["total"]
+        assert (total["runs"], total["ok"], total["in_progress"]) == (2, 1, 1), total
+        assert total["by_trigger"]["api"] == 2, total
+        assert activity["hours"][-1]["runs"] == 2, "both started in the current hour"
+        assert activity["summary"] == "2 runs in the last 24 hours · 1 in progress · 2 api"
+        # The same database read without the server gives the same counts.
+        local = json.loads(_history(tmp_path, "--activity", "--json", "--local").stdout)
+        assert local["activity"]["total"] == total
+        table = _history(tmp_path, "--activity", "--pretty", *server)
+        assert table.stdout.startswith(activity["summary"] + "\nHOUR"), table.stdout
+
+        # Without the schedule's runs: these two. Only the schedule's: none.
+        others = ["--triggered-by", "manual,api,client"]
+        kept = json.loads(_history(tmp_path, "--activity", "--json", *others, *server).stdout)
+        assert kept["activity"]["total"]["runs"] == 2
+        assert kept["activity"]["triggered_by"] == ["manual", "api", "client"]
+        assert _get(port, "/runs?triggered_by=manual,api,client")["total"] == 2
+        scheduled = _get(port, "/runs?triggered_by=schedule")
+        assert (scheduled["runs"], scheduled["total"]) == ([], 0), scheduled
+        assert scheduled["activity"]["total"]["runs"] == 0
+        assert scheduled["activity"]["summary"] == "0 runs in the last 24 hours"
+        # The activity takes no other filter.
+        refused = _history(tmp_path, "--activity", "--status", "failed", *server)
+        assert refused.returncode == 2, refused.stderr
+
+        (tmp_path / "release").write_text("")
+        wait_until(lambda: _get(port, f"/runs/{slow}")["status"] == "success", "the run to finish")
+        assert _in_flight(tmp_path, *server) == []
+        after = json.loads(_history(tmp_path, "--activity", "--json", *server).stdout)
+        assert after["activity"]["total"]["in_progress"] == 0
+        assert after["activity"]["total"]["ok"] == 2
+    finally:
+        (tmp_path / "release").write_text("")
+        _stop_server(serve)

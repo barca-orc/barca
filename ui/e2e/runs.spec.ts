@@ -111,19 +111,40 @@ test.describe('run history', () => {
   })
 })
 
-test('a failed run names its first failed step, and a bar filters to its hour', async ({ page }) => {
+test('a failed run names its first failed step, a bar filters to its hour, and schedule runs hide', async ({ page }) => {
   const started = new Date(Date.now() - 5 * 60_000).toISOString()
   const earlier = new Date(Date.now() - 3 * 3_600_000).toISOString()
   const row = { handle: null, command: 'get', files: [], target: null, triggered_by: null, scheduled_at: null, schedule_id: null, finished_at: null, elapsed_seconds: 1, steps_cached: 0, error: null }
-  await page.route(/\/runs(\?.*)?$/, (route) => route.fulfill({ json: {
-    runs: [
-      { ...row, id: 'r2', run_id: 'r2', status: 'failed', started_at: started, steps_total: 28404, steps_executed: 21950, first_failure: { node_id: 'p.py:orders', error: "KeyError: 'currency'" },
+  // The strip is the server's `activity`: 24 hours of UTC counted over every run of the window,
+  // here 62 runs of which the list holds two.
+  const counts = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
+  const triggers = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
+  const thisHour = Math.floor(Date.now() / 3_600_000) * 3_600_000
+  const startedHour = Math.floor(Date.parse(started) / 3_600_000) * 3_600_000
+  const activityOf = (schedule: number) => {
+    const hours = Array.from({ length: 24 }, (_, i) => {
+      const at = thisHour - (23 - i) * 3_600_000
+      const failed = at === startedHour ? 1 : 0
+      const ok = at === startedHour ? schedule : 0
+      return { at: new Date(at).toISOString().replace('.000Z', 'Z'), runs: ok + failed, ok, not_successful: failed, in_progress: 0,
+        by_status: { ...counts, success: ok, failed }, by_trigger: { ...triggers, schedule: ok, manual: failed } }
+    })
+    const total = { ...hours[0]!, runs: schedule + 1, ok: schedule, not_successful: 1 }
+    return { since: hours[0]!.at, until: new Date(thisHour + 3_600_000).toISOString(), triggered_by: schedule ? [] : ['manual', 'api', 'client'], hours, total,
+      summary: `${schedule + 1} runs in the last 24 hours · 1 not successful` }
+  }
+  const asked: string[] = []
+  await page.route(/\/runs(\?.*)?$/, (route) => {
+    const hidden = new URL(route.request().url()).searchParams.get('triggered_by')
+    asked.push(hidden ?? '')
+    const runs = [
+      { ...row, id: 'r2', run_id: 'r2', status: 'failed', triggered_by: 'manual', started_at: started, steps_total: 28404, steps_executed: 21950, first_failure: { node_id: 'p.py:orders', error: "KeyError: 'currency'" },
         // The row's words are the server's (`line`).
         line: { steps: '21,950 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 28,404 nodes planned · stopped at p.py:orders', failure: "stopped at orders · KeyError: 'currency'", failure_detail: "p.py:orders: KeyError: 'currency'" } },
-      { ...row, id: 'r1', run_id: 'r1', status: 'success', started_at: earlier, steps_total: 1, steps_executed: 1, first_failure: null, line: { steps: '1 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 1 node planned', failure: null, failure_detail: null } },
-    ],
-    total: 2, truncated: false,
-  } }))
+      { ...row, id: 'r1', run_id: 'r1', status: 'success', triggered_by: 'schedule', started_at: earlier, steps_total: 1, steps_executed: 1, first_failure: null, line: { steps: '1 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 1 node planned', failure: null, failure_detail: null } },
+    ].filter((run) => !hidden || hidden.split(',').includes(run.triggered_by))
+    return route.fulfill({ json: { runs, total: hidden ? 1 : 62, truncated: !hidden, activity: activityOf(hidden ? 0 : 61) } })
+  })
   await page.goto('/ui/#/runs')
   const failed = page.getByRole('row', { name: /r2/ })
   await expect(failed).toContainText("stopped at orders · KeyError: 'currency'")
@@ -131,9 +152,20 @@ test('a failed run names its first failed step, and a bar filters to its hour', 
   await expect(failed).toContainText('stopped at orders')
   await expect(failed).toContainText('5m ago')
   await expect(page.locator('.barca-activity-now')).toHaveText('now')
-  await page.getByRole('button', { name: /1 not successful/ }).click()
+  // Counted over the window, not the two runs loaded.
+  await expect(page.locator('.barca-activity-summary')).toContainText('62 runs · 1 not successful')
+  await page.getByRole('button', { name: /62 runs, 1 not successful/ }).click()
   await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
   await expect(failed).toBeVisible()
+  // Back to every hour, then without the schedule's runs: the server filters the list and the strip.
+  await page.getByRole('button', { name: /62 runs, 1 not successful/ }).click()
+  await expect(page.getByRole('row', { name: /r1/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Hide schedule runs' }).click()
+  await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
+  await expect(failed).toBeVisible()
+  await expect(page.locator('.barca-activity-summary')).toContainText('1 run · 1 not successful · schedule runs hidden')
+  await expect(page).toHaveURL(/schedule=hide/)
+  expect(asked).toContain('manual,api,client')
 })
 
 // A deep queue (the fixture's runs finish too fast to make one): the running run is listed first,

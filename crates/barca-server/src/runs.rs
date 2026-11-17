@@ -29,7 +29,8 @@ mod projection;
 mod tests;
 
 pub(crate) use handlers::{
-    cancel, create, detail, events, get_target, list, logs, output, run_all, run_target, status,
+    cancel, create, detail, events, get_target, in_flight_now, list, logs, output, run_all,
+    run_target, status,
 };
 #[cfg(test)]
 pub(crate) use lifecycle::start;

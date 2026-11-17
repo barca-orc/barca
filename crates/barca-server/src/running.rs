@@ -196,6 +196,14 @@ fn covered<'a>(
     nodes: &'a [NodeStatus],
     dag: &barca_core::dag::Dag,
 ) -> Vec<&'a str> {
+    // A CLI run: the rule `barca history --status running` applies on its own machine.
+    if run.progress.is_none() {
+        return nodes
+            .iter()
+            .filter(|n| barca_core::run_list::unfollowed_run_covers(&run.command, &run.nodes, n))
+            .map(|n| n.id.as_str())
+            .collect();
+    }
     if run.nodes.is_empty() {
         return nodes
             .iter()
@@ -262,14 +270,7 @@ pub(crate) fn by_node(
                 }
                 Some(p) => p.finished.contains(id),
                 // A CLI run: finished once it recorded a materialization of the node.
-                None => {
-                    n.last_materialization.as_ref().is_some_and(|m| {
-                        !run.started_sql.is_empty() && m.created_at >= run.started_sql
-                    }) && (!n.partitioned || {
-                        let (done, total) = keys(n);
-                        done >= total
-                    })
-                }
+                None => barca_core::run_list::unfollowed_run_finished(&run.started_sql, n),
             }
         };
         for id in covered {

@@ -1,12 +1,15 @@
 //! A run as a list shows it (#959): the words of one row of `GET /runs` and of
-//! `barca history --json` ([`RunLine`]), and what a run in progress is working on now
-//! ([`RunNow`], with `GET /runs?status=running`). Beside [`crate::run_explanation`], which
+//! `barca history --json` ([`RunLine`]), what a run in progress is working on now
+//! ([`RunNow`], with `GET /runs?status=running` and `barca history --status running`), and the
+//! runs of the last day hour by hour ([`RunActivity`], with `GET /runs` and
+//! `barca history --activity`; #991). Beside [`crate::run_explanation`], which
 //! explains one run in full: both are computed here so the web UI and the CLI only render
 //! them (`specs/behavior/health.md`, "One computation").
 //!
 //! This reads what a run recorded and writes nothing.
 
 use crate::groups::NodeGroup;
+use crate::outcome::TriggeredBy;
 use crate::rollup::headline;
 use crate::run_explanation::count;
 use crate::targets::short_name;
@@ -220,6 +223,48 @@ pub struct RunNow {
     /// The groups of the nodes in flight, busiest first; empty without groups. A node is
     /// counted under the group the rollup puts it in ([`crate::rollup::node_groups`]).
     pub groups: Vec<GroupActivity>,
+    /// The same in one line, as `barca history --status running` prints it under the run:
+    /// `executing 3: orders, clean, report · 12 queued · 240/900 keys`. The first
+    /// [`NOW_NAMES`] nodes are named, by their short names.
+    #[serde(default)]
+    pub line: String,
+}
+
+/// How many executing nodes [`RunNow::line`] names before `+N more`.
+pub const NOW_NAMES: usize = 5;
+
+/// [`RunNow::line`].
+fn now_line(running: &[ActiveNode], queued: usize, keys: Option<KeysDone>) -> String {
+    let mut parts = Vec::new();
+    if !running.is_empty() {
+        let mut names: Vec<String> = running
+            .iter()
+            .take(NOW_NAMES)
+            .map(|n| step_name(&n.node_id))
+            .collect();
+        if running.len() > NOW_NAMES {
+            names.push(format!(
+                "+{} more",
+                count((running.len() - NOW_NAMES) as u64)
+            ));
+        }
+        parts.push(format!(
+            "executing {}: {}",
+            count(running.len() as u64),
+            names.join(", ")
+        ));
+    }
+    if queued > 0 || running.is_empty() {
+        parts.push(format!("{} queued", count(queued as u64)));
+    }
+    if let Some(keys) = keys {
+        parts.push(format!(
+            "{}/{} keys",
+            count(keys.done as u64),
+            count(keys.total as u64)
+        ));
+    }
+    parts.join(" · ")
 }
 
 /// What a run in progress is working on, from the nodes it has in flight.
@@ -282,11 +327,278 @@ pub fn run_now(active: &[ActiveNodeFacts<'_>], groups: &[NodeGroup]) -> RunNow {
             .then_with(|| a.group.cmp(&b.group))
             .then_with(|| a.id.cmp(&b.id))
     });
+    let queued = active.iter().filter(|a| !a.running).count();
+    let keys = (total > 0).then_some(KeysDone { done, total });
     RunNow {
+        line: now_line(&running, queued, keys),
         running,
-        queued: active.iter().filter(|a| !a.running).count(),
-        keys: (total > 0).then_some(KeysDone { done, total }),
+        queued,
+        keys,
         groups,
+    }
+}
+
+/// Whether a run this process cannot follow (a `barca get` or `barca run` on this machine,
+/// which streams its steps to nobody) covers `node`: every asset and sensor for a run of
+/// everything (and the tasks for `barca run`), else its targets. Its upstream steps report
+/// nothing, so only the targets count.
+pub fn unfollowed_run_covers(
+    command: &str,
+    targets: &[String],
+    node: &crate::status::NodeStatus,
+) -> bool {
+    if targets.is_empty() {
+        command != "get" || node.kind != "task"
+    } else {
+        targets.contains(&node.id)
+    }
+}
+
+/// Whether such a run is past `node`: it recorded a result of it since it started
+/// (`started`: `YYYY-MM-DD HH:MM:SS`, UTC), and for a partitioned node every key has one.
+pub fn unfollowed_run_finished(started: &str, node: &crate::status::NodeStatus) -> bool {
+    node.last_materialization
+        .as_ref()
+        .is_some_and(|m| !started.is_empty() && m.created_at.as_str() >= started)
+        && (!node.partitioned || node.partitions.as_ref().is_none_or(|p| p.cached >= p.total))
+}
+
+/// What a run this process cannot follow is working on: the nodes it covers that it is not
+/// past ([`unfollowed_run_covers`], [`unfollowed_run_finished`]). Each counts as executing:
+/// without the run's events nothing says which of them wait, so `queued` is 0.
+pub fn unfollowed_run_now(
+    command: &str,
+    targets: &[String],
+    started: &str,
+    nodes: &[crate::status::NodeStatus],
+    groups: &[NodeGroup],
+) -> RunNow {
+    let active: Vec<ActiveNodeFacts<'_>> = nodes
+        .iter()
+        .filter(|n| unfollowed_run_covers(command, targets, n))
+        .filter(|n| !unfollowed_run_finished(started, n))
+        .map(|n| ActiveNodeFacts {
+            node_id: &n.id,
+            running: true,
+            keys: n
+                .partitions
+                .as_ref()
+                .filter(|_| n.partitioned)
+                .map(|p| (p.cached.min(p.total), p.total)),
+        })
+        .collect();
+    run_now(&active, groups)
+}
+
+// ─── the activity of the last day ───────────────────────────────────────────
+
+/// How many hours [`RunActivity`] covers.
+pub const ACTIVITY_HOURS: usize = 24;
+
+/// Runs by status: the statuses of `barca history --status`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct StatusCounts {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub success: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub failed: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub error: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub cancelled: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub interrupted: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub running: usize,
+}
+
+/// Runs by what started them: the values of `barca history --triggered-by`, and `unknown` for
+/// runs recorded by a barca that did not record it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TriggerCounts {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub schedule: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub api: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub manual: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub client: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub unknown: usize,
+}
+
+/// The runs started in one hour.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ActivityHour {
+    /// The hour's start, RFC 3339 in UTC: `2026-10-22T08:00:00Z`. Hours are hours of UTC; a
+    /// reader shows them in its own zone.
+    pub at: String,
+    /// Every run started in the hour.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub runs: usize,
+    /// Of `runs`, the ones that succeeded.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub ok: usize,
+    /// Of `runs`, the ones that ended otherwise: failed, error, cancelled or interrupted.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub not_successful: usize,
+    /// Of `runs`, the ones still running.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub in_progress: usize,
+    pub by_status: StatusCounts,
+    pub by_trigger: TriggerCounts,
+}
+
+impl ActivityHour {
+    fn add(&mut self, status: &str, trigger: Option<TriggeredBy>, runs: usize) {
+        self.runs += runs;
+        let by_status = &mut self.by_status;
+        match status {
+            "success" => {
+                by_status.success += runs;
+                self.ok += runs;
+            }
+            "running" => {
+                by_status.running += runs;
+                self.in_progress += runs;
+            }
+            other => {
+                self.not_successful += runs;
+                match other {
+                    "failed" => by_status.failed += runs,
+                    "cancelled" => by_status.cancelled += runs,
+                    "interrupted" => by_status.interrupted += runs,
+                    // `error`, and a status this barca does not know.
+                    _ => by_status.error += runs,
+                }
+            }
+        }
+        let by_trigger = &mut self.by_trigger;
+        *match trigger {
+            Some(TriggeredBy::Schedule) => &mut by_trigger.schedule,
+            Some(TriggeredBy::Api) => &mut by_trigger.api,
+            Some(TriggeredBy::Manual) => &mut by_trigger.manual,
+            Some(TriggeredBy::Client) => &mut by_trigger.client,
+            None => &mut by_trigger.unknown,
+        } += runs;
+    }
+}
+
+/// The runs started in the last [`ACTIVITY_HOURS`] hours, hour by hour: the activity strip of
+/// the Runs page, `activity` of `GET /runs` and `barca history --activity`. Counted by the
+/// database over every run of the window ([`crate::db::run_activity`]), never over the runs a
+/// list happens to hold.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunActivity {
+    /// The window's start: the start of the hour 23 hours before the current one (RFC 3339,
+    /// UTC).
+    pub since: String,
+    /// The window's end: the end of the current hour, which is still filling.
+    pub until: String,
+    /// The triggers counted (`--triggered-by`); empty for every run, also the ones that
+    /// recorded no trigger.
+    pub triggered_by: Vec<TriggeredBy>,
+    /// One entry per hour, oldest first, the hours without runs included.
+    pub hours: Vec<ActivityHour>,
+    /// The window as a whole; its `at` is `since`.
+    pub total: ActivityHour,
+    /// The window in one line: `1,440 runs in the last 24 hours · 3 not successful · 1 in
+    /// progress · 1,400 schedule, 30 api, 10 manual`.
+    pub summary: String,
+}
+
+/// The start of `now`'s hour, [`ACTIVITY_HOURS`] - 1 hours earlier: where the window starts.
+pub fn activity_since(now: chrono::DateTime<chrono::Utc>) -> chrono::NaiveDateTime {
+    use chrono::Timelike;
+    let hour = now
+        .naive_utc()
+        .with_minute(0)
+        .and_then(|t| t.with_second(0))
+        .and_then(|t| t.with_nanosecond(0))
+        .unwrap_or_else(|| now.naive_utc());
+    hour - chrono::Duration::hours(ACTIVITY_HOURS as i64 - 1)
+}
+
+/// [`RunActivity`] at `now` from the database's counts, keeping the runs started by one of
+/// `triggers` (every run when empty). A count outside the window is left out.
+pub fn run_activity(
+    counts: &[crate::db::ActivityRow],
+    triggers: &[TriggeredBy],
+    now: chrono::DateTime<chrono::Utc>,
+) -> RunActivity {
+    let since = activity_since(now);
+    let stamp = |t: chrono::NaiveDateTime| {
+        t.and_utc()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    };
+    let mut hours: Vec<ActivityHour> = (0..ACTIVITY_HOURS)
+        .map(|i| ActivityHour {
+            at: stamp(since + chrono::Duration::hours(i as i64)),
+            ..Default::default()
+        })
+        .collect();
+    let mut total = ActivityHour {
+        at: stamp(since),
+        ..Default::default()
+    };
+    for row in counts {
+        if !triggers.is_empty() && !row.triggered_by.is_some_and(|t| triggers.contains(&t)) {
+            continue;
+        }
+        let Ok(hour) = chrono::NaiveDateTime::parse_from_str(
+            &format!("{}:00:00", row.hour),
+            "%Y-%m-%d %H:%M:%S",
+        ) else {
+            continue;
+        };
+        let index = (hour - since).num_hours();
+        if hour < since || index >= ACTIVITY_HOURS as i64 {
+            continue;
+        }
+        hours[index as usize].add(&row.status, row.triggered_by, row.runs);
+        total.add(&row.status, row.triggered_by, row.runs);
+    }
+    let mut summary = vec![format!(
+        "{} {} in the last {ACTIVITY_HOURS} hours",
+        count(total.runs as u64),
+        if total.runs == 1 { "run" } else { "runs" }
+    )];
+    if total.not_successful > 0 {
+        summary.push(format!(
+            "{} not successful",
+            count(total.not_successful as u64)
+        ));
+    }
+    if total.in_progress > 0 {
+        summary.push(format!("{} in progress", count(total.in_progress as u64)));
+    }
+    let by = total.by_trigger;
+    let started: Vec<String> = [
+        (by.schedule, "schedule"),
+        (by.api, "api"),
+        (by.manual, "manual"),
+        (by.client, "client"),
+        (by.unknown, "unknown"),
+    ]
+    .iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, name)| format!("{} {name}", count(*n as u64)))
+    .collect();
+    if !started.is_empty() {
+        summary.push(started.join(", "));
+    }
+    RunActivity {
+        since: stamp(since),
+        until: stamp(since + chrono::Duration::hours(ACTIVITY_HOURS as i64)),
+        triggered_by: triggers.to_vec(),
+        hours,
+        total,
+        summary: summary.join(" · "),
     }
 }
 
@@ -423,6 +735,7 @@ mod tests {
             vec![("p.py:b", Some("3,120 of 5,000 keys")), ("p.py:a", None)]
         );
         assert_eq!(now.queued, 1);
+        assert_eq!(now.line, "executing 2: b, a · 1 queued · 3,120/5,001 keys");
         assert_eq!(
             now.keys,
             Some(KeysDone {
@@ -436,6 +749,151 @@ mod tests {
                 .map(|g| (g.group.as_str(), g.running, g.queued))
                 .collect::<Vec<_>>(),
             vec![("ingest", 2, 0), ("model", 0, 1)]
+        );
+    }
+
+    #[test]
+    fn the_line_names_the_first_executing_nodes_and_counts_the_rest() {
+        let ids: Vec<String> = (0..7).map(|i| format!("p.py:n{i}")).collect();
+        let active: Vec<ActiveNodeFacts<'_>> = ids
+            .iter()
+            .map(|id| ActiveNodeFacts {
+                node_id: id,
+                running: true,
+                keys: None,
+            })
+            .collect();
+        assert_eq!(
+            run_now(&active, &[]).line,
+            "executing 7: n0, n1, n2, n3, n4, +2 more"
+        );
+        // Nothing executing yet: the run waits for a slot.
+        let waiting = [ActiveNodeFacts {
+            node_id: "p.py:a",
+            running: false,
+            keys: None,
+        }];
+        assert_eq!(run_now(&waiting, &[]).line, "1 queued");
+        assert_eq!(run_now(&[], &[]).line, "0 queued");
+    }
+
+    fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn counted(
+        hour: &str,
+        status: &str,
+        triggered_by: Option<TriggeredBy>,
+        runs: usize,
+    ) -> crate::db::ActivityRow {
+        crate::db::ActivityRow {
+            hour: hour.into(),
+            status: status.into(),
+            triggered_by,
+            runs,
+        }
+    }
+
+    #[test]
+    fn activity_is_24_utc_hours_ending_with_the_current_one() {
+        use TriggeredBy::{Api, Manual, Schedule};
+        // 14:25 UTC: the window is 15:00 the day before up to 15:00 today.
+        let now = at("2026-10-22T14:25:10Z");
+        assert_eq!(
+            activity_since(now).to_string(),
+            "2026-10-21 15:00:00",
+            "what the database is asked for"
+        );
+        let counts = [
+            // The hour before the window (a `T`-form row sorts after the window's start).
+            counted("2026-10-21 14", "success", Some(Schedule), 9),
+            counted("2026-10-21 15", "success", Some(Schedule), 60),
+            counted("2026-10-21 15", "failed", Some(Schedule), 2),
+            counted("2026-10-22 00", "cancelled", Some(Api), 1),
+            counted("2026-10-22 14", "running", Some(Manual), 1),
+            counted("2026-10-22 14", "interrupted", None, 1),
+            counted("2026-10-22 14", "error", Some(Api), 1),
+            // A clock ahead of this one: past the window.
+            counted("2026-10-22 15", "success", Some(Schedule), 5),
+        ];
+        let activity = run_activity(&counts, &[], now);
+        assert_eq!(activity.since, "2026-10-21T15:00:00Z");
+        assert_eq!(activity.until, "2026-10-22T15:00:00Z");
+        assert_eq!(activity.hours.len(), ACTIVITY_HOURS);
+        assert_eq!(activity.hours[0].at, "2026-10-21T15:00:00Z");
+        assert_eq!(activity.hours[23].at, "2026-10-22T14:00:00Z");
+        let first = &activity.hours[0];
+        assert_eq!(
+            (
+                first.runs,
+                first.ok,
+                first.not_successful,
+                first.in_progress
+            ),
+            (62, 60, 2, 0)
+        );
+        assert_eq!(first.by_trigger.schedule, 62);
+        // Midnight UTC is the tenth hour, whatever zone the server shows times in.
+        assert_eq!(activity.hours[9].at, "2026-10-22T00:00:00Z");
+        assert_eq!(activity.hours[9].by_status.cancelled, 1);
+        let last = &activity.hours[23];
+        assert_eq!(
+            (last.runs, last.ok, last.not_successful, last.in_progress),
+            (3, 0, 2, 1)
+        );
+        assert_eq!(
+            last.by_status,
+            StatusCounts {
+                running: 1,
+                interrupted: 1,
+                error: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            last.by_trigger,
+            TriggerCounts {
+                manual: 1,
+                api: 1,
+                unknown: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(activity.total.runs, 66);
+        assert_eq!(
+            activity.hours.iter().map(|h| h.runs).sum::<usize>(),
+            activity.total.runs
+        );
+        assert_eq!(
+            activity.summary,
+            "66 runs in the last 24 hours · 5 not successful · 1 in progress · \
+             62 schedule, 2 api, 1 manual, 1 unknown"
+        );
+    }
+
+    #[test]
+    fn activity_without_the_schedules_runs_counts_the_rest() {
+        use TriggeredBy::{Api, Client, Manual, Schedule};
+        let now = at("2026-10-22T14:00:00Z");
+        let counts = [
+            counted("2026-10-22 13", "success", Some(Schedule), 1_440),
+            counted("2026-10-22 13", "success", Some(Api), 1),
+            counted("2026-10-22 13", "success", None, 4),
+        ];
+        let activity = run_activity(&counts, &[Manual, Api, Client], now);
+        assert_eq!(activity.triggered_by, vec![Manual, Api, Client]);
+        assert_eq!(activity.total.runs, 1);
+        assert_eq!(activity.summary, "1 run in the last 24 hours · 1 api");
+        assert_eq!(
+            run_activity(&counts, &[], now).summary,
+            "1,445 runs in the last 24 hours · 1,440 schedule, 1 api, 4 unknown"
+        );
+        assert_eq!(
+            run_activity(&[], &[], now).summary,
+            "0 runs in the last 24 hours"
         );
     }
 }
