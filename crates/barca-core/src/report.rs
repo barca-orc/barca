@@ -223,6 +223,9 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
     };
     // Like NEXT FIRE in `barca list`, SCHEDULE appears only when a shown node is scheduled.
     let has_schedule = result.nodes.iter().any(|n| n.schedule.is_some());
+    // "no refresh path" is said only where something shown is scheduled: a project with no
+    // schedule has none anywhere, and every row would say so.
+    let has_paths = has_schedule || result.nodes.iter().any(|n| n.refresh_path.is_some());
     let rows: Vec<Vec<String>> = result
         .nodes
         .iter()
@@ -270,6 +273,15 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
                     format!("{why}; {}", check.line(now))
                 }
                 _ => why,
+            };
+            // What will bring a node that is not fresh up to date: `stale: upstream_stale;
+            // next tick 15:05 UTC by inbox`, or `no refresh path` (#961). A scheduled node's
+            // own schedule is in its SCHEDULE cell.
+            let why = match &n.refresh_path {
+                _ if n.health.is_fresh() || n.schedule.is_some() => why,
+                Some(path) => format!("{why}; {}", path.line(now)),
+                None if has_paths => format!("{why}; {}", crate::refresh_path::NO_REFRESH_PATH),
+                None => why,
             };
             let last = n
                 .last_materialization

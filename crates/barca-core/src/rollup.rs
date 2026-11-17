@@ -688,6 +688,7 @@ mod tests {
                 pinned: &HashSet::new(),
                 late: &HashSet::new(),
                 checks: &Checks::default(),
+                path: crate::refresh_path::PathEvidence::none(),
                 now: 0,
             },
         );

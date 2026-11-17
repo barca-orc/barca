@@ -5482,6 +5482,7 @@ components:
       - measured
       - root
       - last_check
+      - refresh_path
       - last_materialization
       - shape
       - env
@@ -5546,6 +5547,41 @@ components:
             schedule:
               type: string
               description: The scheduled node whose tick it was.
+        refresh_path: &id_refresh_path
+          type: [object, 'null']
+          additionalProperties: false
+          required: [schedule, next_tick, paused, live, missed_ticks]
+          description: The schedule whose tick brings the node up to date (specs/behavior/health.md,
+            "Refresh path"); null when no tick has the node as a target (a Manual asset or task,
+            an Always node no scheduled node or polled sensor is above, a sensor only polled as an
+            input) and for a paused node or a pinned asset. Membership is the scheduler's own
+            target list. Experimental.
+          properties:
+            schedule:
+              type: string
+              description: The scheduled node's id. Of several schedules that reach the node, the
+                one that fires earliest next (one with no next tick last, ties by id).
+            next_tick:
+              type: [string, 'null']
+              format: date-time
+              description: The schedule's next slot (RFC 3339, UTC), in the server's --timezone;
+                the first slot after a timed pause ends; null for a pause until resumed and when
+                live is false.
+            paused:
+              type: boolean
+              description: The schedule is paused (POST /schedule/{id}/pause).
+            live:
+              type: boolean
+              description: This server's scheduler fires the schedule. false on a --read-only or
+                --no-schedule server and for a schedule held after max_failures failed ticks.
+            missed_ticks:
+              type: integer
+              minimum: 0
+              description: How many finished ticks of the path's schedules had the node as a
+                target and did not leave it fresh (outcome failed or not_reached), counted back
+                from the newest to the last one that found it up to date or rebuilt it, and only
+                those that ended after its newest successful result. 0 for a fresh node. Bounded
+                by the tick record (the newest 20 fired ticks of each schedule keep their targets).
         kind: &id047
           type: string
           enum:
@@ -5675,6 +5711,7 @@ components:
       - measured
       - root
       - last_check
+      - refresh_path
       - last_materialization
       - shape
       - env
@@ -5701,6 +5738,7 @@ components:
         measured: *id_measured
         root: *id_root
         last_check: *id_last_check
+        refresh_path: *id_refresh_path
         partitions: *id050
         last_materialization: *id051
         shape: *id052

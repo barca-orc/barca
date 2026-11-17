@@ -134,6 +134,7 @@ pub const STATUS_FIELDS: &[&str] = &[
     "measured",
     "root",
     "last_check",
+    "refresh_path",
     "partitions",
     "last_materialization",
     "last_bytes_change",
@@ -311,6 +312,7 @@ mod tests {
             measured: Some(true),
             root: Some(barca_core::health::Root::failure("p.py:a")),
             last_check: None,
+            refresh_path: None,
             partitions: Some(PartitionState {
                 total: 0,
                 cached: 0,
