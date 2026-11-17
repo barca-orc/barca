@@ -69,6 +69,37 @@ pub(crate) async fn list(
     Ok(())
 }
 
+/// `barca status --rollup --server`: `GET /state/rollup`, scoped to this command's targets and
+/// files.
+pub(crate) async fn rollup(
+    server: &Server,
+    targets: &[String],
+    files: &[PathBuf],
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let files = server.deployed_files(files).await?;
+    let mut query = Vec::new();
+    if !targets.is_empty() {
+        query.push(format!("targets={}", encode(&targets.join(","))));
+    }
+    // Files alone scope the rollup to their nodes. With targets they only say where the targets
+    // are, as on this machine: the route would add every node of the files to the scope.
+    if targets.is_empty() && !files.is_empty() {
+        query.push(format!("files={}", encode(&files.join(","))));
+    }
+    let path = match query.is_empty() {
+        true => "/state/rollup".to_string(),
+        false => format!("/state/rollup?{}", query.join("&")),
+    };
+    let body = server.get_json(&path).await?;
+    let rollup: barca_core::rollup::Rollup = serde_json::from_value(body)
+        .map_err(|e| server.unexpected("GET /state/rollup", &e.to_string()))?;
+    crate::commands::emit(barca_core::report::render_rollup(&rollup, json));
+    Ok(())
+}
+
 /// `barca status --server`: `GET /nodes`, with this command's files, limit, fields and mode.
 pub(crate) async fn status(
     server: &Server,

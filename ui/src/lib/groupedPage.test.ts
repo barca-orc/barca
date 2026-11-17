@@ -20,6 +20,8 @@ import {
 import type { ListNode, NodeState } from './types'
 import type { Failure } from './health'
 import { served } from './testdata/served'
+import { ROOT, indexRollup } from './rollupView'
+import { nodeEntry, rollup, scopeEntry } from './testdata/rollup'
 
 const tree = groupTree([
   { id: 'group:p.py:outer', name: 'Outer', description: '', members: ['group:p.py:inner', 'p.py:x'], output: 'p.py:x' },
@@ -105,6 +107,11 @@ describe('grouped level', () => {
     const level = input('pipeline=p.py&view=graph', {
       states: states.map((s) => (s.id === 'p.py:y' ? state(s.id, { last_materialization: failed as NodeState['last_materialization'] }) : s)),
       live: { 'p.py:x': 'running' },
+      // The rollup as served: `y` failing in `inner`, and a run working on `x`.
+      rollup: indexRollup(rollup([
+        scopeEntry(ROOT, 'root', null, ['group:p.py:outer'], { failing: 1, never_run: 1, ok: 1 }, { running: 1 }),
+        scopeEntry('group:p.py:outer', 'group', ROOT, ['group:p.py:inner', 'p.py:x'], { failing: 1, never_run: 1, ok: 1 }, { running: 1 }),
+      ])),
     })
     expect(level.visualStates['group:p.py:outer']).toMatchObject({ kind: 'group', label: '1 failing' })
     const parts = (level.visualStates['group:p.py:outer'] as { parts?: { text: string }[] }).parts
@@ -128,6 +135,13 @@ describe('grouped level', () => {
   it('ranks groups worst first: a failed last attempt before a stale member before a cached one', () => {
     const level = input('pipeline=p.py&group=group:p.py:outer', {
       states: [state('p.py:x'), state('p.py:y'), state('p.py:check__y', { last_materialization: failed })],
+      // The rollup as served: the group's check failing, the loose asset ok.
+      rollup: indexRollup(rollup([
+        scopeEntry(ROOT, 'root', null, ['group:p.py:outer'], { failing: 1, ok: 2 }),
+        scopeEntry('group:p.py:outer', 'group', ROOT, ['group:p.py:inner', 'p.py:x'], { failing: 1, ok: 2 }),
+        scopeEntry('group:p.py:inner', 'group', 'group:p.py:outer', ['p.py:check__y', 'p.py:y'], { failing: 1, ok: 1 }),
+        nodeEntry('p.py:x', 'group:p.py:outer', 'ok'),
+      ])),
     })
     expect(level.visibleEntries.map((e) => e.id)).toEqual(['group:p.py:inner', 'p.py:x'])
     expect(level.visualStates['group:p.py:inner']).toMatchObject({ tone: 'failed', label: '1 failing' })
@@ -155,7 +169,7 @@ describe('grouped level', () => {
   })
 
   it('filters failures by id or headline', () => {
-    const f = (id: string, headline: string): Failure => ({ id, name: id, kind: 'asset', headline, error: '', at: null, failingSince: null, failures: 1, impact: 0, missingKeys: null })
+    const f = (id: string, headline: string): Failure => ({ id, name: id, kind: 'asset', headline, error: '', at: null, failingSince: null, failures: 1, group: headline, held: 1, heldAssets: 1, missingKeys: null })
     const list = [f('p.py:a', 'KeyError'), f('p.py:b', 'ValueError')]
     expect(visibleFailures(list, 'key').map((x) => x.id)).toEqual(['p.py:a'])
     expect(visibleFailures(list, ' ').length).toBe(2)

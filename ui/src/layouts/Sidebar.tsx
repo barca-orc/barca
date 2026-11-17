@@ -1,4 +1,5 @@
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router'
+import { useRollup } from '@/hooks/useRollup'
 import { useMemo, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { BookOpen, ChevronDown, ChevronRight, KeyRound, Layers, LogOut, Moon, PanelLeft, Search, Sun } from 'lucide-react'
 import { Button, ConnectionBadge, IconButton, RunsInProgress, StatusGlyph } from '@/components'
@@ -13,8 +14,7 @@ import { useTheme } from '@/context/theme'
 import { useTimeZone } from '@/context/timeZone'
 import { buildRows, fileDisplay, type FileDisplay } from '@/lib/assetTable'
 import { connection } from '@/lib/connection'
-import { groupTree, leavesByGroup } from '@/lib/groups'
-import { blockedBy } from '@/lib/graphView'
+import { groupTree } from '@/lib/groups'
 import { inPipeline, mergeStates, pipelineSummaries, type PipelineSummary } from '@/lib/pipeline'
 import { plural } from '@/lib/plural'
 import { SIDEBAR_KEY, SIDEBAR_STEP, SIDEBAR_WIDTH, SIDEBAR_WIDTH_KEY, fileGroups, initialSidebar, listedPipelines, updateSidebar, type SidebarEffect, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
@@ -350,8 +350,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // The open scope is fresh; the pipelines outside it keep what the whole project last said.
   const nodes = useMemo(() => mergeStates(whole, scoped), [whole, scoped])
   // The rows the tables show, built the same way, so a file's line here and its header there agree.
-  const blockers = useMemo(() => blockedBy(nodes, assets ?? [], pins), [nodes, assets, pins])
-  const rows = useMemo(() => buildRows(nodes.filter((n) => n.kind === kind), 0, blockers, pins), [nodes, kind, blockers, pins])
+  const rows = useMemo(() => buildRows(nodes.filter((n) => n.kind === kind), 0, pins), [nodes, kind, pins])
   const summaries = useMemo(() => pipelineSummaries(rows, assets ?? [], kind), [rows, assets, kind])
   // The project's one state, for the collapsed sidebar: none until every counted node's is known.
   const overall = useMemo(
@@ -360,8 +359,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   )
   const groups = useGroups()
   const tree = useMemo(() => groupTree(groups.data ?? []), [groups.data])
-  const leavesOf = useMemo(() => leavesByGroup(tree), [tree])
-  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+  // A group's dot is its entry of the whole project's rollup (`GET /state/rollup`).
+  const rollup = useRollup(null)
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const [model, dispatch] = useProgram<SidebarModel, SidebarMsg, SidebarEffect>(
@@ -412,7 +411,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       counted={kind}
       pipelines={pipelines}
       overall={overall}
-      groupsOf={(file) => fileGroups(file, tree, scope, leavesOf, byId)}
+      groupsOf={(file) => fileGroups(file, tree, scope, rollup.tree.entries)}
       selected={selected}
       filtering={FILTERABLE.includes(location.pathname)}
       scope={scope}

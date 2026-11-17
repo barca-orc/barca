@@ -8,6 +8,7 @@
  * to elements.
  */
 
+import { blockerOf } from './healthDisplay'
 import { match } from 'ts-pattern'
 import { CACHE_STATES, cacheStateRank, lastAttemptFailed, nodeStateDisplay, shownCacheState, type CacheState } from './cacheStateDisplay'
 import type { Glyph } from './glyph'
@@ -117,7 +118,7 @@ export function blockedKeys(detail: string): { count: number; upstream: string }
 }
 
 /** One row per node, what needs attention first. */
-export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMap<string, string> = new Map(), pins: ReadonlyMap<string, string> = new Map()): AssetRow[] {
+export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<string, string> = new Map()): AssetRow[] {
   return nodes
     .map((n): AssetRow => {
       const last = n.last_materialization
@@ -131,7 +132,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, blocked: ReadonlyMa
         reason: n.cache.reason,
         lastFailed: lastAttemptFailed(n),
         keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total } : null,
-        blockedBy: blocked.get(n.id) ?? null,
+        blockedBy: blockerOf(n),
         pinned: pins.get(n.id) ?? null,
         stateHint: n.cache.detail,
         last: last

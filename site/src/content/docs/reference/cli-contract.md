@@ -80,6 +80,7 @@ command is experimental with it):
 | `barca get --expires` | new with -o url (signed links to results in a cloud store); the link format is the cloud's |
 | `barca status --sample` | sample rows come from a Python helper whose output may grow |
 | `barca status --problems` | new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) |
+| `barca status --rollup` | new in 0.44.0 (specs/behavior/health.md): the rollup document gains causes, the freshness gap and more root kinds as that specification lands |
 | `barca get --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use |
 | `barca run --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use |
 | `barca get --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
@@ -140,7 +141,8 @@ stability; the row adds the keys and routes that go with it.
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key` | new in 0.42: every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, [barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
-| Health: `health`, `health_reason`, `signals`, `measured` and `last_check` of each node and `data_coverage` in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), the `health`, `health_reason`, `signals`, `measured`, `last_check_at` and `last_check_outcome` columns of `barca.nodes`, the `Health:` and `Data:` lines of the `barca status` table and the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node | new in 0.44 (#954, #957, #964, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health) and "Last check"): the series that adds causes and expected times (#974) may add reasons, `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
+| Health: `health`, `health_reason`, `root`, `signals`, `measured` and `last_check` of each node and `data_coverage` in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), the `health`, `health_reason`, `signals`, `measured`, `last_check_at` and `last_check_outcome` columns of `barca.nodes`, the `Health:` and `Data:` lines of the `barca status` table and the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node | new in 0.44 (#954, #957, #964, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health) and "Last check"): the series that adds causes and expected times (#974) may add reasons, `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
+| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`), the table `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)): later releases of the series (#974) add `causes`, `asset_causes`, `gap_seconds`, `unbounded` and `fresh_by` to an entry, `causes`, `gap_seconds`, `unbounded` and `action` to a root, and root kinds other than `failure` |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `prev_run` and `late_since` (rows of `GET /state`, [Server Mode: a Shared Ledger and --server: Data health](/reference/server-mode/#data-health); `signals` moved from here onto every status node in 0.44), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
@@ -531,10 +533,11 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `last_check`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `root`, `last_check`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node |
 | `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
+| `--rollup` | - | default `false` | experimental: new in 0.44.0 (specs/behavior/health.md): the rollup document gains causes, the freshness gap and more root kinds as that specification lands | Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -1560,6 +1563,7 @@ fetched) is still exit 3.
 | `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
+| `nodes[].root` | null | always |
 | `nodes[].shape` | object | always |
 | `nodes[].shape.keys` | array | sometimes |
 | `nodes[].shape.keys[]` | string | always |
@@ -1950,6 +1954,10 @@ counts every node even when `nodes` is truncated.
 | `nodes[].partitions.missing_keys` | array | always |
 | `nodes[].partitions.missing_keys[]` | string | always |
 | `nodes[].partitions.total` | integer | always |
+| `nodes[].root` | null \| object | always |
+| `nodes[].root.id` | string | always |
+| `nodes[].root.kind` | string | always |
+| `nodes[].root.node` | string | always |
 | `nodes[].shape` | null \| object | always |
 | `nodes[].shape.columns` | array | sometimes |
 | `nodes[].shape.columns[]` | object | always |
@@ -2070,6 +2078,10 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].partitions.missing_keys` | array | always |
 | `nodes[].partitions.missing_keys[]` | string | always |
 | `nodes[].partitions.total` | integer | always |
+| `nodes[].root` | null \| object | always |
+| `nodes[].root.id` | string | always |
+| `nodes[].root.kind` | string | always |
+| `nodes[].root.node` | string | always |
 | `nodes[].shape` | null | always |
 | `nodes[].signals` | array | always |
 | `root` | string | always |
@@ -2087,6 +2099,66 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema status_problems -->
+
+#### The rollup
+
+`barca status pipeline.py --rollup --json` (after `broken` failed) prints the rollup instead of
+the nodes (experimental; [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)). `entries[].keys` is on a
+partitioned node's entry only:
+
+<!-- BEGIN GENERATED schema status_rollup -->
+| Key | Type | Present |
+|---|---|---|
+| `as_of` | string | always |
+| `data_coverage` | object | always |
+| `data_coverage.assets` | integer | always |
+| `data_coverage.measured` | integer | always |
+| `data_coverage.suspect` | integer | always |
+| `entries` | array | always |
+| `entries[]` | object | always |
+| `entries[].asset_health` | object | always |
+| `entries[].asset_health.behind` | integer | always |
+| `entries[].asset_health.blocked` | integer | always |
+| `entries[].asset_health.failing` | integer | always |
+| `entries[].asset_health.never_run` | integer | always |
+| `entries[].asset_health.ok` | integer | always |
+| `entries[].asset_health.suspect` | integer | always |
+| `entries[].asset_health.undecided` | integer | always |
+| `entries[].assets` | integer | always |
+| `entries[].children` | array | always |
+| `entries[].children[]` | string | always |
+| `entries[].data_coverage` | object | always |
+| `entries[].data_coverage.assets` | integer | always |
+| `entries[].data_coverage.measured` | integer | always |
+| `entries[].data_coverage.suspect` | integer | always |
+| `entries[].health` | object | always |
+| `entries[].health.behind` | integer | always |
+| `entries[].health.blocked` | integer | always |
+| `entries[].health.failing` | integer | always |
+| `entries[].health.never_run` | integer | always |
+| `entries[].health.ok` | integer | always |
+| `entries[].health.suspect` | integer | always |
+| `entries[].health.undecided` | integer | always |
+| `entries[].id` | string | always |
+| `entries[].keys` | object | sometimes |
+| `entries[].keys.behind` | integer | always |
+| `entries[].keys.failed` | integer | always |
+| `entries[].keys.ok` | integer | always |
+| `entries[].kind` | string | always |
+| `entries[].label` | string | always |
+| `entries[].nodes` | integer | always |
+| `entries[].parent` | null \| string | always |
+| `entries[].running` | integer | always |
+| `roots` | array | always |
+| `roots[]` | object | always |
+| `roots[].assets` | integer | always |
+| `roots[].detail` | string | always |
+| `roots[].error_group` | string | always |
+| `roots[].id` | string | always |
+| `roots[].kind` | string | always |
+| `roots[].node` | string | always |
+| `roots[].nodes` | integer | always |
+<!-- END GENERATED schema status_rollup -->
 
 #### What changed
 
@@ -2136,6 +2208,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
+| `nodes[].root` | null | always |
 | `nodes[].shape` | null \| object | always |
 | `nodes[].shape.keys` | array | sometimes |
 | `nodes[].shape.keys[]` | string | always |
@@ -3090,6 +3163,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
+| `nodes[].root` | null | always |
 | `nodes[].shape` | object | always |
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |

@@ -58,6 +58,7 @@ pub mod queries;
 mod recover;
 pub mod report;
 pub mod results;
+pub mod rollup;
 pub mod run_explanation;
 pub mod schedule;
 pub mod schedule_standing;

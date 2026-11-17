@@ -932,6 +932,18 @@ mod tests {
             "nothing changed: nothing is parsed or decided again"
         );
 
+        // The rollup sums the status result the poll computed: none is computed for it.
+        let rollup = crate::handlers::rollup(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(Default::default()),
+        )
+        .await
+        .map_err(|e| format!("{e:?}"))
+        .unwrap()
+        .0;
+        assert_eq!(rollup.root().nodes, first.len());
+        assert_eq!(loads(&state), (1, 1), "the rollup reuses the kept status");
+
         // A helper module edit changes `first`'s run hash.
         std::fs::write(
             dir.path().join("helpers.py"),

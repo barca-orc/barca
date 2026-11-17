@@ -3,7 +3,7 @@ import { served } from './testdata/served'
 import type { CacheStatus, NodeState } from './types'
 import { buildRows } from './assetTable'
 import { nodeStateDisplay } from './cacheStateDisplay'
-import { blockedBy } from './graphView'
+import { blockedBy } from './testdata/served'
 import {
   EMPTY_FILTERS,
   applyFilters,
@@ -162,13 +162,14 @@ describe('one state per row', () => {
 
 describe('blocked rows', () => {
   // broken fails; report never ran because of it; summary waits on report; other just never ran.
+  // Which node blocks which is the server's answer on each row (`root`).
   const nodes = [
     node('p:broken', { lastAt: '2026-10-06 11:00:00', failed: true }),
-    node('p:report', { state: 'never_run', inputs: ['p:broken'] }),
-    node('p:summary', { state: 'stale', inputs: ['p:report'] }),
+    node('p:report', { state: 'never_run', inputs: ['p:broken'], ...blockedBy('p:broken') }),
+    node('p:summary', { state: 'stale', inputs: ['p:report'], ...blockedBy('p:broken') }),
     node('p:other', { state: 'never_run' }),
   ]
-  const rows = buildRows(nodes, NOW, blockedBy(nodes, nodes))
+  const rows = buildRows(nodes, NOW)
 
   it('reads blocked, by the failure upstream, and a failing node stays failing', () => {
     const by = Object.fromEntries(rows.map((r) => [r.name, r.blockedBy]))
@@ -202,7 +203,8 @@ describe('pinned rows', () => {
     node('p:fixed', { lastAt: '2026-10-06 11:00:00', failed: true }),
   ]
   const pins = new Map([['p:report', 'override from fix.json by me'], ['p:fixed', 'rolled back to abc']])
-  const rows = buildRows(nodes, NOW, blockedBy(nodes, nodes, pins), pins)
+  // The server blocks no pinned node, and passes no failure through one: these rows have no root.
+  const rows = buildRows(nodes, NOW, pins)
   const row = (name: string) => rows.find((r) => r.name === name)!
 
   it('reads pinned, not stale, and passes no failure above it on; failing still outranks it', () => {

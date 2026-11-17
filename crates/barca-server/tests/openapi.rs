@@ -455,6 +455,8 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("/state", "/state"),
         ("/state?targets=first", "/state"),
         ("/state?targets=second,first", "/state"),
+        ("/state/rollup", "/state/rollup"),
+        ("/state/rollup?targets=second", "/state/rollup"),
         ("/schedule", "/schedule"),
         ("/runs?limit=0", "/runs"),
         ("/logs/missing", "/logs/{run_id}"),
@@ -477,6 +479,14 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         checked(&router, "PUT", url, path, 405).await;
     }
     checked(&router, "GET", "/state?targets=missing", "/state", 404).await;
+    checked(
+        &router,
+        "GET",
+        "/state/rollup?targets=missing",
+        "/state/rollup",
+        404,
+    )
+    .await;
     assert!(
         !dir.path().join("metadata.db").exists(),
         "inspection created source history"
@@ -754,6 +764,56 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     assert_eq!(node["last_run"]["keys"], 1);
     assert_eq!(node["last_run"]["failed"], 1);
     assert!(node["last_run"]["elapsed_seconds"].is_null());
+    // Its root is itself, and the rollup is the rows of `GET /state` summed: the same health
+    // word per node, in nodes and in assets, with the failure as the one root.
+    assert_eq!(
+        node["root"]["id"],
+        format!("failure:{}", node["id"].as_str().unwrap())
+    );
+    let rows = checked(&router, "GET", "/state", "/state", 200).await;
+    let rows = rows.as_array().unwrap();
+    let rollup = checked(&router, "GET", "/state/rollup", "/state/rollup", 200).await;
+    let entries = rollup["entries"].as_array().unwrap();
+    let root = &entries[0];
+    assert_eq!(
+        (&root["id"], &root["kind"]),
+        (&json!("root"), &json!("root"))
+    );
+    assert_eq!(root["nodes"], rows.len());
+    let assets = rows.iter().filter(|r| r["kind"] == "asset").count();
+    assert_eq!(root["assets"], assets);
+    assert!(assets < rows.len(), "tasks are nodes, not assets");
+    for word in [
+        "failing",
+        "blocked",
+        "suspect",
+        "behind",
+        "undecided",
+        "never_run",
+        "ok",
+    ] {
+        let of = |asset_only: bool| {
+            rows.iter()
+                .filter(|r| r["health"] == word && (!asset_only || r["kind"] == "asset"))
+                .count()
+        };
+        assert_eq!(root["health"][word], of(false), "{word} nodes");
+        assert_eq!(root["asset_health"][word], of(true), "{word} assets");
+    }
+    for row in rows {
+        let entry = entries.iter().find(|e| e["id"] == row["id"]).unwrap();
+        assert_eq!(entry["kind"], "node");
+        assert_eq!(entry["health"][row["health"].as_str().unwrap()], 1);
+        let file = row["id"].as_str().unwrap().rsplit_once(':').unwrap().0;
+        assert_eq!(entry["parent"], format!("file:{file}"));
+    }
+    assert_eq!(root["children"].as_array().unwrap().len(), 1);
+    assert_eq!(rollup["data_coverage"], root["data_coverage"]);
+    let roots = rollup["roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0]["id"], node["root"]["id"]);
+    assert_eq!(roots[0]["detail"], "ValueError: expected contract failure");
+    assert_eq!(roots[0]["nodes"], 1);
     let slow = checked(&router, "POST", "/run/slow", "/run/{target}", 200).await["run_id"]
         .as_str()
         .unwrap()

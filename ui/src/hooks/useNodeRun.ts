@@ -58,9 +58,16 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   useEffect(() => {
     if (!run || stream.running) return
     void client.invalidateQueries({ queryKey: ['state'] })
+    void client.invalidateQueries({ queryKey: ['rollup'] })
     void client.invalidateQueries({ queryKey: ['asset'] })
     void client.invalidateQueries({ queryKey: ['partition-keys'] })
   }, [run, stream.running, client])
+
+  // A run was accepted: how many nodes of a scope a run works on is the server's count (the
+  // rollup's `running`), so it is asked again at once instead of being counted here.
+  useEffect(() => {
+    if (run) void client.invalidateQueries({ queryKey: ['rollup'] })
+  }, [run, client])
 
   // Seed the accepted target as running before its first SSE event, just as GraphPage does.
   const statuses = useMemo(
