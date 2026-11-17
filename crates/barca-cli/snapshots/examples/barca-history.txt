@@ -11,7 +11,7 @@ Options:
           After verifying a run stopped, record it as interrupted; refuses a proven live owner
 
       --status <STATUS[,...]>
-          Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted
+          Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted; not_successful is every one but success and running
 
       --target <NAME>
           Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out
@@ -19,11 +19,20 @@ Options:
       --triggered-by <TRIGGER[,...]>
           Only runs started this way (comma-separated): manual, api, schedule, client
 
+      --not-triggered-by <T[,...]>
+          Without the runs started this way (comma-separated): schedule hides the cron ticks and keeps the runs that recorded no trigger
+
+      --search <TEXT>
+          Only runs whose run id, target or job contains this text, whatever its case
+
       --activity
-          Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, counted over every recorded run; takes --triggered-by
+          Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, with each hour's median time and leading failure, counted over every recorded run; takes --status, --triggered-by, --not-triggered-by, --search
 
       --since <WHEN>
           Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22)
+
+      --until <WHEN>
+          Only runs started before this, written as --since is: with it, a window
 
   -l, --limit <LIMIT>
           Maximum recent runs (default: every run in JSON, 10 in a human table); with a RUN_ID, the most steps listed (default 1000)
@@ -74,12 +83,16 @@ Examples:
   barca history --status failed,interrupted --since 24h   # what went wrong in the last day
   barca history --target clean             # runs whose target or job is clean
   barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
-  barca history --triggered-by manual,api,client   # every run but the schedule's
+  barca history --not-triggered-by schedule   # every run but the schedule's, also the ones that recorded no trigger
+  barca history --status not_successful --not-triggered-by schedule   # what went wrong in the runs someone started
+  barca history --search daily_report      # runs whose run id, target or job contains the text
+  barca history --since 2026-10-22T08:00:00Z --until 2026-10-22T09:00:00Z   # the runs started in one hour
   barca history --status running           # runs in progress, each with the nodes it is executing now
   barca history --status running --json --fields run_id,now   # {running: [...], queued, keys, groups, line} per run
-  barca history --activity                 # the last 24 hours, hour by hour: runs by status and by trigger
-  barca history --activity --json          # {activity: {since, until, hours: [...], total, summary}}
-  barca history --activity --triggered-by manual,api,client --server   # a server's activity without its schedule's runs
+  barca history --activity                 # the last 24 hours, hour by hour: runs by status and by trigger, median time, leading failure
+  barca history --activity --json          # {activity: {since, until, hours: [...], total, excluded, summary}}
+  barca history --activity --not-triggered-by schedule --server   # a server's activity without its schedule's runs, and what that left out
+  barca history --activity --status not_successful --search daily_report   # when the runs of one target went wrong
   barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
   barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
   barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}

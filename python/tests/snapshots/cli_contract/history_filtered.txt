@@ -1,4 +1,4 @@
-# barca history --status failed --target broken --since 1d --json  (stdout, exit 0)
+# barca history --status failed --target broken --since 1d --until 2999-01-01 --not-triggered-by schedule --search BROKEN --json  (stdout, exit 0)
 runs : array
 runs[] : object
 runs[].attempts : integer

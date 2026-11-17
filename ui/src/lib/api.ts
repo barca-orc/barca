@@ -100,6 +100,18 @@ export type StateScope = { group: string } | { file: string }
 /** First rows asked for with an output's schema (the panel's Preview). */
 const PREVIEW_ROWS = 5
 
+/** The query of `GET /runs`: the flags of `barca history`, by name; `null` leaves one out. */
+export interface RunsQuery {
+  limit: number
+  /** `not_successful`, or `running` (the runs in flight). */
+  status: 'not_successful' | 'running' | null
+  /** `schedule`: without the schedule's runs; a run that recorded no trigger stays. */
+  not_triggered_by: 'schedule' | null
+  since: string | null
+  until: string | null
+  search: string | null
+}
+
 export const api = {
   authStatus: (signal?: AbortSignal) => request<{ mode: 'off' | 'token' }>('/auth/status', { signal }, { token: null }),
   bootstrap: (code: string) => request<IssuedToken>('/auth/bootstrap', { method: 'POST', body: JSON.stringify({ code }) }, { token: null, secret: code }),
@@ -149,9 +161,12 @@ export const api = {
    */
   sqlQuery: (body: SqlQuery, signal?: AbortSignal) =>
     request<SqlAnswer>('/sql/query', { method: 'POST', body: JSON.stringify(body), signal }),
-  /** The newest runs with the last day's `activity`; `triggeredBy` keeps the runs started that way (`manual,api,client`). */
-  runs: (limit = 100, triggeredBy: string | null = null) =>
-    request<RunList>(`/runs?${new URLSearchParams({ limit: String(limit), ...(triggeredBy ? { triggered_by: triggeredBy } : {}) })}`),
+  /**
+   * The runs the filters keep (in progress first, then the newest) with their count and the
+   * last day's `activity`: the filters are `barca history`'s flags, applied by the server.
+   */
+  runs: (query: RunsQuery) =>
+    request<RunList>(`/runs?${new URLSearchParams(Object.entries(query).flatMap(([key, value]) => (value === null ? [] : [[key, String(value)]])))}`),
   runDetail: (id: string) => request<RunView>(`/runs/${encodeURIComponent(id)}`),
   /** One page of a run's steps (`?offset=`, failed steps first): `steps_page.next_offset` is the next. */
   runStepsPage: (id: string, offset: number, limit = 1000) =>

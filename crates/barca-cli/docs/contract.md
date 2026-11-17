@@ -61,6 +61,9 @@ command is experimental with it):
 | `barca history --triggered-by` | new in 0.29.3: the history filters' values and matching may change after field use |
 | `barca history --activity` | new in 0.44 (#991): the activity's keys, its window and its human table may change after field use |
 | `barca history --since` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --not-triggered-by` | new in 0.44 (#969): the history filters' values and matching may change after field use |
+| `barca history --until` | new in 0.44 (#969): the history filters' values and matching may change after field use |
+| `barca history --search` | new in 0.44 (#969): what the text is looked for in, and how, may change after field use |
 | `barca list --groups` | Organizational group hierarchy and metadata shape are experimental |
 | `barca plan` | prints the planner's internal phase/stream layout, which changes with scheduling work |
 | `barca sql` | new in 0.13: the view naming and the JSON result shape may change after field use |
@@ -382,11 +385,14 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<RUN_ID>` | - | - | experimental: new in 0.29.3: the run detail's step keys and human layout may change after field use | One run in detail: its fields, the steps it recorded (the first 1000, failed steps always; --limit and --all change it), and each failed step's error, traceback and how its worker ended |
 | `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
-| `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted |
+| `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted; not_successful is every one but success and running |
 | `--target` | `NAME` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out |
 | `--triggered-by` | `TRIGGER[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started this way (comma-separated): manual, api, schedule, client |
-| `--activity` | - | default `false` | experimental: new in 0.44 (#991): the activity's keys, its window and its human table may change after field use | Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, counted over every recorded run; takes --triggered-by |
+| `--not-triggered-by` | `T[,...]` | - | experimental: new in 0.44 (#969): the history filters' values and matching may change after field use | Without the runs started this way (comma-separated): schedule hides the cron ticks and keeps the runs that recorded no trigger |
+| `--search` | `TEXT` | - | experimental: new in 0.44 (#969): what the text is looked for in, and how, may change after field use | Only runs whose run id, target or job contains this text, whatever its case |
+| `--activity` | - | default `false` | experimental: new in 0.44 (#991): the activity's keys, its window and its human table may change after field use | Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, with each hour's median time and leading failure, counted over every recorded run; takes --status, --triggered-by, --not-triggered-by, --search |
 | `--since` | `WHEN` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22) |
+| `--until` | `WHEN` | - | experimental: new in 0.44 (#969): the history filters' values and matching may change after field use | Only runs started before this, written as --since is: with it, a window |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table); with a RUN_ID, the most steps listed (default 1000) |
 | `--all` | - | default `false` | stable | Show every recorded run (no limit); with a RUN_ID, every step it recorded |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
@@ -2913,13 +2919,18 @@ failed step's node id and the first line of its error (`ZeroDivisionError: divis
 `<function>: <error>`, cut at 72 characters with `…`.
 
 Experimental filters (0.29.3): `--status` (comma-separated: `success`, `failed`, `cancelled`,
-`error`, `running`, `interrupted`), `--target NAME` (the run's target or job names the node),
-`--triggered-by` (comma-separated: `manual`, `api`, `schedule`, `client`) and `--since` (a
-duration `30m`/`24h`/`7d`/`2w`, an RFC 3339 time or a UTC date). They combine with AND;
-`total` and `truncated` count the runs they keep and `--limit` applies after them. An unknown
-value is a usage error (exit 2) naming the valid ones. Against a server they are the query
-parameters `status`, `target`, `triggered_by` and `since` of `GET /history` (a 400 for an
-unknown value).
+`error`, `running`, `interrupted`; `not_successful`, 0.44, is every one but `success` and
+`running`), `--target NAME` (the run's target or job names the node), `--triggered-by`
+(comma-separated: `manual`, `api`, `schedule`, `client`) and `--since` (a duration
+`30m`/`24h`/`7d`/`2w`, an RFC 3339 time or a UTC date). Added in 0.44 (#969):
+`--not-triggered-by` (the same values, left out; a run that recorded no trigger is kept),
+`--until` (started before a time, written as `--since` is) and `--search TEXT` (the run id,
+target or job contains the text, whatever its case). They combine with AND; `total` and
+`truncated` count the runs they keep and `--limit` applies after them. An unknown value is a
+usage error (exit 2) naming the valid ones. Against a server they are the query parameters
+`status`, `target`, `triggered_by`, `not_triggered_by`, `since`, `until` and `search` of
+`GET /history` (a 400 for an unknown value), and all but `target` are also parameters of
+`GET /runs`.
 
 Experimental (0.44, #991): when `--status` names `running`, a listed run in progress has
 `now`, what it is working on: `running[]` (`node_id`, `keys`, `share`), `queued`, `keys`
@@ -2927,10 +2938,12 @@ Experimental (0.44, #991): when `--status` names `running`, a listed run in prog
 table prints `  now: <line>` under its row. It is absent on every other run and without
 `--status running`, and `--fields now` selects it. `barca history --activity` prints
 `{activity}` instead of `{runs, total, truncated}`: `since`, `until`, `triggered_by`,
-`hours[]` (24 entries: `at`, `runs`, `ok`, `not_successful`, `in_progress`, `by_status`,
-`by_trigger`), `total` (one such entry for the window) and `summary`. It takes
-`--triggered-by` and no other filter, limit or `--fields` (exit 2). Semantics and limits:
-`barca docs status`.
+`not_triggered_by`, `statuses`, `search`, `hours[]` (24 entries: `at`, `until`, `runs`, `ok`,
+`not_successful`, `in_progress`, `by_status`, `by_trigger`, `median_seconds`, `failure`
+`{text, runs}` or `null`), `total` (one such entry for the window), `excluded` (one such entry
+for the runs `--not-triggered-by` left out; `null` without it) and `summary`. It takes
+`--status`, `--triggered-by`, `--not-triggered-by` and `--search`, and no other filter, limit
+or `--fields` (exit 2). Semantics and limits: `barca docs status`.
 
 Experimental `barca history RUN_ID` (0.29.3) prints one run as `{run, steps, steps_page,
 hint?}`. `run` is one `runs[]` entry. `steps[]` are the steps the run recorded, in the order it
@@ -3088,6 +3101,28 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | Key | Type | Present |
 |---|---|---|
 | `activity` | object | always |
+| `activity.excluded` | object | always |
+| `activity.excluded.at` | string | always |
+| `activity.excluded.by_status` | object | always |
+| `activity.excluded.by_status.cancelled` | integer | always |
+| `activity.excluded.by_status.error` | integer | always |
+| `activity.excluded.by_status.failed` | integer | always |
+| `activity.excluded.by_status.interrupted` | integer | always |
+| `activity.excluded.by_status.running` | integer | always |
+| `activity.excluded.by_status.success` | integer | always |
+| `activity.excluded.by_trigger` | object | always |
+| `activity.excluded.by_trigger.api` | integer | always |
+| `activity.excluded.by_trigger.client` | integer | always |
+| `activity.excluded.by_trigger.manual` | integer | always |
+| `activity.excluded.by_trigger.schedule` | integer | always |
+| `activity.excluded.by_trigger.unknown` | integer | always |
+| `activity.excluded.failure` | null | always |
+| `activity.excluded.in_progress` | integer | always |
+| `activity.excluded.median_seconds` | null | always |
+| `activity.excluded.not_successful` | integer | always |
+| `activity.excluded.ok` | integer | always |
+| `activity.excluded.runs` | integer | always |
+| `activity.excluded.until` | string | always |
 | `activity.hours` | array | always |
 | `activity.hours[]` | object | always |
 | `activity.hours[].at` | string | always |
@@ -3104,11 +3139,20 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.hours[].by_trigger.manual` | integer | always |
 | `activity.hours[].by_trigger.schedule` | integer | always |
 | `activity.hours[].by_trigger.unknown` | integer | always |
+| `activity.hours[].failure` | null \| object | always |
+| `activity.hours[].failure.runs` | integer | always |
+| `activity.hours[].failure.text` | string | always |
 | `activity.hours[].in_progress` | integer | always |
+| `activity.hours[].median_seconds` | null \| number | always |
 | `activity.hours[].not_successful` | integer | always |
 | `activity.hours[].ok` | integer | always |
 | `activity.hours[].runs` | integer | always |
+| `activity.hours[].until` | string | always |
+| `activity.not_triggered_by` | array | always |
+| `activity.not_triggered_by[]` | string | always |
+| `activity.search` | null | always |
 | `activity.since` | string | always |
+| `activity.statuses` | array | always |
 | `activity.summary` | string | always |
 | `activity.total` | object | always |
 | `activity.total.at` | string | always |
@@ -3125,10 +3169,15 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.total.by_trigger.manual` | integer | always |
 | `activity.total.by_trigger.schedule` | integer | always |
 | `activity.total.by_trigger.unknown` | integer | always |
+| `activity.total.failure` | object | always |
+| `activity.total.failure.runs` | integer | always |
+| `activity.total.failure.text` | string | always |
 | `activity.total.in_progress` | integer | always |
+| `activity.total.median_seconds` | number | always |
 | `activity.total.not_successful` | integer | always |
 | `activity.total.ok` | integer | always |
 | `activity.total.runs` | integer | always |
+| `activity.total.until` | string | always |
 | `activity.triggered_by` | array | always |
 | `activity.until` | string | always |
 <!-- END GENERATED schema history_activity -->

@@ -606,7 +606,7 @@ paths:
         required: false
         schema: *id005
         description: 'barca history --status: comma-separated, any of success, failed, cancelled, error,
-          running, interrupted.'
+          running, interrupted; not_successful is every one but success and running.'
       - name: target
         in: query
         required: false
@@ -624,6 +624,23 @@ paths:
         schema: *id005
         description: 'barca history --since: started at or after a duration back from the server''s clock
           (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date.'
+      - name: not_triggered_by
+        in: query
+        required: false
+        schema: *id005
+        description: 'barca history --not-triggered-by: comma-separated, any of manual, api, schedule,
+          client, left out; a run that recorded no trigger is kept. Experimental.'
+      - name: until
+        in: query
+        required: false
+        schema: *id005
+        description: 'barca history --until: started before a time, written as since is. Experimental.'
+      - name: search
+        in: query
+        required: false
+        schema: *id005
+        description: 'barca history --search: runs whose run id, target or job contains this text,
+          whatever its case. Experimental.'
     head:
       summary: barca history --json (headers only)
       operationId: head_history
@@ -2943,21 +2960,23 @@ paths:
               schema: *id003
               description: Methods accepted by this route
         '400':
-          description: Axum query extractor rejects malformed/non-unsigned limits; an unknown
-            triggered_by value is a JSON error
+          description: Axum query extractor rejects malformed/non-unsigned limits; a filter value
+            barca history would refuse is a JSON error naming the parameter
           content:
             text/plain:
               schema: *id003
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-      description: Newest first, all pipelines in this local environment. No source filter. Snapshot inspection
+      description: The runs in progress first, whatever limit lists, then newest first; all pipelines
+        in this local environment. No source filter. Snapshot inspection
         does not create/migrate the database. Limit defaults to 100 and is clamped to 1–1000.
-        With status=running, only the runs in flight (pending or running), this server's and the
-        CLI runs on the same metadata database whose owner is alive, each with active_steps.
-        With triggered_by, only the runs started that way, and total counts those. Without
-        status=running the body has activity, the runs started in the last 24 hours counted by
-        hour over every recorded run of the window (and of triggered_by), not over the runs listed.
+        The filters are those of barca history, applied by the database; they combine with AND, and
+        runs, total and activity are of the runs they keep. With status=running alone, only the runs
+        in flight (pending or running), this server's and the CLI runs on the same metadata database
+        whose owner is alive, each with active_steps and now. activity is the runs started in the
+        last 24 hours that the filters keep (whatever since and until say), counted by hour over
+        every recorded run of the window, not over the runs listed.
       parameters: &id024
       - name: limit
         in: query
@@ -2971,16 +2990,46 @@ paths:
         required: false
         schema:
           type: string
-          enum:
-          - running
-        description: running lists only the runs in flight; any other value is a 400.
+        description: 'barca history --status: comma-separated, any of success, failed, cancelled, error,
+          running, interrupted; not_successful is every one but success and running. running alone
+          lists the runs in flight. An unknown value is a 400.'
       - name: triggered_by
         in: query
         required: false
         schema:
           type: string
         description: 'barca history --triggered-by: comma-separated, any of manual, api, schedule,
-          client. manual,api,client leaves the schedule''s runs out. An unknown value is a 400.'
+          client. An unknown value is a 400.'
+      - name: not_triggered_by
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'barca history --not-triggered-by: comma-separated, any of manual, api, schedule,
+          client, left out. schedule leaves the schedule''s runs out and keeps the runs that recorded
+          no trigger; activity.excluded counts what it left out of the window. An unknown value is a
+          400. Experimental.'
+      - name: since
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'barca history --since: started at or after a duration back from the server''s clock
+          (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date. Experimental.'
+      - name: until
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'barca history --until: started before a time, written as since is. With since, a
+          window: an hour of activity is its at and until. Experimental.'
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'barca history --search: runs whose run id, target or job contains this text,
+          whatever its case. Experimental.'
     head:
       summary: List durable history joined with retained live runs (headers only)
       operationId: head_runs
@@ -6888,10 +6937,11 @@ components:
     RunActivity:
       type: object
       additionalProperties: false
-      description: The runs started in the last 24 hours, hour by hour, counted by the database over
-        every recorded run of the window, the activity of barca history --activity --json. Absent
-        with status=running. Experimental.
-      required: [since, until, triggered_by, hours, total, summary]
+      description: The runs started in the last 24 hours that the request's filters keep, hour by
+        hour, counted by the database over every recorded run of the window, the activity of barca
+        history --activity --json. Experimental.
+      required: [since, until, triggered_by, not_triggered_by, statuses, search, hours, total, excluded,
+        summary]
       properties:
         since:
           type: string
@@ -6905,6 +6955,19 @@ components:
           description: The triggers counted; empty for every run, also the ones that recorded none.
           items:
             $ref: '#/components/schemas/TriggeredBy'
+        not_triggered_by:
+          type: array
+          description: The triggers left out; a run that recorded no trigger is counted.
+          items:
+            $ref: '#/components/schemas/TriggeredBy'
+        statuses:
+          type: array
+          description: The statuses counted; empty for every status.
+          items:
+            type: string
+        search:
+          type: [string, 'null']
+          description: The text the runs counted hold in their run id, target or job.
         hours:
           type: array
           description: One entry per hour of UTC, oldest first, the hours without runs included.
@@ -6915,19 +6978,30 @@ components:
         total:
           $ref: '#/components/schemas/ActivityHour'
           description: The window as a whole; its at is since.
+        excluded:
+          oneOf:
+          - $ref: '#/components/schemas/ActivityHour'
+          - type: 'null'
+          description: With not_triggered_by, the window's runs it left out and the other filters
+            keep, as one entry for the window; null without it.
         summary:
           type: string
           description: The window in one line, "1,440 runs in the last 24 hours" followed by the
-            not successful, the in progress and the counts by trigger that are not zero.
+            not successful, the in progress, the median time and the counts by trigger that are not
+            zero.
     ActivityHour:
       type: object
       additionalProperties: false
       description: The runs started in one hour.
-      required: [at, runs, ok, not_successful, in_progress, by_status, by_trigger]
+      required: [at, until, runs, ok, not_successful, in_progress, by_status, by_trigger, median_seconds,
+        failure]
       properties:
         at:
           type: string
           description: The hour's start, RFC 3339 in UTC. A reader shows it in its own zone.
+        until:
+          type: string
+          description: The hour's end, the next one's start. since=at and until=until list its runs.
         runs: {type: integer, minimum: 0}
         ok:
           type: integer
@@ -6964,6 +7038,28 @@ components:
             manual: {type: integer, minimum: 0}
             client: {type: integer, minimum: 0}
             unknown: {type: integer, minimum: 0}
+        median_seconds:
+          type: [number, 'null']
+          minimum: 0
+          description: The median time its finished runs took, in seconds; null when none finished.
+        failure:
+          oneOf:
+          - type: object
+            additionalProperties: false
+            required: [text, runs]
+            properties:
+              text:
+                type: string
+                description: 'The first failed step and its error, as in orders, KeyError, region joined
+                  by colons, with a partitioned node''s keys under its name; or how the runs ended when
+                  no step failed, such as cancelled.'
+              runs:
+                type: integer
+                minimum: 1
+                description: How many of the hour's runs it is said of.
+          - type: 'null'
+          description: What most of its unsuccessful runs say went wrong, the latest on a tie; null
+            when none ended that way.
     RunStep:
       type: object
       additionalProperties: false

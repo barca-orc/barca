@@ -150,11 +150,20 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("history", ["history", "--json", "--limit", "1"], "stdout", 0),
     (
         "history_filtered",
-        ["history", "--status", "failed", "--target", "broken", "--since", "1d", "--json"],
+        [
+            *["history", "--status", "failed", "--target", "broken", "--since", "1d"],
+            *["--until", "2999-01-01", "--not-triggered-by", "schedule", "--search", "BROKEN"],
+            "--json",
+        ],
         "stdout",
         0,
     ),
-    ("history_activity", ["history", "--activity", "--json"], "stdout", 0),
+    (
+        "history_activity",
+        ["history", "--activity", "--not-triggered-by", "schedule", "--json"],
+        "stdout",
+        0,
+    ),
     ("stats", ["stats", "total", "pipeline.py", "--json"], "stdout", 0),
     ("doctor", ["doctor", "pipeline.py", "--json"], "stdout", 0),
     # A dry run deletes nothing, so the cases after it see the same project. A moved-aside

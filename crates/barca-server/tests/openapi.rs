@@ -780,6 +780,67 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         runs["total"]
     );
     checked(&router, "GET", "/runs?triggered_by=cron", "/runs", 400).await;
+    // #969: the filters are the server's. Leaving the schedule's runs out keeps these, and
+    // says what it left out; a status, a search and a window each count the runs they keep.
+    let kept = checked(
+        &router,
+        "GET",
+        "/runs?not_triggered_by=schedule",
+        "/runs",
+        200,
+    )
+    .await;
+    assert_eq!(kept["total"], runs["total"]);
+    assert_eq!(kept["activity"]["not_triggered_by"], json!(["schedule"]));
+    assert_eq!(kept["activity"]["excluded"]["runs"], 0);
+    assert!(runs["activity"]["excluded"].is_null());
+    let failed = checked(
+        &router,
+        "GET",
+        "/runs?status=not_successful&search=BROKEN",
+        "/runs",
+        200,
+    )
+    .await;
+    assert_eq!(failed["total"], 1);
+    assert_eq!(failed["runs"][0]["id"], broken.as_str());
+    assert_eq!(failed["activity"]["total"]["runs"], 1);
+    assert_eq!(failed["activity"]["search"], "BROKEN");
+    assert_eq!(
+        failed["activity"]["hours"][23]["failure"],
+        json!({"text": "broken: ValueError: expected contract failure", "runs": 1})
+    );
+    assert!(failed["activity"]["hours"][23]["median_seconds"].is_number());
+    // The current hour lists every run; the hour before the window's first lists none.
+    let hour = &runs["activity"]["hours"][23];
+    let window = format!(
+        "/runs?since={}&until={}",
+        hour["at"].as_str().unwrap(),
+        hour["until"].as_str().unwrap()
+    );
+    assert_eq!(
+        checked(&router, "GET", &window, "/runs", 200).await["total"],
+        runs["total"]
+    );
+    let before = format!(
+        "/runs?until={}",
+        runs["activity"]["since"].as_str().unwrap()
+    );
+    let none = checked(&router, "GET", &before, "/runs", 200).await;
+    assert_eq!(none["total"], 0);
+    assert_eq!(none["activity"]["total"]["runs"], runs["total"], "{none}");
+    for bad in ["not_triggered_by=cron", "status=broken", "until=soon"] {
+        checked(&router, "GET", &format!("/runs?{bad}"), "/runs", 400).await;
+    }
+    let history = checked(
+        &router,
+        "GET",
+        "/history?not_triggered_by=schedule&search=broken&until=2999-01-01",
+        "/history",
+        200,
+    )
+    .await;
+    assert_eq!(history["total"], 1);
     let state = checked(&router, "GET", "/state?targets=broken", "/state", 200).await;
     let node = &state.as_array().unwrap()[0];
     assert!(node["last_success_at"].is_null());
@@ -912,7 +973,8 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     let in_flight = checked(&router, "GET", "/runs?status=running", "/runs", 200).await;
     assert_eq!(in_flight["runs"][0]["id"], slow.as_str());
     assert!(in_flight["runs"][0]["active_steps"].is_array());
-    assert!(in_flight["activity"].is_null());
+    assert_eq!(in_flight["activity"]["statuses"], json!(["running"]));
+    assert_eq!(in_flight["activity"]["total"]["in_progress"], 1);
     let line = in_flight["runs"][0]["now"]["line"].as_str().unwrap();
     assert_eq!(line, "executing 1: slow");
     // `barca history --status running` reads the same `now` from /history (#991).

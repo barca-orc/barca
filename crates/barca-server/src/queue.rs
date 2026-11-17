@@ -337,6 +337,7 @@ fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, chann
             target: (!spec.targets.is_empty()).then(|| spec.targets.join(",")),
             nodes: spec.nodes.clone(),
             trigger: spec.trigger.clone(),
+            refreshes: !matches!(spec.policy, CachePolicy::CacheAware),
             files: spec.files.clone(),
             status: RunStatus::Pending,
             result: None,

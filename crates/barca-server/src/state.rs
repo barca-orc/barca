@@ -89,6 +89,10 @@ pub struct RunState {
     /// What started the run.
     #[serde(skip)]
     pub trigger: barca_core::outcome::Trigger,
+    /// The run was asked to compute again what is cached (`--refresh`, `--refresh-all`): a
+    /// cached node of it is not one it will serve from cache.
+    #[serde(skip)]
+    pub refreshes: bool,
     /// The files the request named (`[]`: the deployed set).
     #[serde(skip)]
     pub files: Vec<String>,

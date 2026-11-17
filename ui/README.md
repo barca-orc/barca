@@ -69,6 +69,17 @@ cd ui/demo/scale && PYTHONPATH=../../../python ../../../target/debug/barca serve
 pnpm --dir ui build && pnpm --dir ui preview   # http://localhost:4173/ui/ — the production build
 ```
 
+For the Runs page on a server that ticks every minute, `python/tests/run_history.py` writes a
+recorded history straight into a project's metadata database: days of every-minute schedule
+runs with a few runs someone started among them, some failed, and rows from before barca
+recorded what started a run (4,359 runs for three days). It also has `backfill`, an asset that
+runs until a file named `release` exists, for a run in progress:
+
+```bash
+cd python && python -m tests.run_history /tmp/barca-runs --days 3   # with barca on PATH
+cd /tmp/barca-runs && barca serve --no-schedule
+```
+
 Measure with the production build (`pnpm preview` proxies the API like `pnpm dev`): React's
 development build is several times slower and says little about what users get.
 

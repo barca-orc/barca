@@ -504,9 +504,20 @@ whose `running` field names the run working on each node, every 2 s while anythi
 
 The Runs page's strip is `activity` of `GET /runs` (`barca history --activity --server`): the
 runs started in each of the last 24 hours, counted by the server over every recorded run of
-the window, whatever the list has loaded. "Hide schedule runs" asks for
-`GET /runs?triggered_by=manual,api,client`, which leaves a schedule's runs out of the list,
-its count and the strip.
+the window, whatever the list has loaded, with each hour's median time and leading failure in
+its bar's tooltip. Every filter of the page is the server's, by the name of `barca history`'s
+flag: the status chips (`status=not_successful`, `status=running`), a bar (`since` and `until`
+of its hour), the search (`search`, over run id, target and job) and "Hide schedule runs"
+(`not_triggered_by=schedule`). The list, its count and the strip are of the runs the filters
+keep, in every recorded run and not only the ones loaded.
+
+The page hides a schedule's runs until asked: on a server that ticks every minute they are
+nearly all of the history, and the runs someone started are what the page is opened for. What
+that hid in the last 24 hours is said under the strip with how many did not succeed
+(`activity.excluded`), and "Show schedule runs" lists them; the browser remembers the choice.
+A run that recorded no trigger (from before barca stored it) is never hidden. Runs in progress
+come first in the list whatever its length, so a long backfill stays in view behind any number
+of newer ticks.
 
 The UI's Runs view shows persisted CLI, scheduled and HTTP runs, plus queued/live server
 runs, with what started each. Select a run to inspect its status, timing, steps, errors and

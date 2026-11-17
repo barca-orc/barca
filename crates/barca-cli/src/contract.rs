@@ -93,6 +93,18 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.29.3: the history filters' values and matching may change after field use",
     ),
     (
+        "history --not-triggered-by",
+        "new in 0.44 (#969): the history filters' values and matching may change after field use",
+    ),
+    (
+        "history --until",
+        "new in 0.44 (#969): the history filters' values and matching may change after field use",
+    ),
+    (
+        "history --search",
+        "new in 0.44 (#969): what the text is looked for in, and how, may change after field use",
+    ),
+    (
         "list --groups",
         "Organizational group hierarchy and metadata shape are experimental",
     ),

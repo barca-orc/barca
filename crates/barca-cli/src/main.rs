@@ -508,8 +508,11 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             status,
             target,
             triggered_by,
+            not_triggered_by,
+            search,
             activity,
             since,
+            until,
             limit,
             all,
             format,
@@ -536,12 +539,15 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 )
                 .await;
             }
-            let filter = history_filter(
-                status.as_deref(),
-                target.as_deref(),
-                triggered_by.as_deref(),
-                since.as_deref(),
-            )?;
+            let filter = history_filter(barca_core::history_filter::HistoryFlags {
+                status: status.as_deref(),
+                target: target.as_deref(),
+                triggered_by: triggered_by.as_deref(),
+                not_triggered_by: not_triggered_by.as_deref(),
+                since: since.as_deref(),
+                until: until.as_deref(),
+                search: search.as_deref(),
+            })?;
             if activity {
                 return client::activity(server, &filter, is_json(format), env.as_deref()).await;
             }
@@ -930,8 +936,11 @@ async fn run_cli(
             status,
             target,
             triggered_by,
+            not_triggered_by,
+            search,
             activity,
             since,
+            until,
             limit,
             all,
             format,
@@ -951,12 +960,15 @@ async fn run_cli(
                 .await
                 .map_err(engine);
             }
-            let filter = history_filter(
-                status.as_deref(),
-                target.as_deref(),
-                triggered_by.as_deref(),
-                since.as_deref(),
-            )?;
+            let filter = history_filter(barca_core::history_filter::HistoryFlags {
+                status: status.as_deref(),
+                target: target.as_deref(),
+                triggered_by: triggered_by.as_deref(),
+                not_triggered_by: not_triggered_by.as_deref(),
+                since: since.as_deref(),
+                until: until.as_deref(),
+                search: search.as_deref(),
+            })?;
             if activity {
                 return activity_cmd(env.as_deref(), &filter, is_json(format))
                     .await

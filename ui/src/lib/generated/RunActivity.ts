@@ -24,6 +24,19 @@ until: string,
  */
 triggered_by: Array<TriggeredBy>,
 /**
+ * The triggers left out (`--not-triggered-by`); a run that recorded no trigger is
+ * counted.
+ */
+not_triggered_by: Array<TriggeredBy>,
+/**
+ * The statuses counted (`--status`); empty for every status.
+ */
+statuses: Array<string>,
+/**
+ * The text the runs counted hold in their run id, target or job (`--search`).
+ */
+search: string | null,
+/**
  * One entry per hour, oldest first, the hours without runs included.
  */
 hours: Array<ActivityHour>,
@@ -32,7 +45,12 @@ hours: Array<ActivityHour>,
  */
 total: ActivityHour,
 /**
+ * With `not_triggered_by`: the window's runs it left out and the other filters keep, so
+ * what is hidden is said (`1,438 schedule runs, 3 not successful`). `null` without it.
+ */
+excluded: ActivityHour | null,
+/**
  * The window in one line: `1,440 runs in the last 24 hours · 3 not successful · 1 in
- * progress · 1,400 schedule, 30 api, 10 manual`.
+ * progress · median 1.2s · 1,400 schedule, 30 api, 10 manual`.
  */
 summary: string, };

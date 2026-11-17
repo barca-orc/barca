@@ -213,7 +213,7 @@ pub(crate) async fn history(
 }
 
 /// `barca history --activity --server`: `activity` of `GET /runs`, counted by the server over
-/// the runs of the last 24 hours (with `--triggered-by`, over the runs started that way).
+/// the runs of the last 24 hours that the filters keep.
 pub(crate) async fn activity(
     server: &Server,
     filter: &barca_core::history_filter::HistoryFilter,
@@ -223,9 +223,7 @@ pub(crate) async fn activity(
     server.health(env).await?;
     let mut path = "/runs?limit=1".to_string();
     for (key, value) in filter.query_pairs() {
-        if key == "triggered_by" {
-            path.push_str(&format!("&{key}={}", encode(&value)));
-        }
+        path.push_str(&format!("&{key}={}", encode(&value)));
     }
     let body = server.get_json(&path).await?;
     let Some(activity) = body.get("activity").filter(|a| !a.is_null()) else {

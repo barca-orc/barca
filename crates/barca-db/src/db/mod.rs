@@ -44,6 +44,7 @@ pub mod materializations;
 pub mod notifications;
 mod partition_keys;
 pub(crate) mod pins;
+mod run_filter;
 mod run_liveness;
 pub mod run_queue;
 mod run_steps;
@@ -108,10 +109,11 @@ pub use run_steps::{
 #[cfg(test)]
 pub(crate) use runs::create_run_with;
 pub use runs::{
-    ActivityRow, NewRun, RunRecord, count_runs, count_runs_triggered, create_run, encode_files,
-    finish_run, generate_run_id, get_recent_runs, get_recent_runs_triggered, get_run,
-    get_run_outcome, reconcile_run, record_unstarted_run, replace_run_outcome, run_activity,
-    run_artifact, set_cancellation, set_plan_reasons, set_run_outcome,
+    ActivityDuration, ActivityFailure, ActivityRow, NewRun, RunActivityFacts, RunFilter, RunRecord,
+    count_runs, count_runs_filtered, create_run, encode_files, finish_run, generate_run_id,
+    get_recent_runs, get_run, get_run_outcome, get_runs_filtered, reconcile_run,
+    record_unstarted_run, replace_run_outcome, run_activity, run_artifact, set_cancellation,
+    set_plan_reasons, set_run_outcome,
 };
 pub use runs::{RunFailure, StartedRun, split_exception, start_run};
 pub use schedule::{
