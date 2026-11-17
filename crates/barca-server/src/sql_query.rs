@@ -1025,7 +1025,21 @@ mod tests {
             format!("COPY (select 1) TO '{written}'"),
             format!("ATTACH '{written}' AS other"),
             format!("EXPORT DATABASE '{written}'"),
+            // DuckDB 1.x parses a table-function pragma as a SELECT (2.x as a PRAGMA).
             "PRAGMA database_list".to_string(),
+            "PRAGMA table_info('barca.runs')".to_string(),
+            "PRAGMA show_tables".to_string(),
+            "PRAGMA version".to_string(),
+            "PRAGMA database_size".to_string(),
+            "PRAGMA storage_info('barca.runs')".to_string(),
+            "/* a query */ PRAGMA database_list".to_string(),
+            "-- a query\nPRAGMA database_list".to_string(),
+            "(PRAGMA database_list)".to_string(),
+            format!("PRAGMA import_database('{}')", dir.path().display()),
+            "PRAGMA copy_database('memory', 'memory')".to_string(),
+            "PRAGMA enable_profiling".to_string(),
+            "CALL duckdb_tables()".to_string(),
+            "PIVOT barca.runs ON status USING count(*)".to_string(),
             "SET enable_external_access = true".to_string(),
             "RESET enable_external_access".to_string(),
             "INSTALL httpfs".to_string(),
@@ -1132,13 +1146,27 @@ mod tests {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
         };
         // Killed between queries: the next one starts another and loads its tables again.
+        // (A query that reaches the helper while it is still dying is the 503 below: a killed
+        // process takes a moment to exit, so the query is sent until it is answered.)
         kill(pid);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let runs = ask(&state, "select count(*) as n from barca.runs")
-            .await
-            .unwrap();
-        assert_eq!(runs.rows, [json!({"n": 0})]);
-        assert_eq!(state.sql.starts.load(Ordering::Relaxed), 2);
+        let mut answered = None;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            match ask(&state, "select count(*) as n from barca.runs").await {
+                Ok(runs) => {
+                    answered = Some(runs);
+                    break;
+                }
+                Err((503, _)) => {}
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(
+            answered.expect("a new helper answers").rows,
+            [json!({"n": 0})]
+        );
+        let started = state.sql.starts.load(Ordering::Relaxed);
+        assert!(started >= 2, "{started}");
         // Killed under a query: that query is a 503 naming what to do, the next is answered.
         let second = state.sql.pid().await.unwrap();
         assert_ne!(second, pid);
@@ -1151,7 +1179,7 @@ mod tests {
         assert_eq!(body["kind"], "infra");
         assert!(body["remediation"].as_str().unwrap().contains("again"));
         ask(&state, "select 1").await.unwrap();
-        assert_eq!(state.sql.starts.load(Ordering::Relaxed), 3);
+        assert_eq!(state.sql.starts.load(Ordering::Relaxed), started + 1);
     }
 
     /// A query that needs more memory than DuckDB is given fails as a usage error: nothing is
@@ -1414,6 +1442,24 @@ mod tests {
         }
         let short = ask(&state, "select ';' as a -- ;").await.unwrap();
         assert_eq!(short.rows, [json!({"a": ";"})]);
+        // Every way a query starts is still one: a comment or a parenthesis first, and the
+        // statements DuckDB reads as a SELECT.
+        for query in [
+            "/* how many */ select count(*) as n from barca.runs",
+            "-- how many\nselect count(*) as n from barca.runs",
+            "/* a /* nested */ comment */ (select count(*) as n from barca.runs)",
+            "with r as (select * from barca.runs) select count(*) as n from r",
+            "from barca.runs select count(*) as n",
+            "values (0)",
+            "table barca.runs",
+            "describe barca.runs",
+            "summarize barca.runs",
+            "show tables",
+        ] {
+            ask(&state, query)
+                .await
+                .unwrap_or_else(|e| panic!("{query}: {e:?}"));
+        }
     }
 
     /// `query_table` and `query` reach a table by a name the text does not show: every table
