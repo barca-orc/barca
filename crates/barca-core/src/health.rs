@@ -20,7 +20,7 @@
 
 use crate::BarcaError;
 use crate::cache_state::CacheState;
-use crate::db::{self, NodeAge};
+use crate::db::{self, NodeAge, TickTargetOutcome};
 use crate::schedule::Zone;
 use crate::status::{NodeStatus, StatusResult};
 use serde::{Deserialize, Serialize};
@@ -120,6 +120,9 @@ pub enum HealthReason {
     Partial,
     /// `behind`: `cache.state` is `unsynced`.
     Unsynced,
+    /// `ok`: `cache.state` is `unknown`, and the newest tick that checked the node found it
+    /// up to date or rebuilt it, with nothing seen to have changed since ([`verdict_stands`]).
+    CheckedUpToDate,
     /// `undecided`: `cache.state` is `unknown`. Also the reason of an unclassified row.
     #[default]
     Unknown,
@@ -148,6 +151,7 @@ impl HealthReason {
             HealthReason::Stale => "stale",
             HealthReason::Partial => "partial",
             HealthReason::Unsynced => "unsynced",
+            HealthReason::CheckedUpToDate => "checked_up_to_date",
             HealthReason::Unknown => "unknown",
             HealthReason::NeverRun => "never_run",
             HealthReason::NoSuccessfulRun => "no_successful_run",
@@ -298,6 +302,74 @@ impl DataCoverage {
     }
 }
 
+/// `last_check`: what the newest finished tick that had the node as a target did with it
+/// (the tick record, `specs/behavior/health.md`). A record, whatever its age: whether it still
+/// decides the node's health is [`verdict_stands`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct LastCheck {
+    /// When that tick's run ended (RFC 3339, UTC).
+    pub at: String,
+    /// What the run did with the node: `rebuilt` (its step executed: for a sensor, it was
+    /// polled, whatever it returned; for a task, it fired), `up_to_date` (a cache hit),
+    /// `failed`, or `not_reached` (the run ended before it decided the node).
+    #[cfg_attr(
+        feature = "ts",
+        ts(type = "\"rebuilt\" | \"up_to_date\" | \"failed\" | \"not_reached\"")
+    )]
+    pub outcome: TickTargetOutcome,
+    /// The scheduled node whose tick it was.
+    pub schedule: String,
+}
+
+impl LastCheck {
+    /// The outcome in words, after "checked 3m ago, ": what the CLI prints and the UI shows.
+    pub fn outcome_word(outcome: TickTargetOutcome) -> &'static str {
+        match outcome {
+            TickTargetOutcome::Rebuilt => "rebuilt",
+            TickTargetOutcome::UpToDate => "up to date",
+            TickTargetOutcome::Failed => "failed",
+            TickTargetOutcome::NotReached => "not reached",
+        }
+    }
+
+    /// `checked 3m ago, up to date`, as of `now` (unix seconds).
+    pub fn line(&self, now: i64) -> String {
+        let ago = chrono::DateTime::parse_from_rfc3339(&self.at)
+            .map(|at| crate::report::ago(now - at.timestamp()))
+            .unwrap_or_else(|_| self.at.clone());
+        format!("checked {ago}, {}", Self::outcome_word(self.outcome))
+    }
+}
+
+/// A node's [`LastCheck`] with what [`verdict_stands`] reads of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Check {
+    pub last: LastCheck,
+    /// When the tick's run ended, unix seconds.
+    pub finished_at: f64,
+    /// Until when its verdict can decide the node's health (unix seconds): one interval of
+    /// its schedule after its run ended, plus the time that tick took from its slot to its
+    /// end (when the next tick's verdict is due), plus the grace a late schedule gets
+    /// (`crate::schedule_standing`). `None` when its schedule is no longer a scheduled node of the
+    /// graph: nothing will check the node again.
+    pub trusted_until: Option<f64>,
+}
+
+/// What the tick record says about the nodes of a graph ([`checks`]): the same for every
+/// request until the metadata database or the graph changes.
+#[derive(Clone, Debug, Default)]
+pub struct Checks {
+    /// Each node's newest check.
+    pub by_node: HashMap<String, Check>,
+    /// Assets whose definition (code, counted decorator parts, helpers) is not the one their
+    /// newest successful result recorded, or cannot be compared with it: edited since.
+    pub redefined: HashSet<String>,
+    /// The runs of fired ticks still in flight: what they record is not a change since a
+    /// check, their own verdict is on its way.
+    pub in_flight: HashSet<String>,
+}
+
 /// What classification reads beyond the status rows themselves.
 #[derive(Clone, Copy)]
 pub struct Evidence<'a> {
@@ -307,6 +379,10 @@ pub struct Evidence<'a> {
     pub pinned: &'a HashSet<String>,
     /// Scheduled nodes whose schedule is late ([`crate::schedule_standing::late_schedules`]).
     pub late: &'a HashSet<String>,
+    /// What the newest ticks found ([`checks`]).
+    pub checks: &'a Checks,
+    /// The instant of classification, unix seconds: a check's verdict expires.
+    pub now: i64,
 }
 
 /// `last_attempt_failed`: its last materialization failed, or (a partitioned node's last
@@ -393,11 +469,14 @@ pub fn blocked_by(nodes: &[NodeStatus], pinned: &HashSet<String>) -> HashMap<Str
 
 /// The signals of `node`, from the ages of every node. `is_asset` says whether an input is an
 /// asset (asked only for a node whose state is `unknown`). Nothing is inspected or guessed: a
-/// count no worker recorded raises no signal.
+/// count no worker recorded raises no signal. `checked`: a tick's verdict stands for the node
+/// ([`verdict_stands`]), so it is not behind an input: that tick read the input's newest
+/// result and found the node up to date.
 pub fn signals(
     node: &NodeStatus,
     ages: &HashMap<String, NodeAge>,
     is_asset: impl Fn(&str) -> bool,
+    checked: bool,
 ) -> Vec<DataSignal> {
     let mut out = Vec::new();
     if node.kind != "asset" {
@@ -424,6 +503,7 @@ pub fn signals(
         }
     }
     if node.cache.state == CacheState::Unknown
+        && !checked
         && let (Some(own), Some(at)) = (age.rows.as_ref(), age.last_success_at.as_ref())
     {
         let behind = node
@@ -462,12 +542,86 @@ pub fn measured(node: &NodeStatus, ages: &HashMap<String, NodeAge>) -> Option<bo
     })
 }
 
-/// The health table of `specs/behavior/health.md`: the first matching row decides.
+/// When `created_at` (UTC `YYYY-MM-DD HH:MM:SS`, as materializations record it) was, unix
+/// seconds. A time that cannot be read is the end of time: newer than any check.
+fn recorded_at(created_at: &str) -> i64 {
+    chrono::NaiveDateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S")
+        .map_or(i64::MAX, |at| at.and_utc().timestamp())
+}
+
+/// For each node, when the newest materialization of a node above it (its whole upstream
+/// cone) was recorded, unix seconds; a node with nothing recorded above it is absent. Rows a
+/// tick's run still in flight recorded do not count: that run's own verdict is on its way.
+/// `nodes` are in dependency order.
+fn newest_above(nodes: &[NodeStatus], evidence: Evidence<'_>) -> HashMap<String, i64> {
+    // Each node's own newest row or anything above it, whichever is newer.
+    let mut through: HashMap<&str, i64> = HashMap::with_capacity(nodes.len());
+    let mut above: HashMap<String, i64> = HashMap::new();
+    for node in nodes {
+        let over = node
+            .inputs
+            .iter()
+            .filter_map(|input| through.get(input.as_str()).copied())
+            .max();
+        if let Some(at) = over {
+            above.insert(node.id.clone(), at);
+        }
+        let in_flight = evidence
+            .ages
+            .get(&node.id)
+            .and_then(|age| age.last_run.as_ref())
+            .is_some_and(|run| evidence.checks.in_flight.contains(&run.run_id));
+        let own = node
+            .last_materialization
+            .as_ref()
+            .filter(|_| !in_flight)
+            .map(|m| recorded_at(&m.created_at));
+        if let Some(at) = own.into_iter().chain(over).max() {
+            through.insert(node.id.as_str(), at);
+        }
+    }
+    above
+}
+
+/// Whether the verdict of `check`, the newest finished tick that had `node` as a target,
+/// still stands as of `now`: a run decided what the read path cannot, and nothing the read
+/// path can see has changed since. All of:
+///
+/// - the tick found the node up to date or rebuilt it (a newer `failed` or `not_reached`
+///   outcome is the newest check, and decides nothing);
+/// - it is not expired ([`Check::trusted_until`]): the next tick of that schedule is not
+///   overdue, and the schedule still exists;
+/// - the node's definition is the one its newest successful result recorded
+///   ([`Checks::redefined`]);
+/// - no node above it has a materialization recorded after the tick's run ended
+///   (`newest_above`), other than by a tick's run still in flight.
+///
+/// What it cannot see, and the expiry bounds: an edit to a node above it (shown on that
+/// node), and a declared environment variable's new value.
+pub fn verdict_stands(
+    node: &NodeStatus,
+    check: &Check,
+    redefined: &HashSet<String>,
+    newest_above: Option<i64>,
+    now: i64,
+) -> bool {
+    matches!(
+        check.last.outcome,
+        TickTargetOutcome::UpToDate | TickTargetOutcome::Rebuilt
+    ) && check.trusted_until.is_some_and(|until| now as f64 <= until)
+        && !redefined.contains(&node.id)
+        // Rows are recorded to the second: one in the second the run ended is the run's own.
+        && newest_above.is_none_or(|at| at as f64 <= check.finished_at)
+}
+
+/// The health table of `specs/behavior/health.md`: the first matching row decides. `checked`:
+/// a tick's verdict stands for the node ([`verdict_stands`]).
 pub fn decide(
     node: &NodeStatus,
     blocked: bool,
     signals: &[DataSignal],
     late: bool,
+    checked: bool,
 ) -> (Health, HealthReason) {
     use HealthReason as R;
     if last_materialization_failed(node) {
@@ -507,8 +661,9 @@ pub fn decide(
         CacheState::Stale => (Health::Behind, R::Stale),
         CacheState::Partial => (Health::Behind, R::Partial),
         CacheState::Unsynced => (Health::Behind, R::Unsynced),
-        // Row 8. SEAM (#964): a row before this one answers `ok`, `checked_up_to_date`, when
-        // the newest finished tick that checked the node found it up to date.
+        // The read path cannot decide; a tick did, and its verdict stands (#964).
+        CacheState::Unknown if checked => (Health::Ok, R::CheckedUpToDate),
+        // Row 8.
         CacheState::Unknown => (Health::Undecided, R::Unknown),
         CacheState::NeverRun => (Health::NeverRun, R::NeverRun),
         CacheState::AlwaysRuns if node.last_materialization.is_none() => {
@@ -521,8 +676,8 @@ pub fn decide(
     }
 }
 
-/// Fill `health`, `health_reason`, `signals`, `measured` and `root` on every row of `nodes` (one
-/// status result: a scope with its upstream cone, in dependency order).
+/// Fill `health`, `health_reason`, `signals`, `measured`, `root` and `last_check` on every row
+/// of `nodes` (one status result: a scope with its upstream cone, in dependency order).
 pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
     let assets: HashSet<&str> = nodes
         .iter()
@@ -530,31 +685,62 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
         .map(|n| n.id.as_str())
         .collect();
     let mut blocked = blocked_by(nodes, evidence.pinned);
+    // Only a node the read path cannot decide asks whether a tick's verdict stands.
+    let above = if nodes.iter().any(|n| {
+        n.cache.state == CacheState::Unknown && evidence.checks.by_node.contains_key(&n.id)
+    }) {
+        newest_above(nodes, evidence)
+    } else {
+        HashMap::new()
+    };
     let decided: Vec<_> = nodes
         .iter()
         .map(|node| {
-            let signals = signals(node, evidence.ages, |id| assets.contains(id));
+            let check = evidence.checks.by_node.get(&node.id);
+            let checked = node.cache.state == CacheState::Unknown
+                && check.is_some_and(|check| {
+                    verdict_stands(
+                        node,
+                        check,
+                        &evidence.checks.redefined,
+                        above.get(&node.id).copied(),
+                        evidence.now,
+                    )
+                });
+            let signals = signals(node, evidence.ages, |id| assets.contains(id), checked);
             let by = blocked.remove(&node.id);
             let (health, reason) = decide(
                 node,
                 by.is_some(),
                 &signals,
                 evidence.late.contains(&node.id),
+                checked,
             );
             // SEAM (#963): the root of every other cause is named here.
             let root = match health {
                 Health::Failing => Some(Root::failure(&node.id)),
                 _ => by.as_deref().map(Root::failure),
             };
-            (health, reason, signals, measured(node, evidence.ages), root)
+            let last_check = check.map(|check| check.last.clone());
+            (
+                health,
+                reason,
+                signals,
+                measured(node, evidence.ages),
+                root,
+                last_check,
+            )
         })
         .collect();
-    for (node, (health, reason, signals, measured, root)) in nodes.iter_mut().zip(decided) {
+    for (node, (health, reason, signals, measured, root, last_check)) in
+        nodes.iter_mut().zip(decided)
+    {
         node.health = health;
         node.health_reason = reason;
         node.signals = signals;
         node.measured = measured;
         node.root = root;
+        node.last_check = last_check;
     }
 }
 
@@ -575,15 +761,18 @@ pub async fn attach_from_db(
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
-    let (ages, pinned, pauses) = if Path::new(db_path).exists() {
+    let (ages, pinned, pauses, checks) = if Path::new(db_path).exists() {
+        let ages = db::node_ages(db_path).await?;
+        let checks = checks(db_path, dag, &ages, zone).await?;
         (
-            db::node_ages(db_path).await?,
+            ages,
             crate::pins::list(db_path)
                 .await?
                 .into_iter()
                 .map(|pin| pin.node_id)
                 .collect(),
             db::get_schedule_pauses(db_path).await?,
+            checks,
         )
     } else {
         Default::default()
@@ -608,9 +797,123 @@ pub async fn attach_from_db(
             ages: &ages,
             pinned: &pinned,
             late: &late,
+            checks: &checks,
+            now: now.timestamp(),
         },
     );
     Ok(())
+}
+
+/// What the tick record at `db_path` says about the nodes of `dag` ([`Checks`]): two bounded
+/// reads for the whole graph, never one per node. Cron is evaluated in `zone`. It depends on
+/// the database, the graph and the ages read from that database, not on the clock, so a
+/// server keeps it until one of them changes.
+pub async fn checks(
+    db_path: &str,
+    dag: &crate::dag::Dag,
+    ages: &HashMap<String, NodeAge>,
+    zone: &Zone,
+) -> Result<Checks, BarcaError> {
+    let ticks = db::latest_ticks(db_path).await?;
+    if ticks.outcomes.is_empty() {
+        return Ok(Checks::default());
+    }
+    let crons: HashMap<String, _> =
+        crate::schedule::jobs_from_summaries(crate::queries::list_assets_from_dag(dag))
+            .into_iter()
+            .map(|job| (job.id, job.cron))
+            .collect();
+    let mut by_node = HashMap::with_capacity(ticks.outcomes.len());
+    // The newest successful row of each asset a tick's verdict could decide.
+    let mut newest: HashMap<i64, &crate::model::DagNode> = HashMap::new();
+    let mut redefined = HashSet::new();
+    for (id, outcome) in ticks.outcomes {
+        let (Some(node), Some(finished_at)) = (dag.get_node(&id), outcome.finished_at) else {
+            continue;
+        };
+        let Some(at) = chrono::DateTime::from_timestamp(finished_at as i64, 0) else {
+            continue;
+        };
+        let slot = outcome.scheduled_at;
+        let trusted_until = crons.get(&outcome.schedule_id).and_then(|cron| {
+            let next =
+                crate::schedule::next_fire(cron, zone, chrono::DateTime::from_timestamp(slot, 0)?)?;
+            let interval = next.timestamp() - slot;
+            // The grace a late schedule gets (`crate::schedule_standing`).
+            let grace = crate::schedule_standing::grace_seconds(Some(slot), Some(next.timestamp()));
+            Some(finished_at + (finished_at - slot as f64).max(0.0) + (interval + grace) as f64)
+        });
+        if matches!(
+            outcome.outcome,
+            TickTargetOutcome::UpToDate | TickTargetOutcome::Rebuilt
+        ) && node.kind() == crate::NodeKind::Asset
+        {
+            match ages.get(&id).and_then(|age| age.rows.as_ref()) {
+                Some(rows) => {
+                    newest.insert(rows.newest.0, node);
+                }
+                // No successful result on record: nothing to compare its definition with.
+                None => {
+                    redefined.insert(id.clone());
+                }
+            }
+        }
+        by_node.insert(
+            id,
+            Check {
+                last: LastCheck {
+                    at: at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    outcome: outcome.outcome,
+                    schedule: outcome.schedule_id,
+                },
+                finished_at,
+                trusted_until,
+            },
+        );
+    }
+    let rows: Vec<i64> = newest.keys().copied().collect();
+    let recorded = db::components_of_rows(db_path, &rows).await?;
+    for (row, node) in newest {
+        if !recorded.get(&row).is_some_and(|recorded| {
+            same_definition(recorded, &node.definition_hash, &node.components)
+        }) {
+            redefined.insert(node.id.clone());
+        }
+    }
+    Ok(Checks {
+        by_node,
+        redefined,
+        in_flight: ticks.in_flight.into_iter().collect(),
+    })
+}
+
+/// Whether `recorded` (the run-hash components a materialization recorded, as JSON) names the
+/// definition a node has now (`definition_hash`, `components`): its definition hash (rows
+/// since 0.37.1), or, for an older row that lists every digest, the same definition components. A row that cannot be read does
+/// not.
+fn same_definition(recorded: &str, definition_hash: &str, components: &[(String, String)]) -> bool {
+    let Ok(recorded) = serde_json::from_str::<HashMap<String, String>>(recorded) else {
+        return false;
+    };
+    if let Some(definition) = recorded.get(crate::changes::DEFINITION_KEY) {
+        return definition == definition_hash;
+    }
+    // The components of a run hash that are not its definition's (`crate::changes`).
+    let own = |key: &str| {
+        ["input ", "sensor ", "value ", "env "]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+    };
+    let then: HashMap<&str, &str> = recorded
+        .iter()
+        .filter(|(key, _)| !own(key))
+        .map(|(key, digest)| (key.as_str(), digest.as_str()))
+        .collect();
+    let now: HashMap<&str, &str> = components
+        .iter()
+        .map(|(key, digest)| (key.as_str(), digest.as_str()))
+        .collect();
+    !then.is_empty() && then == now
 }
 
 #[cfg(test)]
@@ -689,6 +992,8 @@ mod tests {
                 ages: &ages,
                 pinned: &pinned,
                 late: &late,
+                checks: &Checks::default(),
+                now: 0,
             },
         );
         nodes
@@ -726,7 +1031,7 @@ mod tests {
         use HealthReason as R;
         let ok = last("success");
         let row = |n: &NodeStatus, blocked, signals: &[DataSignal], late| {
-            decide(n, blocked, signals, late)
+            decide(n, blocked, signals, late, false)
         };
         let empty = DataSignal::Empty {
             empty_keys: 1,
@@ -946,7 +1251,7 @@ mod tests {
         )]);
         let a = node("p.py:a", &[], CacheState::Cached);
         assert_eq!(
-            signals(&a, &ages, |_| true),
+            signals(&a, &ages, |_| true, false),
             vec![
                 DataSignal::Empty {
                     empty_keys: 3,
@@ -966,10 +1271,10 @@ mod tests {
             "p.py:a".to_string(),
             age((5, "r2"), "2026-11-16 10:00:00", RowFacts::default()),
         )]);
-        assert!(signals(&a, &quiet, |_| true).is_empty());
+        assert!(signals(&a, &quiet, |_| true, false).is_empty());
         let mut task = node("p.py:a", &[], CacheState::AlwaysRuns);
         task.kind = "task".into();
-        assert!(signals(&task, &ages, |_| true).is_empty());
+        assert!(signals(&task, &ages, |_| true, false).is_empty());
     }
 
     #[test]
@@ -998,7 +1303,8 @@ mod tests {
             signals(
                 &node("p.py:all", &inputs, CacheState::Unknown),
                 &ages,
-                is_asset
+                is_asset,
+                false
             ),
             vec![DataSignal::BehindInput {
                 input: "p.py:keys".into(),
@@ -1008,7 +1314,7 @@ mod tests {
         );
         // A state that already says what to do, or that it is current, raises nothing.
         for state in [CacheState::Stale, CacheState::Cached, CacheState::Partial] {
-            assert!(signals(&node("p.py:all", &inputs, state), &ages, is_asset).is_empty());
+            assert!(signals(&node("p.py:all", &inputs, state), &ages, is_asset, false).is_empty());
         }
         // An input written later in the same run is not newer data.
         let same_run = HashMap::from([
@@ -1025,7 +1331,8 @@ mod tests {
             signals(
                 &node("p.py:all", &inputs, CacheState::Unknown),
                 &same_run,
-                is_asset
+                is_asset,
+                false
             )
             .is_empty()
         );
@@ -1077,6 +1384,8 @@ mod tests {
                 ages: &ages,
                 pinned: &pinned,
                 late: &late,
+                checks: &Checks::default(),
+                now: 0,
             },
         );
         assert_eq!(
@@ -1140,5 +1449,269 @@ mod tests {
         assert_eq!(Health::Suspect.word(), "suspect data");
         assert_eq!(Health::NeverRun.word(), "never run");
         assert!(Health::Suspect.is_fresh() && !Health::Behind.is_fresh());
+    }
+
+    /// A check of `id` that ended at `finished_at`, trusted for ten minutes after.
+    fn check(outcome: TickTargetOutcome, finished_at: i64) -> Check {
+        Check {
+            last: LastCheck {
+                at: chrono::DateTime::from_timestamp(finished_at, 0)
+                    .unwrap()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                outcome,
+                schedule: "p.py:clock".to_string(),
+            },
+            finished_at: finished_at as f64 + 0.5,
+            trusted_until: Some(finished_at as f64 + 600.0),
+        }
+    }
+
+    /// A sensor every tick polls, a cutoff asset below it the read path says would run, and
+    /// a report below that it cannot decide: the audit case. Rows recorded at `window_at`
+    /// (the cutoff asset's newest) and long ago (the report's last success).
+    fn undecided_below_a_cutoff(window_at: &str) -> Vec<NodeStatus> {
+        let at = |mut n: NodeStatus, created_at: &str| {
+            n.last_materialization = last("success");
+            n.last_materialization.as_mut().unwrap().created_at = created_at.to_string();
+            n
+        };
+        let mut clock = at(node("p.py:clock", &[], CacheState::AlwaysRuns), window_at);
+        clock.kind = "sensor".into();
+        vec![
+            clock,
+            at(
+                node("p.py:window", &["p.py:clock"], CacheState::Stale),
+                window_at,
+            ),
+            at(
+                node("p.py:report", &["p.py:window"], CacheState::Unknown),
+                "2026-11-10 08:00:00",
+            ),
+        ]
+    }
+
+    // 2026-11-16 10:00:00 UTC.
+    const TICK_ENDED: i64 = 1_794_823_200;
+
+    fn classified_with(mut nodes: Vec<NodeStatus>, checks: &Checks, now: i64) -> Vec<NodeStatus> {
+        let (ages, pinned, late) = none();
+        classify(
+            &mut nodes,
+            Evidence {
+                ages: &ages,
+                pinned: &pinned,
+                late: &late,
+                checks,
+                now,
+            },
+        );
+        nodes
+    }
+
+    fn checked(outcome: TickTargetOutcome) -> Checks {
+        Checks {
+            by_node: HashMap::from([
+                ("p.py:report".to_string(), check(outcome, TICK_ENDED)),
+                (
+                    "p.py:clock".to_string(),
+                    check(TickTargetOutcome::Rebuilt, TICK_ENDED),
+                ),
+            ]),
+            ..Checks::default()
+        }
+    }
+
+    #[test]
+    fn a_node_the_read_path_cannot_decide_takes_the_verdict_of_the_tick_that_checked_it() {
+        use TickTargetOutcome::*;
+        assert_eq!(
+            chrono::DateTime::from_timestamp(TICK_ENDED, 0)
+                .unwrap()
+                .to_rfc3339(),
+            "2026-11-16T10:00:00+00:00"
+        );
+        let report = |nodes: &[NodeStatus]| word(nodes, "p.py:report");
+        // The tick polled the sensor and rebuilt the cutoff asset a second before it ended.
+        let rows = || undecided_below_a_cutoff("2026-11-16 09:59:59");
+        let now = TICK_ENDED + 180;
+
+        // No tick record: as before.
+        let none = classified_with(rows(), &Checks::default(), now);
+        assert_eq!(report(&none), (Health::Undecided, HealthReason::Unknown));
+        assert_eq!(none[2].last_check, None);
+
+        // Found up to date, or rebuilt: ok, and every node says what its last check did.
+        for outcome in [UpToDate, Rebuilt] {
+            let got = classified_with(rows(), &checked(outcome), now);
+            assert_eq!(report(&got), (Health::Ok, HealthReason::CheckedUpToDate));
+            let last = got[2].last_check.as_ref().unwrap();
+            assert_eq!(
+                (last.at.as_str(), last.outcome, last.schedule.as_str()),
+                ("2026-11-16T10:00:00Z", outcome, "p.py:clock")
+            );
+            // A sensor's check is carried too, and decides nothing: it is not undecided.
+            assert_eq!(got[0].last_check.as_ref().unwrap().outcome, Rebuilt);
+            assert_eq!(got[0].health_reason, HealthReason::LastRunSucceeded);
+            // The cutoff asset is decided by the read path: its check changes nothing.
+            assert_eq!(
+                word(&got, "p.py:window"),
+                (Health::Behind, HealthReason::Stale)
+            );
+        }
+        assert_eq!(
+            checked(UpToDate).by_node["p.py:report"].last.line(now),
+            "checked 3m ago, up to date"
+        );
+        assert_eq!(
+            checked(Rebuilt).by_node["p.py:report"]
+                .last
+                .line(now + 3600),
+            "checked 1h ago, rebuilt"
+        );
+
+        // A newer check that failed, or did not reach it, decides nothing.
+        for outcome in [Failed, NotReached] {
+            let got = classified_with(rows(), &checked(outcome), now);
+            assert_eq!(report(&got), (Health::Undecided, HealthReason::Unknown));
+            assert_eq!(got[2].last_check.as_ref().unwrap().outcome, outcome);
+        }
+
+        // Something above it was recorded after the tick ended: changed since.
+        let later = classified_with(
+            undecided_below_a_cutoff("2026-11-16 10:01:00"),
+            &checked(UpToDate),
+            now,
+        );
+        assert_eq!(report(&later), (Health::Undecided, HealthReason::Unknown));
+        // Unless a tick's run still in flight recorded it: its verdict is on its way.
+        let ages = HashMap::from(["p.py:clock", "p.py:window"].map(|id| {
+            (
+                id.to_string(),
+                NodeAge {
+                    last_run: Some(crate::db::RunTotals {
+                        run_id: "run-next".to_string(),
+                        elapsed_seconds: None,
+                        keys: 1,
+                        calls: 0,
+                        failed: 0,
+                    }),
+                    ..NodeAge::default()
+                },
+            )
+        }));
+        let in_flight = Checks {
+            in_flight: HashSet::from(["run-next".to_string()]),
+            ..checked(UpToDate)
+        };
+        let (pinned, late) = (HashSet::new(), HashSet::new());
+        let mut running = undecided_below_a_cutoff("2026-11-16 10:01:00");
+        classify(
+            &mut running,
+            Evidence {
+                ages: &ages,
+                pinned: &pinned,
+                late: &late,
+                checks: &in_flight,
+                now,
+            },
+        );
+        assert_eq!(
+            report(&running),
+            (Health::Ok, HealthReason::CheckedUpToDate)
+        );
+
+        // Its definition is not the one its last success recorded: edited since.
+        let edited = Checks {
+            redefined: HashSet::from(["p.py:report".to_string()]),
+            ..checked(UpToDate)
+        };
+        assert_eq!(
+            report(&classified_with(rows(), &edited, now)),
+            (Health::Undecided, HealthReason::Unknown)
+        );
+
+        // The verdict expires, and one of a schedule that is gone never stands.
+        let expired = classified_with(rows(), &checked(UpToDate), TICK_ENDED + 601);
+        assert_eq!(report(&expired), (Health::Undecided, HealthReason::Unknown));
+        assert!(expired[2].last_check.is_some());
+        let mut gone = checked(UpToDate);
+        gone.by_node.get_mut("p.py:report").unwrap().trusted_until = None;
+        assert_eq!(
+            report(&classified_with(rows(), &gone, now)),
+            (Health::Undecided, HealthReason::Unknown)
+        );
+
+        // Only `unknown` asks: a failure, or a state the read path decided, keeps its row.
+        let mut failing = rows();
+        failing[2].last_materialization = last("failed");
+        assert_eq!(
+            report(&classified_with(failing, &checked(UpToDate), now)).0,
+            Health::Failing
+        );
+        let mut stale = rows();
+        stale[2].cache.state = CacheState::Stale;
+        assert_eq!(
+            report(&classified_with(stale, &checked(UpToDate), now)),
+            (Health::Behind, HealthReason::Stale)
+        );
+    }
+
+    /// A node whose verdict stands is not behind an input the tick rebuilt: the tick read
+    /// that result and found the node up to date.
+    #[test]
+    fn a_standing_verdict_silences_behind_input() {
+        let ages = HashMap::from([
+            (
+                "p.py:window".to_string(),
+                age((9, "r9"), "2026-11-16 09:59:59", RowFacts::default()),
+            ),
+            (
+                "p.py:report".to_string(),
+                age((4, "r1"), "2026-11-10 08:00:00", RowFacts::default()),
+            ),
+        ]);
+        let (pinned, late) = (HashSet::new(), HashSet::new());
+        let run = |checks: &Checks| {
+            let mut nodes = undecided_below_a_cutoff("2026-11-16 09:59:59");
+            classify(
+                &mut nodes,
+                Evidence {
+                    ages: &ages,
+                    pinned: &pinned,
+                    late: &late,
+                    checks,
+                    now: TICK_ENDED + 180,
+                },
+            );
+            nodes.remove(2)
+        };
+        let before = run(&Checks::default());
+        assert_eq!(
+            (before.health, before.health_reason),
+            (Health::Behind, HealthReason::BehindInput)
+        );
+        let after = run(&checked(TickTargetOutcome::UpToDate));
+        assert_eq!(
+            (after.health, after.health_reason),
+            (Health::Ok, HealthReason::CheckedUpToDate)
+        );
+        assert!(after.signals.is_empty());
+    }
+
+    #[test]
+    fn a_recorded_definition_is_compared_by_hash_or_by_its_components() {
+        let components = vec![
+            ("code".to_string(), "c1".to_string()),
+            ("kind".to_string(), "k1".to_string()),
+        ];
+        let same = |recorded: &str| same_definition(recorded, "abc", &components);
+        assert!(same(r#"{"@definition":"abc","input p.py:x":"i"}"#));
+        assert!(!same(r#"{"@definition":"abd"}"#));
+        // A row from before definitions were named lists every digest.
+        assert!(same(r#"{"code":"c1","kind":"k1","input p.py:x":"i"}"#));
+        assert!(!same(r#"{"code":"c2","kind":"k1"}"#));
+        assert!(!same(r#"{"code":"c1","kind":"k1","helper p.py:f":"h"}"#));
+        assert!(!same(r#"{"input p.py:x":"i"}"#));
+        assert!(!same(""));
     }
 }

@@ -5,6 +5,7 @@ import type { DataSignal } from "./DataSignal";
 import type { Durations } from "./Durations";
 import type { Health } from "./Health";
 import type { HealthReason } from "./HealthReason";
+import type { LastCheck } from "./LastCheck";
 import type { LastMaterialization } from "./LastMaterialization";
 import type { LastRun } from "./LastRun";
 import type { NodeRunning } from "./NodeRunning";
@@ -102,6 +103,13 @@ measured: boolean | null,
  * `failure`), on the failing node itself and on each node it blocks; `null` otherwise.
  */
 root: Root | null,
+/**
+ * What the newest finished tick that had the node as a target did with it, and when
+ * (`barca docs status-fields`, "Last check"); `null` when no retained tick did. When the
+ * node's own state is `unknown`, a check that found it up to date decides its health
+ * (`health_reason: "checked_up_to_date"`).
+ */
+last_check: LastCheck | null,
 /**
  * Per-key cache state of a partitioned node.
  */

@@ -16,6 +16,7 @@
  */
 
 import type { Health } from './generated/Health'
+import type { LastCheck } from './generated/LastCheck'
 import type { Glyph } from './glyph'
 import type { Tone } from './tone'
 import type { NodeState } from './types'
@@ -45,6 +46,18 @@ const DISPLAY = {
   never_run: { label: 'never run', tone: 'neutral', glyph: 'never_run', meaning: 'Nothing recorded yet.' },
   ok: { label: 'ok', tone: 'success', glyph: 'fresh', meaning: 'Up to date, or its last run succeeded.' },
 } satisfies Record<Health, HealthDisplay>
+
+/** What a tick did with a node (`last_check.outcome`), in words: `checked 3m ago, up to date`. */
+const CHECK_OUTCOME = {
+  rebuilt: 'rebuilt',
+  up_to_date: 'up to date',
+  failed: 'failed',
+  not_reached: 'not reached',
+} satisfies Record<LastCheck['outcome'], string>
+
+export function checkOutcomeLabel(outcome: LastCheck['outcome']): string {
+  return CHECK_OUTCOME[outcome]
+}
 
 export function healthDisplay(health: Health): HealthDisplay {
   return DISPLAY[health]

@@ -27,6 +27,7 @@ nodes[].last_bytes_change.content_hash : string
 nodes[].last_bytes_change.created_at : string
 nodes[].last_bytes_change.node_id : string
 nodes[].last_bytes_change.run_hash : string
+nodes[].last_check : null
 nodes[].last_materialization : object
 nodes[].last_materialization.artifact : string
 nodes[].last_materialization.content_hash : string

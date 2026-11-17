@@ -205,6 +205,39 @@ pub async fn last_success_components(cache: &CacheReader, node_id: &str) -> Opti
     serde_json::to_string(&all).ok()
 }
 
+/// The run-hash components each of the materializations `ids` (row ids) recorded, as written:
+/// since 0.37.1 the row's own digests and the [`DEFINITION_KEY`] naming its definition's. A row
+/// that recorded none, or no longer exists, is absent. One query, by primary key.
+pub async fn components_of_rows(
+    db_path: &str,
+    ids: &[i64],
+) -> Result<HashMap<i64, String>, BarcaError> {
+    if ids.is_empty() || fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
+        return Ok(HashMap::new());
+    }
+    let failure = |e| BarcaError::Db(format!("failed to read recorded components: {e}"));
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let list = serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_string());
+    let mut rows = conn
+        .query(
+            "SELECT id, components FROM materializations
+             WHERE id IN (SELECT value FROM json_each(?1)) AND components IS NOT NULL",
+            [list],
+        )
+        .await
+        .map_err(failure)?;
+    let mut out = HashMap::with_capacity(ids.len());
+    while let Some(row) = rows.next().await.map_err(failure)? {
+        if let (Ok(id), Ok(components)) = (row.get::<i64>(0), row.get::<String>(1))
+            && !components.is_empty()
+        {
+            out.insert(id, components);
+        }
+    }
+    Ok(out)
+}
+
 /// What a step's history says about why it was not a cache hit (#925): its latest row, and
 /// its latest success.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

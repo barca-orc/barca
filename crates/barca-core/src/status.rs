@@ -75,6 +75,12 @@ pub struct NodeStatus {
     /// `failure`), on the failing node itself and on each node it blocks; `null` otherwise.
     #[serde(default)]
     pub root: Option<crate::health::Root>,
+    /// What the newest finished tick that had the node as a target did with it, and when
+    /// (`barca docs status-fields`, "Last check"); `null` when no retained tick did. When the
+    /// node's own state is `unknown`, a check that found it up to date decides its health
+    /// (`health_reason: "checked_up_to_date"`).
+    #[serde(default)]
+    pub last_check: Option<crate::health::LastCheck>,
     /// Per-key cache state of a partitioned node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionState>,
@@ -879,6 +885,7 @@ pub(crate) async fn status_from_dag_with_membership(
             signals: Vec::new(),
             measured: None,
             root: None,
+            last_check: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
@@ -1210,6 +1217,7 @@ mod tests {
             signals: Vec::new(),
             measured: None,
             root: None,
+            last_check: None,
             partitions: None,
             last_materialization: None,
             last_bytes_change: None,

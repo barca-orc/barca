@@ -68,8 +68,11 @@ document and the fine print are in [barca status: Fields and JSON](/reference/cl
 
 ## Cache state
 
-`cache.state` is the same decision `barca get --dry-run` makes (both call one function), so the
-two cannot disagree. In JSON the states are snake_case, spelled exactly like the `summary` keys
+`cache.state` is the same decision `barca get --dry-run` makes (both call one function), with
+one difference: status predicts a recompute of everything above a node, where `get`, `run` and
+a tick read a `Manual` or pinned node as it is ([Forcing a Recompute](/reference/refresh/)). So below a `Manual` node
+that is stale, status says `stale` or `unknown` where `barca get --dry-run` says `cached`; what
+the last tick found there is `last_check` ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)). In JSON the states are snake_case, spelled exactly like the `summary` keys
 (`never_run`, `always_runs`); the table prints them as `never-run` and `always-runs`.
 
 | state | meaning | `reason` |
@@ -348,7 +351,7 @@ whose remediation is `barca history RUN_ID --local`.
 
 ## Fields, JSON and fine print
 
-Each node's fields (health, data signals and coverage, last materialization, artifact shape,
+Each node's fields (health, what the last tick found, data signals and coverage, last materialization, artifact shape,
 run timing, what started a run), the rollup's keys, the JSON document, output limits and what status asks an artifact store are in [barca status: Fields and JSON](/reference/cli/status-fields/).
 
 See also: [The Cache](/reference/cache/), [barca logs](/reference/cli/logs/), [barca sql](/reference/cli/sql/), [Scripts and AI Agents](/reference/agents/).

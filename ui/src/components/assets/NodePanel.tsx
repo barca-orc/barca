@@ -13,6 +13,7 @@ import { AssetVersions } from './AssetVersions'
 import { CopyButton, KeyErrors, NodeKeys, PartitionBar } from './NodeKeys'
 import { BlastRadius } from './BlastRadius'
 import { IncidentControls } from './IncidentControls'
+import { LastCheckLine } from './LastCheckLine'
 import { usePausedSet } from '@/hooks/usePauses'
 import { usePinNotes } from '@/hooks/usePins'
 import { usePausedRunGuard } from '@/hooks/usePausedRunGuard'
@@ -188,6 +189,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             ))}
           </ul>
         )}
+        {/* What the newest tick that checked it found; the server decides what that means for its health. */}
+        {node.last_check && <LastCheckLine check={node.last_check} nowMs={nowMs} />}
         {node.running && (
           <KeyValue label="now">
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}

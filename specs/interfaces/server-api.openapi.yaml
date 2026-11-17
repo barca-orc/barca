@@ -5422,6 +5422,7 @@ components:
       - signals
       - measured
       - root
+      - last_check
       - last_materialization
       - shape
       - env
@@ -5439,9 +5440,11 @@ components:
         health_reason: &id_health_reason
           type: string
           enum: [last_attempt_failed, keys_failed, upstream_failing, cache_blocked, empty,
-            rows_changed, behind_input, schedule_late, stale, partial, unsynced, unknown,
-            never_run, no_successful_run, last_run_succeeded, cached]
-          description: The rule that decided health. Experimental.
+            rows_changed, behind_input, schedule_late, stale, partial, unsynced,
+            checked_up_to_date, unknown, never_run, no_successful_run, last_run_succeeded, cached]
+          description: The rule that decided health. checked_up_to_date is ok for a node whose
+            cache.state is unknown and whose last_check found it up to date or rebuilt it, while
+            that check stands (specs/behavior/health.md, "What estimates change"). Experimental.
         signals: &id_signals
           type: array
           items:
@@ -5462,6 +5465,28 @@ components:
           description: The upstream fact that explains why the node is not fresh. Today only a
             failure, on the failing node itself and on each node it blocks; null otherwise.
             Experimental.
+        last_check: &id_last_check
+          type: [object, 'null']
+          additionalProperties: false
+          required: [at, outcome, schedule]
+          description: What the newest finished tick that had the node as a target did with it
+            (the tick record, schedule_ticks); null when no retained tick did. A record, whatever
+            its age. A --read-only server reads the ticks the scheduling server recorded.
+            Experimental.
+          properties:
+            at:
+              type: string
+              format: date-time
+              description: When that tick's run ended (RFC 3339, UTC).
+            outcome:
+              type: string
+              enum: [rebuilt, up_to_date, failed, not_reached]
+              description: rebuilt (its step executed and succeeded; a sensor was polled, whatever
+                it returned; a task fired), up_to_date (a cache hit), failed, or not_reached (the
+                run ended before it decided the node).
+            schedule:
+              type: string
+              description: The scheduled node whose tick it was.
         kind: &id047
           type: string
           enum:
@@ -5590,6 +5615,7 @@ components:
       - health_reason
       - measured
       - root
+      - last_check
       - last_materialization
       - shape
       - env
@@ -5615,6 +5641,7 @@ components:
         health_reason: *id_health_reason
         measured: *id_measured
         root: *id_root
+        last_check: *id_last_check
         partitions: *id050
         last_materialization: *id051
         shape: *id052

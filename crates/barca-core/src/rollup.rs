@@ -525,7 +525,7 @@ pub async fn rollup(
 mod tests {
     use super::*;
     use crate::cache_state::CacheState;
-    use crate::health::{Evidence, Root, classify};
+    use crate::health::{Checks, Evidence, Root, classify};
     use crate::status::{LastMaterialization, PartitionState};
 
     fn node(id: &str, kind: &str, inputs: &[&str], state: CacheState) -> NodeStatus {
@@ -589,6 +589,8 @@ mod tests {
                 ages: &HashMap::new(),
                 pinned: &HashSet::new(),
                 late: &HashSet::new(),
+                checks: &Checks::default(),
+                now: 0,
             },
         );
         nodes

@@ -475,6 +475,70 @@ pub async fn tick_outcomes_for_node(
     Ok(out)
 }
 
+/// What the tick record says about every node at once ([`latest_ticks`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LatestTicks {
+    /// For every node some retained tick had as a target: what the newest finished one did
+    /// with it, across schedules (newest by when its run ended, then by slot).
+    pub outcomes: HashMap<String, NodeTickOutcome>,
+    /// The runs of fired ticks that have not recorded how they ended: queued or running (or
+    /// lost with their server, until its next start ends them).
+    pub in_flight: Vec<String>,
+}
+
+/// [`LatestTicks`]: one read of the table for every node, which is bounded by its writers
+/// (the lists of the newest [`TICKS_WITH_TARGETS`] fired ticks of each schedule, and at most
+/// [`TICKS_PER_SCHEDULE`] rows a schedule). A database without the table has nothing.
+pub async fn latest_ticks(db_path: &str) -> Result<LatestTicks, BarcaError> {
+    let mut out = LatestTicks::default();
+    if fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
+        return Ok(out);
+    }
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_table(&conn).await? {
+        return Ok(out);
+    }
+    let mut rows = conn
+        .query(
+            "SELECT schedule_id, scheduled_at, run_id, finished_at, targets FROM schedule_ticks
+             WHERE (targets IS NOT NULL AND finished_at IS NOT NULL)
+                OR (action = 'fired' AND run_id IS NOT NULL AND finished_at IS NULL)
+             ORDER BY finished_at DESC, scheduled_at DESC, schedule_id",
+            (),
+        )
+        .await
+        .map_err(failed("reading the newest outcomes"))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(failed("reading the newest outcomes"))?
+    {
+        let Ok(finished_at) = row.get::<f64>(3) else {
+            out.in_flight.extend(row.get::<String>(2).ok());
+            continue;
+        };
+        let targets: Vec<(String, TickTargetOutcome)> = row
+            .get::<String>(4)
+            .ok()
+            .and_then(|list| serde_json::from_str(&list).ok())
+            .unwrap_or_default();
+        for (node, outcome) in targets {
+            // Rows come newest first: the first outcome of a node is its newest.
+            if let std::collections::hash_map::Entry::Vacant(slot) = out.outcomes.entry(node) {
+                slot.insert(NodeTickOutcome {
+                    schedule_id: row.get::<String>(0).unwrap_or_default(),
+                    scheduled_at: row.get::<i64>(1).unwrap_or_default(),
+                    run_id: row.get::<String>(2).ok(),
+                    finished_at: Some(finished_at),
+                    outcome,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,6 +926,102 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// One read answers for every node: its newest finished outcome across schedules, and
+    /// the runs of ticks still in flight.
+    #[tokio::test]
+    async fn the_newest_outcome_of_every_node_is_read_at_once() {
+        let (_dir, db) = fresh().await;
+        let (orders, report) = ("pipeline.py:orders", "pipeline.py:report");
+        use TickTargetOutcome::*;
+        for (job, slot, run, finished, targets) in [
+            (
+                JOB,
+                100,
+                "run-1",
+                105.0,
+                vec![(orders, Rebuilt), (report, Rebuilt)],
+            ),
+            (
+                "pipeline.py:nightly",
+                150,
+                "run-2",
+                190.0,
+                vec![(orders, UpToDate)],
+            ),
+            (
+                JOB,
+                160,
+                "run-3",
+                170.0,
+                vec![(orders, Failed), (report, NotReached)],
+            ),
+        ] {
+            record_tick(&db, tick(job, slot, TickDecision::Fired, None, Some(run)))
+                .await
+                .unwrap();
+            let targets: Vec<(String, TickTargetOutcome)> = targets
+                .into_iter()
+                .map(|(n, o)| (n.to_string(), o))
+                .collect();
+            record_tick_finished(&db, job, slot, run, finished, "success", &targets)
+                .await
+                .unwrap();
+        }
+        // A tick still running, one that was skipped, and one that never joined the queue.
+        record_tick(
+            &db,
+            tick(JOB, 220, TickDecision::Fired, None, Some("run-4")),
+        )
+        .await
+        .unwrap();
+        record_tick(
+            &db,
+            tick(JOB, 280, TickDecision::Skipped, Some("run-4"), None),
+        )
+        .await
+        .unwrap();
+        record_tick(
+            &db,
+            tick("pipeline.py:nightly", 300, TickDecision::Fired, None, None),
+        )
+        .await
+        .unwrap();
+
+        let got = latest_ticks(&db).await.unwrap();
+        // Newest by when the run ended, not by slot: the nightly tick ended last.
+        let seen = |node: &str| {
+            let o = &got.outcomes[node];
+            (
+                o.schedule_id.clone(),
+                o.scheduled_at,
+                o.finished_at,
+                o.outcome,
+            )
+        };
+        assert_eq!(
+            seen(orders),
+            (
+                "pipeline.py:nightly".to_string(),
+                150,
+                Some(190.0),
+                UpToDate
+            )
+        );
+        assert_eq!(
+            seen(report),
+            (JOB.to_string(), 160, Some(170.0), NotReached)
+        );
+        assert_eq!(got.outcomes.len(), 2);
+        assert_eq!(got.in_flight, vec!["run-4".to_string()]);
+
+        let (_dir, empty) = fresh().await;
+        assert_eq!(latest_ticks(&empty).await.unwrap(), LatestTicks::default());
+        assert_eq!(
+            latest_ticks("/nonexistent/metadata.db").await.unwrap(),
+            LatestTicks::default()
         );
     }
 }

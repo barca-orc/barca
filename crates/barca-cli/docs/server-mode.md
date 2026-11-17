@@ -486,15 +486,22 @@ described at https://barca.sh/reference/server-api-endpoints/.
 
 Each row of `GET /state` and each node of `GET /nodes` carries what `barca status --json` does:
 `health` and `health_reason` (whether something needs doing about the node, and the rule that
-decided it), `root` (the failing node that explains a failing or blocked one), `signals` (what its recorded results say about its data: `empty`, `rows_changed`,
-`behind_input`) and `measured` (whether its rows were counted at all; `null` for a task or
-sensor). They are computed in barca from facts the metadata DB holds, never by reading an
+decided it), `root` (the failing node that explains a failing or blocked one), `signals` (what
+its recorded results say about its data: `empty`, `rows_changed`, `behind_input`), `measured`
+(whether its rows were counted at all; `null` for a task or sensor) and `last_check` (what the
+newest tick that checked the node found, and when; `null` when no retained tick did). They are
+computed in barca from facts the metadata DB holds, never by reading an
 artifact, and are the same on every surface: `barca docs status-fields`, "Health" and "Data
 signals and coverage", has the tables. `GET /nodes` also has `data_coverage` beside `summary`.
 
 The server classifies per answer, on its clock and in its `--timezone`, so a schedule that
 misses its slot turns its node `behind` (`health_reason: "schedule_late"`) without a change to
-the database, and a paused schedule is never late. An empty `signals` on a row with `measured:
+the database, and a paused schedule is never late. A node whose state the server cannot
+decide (`unknown`) and that the last tick found up to date is `ok` with `health_reason:
+"checked_up_to_date"`, on a `--read-only` server too: it reads the ticks the scheduling server
+recorded, and the web UI's node panel reads "checked 3m ago, up to date". The check expires
+when the next tick is overdue (`barca docs status-fields`, "Last check"); the tick record is
+read once per change of the metadata database, not per poll. An empty `signals` on a row with `measured:
 false` says nothing was counted, not that the data is fine; the web UI states the coverage of
 the open scope ("7 of 556 measured") beside its causes.
 
