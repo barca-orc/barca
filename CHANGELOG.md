@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.43.1 (2026-11-17)
+
 ### Bug Fixes
 
 - **The health map reads like a disk map, and healthy assets are green.** A segment's size is now how many assets are under it (a partitioned asset counts once; tasks and sensors colour their group but take no room), matching the page's asset counts, so the map is the project's shape: groups keep the worst health inside, and members too thin to draw one by one become bands sized by the assets inside them in each colour, so mostly healthy groups read mostly green instead of all yellow. Zoom in and a partitioned asset shows its keys in a ring outside it (failed, not up to date, ok), with a few failed keys among thousands still visible. The map is drawn as flat pastel segments parted by hairline gaps, rings that thin outward up to six levels deep, and one number at the centre (how many are in the worst health, as the page header counts them); the line under it names the segment under the pointer, whose branch lights up while the rest dims.
