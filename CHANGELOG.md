@@ -10,7 +10,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
-- **The health map is drawn cleanly.** Its segments are shaded fills parted by hairline gaps instead of 1-pixel strokes, in a palette of its own (crimson failing, amber needs attention, teal-green ok, slate not known yet) that brightens toward the rim; members too thin to draw one by one are one quiet `N smaller` segment instead of a frayed edge; no names are printed on the rings. The centre names the scope, or the segment under the pointer with its path, health and size, in real type, and the hovered branch lights up while the rest dims.
+- **The health map reads like a disk map, and healthy assets are green.** A segment's size is now how many assets are under it (a partitioned asset counts once; tasks and sensors colour their group but take no room), matching the page's asset counts, so the map is the project's shape: groups keep the worst health inside, and members too thin to draw one by one become bands sized by the assets inside them in each colour, so mostly healthy groups read mostly green instead of all yellow. Zoom in and a partitioned asset shows its keys in a ring outside it (failed, not up to date, ok), with a few failed keys among thousands still visible. The map is drawn as flat pastel segments parted by hairline gaps, rings that thin outward up to six levels deep, and one number at the centre (how many are in the worst health, as the page header counts them); the line under it names the segment under the pointer, whose branch lights up while the rest dims.
 
 ## 0.43.0 (2026-11-17)
 

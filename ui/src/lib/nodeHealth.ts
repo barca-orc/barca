@@ -67,6 +67,24 @@ export function isUnhealthy(health: Health): boolean {
   return UNHEALTHY.includes(health)
 }
 
+/** The health map's four colours: failing, needs attention, ok, not known yet. */
+export type HealthFamily = 'failing' | 'attention' | 'ok' | 'unknown'
+
+const FAMILY = {
+  failing: 'failing',
+  blocked: 'attention',
+  suspect: 'attention',
+  behind: 'attention',
+  waiting: 'unknown',
+  never_run: 'unknown',
+  ok: 'ok',
+} satisfies Record<Health, HealthFamily>
+
+/** The colour a health is drawn in on the health map. */
+export function healthFamily(health: Health): HealthFamily {
+  return FAMILY[health]
+}
+
 /** Facts beyond the node's own state row that decide its health. */
 export interface HealthContext {
   /** A failing node upstream keeps it from running (`blockedUpstream`). */
