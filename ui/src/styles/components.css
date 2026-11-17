@@ -414,6 +414,9 @@ a.barca-btn { text-decoration: none; }
 
 /* A Last success cell's failing line wraps rather than cutting its streak off. */
 .barca-age-failing { white-space: normal; }
+/* The cell while its time loads: a text line's box (the skeleton centred in it), so the row is
+   the height it will be. */
+.barca-age-loading { display: inline-flex; align-items: center; height: 1lh; vertical-align: top; }
 /* RunOverview / RunReasons (components/runs/): why a run executes what it does, who asked, how far
    it is (issue 925). Bars are neutral: a share or progress, never a state. */
 .barca-run-cancel { margin: 0 0 12px; font-size: var(--text-sm); color: var(--text-default); }

@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- **Rough edges in the web UI (#970).** A node's panel no longer reads `success · in 20774d` while its group's state loads: a time is never measured from a `now` that is not known yet (it is read against the clock), and a zero or absent time is a dash. The Last success column is drawn with its rows when their state is already known, and otherwise holds its place with a skeleton instead of painting blank. The grouped page's header no longer cuts its breadcrumb, contents (`399 assets · 49 tasks`) and health summary to fit one line: only the crumbs between the root and the heading are shortened (whole in their tooltip), and the view switch wraps to a second line when the rest does not fit.
+
 ## 0.43.1 (2026-11-17)
 
 ### Bug Fixes

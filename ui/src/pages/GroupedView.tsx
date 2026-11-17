@@ -96,7 +96,11 @@ export function GroupedTable({ entries, tree, byId, leaves, live, healthOf, visu
           const node = group ? undefined : byId.get(entry.id)
           const running = node?.running
           const duration = group ? null : lastRunDuration(node)
-          const age = ageCell(scopeAge(group ? leaves(entry.id) : [entry.id], byId), { group: !!group, partitioned: node?.partitioned ?? false })
+          const members = group ? leaves(entry.id) : [entry.id]
+          // A row's time is drawn with the row when its states are already known (loaded for
+          // another scope); only a row with nothing known yet holds its place with a skeleton.
+          const ageKnown = statesLoaded || members.every((id) => byId.has(id))
+          const age = ageCell(scopeAge(members, byId), { group: !!group, partitioned: node?.partitioned ?? false })
           return (
             <tr
               key={entry.id}
@@ -145,7 +149,7 @@ export function GroupedTable({ entries, tree, byId, leaves, live, healthOf, visu
                 )}
               </td>
               <td>
-                {statesLoaded && <LastSuccess cell={age} nowMs={nowMs} />}
+                <LastSuccess cell={ageKnown ? age : null} nowMs={nowMs} />
               </td>
               {hasGroups && <td className="gcol-contents">{group && entry.summary}</td>}
               {hasGroups && (
