@@ -55,7 +55,7 @@ client prints it as it would print the local command's.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/state` | Every node: its `barca status` entry plus typical durations, next run and the run working on it now. |
+| `GET`  | `/state` | Every node: its `barca status` entry (with `health` and `last_check`, what the last tick that checked it found) plus typical durations, next run and the run working on it now. |
 | `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | Every node as `barca list --json` shows it. |

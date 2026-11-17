@@ -201,9 +201,22 @@ pub fn utc_cell(ts: &str) -> String {
     )
 }
 
+/// How long ago, in the largest whole unit: `45s ago`, `3m ago`, `2h ago`, `6d ago`. A time
+/// not in the past (another machine's clock) is `just now`.
+pub(crate) fn ago(seconds: i64) -> String {
+    match seconds {
+        ..=0 => "just now".to_string(),
+        s if s < 60 => format!("{s}s ago"),
+        s if s < 3600 => format!("{}m ago", s / 60),
+        s if s < 86_400 => format!("{}h ago", s / 3600),
+        s => format!("{}d ago", s / 86_400),
+    }
+}
+
 pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> String {
     use std::fmt::Write;
     let mut rendered = String::new();
+    let now = chrono::Utc::now().timestamp();
     let short = |id: &str| -> String {
         let base = id.split('[').next().unwrap_or(id);
         base.rsplit(':').next().unwrap_or(base).to_string()
@@ -247,6 +260,14 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
                     } else {
                         format!("{why}; last run failed: {error}")
                     }
+                }
+                _ => why,
+            };
+            // What the read path cannot decide, a tick did: `cutoff_pending; checked 3m ago,
+            // up to date` (#964).
+            let why = match &n.last_check {
+                Some(check) if n.cache.state == CacheState::Unknown => {
+                    format!("{why}; {}", check.line(now))
                 }
                 _ => why,
             };

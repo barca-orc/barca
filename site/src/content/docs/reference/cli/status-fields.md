@@ -75,6 +75,7 @@ the web UI shows it. The words, most severe first:
 | `behind_input` | `behind` | it has a `behind_input` signal |
 | `schedule_late` | `behind` | its schedule missed a slot more than a minute ago (half the interval for a schedule more frequent than every two minutes) and is not paused |
 | `stale`, `partial`, `unsynced` | `behind` | `cache.state` is that state |
+| `checked_up_to_date` | `ok` | `cache.state` is `unknown`, and the newest tick that checked the node found it up to date or rebuilt it, with nothing seen to have changed since ("Last check" below) |
 | `unknown` | `undecided` | `cache.state` is `unknown` |
 | `never_run` | `never_run` | `cache.state` is `never_run` |
 | `no_successful_run` | `never_run` | a task, sensor or `always` asset with no recorded run |
@@ -98,6 +99,62 @@ barca sql "select health, count(*) from barca.nodes group by all order by 2 desc
 Health is experimental ([CLI Contract](/reference/cli-contract/)): later releases add why a node that is not
 fresh is so and when it is expected fresh.
 
+## Last check
+
+`last_check` is what the newest finished tick that had the node as a target did with it
+([Scheduling With Cron](/scheduling/)): `{"at": "2026-11-17T15:00:05Z", "outcome": "up_to_date", "schedule":
+"pipeline.py:inbox"}`, or `null` when no retained tick did. `at` is when that tick's run ended
+(RFC 3339, UTC), `schedule` the scheduled node whose tick it was, and `outcome` one of:
+
+| `outcome` | The tick's run |
+|---|---|
+| `rebuilt` | executed its step, which succeeded. For a sensor that means it was polled, whatever it returned; for a task, that it fired |
+| `up_to_date` | found a cached result for its code and inputs: a cache hit |
+| `failed` | executed its step, which failed |
+| `not_reached` | ended before it decided the node: a failure upstream, a cancellation, a run that never started |
+
+It is a record, shown whatever its age. Ticks are recorded by a scheduling `barca serve`
+(`schedule_ticks` in the metadata database); `barca status` on that machine and a
+`--read-only` server read the same record. Each schedule keeps the outcomes of its newest 20
+fired ticks, and with several schedules reaching a node the newest tick wins.
+
+**When a check decides health.** `barca status` and `GET /state` predict what recomputing
+everything above a node would do, without running anything. Where the answer depends on what
+only a run produces, the node's state is `unknown` ([barca status: Cache state](/reference/cli/status/#cache-state)): below
+an `@asset(cutoff=True)` that would run, the bytes it will write. A tick does run, and reads a
+`Manual` or pinned node above as it is (the prediction recomputes it), so it can find the node
+up to date every five minutes while its state stays `unknown`. Such a node is `ok` with
+`health_reason: "checked_up_to_date"` when all of this holds:
+
+- its state is `unknown` and no earlier rule applies (it is not failing, blocked, suspect, or
+  the scheduled node of a late schedule);
+- its last check's `outcome` is `up_to_date` or `rebuilt`: a newer `failed` or `not_reached`
+  check is the last check, and decides nothing;
+- the check has not expired. It stands for one interval of its schedule after its run ended,
+  plus the time that tick took from its slot to its end, plus the grace a late schedule gets
+  (a minute; half the interval for a schedule more frequent than every two minutes): by then
+  the next tick's check is due. A tick found up to date at 15:00:05 by a five-minute schedule
+  stands until 15:06:10. The check of a schedule that is no longer in the project never stands;
+- the node's definition (its code, counted decorator arguments and helpers) is the one its
+  newest successful result recorded: an edit since is seen;
+- no node above it has a materialization recorded after that tick's run ended, other than by
+  a tick's run still in flight (whose own check is on its way).
+
+Otherwise the node keeps the health its state gives (`undecided`). A node whose check stands
+gets no `behind_input` signal: the tick read its inputs' newest results and found it up to
+date. Not seen until the next tick or the expiry: an edit to a node above it (which shows on
+that node), and a new value of an environment variable it declares.
+
+The table adds the check to the `WHY` of a node whose state is `unknown`: `cutoff_pending;
+checked 3m ago, up to date`. `barca.nodes` has it as `last_check_at` and `last_check_outcome`.
+
+```bash
+barca status --json | jq -r '.nodes[] | select(.last_check) | [.id, .last_check.outcome, .last_check.at] | @tsv'
+barca sql "select name, health, last_check_outcome, last_check_at from barca.nodes where health_reason = 'checked_up_to_date'"
+```
+
+`last_check` and `checked_up_to_date` are experimental with the rest of health.
+
 ## Data signals and coverage
 
 `signals` lists what a node's recorded results say about its data, from facts the metadata DB
@@ -108,7 +165,7 @@ artifact. Only assets have signals, in this order:
 |---|---|---|
 | `empty` | its latest successful result wrote no rows: for a partitioned node, some keys' latest successful results | `empty_keys` of `keys` (the keys whose latest result recorded a count; 1 of 1 without keys), `previous_empty_keys`: how many were empty before its newest run, `null` when no key had a counted result before it |
 | `rows_changed` | a latest successful result's row count differs from the one before it, same node and key, by more than half of it (any rows after an empty result count) | `rows` and `previous_rows` of `key` (`null` without keys), the key that moved the most relative to before; `changed_keys`: how many moved |
-| `behind_input` | its cache state is `unknown` (nothing else says it is behind, typically a `collect()` fan-in below a pending cutoff) and its latest successful result is older than the newest successful result of an asset it reads, from another run | `input` (the input with the newest result), `input_success_at`, `last_success_at` (UTC `YYYY-MM-DD HH:MM:SS`) |
+| `behind_input` | its cache state is `unknown` (nothing else says it is behind, typically a `collect()` fan-in below a pending cutoff), no tick's check of it stands ("Last check" above) and its latest successful result is older than the newest successful result of an asset it reads, from another run | `input` (the input with the newest result), `input_success_at`, `last_success_at` (UTC `YYYY-MM-DD HH:MM:SS`) |
 
 A signal stays until the next successful result of the node (or key) replaces the one it is
 about; there is no acknowledgement yet. A `stale`, `partial` or `blocked` node gets no
@@ -216,6 +273,7 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "health_reason": "cached",
       "signals": [],
       "measured": true,
+      "last_check": null,
       "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
@@ -229,9 +287,9 @@ A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-2
 "last_fired": null, "last_status": null, "last_run_id": null, "late": false, "late_since": null,
 "failures": 0, "max_failures": 5, "failing": false,
 "paused": false, "paused_until": null, "skip_reason": null, "live": false}`, and `--state` or
-`--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `signals`, `measured`
-and `data_coverage` are in "Health" and "Data signals and coverage" above; here `total` is a
-dict, which has no row count, so one of the two assets is measured.
+`--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `signals`, `measured`,
+`last_check` and `data_coverage` are in "Health", "Last check" and "Data signals and coverage"
+above; here `total` is a dict, which has no row count, so one of the two assets is measured.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column
 order. `--env <name>` reads another environment's state ([The Cache](/reference/cache/)).

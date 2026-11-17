@@ -211,6 +211,9 @@ async fn state_rows_for_targets(
     // Read at most once per database state, whatever the scope (`read_cache`).
     let ages = state.cached_ages(&db_state, &snapshot.path).await?;
     let pinned = state.cached_pinned(&db_state, &snapshot.path).await?;
+    let checks = state
+        .cached_checks(&dag, &db_state, &snapshot.path, &ages)
+        .await?;
     let (status, durations) = if targets.is_empty() {
         // Together: after a change, each waits a moment for its new value (`read_cache`).
         let (status, durations) = tokio::join!(
@@ -250,9 +253,9 @@ async fn state_rows_for_targets(
     Ok(rows(
         &status.nodes,
         &durations,
-        &ages,
-        &pinned,
+        (&ages, &pinned, &checks),
         &schedules,
+        now.timestamp(),
         running,
     ))
 }
@@ -371,16 +374,25 @@ pub(crate) async fn published_ticks(
     Ok(state.cached_ticks(&db_state, &snapshot.path, ids).await?)
 }
 
+/// What health reads of the metadata database, each kept per database state (`read_cache`):
+/// every node's age, the pinned assets, and what the newest ticks found.
+type Records<'a> = (
+    &'a std::collections::HashMap<String, db::NodeAge>,
+    &'a std::collections::HashSet<String>,
+    &'a barca_core::health::Checks,
+);
+
 /// The `GET /state` rows: each node's status with its durations, its schedule
-/// ([`live_schedules`]), run and data signals.
+/// ([`live_schedules`]), run and data signals, as of `now` (unix seconds).
 fn rows(
     nodes: &[barca_core::status::NodeStatus],
     durations: &std::collections::HashMap<String, Durations>,
-    ages: &std::collections::HashMap<String, db::NodeAge>,
-    pinned: &std::collections::HashSet<String>,
+    records: Records<'_>,
     schedules: &std::collections::HashMap<String, LiveSchedule>,
+    now: i64,
     mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
 ) -> Vec<NodeState> {
+    let (ages, pinned, checks) = records;
     // Health, signals and coverage are classified here, per answer: lateness moves with the
     // clock, so it is never kept with the status result. Late is the schedule's standing
     // (`barca_core::schedule_standing::standing`), the one `GET /schedule` reports.
@@ -392,6 +404,8 @@ fn rows(
             ages,
             pinned,
             late: &late,
+            checks,
+            now,
         },
     );
     nodes
@@ -631,19 +645,23 @@ pub(crate) async fn attach_live_schedules(
 pub(crate) async fn attach_health(
     state: &AppState,
     result: &mut barca_core::status::StatusResult,
-    dag: &barca_core::dag::Dag,
+    dag: &std::sync::Arc<barca_core::dag::Dag>,
     db_state: &crate::read_cache::Stamp,
     db_path: &str,
 ) -> Result<(), ApiError> {
     let ages = state.cached_ages(db_state, db_path).await?;
     let pinned = state.cached_pinned(db_state, db_path).await?;
-    let late = late_of(&live_schedules(state, dag, db_state, db_path, chrono::Utc::now()).await?);
+    let checks = state.cached_checks(dag, db_state, db_path, &ages).await?;
+    let now = chrono::Utc::now();
+    let late = late_of(&live_schedules(state, dag, db_state, db_path, now).await?);
     barca_core::health::attach(
         result,
         barca_core::health::Evidence {
             ages: &ages,
             pinned: &pinned,
             late: &late,
+            checks: &checks,
+            now: now.timestamp(),
         },
     );
     Ok(())

@@ -7,10 +7,10 @@ Specification version: 1. Status: approved intent, implemented in part. The 0.44
 value, route, flag or table named here exists only once the issue that owns it has landed.
 Implemented: "Health from existing state" (#954); of "Node fields and where they appear",
 `health`, `health_reason`, `signals`, `measured` and `data_coverage` (#957), experimental in
-the CLI contract; and the tick record ("What a tick records", #960), as the `schedule_ticks`
-table and its two reads, which nothing reads yet. Everything else below is intent: `cause`,
-`root`, `refresh_path`, the times, `gap_seconds`, `as_of`, the rollup, the new tables and the
-query route do not exist yet, and the `checked_up_to_date` reason is not among the values served.
+the CLI contract; the tick record ("What a tick records", #960), as the `schedule_ticks`
+table and its reads; and `last_check` with the `checked_up_to_date` reason ("Last check",
+#964). Everything else below is intent: `cause`, `root`, `refresh_path`, the other times,
+`gap_seconds`, `as_of`, the rollup, the new tables and the query route do not exist yet.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
 health word, its cause bucket and root, its refresh path, when it is expected fresh or
 rechecked, the freshness gap, the rollup tree, what a tick records, the `barca.schedules`,
@@ -109,6 +109,7 @@ The first matching row decides `health`; `health_reason` (string enum) names the
 | 5 | a data signal `behind_input` | `behind` | `behind_input` |
 | 6 | its schedule is `late` (below) | `behind` | `schedule_late` |
 | 7 | `cache.state` is `stale`, `partial` or `unsynced` | `behind` | the state: `stale`, `partial`, `unsynced` |
+| 7a | `cache.state == unknown` and the last check's verdict stands ("Last check", #964) | `ok` | `checked_up_to_date` |
 | 8 | `cache.state == unknown` | `undecided` | `unknown` |
 | 9 | `cache.state == never_run` | `never_run` | `never_run` |
 | 10 | `cache.state == always_runs` and `last_materialization` is `null` | `never_run` | `no_successful_run` |
@@ -136,10 +137,76 @@ separate fact shown beside its health; it does not change it.
   are read from the `runs` rows a schedule started (slot to start), not from
   `queue_wait_seconds`. Conformance: `a_queued_tick_reads_the_same_on_every_surface`
   (`crates/barca-server/tests/running.rs`) and the tests of `schedule_standing`.
-- Row 8 gains a row before it: when the newest finished tick that checked the node recorded
-  `up_to_date` and no record newer than that tick says otherwise, `health` is `ok` with
-  `health_reason: "checked_up_to_date"`, and `last_check` carries the tick.
+- Row 8 gains a row before it (7a, implemented): when the newest finished tick that checked
+  the node found it up to date or rebuilt it and nothing the read path can see has changed
+  since, `health` is `ok` with `health_reason: "checked_up_to_date"`, and `last_check` carries
+  the tick. "Last check" below states the condition.
 - `health` does not say whether a `behind` or `never_run` node is a problem. `cause` does.
+
+### Last check (#964)
+
+Implemented in `crates/barca-core/src/health.rs` (`checks`, `verdict_stands`).
+
+**Why the read path cannot decide.** `cache.state` predicts what recomputing everything above
+a node would do, without running anything ([inspection](inspection.md)). Where the answer
+depends on what only a run produces, it is `unknown`: below a cutoff asset the prediction
+says would run (`cutoff_pending`: the bytes it will write), a sensor with no recorded output
+(`sensor_output_unknown`), a `partitions_from` source whose output is not available
+(`partitions_unknown`). A run does produce it. A tick's run also follows rules the prediction
+does not: it reads a `Manual` or pinned node as it is (`RunRules::tick`), where the prediction
+recomputes it (`RunRules::default`). So below a `Manual` node that is stale against a sensor
+polled every tick, the prediction says the cutoff asset under it would run, forever, and
+everything below that is `unknown`, forever; each tick reruns the cutoff asset, which writes
+the same bytes, and finds what is below it up to date. The run decided what the read path
+cannot, and the tick record holds its verdict.
+
+`last_check` is `{"at", "outcome", "schedule"}` of the newest finished fired tick that had the
+node as a target, across schedules, newest by when its run ended: `at` is that time,
+`outcome` what the tick recorded (`rebuilt`, `up_to_date`, `failed`, `not_reached`),
+`schedule` the scheduled node's id. It is `null` when no retained tick lists the node (the
+newest 20 fired ticks of each schedule do). It is a record: served whatever its age, for every
+node kind.
+
+The verdict of a last check **stands**, and row 7a applies, when all hold at `as_of`:
+
+1. `outcome` is `up_to_date` or `rebuilt`. A newer `failed` or `not_reached` outcome is the
+   last check and decides nothing; a recorded failure is row 1.
+2. It has not expired: `as_of <= finished_at + (finished_at - scheduled_at) + interval +
+   grace`, where `interval` is from the tick's slot to its schedule's next slot and `grace` is
+   row 6's (60 seconds, or half the interval under two minutes). That is when the next tick's
+   verdict is due: one interval after this run ended (a run longer than the interval skips
+   ticks), taking as long as this one did from slot to end. The schedule must still be a
+   scheduled node of the graph; a check of one that is not never stands.
+3. The node's definition hash is the one its newest successful result recorded
+   (`materializations.components`; a row older than that key is compared digest by digest; a
+   node with no successful result or no recorded components does not pass).
+4. No node in its upstream cone has a materialization recorded after `finished_at`, other
+   than rows of a run that a fired tick started and that has not ended (its own verdict is on
+   its way).
+
+A node whose verdict stands raises no `behind_input` signal: the tick read its inputs' newest
+results and found it up to date. Rows 1 to 6 still come first, so a failing, blocked or
+suspect node, or the scheduled node of a late schedule, is not `ok`. A node the read path
+decides (`stale`, `cached`, ...) keeps that answer whatever its last check says: where the
+prediction and the tick disagree on a decided state (a node below a stale `Manual` node reads
+`stale`, `upstream_stale`, though ticks find it up to date), this rule does not apply (an
+open gap below).
+
+Sensors and tasks: a polled sensor is recorded `rebuilt` whether or not its observation
+changed ("What a tick records"), and a task that fired is `rebuilt`. Their state is
+`always_runs`, never `unknown`, so no check decides their health; `last_check` carries the
+record as written, and `rebuilt` on a sensor means "polled". An asset's outcome is its own
+step's result and does not depend on that limitation.
+
+Cost: two reads per classification of a scope, never one per node. One reads
+`schedule_ticks` once for every node (`db::latest_ticks`: the retained target lists, and the
+runs of ticks in flight); one reads by primary key the newest successful row of each asset
+whose check could stand (`db::components_of_rows`). The server keeps the result per graph and
+database state (`AppState::cached_checks`), so a poll that finds nothing changed reads
+nothing; expiry is a time the result carries, compared with the clock per answer.
+
+What it does not see, bounded by the expiry: an edit to a node above (shown on that node,
+which the next tick recomputes), and a new value of a declared environment variable.
 
 ### Refresh path (#961)
 
@@ -232,7 +299,7 @@ as one entry. Roots are ranked by `gap_seconds`, then `nodes`, then `id`.
 | `stale_since` | the earliest recorded time from which the node has been continuously not fresh | fresh; undecided; or no record holds the time |
 | `expected_fresh_at` | when the node is expected to be fresh | fresh; or cause is not `catching_up` or `queued`; or the path has an undecided node |
 | `recheck_at` | when a tick next evaluates the node | no refresh path, or its `next_tick` is `null` |
-| `last_check` | `{"at", "outcome", "schedule"}`: the newest finished tick that had the node as a target | no retained tick did |
+| `last_check` | `{"at", "outcome", "schedule"}`: the newest finished tick that had the node as a target (implemented, "Last check") | no retained tick did |
 
 - `stale_since` by root kind: a changed observation or input is the `created_at` of the root's
   current result; a failure is `failing_since`; code, environment and never-run use the time
@@ -373,10 +440,11 @@ for the newest 20 fired ticks of each schedule, counts only for older ones. Trim
 write, inside the write's transaction; the ticks of a schedule that no longer fires are trimmed
 by age at scheduler startup and about hourly while ticks are recorded.
 
-Reads (`barca_core::db`): `ticks_for_schedule(db_path, schedule_id, limit)`, newest first, and
+Reads (`barca_core::db`): `ticks_for_schedule(db_path, schedule_id, limit)`, newest first;
 `tick_outcomes_for_node(db_path, node_id, limit)`, what the newest finished fired ticks that
-still hold their target list did with one node, across schedules. Both answer empty for a
-database without the table.
+still hold their target list did with one node, across schedules; and `latest_ticks(db_path)`,
+the newest such outcome of every node at once with the runs of the ticks still in flight
+(what "Last check" reads). All answer empty for a database without the table.
 
 ### Tables (#965)
 
@@ -472,7 +540,11 @@ the rollup by group, and the top roots.
 - After a restart, `GET /schedule`'s in-memory skip fields are empty as today; the tick record
   keeps what was skipped.
 - A `--read-only` server classifies from the shared metadata: it reads the ticks the
-  scheduling server wrote, and `refresh_path.live` reflects that server's scheduler.
+  scheduling server wrote (`last_check` and row 7a work there as on the scheduling server),
+  and `refresh_path.live` reflects that server's scheduler.
+- When ticks stop (the scheduler is down, the schedule paused or removed), a standing verdict
+  expires within one interval plus the last tick's duration and grace, and the node reads
+  `undecided` again; `last_check` keeps the record.
 - The query helper is restarted when it dies or exceeds its memory limit; the request in
   flight answers `503`. Without DuckDB installed the route answers `503` naming the extra;
   every other route is unaffected.
@@ -483,8 +555,8 @@ Each issue lands its scenario with the code and replaces the matching source lin
 today: #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
-the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)) and the #960 row. The rest
-do not pass yet.
+the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #960 row and the
+#964 row. The rest do not pass yet.
 
 | Scenario | Issue |
 | --- | --- |
@@ -497,7 +569,7 @@ do not pass yet.
 | A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961 |
 | Estimates within the stated error on the seeded server simulation; a node below a pending cutoff has `recheck_at` only | #962 |
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963 |
-| An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964 |
+| An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965 |
 | A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972 |
 | One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973 |
@@ -519,6 +591,14 @@ data signals are deleted: their rules are `crates/barca-core/src/health.rs`):
   and data coverage per scope, in TypeScript, from the served `health` and `measured`. `root`
   (#963) and the rollup (#955) replace both.
 
+- A node the read path decides differently from a tick is not covered by "Last check": below
+  a stale `Manual` node (not behind a cutoff) the prediction says `stale`, `upstream_stale`,
+  and health `behind`, while every tick finds the node up to date; `barca get --dry-run`
+  already predicts it `cached`. Making status predict with the rules a run follows would
+  change `cache.state` for those nodes and is not decided here.
+- "Last check" compares the node's own definition and the times of rows above it. An edit
+  above the node, and a declared environment variable's new value, are not seen until the next
+  tick or the expiry.
 - Which nodes a tick reaches when a polled sensor changes below-`Always` assets (#952) is
   unresolved; this document takes the walk's answer and adds no rule of its own.
 - Where the time of a code or environment change is recorded for `stale_since` is #962's

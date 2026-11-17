@@ -4,6 +4,7 @@ import type { CacheStatus } from "./CacheStatus";
 import type { DataSignal } from "./DataSignal";
 import type { Health } from "./Health";
 import type { HealthReason } from "./HealthReason";
+import type { LastCheck } from "./LastCheck";
 import type { LastMaterialization } from "./LastMaterialization";
 import type { PartitionState } from "./PartitionState";
 import type { ScheduleStatus } from "./ScheduleStatus";
@@ -45,6 +46,13 @@ signals: Array<DataSignal>,
  * any key's); `null` for a task or sensor. `false` is "not measured", not ok.
  */
 measured: boolean | null,
+/**
+ * What the newest finished tick that had the node as a target did with it, and when
+ * (`barca docs status-fields`, "Last check"); `null` when no retained tick did. When the
+ * node's own state is `unknown`, a check that found it up to date decides its health
+ * (`health_reason: "checked_up_to_date"`).
+ */
+last_check: LastCheck | null,
 /**
  * Per-key cache state of a partitioned node.
  */
