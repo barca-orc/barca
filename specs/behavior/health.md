@@ -19,9 +19,9 @@ states; and the cause, the root and the gap ("Cause", "Root", "The freshness gap
 #973): `cause`, `root` with every kind, `gap_seconds` and their `barca.nodes` columns,
 `causes`, `asset_causes` and `gap_seconds` of a rollup entry, the root list with `causes`,
 `gap_seconds`, `unbounded` and `action`, and `as_of` and `rollup` in `barca status --json`,
-as those sections' "As implemented" state; and the server query route ("Server query
-route", #972). Everything else below is intent: the new tables (`barca.schedules`,
-`barca.ticks`, `barca.queue`) do not exist yet.
+as those sections' "As implemented" state; the server query route ("Server query
+route", #972); and the tables ("Tables", #965): `barca.schedules`, `barca.ticks` and
+`barca.queue`, as that section's "As implemented" states. Everything else below is intent.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
 health word, its cause bucket and root, its refresh path, when it is expected fresh or
 rechecked, the freshness gap, the rollup tree, what a tick records, the `barca.schedules`,
@@ -752,6 +752,42 @@ with the same rules (read when named, text times that sort, a read-only copy).
 gap (`select sum(gap_seconds), count(*) filter (where cause is not null and expected_fresh_at is null) from barca.nodes`),
 the rollup by group, and the top roots.
 
+As implemented (#965), in `crates/barca-core/src/sql/tables.rs` (the columns and the row
+builders, which `barca sql` on a machine and the server's query route both call):
+
+- **`barca.schedules`** is the `schedule` block of each scheduled node's status
+  (`ScheduleStatus`, what `barca status --json` and `GET /nodes` print), with the node's `id`,
+  `name` and `kind`; `interval_seconds` is `schedule_standing::interval_seconds`, the distance
+  between the slots around now that `standing` uses; `targets` is the scheduler's own target
+  list, the scheduled node first (`ScheduledJob::targets` on a machine, the walk kept per
+  graph on a server). On a machine without a server the block is what the metadata database
+  records and `live` is false; on a server it is the scheduler's. It is loaded again with the
+  graph and at least every 30 seconds, like `barca.nodes`.
+- **`barca.ticks`** is `schedule_ticks` read once (`db::recent_ticks`), every schedule's
+  ticks, newest slot first; a schedule no longer in the graph keeps its rows until they are
+  trimmed. `scheduled_at` is the slot (RFC 3339, UTC), `started_at` and `finished_at` the
+  run's times with milliseconds, the counts `null` on a tick that did not fire or has not
+  ended. A machine no server scheduled has none.
+- **`barca.queue`** is the entries of `GET /queue`, started runs first, then the waiting
+  ones in order, with `state` as `run_queue` records it and `scheduled_at` the slot of a
+  tick's run. It is the server's state, so it is handed over for every query that names it.
+  A `--read-only` server lists the recorded queue, with `started_at`, `estimated_start_at`
+  and `wait_seconds` `null`, as its `GET /queue` does. `barca sql` without a server has no
+  queue: the table is there, empty, and stderr says why.
+- **Times are text**, as the rule above says, in every table: a query casts one to compute
+  with it (`now() - stale_since::timestamptz`).
+- **With a server**, a query that names only `barca.*` tables is answered by the route; one
+  that also names a result view runs on the client, which reads these three tables through
+  the route (`select * from barca.<table>`, at most 10,000 rows) and leaves them empty, with
+  a note, when the route does not answer.
+- **The manual** (`barca docs sql`, "Health queries") ships eight queries, each run as
+  written by `python/tests/test_docs_examples.py` on a machine and against a `--read-only`
+  server: the gap as one number, the gap by source file, the top roots, the nodes with no
+  refresh path, the overdue nodes with their missed ticks, the queue-bound schedules with
+  their typical wait, the tick outcomes of one node over time, and the runs per hour by
+  trigger. The rollup by group is not a query: `barca.nodes` has no group column, and the
+  group tree is `barca status --rollup` (`GET /state/rollup`).
+
 ### Server query route (#972)
 
 Implemented ([route and helper owner](../../crates/barca-server/src/sql_query.rs),
@@ -898,7 +934,7 @@ today (with the #961, #962, #963 and #973 rows): #954 ([health rules](../../crat
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
-row, the #964 row, the #972 row and the #985 row. The rest do not pass yet.
+row, the #964 row, the #965 row, the #972 row and the #985 row. The rest do not pass yet.
 
 | Scenario | Issue |
 | --- | --- |
@@ -913,7 +949,7 @@ row, the #964 row, the #972 row and the #985 row. The rest do not pass yet.
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963: [the cause rows, the walk, the roots where nothing refreshes, the audit shape (698 nodes, 422 not fresh, five roots, the top three hold 392)](../../crates/barca-core/src/causes.rs), [the root list, its actions and INV-HEALTH-03 with causes and the gap](../../crates/barca-core/src/rollup.rs), [the routes against each other](../../crates/barca-server/tests/openapi.rs), [CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, the commands of two actions run](../../python/tests/test_causes.py), [the causes list over the served roots](../../ui/src/lib/causesView.test.ts) |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
-| `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965 |
+| `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965: [the columns against the JSON keys](../../crates/barca-core/src/sql/tables.rs), [every tick in one read](../../crates/barca-db/src/db/ticks.rs), [the manual's eight queries on a machine and a read-only server](../../python/tests/test_docs_examples.py) (the rollup as the gap by file), [a live scheduler's schedules and ticks, the run queue, and a query run on the client](../../python/tests/test_sql_query_route.py) |
 | A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972: [the refusals (INV-HEALTH-09), the time limit, a killed helper, no DuckDB, an unchanged server loading nothing](../../crates/barca-server/src/sql_query.rs), [a served project, read-only and behind a token, and the CLI](../../python/tests/test_sql_query_route.py), [the wire shape](../../crates/barca-server/tests/openapi.rs) |
 | One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973: [the rule](../../crates/barca-core/src/causes.rs) ("ticks that wait longer than they are apart name the queue"), [a real server with one slot, and a read-only server beside it](../../python/tests/test_causes.py) |
 
@@ -981,6 +1017,9 @@ the causes list's grouping and the failures list's impact are deleted: their rul
 - A node declared in several groups is placed by group id (#955 keeps the rule: it is the one
   that keeps every level an exact sum). Whether overlapping groups should instead be refused
   at parse time is open.
+- `barca.nodes` has no group column, so the gap by group is the rollup tree, not a query
+  (#965). A node sits under one group there (the first by group id); a column would have to
+  carry that placement, not the declared groups, to add up the same.
 - The numbers fixed here (20 ticks for typical values, 1,000 ticks and 14 days of retention, a
   5-second query, 1,000 and 10,000 rows) are defaults chosen without measurement; an issue that
   measures otherwise revises this document in its PR.

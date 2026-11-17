@@ -53,6 +53,10 @@ Examples:
   barca sql "select target, status, elapsed_seconds from barca.runs where status = 'failed' order by started_at desc limit 10"
   barca sql "select node_id, elapsed_seconds, size_bytes from barca.materializations order by created_at desc"
   barca sql "select name, state, reason from barca.nodes where state <> 'cached'"
+  barca sql "select sum(gap_seconds) as gap, count(*) filter (where cause is not null and expected_fresh_at is null) as unbounded from barca.nodes"   # the freshness gap as one number
+  barca sql "select root_kind, root_node, count(*) as nodes, sum(gap_seconds) as gap from barca.nodes where root_id is not null group by all order by nodes desc"   # what holds the nodes that are not fresh
+  barca sql "select id, interval_seconds, typical_queue_wait_seconds from barca.schedules where queue_bound"   # schedules whose ticks wait for a run slot
+  barca sql "select scheduled_at, action, run_status, failed, not_reached from barca.ticks order by scheduled_at desc limit 20"   # what the last ticks did
   barca sql "select * from revenue" --local                # this machine's results, not a configured server's
   barca sql "select * from revenue" --server https://barca.example.com   # views resolved by that server
   barca sql "select status, count(*) from barca.runs group by all" --server https://barca.example.com   # barca's tables alone: the server answers

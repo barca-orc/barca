@@ -725,7 +725,8 @@ paths:
       summary: One SELECT over barca's own tables, run by the server
       operationId: post_sql_query
       description: 'Experimental (specs/behavior/health.md, "Server query route"). The query is one
-        SELECT (DuckDB dialect) over barca.runs, barca.materializations and barca.nodes; the answer
+        SELECT (DuckDB dialect) over barca.runs, barca.materializations, barca.nodes, barca.schedules,
+        barca.ticks and barca.queue; the answer
         is the document barca sql --json prints. A read: a read-only server serves it, and token
         mode requires a token as on every route. The server never runs SQL over results or files:
         the query runs in one long-lived helper process whose in-memory DuckDB holds those tables
@@ -8138,7 +8139,7 @@ components:
       properties:
         query:
           type: string
-          description: One SELECT over barca.runs, barca.materializations and barca.nodes (DuckDB dialect).
+          description: One SELECT over barca's tables (barca.runs, barca.materializations, barca.nodes, barca.schedules, barca.ticks, barca.queue; DuckDB dialect).
         limit:
           type:
           - integer

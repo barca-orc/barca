@@ -407,7 +407,8 @@ $ barca doctor
 ```
 
 `barca sql` answers the questions the commands above do not, over barca's own tables
-(`barca.runs`, `barca.materializations`, `barca.nodes`; `barca docs sql`), from the server's
+(`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`,
+`barca.queue`; `barca docs sql`, "Health queries"), from the server's
 records with a server configured:
 
 ```bash

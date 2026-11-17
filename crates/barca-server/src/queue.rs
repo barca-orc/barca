@@ -568,6 +568,15 @@ pub struct QueueEntry {
     /// a running run, to `estimated_start_at` for a waiting one. `null` when neither is known.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub wait_seconds: Option<u64>,
+    /// Where `run_queue` has it: `queued`, `running`, or `draining` (in flight when its server
+    /// began to stop). Not served: a column of `barca.queue` ([`table_rows`]).
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub(crate) state: &'static str,
+    /// For a tick's run: its slot (RFC 3339, UTC). Not served: a column of `barca.queue`.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub(crate) scheduled_at: Option<String>,
 }
 
 /// `GET /queue` (and the answer of pause and resume).
@@ -593,7 +602,7 @@ pub struct QueueView {
     pub capacity: Option<barca_core::serve::capacity::CapacitySnapshot>,
 }
 
-fn entry(run: &RunState, position: Option<usize>) -> QueueEntry {
+fn entry(run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
     QueueEntry {
         run_id: run.handle.clone(),
         status: if run.status == RunStatus::Running {
@@ -611,6 +620,13 @@ fn entry(run: &RunState, position: Option<usize>) -> QueueEntry {
         started_at: None,
         estimated_start_at: None,
         wait_seconds: None,
+        state: match (run.status == RunStatus::Running, draining) {
+            (false, _) => QueueState::Queued,
+            (true, false) => QueueState::Running,
+            (true, true) => QueueState::Draining,
+        }
+        .as_str(),
+        scheduled_at: run.trigger.scheduled_at.clone(),
     }
 }
 
@@ -713,18 +729,24 @@ pub(crate) async fn view_with_starts(state: &AppState) -> QueueView {
 
 /// The queue as this server holds it.
 pub fn view(state: &AppState) -> QueueView {
+    let draining = state.is_draining();
     let queued = state
         .queue
         .waiting_ids()
         .iter()
         .enumerate()
-        .filter_map(|(at, id)| state.runs.get(id).map(|r| entry(&r, Some(at + 1))))
+        .filter_map(|(at, id)| {
+            state
+                .runs
+                .get(id)
+                .map(|r| entry(&r, Some(at + 1), draining))
+        })
         .collect();
     let mut running: Vec<QueueEntry> = state
         .runs
         .iter()
         .filter(|r| r.status == RunStatus::Running)
-        .map(|r| entry(&r, None))
+        .map(|r| entry(&r, None, draining))
         .collect();
     running.sort_by(|a, b| a.queued_at.cmp(&b.queued_at));
     let paused_at = state.queue.paused_at();
@@ -763,6 +785,8 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             started_at: None,
             estimated_start_at: None,
             wait_seconds: None,
+            state: row.state.as_str(),
+            scheduled_at: spec.trigger.scheduled_at.clone(),
         };
         if started {
             running.push(item);
@@ -790,6 +814,37 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<QueueView>, ApiEr
         return recorded_view(&state).await.map(Json);
     }
     Ok(Json(view_with_starts(&state).await))
+}
+
+/// The rows of `barca.queue` (`POST /sql/query`): the entries of `GET /queue`, the started
+/// runs first, then the waiting ones in order. A `--read-only` server lists the recorded
+/// queue, without starts or estimates, as its `GET /queue` does.
+pub(crate) async fn table_rows(
+    state: &AppState,
+) -> Result<Vec<barca_core::sql::tables::QueueRow>, ApiError> {
+    let view = match state.config.read_only {
+        true => recorded_view(state).await?,
+        false => view_with_starts(state).await,
+    };
+    Ok(view
+        .running
+        .into_iter()
+        .chain(view.queued)
+        .map(|e| barca_core::sql::tables::QueueRow {
+            run_id: e.run_id,
+            position: e.position,
+            state: e.state,
+            queued_at: e.queued_at,
+            started_at: e.started_at,
+            estimated_start_at: e.estimated_start_at,
+            wait_seconds: e.wait_seconds,
+            command: e.command,
+            target: e.target,
+            triggered_by: e.triggered_by,
+            schedule_id: e.schedule_id,
+            scheduled_at: e.scheduled_at,
+        })
+        .collect())
 }
 
 /// `POST /queue/pause` — hold every queued run back until `POST /queue/resume`; runs in flight

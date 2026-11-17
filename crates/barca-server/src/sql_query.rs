@@ -1,5 +1,5 @@
 //! `POST /sql/query`: a query over barca's own tables (`barca.runs`, `barca.materializations`,
-//! `barca.nodes`), answered by the server so that a browser, which cannot run DuckDB over the
+//! `barca.nodes`, `barca.schedules`, `barca.ticks`, `barca.queue`), answered by the server so that a browser, which cannot run DuckDB over the
 //! server's records, can ask an aggregate question. `barca sql --server` sends a query that
 //! names only those tables here too.
 //!
@@ -123,6 +123,9 @@ pub(crate) struct Source {
     /// loaded again when the inspected graph changes, and at least every [`STATUS_MAX_AGE`]
     /// (what it shows also moves with the clock: a schedule turning late).
     pub(crate) graph: bool,
+    /// Whether its rows are the server's own state in memory (the run queue), which neither
+    /// the database's stamp nor the graph tells apart: loaded for every query that names it.
+    pub(crate) live: bool,
     /// Read at most [`TABLE_ROWS`] rows, newest first.
     pub(crate) load: Load,
 }
@@ -135,19 +138,45 @@ pub(crate) const SOURCES: &[Source] = &[
         name: tables::RUNS,
         columns: tables::RUN_COLUMNS,
         graph: false,
+        live: false,
         load: runs,
     },
     Source {
         name: tables::MATERIALIZATIONS,
         columns: tables::MATERIALIZATION_COLUMNS,
         graph: false,
+        live: false,
         load: materializations,
     },
     Source {
         name: tables::NODES,
         columns: tables::NODE_COLUMNS,
         graph: true,
+        live: false,
         load: nodes,
+    },
+    Source {
+        name: tables::SCHEDULES,
+        columns: tables::SCHEDULE_COLUMNS,
+        graph: true,
+        live: false,
+        load: schedules,
+    },
+    Source {
+        name: tables::TICKS,
+        columns: tables::TICK_COLUMNS,
+        graph: false,
+        live: false,
+        load: ticks,
+    },
+    // The queue is the server's own state, not the database's: loaded for every query that
+    // names it ([`Source::live`]).
+    Source {
+        name: tables::QUEUE,
+        columns: tables::QUEUE_COLUMNS,
+        graph: false,
+        live: true,
+        load: queue,
     },
 ];
 
@@ -197,6 +226,52 @@ fn nodes(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
     })
 }
 
+/// The scheduled nodes of `GET /nodes` with their `schedule` block (the scheduler's own state
+/// on a server that runs one), and each one's targets from the walk kept per graph.
+fn schedules(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
+    Box::pin(async move {
+        let dag = inputs
+            .dag
+            .as_ref()
+            .expect("a graph table is given the graph");
+        let status = crate::inspect::node_status(
+            &inputs.state,
+            dag,
+            &inputs.db,
+            &inputs.snapshot,
+            Vec::new(),
+            0,
+        )
+        .await?;
+        let paths = inputs.state.cached_paths(dag).await?;
+        let zone = crate::scheduler::zone_of(&inputs.state.config);
+        let rows = tables::schedule_rows(
+            &status.nodes,
+            |id| tables::targets_in(&status.nodes, &paths, id),
+            &zone,
+            chrono::Utc::now(),
+        );
+        let total = rows.len();
+        Ok(rows_of(tables::schedules(Some(rows)), total))
+    })
+}
+
+fn ticks(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
+    Box::pin(async move {
+        let (rows, total) = barca_core::db::recent_ticks(&inputs.snapshot.path, TABLE_ROWS).await?;
+        Ok(rows_of(tables::ticks(Some(&rows)), total))
+    })
+}
+
+/// The runs of `GET /queue`, as that route lists them now.
+fn queue(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
+    Box::pin(async move {
+        let rows = crate::queue::table_rows(&inputs.state).await?;
+        let total = rows.len();
+        Ok(rows_of(tables::queue(Some(&rows)), total))
+    })
+}
+
 fn table_list() -> String {
     SOURCES
         .iter()
@@ -221,7 +296,10 @@ impl Loaded {
             (None, None) => true,
             _ => false,
         };
-        self.db == *db && same_graph && !(source.graph && self.at.elapsed() >= STATUS_MAX_AGE)
+        !source.live
+            && self.db == *db
+            && same_graph
+            && !(source.graph && self.at.elapsed() >= STATUS_MAX_AGE)
     }
 }
 

@@ -267,6 +267,18 @@ pub async fn attach_schedules(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
     let jobs = crate::schedule::jobs_from_dag(dag);
+    attach_schedules_of(nodes, &jobs, db_path, zone, now).await
+}
+
+/// [`attach_schedules`] for jobs already collected from the graph
+/// ([`crate::schedule::jobs_from_dag`]).
+pub async fn attach_schedules_of(
+    nodes: &mut [NodeStatus],
+    jobs: &[crate::schedule::ScheduledJob],
+    db_path: Option<&str>,
+    zone: &crate::schedule::Zone,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), BarcaError> {
     if jobs.is_empty() {
         return Ok(());
     }
@@ -279,7 +291,7 @@ pub async fn attach_schedules(
         ),
         None => Default::default(),
     };
-    attach_standings(nodes, &jobs, &ticks, &failures, &pauses, zone, now);
+    attach_standings(nodes, jobs, &ticks, &failures, &pauses, zone, now);
     Ok(())
 }
 
@@ -745,7 +757,14 @@ pub(crate) async fn status_with_membership(
     python: &std::path::Path,
     sample: usize,
     shape: bool,
-) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
+) -> Result<
+    (
+        StatusResult,
+        crate::cache::ExpandedMembership,
+        crate::dag::Dag,
+    ),
+    BarcaError,
+> {
     let t0 = std::time::Instant::now();
     let dag = crate::load::build_dag(file_args, python).await?;
     trace_since("status: load", t0);
@@ -759,7 +778,7 @@ pub(crate) async fn status_with_membership(
         chrono::Utc::now(),
     )
     .await?;
-    Ok((result, membership))
+    Ok((result, membership, dag))
 }
 
 /// Inspect a validated graph; shares cache decisions with strict status.

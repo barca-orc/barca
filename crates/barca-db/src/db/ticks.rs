@@ -416,6 +416,54 @@ pub async fn ticks_for_schedule(
     Ok(out)
 }
 
+/// Every recorded tick, newest slot first (then by schedule), at most `limit`, and how many
+/// there are in all: the rows of `barca.ticks` (`barca sql`). The table is bounded by its
+/// writers, so this is one bounded read. A database without the table has none.
+pub async fn recent_ticks(
+    db_path: &str,
+    limit: usize,
+) -> Result<(Vec<TickRecord>, usize), BarcaError> {
+    if fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
+        return Ok((Vec::new(), 0));
+    }
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_table(&conn).await? {
+        return Ok((Vec::new(), 0));
+    }
+    let mut rows = conn
+        .query("SELECT COUNT(*) FROM schedule_ticks", ())
+        .await
+        .map_err(failed("counting the ticks"))?;
+    let total = rows
+        .next()
+        .await
+        .map_err(failed("counting the ticks"))?
+        .and_then(|row| row.get::<i64>(0).ok())
+        .map_or(0, |n| usize::try_from(n).unwrap_or(0));
+    while rows
+        .next()
+        .await
+        .map_err(failed("counting the ticks"))?
+        .is_some()
+    {}
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT {COLUMNS} FROM schedule_ticks
+                 ORDER BY scheduled_at DESC, schedule_id LIMIT ?1"
+            ),
+            libsql::params![i64::try_from(limit).unwrap_or(i64::MAX)],
+        )
+        .await
+        .map_err(failed("reading the ticks"))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.map_err(failed("reading the ticks"))? {
+        out.extend(record_of(&row));
+    }
+    Ok((out, total))
+}
+
 /// What the newest finished fired ticks that had `node_id` as a target did with it, newest
 /// first, at most `limit`, across every schedule whose tick reaches the node. Only ticks that
 /// still hold their target list answer: the newest [`TICKS_WITH_TARGETS`] fired ticks of each
@@ -640,6 +688,31 @@ mod tests {
     }
 
     const JOB: &str = "pipeline.py:inbox";
+
+    #[tokio::test]
+    async fn every_schedules_ticks_are_read_newest_first_with_their_count() {
+        let (_dir, db) = fresh().await;
+        use TickDecision::*;
+        assert_eq!(recent_ticks(&db, 10).await.unwrap(), (Vec::new(), 0));
+        record_tick(&db, tick(JOB, 100, Fired, None, Some("run-1")))
+            .await
+            .unwrap();
+        record_tick(&db, tick("pipeline.py:pulse", 130, Paused, None, None))
+            .await
+            .unwrap();
+        record_tick(&db, tick(JOB, 160, Skipped, Some("run-1"), None))
+            .await
+            .unwrap();
+        let (ticks, total) = recent_ticks(&db, 2).await.unwrap();
+        assert_eq!(total, 3);
+        let slots: Vec<(&str, i64)> = ticks
+            .iter()
+            .map(|t| (t.schedule_id.as_str(), t.scheduled_at))
+            .collect();
+        assert_eq!(slots, [(JOB, 160), ("pipeline.py:pulse", 130)]);
+        let missing = _dir.path().join("none.db").to_string_lossy().to_string();
+        assert_eq!(recent_ticks(&missing, 10).await.unwrap(), (Vec::new(), 0));
+    }
 
     #[tokio::test]
     async fn each_decision_is_one_row_read_newest_first() {

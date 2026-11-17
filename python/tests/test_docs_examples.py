@@ -1186,3 +1186,126 @@ def test_assets_topic_weight_example(binary, topics, tmp_path):
         "[barca] warning: 'embed_a' has weight=8, more than the capacity 4 (BARCA_CAPACITY); "
         "it runs alone" in warned.stderr
     )
+
+
+def test_sql_topic_health_queries(binary, topics, tmp_path):
+    """ "Health queries" (`barca docs sql`): every query of the section runs as written over
+    the section's project, on this machine and on a server, and answers what the text shows
+    (the seconds of a gap and the times apart, which move with the clock)."""
+    import os
+    import sqlite3
+    import time
+
+    from .served import Serve
+
+    pytest.importorskip("duckdb")
+    section = topics["sql"].split("\n## Health queries\n", 1)[1].split("\n## ", 1)[0]
+    (tmp_path / "pipeline.py").write_text(blocks(section, "python")[0])
+    gap, by_file, roots, no_path, overdue, queue_bound, outcomes, per_hour = blocks(section, "sql")
+    shown = [b for b in blocks(section, "") if b.strip()]
+    assert len(shown) == 8, "one answer shown under each query"
+
+    # A store, as a project with a server has: a query that names a node (the tick outcomes
+    # of `clean`) names its result view too, so with a server it runs on this machine.
+    (tmp_path / "store").mkdir()
+    (tmp_path / "barca.toml").write_text(f'[remote]\nuri = "{tmp_path / "store"}"\n')
+    # Written an hour ago: a node that never ran is out of date since its file was last
+    # changed, which is what its gap counts from.
+    written = time.time() - 3600
+    os.utime(tmp_path / "pipeline.py", (written, written))
+    # `inbox` and `orders` computed once; `clean`, `reviewed`, `ledger` and `totals` never.
+    result(barca(binary, tmp_path, "get", "orders", "pipeline.py"))
+    # Two ticks of `inbox`, as a scheduling server records them (`schedule_ticks`): each
+    # waited 400 seconds for a run slot, longer than the five minutes between ticks, and its
+    # run failed before it reached `clean`.
+    slot = int(time.time()) // 300 * 300 - 900
+    targets = [
+        ["pipeline.py:inbox", "rebuilt"],
+        ["pipeline.py:orders", "up_to_date"],
+        ["pipeline.py:clean", "not_reached"],
+    ]
+    with sqlite3.connect(tmp_path / ".barca" / "metadata.db") as db:
+        for at in (slot, slot + 300):
+            db.execute(
+                "INSERT INTO schedule_ticks (schedule_id, scheduled_at, action, run_id,"
+                " started_at, finished_at, run_status, queue_wait_seconds, rebuilt, up_to_date,"
+                " failed, not_reached, targets)"
+                " VALUES ('pipeline.py:inbox', ?, 'fired', ?, ?, ?, 'failed', 400, 1, 1, 0, 1, ?)",
+                (at, f"tick-{at}", at + 400.0, at + 402.0, json.dumps(targets)),
+            )
+    db.close()
+
+    def slot_text(at: int) -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at))
+
+    def check(*server: str) -> None:
+        def rows(query: str) -> list[dict]:
+            out = result(barca(binary, tmp_path, "sql", *server, query, "--json"))
+            assert not out["truncated"], out
+            return out["rows"]
+
+        (total,) = rows(gap)
+        assert (total["not_fresh"], total["unbounded"]) == (4, 4), total
+        # Four nodes, each out of date for the hour since the file was written.
+        assert 4 * 3500 <= total["gap_seconds"] <= 4 * 3700, total
+
+        assert rows(by_file) == [
+            {"file": "pipeline.py", "not_fresh": 4, "gap_seconds": total["gap_seconds"]}
+        ]
+
+        held = rows(roots)
+        assert [(r["root_kind"], r["root_node"], r["nodes"]) for r in held] == [
+            ("no_schedule", "pipeline.py:ledger", 2),
+            ("never_run", "pipeline.py:clean", 1),
+            ("no_schedule", "pipeline.py:reviewed", 1),
+        ], held
+        # Every node that is not fresh is under one root: the roots add up to the gap.
+        assert sum(r["gap_seconds"] for r in held) == total["gap_seconds"]
+
+        unrefreshed = rows(no_path)
+        assert [(r["name"], r["health"], r["root_node"]) for r in unrefreshed] == [
+            ("ledger", "never_run", "pipeline.py:ledger"),
+            ("reviewed", "never_run", "pipeline.py:reviewed"),
+            ("totals", "never_run", "pipeline.py:ledger"),
+        ], unrefreshed
+        assert all(r["stale_since"] for r in unrefreshed), unrefreshed
+
+        (missed,) = rows(overdue)
+        assert missed["name"] == "clean" and missed["missed_ticks"] == 2, missed
+        assert missed["refresh_schedule"] == "pipeline.py:inbox", missed
+        assert missed["last_check_outcome"] == "not_reached", missed
+
+        assert rows(queue_bound) == [
+            {
+                "id": "pipeline.py:inbox",
+                "interval_seconds": 300,
+                "typical_queue_wait_seconds": 400,
+                "typical_run_seconds": None,
+            }
+        ]
+
+        assert rows(outcomes) == [
+            {
+                "scheduled_at": slot_text(at),
+                "outcome": "not_reached",
+                "run_status": "failed",
+                "queue_wait_seconds": 400.0,
+            }
+            for at in (slot + 300, slot)
+        ]
+
+        (hour,) = rows(per_hour)
+        assert (hour["triggered_by"], hour["runs"]) == ("manual", 1), hour
+
+        # A time is text: cast it to compute with it, as the topic says.
+        (age,) = rows(
+            "select epoch(now() - stale_since::timestamptz) >= 0 as behind,"
+            " epoch(finished_at::timestamptz - started_at::timestamptz) as ran"
+            " from barca.nodes, barca.ticks where name = 'ledger' limit 1"
+        )
+        assert age == {"behind": True, "ran": 2.0}, age
+
+    check()
+    # A server that only reads answers the same from the same records (`POST /sql/query`).
+    with Serve(tmp_path, "--read-only") as server:
+        check("--server", server.url)
