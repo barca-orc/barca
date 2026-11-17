@@ -470,6 +470,9 @@ Examples:
   barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
   barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
   barca status --problems --server         # what needs attention on the configured server
+  barca status --rollup                    # counts by health per group and file, in nodes and assets, worst first
+  barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
+  barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
 
 More: barca docs status, barca docs agents";
 
@@ -1151,6 +1154,10 @@ pub(crate) enum Cli {
         /// blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
         #[arg(long)]
         problems: bool,
+        /// Experimental: print the rollup instead of the nodes: counts by health per group and
+        /// file, in nodes and in assets
+        #[arg(long, conflicts_with_all = ["limit", "all", "fields", "sample", "state", "problems"])]
+        rollup: bool,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]

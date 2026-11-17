@@ -39,6 +39,7 @@ nodes[].last_materialization.status : string
 nodes[].measured : boolean
 nodes[].name : string
 nodes[].partitioned : boolean
+nodes[].root : null
 nodes[].shape : null|object
 nodes[].shape.keys : array  (optional)
 nodes[].shape.keys[] : string

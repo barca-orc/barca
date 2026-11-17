@@ -43,6 +43,10 @@ nodes[].partitions.missing : integer
 nodes[].partitions.missing_keys : array
 nodes[].partitions.missing_keys[] : string
 nodes[].partitions.total : integer
+nodes[].root : null|object
+nodes[].root.id : string
+nodes[].root.kind : string
+nodes[].root.node : string
 nodes[].shape : null
 nodes[].signals : array
 root : string

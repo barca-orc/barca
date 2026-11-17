@@ -136,7 +136,7 @@ const [query, setQuery] = useState('')
 
     <Spec title="CommandPaletteView" note="⌘K: results with their state's glyph, failing first among equal matches; before states load; nothing found.">
       {[
-        { label: 'results', query: 'orders', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: nodeByState.cached.id, kind: 'asset' }, { id: failedNode.id, kind: 'asset' }], [], [{ id: 'orders-run', target: failedNode.id, status: 'failed' }], { byId: new Map([[nodeByState.cached.id, nodeByState.cached], [failedNode.id, failedNode]]), leavesOf: new Map() })], 'orders') },
+        { label: 'results', query: 'orders', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: nodeByState.cached.id, kind: 'asset' }, { id: failedNode.id, kind: 'asset' }], [], [{ id: 'orders-run', target: failedNode.id, status: 'failed' }], { byId: new Map([[nodeByState.cached.id, nodeByState.cached], [failedNode.id, failedNode]]), entries: new Map() })], 'orders') },
         { label: 'states not loaded', query: 'inv', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: 'billing.py:invoices_00', kind: 'asset' }, { id: 'billing.py:check__invoices_00', kind: 'task' }], [], [])], 'inv') },
         { label: 'nothing found', query: 'zzz', items: [] },
       ].map((v) => (
@@ -159,11 +159,11 @@ const [query, setQuery] = useState('')
       <Variant label="read-only server"><div style={{ width: 720 }}><ReadOnlyNotice /></div></Variant>
     </Spec>
 
-    <Spec title="HealthBar" note="A scope's nodes by state; a single failure stays visible among thousands.">
+    <Spec title="HealthBar" note="A scope's nodes by health, from its entry of the rollup; a single failure stays visible among thousands.">
       {Object.entries(healthStates).map(([label, c]) => (
-        <Variant key={label} label={label}><HealthBar counts={c} /></Variant>
+        <Variant key={label} label={label}><HealthBar scope={c} /></Variant>
       ))}
-      <Variant label="wide, every part named"><HealthBar counts={healthStates['every health']!} labelLimit={10} width={200} /></Variant>
+      <Variant label="wide, every part named"><HealthBar scope={healthStates['every health']!} labelLimit={10} width={200} /></Variant>
     </Spec>
 
     <Spec title="Age / LastSuccess" note="Relative, absolute in the chosen zone on hover; whose success it is when not the row's own; a failing row adds since when and how many runs in a row, a group how many members fail.">

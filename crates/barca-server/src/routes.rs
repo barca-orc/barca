@@ -45,6 +45,7 @@ pub fn router(state: AppState) -> Router {
         .route("/queue/pause", post(queue::pause))
         .route("/queue/resume", post(queue::resume))
         .route("/state", get(handlers::state))
+        .route("/state/rollup", get(handlers::rollup))
         .route("/schedule", get(handlers::schedule))
         .route_layer(axum::middleware::from_fn(etag));
     Router::new()

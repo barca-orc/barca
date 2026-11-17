@@ -491,7 +491,7 @@ described at [Server API Endpoints](/reference/server-api-endpoints/).
 
 Each row of `GET /state` and each node of `GET /nodes` carries what `barca status --json` does:
 `health` and `health_reason` (whether something needs doing about the node, and the rule that
-decided it), `signals` (what its recorded results say about its data: `empty`, `rows_changed`,
+decided it), `root` (the failing node that explains a failing or blocked one), `signals` (what its recorded results say about its data: `empty`, `rows_changed`,
 `behind_input`) and `measured` (whether its rows were counted at all; `null` for a task or
 sensor). They are computed in barca from facts the metadata DB holds, never by reading an
 artifact, and are the same on every surface: [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health) and "Data
@@ -503,7 +503,21 @@ the database, and a paused schedule is never late. An empty `signals` on a row w
 false` says nothing was counted, not that the data is fine; the web UI states the coverage of
 the open scope ("7 of 556 measured") beside its causes.
 
+`GET /state/rollup` (experimental) is those rows summed: one tree of everything in scope, its
+groups, the source files of the nodes in no group, and the nodes, each level the exact sum of
+its children, in nodes (`nodes`, `health`) and in assets (`assets`, `asset_health`), with
+`roots` (each failing node and how many nodes it holds) and the scope's `data_coverage`. It
+takes the scope of `GET /state` (`?targets=`, `?files=`), is the document `barca status
+--rollup --json` prints ([barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)), and is what the web UI's
+health map, health bars, group rows, causes and failures list render, so the map, the bars
+and the CLI state the same numbers. It sums the status result `GET /state` is built from: no
+status is computed for it. Its `as_of` is the start of the current minute on the server's
+clock, so an unchanged poll within a minute is a `304`. Each row's `root` names the failing
+node that blocks it; the web UI reads it instead of walking the graph.
+
 ```bash
+curl -s localhost:8274/state/rollup | jq '.entries[0] | {nodes, assets, health}'
+curl -s 'localhost:8274/state/rollup?targets=total' | jq -r '.roots[] | [.nodes, .node, .detail] | @tsv'
 curl -s localhost:8274/state | jq '.[] | select(.signals != []) | {id, signals}'
 curl -s localhost:8274/state | jq 'map(select(.kind == "asset")) | {assets: length, measured: map(select(.measured)) | length}'
 curl -s localhost:8274/nodes | jq '.data_coverage'

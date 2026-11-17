@@ -3,13 +3,13 @@
  * file. The collapse and the width are remembered in this browser; opening a file is not.
  */
 
+import type { ScopeHealth } from './health'
 import { match } from 'ts-pattern'
 import { groupHealth, groupPath, type GroupTree } from './groups'
 import { only, type Next } from './program'
 import type { PipelineSummary } from './pipeline'
 import type { Tone } from './tone'
 import type { Glyph } from './glyph'
-import type { NodeState } from './types'
 
 export const SIDEBAR_KEY = 'barca.sidebar.collapsed'
 export const SIDEBAR_WIDTH_KEY = 'barca.sidebar.width'
@@ -107,17 +107,16 @@ export function fileGroups(
   file: string,
   tree: GroupTree,
   open: string | null,
-  leavesOf: ReadonlyMap<string, string[]>,
-  byId: Map<string, NodeState>,
+  entries: ReadonlyMap<string, ScopeHealth>,
 ): SidebarGroup[] {
   const path = new Set(groupPath(open, tree).map((g) => g.id))
   const out: SidebarGroup[] = []
   const visit = (id: string, depth: number) => {
     const group = tree.groups.get(id)
     if (!group) return
-    const leaves = leavesOf.get(id) ?? []
-    const known = leaves.every((leaf) => byId.has(leaf))
-    const health = known ? groupHealth(leaves, byId) : null
+    // The group's entry of the project's rollup: none until it has loaded.
+    const entry = entries.get(id)
+    const health = entry ? groupHealth(entry) : null
     out.push({ id, name: group.name, depth, tone: health?.tone ?? null, glyph: health?.glyph ?? null })
     if (path.has(id)) for (const member of group.members) visit(member, depth + 1)
   }

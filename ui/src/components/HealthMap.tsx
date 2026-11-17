@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
-import { arcPath, healthSummary, ringRadii, sunburst, treePath, ROOT, type Arc, type HealthTree, type HealthTreeNode } from '@/lib/healthTree'
+import { arcPath, healthSummary, mapUnit, ringRadii, sunburst, treePath, worstOf, ROOT, type Arc, type RollupEntry, type RollupTree, type Unit } from '@/lib/rollupView'
 import { HEALTH_ORDER, healthDisplay, healthFamily, isUnhealthy, type HealthFamily } from '@/lib/healthDisplay'
 import { plural } from '@/lib/plural'
 
 export interface HealthMapProps {
-  tree: HealthTree
+  /** The rollup (`GET /state/rollup`): every count the map shows is an entry's own. */
+  tree: RollupTree
   /** The scope at the centre: the root, a group or a file. */
   focus: string
   /** Zoom to a scope (a segment with members, or the centre to go up). */
@@ -46,8 +47,8 @@ function fillOf(a: Arc): string {
 }
 
 /** `12 assets`; `3 nodes` in a scope with no assets, where the map is sized by nodes. */
-function sizeWords(n: number, assets: boolean): string {
-  return plural(n, assets ? 'asset' : 'node')
+function sizeWords(n: number, unit: Unit): string {
+  return plural(n, unit === 'assets' ? 'asset' : 'node')
 }
 
 /** The arc ids lit while `hover` is under the pointer: it, what is inside it, and what holds it. */
@@ -67,12 +68,18 @@ function litIds(arcs: readonly Arc[], hover: string | null): Set<string> | null 
   return lit
 }
 
-/** The centre's one number: how many nodes are in the scope's worst health (as the page header
- * counts them), or, when all is well, how many assets. */
-function headline(node: Pick<HealthTreeNode, 'counts' | 'leaves' | 'assets'>): { value: number; word: string; family: HealthFamily } {
-  const worst = HEALTH_ORDER.find((h) => isUnhealthy(h) && node.counts[h] > 0)
-  if (worst) return { value: node.counts[worst], word: healthDisplay(worst).label, family: healthFamily(worst) }
-  return { value: node.assets > 0 ? node.assets : node.leaves, word: 'all ok', family: 'ok' }
+/**
+ * The centre's one number, in the map's unit (assets, or nodes in a scope with no assets): how
+ * many are in the scope's worst health, or, when all is well, how many there are. The unit is
+ * said under it, so it is never read against the bar's nodes.
+ */
+function headline(entry: RollupEntry, unit: Unit): { value: number; word: string; family: HealthFamily } {
+  const counts = unit === 'assets' ? entry.asset_health : entry.health
+  const one = unit === 'assets' ? 'asset' : 'node'
+  const worst = HEALTH_ORDER.find((h) => isUnhealthy(h) && counts[h] > 0)
+  if (worst) return { value: counts[worst], word: `${healthDisplay(worst).label} ${counts[worst] === 1 ? one : `${one}s`}`, family: healthFamily(worst) }
+  const all = unit === 'assets' ? entry.assets : entry.nodes
+  return { value: all, word: `${all === 1 ? one : `${one}s`}, all ok`, family: 'ok' }
 }
 
 /**
@@ -83,8 +90,8 @@ function headline(node: Pick<HealthTreeNode, 'counts' | 'leaves' | 'assets'>): {
  * assets are underneath; its colour is the worst health inside: red failing, amber needs
  * attention, green ok, slate not known yet, paler at each level out. Members too thin to draw are
  * one `N smaller` segment per colour; a partitioned asset with room shows its keys outside it
- * (failed, not up to date, ok). The centre holds one number (how many nodes are in the scope's
- * worst health); the line under the map names the segment under the pointer, whose branch is lit
+ * (failed, not up to date, ok). The centre holds one number, with its unit (how many assets are
+ * in the scope's worst health); the line under the map names the segment under the pointer, whose branch is lit
  * while the rest dims. Click a segment to make it the centre, an asset or its keys to open it,
  * the centre to go up.
  */
@@ -92,32 +99,35 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
   const arcs = useMemo(() => sunburst(tree, focus, MAX_RINGS, 0.008), [tree, focus])
   const [hover, setHover] = useState<string | null>(null)
   const lit = useMemo(() => litIds(arcs, hover), [arcs, hover])
-  const center = tree.nodes.get(focus)
+  const center = tree.entries.get(focus)
   if (!center) return null
+  const unit = mapUnit(center)
 
   const half = size / 2
   const outer = half - 1
   const hole = outer * HOLE
   const rings = ringRadii(arcs.reduce((max, a) => Math.max(max, a.depth), 0), hole, outer, RING_SHAPE)
-  const parent = tree.parent.get(focus)
+  const parent = center.parent ?? undefined
   const hovered = hover ? arcs.find((a) => a.id === hover) ?? null : null
-  const hoveredNode = hovered && hovered.kind !== 'rest' && hovered.kind !== 'keys' ? tree.nodes.get(hovered.id) : null
+  const hoveredEntry = hovered && hovered.kind !== 'rest' && hovered.kind !== 'keys' ? tree.entries.get(hovered.id) : null
   const activate = (a: Arc) => (a.kind === 'node' ? onOpen(a.id) : a.kind === 'keys' ? onOpen(a.parent) : a.kind === 'rest' ? onFocus(a.parent) : onFocus(a.id))
-  const top = headline(center)
+  const top = headline(center, unit)
 
   // The line under the map: the segment under the pointer, else the scope.
   const name = hovered ? hovered.label : focus === ROOT ? 'All pipelines' : center.label
   // Where the segment sits: the path to it, or to what holds it (`N smaller`, a node's keys).
   const synthetic = hovered?.kind === 'rest' || hovered?.kind === 'keys'
   const where = hovered ? treePath(tree, synthetic ? hovered.parent : hovered.id).slice(1, synthetic ? undefined : -1).map((n) => n.label).join(' › ') : null
-  const summary = hoveredNode
-    ? healthSummary(hoveredNode, 2) || healthDisplay(hoveredNode.health).label
+  // The words count what the map is sized in, so the line and the segment agree.
+  const countsOf = (e: RollupEntry) => (unit === 'assets' ? e.asset_health : e.health)
+  const summary = hoveredEntry
+    ? healthSummary(countsOf(hoveredEntry), 2) || healthDisplay(worstOf(hoveredEntry.health)).label
     : hovered
       ? healthDisplay(hovered.health).label
-      : healthSummary(center, 3) || 'nothing needs attention'
+      : healthSummary(countsOf(center), 3) || 'nothing needs attention'
   const amount = hovered?.keys
     ? `${hovered.keys.count.toLocaleString()} of ${hovered.keys.of.toLocaleString()} keys`
-    : sizeWords(hovered ? hovered.size : center.assets > 0 ? center.assets : center.leaves, center.assets > 0)
+    : sizeWords(hovered ? hovered.size : unit === 'assets' ? center.assets : center.nodes, unit)
 
   return (
     <figure className="barca-healthmap" aria-label={`Health map of ${center.label}`}>
@@ -141,7 +151,7 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
               data-lit={lit === null ? undefined : lit.has(a.id)}
               role="button"
               tabIndex={a.depth === 1 ? 0 : -1}
-              aria-label={`${a.label}: ${healthDisplay(a.health).label}, ${a.keys ? `${a.keys.count.toLocaleString()} of ${a.keys.of.toLocaleString()} keys` : sizeWords(a.size, center.assets > 0)}`}
+              aria-label={`${a.label}: ${healthDisplay(a.health).label}, ${a.keys ? `${a.keys.count.toLocaleString()} of ${a.keys.of.toLocaleString()} keys` : sizeWords(a.size, unit)}`}
               onMouseEnter={() => setHover(a.id)}
               onFocus={() => setHover(a.id)}
               onBlur={() => setHover(null)}
@@ -156,14 +166,14 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
           data-family={top.family}
           role={parent !== undefined ? 'button' : undefined}
           tabIndex={parent !== undefined ? 0 : undefined}
-          aria-label={parent !== undefined ? `Up to ${tree.nodes.get(parent)?.label ?? 'All pipelines'}` : undefined}
+          aria-label={parent !== undefined ? `Up to ${parent === ROOT ? 'All pipelines' : tree.entries.get(parent)?.label ?? 'All pipelines'}` : undefined}
           onClick={() => parent !== undefined && onFocus(parent)}
           onKeyDown={(e) => { if (parent !== undefined && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onFocus(parent) } }}
           onMouseEnter={() => setHover(null)}
         >
           {parent !== undefined && <title>Up one level</title>}
         </circle>
-        {/* One number, in real type: how many nodes are in the scope's worst health. */}
+        {/* One number, in real type, with its unit: how many are in the scope's worst health. */}
         <foreignObject x={-hole} y={-hole} width={hole * 2} height={hole * 2} pointerEvents="none">
           <div className="barca-healthmap-center" data-family={top.family}>
             <strong>{top.value.toLocaleString()}</strong>
@@ -174,7 +184,7 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
       <figcaption className="barca-healthmap-caption" aria-live="polite">
         <span className="barca-healthmap-where">{where ?? (hovered ? '' : parent !== undefined ? 'click the centre to go up' : '')}</span>
         <span className="barca-healthmap-name">{name}</span>
-        <span className="barca-healthmap-summary" data-family={healthFamily((hoveredNode ?? hovered ?? center).health)}>
+        <span className="barca-healthmap-summary" data-family={healthFamily(hoveredEntry ? worstOf(hoveredEntry.health) : hovered ? hovered.health : worstOf(center.health))}>
           {summary} · {amount}
         </span>
       </figcaption>

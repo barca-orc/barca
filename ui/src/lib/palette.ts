@@ -4,6 +4,7 @@
  * `layouts/CommandPalette.tsx` runs it.
  */
 
+import type { ScopeHealth } from './health'
 import { keysHref } from './keysPage'
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
@@ -45,12 +46,13 @@ export interface PaletteItem {
 /** What the index knows of the project's state: every node's row of `GET /state`, and each group's leaves. */
 export interface PaletteStates {
   byId: Map<string, NodeState>
-  leavesOf: ReadonlyMap<string, string[]>
+  /** The project's rollup entries by id (`GET /state/rollup`): a group's state, a file's. */
+  entries: ReadonlyMap<string, ScopeHealth>
   /** A nested group's ancestors (`Ads › Staging`), so groups of one name tell apart. */
   placeOf?: ReadonlyMap<string, string>
 }
 
-const NO_STATES: PaletteStates = { byId: new Map(), leavesOf: new Map() }
+const NO_STATES: PaletteStates = { byId: new Map(), entries: new Map() }
 
 /** The most urgent first: what a search lists first among results that match equally well. */
 const URGENCY: Record<Tone, number> = { failed: 0, warning: 1, running: 2, queued: 3, neutral: 4, success: 5 }
@@ -59,10 +61,13 @@ function shown(box: GraphState): PaletteState {
   return { glyph: box.glyph, label: box.label, live: isLive(box), tone: box.tone }
 }
 
-/** The state of a scope of nodes (a group's leaves, a file's nodes): null until every one of them is known. */
-function scopeState(ids: string[], states: PaletteStates): PaletteState | null {
-  if (ids.length === 0 || !ids.every((id) => states.byId.has(id))) return null
-  return shown(groupHealth(ids, states.byId))
+/**
+ * The state of a scope (a group, or a file whose nodes are in no group): its entry of the
+ * rollup, null when the rollup has none (not loaded, or a file whose nodes sit in groups).
+ */
+function scopeState(id: string, states: PaletteStates): PaletteState | null {
+  const entry = states.entries.get(id)
+  return entry ? shown(groupHealth(entry)) : null
 }
 
 const PALETTE_LIMIT = 50
@@ -109,8 +114,8 @@ export function paletteIndex(
   }
   const files = [...byFile.keys()].sort(NAMES.compare)
   return [
-    ...files.map((file): PaletteItem => ({ key: `file:${file}`, section: 'Files', label: pipelineName(file), detail: file, target: { type: 'go', to: link('/assets', { pipeline: file }) }, state: scopeState(byFile.get(file) ?? [], states) })),
-    ...groups.map((g): PaletteItem => ({ key: g.id, section: 'Groups', label: g.name, detail: [states.placeOf?.get(g.id), pipelineName(groupFile(g.id))].filter(Boolean).join(' · '), target: { type: 'go', to: link('/assets', { pipeline: groupFile(g.id), group: g.id }) }, state: scopeState(states.leavesOf.get(g.id) ?? [], states) })),
+    ...files.map((file): PaletteItem => ({ key: `file:${file}`, section: 'Files', label: pipelineName(file), detail: file, target: { type: 'go', to: link('/assets', { pipeline: file }) }, state: groups.some((g) => groupFile(g.id) === file) ? null : scopeState(`file:${file}`, states) })),
+    ...groups.map((g): PaletteItem => ({ key: g.id, section: 'Groups', label: g.name, detail: [states.placeOf?.get(g.id), pipelineName(groupFile(g.id))].filter(Boolean).join(' · '), target: { type: 'go', to: link('/assets', { pipeline: groupFile(g.id), group: g.id }) }, state: scopeState(g.id, states) })),
     ...assets.map((a) => nodeItem(a, states)),
     ...runs.map((r): PaletteItem => ({ key: `run:${r.id}`, section: 'Runs', label: r.id, detail: `${r.target ?? 'all assets'} · ${runWord(r.status)}`, target: { type: 'go', to: link('/runs', { run: r.id }) }, state: runState(r.status) })),
   ]

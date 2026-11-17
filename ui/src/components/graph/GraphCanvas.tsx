@@ -23,7 +23,7 @@ import { PortNode } from './PortNode'
 import { RoutedEdge } from './RoutedEdge'
 import { GraphLegend } from './GraphLegend'
 import { BLOCKED_UPSTREAM, PINNED } from '@/lib/cacheStateDisplay'
-import { fitViewport, isArrowKey, neighborInDirection, revealViewport, waitStatus, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
+import { fitViewport, isArrowKey, neighborInDirection, revealViewport, type Inset, type ViewNode } from '@/lib/graphView'
 import { isLive, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
 import { edgeClassName, type LayoutDir, type GraphEdgeData, type GraphNode, type GraphEntry } from '@/lib/graph'
@@ -257,20 +257,13 @@ export function GraphCanvas({
 
   const nodes = useMemo<GraphNode[]>(() => {
     const names = new Map(base.nodes.map((n) => [n.id, n.data.name]))
-    // A blocked consumer (never run or stale behind a failure) reads `blocked`; its hint names the failure upstream that kept it from running. A node
-    // whose state has not arrived is not one that never ran.
-    const waits = new Map<string, WaitStatus>()
-    for (const n of base.nodes) {
-      const state = states[n.id]
-      if (!state || state.kind !== 'cache') continue
-      const s = waitStatus(state)
-      // A pinned node is read as its pinned version: it never waits on a failure above it.
-      waits.set(n.id, s === 'waiting' && pins.has(n.id) ? 'other' : s)
-    }
-    const why = waitsOn(base.edges.map((e) => [e.source, e.target]), waits, (id) => names.get(id) ?? id)
     return base.nodes.map((n) => {
       const state = states[n.id] ?? UNKNOWN_GRAPH_STATE
-      const wait = why.get(n.id)
+      // A blocked consumer reads `blocked`, and its hint names the failing node upstream that
+      // keeps it from running: the server's answer on its row (`root`), not a walk done here. A
+      // pinned node is never blocked there, and a node whose state has not arrived says nothing.
+      const by = state.kind === 'cache' ? state.blockedBy : undefined
+      const wait = by ? { by, hint: `Blocked: waits on ${names.get(by) ?? by}, whose last attempt failed.` } : undefined
       // One state per node: failing > running > pinned > blocked > the cache state.
       const pin = !isFailed(state) && !isLive(state) && state.kind === 'cache' ? pins.get(n.id) : undefined
       return { ...n, selected: n.id === selected,
@@ -289,7 +282,7 @@ export function GraphCanvas({
           parts: state.kind === 'group' || state.kind === 'run' ? state.parts : undefined,
         } }
     })
-  }, [base.nodes, base.edges, selected, states, pins, shown])
+  }, [base.nodes, selected, states, pins, shown])
 
   const nodeTones = useMemo(() => new Map(nodes.map(n => [n.id, n.data.tone])), [nodes])
   const nodeGlyphs = useMemo(() => new Map(nodes.map(n => [n.id, n.data.glyph ?? toneGlyph(n.data.tone)])), [nodes])

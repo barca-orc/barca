@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { counts } from '@/lib/testdata/rollup'
 import { DagNode } from '@/components'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import type { GraphEntry } from '@/lib/graph'
@@ -30,9 +31,7 @@ const PIPELINE_STATES: Record<string, GraphState> = {
   'p:product_catalog': graphState(nodeByState.cached),
   'p:orders_clean': graphState(nodeByState.cached),
   'p:orders_enriched': runningGraphState(runningPartitioned),
-  'group:p:modeling': groupHealth(['m:a', 'm:b', 'm:c', 'm:d'], new Map([
-    ['m:a', failedNode], ['m:b', { ...nodeByState.cached, id: 'm:b' }], ['m:c', { ...nodeByState.stale, id: 'm:c' }], ['m:d', { ...nodeByState.cached, id: 'm:d', running: runningPartitioned }],
-  ])),
+  'group:p:modeling': groupHealth({ health: counts({ failing: 1, behind: 1, ok: 2 }), nodes: 4, running: 1 }),
   'p:revenue_daily': graphState(nodeByState.stale),
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
@@ -58,12 +57,12 @@ const GROUP_GRAPH_STATES: Record<string, GraphState> = Object.fromEntries(
   GROUP_GRAPH.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', glyph: 'fresh', label: '4 fresh', hint: '' } : { kind: 'group', tone: 'failed', glyph: 'failed', label: '2 failing', hint: '' }]),
 )
 
-/** A group card in each case its health line has: from `groupHealth` over real member states. */
+/** A group card in each case its health line has: `groupHealth` over the group's rollup entry. */
 const GROUP_CARDS: Record<string, GraphState> = {
-  'failing while running': groupHealth(['a', 'b', 'c'], new Map([['a', { ...failedNode, id: 'a' }], ['b', { ...nodeByState.cached, id: 'b', running: runningPartitioned }], ['c', { ...nodeByState.stale, id: 'c' }]])),
-  'running, nothing failed': groupHealth(['a', 'b'], new Map([['a', { ...nodeByState.cached, id: 'a', running: runningPartitioned }], ['b', { ...nodeByState.cached, id: 'b' }]])),
-  'stale and more': groupHealth(['a', 'b', 'c', 'd', 'e'], new Map([['a', { ...nodeByState.stale, id: 'a' }], ['b', { ...nodeByState.partial, id: 'b' }], ['c', { ...nodeByState.never_run, id: 'c' }], ['d', { ...nodeByState.always_runs, id: 'd' }], ['e', { ...nodeByState.cached, id: 'e' }]])),
-  'all fresh': groupHealth(['a'], new Map([['a', { ...nodeByState.cached, id: 'a' }]])),
+  'failing while running': groupHealth({ health: counts({ failing: 1, behind: 1, ok: 1 }), nodes: 3, running: 1 }),
+  'running, nothing failed': groupHealth({ health: counts({ ok: 2 }), nodes: 2, running: 1 }),
+  'stale and more': groupHealth({ health: counts({ behind: 2, never_run: 1, ok: 2 }), nodes: 5, running: 0 }),
+  'all fresh': groupHealth({ health: counts({ ok: 1 }), nodes: 1, running: 0 }),
 }
 const GROUP_CARD_ENTRIES: GraphEntry[] = Object.keys(GROUP_CARDS).map((name) => ({ id: name, kind: 'group', inputs: [], name, summary: '12 assets · 12 tasks', outputName: 'model' }))
 

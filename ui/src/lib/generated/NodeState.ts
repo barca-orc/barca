@@ -9,6 +9,7 @@ import type { LastMaterialization } from "./LastMaterialization";
 import type { LastRun } from "./LastRun";
 import type { NodeRunning } from "./NodeRunning";
 import type { PartitionState } from "./PartitionState";
+import type { Root } from "./Root";
 import type { ScheduleStatus } from "./ScheduleStatus";
 
 /**
@@ -96,6 +97,11 @@ signals: Array<DataSignal>,
  * any key's); `null` for a task or sensor. `false` is "not measured", not ok.
  */
 measured: boolean | null,
+/**
+ * The upstream fact that explains why it is not fresh: today only a failure (`kind`
+ * `failure`), on the failing node itself and on each node it blocks; `null` otherwise.
+ */
+root: Root | null,
 /**
  * Per-key cache state of a partitioned node.
  */

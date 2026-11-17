@@ -23,11 +23,11 @@ import { useRunDetail } from '@/hooks/useRuns'
 import { usePartitionKey } from '@/hooks/usePartitionGrid'
 import { buildRows, formatSeconds } from '@/lib/assetTable'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
-import { blockedBy as blockedByMap } from '@/lib/graphView'
+import { blockerOf } from '@/lib/healthDisplay'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { signalLine } from '@/lib/dataSignals'
 import { EDITOR_ROOTS_KEY, changedSummary, collapseRuns, dataKey, dataKeyNote, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, errorFirstLine, failuresOnlyNote, formatBytes, historyBars, keyFigures, onlyFailures, rowsLabel, raisedAtLabel, runPace, runsRecorded, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
-import { consumersOf, downstreamIds, failedUpstream, headline, isFailed, streakLabel } from '@/lib/health'
+import { consumersOf, downstreamIds, headline, isFailed, streakLabel } from '@/lib/health'
 import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
 import type { AssetRunEntry, KeyArtifact, ListNode, NodeState, NodeStatus } from '@/lib/types'
@@ -71,16 +71,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const downstream = downstreamOf(node.id, graph)
   const consumers = useMemo(() => consumersOf(graph), [graph])
   const impact = useMemo(() => downstreamIds(node.id, consumers).size, [node.id, consumers])
-  const inputs = useMemo(() => new Map(graph.map((n) => [n.id, n.inputs])), [graph])
   const failed = isFailed(memberHealth(node))
   const failedKeys = node.partitions?.failed ?? 0
-  // Why a node that did not fail is not up to date: something it reads failed.
-  const blockedBy = useMemo(() => (failed ? [] : failedUpstream(node.id, inputs, byId)), [failed, node.id, inputs, byId])
+  // Why a node that did not fail is not up to date: the failing node upstream that blocks it,
+  // as the server names it on the row (`root`); a pinned node is never blocked.
+  const blocker = failed ? null : blockerOf(node)
+  const blockedBy = blocker ? [blocker] : []
   // The one state it shows: `blocked` when a failed node upstream keeps it from running.
   const pins = usePinNotes()
   // Pinned (`barca pin`): it reads `pinned`, not its cache state; a failure above it does not block it.
   const pinned = failed ? null : pins.get(node.id) ?? null
-  const blocker = useMemo(() => (failed ? null : blockedByMap(nodes, graph, pins).get(node.id) ?? null), [failed, nodes, graph, pins, node.id])
   const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
@@ -245,7 +245,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {blockedBy.length > 0 && (
           <div className="barca-why" role="group" aria-label="What it waits on">
             <div className="barca-why-head">
-              <strong>Waiting on {blockedBy.length} failed upstream node{blockedBy.length === 1 ? '' : 's'}</strong>
+              <strong>Blocked by a failing node upstream</strong>
             </div>
             <ul className="barca-why-list">
               {blockedBy.slice(0, 8).map((id) => (

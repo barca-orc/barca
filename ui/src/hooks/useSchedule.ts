@@ -21,6 +21,7 @@ export function useToggleSchedulePause() {
     onSettled: () => {
       void client.invalidateQueries({ queryKey: ['schedule'] })
       void client.invalidateQueries({ queryKey: ['state'] })
+      void client.invalidateQueries({ queryKey: ['rollup'] })
     },
   })
 }

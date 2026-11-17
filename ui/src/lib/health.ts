@@ -1,15 +1,16 @@
 /**
- * What is broken, how much it affects, and why: pure answers over `GET /state` rows and the
- * graph from `GET /assets`. The grouped page's health strip and failures list, and the node
- * panel's "Why" section, only render these.
+ * What is broken and how much it holds, in the words a page shows: the rollup's entries and
+ * roots (`GET /state/rollup`, classified and summed in `barca-core`) joined with the rows of
+ * `GET /state`. Nothing here classifies, counts or attributes; it words and joins.
  */
 
 import { healthDisplay, HEALTH_ORDER, type Health } from './healthDisplay'
 import type { Glyph } from './glyph'
 import { memberHealth, type GraphState } from './graphState'
+import type { RollupEntry, RollupRoot } from './rollupView'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
 import type { Tone } from './tone'
-import type { NodeState, PartitionKeys, StatusKind } from './types'
+import type { NodeState, PartitionKeys } from './types'
 
 /** A node's place in the graph: what `GET /assets` says, all a lineage needs. */
 export interface GraphLink {
@@ -18,80 +19,41 @@ export interface GraphLink {
 }
 
 /**
- * How many nodes of a scope are in each health (the server's `health`), as a health bar shows
- * them, plus the nodes a run is working on and those whose state is not loaded. A rollup counts
- * health, not cache states: a scope says `3 failing · 12 blocked · 40 behind`, and each node in
- * it keeps its own precise state word (`stale`, `partial`) beside its health.
+ * A scope's health as a bar shows it: the entry of the rollup (`GET /state/rollup`) for that
+ * scope. `health` counts its nodes, each once, by the server's word; `running` is how many of
+ * them a run is working on, a separate fact beside their health. Nothing here counts: a bar,
+ * a group's box and the map read the same entry, so they agree.
  */
-export interface HealthCounts {
-  states: Record<Health, number>
-  running: number
-  /** No state loaded for them yet. */
-  pending: number
-  total: number
-}
+export type ScopeHealth = Pick<RollupEntry, 'health' | 'running' | 'nodes'>
 
-/** A segment of the bar or a part of its label: a health, run work, or no state yet. */
-type HealthPart = Health | 'running' | 'pending'
+/** A segment of the bar or a part of its label: a health, or run work. */
+type HealthPart = Health | 'running'
 
 /** Most urgent first: the order of the bar's segments. A failure leads, then run work. */
-export const HEALTH_PARTS: readonly HealthPart[] = ['failing', 'running', ...HEALTH_ORDER.filter((h) => h !== 'failing'), 'pending']
-
-export function emptyHealth(total = 0): HealthCounts {
-  return {
-    states: Object.fromEntries(HEALTH_ORDER.map((h) => [h, 0])) as Record<Health, number>,
-    running: 0,
-    pending: 0,
-    total,
-  }
-}
+export const HEALTH_PARTS: readonly HealthPart[] = ['failing', 'running', ...HEALTH_ORDER.filter((h) => h !== 'failing')]
 
 /** The tone of a part of the bar. */
 export function healthPartTone(part: HealthPart): Tone {
-  if (part === 'running') return 'running'
-  if (part === 'pending') return 'neutral'
-  return healthDisplay(part).tone
+  return part === 'running' ? 'running' : healthDisplay(part).tone
 }
 
 /** The glyph of a part of the bar: the colour of its segment. */
 export function healthPartGlyph(part: HealthPart): Glyph {
-  if (part === 'running') return 'running'
-  if (part === 'pending') return 'pending'
-  return healthDisplay(part).glyph
+  return part === 'running' ? 'running' : healthDisplay(part).glyph
 }
 
-/**
- * Counts of `ids`; a live run's status (`live`) outranks the polled state. `healthOf` is each
- * node's health as the page's health tree holds it; without it, each row's own `health` (the
- * server's word) is counted, which is the same word.
- */
-export function healthCounts(
-  ids: readonly string[],
-  byId: ReadonlyMap<string, NodeState>,
-  live: Readonly<Record<string, StatusKind>> = {},
-  healthOf?: ReadonlyMap<string, Health>,
-): HealthCounts {
-  const counts = emptyHealth(ids.length)
-  for (const id of ids) {
-    const status = live[id]
-    const node = byId.get(id)
-    if (status === 'running' || status === 'queued' || node?.running) counts.running += 1
-    else if (status === 'failed') counts.states.failing += 1
-    else if (node) counts.states[healthOf?.get(id) ?? node.health] += 1
-    else counts.pending += 1
-  }
-  return counts
+/** How many nodes a part of `scope` is. */
+export function partCount(scope: ScopeHealth, part: HealthPart): number {
+  return part === 'running' ? scope.running : scope.health[part]
 }
 
-const PENDING_WORD = 'checking'
-
-/** The word of a part: `behind`, `running`, `checking`. */
+/** The word of a part: `behind`, `running`. */
 function partWord(part: HealthPart): string {
-  return part === 'pending' ? PENDING_WORD : part === 'running' ? part : healthDisplay(part).label
+  return part === 'running' ? part : healthDisplay(part).label
 }
 
 export interface HealthLabelPart {
-  /** What the part counts: a health, run work, or no state yet. */
+  /** What the part counts: a health, or run work. */
   key: HealthPart
   tone: Tone
   glyph: Glyph
@@ -104,28 +66,23 @@ export interface HealthLabelPart {
 }
 
 /** Every non-empty part, most urgent first, as the words a label shows. */
-export function healthParts(counts: HealthCounts, limit = HEALTH_PARTS.length): HealthLabelPart[] {
+export function healthParts(scope: ScopeHealth, limit = HEALTH_PARTS.length): HealthLabelPart[] {
   const parts: HealthLabelPart[] = []
   for (const part of HEALTH_PARTS) {
-    const count = part === 'running' || part === 'pending' ? counts[part] : counts.states[part]
+    const count = partCount(scope, part)
     if (count > 0) parts.push({ key: part, tone: healthPartTone(part), glyph: healthPartGlyph(part), count, word: partWord(part), text: `${count.toLocaleString()} ${partWord(part)}` })
   }
   return parts.slice(0, limit)
 }
 
 /** `2 failing · 12 blocked · 380 ok`. */
-export function healthLabel(counts: HealthCounts, limit?: number): string {
-  return healthParts(counts, limit).map((p) => p.text).join(' · ')
+export function healthLabel(scope: ScopeHealth, limit?: number): string {
+  return healthParts(scope, limit).map((p) => p.text).join(' · ')
 }
 
-/** How many nodes need attention short of failing: blocked, suspect or behind. */
-export function needsAttention(counts: HealthCounts): number {
-  return counts.states.blocked + counts.states.suspect + counts.states.behind
-}
-
-/** The tone of a scope's most urgent part; neutral for an empty scope. */
-export function healthTone(counts: HealthCounts): Tone {
-  return healthParts(counts, 1)[0]?.tone ?? 'neutral'
+/** A sort key: how many nodes need attention short of failing (blocked, suspect or behind). */
+export function needsAttention(scope: ScopeHealth): number {
+  return scope.health.blocked + scope.health.suspect + scope.health.behind
 }
 
 /** Whether `state` is the box of a node whose last attempt failed. */
@@ -158,23 +115,30 @@ export function downstreamIds(id: string, consumers: ReadonlyMap<string, string[
   return seen
 }
 
-/** A failure, as the failures list shows it. */
+/**
+ * A failure, as the failures list shows it: a failure root of the rollup (which node failed,
+ * how many nodes it holds, the error it shares with others) joined with that node's own row.
+ */
 export interface Failure {
   id: string
   name: string
   kind: NodeState['kind']
-  /** The error's first line: usually `Type: message`. */
+  /** The error's one line: the root's `detail`, or the node's most common key error once loaded. */
   headline: string
   /** The whole recorded error, traceback included. */
   error: string
+  /** The root's `error_group`: failures sharing one are listed under one heading. Null: on its own. */
+  group: string | null
   /** When the failed attempt was recorded (UTC, `YYYY-MM-DD HH:MM:SS`). */
   at: string | null
   /** The first failed attempt after its last clean run. */
   failingSince: string | null
   /** Runs in a row that failed it (`streakLabel`). */
   failures: number
-  /** How many nodes downstream of it, transitively, are waiting on it; null until the graph is loaded. */
-  impact: number | null
+  /** Nodes the root holds (`nodes`): the failing node itself and every node it blocks. */
+  held: number
+  /** Of them, assets (`assets`). */
+  heldAssets: number
   /** For a partitioned node: how many keys have no cached result. */
   missingKeys: number | null
   /** For a partitioned node whose keys failed: how many, and their errors once loaded. */
@@ -293,102 +257,41 @@ export function headline(error: string | null | undefined): string {
 }
 
 /**
- * The failed nodes among `nodes`: the most downstream impact first (unknown last), then the most
- * recent. `consumers` is null while the graph is loading: then the impact is unknown, not 0. A
- * check that failed on a cached asset is a failure too; a node merely stale because something
- * upstream failed is not (it is what `impact` counts). A node whose keys failed is headed by
- * their most common error once `keyErrors` (by node id) has its keys page; before that by its
- * own error, which is one key's, or by how many keys failed.
+ * The failures the rollup's `roots` name, in the order served (the most nodes held first), each
+ * with its node's row from `GET /state`; a root whose row is not loaded is left out until it
+ * is. A node whose keys failed is headed by their most common error once `keyErrors` (by node
+ * id) has its keys page; before that by the root's own line.
  */
 export function failures(
-  nodes: readonly NodeState[],
-  consumers: ReadonlyMap<string, string[]> | null,
+  roots: readonly RollupRoot[],
+  byId: ReadonlyMap<string, NodeState>,
   keyErrors?: ReadonlyMap<string, PartitionKeys>,
 ): Failure[] {
-  return nodes
-    .filter((n) => isFailed(memberHealth(n)))
-    .map((n) => {
-      const nodeError = n.last_materialization?.error ?? ''
-      const page = keyErrors?.get(n.id)
-      const keys = failedKeys(n, page)
-      const top = keys?.errors?.[0]
-      const sample = page?.keys[0]?.error ?? ''
-      const fallback = keys && !nodeError ? `${keysLine({ ...keys, errors: null })} failed` : headline(nodeError)
-      return {
-        id: n.id,
-        name: n.name,
-        kind: n.kind,
-        headline: top?.error ?? fallback,
-        error: top ? sample || nodeError || top.error : nodeError,
-        at: n.last_materialization?.created_at ?? null,
-        failingSince: n.failing_since,
-        failures: n.consecutive_failures,
-        impact: consumers ? downstreamIds(n.id, consumers).size : null,
-        missingKeys: n.partitions ? n.partitions.missing : null,
-        keys,
-      }
+  const out: Failure[] = []
+  for (const root of roots) {
+    const n = byId.get(root.node)
+    if (root.kind !== 'failure' || !n) continue
+    const nodeError = n.last_materialization?.error ?? ''
+    const page = keyErrors?.get(n.id)
+    const keys = failedKeys(n, page)
+    const top = keys?.errors?.[0]
+    const sample = page?.keys[0]?.error ?? ''
+    out.push({
+      id: n.id,
+      name: n.name,
+      kind: n.kind,
+      // A node whose keys failed with no error of its own says how many, in the page's number format.
+      headline: top?.error ?? (keys && !nodeError ? `${keysLine({ ...keys, errors: null })} failed` : root.detail),
+      error: top ? sample || nodeError || top.error : nodeError,
+      group: root.error_group,
+      at: n.last_materialization?.created_at ?? null,
+      failingSince: n.failing_since,
+      failures: n.consecutive_failures,
+      held: root.nodes,
+      heldAssets: root.assets,
+      missingKeys: n.partitions ? n.partitions.missing : null,
+      keys,
     })
-    .sort((a, b) => (b.impact ?? -1) - (a.impact ?? -1) || (b.at ?? '').localeCompare(a.at ?? '') || a.name.localeCompare(b.name))
-}
-
-/** One cause: failures whose error differs at most in its numbers. */
-export interface FailureGroup {
-  /** The headline with its numbers normalised: what the failures share. */
-  cause: string
-  /** The first failure's headline as recorded: what the heading shows. */
-  headline: string
-  failures: Failure[]
-  /** The members' impacts added up; null when any is unknown. A node downstream of two counts twice. */
-  impact: number | null
-}
-
-/** `row count fell 64% day over day` and `… 12% …` are one cause. */
-export function causeOf(headline: string): string {
-  return headline.replace(/\d[\d,._]*\d|\d/g, '#')
-}
-
-/** `list` grouped by cause, the most impact first (unknown last), then the most failures. */
-export function failureGroups(list: readonly Failure[]): FailureGroup[] {
-  const groups = new Map<string, FailureGroup>()
-  for (const f of list) {
-    const cause = causeOf(f.headline)
-    const group = groups.get(cause) ?? { cause, headline: f.headline, failures: [], impact: 0 }
-    group.failures.push(f)
-    group.impact = group.impact === null || f.impact === null ? null : group.impact + f.impact
-    groups.set(cause, group)
-  }
-  return [...groups.values()].sort(
-    (a, b) => (b.impact ?? -1) - (a.impact ?? -1) || b.failures.length - a.failures.length || a.cause.localeCompare(b.cause),
-  )
-}
-
-/** A count for a table: `0` for none, `?` while it is not known. */
-export function impactLabel(impact: number | null): string {
-  return impact === null ? '?' : impact.toLocaleString()
-}
-
-/**
- * The failed nodes upstream of `id` (transitively, nearest first): why a stale or never-run
- * node has not been brought up to date. Only nodes with a loaded state can be judged.
- */
-export function failedUpstream(
-  id: string,
-  inputs: ReadonlyMap<string, readonly string[]>,
-  byId: ReadonlyMap<string, NodeState>,
-): string[] {
-  const out: string[] = []
-  const seen = new Set<string>([id])
-  let frontier = [...(inputs.get(id) ?? [])]
-  while (frontier.length) {
-    const next: string[] = []
-    for (const up of frontier) {
-      if (seen.has(up)) continue
-      seen.add(up)
-      const node = byId.get(up)
-      if (node && isFailed(memberHealth(node))) out.push(up)
-      next.push(...(inputs.get(up) ?? []))
-    }
-    frontier = next
   }
   return out
 }

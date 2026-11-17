@@ -65,22 +65,6 @@ export function dataSignalSets(states: readonly NodeState[], nowMs: number = Dat
 }
 
 /**
- * How much of `states`' data was measured: the server's `measured` flags and suspect signals,
- * added up for a scope. The same three numbers as `data_coverage` in `barca status --json`;
- * the rollup (issue 955) will carry them per scope and this sum goes.
- */
-export function dataCoverage(states: readonly NodeState[]): DataCoverage {
-  const out: DataCoverage = { assets: 0, measured: 0, suspect: 0 }
-  for (const s of states) {
-    if (s.kind !== 'asset') continue
-    out.assets += 1
-    if (s.measured === true) out.measured += 1
-    if (s.signals.some((x) => x.kind !== 'behind_input')) out.suspect += 1
-  }
-  return out
-}
-
-/**
  * `7 of 556 measured`, then `· 2 suspect`: always said with the count it is out of, so an
  * unmeasured asset reads as not measured, never as fine.
  */

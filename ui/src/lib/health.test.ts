@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { causeOf, emptyHealth, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, healthTone, scopeAge, ageCell, streakLabel, successOfLabel, relativeTraceback, pathBreaks } from './health'
+import { failedKeyNodes, keysLine, consumersOf, downstreamIds, failures, headline, healthLabel, healthParts, needsAttention, partCount, scopeAge, ageCell, streakLabel, successOfLabel, relativeTraceback, pathBreaks, type ScopeHealth } from './health'
+import { blockerOf } from './healthDisplay'
+import { counts, failureRoot } from './testdata/rollup'
 import type { NodeState, PartitionKeys } from './types'
-import { served } from './testdata/served'
+import { blockedBy, served } from './testdata/served'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
   return served({
@@ -18,62 +20,49 @@ const failedAt = (at: string, error: string) => ({
 // raw → clean → (report, check); orphan fails alone.
 const nodes = [
   node('p.py:raw', [], failedAt('2026-10-29 11:00:00', "KeyError: 'currency'\n  File \"p.py\", line 3")),
-  node('p.py:clean', ['p.py:raw'], { cache: { state: 'stale', reason: 'upstream_stale', detail: '' }, health: 'blocked' }),
+  node('p.py:clean', ['p.py:raw'], { cache: { state: 'stale', reason: 'upstream_stale', detail: '' }, ...blockedBy('p.py:raw') }),
   node('p.py:report', ['p.py:clean']),
   node('p.py:check', ['p.py:clean'], { kind: 'task' }),
   node('p.py:orphan', [], failedAt('2026-10-29 12:00:00', 'ZeroDivisionError: division by zero')),
 ]
 const byId = new Map(nodes.map((n) => [n.id, n]))
 const consumers = consumersOf(nodes)
+// The roots `GET /state/rollup` serves for them: `raw` holds itself and `clean`.
+const roots = [failureRoot('p.py:raw', "KeyError: 'currency'", 2), failureRoot('p.py:orphan', 'ZeroDivisionError: division by zero')]
 
 describe('health', () => {
-  it('counts a scope by health, each node once: a failure first, then run work, then the rest by severity', () => {
-    const ids = nodes.map((n) => n.id)
-    const counts = healthCounts(ids, byId)
-    // `raw` and `orphan` failed; the server says `clean` (stale, below `raw`) is blocked.
-    expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, failing: 2, blocked: 1, ok: 2 } })
-    expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ ok: 1 }) })
-    expect(healthLabel(counts)).toBe('2 failing · 1 blocked · 2 ok')
-    expect(healthParts(counts, 2)).toEqual([
+  it('words a rollup entry: a failure first, then run work, then the rest by severity', () => {
+    // The scope's entry, as served: 5 nodes, of which a run is working on one.
+    const scope: ScopeHealth = { health: counts({ failing: 2, blocked: 1, ok: 2 }), nodes: 5, running: 1 }
+    expect(healthLabel(scope)).toBe('2 failing · 1 running · 1 blocked · 2 ok')
+    expect(healthParts(scope, 2)).toEqual([
       { key: 'failing', tone: 'failed', glyph: 'failed', count: 2, word: 'failing', text: '2 failing' },
-      { key: 'blocked', tone: 'warning', glyph: 'blocked', count: 1, word: 'blocked', text: '1 blocked' },
+      { key: 'running', tone: 'running', glyph: 'running', count: 1, word: 'running', text: '1 running' },
     ])
-    expect(healthLabel(counts, 1)).toBe('2 failing')
-    expect(healthTone(counts)).toBe('failed')
-    expect(healthTone(emptyHealth())).toBe('neutral')
-    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 ok')
-    // A whole-project health map, when the page has one, decides instead.
-    expect(healthLabel(healthCounts(['p.py:report'], byId, {}, new Map([['p.py:report', 'blocked']])))).toBe('1 blocked')
+    expect(healthLabel(scope, 1)).toBe('2 failing')
+    expect(partCount(scope, 'blocked')).toBe(1)
+    expect(needsAttention(scope)).toBe(1)
+    expect(healthLabel({ health: counts(), nodes: 0, running: 0 })).toBe('')
+    expect(healthLabel({ health: counts({ suspect: 1, never_run: 2 }), nodes: 3, running: 0 })).toBe('1 suspect data · 2 never run')
   })
 
-  it('lists failures by downstream impact, with their headline', () => {
-    const list = failures(nodes, consumers)
-    expect(list.map((f) => [f.name, f.impact, f.headline])).toEqual([
-      ['raw', 3, "KeyError: 'currency'"],
-      ['orphan', 0, 'ZeroDivisionError: division by zero'],
+  it('lists the failure roots as served, each with its row and how many nodes it holds', () => {
+    const list = failures(roots, byId)
+    expect(list.map((f) => [f.name, f.held, f.heldAssets, f.headline, f.group])).toEqual([
+      ['raw', 2, 2, "KeyError: 'currency'", "KeyError: 'currency'"],
+      ['orphan', 1, 1, 'ZeroDivisionError: division by zero', 'ZeroDivisionError: division by zero'],
     ])
+    expect(list[0]).toMatchObject({ at: '2026-10-29 11:00:00', error: "KeyError: 'currency'\n  File \"p.py\", line 3" })
+    // A root whose row has not loaded is left out until it has.
+    expect(failures([failureRoot('p.py:gone', 'x'), ...roots], byId).map((f) => f.name)).toEqual(['raw', 'orphan'])
   })
 
-  it('finds what blocks a node, nearest first', () => {
-    const inputs = new Map(nodes.map((n) => [n.id, n.inputs]))
-    expect(failedUpstream('p.py:report', inputs, byId)).toEqual(['p.py:raw'])
-    expect(failedUpstream('p.py:orphan', inputs, byId)).toEqual([])
+  it('says which failing node blocks a row from the row itself', () => {
+    expect(blockerOf(byId.get('p.py:clean')!)).toBe('p.py:raw')
+    // A failing node's root is itself: it is failing, not blocked.
+    expect(blockerOf(byId.get('p.py:raw')!)).toBeNull()
+    expect(blockerOf(byId.get('p.py:report')!)).toBeNull()
     expect([...downstreamIds('p.py:raw', consumers)].sort()).toEqual(['p.py:check', 'p.py:clean', 'p.py:report'])
-  })
-
-  it('does not call an unloaded graph zero', () => {
-    expect(failures(nodes, null).every((f) => f.impact === null)).toBe(true)
-    expect(impactLabel(null)).toBe('?')
-    expect(impactLabel(0)).toBe('0')
-  })
-
-  it('groups failures by cause, numbers normalised, most impact first', () => {
-    const f = (headline: string, impact: number | null) => ({ headline, impact }) as Failure
-    const groups = failureGroups([f('fell 64%', 2), f('fell 1,200%', 3), f('other', 9), f('later', null)])
-    expect(groups.map((g) => [g.cause, g.failures.length, g.impact])).toEqual([['other', 1, 9], ['fell #%', 2, 5], ['later', 1, null]])
-    // The heading shows what its first member says, not the masked cause.
-    expect(groups.map((g) => g.headline)).toEqual(['other', 'fell 64%', 'later'])
-    expect(causeOf('v1.2 failed 3 times')).toBe('v# failed # times')
   })
 
   it('says something for an empty error', () => {
@@ -162,27 +151,31 @@ describe('partitioned failures', () => {
       ...over,
     })
   const loaded = new Map([['p.py:forecast', page]])
+  // Its root as served: the node's own error line, or how many keys failed when it has none.
+  const keysRoot = { ...failureRoot('p.py:forecast', '7 of 3077 keys failed'), error_group: null }
+  const errorRoot = (detail: string) => failureRoot('p.py:forecast', detail)
+  const one = (n: NodeState) => new Map([[n.id, n]])
 
   it('counts the failed keys until their errors are loaded, then heads with the most common', () => {
-    const [before] = failures([forecast()], consumers)
+    const [before] = failures([keysRoot], new Map([['p.py:forecast', forecast()]]))
     expect(before).toMatchObject({ headline: '7 of 3,077 keys failed', error: '', keys: { failed: 7, total: 3077, errors: null, runId: null } })
     expect(keysLine(before!.keys!)).toBe('7 of 3,077 keys')
-    const [after] = failures([forecast()], consumers, loaded)
+    const [after] = failures([keysRoot], new Map([['p.py:forecast', forecast()]]), loaded)
     expect(after).toMatchObject({ headline: KEY_ERROR, error: SAMPLE, keys: { failed: 7, total: 3077, errors: page.errors, runId: 'd9becbdf4a92' } })
     expect(keysLine(after!.keys!)).toBe('7 of 3,077 keys · +1 more error')
   })
 
   it('a key error outranks the node-level one, which is one key\'s', () => {
     const withError = forecast(failedAt('2026-10-31 15:30:12', 'BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14'))
-    expect(failures([withError], consumers)[0]!.headline).toBe('BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14')
-    expect(failures([withError], consumers, loaded)[0]!.headline).toBe(KEY_ERROR)
-    expect(failureGroups(failures([withError], consumers, loaded))[0]!.headline).toBe(KEY_ERROR)
+    const root = errorRoot('BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14')
+    expect(failures([root], one(withError))[0]!.headline).toBe('BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14')
+    expect(failures([root], one(withError), loaded)[0]!.headline).toBe(KEY_ERROR)
   })
 
   it('leaves a node whose keys did not fail alone', () => {
     // Failed as a whole, with 7 keys stale rather than failed: its own error, and no key errors to load.
     const whole = forecast({ ...failedAt('2026-10-31 15:30:12', 'ImportError: no module named prophet'), partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [] } })
-    expect(failures([whole], consumers)[0]).toMatchObject({ headline: 'ImportError: no module named prophet', keys: null, missingKeys: 7 })
+    expect(failures([errorRoot('ImportError: no module named prophet')], one(whole))[0]).toMatchObject({ headline: 'ImportError: no module named prophet', keys: null, missingKeys: 7 })
     expect(failedKeyNodes([forecast(), whole, ...nodes])).toEqual(['p.py:forecast'])
   })
 })

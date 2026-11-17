@@ -71,6 +71,10 @@ pub struct NodeStatus {
     /// any key's); `null` for a task or sensor. `false` is "not measured", not ok.
     #[serde(default)]
     pub measured: Option<bool>,
+    /// The upstream fact that explains why it is not fresh: today only a failure (`kind`
+    /// `failure`), on the failing node itself and on each node it blocks; `null` otherwise.
+    #[serde(default)]
+    pub root: Option<crate::health::Root>,
     /// Per-key cache state of a partitioned node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionState>,
@@ -874,6 +878,7 @@ pub(crate) async fn status_from_dag_with_membership(
             health_reason: Default::default(),
             signals: Vec::new(),
             measured: None,
+            root: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
@@ -1204,6 +1209,7 @@ mod tests {
             health_reason: Default::default(),
             signals: Vec::new(),
             measured: None,
+            root: None,
             partitions: None,
             last_materialization: None,
             last_bytes_change: None,

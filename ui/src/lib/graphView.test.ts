@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitTarget, fitViewport, fitsReadably, MIN_FIT_ZOOM, MIN_LABEL_PX, neighborInDirection, revealViewport, SMALLEST_LABEL_PX, waitsOn, type ViewNode } from './graphView'
+import { fitTarget, fitViewport, fitsReadably, MIN_FIT_ZOOM, MIN_LABEL_PX, neighborInDirection, revealViewport, SMALLEST_LABEL_PX, type ViewNode } from './graphView'
 
 const INSET = { top: 32, right: 32, bottom: 64, left: 56 }
 const node = (id: string, x: number, y: number, failed = false, inert = false): ViewNode =>
@@ -106,30 +106,5 @@ describe('neighborInDirection', () => {
   it('starts at the first failed node, else the upstream-most one', () => {
     expect(neighborInDirection(nodes, null, 'ArrowRight')).toBe('b')
     expect(neighborInDirection([node('a', 0, 0), node('b', 304, 0)], null, 'ArrowDown')).toBe('a')
-  })
-})
-
-describe('waitsOn', () => {
-  const name = (id: string) => id.split(':').pop()!
-  it('names the failed input of a never-run consumer, as a hint beside its state', () => {
-    const out = waitsOn([['p:publish', 'p:validate']], new Map([['p:publish', 'failed'], ['p:validate', 'waiting']]), name)
-    expect(out.get('p:validate')).toEqual({ by: 'p:publish', hint: 'Blocked: waits on publish, whose last attempt failed.' })
-  })
-  it('follows a chain of never-run nodes to the failure behind them', () => {
-    const out = waitsOn(
-      [['a', 'b'], ['b', 'c'], ['x', 'c']],
-      new Map([['a', 'failed'], ['b', 'waiting'], ['c', 'waiting'], ['x', 'other']]),
-      name,
-    )
-    expect(out.get('c')?.hint).toBe('Blocked: waits on a, whose last attempt failed.')
-    expect(out.size).toBe(2)
-  })
-  it('leaves nodes in other states, and unexplained never-run ones, alone', () => {
-    const out = waitsOn(
-      [['a', 'b'], ['a', 'c'], ['d', 'e']],
-      new Map([['a', 'failed'], ['b', 'other'], ['c', 'other'], ['d', 'other'], ['e', 'waiting']]),
-      name,
-    )
-    expect(out.size).toBe(0)
   })
 })

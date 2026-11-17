@@ -211,6 +211,49 @@ impl DataSignal {
     }
 }
 
+/// What kind of upstream fact a [`Root`] is.
+///
+/// SEAM (#963): only `failure` is derived today. The change, schedule and queue kinds of
+/// `specs/behavior/health.md` ("Root") are added here, and [`classify`] names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum RootKind {
+    /// A failing node: the node itself, or the nearest failing node upstream ([`blocked_by`]).
+    Failure,
+}
+
+impl RootKind {
+    /// The value as JSON spells it, and the prefix of a root's id.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RootKind::Failure => "failure",
+        }
+    }
+}
+
+/// The upstream fact that explains why a node is not fresh: `<kind>:<node id>`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Root {
+    /// `<kind>:<node id>`, e.g. `failure:pipeline.py:orders`.
+    pub id: String,
+    pub kind: RootKind,
+    /// The node the fact is about: for a failure, the failing node.
+    pub node: String,
+}
+
+impl Root {
+    /// The failure root of `node`: what a failing node and every node it blocks carry.
+    pub fn failure(node: &str) -> Self {
+        Root {
+            id: format!("{}:{node}", RootKind::Failure.as_str()),
+            kind: RootKind::Failure,
+            node: node.to_string(),
+        }
+    }
+}
+
 /// How much of a scope's data was measured: `7 of 556 measured`. An unmeasured asset raised no
 /// signal because nothing was counted, so it is "not measured", never implied ok.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -478,7 +521,7 @@ pub fn decide(
     }
 }
 
-/// Fill `health`, `health_reason`, `signals` and `measured` on every row of `nodes` (one
+/// Fill `health`, `health_reason`, `signals`, `measured` and `root` on every row of `nodes` (one
 /// status result: a scope with its upstream cone, in dependency order).
 pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
     let assets: HashSet<&str> = nodes
@@ -491,20 +534,27 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
         .iter()
         .map(|node| {
             let signals = signals(node, evidence.ages, |id| assets.contains(id));
+            let by = blocked.remove(&node.id);
             let (health, reason) = decide(
                 node,
-                blocked.remove(&node.id).is_some(),
+                by.is_some(),
                 &signals,
                 evidence.late.contains(&node.id),
             );
-            (health, reason, signals, measured(node, evidence.ages))
+            // SEAM (#963): the root of every other cause is named here.
+            let root = match health {
+                Health::Failing => Some(Root::failure(&node.id)),
+                _ => by.as_deref().map(Root::failure),
+            };
+            (health, reason, signals, measured(node, evidence.ages), root)
         })
         .collect();
-    for (node, (health, reason, signals, measured)) in nodes.iter_mut().zip(decided) {
+    for (node, (health, reason, signals, measured, root)) in nodes.iter_mut().zip(decided) {
         node.health = health;
         node.health_reason = reason;
         node.signals = signals;
         node.measured = measured;
+        node.root = root;
     }
 }
 

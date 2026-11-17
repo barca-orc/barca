@@ -5,6 +5,7 @@
    apiBase.ts); in dev, Vite proxies non-/ui paths to barca serve.
    ============================================================ */
 
+import type { Rollup } from './generated/Rollup'
 import { connectionToken, redactCredential, serverFetch } from './credentials'
 import type { Pins } from './pins'
 import type { PauseRequest, Pauses } from './pauses'
@@ -130,6 +131,14 @@ export const api = {
       scope === null
         ? '/state'
         : `/state?${new URLSearchParams('group' in scope ? { targets: scope.group } : { files: scope.file })}`,
+      { signal },
+    ),
+  /** `GET /state/rollup`: the rows of `GET /state` summed into one tree, for the same scope. */
+  rollup: (scope: StateScope | null, signal?: AbortSignal) =>
+    request<Rollup>(
+      scope === null
+        ? '/state/rollup'
+        : `/state/rollup?${new URLSearchParams('group' in scope ? { targets: scope.group } : { files: scope.file })}`,
       { signal },
     ),
   runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),

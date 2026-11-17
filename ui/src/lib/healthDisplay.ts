@@ -50,17 +50,6 @@ export function healthDisplay(health: Health): HealthDisplay {
   return DISPLAY[health]
 }
 
-export function healthRank(health: Health): number {
-  return HEALTH_ORDER.indexOf(health)
-}
-
-/** The most severe of `healths`; `ok` for none. */
-export function worstHealth(healths: Iterable<Health>): Health {
-  let worst: Health = 'ok'
-  for (const h of healths) if (healthRank(h) < healthRank(worst)) worst = h
-  return worst
-}
-
 export function isUnhealthy(health: Health): boolean {
   return UNHEALTHY.includes(health)
 }
@@ -84,14 +73,10 @@ export function healthFamily(health: Health): HealthFamily {
 }
 
 /**
- * How much a node's health weighs: for a partitioned node, the keys it concerns (failed keys
- * for a failure, keys without a result otherwise); 1 for any other unhealthy node; 0 when
- * healthy. What a health map sizes by, so a node with 1,205 failed keys outweighs a stale one.
+ * The failing node that keeps `node` from being brought up to date, as the server names it: the
+ * `root` of a `blocked` row. Null when it is not blocked by a failing node (a failing node's
+ * root is itself). `barca-core` walks the graph (`health::blocked_by`); nothing here does.
  */
-export function healthWeight(node: NodeState, health: Health): number {
-  if (!isUnhealthy(health)) return 0
-  const p = node.partitions
-  if (!p) return 1
-  if (health === 'failing') return Math.max(1, p.failed ?? 0)
-  return Math.max(1, p.missing)
+export function blockerOf(node: Pick<NodeState, 'health' | 'root'>): string | null {
+  return node.health === 'blocked' && node.root ? node.root.node : null
 }

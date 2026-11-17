@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { served } from './helpers/served'
 
 const assets = [
   { id: 'forecast.py:rows', kind: 'asset', inputs: [], freshness: 'always', env: [] },
@@ -10,11 +11,30 @@ const groups = [{
   id: 'group:forecast.py:training', name: 'Forecast training', description: '',
   members: ['forecast.py:rows', 'forecast.py:model'], output: 'forecast.py:model',
 }]
-const states = assets.map(asset => ({
+const states = assets.map(asset => served({
   ...asset, name: asset.id.split(':')[1], partitioned: false, shape: null,
   durations: null, next_run: null, running: null, last_materialization: null,
   cache: { state: 'cached', reason: 'materialized', detail: 'Cached result' },
 }))
+
+// `GET /state/rollup?files=forecast.py` for these rows, as the server sums them: the group's two
+// assets, and the file of the one in no group.
+const ok = (n: number) => ({ failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: n })
+const entry = (id: string, kind: string, label: string, parent: string | null, children: string[], n: number) =>
+  ({ id, kind, label, parent, children, nodes: n, assets: n, running: 0, health: ok(n), asset_health: ok(n), data_coverage: { assets: n, measured: 0, suspect: 0 } })
+const rollup = {
+  as_of: '2026-11-17T14:57:00Z',
+  entries: [
+    entry('root', 'root', 'all', null, ['group:forecast.py:training', 'file:forecast.py'], 3),
+    entry('group:forecast.py:training', 'group', 'Forecast training', 'root', ['forecast.py:model', 'forecast.py:rows'], 2),
+    entry('forecast.py:model', 'node', 'model', 'group:forecast.py:training', [], 1),
+    entry('forecast.py:rows', 'node', 'rows', 'group:forecast.py:training', [], 1),
+    entry('file:forecast.py', 'file', 'forecast.py', 'root', ['forecast.py:other'], 1),
+    entry('forecast.py:other', 'node', 'other', 'file:forecast.py', [], 1),
+  ],
+  roots: [],
+  data_coverage: { assets: 3, measured: 0, suspect: 0 },
+}
 
 test('an empty pipeline selection renders an empty result; only the sidebar asks for the whole project', async ({ page }) => {
   const requests: string[] = []
@@ -79,6 +99,7 @@ for (const view of ['list', 'graph']) {
     const requests: URL[] = []
     await page.route('**/assets', route => route.fulfill({ json: assets }))
     await page.route('**/groups', route => route.fulfill({ json: groups }))
+    await page.route(/\/state\/rollup(?:\?.*)?$/, route => route.fulfill({ json: rollup }))
     await page.route(/\/state(?:\?.*)?$/, async route => {
       const url = new URL(route.request().url())
       requests.push(url)

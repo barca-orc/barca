@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { blockedBy, served } from './helpers/served'
 
 // The planning fixture of the 0.38 UX review: 3,077 accounts, 7 keys failing, a failing
 // publish step, and a validation that cannot run because of it.
@@ -16,13 +17,15 @@ const states = assets.map((a) => {
   const partitioned = ['demand_forecast', 'promo_plan', 'replenishment'].includes(name)
   const failed = name === 'demand_forecast'
   const never = name === 'validate_publication'
-  return {
+  return served({
     ...a, name, partitioned,
     cache: { state: never ? 'never_run' : failed ? 'partial' : 'cached', reason: 'materialized', detail: 'fixture' },
     partitions: partitioned ? { total: 3077, cached: failed ? 3070 : 3077, missing: failed ? 7 : 0, missing_keys: [], failed: failed ? 7 : 0, failed_keys: [], changed: {} } : null,
     last_materialization: never ? null : materialization(failed || name === 'publish_plan' ? 'failed' : 'success', name === 'publish_plan' ? 'warehouse refused the plan' : null),
     shape: null, durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null,
-  }
+    // The server's answer: the validation is blocked by the failing publish step above it.
+    ...(never ? blockedBy(id('publish_plan')) : {}),
+  })
 })
 
 const node = (name: string) => `.react-flow__node[data-id="${id(name)}"]`

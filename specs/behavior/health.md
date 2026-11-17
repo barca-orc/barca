@@ -7,10 +7,14 @@ Specification version: 1. Status: approved intent, implemented in part. The 0.44
 value, route, flag or table named here exists only once the issue that owns it has landed.
 Implemented: "Health from existing state" (#954); of "Node fields and where they appear",
 `health`, `health_reason`, `signals`, `measured` and `data_coverage` (#957), experimental in
-the CLI contract; and the tick record ("What a tick records", #960), as the `schedule_ticks`
-table and its two reads, which nothing reads yet. Everything else below is intent: `cause`,
-`root`, `refresh_path`, the times, `gap_seconds`, `as_of`, the rollup, the new tables and the
-query route do not exist yet, and the `checked_up_to_date` reason is not among the values served.
+the CLI contract; the tick record ("What a tick records", #960), as the `schedule_ticks`
+table and its two reads, which nothing reads yet; and the rollup ("Rollup", #955): `GET
+/state/rollup` and `barca status --rollup`, with the counts in both units, `keys`, and of
+`root` and the root list the `failure` kind only, as that section's "As implemented" states.
+Everything else below is intent: `cause`, every root kind but `failure`, `refresh_path`, the
+times, `gap_seconds`, the cause and gap fields of a rollup entry and of a root, `as_of` and
+`rollup` in `barca status --json`, the new tables and the query route do not exist yet, and
+the `checked_up_to_date` reason is not among the values served.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
 health word, its cause bucket and root, its refresh path, when it is expected fresh or
 rechecked, the freshness gap, the rollup tree, what a tick records, the `barca.schedules`,
@@ -331,6 +335,44 @@ targets) and never collides with `GET /health`, which is liveness.
 - A node entry adds `keys` for a partitioned node: `{"failed", "behind", "ok"}`.
 - `roots` is the root list above, scoped to the nodes in the response.
 
+As implemented (#955), in `crates/barca-core/src/rollup.rs` (`build`), which the route, the
+CLI and the web UI all read:
+
+- Served on an entry: `id`, `kind`, `label`, `parent` (`null` on the root), `children`,
+  `nodes`, `assets`, `running`, `health`, `asset_health`, and `keys` on a partitioned node.
+  An entry also carries `data_coverage` (`{"assets", "measured", "suspect"}` for the assets
+  underneath), which this section did not name: it is what lets a surface state the coverage
+  of a group without adding it up, and it sums like every other count. Absent, not `null`,
+  until their issues land: `causes`, `asset_causes`, `gap_seconds`, `unbounded`, `fresh_by`
+  (#961 to #963).
+- A group entry's id is the group's own id, which already reads `group:<file>:<name>`
+  (`GET /groups`); it is not prefixed again. A file entry holds the nodes of that file that
+  are in no group, so a file whose nodes are all grouped has no entry. A group with no node
+  in scope is not listed. A group that is a member of several groups is placed like a node:
+  under the first by group id, and never under a group it contains.
+- `entries` lists the root first, then depth first in `children` order. A node's `label` is
+  its declared name; the root's is `all`.
+- `children` order is worst health first (the most severe health with a node underneath),
+  then most assets, then label, then id.
+- `running` counts the nodes a run is working on (`running` of `GET /state`). `barca status
+  --rollup` on a machine without a server tracks no run and answers 0.
+- `root` on a node (`NodeStatus.root`) and `roots` hold the `failure` kind only: a `failing`
+  node's root is itself, and a node `blocked` by a failing node (`blocked_by`) has that node.
+  Every other node, a `cache_blocked` one included, has `root: null` and is under no root, so
+  INV-HEALTH-04 holds for failures only. A root carries `id`, `kind`, `node`, `detail` (the
+  error headline as recorded: its first line, or the last line of a bare traceback; `N of M
+  keys failed` for a node whose keys failed with no error of its own), `error_group` (`null`
+  when no error was recorded), `nodes` and `assets`. Absent until #961 to #963: `causes`,
+  `gap_seconds`, `unbounded`, `action`. Roots are ranked by `nodes`, then `id`.
+- The scope is that of `GET /state`: targets stand for their upstream cones, so the rollup of
+  one group or file also counts what it reads from outside it.
+- The server sums the status result `GET /state` is built from (no status is computed for the
+  rollup) and classifies per answer. Its `as_of` is the start of the current minute, the
+  instant lateness is read at, so an unchanged poll within a minute answers `304`; the CLI's
+  is the instant of the command.
+- `barca status --json` does not carry `as_of` or `rollup` yet ("Node fields and where they
+  appear"); the rollup is its own document.
+
 ### What a tick records (#960)
 
 Implemented. One bounded table in the metadata database, `schedule_ticks`
@@ -487,7 +529,7 @@ do not pass yet.
 | Scenario | Issue |
 | --- | --- |
 | The twelve health rows, `blocked_by` through `unknown` nodes and past pins, as Rust tests ported from the TypeScript ones | #954 |
-| The map, the bars and `barca status --rollup` print the same counts from one response; asset and node units both present | #955 |
+| The map, the bars and `barca status --rollup` print the same counts from one response; asset and node units both present | #955: [rollup rules](../../crates/barca-core/src/rollup.rs) (INV-HEALTH-03 on every fixture, one parent per node, both units, the failure roots), [the route against `GET /state`](../../crates/barca-server/tests/openapi.rs), [no second status computation](../../crates/barca-server/src/read_cache.rs), [the CLI contract snapshot](../../python/tests/snapshots/cli_contract/status_rollup.txt), [the map's layout over the response](../../ui/src/lib/rollupView.test.ts), [the bar, the map and a group row against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
 | A project with 7 of 556 assets counted reads "7 of 556 measured" in status JSON and the UI | #957 |
 | A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late (passes: `a_queued_tick_reads_the_same_on_every_surface`) | #958 |
 | Re-adding a derived word in TypeScript fails CI | #959 |
@@ -501,8 +543,9 @@ do not pass yet.
 | One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973 |
 
 Sources the rules are ported from, until each is deleted by its issue (node health and the
-data signals are deleted: their rules are `crates/barca-core/src/health.rs`):
-[health tree](../../ui/src/lib/healthTree.ts), [causes](../../ui/src/lib/causes.ts),
+data signals are deleted: their rules are `crates/barca-core/src/health.rs`; the health tree,
+the causes list's grouping and the failures list's impact are deleted: their rules are
+`crates/barca-core/src/rollup.rs`):
 [tick targets](../../crates/barca-core/src/freshness.rs),
 [status](../../crates/barca-core/src/status.rs), [tables](../../crates/barca-core/src/sql/tables.rs).
 
@@ -513,9 +556,14 @@ data signals are deleted: their rules are `crates/barca-core/src/health.rs`):
   that is this machine's clock and time zone against the last tick the metadata database
   holds, so a schedule no scheduler is firing reads `behind`, `schedule_late`. #958 replaces
   it with the one definition.
-- The web UI still attributes each blocked node to its failing node, and sums health counts
-  and data coverage per scope, in TypeScript, from the served `health` and `measured`. `root`
-  (#963) and the rollup (#955) replace both.
+- The web UI no longer attributes a blocked node to its failing node or sums health counts and
+  data coverage: it reads `root` and the rollup. What it still derives: a group row's "Last
+  success" (its oldest member's, and how many members are failing, from the rows of
+  `GET /state`), which `stale_since` and the times (#962) replace; a file's one state in the
+  sidebar and the asset list's filter counts, which read rows, not the rollup; and a node
+  panel's count of nodes downstream, a graph walk for navigation. A node declared in several
+  groups is listed in each of them by the UI but counted in one by the rollup, so such a
+  group's row lists more members than its bar counts.
 
 - Which nodes a tick reaches when a polled sensor changes below-`Always` assets (#952) is
   unresolved; this document takes the walk's answer and adds no rule of its own.
@@ -524,8 +572,9 @@ data signals are deleted: their rules are `crates/barca-core/src/health.rs`):
 - Assets paused with `barca pause` and pinned assets keep the health their cache state gives;
   whether a paused asset is `no_refresh_path` with its own root kind is left to #961.
 - The estimate ignores worker contention and heavy-step capacity; its error is unmeasured.
-- A node declared in several groups is placed by group id; if groups may overlap by design,
-  #955 confirms or replaces that rule here.
+- A node declared in several groups is placed by group id (#955 keeps the rule: it is the one
+  that keeps every level an exact sum). Whether overlapping groups should instead be refused
+  at parse time is open.
 - The numbers fixed here (20 ticks for typical values, 1,000 ticks and 14 days of retention, a
   5-second query, 1,000 and 10,000 rows) are defaults chosen without measurement; an issue that
   measures otherwise revises this document in its PR.

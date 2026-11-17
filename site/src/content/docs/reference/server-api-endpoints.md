@@ -56,6 +56,7 @@ client prints it as it would print the local command's.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/state` | Every node: its `barca status` entry plus typical durations, next run and the run working on it now. |
+| `GET`  | `/state/rollup` | Experimental: the rows of `/state` summed into one tree (root, groups, files, nodes), each level the exact sum of its children, in nodes and in assets, with the failing nodes and what each holds. What `barca status --rollup --json` prints and the web UI's health map, bars and failures list render. Same scope as `/state` (`?targets=`, `?files=`). |
 | `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
 | `GET`  | `/assets` | Every node as `barca list --json` shows it. |

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { counts } from './testdata/rollup'
 import { graphState, memberHealth } from './graphState'
 import { groupHealth } from './groups'
 import { pipelineSummaries } from './pipeline'
@@ -133,14 +134,13 @@ describe('running state from /state', () => {
     const byId = new Map(nodes.map((n) => [n.id, n]))
     expect(runningCount(['p.py:a', 'p.py:b', 'q.py:c'], byId)).toBe(1)
     // A failure inside a running group leads: running is shown beside it, never instead (#925).
-    const group = groupHealth(['p.py:a', 'p.py:b'], byId)
+    const group = groupHealth({ health: counts({ failing: 1, ok: 1 }), nodes: 2, running: 1 })
     expect(group).toMatchObject({ kind: 'group', tone: 'failed', label: '1 failing' })
-    expect(group.kind === 'group' && group.parts?.map((p) => p.text)).toEqual(['1 failing', '1 running'])
+    expect(group.kind === 'group' && group.parts?.map((p) => p.text)).toEqual(['1 failing', '1 running', '1 ok'])
     // A group with run work and nothing failed pulses as a run.
-    expect(groupHealth(['p.py:a'], byId)).toMatchObject({ kind: 'run', tone: 'running', label: '1 running' })
+    expect(groupHealth({ health: counts({ ok: 1 }), nodes: 1, running: 1 })).toMatchObject({ kind: 'run', tone: 'running', label: '1 running' })
     // Once the run ends, the failed last attempt is the one fact left.
-    byId.set('p.py:a', node('p.py:a'))
-    expect(groupHealth(['p.py:a', 'p.py:b'], byId)).toMatchObject({ tone: 'failed', label: '1 failing' })
+    expect(groupHealth({ health: counts({ failing: 1, ok: 1 }), nodes: 2, running: 0 })).toMatchObject({ tone: 'failed', label: '1 failing' })
   })
 
   it('polls /state every 2s while anything runs, every 10s otherwise', () => {

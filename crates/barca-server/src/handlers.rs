@@ -130,6 +130,12 @@ pub async fn state(
     Query(query): Query<StateQuery>,
 ) -> Result<Json<Vec<NodeState>>, ApiError> {
     state.reads.polled();
+    let targets = scope_targets(&state, &query).await?;
+    Ok(Json(state_rows_for_targets(&state, &targets).await?))
+}
+
+/// The targets a `GET /state` or `GET /state/rollup` query names, sorted: empty for every node.
+async fn scope_targets(state: &AppState, query: &StateQuery) -> Result<Vec<String>, ApiError> {
     let split = |list: &Option<String>| -> Vec<String> {
         list.iter()
             .flat_map(|s| s.split(','))
@@ -148,7 +154,41 @@ pub async fn state(
     };
     targets.sort();
     targets.dedup();
-    Ok(Json(state_rows_for_targets(&state, &targets).await?))
+    Ok(targets)
+}
+
+/// `GET /state/rollup` — the rows of `GET /state` summed into one tree (root, group, file,
+/// node), each level the exact sum of its children, in nodes and in assets
+/// ([`barca_core::rollup`]). It takes the scope of `GET /state` and sums the status result
+/// that route's rows are built from ([`crate::read_cache`]): no status is computed for it
+/// alone. Health is classified per answer, on the server's clock, exactly as `GET /state`
+/// classifies it, so a node's health is the same word in both. `as_of` is the start of the
+/// current minute (a schedule's lateness moves by the minute), so an unchanged poll within a
+/// minute is a `304`.
+pub async fn rollup(
+    State(state): State<AppState>,
+    Query(query): Query<StateQuery>,
+) -> Result<Json<barca_core::rollup::Rollup>, ApiError> {
+    state.reads.polled();
+    let targets = scope_targets(&state, &query).await?;
+    let dag = state.inspect_dag().await?;
+    let db_state = state.db_state();
+    let snapshot = snapshot_db(&state).await?;
+    let status = status_for_targets(&state, &dag, &db_state, &snapshot, &targets).await?;
+    let mut result = (*status).clone();
+    let now = chrono::Utc::now();
+    let as_of = chrono::DateTime::from_timestamp(now.timestamp() / 60 * 60, 0).unwrap_or(now);
+    attach_health_at(&state, &mut result, &dag, &db_state, &snapshot.path, as_of).await?;
+    let runs = crate::running::in_flight(&state, Some(&snapshot.path)).await;
+    let running = crate::running::by_node(&runs, &result.nodes, &dag)
+        .into_keys()
+        .collect();
+    Ok(Json(barca_core::rollup::build(
+        &result.nodes,
+        &dag.groups,
+        &running,
+        as_of,
+    )))
 }
 
 /// `targets` with each group id replaced by the nodes in it (nested groups included), and
@@ -635,9 +675,21 @@ pub(crate) async fn attach_health(
     db_state: &crate::read_cache::Stamp,
     db_path: &str,
 ) -> Result<(), ApiError> {
+    attach_health_at(state, result, dag, db_state, db_path, chrono::Utc::now()).await
+}
+
+/// [`attach_health`] as of `now`.
+pub(crate) async fn attach_health_at(
+    state: &AppState,
+    result: &mut barca_core::status::StatusResult,
+    dag: &barca_core::dag::Dag,
+    db_state: &crate::read_cache::Stamp,
+    db_path: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), ApiError> {
     let ages = state.cached_ages(db_state, db_path).await?;
     let pinned = state.cached_pinned(db_state, db_path).await?;
-    let late = late_of(&live_schedules(state, dag, db_state, db_path, chrono::Utc::now()).await?);
+    let late = late_of(&live_schedules(state, dag, db_state, db_path, now).await?);
     barca_core::health::attach(
         result,
         barca_core::health::Evidence {

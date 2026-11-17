@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { coverageLine, dataCoverage, dataSignalSets, signalLine } from './dataSignals'
+import { coverageLine, dataSignalSets, signalLine } from './dataSignals'
 import { served } from './testdata/served'
 import type { NodeState } from './types'
 
@@ -24,15 +24,9 @@ const row = (id: string, over: Partial<NodeState> = {}): NodeState =>
   })
 
 describe('data coverage', () => {
-  it('says how many assets were measured, and never calls an unmeasured one fine', () => {
-    const states = [
-      row('p.py:a', { measured: true }),
-      row('p.py:b', { measured: true, signals: [{ kind: 'empty', empty_keys: 1, keys: 1, previous_empty_keys: 0 }] }),
-      row('p.py:c'),
-      row('p.py:t', { kind: 'task' }),
-    ]
-    expect(dataCoverage(states)).toEqual({ assets: 3, measured: 2, suspect: 1 })
-    expect(coverageLine(dataCoverage(states))).toBe('2 of 3 measured · 1 suspect')
+  it('says a scope\'s coverage as served, and never calls an unmeasured asset fine', () => {
+    // `data_coverage` of a rollup entry: the server counts it, the page words it.
+    expect(coverageLine({ assets: 3, measured: 2, suspect: 1 })).toBe('2 of 3 measured · 1 suspect')
     expect(coverageLine({ assets: 556, measured: 7, suspect: 0 })).toBe('7 of 556 measured')
     expect(coverageLine({ assets: 3, measured: 0, suspect: 0 })).toBe('0 of 3 measured')
   })

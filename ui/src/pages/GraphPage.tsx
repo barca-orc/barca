@@ -99,7 +99,10 @@ export function GraphPage() {
     return base
   }, [assets, knownRows, stateQuery.isError, statuses, stream.running])
   useEffect(() => {
-    if (run && !stream.running) void queryClient.invalidateQueries({queryKey:['state']})
+    if (run && !stream.running) {
+      void queryClient.invalidateQueries({queryKey:['state']})
+      void queryClient.invalidateQueries({queryKey:['rollup']})
+    }
   }, [run, stream.running, queryClient])
   const selectedState = selected ? visualStates[selected] ?? UNKNOWN_GRAPH_STATE : UNKNOWN_GRAPH_STATE
   const selectedError = (selected && stream.running && stream.errors[selected]) || stateQuery.data?.find(n => n.id === selected)?.last_materialization?.error || null

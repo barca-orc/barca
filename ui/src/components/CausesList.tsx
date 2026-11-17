@@ -1,7 +1,7 @@
 import { match } from 'ts-pattern'
 import { Age } from './Age'
 import { StatusGlyph } from './StatusGlyph'
-import { causeImpact, type Cause } from '@/lib/causes'
+import { causeImpact, type Cause } from '@/lib/causesView'
 
 export interface CausesListProps {
   causes: readonly Cause[]
@@ -19,9 +19,9 @@ export interface CausesListProps {
 
 /**
  * barca · CausesList
- * What is wrong, one entry per root cause, the biggest first: a failure with the nodes it
- * blocks counted under it (not as rows of their own), then output that looks wrong, then what is
- * behind. Each entry opens the node it is about.
+ * What is wrong, one entry per root as the rollup serves them (the failure holding the most
+ * nodes first): a failure with how many nodes it holds (not as rows of their own), then output
+ * that looks wrong, then what is behind. Each entry opens the node it is about.
  */
 export function CausesList({ causes, name, onOpen, limit = 6, onShowAll, nowMs }: CausesListProps) {
   if (causes.length === 0)
@@ -34,12 +34,12 @@ export function CausesList({ causes, name, onOpen, limit = 6, onShowAll, nowMs }
   const shown = causes.slice(0, limit)
   const more = causes.length - shown.length
   return (
-    <ol className="barca-causes" aria-label="Causes, biggest first">
+    <ol className="barca-causes" aria-label="Causes, the most nodes held first">
       {shown.map((cause, i) =>
         match(cause)
           .with({ kind: 'failure' }, (c) => {
-            const first = c.nodes[0]!
-            const others = c.nodes.length - 1
+            const first = c.node
+            const others = c.others
             return (
               <li key={`f:${i}`} className="barca-cause" data-kind="failure">
                 <StatusGlyph glyph="failed" />

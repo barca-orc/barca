@@ -29,6 +29,7 @@ export function useRunDetail(id: string | null) {
   useEffect(() => {
     if (status && !runIsLive(status)) {
       void client.invalidateQueries({ queryKey: ['state'] })
+      void client.invalidateQueries({ queryKey: ['rollup'] })
       void client.invalidateQueries({ queryKey: ['asset'] })
       void client.invalidateQueries({ queryKey: ['runs', 'list'] })
     }
