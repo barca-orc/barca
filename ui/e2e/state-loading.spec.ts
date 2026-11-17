@@ -21,7 +21,7 @@ const states = assets.map(asset => served({
 // assets, and the file of the one in no group.
 const ok = (n: number) => ({ failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: n })
 const entry = (id: string, kind: string, label: string, parent: string | null, children: string[], n: number) =>
-  ({ id, kind, label, parent, children, nodes: n, assets: n, running: 0, health: ok(n), asset_health: ok(n), data_coverage: { assets: n, measured: 0, suspect: 0 } })
+  ({ id, kind, label, parent, children, nodes: n, assets: n, running: 0, health: ok(n), asset_health: ok(n), data_coverage: { assets: n, measured: 0, suspect: 0 }, also_in: [] })
 const rollup = {
   as_of: '2026-11-17T14:57:00Z',
   entries: [
@@ -34,6 +34,8 @@ const rollup = {
   ],
   roots: [],
   data_coverage: { assets: 3, measured: 0, suspect: 0 },
+  // The same nodes by source file: what the sidebar reads.
+  files: [{ file: 'forecast.py', nodes: 3, assets: 3, running: 0, health: ok(3), asset_health: ok(3), worst: 'ok' }],
 }
 
 test('an empty pipeline selection renders an empty result; only the sidebar asks for the whole project', async ({ page }) => {
@@ -62,18 +64,16 @@ test('a status failure leaves grouped metadata and sidebar counts visible', asyn
   await expect(page.locator('.barca-sidebar').getByRole('button', { name: 'other.py 1' })).toBeVisible()
 })
 
-test('a sidebar dot waits for its whole file: no dot says "fine" from part of it', async ({ page }) => {
+test('a sidebar dot is the file\'s sums in the rollup: no dot for a file the rollup says nothing of', async ({ page }) => {
   await page.route('**/assets', route => route.fulfill({ json: assets }))
   await page.route('**/groups', route => route.fulfill({ json: groups }))
-  await page.route(/\/state(?:\?.*)?$/, route => {
-    // The whole-project request fails: only the open pipeline is known.
-    if (!route.request().url().includes('?')) return route.fulfill({ status: 500, json: { error: 'busy' } })
-    return route.fulfill({ json: states.filter(n => n.id.startsWith('forecast.py:')) })
-  })
+  await page.route(/\/state(?:\?.*)?$/, route => route.fulfill({ json: states }))
+  // The rollup sums `forecast.py` and says nothing of `other.py`.
+  await page.route(/\/state\/rollup(?:\?.*)?$/, route => route.fulfill({ json: rollup }))
   await page.goto('/ui/#/assets?pipeline=forecast.py')
   const sidebar = page.locator('.barca-sidebar')
-  // The file's most urgent state, in the CLI's word, and what its count counts.
-  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toHaveAttribute('title', 'forecast.py · 3 assets · fresh')
+  // The file's most severe health, in the server's word, and what its count counts.
+  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toHaveAttribute('title', 'forecast.py · 3 assets · ok')
   await expect(sidebar.getByRole('button', { name: 'other.py 1' }).locator('.barca-pipe-nodot')).toHaveCount(1)
 })
 

@@ -1,5 +1,7 @@
-import type { ListNode, NodeKind, NodeState } from './types'
-import { fileDisplay, type AssetRow, type FileDisplay } from './assetTable'
+import type { FileRollup } from './generated/FileRollup'
+import type { Glyph } from './glyph'
+import { healthDisplay } from './healthDisplay'
+import type { ListNode, NodeKind } from './types'
 
 /**
  * Asset ids are "<source-file>:<name>" (e.g. "iris_project/assets.py:raw_data").
@@ -26,47 +28,56 @@ export interface Pipeline {
   file: string
 }
 
+/** How a file reads as one: a glyph and its word, as its header and the sidebar show it. */
+export interface FileDisplay {
+  glyph: Glyph
+  label: string
+  /** A run is working on some of its nodes: the running glyph turns. */
+  live: boolean
+}
+
+/**
+ * A file's one state, for its header in the table and its line in the sidebar: the words of its
+ * sums in the rollup (`files` of `GET /state/rollup`, summed in `barca-core`). A run working on
+ * some of its nodes leads; else the most severe health among them (`worst`, the server's).
+ * Nothing here counts or ranks.
+ */
+export function fileShown(sums: Pick<FileRollup, 'running' | 'worst'>): FileDisplay {
+  if (sums.running > 0) return { glyph: 'running', label: `${sums.running.toLocaleString()} running`, live: true }
+  const shown = healthDisplay(sums.worst)
+  return { glyph: shown.glyph, label: shown.label, live: false }
+}
+
 /** A pipeline (source file) as the sidebar shows it, for the nodes of one kind. */
 export interface PipelineSummary extends Pipeline {
   /** Its nodes of the counted kind, from graph metadata: known before any state is. */
   total: number
-  /**
-   * Its one state, exactly as the file's header in the table shows it (`fileDisplay`); null
-   * until every counted node of it has a state (a part says nothing of the whole) and nothing
-   * of it is running.
-   */
+  /** Its one state (`fileShown`); null until the rollup has loaded, or for a file it has no node of. */
   shown: FileDisplay | null
-  /** How many of them a run is working on now. */
+  /** How many of its nodes a run is working on now. */
   running: number
 }
 
 /**
  * One line per source file of the project, in file order: how many of its nodes are of `kind`
- * (the page's: Assets counts assets), and their one state from `rows` (`buildRows` over the
- * loaded states of that kind). A file with none of that kind is here at 0; the sidebar leaves it
- * out (`listedPipelines`).
+ * (the page's: Assets counts assets), from the graph (`GET /assets`), and its one state from
+ * the rollup's `files` (null before it loads). A file with none of that kind is here at 0; the
+ * sidebar leaves it out (`listedPipelines`).
  */
 export function pipelineSummaries(
-  rows: readonly AssetRow[],
+  files: ReadonlyMap<string, FileRollup> | null,
   listed: readonly Pick<ListNode, 'id' | 'kind'>[],
   kind: NodeKind,
 ): PipelineSummary[] {
-  const rowById = new Map(rows.map((r) => [r.id, r]))
-  const byFile = new Map<string, { total: number; rows: AssetRow[]; known: boolean }>()
+  const totals = new Map<string, number>()
   for (const node of listed) {
     const file = sourceFile(node.id)
-    const entry = byFile.get(file) ?? { total: 0, rows: [], known: true }
-    byFile.set(file, entry)
-    if (node.kind !== kind) continue
-    entry.total += 1
-    const row = rowById.get(node.id)
-    if (row) entry.rows.push(row)
-    else entry.known = false
+    totals.set(file, (totals.get(file) ?? 0) + (node.kind === kind ? 1 : 0))
   }
-  return [...byFile]
-    .map(([file, { total, rows, known }]) => {
-      const running = rows.filter((r) => r.running).length
-      return { file, name: pipelineName(file), total, running, shown: known || running > 0 ? fileDisplay(rows) : null }
+  return [...totals]
+    .map(([file, total]) => {
+      const sums = total > 0 ? files?.get(file) : undefined
+      return { file, name: pipelineName(file), total, running: sums?.running ?? 0, shown: sums ? fileShown(sums) : null }
     })
     .sort((a, b) => a.file.localeCompare(b.file))
 }
@@ -74,12 +85,4 @@ export function pipelineSummaries(
 /** Whether node `id` belongs to the selected pipeline (`null` = all). */
 export function inPipeline(id: string, file: string | null): boolean {
   return file === null || sourceFile(id) === file
-}
-
-/** `fresh` rows, and every row of `older` that `fresh` does not have. */
-export function mergeStates(older: NodeState[] | undefined, fresh: NodeState[] | undefined): NodeState[] {
-  if (!older) return fresh ?? []
-  if (!fresh) return older
-  const ids = new Set(fresh.map((n) => n.id))
-  return [...fresh, ...older.filter((n) => !ids.has(n.id))]
 }

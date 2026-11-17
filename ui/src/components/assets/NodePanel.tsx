@@ -27,7 +27,7 @@ import { buildRows, formatSeconds } from '@/lib/assetTable'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { blockerOf } from '@/lib/healthDisplay'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
-import { signalLine } from '@/lib/dataSignals'
+import { signalDisplay, signalLine } from '@/lib/dataSignals'
 import { EDITOR_ROOTS_KEY, changedSummary, collapseRuns, dataKey, dataKeyNote, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, errorFirstLine, failuresOnlyNote, formatBytes, historyBars, keyFigures, onlyFailures, rowsLabel, raisedAtLabel, runPace, runsRecorded, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
 import { consumersOf, downstreamIds, headline, isFailed, streakLabel } from '@/lib/health'
 import { isLive, memberHealth } from '@/lib/graphState'
@@ -184,8 +184,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           <ul className="barca-signals" aria-label="Data signals">
             {(node.signals ?? []).map((signal, i) => (
               <li key={i}>
-                <StatusGlyph glyph={signal.kind === 'behind_input' ? 'stale' : 'partial'} size={12} />
-                <span>{signal.kind === 'behind_input' ? 'Behind: ' : 'Suspect data: '}{signalLine(signal)}</span>
+                <StatusGlyph glyph={signalDisplay(signal).glyph} size={12} />
+                <span>{signalDisplay(signal).prefix}{signalLine(signal)}</span>
               </li>
             ))}
           </ul>

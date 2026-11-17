@@ -7,6 +7,7 @@
  * way.
  */
 
+import type { Glyph } from './glyph'
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
 import type { DataCoverage } from './generated/DataCoverage'
@@ -33,6 +34,11 @@ export function signalLine(signal: DataSignal): string {
     })
     .with({ kind: 'behind_input' }, (s) => `older than its input ${shortName(s.input)}`)
     .exhaustive()
+}
+
+/** How a signal is drawn in a node's panel: its glyph, and the word it is filed under. */
+export function signalDisplay(signal: DataSignal): { glyph: Glyph; prefix: string } {
+  return signal.kind === 'behind_input' ? { glyph: 'stale', prefix: 'Behind: ' } : { glyph: 'partial', prefix: 'Suspect data: ' }
 }
 
 export interface DataSignalSets {

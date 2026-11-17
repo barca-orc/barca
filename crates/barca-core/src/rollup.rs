@@ -154,6 +154,11 @@ pub struct RollupEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub keys: Option<KeyCounts>,
+    /// The other groups that declare this node or group, by id: it is counted under `parent`
+    /// alone, and a list of a group named here shows it as a member counted elsewhere. Empty
+    /// for an entry declared in at most one group.
+    #[serde(default)]
+    pub also_in: Vec<String>,
 }
 
 impl RollupEntry {
@@ -171,6 +176,7 @@ impl RollupEntry {
             asset_health: HealthCounts::default(),
             data_coverage: DataCoverage::default(),
             keys: None,
+            also_in: Vec::new(),
         }
     }
 }
@@ -214,6 +220,28 @@ pub struct RollupRoot {
     pub assets: usize,
 }
 
+/// One source file's nodes, summed: every node of the file in scope, in whichever group it
+/// sits. The tree has a `file` entry only for the nodes of a file that are in no group, so a
+/// surface that lists files (the web UI's sidebar) reads these.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct FileRollup {
+    /// The source file, as node ids name it.
+    pub file: String,
+    /// Its nodes in scope.
+    pub nodes: usize,
+    /// Of them, assets.
+    pub assets: usize,
+    /// Of them, nodes a run is working on now.
+    pub running: usize,
+    /// Its nodes by health.
+    pub health: HealthCounts,
+    /// Its assets by health.
+    pub asset_health: HealthCounts,
+    /// The most severe health among its nodes: the one word a line about the file shows.
+    pub worst: Health,
+}
+
 /// `GET /state/rollup` and `barca status --rollup --json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -226,6 +254,9 @@ pub struct Rollup {
     pub roots: Vec<RollupRoot>,
     /// The root entry's data coverage.
     pub data_coverage: DataCoverage,
+    /// Each source file in scope with its nodes summed, by file path.
+    #[serde(default)]
+    pub files: Vec<FileRollup>,
 }
 
 impl Rollup {
@@ -267,6 +298,53 @@ fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
     entry
 }
 
+/// The group each node sits under in the rollup: the first group, by group id, that declares
+/// it. The same rule [`build`] places a node by, for a caller that has no status rows (a run
+/// in progress counting its nodes by group, [`crate::run_list::run_now`]).
+pub fn node_groups(groups: &[NodeGroup]) -> HashMap<&str, &NodeGroup> {
+    let ids: HashSet<&str> = groups.iter().map(|g| g.id.as_str()).collect();
+    let by_id: BTreeMap<&str, &NodeGroup> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
+    let mut out = HashMap::new();
+    for group in by_id.values() {
+        for member in &group.members {
+            if !ids.contains(member.as_str()) {
+                out.entry(member.as_str()).or_insert(*group);
+            }
+        }
+    }
+    out
+}
+
+/// Each source file of `nodes`, summed, by file path.
+fn files(nodes: &[NodeStatus], running: &HashSet<String>) -> Vec<FileRollup> {
+    let mut out: BTreeMap<&str, FileRollup> = BTreeMap::new();
+    for node in nodes {
+        let file = source_file(&node.id);
+        let sums = out.entry(file).or_insert_with(|| FileRollup {
+            file: file.to_string(),
+            nodes: 0,
+            assets: 0,
+            running: 0,
+            health: HealthCounts::default(),
+            asset_health: HealthCounts::default(),
+            worst: Health::Ok,
+        });
+        sums.nodes += 1;
+        sums.running += usize::from(running.contains(&node.id));
+        *sums.health.slot(node.health) += 1;
+        if node.kind == "asset" {
+            sums.assets += 1;
+            *sums.asset_health.slot(node.health) += 1;
+        }
+    }
+    out.into_values()
+        .map(|mut f| {
+            f.worst = f.health.worst().unwrap_or(Health::Ok);
+            f
+        })
+        .collect()
+}
+
 /// Whether `ancestor` is `id` or above it.
 fn is_above(parent: &HashMap<String, String>, ancestor: &str, id: &str) -> bool {
     let mut at = Some(id);
@@ -302,13 +380,26 @@ pub fn build(
 
     // Parents: groups in id order claim their members, so the first by id wins.
     let mut parent: HashMap<String, String> = HashMap::new();
+    let mut also_in: HashMap<String, Vec<String>> = HashMap::new();
     for (id, group) in &by_id {
         for member in &group.members {
             let known = entries.contains_key(member) || by_id.contains_key(member.as_str());
-            if !known || parent.contains_key(member) || is_above(&parent, member, id) {
+            if !known || is_above(&parent, member, id) {
                 continue;
             }
-            parent.insert(member.clone(), (*id).to_string());
+            match parent.get(member) {
+                // Declared again: it stays under the first group and names this one.
+                Some(first) if first != id => {
+                    let also = also_in.entry(member.clone()).or_default();
+                    if !also.iter().any(|g| g == id) {
+                        also.push((*id).to_string());
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    parent.insert(member.clone(), (*id).to_string());
+                }
+            }
         }
     }
     for id in by_id.keys() {
@@ -346,6 +437,7 @@ pub fn build(
             .unwrap_or_else(|| ROOT_ID.to_string());
         if let Some(entry) = entries.get_mut(&id) {
             entry.parent = Some(above.clone());
+            entry.also_in = also_in.remove(&id).unwrap_or_default();
         }
         if let Some(entry) = entries.get_mut(&above) {
             entry.children.push(id);
@@ -392,11 +484,17 @@ pub fn build(
     let mut ordered = Vec::with_capacity(entries.len());
     walk(ROOT_ID, &mut entries, &mut ordered);
     let data_coverage = ordered[0].data_coverage;
+    // A group left out as empty is not named as another place a node is declared.
+    let kept: HashSet<String> = ordered.iter().map(|e| e.id.clone()).collect();
+    for entry in &mut ordered {
+        entry.also_in.retain(|g| kept.contains(g));
+    }
     Rollup {
         as_of: as_of.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         entries: ordered,
         roots: roots(nodes),
         data_coverage,
+        files: files(nodes, running),
     }
 }
 
@@ -685,6 +783,64 @@ mod tests {
         assert_eq!(leaves, nodes.iter().map(|n| n.id.as_str()).collect());
         assert_eq!(rollup.root().nodes, nodes.len());
         assert_eq!(rollup.data_coverage, DataCoverage::of(nodes));
+        // The files are the same nodes cut another way: they add up to the root.
+        let root = rollup.root();
+        let mut of_files = RollupEntry::inner("files".into(), EntryKind::Root, String::new());
+        for f in &rollup.files {
+            of_files.nodes += f.nodes;
+            of_files.assets += f.assets;
+            of_files.running += f.running;
+            of_files.health.add(&f.health);
+            of_files.asset_health.add(&f.asset_health);
+            assert_eq!(Some(f.worst), f.health.worst(), "{}", f.file);
+        }
+        assert_eq!(
+            (of_files.nodes, of_files.assets, of_files.running),
+            (root.nodes, root.assets, root.running)
+        );
+        assert_eq!(
+            (of_files.health, of_files.asset_health),
+            (root.health, root.asset_health)
+        );
+    }
+
+    #[test]
+    fn a_node_declared_in_two_groups_is_counted_once_and_names_the_other() {
+        let (nodes, mut groups) = fixture();
+        let shared = nodes[0].id.clone();
+        let first = rollup_parent(&build(&nodes, &groups, &HashSet::new(), now()), &shared);
+        groups.push(NodeGroup {
+            id: "group:zz.py:extra".into(),
+            name: "extra".into(),
+            description: String::new(),
+            members: vec![shared.clone(), "q.py:lookup".to_string()],
+            output: shared.clone(),
+        });
+        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        assert_sums(&rollup, &nodes);
+        let entry = rollup.entries.iter().find(|e| e.id == shared).unwrap();
+        assert_eq!(first, "group:p.py:ingest");
+        assert_eq!(entry.parent.as_deref(), Some(first.as_str()));
+        assert_eq!(entry.also_in, vec!["group:zz.py:extra".to_string()]);
+        // Every node in a group sits where `node_groups` says, the rule a run in progress
+        // counts its nodes by.
+        let by_node = node_groups(&groups);
+        for e in rollup.entries.iter().filter(|e| e.kind == EntryKind::Node) {
+            let parent = e.parent.as_deref().unwrap();
+            match by_node.get(e.id.as_str()) {
+                Some(group) => assert_eq!(parent, group.id, "{}", e.id),
+                None => assert!(parent.starts_with("file:"), "{}", e.id),
+            }
+        }
+    }
+
+    fn rollup_parent(rollup: &Rollup, id: &str) -> String {
+        rollup
+            .entries
+            .iter()
+            .find(|e| e.id == id)
+            .and_then(|e| e.parent.clone())
+            .unwrap()
     }
 
     #[test]
@@ -926,10 +1082,26 @@ mod tests {
             k.sort();
             k
         };
-        assert_eq!(keys(&json), ["as_of", "data_coverage", "entries", "roots"]);
+        assert_eq!(
+            keys(&json),
+            ["as_of", "data_coverage", "entries", "files", "roots"]
+        );
+        assert_eq!(
+            keys(&json["files"][0]),
+            [
+                "asset_health",
+                "assets",
+                "file",
+                "health",
+                "nodes",
+                "running",
+                "worst"
+            ]
+        );
         assert_eq!(
             keys(&json["entries"][0]),
             [
+                "also_in",
                 "asset_health",
                 "assets",
                 "children",

@@ -1,28 +1,31 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import { useGroups } from '@/hooks/useGroups'
 import { recovering } from '@/hooks/polling'
 import { api } from '@/lib/api'
 import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
 import { plural } from '@/lib/plural'
 import { elapsedLabel, runHref } from '@/lib/running'
-import { ACTIVE_SHOWN, activityNow } from '@/lib/runLive'
 import { runIsLive } from '@/lib/runs'
-import type { ActiveStep, NodeGroup, RunView } from '@/lib/types'
+import type { RunNow, RunView } from '@/lib/types'
 import { MiddleName } from '../MiddleName'
 import { Section } from '../SidePanel'
 import { StatusGlyph } from '../StatusGlyph'
 import { RunReasons } from './RunReasons'
 
+/** How many nodes the overview lists as executing now. */
+const ACTIVE_SHOWN = 8
+
 /** How many groups the overview lists. */
 const GROUPS_SHOWN = 5
 
+/** A live run the server has not listed as in flight yet: nothing executing, nothing queued. */
+const NOTHING_NOW: RunNow = { running: [], queued: 0, keys: null, groups: [] }
+
 export interface RunOverviewViewProps {
   run: RunView
-  /** The nodes the run is working on now (`active_steps`); empty when not live or not known. */
-  active: readonly ActiveStep[]
-  groups: readonly NodeGroup[]
+  /** What the run is working on now (`now` of `GET /runs?status=running`); null when not live or not known. */
+  now: RunNow | null
   nowMs: number
 }
 
@@ -30,12 +33,12 @@ export interface RunOverviewViewProps {
  * The top of a run's panel: why the run was not served from cache, who asked for it and why,
  * its retries, why it was cancelled, and, while it runs, how far it is, what it is doing now,
  * by group, how long is left and what took longest. The words are the server's
- * (`run.explanation`); only the nodes in flight are laid out here.
+ * (`run.explanation`), and so are the nodes in flight and their groups (`now`).
  */
-export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewProps) {
+export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
   const live = runIsLive(run.status)
   const { cancellation: cancel, attempts, progress, slowest, why } = run.explanation
-  const overview = live && progress ? { progress, now: activityNow(active, groups), elapsed: elapsedLabel(run.started_at, nowMs) } : null
+  const overview = live && progress ? { progress, now: now ?? NOTHING_NOW, elapsed: elapsedLabel(run.started_at, nowMs) } : null
   return (
     <Section title="Run overview">
       {cancel && (
@@ -67,9 +70,9 @@ export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewP
             ? <p className="barca-note barca-muted">{overview.now.queued > 0 ? `${plural(overview.now.queued, 'node')} waiting for a worker.` : 'Between steps.'}</p>
             : <ul className="barca-run-active">
                 {overview.now.running.slice(0, ACTIVE_SHOWN).map((node) => (
-                  <li key={node.nodeId}>
+                  <li key={node.node_id}>
                     <StatusGlyph glyph="running" size={12} live />
-                    <Link to={`/assets?node=${encodeURIComponent(node.nodeId)}`} title={node.nodeId}><MiddleName name={shortName(node.nodeId)} /></Link>
+                    <Link to={`/assets?node=${encodeURIComponent(node.node_id)}`} title={node.node_id}><MiddleName name={shortName(node.node_id)} /></Link>
                     {node.keys && <span className="barca-cell-sub">{node.keys}</span>}
                   </li>
                 ))}
@@ -85,7 +88,7 @@ export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewP
             <span className="barca-run-reason-label">By group</span>
             <ul className="barca-run-groups">
               {overview.now.groups.slice(0, GROUPS_SHOWN).map((g) => (
-                <li key={g.group}><MiddleName name={g.group} /><span className="barca-cell-sub">{g.running} running{g.queued > 0 && `, ${g.queued} queued`}</span></li>
+                <li key={g.id}><MiddleName name={g.group} /><span className="barca-cell-sub">{g.running} running{g.queued > 0 && `, ${g.queued} queued`}</span></li>
               ))}
             </ul>
           </>}
@@ -108,7 +111,7 @@ export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewP
   )
 }
 
-/** [`RunOverviewView`] with the nodes a live run is working on now and the project's groups. */
+/** [`RunOverviewView`] with what a live run is working on now. */
 export function RunOverview({ run }: { run: RunView }) {
   const live = runIsLive(run.status)
   const inFlight = useQuery({
@@ -118,13 +121,11 @@ export function RunOverview({ run }: { run: RunView }) {
     refetchInterval: recovering(2_000),
     retry: false,
   })
-  const groups = useGroups()
   const row = inFlight.data?.runs.find((r) => r.id === run.run_id || r.run_id === run.run_id)
   return (
     <RunOverviewView
       run={run}
-      active={live ? row?.active_steps ?? [] : []}
-      groups={groups.data ?? []}
+      now={live ? row?.now ?? null : null}
       nowMs={inFlight.dataUpdatedAt}
     />
   )

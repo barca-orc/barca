@@ -74,6 +74,7 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "principal",
     "trigger_reason",
     "cancellation",
+    "line",
 ];
 
 /// Item fields of `steps[]` in `get`/`run` JSON (real and `--dry-run`). Optional fields only

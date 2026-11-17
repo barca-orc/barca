@@ -4,18 +4,15 @@ import { useMemo, useRef, type CSSProperties, type KeyboardEvent, type PointerEv
 import { BookOpen, ChevronDown, ChevronRight, KeyRound, Layers, LogOut, Moon, PanelLeft, Search, Sun } from 'lucide-react'
 import { Button, ConnectionBadge, IconButton, RunsInProgress, StatusGlyph } from '@/components'
 import { QueueStatus } from '@/components/QueueStatus'
-import { useAssetStates, useWholeState } from '@/hooks/useAssetStates'
 import { useAssets } from '@/hooks/useAssets'
-import { useGroups } from '@/hooks/useGroups'
+import { useGroupTree } from '@/hooks/useGroupTree'
 import { useHealth } from '@/hooks/useHealth'
-import { usePinNotes } from '@/hooks/usePins'
 import { useProgram } from '@/hooks/useProgram'
 import { useTheme } from '@/context/theme'
 import { useTimeZone } from '@/context/timeZone'
-import { buildRows, fileDisplay, type FileDisplay } from '@/lib/assetTable'
 import { connection } from '@/lib/connection'
-import { groupTree } from '@/lib/groups'
-import { inPipeline, mergeStates, pipelineSummaries, type PipelineSummary } from '@/lib/pipeline'
+import { fileShown, inPipeline, pipelineSummaries, type FileDisplay, type PipelineSummary } from '@/lib/pipeline'
+import { ROOT, worstOf } from '@/lib/rollupView'
 import { plural } from '@/lib/plural'
 import { SIDEBAR_KEY, SIDEBAR_STEP, SIDEBAR_WIDTH, SIDEBAR_WIDTH_KEY, fileGroups, initialSidebar, listedPipelines, updateSidebar, type SidebarEffect, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
 import { zoneName } from '@/lib/time'
@@ -340,27 +337,20 @@ function SidebarFooter() {
 }
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
-  const { data: scoped } = useAssetStates()
-  const { data: whole } = useWholeState()
   const assetQuery = useAssets()
   const assets = assetQuery.data
-  const pins = usePinNotes()
   const location = useLocation()
   const kind = countedKind(location.pathname)
-  // The open scope is fresh; the pipelines outside it keep what the whole project last said.
-  const nodes = useMemo(() => mergeStates(whole, scoped), [whole, scoped])
-  // The rows the tables show, built the same way, so a file's line here and its header there agree.
-  const rows = useMemo(() => buildRows(nodes.filter((n) => n.kind === kind), 0, pins), [nodes, kind, pins])
-  const summaries = useMemo(() => pipelineSummaries(rows, assets ?? [], kind), [rows, assets, kind])
-  // The project's one state, for the collapsed sidebar: none until every counted node's is known.
-  const overall = useMemo(
-    () => (summaries.every((p) => p.shown !== null || p.total === 0) || rows.some((r) => r.running) ? fileDisplay(rows) : null),
-    [summaries, rows],
-  )
-  const groups = useGroups()
-  const tree = useMemo(() => groupTree(groups.data ?? []), [groups.data])
-  // A group's dot is its entry of the whole project's rollup (`GET /state/rollup`).
+  // Every file's state and every group's dot is the whole project's rollup (`GET /state/rollup`):
+  // a file reads its sums (`files`), the project the root entry. Nothing is summed here.
   const rollup = useRollup(null)
+  const summaries = useMemo(() => pipelineSummaries(rollup.loaded ? rollup.tree.files : null, assets ?? [], kind), [rollup, assets, kind])
+  // The project's one state, for the collapsed sidebar: none until the rollup has loaded.
+  const overall = useMemo(() => {
+    const root = rollup.loaded ? rollup.tree.entries.get(ROOT) : undefined
+    return root && root.nodes > 0 ? fileShown({ running: root.running, worst: worstOf(root.health) }) : null
+  }, [rollup])
+  const tree = useGroupTree(null)
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const [model, dispatch] = useProgram<SidebarModel, SidebarMsg, SidebarEffect>(

@@ -658,26 +658,34 @@ async fn in_flight_list(
                         // The snapshot's owner diagnosis is not this machine's: the owner
                         // was found alive.
                         row.status = "running".into();
-                        row
+                        row.worded()
                     }
                     None => continue,
                 },
             };
             let by_node =
                 crate::running::by_node(std::slice::from_ref(flight), &status.nodes, &dag);
-            row.active_steps = Some(
-                status
-                    .nodes
-                    .iter()
-                    .filter_map(|n| {
-                        by_node.get(&n.id).map(|r| ActiveStep {
-                            node_id: n.id.clone(),
-                            step: r.step,
-                            partitions: r.partitions.clone(),
-                        })
+            let active: Vec<ActiveStep> = status
+                .nodes
+                .iter()
+                .filter_map(|n| {
+                    by_node.get(&n.id).map(|r| ActiveStep {
+                        node_id: n.id.clone(),
+                        step: r.step,
+                        partitions: r.partitions.clone(),
                     })
-                    .collect(),
-            );
+                })
+                .collect();
+            let facts: Vec<_> = active
+                .iter()
+                .map(|a| barca_core::run_list::ActiveNodeFacts {
+                    node_id: &a.node_id,
+                    running: a.step == crate::running::RunningStep::Running,
+                    keys: a.partitions.as_ref().map(|p| (p.done, p.total)),
+                })
+                .collect();
+            row.now = Some(barca_core::run_list::run_now(&facts, &dag.groups));
+            row.active_steps = Some(active);
             runs.push(row);
         }
     }

@@ -434,6 +434,13 @@ targets) and never collides with `GET /health`, which is liveness.
 - `fresh_by` is the latest `expected_fresh_at` underneath, `null` when none is estimated. It
   speaks only for the nodes that have one; `unbounded` and `causes.undecided` say the rest.
 - A node entry adds `keys` for a partitioned node: `{"failed", "behind", "ok"}`.
+- `also_in` lists the other groups that declare an entry, by id: it is counted under `parent`
+  alone, and a surface listing a group's members lists the members counted under it, so a list
+  and its count are the same nodes (#959).
+- `files` (beside `entries`) sums the same nodes by source file, `{file, nodes, assets,
+  running, health, asset_health, worst}` per file in scope: the tree has a `file` entry only
+  for the nodes in no group, and a surface that lists files reads these instead of adding
+  entries up (#959).
 - `roots` is the root list above, scoped to the nodes in the response.
 
 As implemented (#955), in `crates/barca-core/src/rollup.rs` (`build`), which the route, the
@@ -630,8 +637,8 @@ Each issue lands its scenario with the code and replaces the matching source lin
 today (with the #961 row): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
-the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #960 row and the
-#964 row. The rest do not pass yet.
+the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
+row and the #964 row. The rest do not pass yet.
 
 | Scenario | Issue |
 | --- | --- |
@@ -639,7 +646,7 @@ the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #960 ro
 | The map, the bars and `barca status --rollup` print the same counts from one response; asset and node units both present | #955: [rollup rules](../../crates/barca-core/src/rollup.rs) (INV-HEALTH-03 on every fixture, one parent per node, both units, the failure roots), [the route against `GET /state`](../../crates/barca-server/tests/openapi.rs), [no second status computation](../../crates/barca-server/src/read_cache.rs), [the CLI contract snapshot](../../python/tests/snapshots/cli_contract/status_rollup.txt), [the map's layout over the response](../../ui/src/lib/rollupView.test.ts), [the bar, the map and a group row against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
 | A project with 7 of 556 assets counted reads "7 of 556 measured" in status JSON and the UI | #957 |
 | A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late (passes: `a_queued_tick_reads_the_same_on_every_surface`) | #958 |
-| Re-adding a derived word in TypeScript fails CI | #959 |
+| Re-adding a derived word in TypeScript fails CI | #959: [the check](../../scripts/check-ui-layering.py) (a prek hook, so every tier; it seeds violations into a small tree on each run and fails if one passes), [its table](../../crates/barca-cli/ui-layering.json) (every route the UI calls with its CLI command, every module of `ui/src/lib` with its kind, the named exemptions), [the table against the CLI and the router](../../crates/barca-cli/src/ui_layering_tests.rs), [the fixtures' health words from `classify`](../../crates/barca-core/src/ui_fixture_tests.rs) |
 | A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
 | A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961: [the shapes, a paused schedule, no live scheduler, paused and pinned nodes, missed ticks](../../crates/barca-core/src/refresh_path.rs) ("membership is the scheduler's own target list"), [the batched misses](../../crates/barca-db/src/db/ticks.rs), [the walk once per graph](../../crates/barca-server/src/read_cache.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a scheduling and a read-only server](../../python/tests/test_refresh_path.py) |
 | Estimates within the stated error on the seeded server simulation; a node below a pending cutoff has `recheck_at` only | #962 |

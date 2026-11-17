@@ -51,4 +51,10 @@ data_coverage: DataCoverage,
 /**
  * A partitioned node's keys (a node entry only).
  */
-keys?: KeyCounts, };
+keys?: KeyCounts,
+/**
+ * The other groups that declare this node or group, by id: it is counted under `parent`
+ * alone, and a list of a group named here shows it as a member counted elsewhere. Empty
+ * for an entry declared in at most one group.
+ */
+also_in: Array<string>, };

@@ -1,0 +1,258 @@
+{
+  "always_runs|cancelled|false": {
+    "health": "ok",
+    "health_reason": "last_run_succeeded"
+  },
+  "always_runs|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "always_runs|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "always_runs|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "always_runs|none|false": {
+    "health": "never_run",
+    "health_reason": "no_successful_run"
+  },
+  "always_runs|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "always_runs|success|false": {
+    "health": "ok",
+    "health_reason": "last_run_succeeded"
+  },
+  "always_runs|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "blocked|cancelled|false": {
+    "health": "blocked",
+    "health_reason": "cache_blocked"
+  },
+  "blocked|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "blocked|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "blocked|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "blocked|none|false": {
+    "health": "blocked",
+    "health_reason": "cache_blocked"
+  },
+  "blocked|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "blocked|success|false": {
+    "health": "blocked",
+    "health_reason": "cache_blocked"
+  },
+  "blocked|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "cached|cancelled|false": {
+    "health": "ok",
+    "health_reason": "cached"
+  },
+  "cached|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "cached|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "cached|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "cached|none|false": {
+    "health": "ok",
+    "health_reason": "cached"
+  },
+  "cached|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "cached|success|false": {
+    "health": "ok",
+    "health_reason": "cached"
+  },
+  "cached|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "never_run|cancelled|false": {
+    "health": "never_run",
+    "health_reason": "never_run"
+  },
+  "never_run|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "never_run|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "never_run|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "never_run|none|false": {
+    "health": "never_run",
+    "health_reason": "never_run"
+  },
+  "never_run|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "never_run|success|false": {
+    "health": "never_run",
+    "health_reason": "never_run"
+  },
+  "never_run|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "partial|cancelled|false": {
+    "health": "behind",
+    "health_reason": "partial"
+  },
+  "partial|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "partial|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "partial|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "partial|none|false": {
+    "health": "behind",
+    "health_reason": "partial"
+  },
+  "partial|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "partial|success|false": {
+    "health": "behind",
+    "health_reason": "partial"
+  },
+  "partial|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "stale|cancelled|false": {
+    "health": "behind",
+    "health_reason": "stale"
+  },
+  "stale|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "stale|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "stale|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "stale|none|false": {
+    "health": "behind",
+    "health_reason": "stale"
+  },
+  "stale|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "stale|success|false": {
+    "health": "behind",
+    "health_reason": "stale"
+  },
+  "stale|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "unknown|cancelled|false": {
+    "health": "undecided",
+    "health_reason": "unknown"
+  },
+  "unknown|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "unknown|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "unknown|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "unknown|none|false": {
+    "health": "undecided",
+    "health_reason": "unknown"
+  },
+  "unknown|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "unknown|success|false": {
+    "health": "undecided",
+    "health_reason": "unknown"
+  },
+  "unknown|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "unsynced|cancelled|false": {
+    "health": "behind",
+    "health_reason": "unsynced"
+  },
+  "unsynced|cancelled|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "unsynced|failed|false": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "unsynced|failed|true": {
+    "health": "failing",
+    "health_reason": "last_attempt_failed"
+  },
+  "unsynced|none|false": {
+    "health": "behind",
+    "health_reason": "unsynced"
+  },
+  "unsynced|none|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  },
+  "unsynced|success|false": {
+    "health": "behind",
+    "health_reason": "unsynced"
+  },
+  "unsynced|success|true": {
+    "health": "failing",
+    "health_reason": "keys_failed"
+  }
+}

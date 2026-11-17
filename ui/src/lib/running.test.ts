@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { counts } from './testdata/rollup'
+import { counts, fileSums } from './testdata/rollup'
 import { graphState, memberHealth } from './graphState'
 import { groupHealth } from './groups'
 import { pipelineSummaries } from './pipeline'
-import { buildRows } from './assetTable'
 import {
   POLL_IDLE_MS,
   POLL_RUNNING_MS,
@@ -126,7 +125,9 @@ describe('running state from /state', () => {
       node('p.py:b', null, true),
       node('q.py:c'),
     ]
-    const summaries = pipelineSummaries(buildRows(nodes, 0), nodes, 'asset')
+    // A file's running count is its sums' in the rollup (`files`), as served.
+    const files = new Map([fileSums('p.py', 'ok', { nodes: 2, running: 1 }), fileSums('q.py', 'ok')].map((f) => [f.file, f]))
+    const summaries = pipelineSummaries(files, nodes, 'asset')
     expect(summaries.map((p) => [p.file, p.running])).toEqual([
       ['p.py', 1],
       ['q.py', 0],

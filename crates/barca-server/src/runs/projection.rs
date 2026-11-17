@@ -297,6 +297,34 @@ pub struct RunSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub active_steps: Option<Vec<ActiveStep>>,
+    /// With `?status=running` only: `active_steps` as a run's panel lists them, the nodes
+    /// executing (furthest from done first), how many wait, and the same by group.
+    /// Experimental.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub now: Option<barca_core::run_list::RunNow>,
+    /// The run in the words of a list row: its steps by outcome and what went wrong, the
+    /// `line` of `barca history --json`. Experimental.
+    pub line: barca_core::run_list::RunLine,
+}
+
+impl RunSummary {
+    /// `line` from the row's own fields: set once the row is complete.
+    pub(super) fn worded(mut self) -> Self {
+        self.line = barca_core::run_list::run_line(barca_core::run_list::RunLineFacts {
+            status: &self.status,
+            steps_total: self.steps_total,
+            steps_executed: self.steps_executed,
+            steps_cached: self.steps_cached,
+            steps_failed: self.steps_failed,
+            error: self.error.as_deref(),
+            first_failure: self
+                .first_failure
+                .as_ref()
+                .map(|f| (f.node_id.as_str(), f.error.as_str())),
+        });
+        self
+    }
 }
 /// A run's first failed step (`RunSummary::first_failure`).
 #[derive(Clone, Debug, Serialize)]
@@ -365,7 +393,10 @@ pub(super) fn summary(record: db::RunRecord, live: Option<&RunState>) -> RunSumm
             .cancellation
             .or_else(|| live.and_then(|r| r.cancellation.clone())),
         active_steps: None,
+        now: None,
+        line: Default::default(),
     }
+    .worded()
 }
 pub(super) fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
     RunSummary {
@@ -398,7 +429,10 @@ pub(super) fn live_summary(run: &RunState, files: &[String]) -> RunSummary {
         trigger_reason: run.trigger.reason.clone(),
         cancellation: run.cancellation.clone(),
         active_steps: None,
+        now: None,
+        line: Default::default(),
     }
+    .worded()
 }
 pub(super) fn live_runs(state: &AppState) -> Vec<RunState> {
     state.runs.iter().map(|r| r.value().clone()).collect()

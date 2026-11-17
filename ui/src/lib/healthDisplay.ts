@@ -63,6 +63,11 @@ export function healthDisplay(health: Health): HealthDisplay {
   return DISPLAY[health]
 }
 
+/** Where `health` sorts: 0 is the most severe (the served order, `HEALTH_ORDER`). */
+export function healthRank(health: Health): number {
+  return HEALTH_ORDER.indexOf(health)
+}
+
 export function isUnhealthy(health: Health): boolean {
   return UNHEALTHY.includes(health)
 }
