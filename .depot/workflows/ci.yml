@@ -303,8 +303,8 @@ jobs:
 
   perf:
     # The performance budgets of specs/behavior/performance.md ("Gates"): the trivial
-    # pipeline's wall time, coordinator CPU and memory, and the incremental_dag native budgets,
-    # against the wheel `build` makes. Under a minute. Tier merge and up.
+    # pipeline's wall time, coordinator CPU and memory, the incremental_dag native budgets and
+    # a long-lived database's plan-reasons lookup, against the wheel `build` makes. Under a minute. Tier merge and up.
     needs: [build, changes]
     if: ${{ needs.changes.outputs.tier == 'merge' || needs.changes.outputs.tier == 'full' }}
     runs-on: depot-ubuntu-24.04-4

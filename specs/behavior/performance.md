@@ -64,6 +64,7 @@ whole-program LTO) on a shared 4-CPU runner and takes a few seconds:
 | Same, coordinator peak in every run | <19,531 KiB ([resources](resources.md) simple coordination) | 16.7 MiB |
 | `incremental_dag/bench.py`, 5,000 keys, every warm one-key and unchanged run: coordinator peak | <19,531 KiB | 16.9 MiB |
 | Same, coordinator CPU | <40 ms | 13.7-18.0 ms |
+| Long-lived database: 300 partition keys, each with 200 times its history (60k rows, a seventh of the copies failed), every key missed: median plan-reasons lookup of 3 runs (`BARCA_TRACE_TIMING`'s `plan reasons so far`) | <25 ms | 1.6-2.3 ms (2026-11-17, load ~30; 76-87 ms before #1009) |
 
 The wall-time limit is about 3.7 times the reference median: it fails a fixed cost of about
 100 ms more per run (a survey of `.barca/`, a sleep, a second interpreter), not a few
@@ -71,8 +72,10 @@ milliseconds, which shared runners cannot resolve. The CI CPU limit is twice the
 above, which this machine still meets with the release binary and the `fast` wheel nearly
 reaches (18.0 ms); slower runner cores would fail it without a regression. The 5,000-key
 domain keeps the cold seed (excluded from the budget) near two seconds; the 50k and 200k
-budgets above are measured, not gated. A check over its limit is measured again from scratch,
-and fails the job only if it fails twice.
+budgets above are measured, not gated. The long-lived database check stands for a server that
+has run for weeks: its history is seeded with sqlite3 after one run, and a lookup that reads a
+node's history again (#1009) takes three to six times the limit. A check over its limit is
+measured again from scratch, and fails the job only if it fails twice.
 
 ## Invariants
 

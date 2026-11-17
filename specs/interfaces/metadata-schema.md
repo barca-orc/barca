@@ -250,6 +250,12 @@ every database from before 0.29.2 (#629):
   AND status = 'success'`: `barca status` counts a partitioned node's keys whose latest success is
   empty from these rows, a probe each. Opening an older database adds both; the index is empty
   until a result is counted.
+- `idx_mat_node_rest (node_id, id) WHERE status != 'success' OR artifact_path IS NULL` (#1009, a
+  partial index): the rows of a node that `idx_mat_node_latest` leaves out, failures and
+  successes without an artifact path (a ledger post's). With the two, a node's newest row and
+  newest success are a few seeks (`db::step_histories`, read at every phase boundary of a run
+  to say why its steps ran), not a read of its history. Opening an older database builds it,
+  about 80 ms for 300k rows; older binaries ignore it.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
   `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,
   `running`, or `draining` (0.31.0: in flight when the server was told to stop); `spec` is the server's description of the run (JSON: command, targets, nodes,

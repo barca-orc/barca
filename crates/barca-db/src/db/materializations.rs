@@ -259,60 +259,86 @@ pub struct SuccessRow {
     pub components: Option<String>,
 }
 
+/// The rows of a node that `idx_mat_node_latest` leaves out (failures, and successes without an
+/// artifact path, such as a ledger post's), in the form [`NEWEST_ROWS`] states so SQLite reads
+/// it through `idx_mat_node_rest`, whose `WHERE` it repeats.
+macro_rules! rest_rows {
+    () => {
+        "(status != 'success' OR artifact_path IS NULL)"
+    };
+}
+
+/// For each id of the JSON array `?1` that has a row: its newest row (status, run hash) and its
+/// newest success (id, run hash, components), by at most three seeks (#1009). A node's newest
+/// row is the newer of its newest success with an artifact (`idx_mat_node_latest`) and its
+/// newest other row (`idx_mat_node_rest`); its newest success is the newer of the first and
+/// the newest success without an artifact after it, which walks only the rows written since
+/// that success with an artifact. None of it reads a node's older history.
+const NEWEST_ROWS: &str = concat!(
+    "WITH seeds AS MATERIALIZED (SELECT k.value AS node, \
+       COALESCE((SELECT id FROM materializations INDEXED BY idx_mat_node_latest \
+         WHERE node_id = k.value AND status = 'success' AND artifact_path IS NOT NULL \
+         ORDER BY id DESC LIMIT 1), 0) AS kept \
+     FROM json_each(?1) AS k), \
+     newest AS MATERIALIZED (SELECT seeds.node AS node, \
+       max(seeds.kept, COALESCE((SELECT id FROM materializations INDEXED BY idx_mat_node_rest \
+         WHERE node_id = seeds.node AND ",
+    rest_rows!(),
+    " ORDER BY id DESC LIMIT 1), 0)) AS latest, \
+       max(seeds.kept, COALESCE((SELECT id FROM materializations INDEXED BY idx_mat_node_rest \
+         WHERE node_id = seeds.node AND ",
+    rest_rows!(),
+    " AND id > seeds.kept AND status = 'success' ORDER BY id DESC LIMIT 1), 0)) AS success \
+     FROM seeds) \
+     SELECT n.node, l.status, COALESCE(l.run_hash, ''), s.id, COALESCE(s.run_hash, ''), \
+       s.components \
+     FROM newest n JOIN materializations l ON l.id = n.latest \
+     LEFT JOIN materializations s ON s.id = n.success"
+);
+
 /// [`StepHistory`] of each of `ids` (display ids) that has a row, a few thousand ids a query
-/// (the ids as one JSON array, through `idx_mat_node_run`). Best effort: a query that fails
-/// leaves its ids out, and they read as never run.
+/// (the ids as one JSON array). Each id costs a few index seeks ([`NEWEST_ROWS`]), however long
+/// its history (#1009). Best effort: a query that fails leaves its ids out, and they read as
+/// never run.
 pub async fn step_histories(cache: &CacheReader, ids: &[&str]) -> HashMap<String, StepHistory> {
     const CHUNK: usize = 2048;
-    const SQL: &str = concat!(
-        "SELECT k.value, m.status, COALESCE(m.run_hash, ''), m.components FROM json_each(?1) AS k \
-         JOIN materializations m ",
-        by_node_run!(),
-        " ON m.node_id = k.value ORDER BY k.key, m.id DESC"
-    );
     let mut out: HashMap<String, StepHistory> = HashMap::with_capacity(ids.len());
     for chunk in ids.chunks(CHUNK) {
         let Ok(list) = serde_json::to_string(chunk) else {
             continue;
         };
-        let Ok(mut rows) = cache.conn().query(SQL, [list]).await else {
+        let Ok(mut rows) = cache.conn().query(NEWEST_ROWS, [list]).await else {
             continue;
         };
-        // Each id's rows newest first: the first is its latest, the first success its last.
-        let mut current = String::new();
-        let mut found = false;
         while let Ok(Some(row)) = rows.next().await {
+            #[cfg(test)]
+            HISTORY_ROWS.with(|n| n.set(n.get() + 1));
             let Ok(id) = row.get::<String>(0) else {
                 continue;
             };
-            let status = row.get::<String>(1).unwrap_or_default();
-            if current != id {
-                current.clone_from(&id);
-                found = false;
-                out.insert(
-                    id.clone(),
-                    StepHistory {
-                        latest_status: status.clone(),
-                        latest_run_hash: row.get::<String>(2).unwrap_or_default(),
-                        last_success: None,
-                    },
-                );
-            }
-            if found || status != "success" {
-                continue;
-            }
-            found = true;
-            if let Some(entry) = out.get_mut(&id) {
-                entry.last_success = Some(SuccessRow {
-                    run_hash: row.get::<String>(2).unwrap_or_default(),
-                    components: row.get::<String>(3).ok().filter(|c| !c.is_empty()),
-                });
-            }
+            let last_success = row.get::<i64>(3).is_ok().then(|| SuccessRow {
+                run_hash: row.get::<String>(4).unwrap_or_default(),
+                components: row.get::<String>(5).ok().filter(|c| !c.is_empty()),
+            });
+            out.insert(
+                id,
+                StepHistory {
+                    latest_status: row.get::<String>(1).unwrap_or_default(),
+                    latest_run_hash: row.get::<String>(2).unwrap_or_default(),
+                    last_success,
+                },
+            );
         }
         drop(rows);
         tokio::task::yield_now().await;
     }
     out
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Rows [`step_histories`] read on this thread, for the tests that bound it.
+    static HISTORY_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether some key of the partitioned node `base` has a successful row (#925): a key without
@@ -1290,5 +1316,246 @@ mod tests {
         assert_eq!(output_ref.path, ".barca/artifacts/test.py--foo.parquet");
         assert_eq!(output_ref.format, "parquet");
         assert_eq!(output_ref.size_bytes, 4096);
+    }
+}
+
+#[cfg(test)]
+mod step_history_tests {
+    use super::{HISTORY_ROWS, StepHistory, SuccessRow, step_histories};
+    use crate::db::CacheReader;
+    use std::collections::HashMap;
+
+    /// What `step_histories` returned before #1009: every row of each id, newest first, the
+    /// first its latest and the first success its last. The oracle the seeks must agree with.
+    async fn every_row(cache: &CacheReader, ids: &[&str]) -> HashMap<String, StepHistory> {
+        let list = serde_json::to_string(ids).unwrap();
+        let mut rows = cache
+            .conn()
+            .query(
+                "SELECT k.value, m.status, COALESCE(m.run_hash, ''), m.components \
+                 FROM json_each(?1) AS k JOIN materializations m ON m.node_id = k.value \
+                 ORDER BY k.key, m.id DESC",
+                [list],
+            )
+            .await
+            .unwrap();
+        let mut out: HashMap<String, StepHistory> = HashMap::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            let id = row.get::<String>(0).unwrap();
+            let status = row.get::<String>(1).unwrap();
+            let entry = out.entry(id).or_insert_with(|| StepHistory {
+                latest_status: status.clone(),
+                latest_run_hash: row.get::<String>(2).unwrap(),
+                last_success: None,
+            });
+            if entry.last_success.is_none() && status == "success" {
+                entry.last_success = Some(SuccessRow {
+                    run_hash: row.get::<String>(2).unwrap(),
+                    components: row.get::<String>(3).ok().filter(|c| !c.is_empty()),
+                });
+            }
+        }
+        out
+    }
+
+    async fn reader() -> (tempfile::TempDir, CacheReader) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        crate::db::init_db(&path).await.unwrap();
+        let cache = CacheReader::open(&path).await.unwrap();
+        (dir, cache)
+    }
+
+    /// One row: `(status, run hash, artifact path, components)`, empty for NULL.
+    type Row<'a> = (&'a str, &'a str, &'a str, &'a str);
+
+    /// One row of `node`.
+    async fn insert(cache: &CacheReader, node: &str, row: Row<'_>) {
+        let (status, hash, path, components) = row;
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO materializations (node_id, status, run_hash, artifact_path, \
+                 components) VALUES (?1, ?2, NULLIF(?3, ''), NULLIF(?4, ''), NULLIF(?5, ''))",
+                [node, status, hash, path, components],
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_newest_row_and_success_are_what_the_whole_history_says() {
+        let (_dir, cache) = reader().await;
+        // Each node's rows, oldest first.
+        let cases: &[(&str, &[Row])] = &[
+            (
+                "p.py:ok",
+                &[
+                    ("success", "h1", "/a/1", "{\"x\":\"1\"}"),
+                    ("success", "h2", "/a/2", "{\"x\":\"2\"}"),
+                ],
+            ),
+            (
+                "p.py:failing",
+                &[
+                    ("success", "h1", "/a/1", "{}"),
+                    ("failed", "h2", "", ""),
+                    ("failed", "h2", "", ""),
+                ],
+            ),
+            (
+                "p.py:never",
+                &[("failed", "h1", "", ""), ("failed", "h2", "", "")],
+            ),
+            // Failed at h1, then at h2: the newest is h2, whatever the run hash is now.
+            (
+                "p.py:moved",
+                &[
+                    ("success", "h0", "/a/0", ""),
+                    ("failed", "h1", "", ""),
+                    ("failed", "h2", "", ""),
+                ],
+            ),
+            (
+                "p.py:recovered",
+                &[
+                    ("failed", "h1", "", ""),
+                    ("success", "h1", "/a/1", "{\"y\":\"1\"}"),
+                ],
+            ),
+            // A success without an artifact (a ledger post's) newer than one with.
+            (
+                "p.py:posted",
+                &[
+                    ("success", "h1", "/a/1", "{}"),
+                    ("failed", "h2", "", ""),
+                    ("success", "h3", "", "{\"z\":\"3\"}"),
+                    ("failed", "h4", "", ""),
+                ],
+            ),
+            // ... and older than one with.
+            (
+                "p.py:posted_old",
+                &[("success", "h1", "", "{}"), ("success", "h2", "/a/2", "")],
+            ),
+            (
+                "p.py:only_posted",
+                &[("success", "h1", "", ""), ("failed", "h1", "", "")],
+            ),
+            // No run hash recorded.
+            (
+                "p.py:no_hash",
+                &[("success", "", "/a/1", ""), ("failed", "", "", "")],
+            ),
+            (
+                "p.py:k[a]",
+                &[
+                    ("failed", "h1", "", ""),
+                    ("success", "h2", "/k/a", "{}"),
+                    ("success", "h3", "/k/a3", ""),
+                ],
+            ),
+        ];
+        // Interleaved, as runs write them.
+        let longest = cases.iter().map(|(_, rows)| rows.len()).max().unwrap();
+        for i in 0..longest {
+            for (node, rows) in cases {
+                if let Some(row) = rows.get(i) {
+                    insert(&cache, node, *row).await;
+                }
+            }
+        }
+        let mut ids: Vec<&str> = cases.iter().map(|(node, _)| *node).collect();
+        ids.push("p.py:absent");
+        let got = step_histories(&cache, &ids).await;
+        assert_eq!(got, every_row(&cache, &ids).await);
+        assert_eq!(got.len(), cases.len(), "an id without rows is left out");
+        let failing = &got["p.py:failing"];
+        assert_eq!(
+            (
+                failing.latest_status.as_str(),
+                failing.latest_run_hash.as_str()
+            ),
+            ("failed", "h2")
+        );
+        assert_eq!(failing.last_success.as_ref().unwrap().run_hash, "h1");
+        assert_eq!(
+            got["p.py:posted"].last_success.as_ref().unwrap().run_hash,
+            "h3"
+        );
+        assert_eq!(
+            got["p.py:posted_old"]
+                .last_success
+                .as_ref()
+                .unwrap()
+                .run_hash,
+            "h2"
+        );
+        assert!(got["p.py:never"].last_success.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_long_history_is_not_read() {
+        let (_dir, cache) = reader().await;
+        const IDS: usize = 40;
+        const RUNS: usize = 500;
+        // Every id ran `RUNS` times, a failure every seventh run, a success without an
+        // artifact every eleventh, newest last: 20k rows.
+        cache
+            .conn()
+            .execute(
+                &format!(
+                    "WITH RECURSIVE r(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM r WHERE i < {}), \
+                     k(j) AS (SELECT 0 UNION ALL SELECT j + 1 FROM k WHERE j < {}) \
+                     INSERT INTO materializations (node_id, run_hash, status, artifact_path, components) \
+                     SELECT 'p.py:n[' || j || ']', 'h' || i, \
+                       CASE WHEN i % 7 = 3 THEN 'failed' ELSE 'success' END, \
+                       CASE WHEN i % 7 = 3 OR i % 11 = 5 THEN NULL ELSE '/a/' || i END, '{{}}' \
+                     FROM r, k ORDER BY i, j",
+                    RUNS - 1,
+                    IDS - 1
+                ),
+                (),
+            )
+            .await
+            .unwrap();
+        let names: Vec<String> = (0..IDS).map(|j| format!("p.py:n[{j}]")).collect();
+        let ids: Vec<&str> = names.iter().map(String::as_str).collect();
+        HISTORY_ROWS.with(|n| n.set(0));
+        let got = step_histories(&cache, &ids).await;
+        assert_eq!(
+            HISTORY_ROWS.with(std::cell::Cell::get),
+            IDS,
+            "one row per id, not its {RUNS} rows of history"
+        );
+        assert_eq!(got, every_row(&cache, &ids).await);
+        // And SQLite reaches each by seeks: no scan of the table or of a node's rows.
+        let list = serde_json::to_string(&ids).unwrap();
+        let mut plan = cache
+            .conn()
+            .query(
+                &format!("EXPLAIN QUERY PLAN {}", super::NEWEST_ROWS),
+                [list],
+            )
+            .await
+            .unwrap();
+        let mut details = Vec::new();
+        while let Some(row) = plan.next().await.unwrap() {
+            details.push(row.get::<String>(3).unwrap());
+        }
+        let reads: Vec<&String> = details
+            .iter()
+            .filter(|d| d.contains("materializations") || d.starts_with("SEARCH"))
+            .collect();
+        assert!(
+            reads.iter().all(|d| d.starts_with("SEARCH")),
+            "every read of materializations is a seek: {details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .any(|d| d.contains("idx_mat_node_rest (node_id=? AND id>?)")),
+            "the success without an artifact is looked for only after the newest with one: {details:?}"
+        );
     }
 }
