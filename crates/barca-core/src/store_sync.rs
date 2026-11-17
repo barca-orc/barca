@@ -6,6 +6,7 @@ use crate::dispatch;
 use crate::gc::size::human;
 use crate::recover;
 use crate::transfer::{ArtifactLayout, TransferClient};
+use crate::verified_copies;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -18,7 +19,9 @@ pub(crate) struct StoreSync {
     /// Local mirror path → (node id, store location, recorded SHA-256), for
     /// store-backed cache hits. Fetched on first use, so fully-cached
     /// intermediates a run never reads are never downloaded. With a recorded
-    /// hash, a copy already on disk is checked against it on first use too.
+    /// hash, a copy already on disk is checked against it on first use too, unless this
+    /// process found it to hold that hash and it has not changed since
+    /// ([`crate::verified_copies`]).
     pub(crate) fetchable: HashMap<String, (String, String, Option<String>)>,
     /// Base step id -> what was found, for each store copy fetched in this run that does not
     /// have its recorded hash. Put on the step reports when the run ends ([`crate::mismatch`]).
@@ -128,6 +131,37 @@ impl StoreSync {
     /// Never fetch an earlier sensor observation over the producer's new bytes.
     pub(crate) fn produced(&mut self, path: &str) {
         self.fetchable.remove(path);
+        verified_copies::forget(std::path::Path::new(path));
+    }
+
+    /// Remember the local copies the helper just checked (`checking`: store location, local
+    /// path, recorded digest) with the digest each now holds: the recorded one, or for a store
+    /// copy that differs, the store copy's. A failed fetch leaves nothing remembered.
+    fn remember_checked(
+        &self,
+        checking: &[(String, std::path::PathBuf, String)],
+        report: &crate::transfer::TransferReport,
+        hashed_from: std::time::SystemTime,
+    ) {
+        let failed: HashSet<&str> = report.failures.iter().map(|f| f.store.as_str()).collect();
+        let differing: HashMap<&str, Option<&str>> = report
+            .mismatched
+            .iter()
+            .map(|(_, at, sha256)| (at.as_str(), sha256.as_deref()))
+            .collect();
+        let mut good = Vec::new();
+        for (store, local, recorded) in checking {
+            let holds = match differing.get(store.as_str()) {
+                _ if failed.contains(store.as_str()) => None,
+                Some(store_copy) => *store_copy,
+                None => Some(recorded.as_str()),
+            };
+            match holds {
+                Some(sha256) => good.push((local.as_path(), sha256)),
+                None => verified_copies::forget(local),
+            }
+        }
+        verified_copies::remember(good, hashed_from);
     }
 
     /// Whether `path` is the local mirror of a cache hit that has not been
@@ -229,29 +263,69 @@ impl StoreSync {
         paths: impl IntoIterator<Item = &'a str>,
         pb: Option<&indicatif::ProgressBar>,
     ) -> Result<(), String> {
+        let began = Instant::now();
         let mut wanted = Vec::new();
         for path in paths {
             if let Some(entry) = self.fetchable.remove(path) {
                 wanted.push(entry);
             }
         }
+        let asked = wanted.len();
+        // A local copy this process already found to hold the recorded digest, unchanged
+        // since, is not hashed again (#1010, `crate::verified_copies`). The rest are checked
+        // as before; what those checks find is remembered below.
+        let hashed_from = std::time::SystemTime::now();
+        wanted.retain(
+            |(_, store, sha256)| match (sha256, self.layout.local_for(store)) {
+                (Some(sha256), Some(local)) => !verified_copies::holds(&local, sha256),
+                _ => true,
+            },
+        );
+        let remembered = asked - wanted.len();
         // A helper that was not started (the store was checked in the last 5 minutes, #593) is
         // started only if a local copy is missing or is not the recorded one; the store is
         // checked first.
+        let mut hashed_here = 0;
         if !self.client.started() {
-            wanted
-                .retain(|(_, store, sha256)| !self.client.has_local_copy(store, sha256.as_deref()));
+            let mut good = Vec::new();
+            wanted.retain(|(_, store, sha256)| {
+                let here = self.client.has_local_copy(store, sha256.as_deref());
+                if let (true, Some(sha256)) = (here, sha256) {
+                    good.extend(self.layout.local_for(store).map(|l| (l, sha256.clone())));
+                }
+                hashed_here += usize::from(sha256.is_some());
+                !here
+            });
+            verified_copies::remember(
+                good.iter().map(|(l, h)| (l.as_path(), h.as_str())),
+                hashed_from,
+            );
             if !wanted.is_empty() {
                 self.check_now().await?;
             }
         }
         let mut locals = Vec::new();
+        let mut checking = Vec::new();
         for (node, store, sha256) in wanted {
             if let Some(local) = self.client.fetch(&node, &store, sha256.as_deref()) {
+                if let Some(sha256) = sha256 {
+                    checking.push((store, local.clone(), sha256));
+                }
                 locals.push(local);
             }
         }
+        let trace = |sent: usize| {
+            if asked > 0 && std::env::var_os("BARCA_TRACE_TIMING").is_some() {
+                crate::errln!(
+                    "[trace]  ensure_local: {asked} cached input(s), {remembered} unchanged since \
+                     checked, {hashed_here} hashed here, {sent} sent to the transfer helper to check, \
+                     {:.1}ms",
+                    began.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        };
         if locals.is_empty() {
+            trace(0);
             return Ok(());
         }
         let started = Instant::now();
@@ -262,6 +336,8 @@ impl StoreSync {
             _ = self.cancel.cancelled() => return Err(STORE_WAIT_CANCELLED.to_string()),
             report = self.client.await_fetches(&locals) => report,
         };
+        trace(checking.len());
+        self.remember_checked(&checking, &report, hashed_from);
         if report.transferred > 0 {
             let msg = format!(
                 "[barca] fetched {} cached artifact{} ({}) in {:.1}s",
