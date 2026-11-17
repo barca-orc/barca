@@ -12,8 +12,8 @@ const ROWS_SHOWN = 6
  * Why a run executes what it does (`plan_reasons`, issue 925): by category, each subject with its
  * steps and nodes and a bar of its share of the run's steps, linking to the first node it ran.
  */
-export function RunReasons({ plan, live }: { plan: PlanReasons | null | undefined; live: boolean }) {
-  const explanation = planExplanation(plan, live)
+export function RunReasons({ plan, live, executed = 0 }: { plan: PlanReasons | null | undefined; live: boolean; executed?: number }) {
+  const explanation = planExplanation(plan, live, executed)
   return match(explanation)
     .with({ kind: 'none' }, ({ note }) => <p className="barca-note barca-muted">{note}</p>)
     .with({ kind: 'reasons' }, ({ headline, groups, omitted, partial }) => (

@@ -83,12 +83,14 @@ export type PlanExplanation =
  * A run's `plan_reasons` grouped by category, most steps first (the order the server sends).
  * `live`: the run is still deciding phases, so the reasons are the ones so far.
  */
-export function planExplanation(plan: PlanReasons | null | undefined, live: boolean): PlanExplanation {
+export function planExplanation(plan: PlanReasons | null | undefined, live: boolean, executed = 0): PlanExplanation {
   if (plan == null || plan.steps === 0) {
-    return {
-      kind: 'none',
-      note: live ? 'No step decided to run yet.' : 'Every step was served from cache, or the run recorded no reasons.',
-    }
+    const note = live
+      ? 'No step decided to run yet.'
+      : executed > 0
+        ? `${plural(executed, 'step')} ran, but this run recorded no reasons (barca records them from 0.43).`
+        : 'Every step was served from cache.'
+    return { kind: 'none', note }
   }
   const groups = new Map<ReasonCategory, ReasonGroup>()
   for (const r of plan.reasons) {

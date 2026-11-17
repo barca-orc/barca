@@ -102,7 +102,7 @@ export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewP
       {/* A run cancelled in the queue decided nothing: the notice above says so. */}
       {run.cancellation?.started !== false && <>
         <span className="barca-run-reason-label">Why these steps ran</span>
-        <RunReasons plan={run.plan_reasons} live={live} />
+        <RunReasons plan={run.plan_reasons} live={live} executed={run.steps_executed ?? 0} />
       </>}
     </Section>
   )

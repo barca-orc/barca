@@ -172,6 +172,8 @@ describe('a run from an older server', () => {
   it('reads the fields it does not send as absent', () => {
     expect(cancellationNotice(undefined)).toBeNull()
     expect(planExplanation(undefined, false).kind).toBe('none')
+    expect(planExplanation(undefined, false, 4976)).toEqual({ kind: 'none', note: '4,976 steps ran, but this run recorded no reasons (barca records them from 0.43).' })
+    expect(planExplanation(undefined, false, 0)).toEqual({ kind: 'none', note: 'Every step was served from cache.' })
     expect(triggerDetail('api', undefined)).toBe('api')
     expect(attemptsLabel(3, undefined)).toBe('3 attempts')
   })

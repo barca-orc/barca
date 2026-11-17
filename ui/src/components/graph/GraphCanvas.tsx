@@ -210,9 +210,13 @@ function GraphControls({ dir, onFit, onToggleDir }: { dir: LayoutDir; onFit: () 
  * leads with. A state not loaded yet is not listed.
  */
 function legendGlyphs(nodes: readonly GraphNode[]): Map<string, string> {
-  const words = new Map<string, string>()
+  const seen = new Map<string, string[]>()
+  // A glyph can carry two words: a node's state (`stale`) and a group's health (`behind`).
   const add = (glyph: string, word: string | null | undefined) => {
-    if (word && !words.has(glyph)) words.set(glyph, word)
+    if (!word) return
+    const list = seen.get(glyph) ?? []
+    if (!list.includes(word)) list.push(word)
+    seen.set(glyph, list)
   }
   for (const n of nodes) {
     if (n.type === 'port') continue
@@ -220,7 +224,7 @@ function legendGlyphs(nodes: readonly GraphNode[]): Map<string, string> {
     if (parts) for (const part of parts) add(part.glyph, part.word)
     else add(n.data.lastFailed ? 'failed' : n.data.glyph ?? toneGlyph(n.data.tone), n.data.label)
   }
-  return words
+  return new Map([...seen].map(([glyph, list]) => [glyph, list.join(' / ')]))
 }
 
 /** The node a key event came from, when it came from one. */

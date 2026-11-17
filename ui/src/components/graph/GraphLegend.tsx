@@ -22,7 +22,9 @@ const ENTRIES: readonly (readonly [Glyph, string])[] = [
  * word of their node; the waiting glyph is not listed.
  */
 export function GraphLegend({ shown, children }: { shown: ReadonlyMap<string, string>; children?: ReactNode }) {
-  const known = ENTRIES.filter(([glyph]) => shown.has(glyph))
+  // In the legend's order, with the words the cards on screen use (a node's `stale`, a group's
+  // `behind`): what is listed is what is drawn.
+  const known = ENTRIES.filter(([glyph]) => shown.has(glyph)).map(([glyph]) => [glyph, shown.get(glyph)!] as [Glyph, string])
   const listed = new Set(known.map(([glyph]) => glyph))
   const others = [...shown].filter(([glyph]) => !listed.has(glyph as Glyph) && glyph !== 'pending') as [Glyph, string][]
   const entries = [...known, ...others]
