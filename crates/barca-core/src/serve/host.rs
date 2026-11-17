@@ -61,9 +61,9 @@ impl RunHost for ServeHost {
         self.capacity.as_ref().map_or(0, |c| c.snapshot().in_use)
     }
     fn try_acquire(&self, run_id: &str, release: u32, node: &str, weight: u32) -> bool {
-        self.capacity.as_ref().is_none_or(|c| {
-            c.release_and_try_acquire(run_id, release, node, weight, self.origin)
-        })
+        self.capacity
+            .as_ref()
+            .is_none_or(|c| c.release_and_try_acquire(run_id, release, node, weight, self.origin))
     }
     fn withdraw(&self, run_id: &str) {
         if let Some(c) = &self.capacity {

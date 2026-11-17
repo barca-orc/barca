@@ -780,7 +780,9 @@ fn server_admission(server: Option<&ServerToml>) -> Result<ServerAdmission, Barc
         }
     };
     match admission.map(|v| v.as_str()) {
-        None | Some(Some("requested_first")) => Ok(ServerAdmission::RequestedFirst { max_wait_secs }),
+        None | Some(Some("requested_first")) => {
+            Ok(ServerAdmission::RequestedFirst { max_wait_secs })
+        }
         Some(Some("first_come")) if max_wait.is_some() => Err(BarcaError::Usage(
             "[server] scheduled_max_wait_seconds applies only to admission = \"requested_first\"; \
              remove it or the admission = \"first_come\" line"

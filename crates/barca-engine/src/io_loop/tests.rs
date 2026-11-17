@@ -975,10 +975,20 @@ impl crate::run_host::RunHost for RecordingHost {
     fn shares_steps(&self) -> bool {
         false
     }
-    fn claim_step(&self, _run_id: &str, _key: &crate::run_host::StepKey) -> crate::run_host::StepClaim {
+    fn claim_step(
+        &self,
+        _run_id: &str,
+        _key: &crate::run_host::StepKey,
+    ) -> crate::run_host::StepClaim {
         crate::run_host::StepClaim::Mine
     }
-    fn finish_step(&self, _run_id: &str, _key: &crate::run_host::StepKey, _artifact: serde_json::Value) {}
+    fn finish_step(
+        &self,
+        _run_id: &str,
+        _key: &crate::run_host::StepKey,
+        _artifact: serde_json::Value,
+    ) {
+    }
     fn release_step(&self, _run_id: &str, _key: &crate::run_host::StepKey) {}
     fn leave_steps(&self, _run_id: &str) {}
 }

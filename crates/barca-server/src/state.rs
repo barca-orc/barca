@@ -400,7 +400,8 @@ impl AppState {
             .unwrap_or_else(default_run_concurrency)
             .max(1);
         let now = chrono::Utc::now();
-        let admission = barca_core::serve::capacity::Admission::from(config.resolved.server_admission);
+        let admission =
+            barca_core::serve::capacity::Admission::from(config.resolved.server_admission);
         let capacity = config.resolved.server_capacity.map(|(total, source)| {
             Arc::new(barca_core::serve::capacity::SharedCapacity::with_admission(
                 total, source, admission,

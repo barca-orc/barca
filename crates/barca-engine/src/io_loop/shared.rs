@@ -243,7 +243,11 @@ impl WorkerPool {
         let Some((weight, node)) = self.head_share_weight(coord) else {
             return true;
         };
-        let total = self.share.as_ref().expect("head_share_weight found one").total;
+        let total = self
+            .share
+            .as_ref()
+            .expect("head_share_weight found one")
+            .total;
         let running = self.weight_against(coord, total);
         let share = self.share.as_mut().expect("head_share_weight found one");
         match share.grant {

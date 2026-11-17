@@ -932,7 +932,10 @@ mod tests {
         assert!(!cap.release_and_try_acquire("sched", 1, "s2", 1, Scheduled));
         assert!(cap.try_acquire_as("req", "r1", 1, Requested));
         for n in 2..6 {
-            assert!(!cap.try_acquire_as("sched", "s2", 1, Scheduled), "still held");
+            assert!(
+                !cap.try_acquire_as("sched", "s2", 1, Scheduled),
+                "still held"
+            );
             assert!(cap.release_and_try_acquire("req", 1, &format!("r{n}"), 1, Requested));
         }
         assert_eq!(cap.snapshot().in_use, 1);
@@ -952,7 +955,10 @@ mod tests {
         // The scheduled step ends; its next asks with the release and goes behind.
         assert!(!cap.release_and_try_acquire("sched", 2, "s2", 2, Scheduled));
         assert!(cap.try_acquire_as("req", "r1", 3, Requested));
-        assert!(!cap.try_acquire_as("sched", "s2", 2, Scheduled), "3 + 2 > 4");
+        assert!(
+            !cap.try_acquire_as("sched", "s2", 2, Scheduled),
+            "3 + 2 > 4"
+        );
         for n in 2..5 {
             assert!(cap.release_and_try_acquire("req", 3, &format!("r{n}"), 3, Requested));
             assert!(!cap.try_acquire_as("sched", "s2", 2, Scheduled));
@@ -990,7 +996,10 @@ mod tests {
     fn first_come_keeps_scheduled_and_requested_alike() {
         let cap = first_come(1, "[server] capacity");
         let s = cap.snapshot();
-        assert_eq!((s.admission.as_str(), s.scheduled_max_wait_seconds), ("first_come", None));
+        assert_eq!(
+            (s.admission.as_str(), s.scheduled_max_wait_seconds),
+            ("first_come", None)
+        );
         assert!(cap.try_acquire_as("s1", "a1", 1, Scheduled));
         assert!(!cap.try_acquire_as("r", "b1", 1, Requested));
         // The scheduled run's next step asks with its release, after the requested one: it

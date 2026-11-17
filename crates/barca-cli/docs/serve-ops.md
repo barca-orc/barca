@@ -285,8 +285,9 @@ a second weight-3 step waits. How a step is admitted:
   `--server` client or agent; anything a schedule's tick did not start) is ahead in the line
   of a scheduled run, whenever it asked. Runs of one kind go in the order they first asked:
   an earlier request is finished before a later one gets the capacity, and the same between
-  scheduled runs. Nothing running is stopped, so a request waits at most for the steps
-  running when it asks. A run hands the weight of a step that ended back in the same call that
+  scheduled runs. Nothing running is stopped: a request that asks while a scheduled step runs
+  waits for that step to end (and for earlier requests, and a scheduled step that has waited
+  out the bound below). A run hands the weight of a step that ended back in the same call that
   asks for its next step, so a scheduled run cannot take it in between.
 - **A bounded wait for schedules.** A scheduled run's step that has waited
   `scheduled_max_wait_seconds` (default 120) goes ahead of the requested ones, so a stream of

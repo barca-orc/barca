@@ -344,7 +344,9 @@ def r3(r2: int) -> int:
 """
 
 
-def overlap(project: Path, capacity: int, *, weight_s: int = 1, weight_r: int = 1, toml: str = "") -> list[str]:
+def overlap(
+    project: Path, capacity: int, *, weight_s: int = 1, weight_r: int = 1, toml: str = ""
+) -> list[str]:
     """A request for r3 made while the first tick's s1 holds the capacity; the order the steps
     ended in, once both runs succeeded."""
     body = ADMISSION.replace("WEIGHT_S", str(weight_s)).replace("WEIGHT_R", str(weight_r))
@@ -364,7 +366,10 @@ def overlap(project: Path, capacity: int, *, weight_s: int = 1, weight_r: int = 
         assert server.finished(requested)["status"] == "success"
         wait_until(lambda: "s4" in order(project), "the scheduled run's last step")
         wait_until(
-            lambda: any(r["status"] == "success" for r in server.get("/history?triggered_by=schedule")["runs"]),
+            lambda: any(
+                r["status"] == "success"
+                for r in server.get("/history?triggered_by=schedule")["runs"]
+            ),
             "the scheduled run to succeed",
         )
         return order(project)
@@ -390,26 +395,39 @@ def test_requested_first_with_a_capacity_above_one_and_heavy_steps(tmp_path):
 
 
 def test_the_queue_shows_the_admission_order_in_effect(tmp_path):
-    project = write(tmp_path / "p", "", '[server]\ncapacity = 2\nscheduled_max_wait_seconds = 30\n')
+    project = write(tmp_path / "p", "", "[server]\ncapacity = 2\nscheduled_max_wait_seconds = 30\n")
     with serving(project, "--no-schedule") as server:
         capacity = queue(server)["capacity"]
-        assert (capacity["admission"], capacity["scheduled_max_wait_seconds"]) == ("requested_first", 30)
+        assert (capacity["admission"], capacity["scheduled_max_wait_seconds"]) == (
+            "requested_first",
+            30,
+        )
     write(project, "", '[server]\ncapacity = 2\nadmission = "first_come"\n')
     with serving(project, "--no-schedule") as server:
         capacity = queue(server)["capacity"]
-        assert (capacity["admission"], capacity["scheduled_max_wait_seconds"]) == ("first_come", None)
+        assert (capacity["admission"], capacity["scheduled_max_wait_seconds"]) == (
+            "first_come",
+            None,
+        )
 
 
 def test_admission_settings_are_checked(tmp_path):
     for toml, message in [
         ('admission = "fastest"', '[server] admission: expected "requested_first" or "first_come"'),
-        ("scheduled_max_wait_seconds = 0", "[server] scheduled_max_wait_seconds: expected a whole number"),
+        (
+            "scheduled_max_wait_seconds = 0",
+            "[server] scheduled_max_wait_seconds: expected a whole number",
+        ),
         (
             'admission = "first_come"\nscheduled_max_wait_seconds = 60',
             "scheduled_max_wait_seconds applies only to",
         ),
     ]:
-        project = write(tmp_path / "p", "@asset()\ndef a() -> int:\n    return 1\n", f"[server]\ncapacity = 2\n{toml}\n")
+        project = write(
+            tmp_path / "p",
+            "@asset()\ndef a() -> int:\n    return 1\n",
+            f"[server]\ncapacity = 2\n{toml}\n",
+        )
         result = barca(project, "get", "pipeline.py")
         assert result.returncode == 2, (toml, result.stderr)
         assert message in json.loads(result.stderr.splitlines()[-1])["error"], (toml, result.stderr)
