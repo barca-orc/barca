@@ -592,3 +592,140 @@ def test_without_duckdb_the_route_is_a_503_and_the_cli_runs_the_query_itself(pro
         code, body, err = cli_sql(project, server, "select count(*) as n from barca.runs")
         assert code == 0, err
         assert body["rows"] == [{"n": 0}]
+
+
+# A sensor polled every two seconds with an asset below it, and a step slow enough to hold the
+# one run slot while another run waits.
+SCHEDULED = """
+import time
+
+from barca import Always, Schedule, asset, sensor
+
+
+@sensor(freshness=Schedule("*/2 * * * * *"))
+def pulse() -> int:
+    return 1
+
+
+@asset(inputs={"p": pulse}, freshness=Always)
+def beat(p: int) -> dict:
+    return {"p": p}
+
+
+@asset()
+def slow() -> dict:
+    time.sleep(4)
+    return {}
+
+
+@asset()
+def quick() -> dict:
+    return {}
+"""
+
+
+def test_the_schedules_the_ticks_and_the_queue_are_tables_of_a_scheduling_server(project):
+    """#965: `barca.schedules` is the scheduler's own state, `barca.ticks` what it recorded,
+    `barca.queue` the run queue as `GET /queue` lists it; a query that also names a result
+    view runs on the client with the same rows."""
+    (project / "pipeline.py").write_text(SCHEDULED)
+    with Serve(project, "--max-runs", "1", env=_env()) as server:
+
+        def rows(query: str) -> list[dict]:
+            status, body = ask(server, query)
+            assert status == 200, body
+            return body["rows"]
+
+        # The schedule as `GET /schedule` reports it, with its interval and one tick's targets.
+        ticked = "select * from barca.ticks where finished_at is not null order by scheduled_at"
+        ticks = server.wait("a finished tick", lambda: rows(ticked), timeout=60)
+        (schedule,) = rows("select * from barca.schedules")
+        (served,) = [s for s in server.get("/schedule") if s["id"] == "pipeline.py:pulse"]
+        assert schedule["id"] == "pipeline.py:pulse" and schedule["name"] == "pulse"
+        assert (schedule["kind"], schedule["cron"]) == ("sensor", "*/2 * * * * *")
+        assert schedule["interval_seconds"] == 2
+        assert schedule["targets"] == ["pipeline.py:pulse", "pipeline.py:beat"]
+        assert schedule["live"] is True and schedule["paused"] is False
+        assert schedule["last_fired"] is not None and schedule["last_run_id"] is not None
+        for key in ("max_failures", "failing", "queue_bound", "paused_until"):
+            assert schedule[key] == served[key], key
+
+        # A tick: its slot, the run it started (a run of `barca.runs`), and what it did with
+        # each target.
+        tick = ticks[0]
+        assert tick["schedule_id"] == "pipeline.py:pulse" and tick["action"] == "fired"
+        assert tick["run_status"] == "success" and tick["queue_wait_seconds"] >= 0
+        assert (tick["rebuilt"] + tick["up_to_date"], tick["failed"], tick["not_reached"]) == (
+            2,
+            0,
+            0,
+        ), tick
+        assert [t["node"] for t in tick["targets"]] == ["pipeline.py:pulse", "pipeline.py:beat"]
+        joined = rows(
+            "select r.triggered_by, r.scheduled_at = t.scheduled_at as same_slot "
+            f"from barca.ticks t join barca.runs r using (run_id) where t.run_id = '{tick['run_id']}'"
+        )
+        assert joined == [{"triggered_by": "schedule", "same_slot": True}]
+        outcomes = rows(
+            "select target.outcome from barca.ticks t, unnest(t.targets) as u(target) "
+            f"where target.node = 'pipeline.py:beat' and t.run_id = '{tick['run_id']}'"
+        )
+        assert outcomes[0]["outcome"] in ("rebuilt", "up_to_date"), outcomes
+
+        # One run slot: a slow run holds it and the next one waits, first in line.
+        first = server.submit("slow", "get")["run_id"]
+        server.wait("the slow run to start", lambda: server.run(first)["status"] == "running")
+        second = server.submit("quick", "get")["run_id"]
+        listed = "select * from barca.queue where triggered_by = 'api'"
+        queue = server.wait(
+            "both runs in the queue", lambda: len(q := rows(listed)) == 2 and q, timeout=30
+        )
+        by_run = {q["run_id"]: q for q in queue}
+        running, waiting = by_run[first], by_run[second]
+        assert (running["state"], running["position"]) == ("running", None), running
+        assert running["started_at"] is not None and running["wait_seconds"] is not None
+        assert waiting["state"] == "queued" and waiting["position"] >= 1, waiting
+        assert waiting["estimated_start_at"] is not None, waiting
+        assert (waiting["command"], waiting["target"]) == ("get", "quick"), waiting
+        assert waiting["scheduled_at"] is None and waiting["schedule_id"] is None
+        # A tick's run in the queue carries its slot.
+        scheduled = (
+            "select scheduled_at, schedule_id from barca.queue where triggered_by = 'schedule'"
+        )
+        for row in rows(scheduled):
+            assert row["schedule_id"] == "pipeline.py:pulse" and row["scheduled_at"], row
+        # The table is the queue now, not the queue when it was first read.
+        server.wait(f"run {second}", lambda: server.run(second)["status"] not in LIVE, timeout=60)
+        assert rows(listed) == []
+
+        # A query that also names a result view runs here: the same schedule and ticks, read
+        # from the server.
+        code, mixed, err = cli_sql(
+            project,
+            server,
+            "select s.id, s.live, (select count(*) from barca.ticks) > 0 as ticked, "
+            "(select count(*) from barca.queue) >= 0 as queue, b.p from barca.schedules s, beat b",
+        )
+        assert code == 0, err
+        assert mixed["rows"] == [
+            {"id": "pipeline.py:pulse", "live": True, "ticked": True, "queue": True, "p": 1}
+        ]
+
+    # Without a server: the schedule and its ticks as the metadata database records them, no
+    # scheduler, and no queue.
+    def local(query: str):
+        out = helpers.barca(project, "sql", query, "--json", "--local", env=_env(), timeout=QUICK)
+        assert out.returncode == 0, out.stderr
+        return json.loads(out.stdout)["rows"], out.stderr
+
+    (recorded,), _ = local("select id, live, targets, interval_seconds from barca.schedules")
+    assert recorded == {
+        "id": "pipeline.py:pulse",
+        "live": False,
+        "targets": ["pipeline.py:pulse", "pipeline.py:beat"],
+        "interval_seconds": 2,
+    }
+    kept, _ = local("select count(*) as ticks from barca.ticks where action = 'fired'")
+    assert kept[0]["ticks"] >= 1
+    none, err = local("select * from barca.queue")
+    assert none == [] and "barca.queue is empty: the run queue is a server's" in err, err

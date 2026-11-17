@@ -1,9 +1,9 @@
 """The server's query helper: `POST /sql/query`, invoked by Rust as `python -m barca._sql_server`.
 
 One long-lived process per `barca serve`, holding an in-memory DuckDB with barca's own records
-(`barca.runs`, `barca.materializations`, `barca.nodes`) and nothing else: no result view, no
-file. Rust hands it the rows of a table when the metadata database or the graph changed, and
-one query at a time.
+(`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`,
+`barca.queue`) and nothing else: no result view, no file. Rust hands it the rows of a table
+when the metadata database or the graph changed, and one query at a time.
 
 A query comes from whoever can reach the server, so the database is closed before the first
 one runs, and each of these holds without the others:

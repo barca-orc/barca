@@ -41,13 +41,14 @@ pub use barca_db::db::{
 };
 
 // The tick record (#960): what each due tick of a schedule decided and how its run ended. The
-// server's scheduler and run recorder write it; `ticks_for_schedule`, `tick_outcomes_for_node`
-// and `latest_ticks` (every node at once, what health reads) are the reads.
+// server's scheduler and run recorder write it; `ticks_for_schedule`, `tick_outcomes_for_node`,
+// `latest_ticks` (every node at once, what health reads) and `recent_ticks` (the rows of
+// `barca.ticks`) are the reads.
 pub use barca_db::db::{
     LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
     TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, TickTimings,
-    components_of_rows, latest_ticks, record_tick, record_tick_finished, record_tick_started,
-    tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
+    components_of_rows, latest_ticks, recent_ticks, record_tick, record_tick_finished,
+    record_tick_started, tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
 };
 
 // Fixtures for the tests of `barca-cli` and `barca-server`, which write runs without running

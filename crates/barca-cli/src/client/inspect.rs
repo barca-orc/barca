@@ -492,7 +492,7 @@ fn server_runs(
     limit: Option<usize>,
 ) -> bool {
     use barca_core::sql::{names, tables};
-    let barca = [tables::RUNS, tables::MATERIALIZATIONS, tables::NODES];
+    let barca = tables::NAMES;
     let views = catalog
         .views
         .iter()
@@ -506,10 +506,12 @@ fn server_runs(
 }
 
 /// `barca sql` with a server. A query that names only barca's tables (`barca.runs`,
-/// `barca.materializations`, `barca.nodes`) is answered by the server (`POST /sql/query`,
+/// `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`, `barca.queue`)
+/// is answered by the server (`POST /sql/query`,
 /// [`server_runs`]). Any other runs on this machine: the views resolved from the server's
 /// ledger (`GET /sql/views`), barca's tables from its records (`GET /history`,
-/// `GET /materializations`, `GET /nodes`), the artifacts read from the store this project
+/// `GET /materializations`, `GET /nodes`; the schedules, ticks and queue through
+/// `POST /sql/query`), the artifacts read from the store this project
 /// shares with the server, as a local `barca sql` reads them. The server never runs SQL over
 /// results or files.
 pub(crate) async fn sql(
@@ -606,6 +608,41 @@ pub(crate) async fn sql(
         }
         nodes = tables::nodes(Some(&result.nodes));
     }
+    // The schedules, the ticks and the run queue have no route that lists them as rows: the
+    // server's own query route answers `select *` over each, the rows it would query itself.
+    let mut more = Vec::new();
+    for (name, columns) in [
+        (tables::SCHEDULES, tables::SCHEDULE_COLUMNS),
+        (tables::TICKS, tables::TICK_COLUMNS),
+        (tables::QUEUE, tables::QUEUE_COLUMNS),
+    ] {
+        if !tables::named(query, name) {
+            more.push(tables::table(name, columns, None));
+            continue;
+        }
+        let select = format!("select * from barca.{name}");
+        let mut table = tables::table(name, columns, Some(Vec::new()));
+        match server.sql_query(&select, cap).await? {
+            Some(answer) => {
+                let rows = match &answer["rows"] {
+                    serde_json::Value::Array(rows) => rows.clone(),
+                    _ => Vec::new(),
+                };
+                let total = answer["total"].as_u64().map_or(rows.len(), |t| t as usize);
+                table.note = tables::truncated_note(name, rows.len(), total, &server.shown_url);
+                table.rows = Some(rows);
+            }
+            None => {
+                table.note = Some(format!(
+                    "barca.{name} is empty: the server at {} does not answer queries over \
+                     barca's tables (it is from before the query route, or its Python \
+                     environment has no DuckDB: `uv add 'barca[sql]'` there)",
+                    server.shown_url
+                ));
+            }
+        }
+        more.push(table);
+    }
 
     let python = barca_core::commands::find_python();
     let origin = barca_core::sql::Origin::Server {
@@ -617,7 +654,7 @@ pub(crate) async fn sql(
         query,
         limit,
         catalog,
-        vec![runs, steps, nodes],
+        [runs, steps, nodes].into_iter().chain(more).collect(),
         Vec::new(),
         &python,
         &origin,

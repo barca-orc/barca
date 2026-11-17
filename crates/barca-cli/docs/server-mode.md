@@ -243,7 +243,8 @@ with code the server does not run keeps the server's state. A partitioned node h
 artifact, so its `local` is `false`.
 
 `barca sql` asks the server which result each view reads (`GET /sql/views`) and reads barca's
-tables (`barca.runs`, `barca.materializations`, `barca.nodes`) from its records, then runs the
+tables (`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`,
+`barca.queue`) from its records, then runs the
 query here over the store; the server never runs SQL over results or files (`barca docs sql`,
 "With a server"). A query that names only barca's tables is sent to the server instead (`POST
 /sql/query`, below). An unsynced result is not mixed into a view: the error or note says so and
@@ -447,7 +448,7 @@ streams are idle. Auth-off mode rejects token administration.
 | `POST /ledger/lookup` | `{"hashes": [{"node_id", "run_hash"}]}` | `{"results": [{"node_id", "run_hash", "exists", "path", "format", "size_bytes", "digest"}]}`, one per pair, in order; only `exists: false` for a miss |
 | `GET /sql/views?files=a.py` | - | `{"views": [{"name", "node", "kind", "partitioned", "format", "files": [{"path", "partition", "content_hash"}], "stale", "run_hash"}], "missing": [{"name", "node", "command", ...}], "duplicates": [{"name", "ids"}]}`: which result each `barca sql` view reads |
 | `GET /materializations?limit=N&offset=M` | - | `{"materializations": [...], "total", "limit", "offset"}`: step results, newest first (`barca.materializations`); `limit` defaults to 1000, at most 10000 |
-| `POST /sql/query` | `{"query": "select ...", "limit": 1000}` | `{"columns", "rows", "total", "truncated", "hint"?, "notes"?}`: the document `barca sql --json` prints, for one `SELECT` over `barca.runs`, `barca.materializations` and `barca.nodes`; `400` for anything else or rows past 4MB, `408` past 5 seconds, `429` beyond four queries at once, `503` without DuckDB |
+| `POST /sql/query` | `{"query": "select ...", "limit": 1000}` | `{"columns", "rows", "total", "truncated", "hint"?, "notes"?}`: the document `barca sql --json` prints, for one `SELECT` over barca's tables (`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`, `barca.queue`); `400` for anything else or rows past 4MB, `408` past 5 seconds, `429` beyond four queries at once, `503` without DuckDB |
 | `POST /ledger/runs` | `{"run": {...}, "steps": [...]}`: the run row and its step rows | `201 {"run_id", "bytes_changed"}`, or `409` with the error envelope naming the node and nothing recorded; `400` on a server with no store, `403` on a `--read-only` one, `503` while it shuts down |
 
 A repeated post of a run the server already recorded (same `run.run_id`) answers `201` with the
@@ -457,8 +458,9 @@ run it recorded.
 files. It is a read: a `--read-only` server serves it, and with `--auth token` it needs a token
 like every other route.
 
-- The query is one `SELECT` (DuckDB dialect) over `barca.runs`, `barca.materializations` and
-  `barca.nodes` (`barca docs sql`, "barca's own tables"). `limit` defaults to 1000 and is at
+- The query is one `SELECT` (DuckDB dialect) over `barca.runs`, `barca.materializations`,
+  `barca.nodes`, `barca.schedules`, `barca.ticks` and `barca.queue` (`barca docs sql`, "barca's
+  own tables"). `barca.queue` is the queue of `GET /queue` at the time of the query. `limit` defaults to 1000 and is at
   most 10000; `total` counts every row, `truncated` says rows were cut and `hint` what to send.
   `notes` appears when a table holds more than the 100000 rows the server loads of it.
   An answer holds at most 4MB of rows: a query whose first `limit` rows are more is refused

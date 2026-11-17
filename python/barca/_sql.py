@@ -9,9 +9,10 @@ the fsspec filesystem the workers use, and queried from there. A copy is reused 
 object's size and version (etag, generation, modified time) are unchanged, so a query costs one
 metadata request per remote file it reads, and a download only the first time.
 
-barca's own records (`barca.runs`, `barca.materializations`, `barca.nodes`) arrive as rows from
-Rust and become tables in the `barca` schema; a table the query does not name arrives without
-rows and is a typed placeholder that errors when read. `show tables` lists the views and those
+barca's own records (`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`,
+`barca.ticks`, `barca.queue`) arrive as rows from Rust and become tables in the `barca` schema;
+a table the query does not name arrives without rows and is a typed placeholder that errors
+when read. `show tables` lists the views and those
 tables (as `barca.runs`), not only the views of the default schema.
 
 Protocol: one JSON document on stdin,

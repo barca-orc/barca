@@ -193,6 +193,23 @@ pub(crate) fn median(values: &[f64]) -> f64 {
     }
 }
 
+fn interval_between(prev: Option<i64>, next: Option<i64>) -> Option<i64> {
+    match (prev, next) {
+        (Some(prev), Some(next)) if next > prev => Some(next - prev),
+        _ => None,
+    }
+}
+
+/// How far apart a schedule's slots are as of `now`, in seconds: from the slot before `now`
+/// to the one after it, what [`Standing::interval_seconds`] holds. `None` for a cron with no
+/// slot on one side.
+pub fn interval_seconds(cron: &Cron, zone: &Zone, now: DateTime<Utc>) -> Option<i64> {
+    interval_between(
+        prev_fire(cron, zone, now).map(|t| t.timestamp()),
+        next_fire(cron, zone, now).map(|t| t.timestamp()),
+    )
+}
+
 /// The one definition of a schedule's last tick, last run, next slot and lateness.
 ///
 /// A schedule is late when it is not paused, a slot after its newest fired tick has passed
@@ -222,10 +239,7 @@ pub fn standing(
     let own_wait = newest.map_or(0, |run| run.queue_wait(at)) as f64;
     let allowance = grace_seconds as f64 + typical_queue_wait_seconds.max(own_wait);
     let run_seconds = ticks.map_or(&[][..], |t| &t.run_seconds);
-    let interval_seconds = match (prev_fire, next) {
-        (Some(prev), Some(next)) if next > prev => Some(next - prev),
-        _ => None,
-    };
+    let interval_seconds = interval_between(prev_fire, next);
     Standing {
         prev_fire,
         next_fire: next,

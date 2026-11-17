@@ -48,6 +48,21 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   that scope, so a group's list is its own entry and nothing is filtered or counted in the
   browser. `barca status --rollup` prints "The first 3 hold N of them." above a list of more
   than three roots. Experimental, with the rest of the rollup.
+- **`barca sql` has the schedules, the ticks and the run queue as tables, and the manual ships
+  the health queries** (#965). `barca.schedules` is one row per scheduled node (its `schedule`
+  block from `barca status --json`, with `interval_seconds` and the `targets` of one tick),
+  `barca.ticks` one row per recorded tick (what the scheduler decided, the run it started, how
+  many targets ended each way and, for a schedule's newest 20 fired ticks, each target's
+  outcome), and `barca.queue` one row per run in a server's run queue (`barca queue --json`,
+  with `state` and the tick's `scheduled_at`). They work in `barca sql` on a machine (the
+  queue is a server's: there the table is empty and stderr says so), through `POST /sql/query`
+  and with `barca sql --server`. `barca docs sql` ("Health queries") gives eight short queries
+  to adapt, each run by the tests as written: the freshness gap as one number, the gap by
+  source file, the top roots by nodes held and gap, the nodes with no refresh path, the
+  overdue nodes with how many ticks missed them, the queue-bound schedules with their typical
+  wait, the tick outcomes of one node over time, and the runs per hour by trigger. Times are
+  text in every table, so cast one to compute with it (`now() - stale_since::timestamptz`).
+  `barca.nodes` has no group column: the gap by group is `barca status --rollup`.
 - **The server answers queries over barca's own tables: `POST /sql/query`** (#972, experimental).
   A browser cannot run DuckDB over a server's records, so the web UI had no way to ask an
   aggregate question. The route takes `{"query", "limit"}` and answers the document `barca sql

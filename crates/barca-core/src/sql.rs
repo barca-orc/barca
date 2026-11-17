@@ -185,10 +185,10 @@ pub async fn sql(
     python: &std::path::Path,
     limit: Option<usize>,
 ) -> Result<SqlResult, BarcaError> {
-    let (st, membership) =
+    let (st, membership, dag) =
         status::status_with_membership(cfg, &[], file_args, python, 0, false).await?;
     let catalog = resolve(cfg, &st, &membership, |_| true).await?;
-    let tables = tables::local(cfg, query, &st.nodes).await?;
+    let tables = tables::local(cfg, query, &st.nodes, &dag).await?;
     run(
         cfg,
         query,
