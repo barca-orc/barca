@@ -65,6 +65,15 @@ again with no commands, flags, keys, routes, decorator arguments or UI features.
 is parsed from Python and served by `GET /chains`, which brings the parser, CLI contract and
 manual changes with it. Nothing else new lands before 0.39.6 is done.
 
+**0.44.0, the freshness gap ([#974](https://github.com/barca-orc/barca/issues/974)):** the UI
+and the CLI both answer "how far is this project from a fresh DAG, why, and what closes the
+distance", from one implementation in Rust. The specification is
+[health.md](specs/behavior/health.md) (#953, approved intent); "The UI" under Decided is amended
+for it. In order: confirm whether `Always` assets below a polled sensor stay stale through
+ticks (#952); move the UI's derivations into `barca-core` with no new behaviour (#954 to #959);
+record what each tick decided and classify refresh path, estimates, cause and root (#960 to
+#965, #972, #973); then the UI, rendering only (#966 to #971).
+
 RFC-0014 pipeline fuzzing is deferred, with no action on its working branch. It has no
 scheduled release. DuckDB 1.x and 2.x remain supported (`duckdb>=1.4,<3`), with CI on both.
 
@@ -112,6 +121,7 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.39.4 | 2026-11-03 | A server's runs share identical in-flight asset steps (experimental); a requeued run's re-executed steps are recorded under their new run hashes | #654 (part, [#796](https://github.com/barca-orc/barca/pull/796)), #794 |
 | 0.39.5 (the 0.39 cleanup) | 2026-11-04 | No features: #799 documented (a refresh recomputes only its target's cone); 0.39.4 measured (31.7 ms trivial run) with a performance gate in the merge tier; the documents made true; one `CacheState` enum, one metadata write boundary, serve out of the embedded hot loop, the `.barca/` layout spec; per-test timeouts, Playwright and type drift in CI, isolated backup tests, Dependabot at zero critical and high | #800: #804 (#799), #810, #803, #802, #819, #817, #805, #806, #809, #808 |
 | 0.39.6 (second cleanup) | planned | No features: `db.rs` split by table family and metadata backups that do not hold the DB lock (landed), then the five items under "Now, in order" | #821, #801, #807 and the issues filed from the 2026-11-04 audit |
+| 0.44.0 | planned | The freshness gap: health, causes and estimates defined once in Rust, for the CLI and the UI | #974: #952 to #973 |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
@@ -154,6 +164,21 @@ and no others, maps each state once from the shared `CacheState` enum via genera
 shows exactly what `barca status --json` shows, with client-side muting removed. The current UI
 does not meet this, so the redesign is scoped after 0.39.6 (its prototype is PR #818,
 `feat/ui-chains`); #807 tracks the stale Playwright specs, fixed in 0.39.6.
+
+Amended 2026-11-17 (#953, for 0.44.0). The health words (`failing`, `blocked`, `suspect`,
+`behind`, `undecided`, `never_run`, `ok`) and the cause buckets (`catching_up`, `queued`,
+`no_refresh_path`, `overdue`, `failing`, `undecided`) are barca vocabulary too: defined once in
+Rust (`barca-core`), carried by `barca status --json` and the `barca.*` tables, and shown by the
+CLI and the UI alike, beside the cache state and never in place of it. The UI still adds no
+word of its own: the seven health words it shipped in TypeScript in 0.43 move to Rust. Four
+layers, each with one job: **records** (the scheduler writes what it decided and computes no
+analytics), **classification** (`barca-core` derives health, cause, refresh path and
+estimates), **aggregation** (`barca sql` tables in the `barca` schema, queried with DuckDB over
+rows Rust hands it) and **presentation** (the CLI and the UI render; TypeScript derives
+nothing). Health is judged by when a node will next be fresh: a stale node the next tick
+refreshes is catching up, not a problem; one that ticks passed over (overdue) or that nothing
+will refresh (no refresh path) is. Specification: [health.md](specs/behavior/health.md),
+approved intent until the 0.44.0 issues implement it.
 
 **Metadata durability (2026-11-04, #810).** The metadata database keeps SQLite's full
 synchronous mode. The 0.39.4 benchmark attributes 3 to 4 ms of a 32 ms trivial run to WAL
