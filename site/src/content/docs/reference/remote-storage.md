@@ -171,6 +171,12 @@ of it, including what a backup contains, the cadence settings and a server's bac
   uploads each artifact in the background as soon as its step finishes. A sensor that returned
   what the store already holds at that location, by this machine's record of a confirmed upload
   (its data did not change), is not uploaded again; an asset is uploaded whenever it runs.
+- How a file is uploaded: to S3, a file of 10 MiB or more goes as a multipart upload of 5 to
+  50 MiB parts, 10 at a time (a file up to 500 MiB goes in one round of parts); a smaller one
+  is one request. To Azure, a file over 64 MiB goes as 4 MiB blocks, 64 at a time, and a
+  smaller one is one request; the large files of a `@sink` share the 64 between them, so an
+  upload holds at most 256 MiB of blocks in memory. A `max_concurrency` in the storage options
+  replaces the 10 or 64. GCS uploads go as gcsfs sends them, one chunk after another.
 - A cache hit whose file is only in the store is downloaded just before the first step that
   reads it eagerly. Cached intermediates nothing reads are never downloaded, and neither are
   parquet results that are only read lazily (below).
