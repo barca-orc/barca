@@ -4,6 +4,7 @@ import { HealthMap } from '@/components/HealthMap'
 import { useAssets } from '@/hooks/useAssets'
 import { usePartitionErrors } from '@/hooks/usePartitionErrors'
 import { causes } from '@/lib/causes'
+import { coverageLine, dataCoverage } from '@/lib/dataSignals'
 import { consumersOf, failedKeyNodes, failures } from '@/lib/health'
 import { healthSummary, leafIds, nearestInTree, ROOT } from '@/lib/healthTree'
 import { useNow } from '@/hooks/useNow'
@@ -36,6 +37,7 @@ export function HealthOverview({ health, scope, onScope, onOpen, onShowFailures 
   const focus = nearestInTree(tree, scope)
   const within = useMemo(() => new Set(leafIds(tree, focus)), [tree, focus])
   const scoped = useMemo(() => states.filter((s) => within.has(s.id)), [states, within])
+  const coverage = useMemo(() => dataCoverage(scoped), [scoped])
   const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scoped), [scoped]))
   const consumers = useMemo(() => (assets.data ? consumersOf(graph) : null), [assets.data, graph])
   const list = useMemo(
@@ -56,6 +58,12 @@ export function HealthOverview({ health, scope, onScope, onOpen, onShowFailures 
           <span className="barca-health-overview-sub">{healthSummary(center) || `${center.leaves.toLocaleString()} nodes, nothing needs attention`}</span>
         </h2>
         <CausesList causes={list} name={shortName} onOpen={onOpen} onShowAll={onShowFailures} nowMs={nowMs} />
+        {/* Always with what it is out of: an asset no worker counted is not measured, never fine. */}
+        {coverage.assets > 0 && (
+          <p className="barca-note barca-muted" aria-label="Data coverage" title="Assets whose latest result has a recorded row count. Data signals (empty output, rows changed) are raised only for these.">
+            Data: {coverageLine(coverage)}
+          </p>
+        )}
       </div>
     </section>
   )

@@ -5,8 +5,9 @@ import { lastAttemptFailed } from './cacheStateDisplay'
 import type { NodeState, RunNodeSummary, RunStep } from './types'
 
 const step = (node_id: string, status: string) => ({ node_id, status }) as RunStep
+// `health` as the server sends it for these keys: failing when some failed, else behind.
 const node = (partitions: NodeState['partitions']) =>
-  ({ partitions, last_materialization: { status: 'success' }, cache: { state: 'partial' } }) as unknown as NodeState
+  ({ partitions, last_materialization: { status: 'success' }, cache: { state: 'partial' }, health: (partitions?.failed ?? 0) > 0 ? 'failing' : 'behind' }) as unknown as NodeState
 
 describe('groupRunSteps', () => {
   it('counts from the summary, however few keys the page lists, with failed keys first', () => {

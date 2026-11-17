@@ -4,7 +4,7 @@ import { plural } from './plural'
 import { shortName, type GraphEntry } from './graph'
 import type { GraphState } from './graphState'
 import { healthCounts, healthLabel, healthParts } from './health'
-import type { Health } from './nodeHealth'
+import type { Health } from './healthDisplay'
 import { isCheck } from './status'
 import { formatSeconds } from './assetTable'
 

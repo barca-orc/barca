@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { causeOf, emptyHealth, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, healthTone, scopeAge, ageCell, streakLabel, successOfLabel, relativeTraceback, pathBreaks } from './health'
 import type { NodeState, PartitionKeys } from './types'
+import { served } from './testdata/served'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
-  return {
+  return served({
     id, name: id.split(':')[1]!, kind: 'asset', inputs, partitioned: false,
     cache: { state: 'cached', reason: 'materialized', detail: '' },
     last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null },
     shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, ...over,
-  }
+  })
 }
 const failedAt = (at: string, error: string) => ({
   last_materialization: { status: 'failed', created_at: at, elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error },
@@ -17,7 +18,7 @@ const failedAt = (at: string, error: string) => ({
 // raw → clean → (report, check); orphan fails alone.
 const nodes = [
   node('p.py:raw', [], failedAt('2026-10-29 11:00:00', "KeyError: 'currency'\n  File \"p.py\", line 3")),
-  node('p.py:clean', ['p.py:raw'], { cache: { state: 'stale', reason: 'upstream_stale', detail: '' } }),
+  node('p.py:clean', ['p.py:raw'], { cache: { state: 'stale', reason: 'upstream_stale', detail: '' }, health: 'blocked' }),
   node('p.py:report', ['p.py:clean']),
   node('p.py:check', ['p.py:clean'], { kind: 'task' }),
   node('p.py:orphan', [], failedAt('2026-10-29 12:00:00', 'ZeroDivisionError: division by zero')),
@@ -29,7 +30,7 @@ describe('health', () => {
   it('counts a scope by health, each node once: a failure first, then run work, then the rest by severity', () => {
     const ids = nodes.map((n) => n.id)
     const counts = healthCounts(ids, byId)
-    // `raw` and `orphan` failed; `clean` (stale, below `raw`) and `report`, `check` (below it) are blocked.
+    // `raw` and `orphan` failed; the server says `clean` (stale, below `raw`) is blocked.
     expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, failing: 2, blocked: 1, ok: 2 } })
     expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ ok: 1 }) })
     expect(healthLabel(counts)).toBe('2 failing · 1 blocked · 2 ok')

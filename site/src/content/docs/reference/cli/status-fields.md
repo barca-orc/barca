@@ -37,11 +37,100 @@ Results recorded by an older barca, and results a server's ledger received from 
 node the rows of the run's successful keys added up, `null` unless every one was counted, and
 `recent_runs[].empty_keys`), in `barca sql` (`materializations.rows`, `nodes.last_rows`,
 `nodes.partitions_empty`), and in the server's routes ([Server Mode: a Shared Ledger and --server: Data health](/reference/server-mode/#data-health)).
+What the counts say about a node's data, and how many assets have one at all, is in "Data
+signals and coverage" below.
 A partitioned node's `partitions.empty` counts its keys whose latest successful result wrote no
 rows (absent when none did).
 For a partitioned node it is one key's row from the latest run, the first key in sort order
 (`partition` names it), so two identical runs report the same key whatever order the keys
 finished in.
+
+## Health
+
+Every node has a `health`: one word that says whether something needs doing about it, beside
+its cache state and never in place of it. `barca status --json`, the server's `GET /nodes` and
+`GET /state` and `barca.nodes` in `barca sql` carry the same word, computed once in barca, and
+the web UI shows it. The words, most severe first:
+
+| `health` | Printed as | Meaning |
+|---|---|---|
+| `failing` | failing | its own last attempt failed |
+| `blocked` | blocked | something upstream keeps it from being brought up to date |
+| `suspect` | suspect data | its last run succeeded but its recorded row counts look wrong |
+| `behind` | behind | out of date against its inputs, partly computed, out of sync, or late |
+| `undecided` | undecided | barca cannot decide yet (a cutoff or sensor upstream has not reported) |
+| `never_run` | never run | nothing recorded |
+| `ok` | ok | fresh, or a task or sensor whose last run succeeded |
+
+`health_reason` names the rule that decided it. The first that applies wins:
+
+| `health_reason` | `health` | When |
+|---|---|---|
+| `last_attempt_failed` | `failing` | `last_materialization.status` is `failed` |
+| `keys_failed` | `failing` | `partitions.failed` is above 0 and the last materialization did not fail |
+| `upstream_failing` | `blocked` | a node upstream is failing: an input, or an input of an input that is itself neither failing, `cached` nor `always_runs`. A pinned asset ([barca pin and unpin](/reference/cli/pin/)) is never blocked and a failure does not pass it |
+| `cache_blocked` | `blocked` | `cache.state` is `blocked`, or `cache.reason` is `upstream_failed` |
+| `empty` | `suspect` | it has an `empty` signal |
+| `rows_changed` | `suspect` | it has a `rows_changed` signal |
+| `behind_input` | `behind` | it has a `behind_input` signal |
+| `schedule_late` | `behind` | its schedule missed a slot more than a minute ago (half the interval for a schedule more frequent than every two minutes) and is not paused |
+| `stale`, `partial`, `unsynced` | `behind` | `cache.state` is that state |
+| `unknown` | `undecided` | `cache.state` is `unknown` |
+| `never_run` | `never_run` | `cache.state` is `never_run` |
+| `no_successful_run` | `never_run` | a task, sensor or `always` asset with no recorded run |
+| `last_run_succeeded` | `ok` | a task, sensor or `always` asset whose last run did not fail |
+| `cached` | `ok` | `cache.state` is `cached` |
+
+A partitioned node has one health. A run working on a node does not change it. A node below
+a failure is `blocked` even when its own state is `unknown` (it waits on a cutoff): the walk
+passes through such nodes. `barca status` scoped to targets reads the targets' upstream cones,
+so a failure above them is seen.
+
+The table prints the words of the nodes it lists under the cache counts, most severe first:
+`Health: 1 failing, 1 blocked, 2 ok`. With `--state` or `--problems` the line reads `Health
+(nodes listed)`.
+
+```bash
+barca status --json | jq -r '.nodes[] | select(.health != "ok") | [.health, .health_reason, .id] | @tsv'
+barca sql "select health, count(*) from barca.nodes group by all order by 2 desc"
+```
+
+Health is experimental ([CLI Contract](/reference/cli-contract/)): later releases add why a node that is not
+fresh is so and when it is expected fresh.
+
+## Data signals and coverage
+
+`signals` lists what a node's recorded results say about its data, from facts the metadata DB
+holds (row counts workers recorded, when each result was written), never by reading an
+artifact. Only assets have signals, in this order:
+
+| `kind` | When | Fields |
+|---|---|---|
+| `empty` | its latest successful result wrote no rows: for a partitioned node, some keys' latest successful results | `empty_keys` of `keys` (the keys whose latest result recorded a count; 1 of 1 without keys), `previous_empty_keys`: how many were empty before its newest run, `null` when no key had a counted result before it |
+| `rows_changed` | a latest successful result's row count differs from the one before it, same node and key, by more than half of it (any rows after an empty result count) | `rows` and `previous_rows` of `key` (`null` without keys), the key that moved the most relative to before; `changed_keys`: how many moved |
+| `behind_input` | its cache state is `unknown` (nothing else says it is behind, typically a `collect()` fan-in below a pending cutoff) and its latest successful result is older than the newest successful result of an asset it reads, from another run | `input` (the input with the newest result), `input_success_at`, `last_success_at` (UTC `YYYY-MM-DD HH:MM:SS`) |
+
+A signal stays until the next successful result of the node (or key) replaces the one it is
+about; there is no acknowledgement yet. A `stale`, `partial` or `blocked` node gets no
+`behind_input`: its state already says it will run.
+
+An empty `signals` does not mean the data is fine. A signal can only be raised for a result
+whose rows were counted ("Row counts" above), so each asset says whether it was: `measured` is
+`true` when its latest successful result has a recorded row count (for a partitioned asset,
+any key's), `false` when it has none, and `null` for a task or sensor. An asset with
+`measured: false` is not measured, never ok for data.
+
+`data_coverage`, beside `summary`, counts this for every node in scope (a filter does not
+change it): `assets`, how many of them are `measured`, and how many of those are `suspect`
+(an `empty` or `rows_changed` signal). The table prints it as its last line but one, `Data: 7
+of 556 assets measured`, with `, 2 suspect` when some are, so "no suspect data" is never said
+without what it is out of.
+
+```bash
+barca status --json | jq '.data_coverage'
+barca status --json | jq -r '.nodes[] | select(.signals != []) | [.id, (.signals | map(.kind) | join(","))] | @tsv'
+barca sql "select count(*) filter (where measured) as measured, count(*) as assets from barca.nodes where kind = 'asset'"
+```
 
 ## Last changed bytes
 
@@ -123,11 +212,16 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "inputs": [],
       "partitioned": false,
       "cache": {"state": "cached", "reason": "materialized", "detail": "...", "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet"},
+      "health": "ok",
+      "health_reason": "cached",
+      "signals": [],
+      "measured": true,
       "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
   ],
-  "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "blocked": 0, "unknown": 0, "always_runs": 0}
+  "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "blocked": 0, "unknown": 0, "always_runs": 0},
+  "data_coverage": {"assets": 2, "measured": 1, "suspect": 0}
 }
 ```
 
@@ -135,7 +229,9 @@ A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-2
 "last_fired": null, "last_status": null, "last_run_id": null, "late": false, "late_since": null,
 "failures": 0, "max_failures": 5, "failing": false,
 "paused": false, "paused_until": null, "skip_reason": null, "live": false}`, and `--state` or
-`--problems` add `"filter"` beside `summary`.
+`--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `signals`, `measured`
+and `data_coverage` are in "Health" and "Data signals and coverage" above; here `total` is a
+dict, which has no row count, so one of the two assets is measured.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column
 order. `--env <name>` reads another environment's state ([The Cache](/reference/cache/)).

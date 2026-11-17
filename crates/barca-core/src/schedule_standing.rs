@@ -211,6 +211,21 @@ pub fn standing(
     }
 }
 
+/// The schedules of `jobs` that are late as of `now` ([`standing`]): what row 6 of the health
+/// table reads (`crate::health`).
+pub fn late_schedules(
+    jobs: &[crate::schedule::ScheduledJob],
+    ticks: &HashMap<String, Ticks>,
+    zone: &Zone,
+    now: DateTime<Utc>,
+    paused: &dyn Fn(&str) -> bool,
+) -> std::collections::HashSet<String> {
+    jobs.iter()
+        .filter(|job| standing(&job.cron, zone, now, paused(&job.id), ticks.get(&job.id)).late)
+        .map(|job| job.id.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

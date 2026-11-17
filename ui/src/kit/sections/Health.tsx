@@ -5,14 +5,15 @@ import type { Cause } from '@/lib/causes'
 import type { NodeGroup, NodeState } from '@/lib/types'
 import { NOW_MS } from '../fixtures'
 import { Spec, Variant } from '../Kit'
+import { served } from '@/lib/testdata/served'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
-  return {
+  return served({
     id, name: id.split(':')[1]!, kind: 'asset', inputs, partitioned: false,
     cache: { state: 'cached', reason: 'materialized', detail: '' },
     last_materialization: { status: 'success', created_at: '2026-11-16 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null },
     shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, prev_run: null, late_since: null, signals: [], ...over,
-  }
+  })
 }
 const failed = { last_materialization: { status: 'failed', created_at: '2026-11-16 11:00:00', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'TypeError: x' } }
 const stale = { cache: { state: 'stale' as const, reason: 'changed' as const, detail: '' } }

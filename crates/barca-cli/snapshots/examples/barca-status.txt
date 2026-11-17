@@ -22,7 +22,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: id, name, kind, inputs, partitioned, cache, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
+          [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
 
       --sample <N>
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)

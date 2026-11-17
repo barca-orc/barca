@@ -112,15 +112,20 @@ experimental), as its "Acceptance and evidence" states. [The TLA+ models](models
 abstraction of the approved ownership/order rules. Model checking is not a proof of Rust
 conformance or performance.
 
-[Health, causes and the freshness gap](behavior/health.md) is approved intent, not yet
-implemented: the health words and their derivation, the cause buckets and roots, the refresh
+[Health, causes and the freshness gap](behavior/health.md) is approved intent, implemented in
+part. Implemented (experimental): the health words and their derivation (`health`,
+`health_reason`), `signals` and `measured` on every status node, and `data_coverage`, in
+`barca status --json`, `GET /nodes`, `GET /state` and `barca.nodes`, with their wire shapes in
+the OpenAPI and CLI contract owners and their rules checked in
+`crates/barca-core/src/health.rs`. Not implemented: the cause buckets and roots, the refresh
 path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the freshness gap, the rollup
 (`GET /state/rollup`, `barca status --rollup`), the tick record, the `barca.schedules`,
-`barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Only the
-tick record is implemented (#960: the `schedule_ticks` table and its reads, which nothing uses
-yet); no other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974) implements it issue by
-issue, and each PR moves its wire shapes into the OpenAPI and CLI contract owners. Until then
-the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are authoritative.
+`barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Also
+implemented: the tick record (#960: the `schedule_ticks` table and its reads, which nothing uses
+yet). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
+implements it issue by issue, and each PR moves its wire shapes into the OpenAPI and CLI contract
+owners. Until then the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are
+authoritative for the rest.
 
 [API ideas](proposals/api-ideas.md) are unscheduled, unapproved alternatives. Keep them separate
 from both implemented contracts and accepted design. [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical

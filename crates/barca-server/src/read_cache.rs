@@ -160,6 +160,7 @@ struct SharedSnapshot {
 
 /// Every node's age, shared by the polls of one database state.
 type NodeAges = Arc<HashMap<String, barca_core::db::NodeAge>>;
+type Pinned = Arc<std::collections::HashSet<String>>;
 
 /// What the metadata database records of every schedule, shared by the polls of one database
 /// state: its ticks and its failed ticks.
@@ -249,6 +250,9 @@ pub struct ReadCache {
     /// The last node ages read, and the database state they are of ([`AppState::cached_ages`]).
     /// An async lock, held while they are read, so that concurrent polls read them once.
     ages: tokio::sync::Mutex<Option<(Stamp, NodeAges)>>,
+    /// The pinned assets last read, and the database state they are of
+    /// ([`AppState::cached_pinned`]).
+    pinned: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
     /// The last recorded ticks read, the database state they are of and the schedules they
     /// were read for ([`AppState::cached_ticks`]).
     ticks: tokio::sync::Mutex<Option<KeptScheduleFacts>>,
@@ -609,6 +613,30 @@ impl AppState {
         );
         *kept = Some((db.clone(), ages.clone()));
         Ok(ages)
+    }
+
+    /// The ids of the pinned assets for the database in state `db`, kept until it changes: what
+    /// health reads to stop a failure at a pin (`barca_core::health`).
+    pub(crate) async fn cached_pinned(
+        &self,
+        db: &Stamp,
+        db_path: &str,
+    ) -> Result<Pinned, BarcaError> {
+        let mut kept = self.reads.pinned.lock().await;
+        if let Some((stamp, pinned)) = kept.as_ref()
+            && stamp == db
+        {
+            return Ok(pinned.clone());
+        }
+        let pinned: Pinned = Arc::new(
+            barca_core::pins::list(db_path)
+                .await?
+                .into_iter()
+                .map(|pin| pin.node_id)
+                .collect(),
+        );
+        *kept = Some((db.clone(), pinned.clone()));
+        Ok(pinned)
     }
 
     /// What the database in state `db` records of `schedules` (scheduled node ids): their

@@ -3,6 +3,7 @@ import type { ListNode, NodeState, ScheduleJob } from './types'
 import type { ScheduleStatus } from './generated/ScheduleStatus'
 import { formatLate, humanizeCron, lastStatusLabel, scheduleRows } from './schedules'
 import { formatCountdown } from './time'
+import { served } from './testdata/served'
 
 describe('humanizeCron', () => {
   it('describes common schedules in words', () => {
@@ -68,7 +69,7 @@ function job(id: string, over: Partial<ScheduleJob> = {}): ScheduleJob {
 }
 
 function state(id: string, over: Partial<NodeState> = {}): NodeState {
-  return {
+  return served({
     id,
     name: id.split(':').pop()!,
     kind: 'task',
@@ -86,7 +87,7 @@ function state(id: string, over: Partial<NodeState> = {}): NodeState {
     last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     ...over,
-  }
+  })
 }
 
 describe('scheduleRows', () => {
