@@ -363,7 +363,8 @@ a.barca-btn { text-decoration: none; }
 
 /* HealthMap: a scope as a sunburst, sized by what is wrong, coloured by the worst health inside. */
 .barca-healthmap { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 0; min-width: 0; }
-.barca-healthmap svg { display: block; overflow: visible; }
+.barca-healthmap svg { display: block; overflow: visible; width: clamp(180px, 22vw, 300px); height: auto; }
+.barca-healthmap-caption { max-width: clamp(180px, 22vw, 300px); }
 .barca-healthmap-arc { stroke: var(--bg-canvas); stroke-width: 1; cursor: pointer; transition: opacity var(--dur-fast) var(--ease-out); }
 .barca-healthmap-arc[data-depth="2"] { opacity: 0.85; }
 .barca-healthmap-arc[data-depth="3"] { opacity: 0.7; }
