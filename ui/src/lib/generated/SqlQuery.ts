@@ -9,6 +9,6 @@ export type SqlQuery = {
  */
 query: string,
 /**
- * Rows to answer: default [`DEFAULT_LIMIT`], at most [`MAX_LIMIT`].
+ * Rows to answer: 1000 when absent, at most 10000 (a larger value is lowered to it).
  */
 limit?: number, };
