@@ -247,9 +247,9 @@
 .barca-view-head { min-height: 48px; padding: 10px 24px; flex: none; container-type: inline-size; display: flex; flex-direction: column; justify-content: center; }
 .barca-view-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-height: 28px; }
 .barca-view-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-right: 6px; }
-/* A group's header (GroupedPipelinePage) stays one line: its breadcrumb and health give way,
-   cut at their ends, before its view switch wraps. */
-.barca-view-bar:has(> .barca-group-crumbs) { flex-wrap: nowrap; }
+/* A group's header (GroupedPipelinePage) is one line while everything fits whole; short of
+   room its view switch wraps to a second line (the bar's `flex-wrap`), before the breadcrumb's
+   ends, the counts or the health are cut. */
 .barca-view-title h1 {
   font-family: var(--font-display);
   font-size: var(--text-lg);
@@ -774,12 +774,16 @@
   min-width: 0;
   color: var(--text-faint);
 }
-/* Short of room, the ancestors (navigation, whole in their tooltip) give way before the
-   heading, which names where you are: the heading is never cut, at the root either. */
+/* The heading names where you are and the root where you came from: neither is cut while the
+   line has room for them. The crumbs between are navigation, whole in their tooltip: they are
+   the only part shortened, to 24 characters each, so a deep path leaves the line to the counts
+   and the health. A breadcrumb wider than the page alone still gives its ancestors up first. */
 .barca-group-crumbs > span:has(> h1), .barca-group-crumbs > h1 { flex-shrink: 0; }
-/* After the heading, its counts and its health give way first: cut at their end, and on a
-   narrow page the health is its bar alone (its words are in its tooltip). */
-.barca-view-bar:has(> .barca-group-crumbs) > .barca-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 2; }
+.barca-group-crumbs > span > button { max-width: 24ch; }
+.barca-group-crumbs > button { flex-shrink: 0; }
+/* The counts and the health are never cut: what does not fit beside them wraps under them. On
+   a narrow page the health is its bar alone (its words are in its tooltip). */
+.barca-view-bar:has(> .barca-group-crumbs) > .barca-count { flex: none; white-space: nowrap; }
 @container (max-width: 900px) {
   .barca-scope-health .barca-health-label { display: none; }
 }
@@ -1000,9 +1004,8 @@
   line-height: 1.5;
 }
 
-/* The open scope's health beside its breadcrumb. When the bar is short of room the health
-   label gives way first (it has an ellipsis), the heading last; nothing wraps or overlaps. */
-.barca-scope-health { display: flex; align-items: center; min-height: 20px; min-width: 0; flex-shrink: 4; }
+/* The open scope's health beside its breadcrumb: whole, on a line with what fits beside it. */
+.barca-scope-health { display: flex; align-items: center; min-height: 20px; flex: none; max-width: 100%; }
 .barca-group-external { color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; }
 .barca-view-toggle button[data-failed]:not([aria-pressed='true']) { color: var(--text-strong); }
 .barca-panel-health { margin: 10px 0 4px; max-width: 100%; min-width: 0; }

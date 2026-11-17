@@ -23,10 +23,23 @@ export function parseTime(value: string): number | null {
   return Number.isNaN(t) ? null : t
 }
 
-/** `3h ago`; a value that is not a time is returned as it is. */
+/** What an absent time reads as: a time not recorded, or a `now` not known yet. */
+export const NO_TIME = '–'
+
+/**
+ * Whether `ms` is a time. `0` is not: it is what a time not recorded yet looks like (a query's
+ * `dataUpdatedAt` before its first answer, a zeroed timestamp), and shown relative to a real
+ * time it would read as fifty-odd years (`in 20774d`).
+ */
+export function isInstant(ms: number | null | undefined): ms is number {
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0
+}
+
+/** `3h ago`; a value that is not a time is returned as it is, an absent one or an absent `nowMs` as `–`. */
 export function formatAgo(value: string, nowMs: number): string {
   const t = parseTime(value)
-  return t === null ? value : agoOf(t, nowMs)
+  if (t === null) return value
+  return isInstant(t) && isInstant(nowMs) ? agoOf(t, nowMs) : NO_TIME
 }
 
 /** `3h ago` of a time in ms; a time ahead of `nowMs` reads `just now`. */
@@ -38,8 +51,12 @@ function agoOf(ms: number, nowMs: number): string {
   return `${Math.floor(s / 86400)}d ago`
 }
 
-/** `in 12s`, `in 12m`, `in 3h 5m`, `in 2d`; a time already past is `due now` (a next run). */
+/**
+ * `in 12s`, `in 12m`, `in 3h 5m`, `in 2d`; a time already past is `due now` (a next run). An
+ * absent time, or an absent `nowMs`, is `–`.
+ */
 export function formatCountdown(atMs: number, nowMs: number): string {
+  if (!isInstant(atMs) || !isInstant(nowMs)) return NO_TIME
   const s = Math.floor((atMs - nowMs) / 1000)
   if (s < 0) return 'due now'
   if (s < 60) return `in ${s}s`
@@ -50,8 +67,12 @@ export function formatCountdown(atMs: number, nowMs: number): string {
   return `in ${Math.floor(h / 24)}d`
 }
 
-/** A time relative to `nowMs`, either way: `3h ago` behind it, `in 5m` ahead of it. */
+/**
+ * A time relative to `nowMs`, either way: `3h ago` behind it, `in 5m` ahead of it. An absent
+ * time, or an absent `nowMs` (data still loading), is `–`: never an age measured from the epoch.
+ */
 export function formatRelative(ms: number, nowMs: number): string {
+  if (!isInstant(ms) || !isInstant(nowMs)) return NO_TIME
   return ms > nowMs ? formatCountdown(ms, nowMs) : agoOf(ms, nowMs)
 }
 
