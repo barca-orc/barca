@@ -5,8 +5,9 @@ import { POLL_WHOLE_MS, statePollInterval } from '@/lib/running'
 import { useSearchParams } from 'react-router'
 import { useAssets } from './useAssets'
 import { useGroups } from './useGroups'
+import { useGroupTree } from './useGroupTree'
 import { inPipeline } from '@/lib/pipeline'
-import { groupTree, viewScope } from '@/lib/groups'
+import { viewScope } from '@/lib/groups'
 import { recovering } from './polling'
 import type { NodeState } from '@/lib/types'
 import { knownStates } from '@/lib/knownStates'
@@ -21,10 +22,7 @@ export function useStateScope(): { scope: StateScope | null; waiting: boolean } 
   const [params] = useSearchParams()
   const pipeline = params.get('pipeline')
   const groups = useGroups()
-  const tree = useMemo(
-    () => groupTree((groups.data ?? []).filter(g => !pipeline || g.id.startsWith(`group:${pipeline}:`))),
-    [groups.data, pipeline],
-  )
+  const tree = useGroupTree(pipeline)
   const group = viewScope(params, tree)
   return {
     scope: group ? { group } : pipeline ? { file: pipeline } : null,

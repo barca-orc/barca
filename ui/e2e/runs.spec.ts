@@ -117,8 +117,10 @@ test('a failed run names its first failed step, and a bar filters to its hour', 
   const row = { handle: null, command: 'get', files: [], target: null, triggered_by: null, scheduled_at: null, schedule_id: null, finished_at: null, elapsed_seconds: 1, steps_cached: 0, error: null }
   await page.route(/\/runs(\?.*)?$/, (route) => route.fulfill({ json: {
     runs: [
-      { ...row, id: 'r2', run_id: 'r2', status: 'failed', started_at: started, steps_total: 28404, steps_executed: 21950, first_failure: { node_id: 'p.py:orders', error: "KeyError: 'currency'" } },
-      { ...row, id: 'r1', run_id: 'r1', status: 'success', started_at: earlier, steps_total: 1, steps_executed: 1, first_failure: null },
+      { ...row, id: 'r2', run_id: 'r2', status: 'failed', started_at: started, steps_total: 28404, steps_executed: 21950, first_failure: { node_id: 'p.py:orders', error: "KeyError: 'currency'" },
+        // The row's words are the server's (`line`).
+        line: { steps: '21,950 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 28,404 nodes planned · stopped at p.py:orders', failure: "stopped at orders · KeyError: 'currency'", failure_detail: "p.py:orders: KeyError: 'currency'" } },
+      { ...row, id: 'r1', run_id: 'r1', status: 'success', started_at: earlier, steps_total: 1, steps_executed: 1, first_failure: null, line: { steps: '1 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 1 node planned', failure: null, failure_detail: null } },
     ],
     total: 2, truncated: false,
   } }))

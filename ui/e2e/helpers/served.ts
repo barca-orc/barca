@@ -3,8 +3,11 @@
  * `barca-core` and arrives on every row (`health`, `health_reason`, `signals`, `measured`,
  * `root`, `last_check`); the UI derives none of it, so a mock that leaves it out is not a row the server
  * sends. `served` fills in what the server says of a row with these facts and nothing around
- * it; a mock about a node a failure blocks states that itself (`blockedBy`).
+ * it (a lookup in `src/lib/testdata/health-alone.json`, which a Rust test generates); a mock about a node a failure blocks states that itself (`blockedBy`).
  */
+
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 interface Row {
   id: string
@@ -15,19 +18,17 @@ interface Row {
   health?: string
 }
 
+// What `health::classify` says of a row alone, for every combination of these facts: written
+// by a Rust test (`crates/barca-core/src/ui_fixture_tests.rs`), so no health rule is spelled here.
+const ALONE = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../../src/lib/testdata/health-alone.json', import.meta.url)), 'utf8'),
+) as Record<string, { health: string; health_reason: string }>
+
 function alone(row: Row): [string, string] {
-  if (row.last_materialization?.status === 'failed') return ['failing', 'last_attempt_failed']
-  if ((row.partitions?.failed ?? 0) > 0) return ['failing', 'keys_failed']
-  switch (row.cache.state) {
-    case 'blocked': return ['blocked', 'cache_blocked']
-    case 'stale': return ['behind', 'stale']
-    case 'partial': return ['behind', 'partial']
-    case 'unsynced': return ['behind', 'unsynced']
-    case 'unknown': return ['undecided', 'unknown']
-    case 'never_run': return ['never_run', 'never_run']
-    case 'always_runs': return row.last_materialization ? ['ok', 'last_run_succeeded'] : ['never_run', 'no_successful_run']
-    default: return ['ok', 'cached']
-  }
+  const key = `${row.cache.state}|${row.last_materialization?.status ?? 'none'}|${(row.partitions?.failed ?? 0) > 0}`
+  const found = ALONE[key]
+  if (!found) throw new Error(`no row ${key} in health-alone.json: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
+  return [found.health, found.health_reason]
 }
 
 /** `row` with the health the server gives it on its own, unless the mock states one. */

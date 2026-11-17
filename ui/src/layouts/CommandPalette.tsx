@@ -47,10 +47,10 @@ export function CommandPalette({ run, onRun, onClose }: CommandPaletteProps) {
   // A group's or file's glyph is its entry of the whole project's rollup.
   const rollup = useRollup(null)
   const known = useMemo(() => {
-    const tree = groupTree(groups ?? [])
+    const tree = groupTree(groups ?? [], rollup.loaded ? rollup.tree.entries : undefined)
     const placeOf = new Map((groups ?? []).map((g) => [g.id, groupPath(tree.parents.get(g.id) ?? null, tree).map((p) => p.name).join(' › ')]))
     return { byId: new Map((states ?? []).map((n) => [n.id, n])), entries: rollup.tree.entries, placeOf }
-  }, [states, groups, rollup.tree])
+  }, [states, groups, rollup])
   const index = useMemo(() => paletteIndex(assets ?? [], groups ?? [], runs ?? [], known), [assets, groups, runs, known])
   const canGraph = location.pathname === '/assets' && !new URLSearchParams(location.search).has('view')
   const actions = paletteActions(run && !run.disabled ? run.label : null, canGraph)

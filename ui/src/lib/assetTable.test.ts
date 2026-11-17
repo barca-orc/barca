@@ -368,16 +368,16 @@ describe('one line a row', () => {
     expect(assetColumns([{ typicalSeconds: 0.3, nextRunMs: null }, { typicalSeconds: null, nextRunMs: NOW }])).toEqual({ typical: true, next: true })
   })
 
-  it('groups rows by file, in table order, each with the row that most needs attention', () => {
+  it('groups rows by file, in table order', () => {
     const rows = buildRows([
       node({ id: 'b.py:fine' }),
       node({ id: 'a.py:ok' }),
       node({ id: 'b.py:broken', last_materialization: failedAttempt }),
     ], NOW)
     const groups = groupByFile(rows)
-    expect(groups.map((g) => [g.file, g.rows.map((r) => r.name), g.worst.name])).toEqual([
-      ['b.py', ['broken', 'fine'], 'broken'],
-      ['a.py', ['ok'], 'ok'],
+    expect(groups.map((g) => [g.file, g.rows.map((r) => r.name)])).toEqual([
+      ['b.py', ['broken', 'fine']],
+      ['a.py', ['ok']],
     ])
     expect(tableLines(rows, true, new Set(['b.py'])).map((l) => (l.kind === 'file' ? `# ${l.group.file}${l.collapsed ? ' (folded)' : ''}` : l.row.name)))
       .toEqual(['# b.py (folded)', '# a.py', 'ok'])

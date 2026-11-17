@@ -142,7 +142,8 @@ stability; the row adds the keys and routes that go with it.
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, [barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
 | Health: `health`, `health_reason`, `root`, `signals`, `measured`, `last_check` and `refresh_path` of each node and `data_coverage` in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), the `health`, `health_reason`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick` and `missed_ticks` columns of `barca.nodes`, the `Health:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox` or `no refresh path` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #964, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health), "Last check" and "Refresh path"): the series that adds causes and expected times (#974) may add reasons, `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
-| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`), the table `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)): later releases of the series (#974) add `causes`, `asset_causes`, `gap_seconds`, `unbounded` and `fresh_by` to an entry, `causes`, `gap_seconds`, `unbounded` and `action` to a root, and root kinds other than `failure` |
+| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)): later releases of the series (#974) add `causes`, `asset_causes`, `gap_seconds`, `unbounded` and `fresh_by` to an entry, `causes`, `gap_seconds`, `unbounded` and `action` to a root, and root kinds other than `failure` |
+| `line` of each run in `barca history --json` and `GET /runs` (`steps`, `steps_detail`, `failure`, `failure_detail`), and `now` of `GET /runs?status=running` | new in 0.44 (#959, [barca status](/reference/cli/status/)): the words a run list prints, computed once for the CLI and the web UI; their wording may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `prev_run` and `late_since` (rows of `GET /state`, [Server Mode: a Shared Ledger and --server: Data health](/reference/server-mode/#data-health); `signals` moved from here onto every status node in 0.44), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
@@ -388,7 +389,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit); with a RUN_ID, every step it recorded |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`, `line` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -2119,6 +2120,7 @@ partitioned node's entry only:
 | `data_coverage.suspect` | integer | always |
 | `entries` | array | always |
 | `entries[]` | object | always |
+| `entries[].also_in` | array | always |
 | `entries[].asset_health` | object | always |
 | `entries[].asset_health.behind` | integer | always |
 | `entries[].asset_health.blocked` | integer | always |
@@ -2152,6 +2154,29 @@ partitioned node's entry only:
 | `entries[].nodes` | integer | always |
 | `entries[].parent` | null \| string | always |
 | `entries[].running` | integer | always |
+| `files` | array | always |
+| `files[]` | object | always |
+| `files[].asset_health` | object | always |
+| `files[].asset_health.behind` | integer | always |
+| `files[].asset_health.blocked` | integer | always |
+| `files[].asset_health.failing` | integer | always |
+| `files[].asset_health.never_run` | integer | always |
+| `files[].asset_health.ok` | integer | always |
+| `files[].asset_health.suspect` | integer | always |
+| `files[].asset_health.undecided` | integer | always |
+| `files[].assets` | integer | always |
+| `files[].file` | string | always |
+| `files[].health` | object | always |
+| `files[].health.behind` | integer | always |
+| `files[].health.blocked` | integer | always |
+| `files[].health.failing` | integer | always |
+| `files[].health.never_run` | integer | always |
+| `files[].health.ok` | integer | always |
+| `files[].health.suspect` | integer | always |
+| `files[].health.undecided` | integer | always |
+| `files[].nodes` | integer | always |
+| `files[].running` | integer | always |
+| `files[].worst` | string | always |
 | `roots` | array | always |
 | `roots[]` | object | always |
 | `roots[].assets` | integer | always |
@@ -2326,6 +2351,11 @@ has `scheduled_at` (the tick, RFC 3339 in UTC) and `schedule_id` (the scheduled 
 a `client` run had on the laptop that posted it ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)), `null` on every other
 run; additive and experimental.
 
+`runs[].line` (experimental, #959) is the run in the words of one row of a list, the same the
+web UI's run list prints: `steps` (the steps by outcome, `7 ok · 1 failed · 0 cached`),
+`steps_detail` (what that counts, the nodes planned and the step the run stopped at), `failure`
+(what went wrong in one line, `null` when nothing did) and `failure_detail` (the same in full).
+
 `runs[].principal` and `runs[].trigger_reason` (experimental, #925) say who asked a server for
 the run and why: the project token its `POST /runs` was authenticated with, as `token:<name>`
 (`null` without authentication, and for every run not started over HTTP), and the free-text
@@ -2445,6 +2475,11 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
 | `runs[].job` | string | always |
+| `runs[].line` | object | always |
+| `runs[].line.failure` | string | always |
+| `runs[].line.failure_detail` | string | always |
+| `runs[].line.steps` | string | always |
+| `runs[].line.steps_detail` | string | always |
 | `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
@@ -2482,6 +2517,11 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].files[]` | string | always |
 | `runs[].finished_at` | string | always |
 | `runs[].job` | string | always |
+| `runs[].line` | object | always |
+| `runs[].line.failure` | string | always |
+| `runs[].line.failure_detail` | string | always |
+| `runs[].line.steps` | string | always |
+| `runs[].line.steps_detail` | string | always |
 | `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
@@ -2633,6 +2673,11 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].files` | array | always |
 | `runs[].finished_at` | null | always |
 | `runs[].job` | null | always |
+| `runs[].line` | object | always |
+| `runs[].line.failure` | null | always |
+| `runs[].line.failure_detail` | null | always |
+| `runs[].line.steps` | string | always |
+| `runs[].line.steps_detail` | string | always |
 | `runs[].principal` | null | always |
 | `runs[].retries` | integer | always |
 | `runs[].run_id` | string | always |

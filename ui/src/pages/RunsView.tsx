@@ -19,7 +19,7 @@ import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
 import { outcomeResult, parseOutcome, runGlyph, runIsLive, runLabel, triggeredByLabel } from '@/lib/runs'
 import { statusGlyph } from '@/lib/status'
-import { NO_STEPS_OPEN, activityBarLabel, activityTicks, canLoadMore, failedChipCount, hourLabel, runActivity, runFailed, runFailureLine, runNodeOutcome, runNodeTime, runProgress, runRowError, runStepRows, runsCountLabel, stepName, toggleStepsOpen, visibleRuns, type RunActivity, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { NO_STEPS_OPEN, activityBarLabel, activityTicks, canLoadMore, failedChipCount, hourLabel, runActivity, runFailed, runNodeOutcome, runNodeTime, runStepRows, runsCountLabel, stepName, toggleStepsOpen, visibleRuns, type RunActivity, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunList, RunNodeSummary, RunStep, RunView } from '@/lib/types'
 
 /** A step's recorded error: its headline in words, the frames below it in mono, paths short and wrapping at `/`. */
@@ -472,11 +472,11 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
   return <table className="barca-table barca-run-table"><thead><tr>
     <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th><th>Failure</th>
   </tr></thead><tbody>{runs.map(run => {
-    const error = runRowError(run)
-    const progress = runProgress(run)
+    // The row's words are the server's (`line`, as `barca history --json` prints them).
+    const failure = run.line.failure
     // The whole row opens the run's panel (its error in full there): the row's height never changes.
     return <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}
-      data-failing={error ? true : undefined}
+      data-failing={failure ? true : undefined}
       onClick={(event) => { if (!(event.target instanceof Element && event.target.closest('button'))) dispatch({ type: 'run_selected', id: run.id }) }}>
     <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
     <td><span className="barca-run-target" title={run.target ?? undefined}>{run.target ?? 'all assets'}</span></td>
@@ -484,8 +484,8 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
     <td><StatusBadge size="sm" glyph={runGlyph(run.status)} label={runLabel(run.status)} live={runIsLive(run.status)} /></td>
     <td><Age at={run.started_at} nowMs={now} /></td>
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
-    <td className="num barca-run-steps-cell" title={progress.title}>{progress.steps}</td>
-    <td className="barca-run-failure">{error && <ErrorLine error={error.title} text={runFailureLine(run) ?? error.text} inline />}</td>
+    <td className="num barca-run-steps-cell" title={run.line.steps_detail}>{run.line.steps}</td>
+    <td className="barca-run-failure">{failure && <ErrorLine error={run.line.failure_detail ?? failure} text={failure} inline />}</td>
   </tr>
   })}</tbody></table>
 }

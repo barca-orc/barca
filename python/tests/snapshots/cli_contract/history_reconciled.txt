@@ -12,6 +12,11 @@ runs[].failure : null
 runs[].files : array
 runs[].finished_at : null
 runs[].job : null
+runs[].line : object
+runs[].line.failure : null
+runs[].line.failure_detail : null
+runs[].line.steps : string
+runs[].line.steps_detail : string
 runs[].principal : null
 runs[].retries : integer
 runs[].run_id : string

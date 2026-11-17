@@ -13,6 +13,7 @@ import type { RollupEntry } from './generated/RollupEntry'
 import type { RollupRoot } from './generated/RollupRoot'
 import type { EntryKind } from './generated/EntryKind'
 import type { DataCoverage } from './generated/DataCoverage'
+import type { FileRollup } from './generated/FileRollup'
 
 export type { HealthCounts, Rollup, RollupEntry, RollupRoot, EntryKind }
 
@@ -28,6 +29,8 @@ export interface RollupTree {
   /** What holds the nodes that are not fresh, as served: the most nodes first. */
   roots: readonly RollupRoot[]
   coverage: DataCoverage
+  /** Each source file's nodes summed (`files`), by file path. */
+  files: ReadonlyMap<string, FileRollup>
   asOf: string
 }
 
@@ -35,14 +38,15 @@ const NO_COUNTS: HealthCounts = { failing: 0, blocked: 0, suspect: 0, behind: 0,
 
 /** A tree with only an empty root: what a page holds until the rollup has loaded. */
 export const EMPTY_ROLLUP: RollupTree = {
-  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 } }]]),
+  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, also_in: [] }]]),
+  files: new Map(),
   roots: [],
   coverage: { assets: 0, measured: 0, suspect: 0 },
   asOf: '',
 }
 
 export function indexRollup(rollup: Rollup): RollupTree {
-  return { entries: new Map(rollup.entries.map((e) => [e.id, e])), roots: rollup.roots, coverage: rollup.data_coverage, asOf: rollup.as_of }
+  return { entries: new Map(rollup.entries.map((e) => [e.id, e])), roots: rollup.roots, coverage: rollup.data_coverage, files: new Map(rollup.files.map((f) => [f.file, f])), asOf: rollup.as_of }
 }
 
 /** The most severe health an entry counts (the served order); `ok` for an empty one. */
@@ -85,7 +89,7 @@ export function rootsWithin(tree: RollupTree, id: string): RollupRoot[] {
 
 /** `3 failing · 169 blocked · 12 behind`: the unhealthy counts of a scope, worst first. */
 export function healthSummary(counts: HealthCounts, limit = HEALTH_ORDER.length): string {
-  const parts = HEALTH_ORDER.filter((h) => isUnhealthy(h) && counts[h] > 0).map((h) => `${counts[h].toLocaleString()} ${h === 'suspect' ? 'suspect' : h}`)
+  const parts = HEALTH_ORDER.filter((h) => isUnhealthy(h) && counts[h] > 0).map((h) => `${counts[h].toLocaleString()} ${h}`)
   return parts.slice(0, limit).join(' · ')
 }
 

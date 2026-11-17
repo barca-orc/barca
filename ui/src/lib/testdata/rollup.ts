@@ -4,6 +4,14 @@
  */
 import type { HealthCounts, Rollup, RollupEntry, RollupRoot } from '../rollupView'
 import type { Health } from '../healthDisplay'
+import type { FileRollup } from '../generated/FileRollup'
+
+/** A file's sums, as `files` of the rollup states them: every node in `worst` unless `health` says otherwise. */
+export function fileSums(file: string, worst: Health, over: Partial<FileRollup> = {}): FileRollup {
+  const nodes = over.nodes ?? 1
+  const health = over.health ?? counts({ [worst]: nodes })
+  return { file, nodes, assets: nodes, running: 0, health, asset_health: health, worst, ...over }
+}
 
 export function counts(part: Partial<HealthCounts> = {}): HealthCounts {
   return { failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: 0, ...part }
@@ -15,7 +23,7 @@ export function nodeEntry(id: string, parent: string, health: Health, over: Part
   const one = counts({ [health]: 1 })
   return {
     id, kind: 'node', label: id.slice(id.lastIndexOf(':') + 1), parent, children: [], nodes: 1, assets: task ? 0 : 1, running: 0,
-    health: one, asset_health: task ? counts() : one, data_coverage: { assets: task ? 0 : 1, measured: 0, suspect: 0 }, ...rest,
+    health: one, asset_health: task ? counts() : one, data_coverage: { assets: task ? 0 : 1, measured: 0, suspect: 0 }, also_in: [], ...rest,
   }
 }
 
@@ -32,12 +40,12 @@ export function scopeEntry(
   const nodes = h.failing + h.blocked + h.suspect + h.behind + h.undecided + h.never_run + h.ok
   return {
     id, kind, label: kind === 'root' ? 'all' : id.slice(id.indexOf(':') + 1), parent, children, nodes, assets: nodes, running: 0,
-    health: h, asset_health: h, data_coverage: { assets: nodes, measured: 0, suspect: 0 }, ...over,
+    health: h, asset_health: h, data_coverage: { assets: nodes, measured: 0, suspect: 0 }, also_in: [], ...over,
   }
 }
 
-export function rollup(entries: RollupEntry[], roots: RollupRoot[] = []): Rollup {
-  return { as_of: '2026-11-17T14:57:00Z', entries, roots, data_coverage: entries[0]!.data_coverage }
+export function rollup(entries: RollupEntry[], roots: RollupRoot[] = [], files: FileRollup[] = []): Rollup {
+  return { as_of: '2026-11-17T14:57:00Z', entries, roots, data_coverage: entries[0]!.data_coverage, files }
 }
 
 export function failureRoot(node: string, detail: string, nodes = 1, assets = nodes): RollupRoot {

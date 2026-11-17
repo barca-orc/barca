@@ -2,6 +2,8 @@
 import type { ActiveStep } from "./ActiveStep";
 import type { Cancellation } from "./Cancellation";
 import type { FirstFailure } from "./FirstFailure";
+import type { RunLine } from "./RunLine";
+import type { RunNow } from "./RunNow";
 import type { TriggeredBy } from "./TriggeredBy";
 
 export type RunSummary = { id: string, handle: string | null, run_id: string | null, command: string, files: Array<string>, target: string | null, status: string, triggered_by: TriggeredBy | null, scheduled_at: string | null, schedule_id: string | null, started_at: string, finished_at: string | null, elapsed_seconds: number | null, steps_total: number | null, steps_executed: number, steps_cached: number,
@@ -29,4 +31,15 @@ cancellation: Cancellation | null,
 /**
  * With `?status=running` only: the nodes the run is working on now.
  */
-active_steps?: Array<ActiveStep>, };
+active_steps?: Array<ActiveStep>,
+/**
+ * With `?status=running` only: `active_steps` as a run's panel lists them, the nodes
+ * executing (furthest from done first), how many wait, and the same by group.
+ * Experimental.
+ */
+now?: RunNow,
+/**
+ * The run in the words of a list row: its steps by outcome and what went wrong, the
+ * `line` of `barca history --json`. Experimental.
+ */
+line: RunLine, };
