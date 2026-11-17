@@ -171,6 +171,60 @@ impl CauseCounts {
     }
 }
 
+/// The weight of one fresh node: every node counts, so a fresh scope still has a size.
+pub const FRESH_WEIGHT: usize = 1;
+
+/// A scope's distance from fresh, in weighted nodes, by what the nodes are: each cause's
+/// nodes times [`Cause::weight`], and the fresh nodes times [`FRESH_WEIGHT`]. They add up to
+/// the entry's `weight`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Weights {
+    pub failing: usize,
+    pub overdue: usize,
+    pub no_refresh_path: usize,
+    pub queued: usize,
+    pub undecided: usize,
+    pub catching_up: usize,
+    /// The nodes with no cause (`ok` and `suspect`), one each.
+    pub fresh: usize,
+}
+
+impl Weights {
+    /// The weights of `nodes` nodes of which `causes` are not fresh.
+    pub fn of(nodes: usize, causes: &CauseCounts) -> Self {
+        let w = |cause: Cause| causes.get(cause) * cause.weight();
+        Weights {
+            failing: w(Cause::Failing),
+            overdue: w(Cause::Overdue),
+            no_refresh_path: w(Cause::NoRefreshPath),
+            queued: w(Cause::Queued),
+            undecided: w(Cause::Undecided),
+            catching_up: w(Cause::CatchingUp),
+            fresh: nodes.saturating_sub(causes.total()) * FRESH_WEIGHT,
+        }
+    }
+
+    /// Every part added up.
+    pub fn total(&self) -> usize {
+        self.failing
+            + self.overdue
+            + self.no_refresh_path
+            + self.queued
+            + self.undecided
+            + self.catching_up
+            + self.fresh
+    }
+}
+
+impl CauseCounts {
+    /// The weight of the nodes counted: each cause's nodes times its weight. What a root
+    /// holds weighs this much (it holds no fresh node).
+    pub fn weight(&self) -> usize {
+        Cause::ALL.iter().map(|c| self.get(*c) * c.weight()).sum()
+    }
+}
+
 /// A partitioned node's keys, by how they stand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -201,6 +255,9 @@ pub struct HeldBy {
     pub gap_seconds: i64,
     /// Of those nodes, the ones with no `expected_fresh_at`.
     pub unbounded: usize,
+    /// The weight of those nodes: what the list is ranked by ([`CauseCounts::weight`]).
+    #[serde(default)]
+    pub weight: usize,
     /// Nodes held by this root and by the roots listed before it: against the entry's
     /// `not_fresh`, how much of the scope the first roots explain.
     pub cumulative_nodes: usize,
@@ -240,10 +297,19 @@ pub struct RollupEntry {
     /// Nodes underneath that are not fresh: the nodes `causes` counts, as one number.
     #[serde(default)]
     pub not_fresh: usize,
+    /// The entry's distance from fresh, in weighted nodes: every node underneath counts
+    /// [`FRESH_WEIGHT`], and one that is not fresh its cause's weight instead
+    /// ([`Cause::weight`]). The exact sum of the children's; what the health map sizes a
+    /// segment by.
+    #[serde(default)]
+    pub weight: usize,
+    /// `weight` by what the nodes are: each cause, and fresh.
+    #[serde(default)]
+    pub weights: Weights,
     /// The roots that hold those nodes, each with what it holds underneath this entry, in
-    /// the order of the root list applied to what is held here (roots holding nodes with no
-    /// estimate first, the most nodes first; then by gap, nodes and id). Their `nodes` add
-    /// up to `not_fresh`. Empty on a node entry: a node's root is on its row.
+    /// the order of the root list applied to what is held here (the most weight held first,
+    /// a failure first among equals; then nodes, gap and id). Their `nodes` add up to
+    /// `not_fresh`. Empty on a node entry: a node's root is on its row.
     #[serde(default)]
     pub held_by: Vec<HeldBy>,
     /// The freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds`.
@@ -287,6 +353,8 @@ impl RollupEntry {
             causes: CauseCounts::default(),
             asset_causes: CauseCounts::default(),
             not_fresh: 0,
+            weight: 0,
+            weights: Weights::default(),
             held_by: Vec::new(),
             gap_seconds: 0,
             unbounded: 0,
@@ -337,6 +405,15 @@ impl RollupEntry {
     }
 }
 
+impl RollupEntry {
+    /// Sets `weight` and `weights` from the entry's own `nodes` and `causes`: linear in the
+    /// counts, so a level's weight is the sum of its children's.
+    fn weigh(&mut self) {
+        self.weights = Weights::of(self.nodes, &self.causes);
+        self.weight = self.weights.total();
+    }
+}
+
 /// What a level adds up from its children: the one place a new summed field is added.
 trait Sums {
     fn add(&mut self, child: &RollupEntry);
@@ -355,6 +432,7 @@ impl Sums for RollupEntry {
         self.causes.add(&child.causes);
         self.asset_causes.add(&child.asset_causes);
         self.not_fresh += child.not_fresh;
+        self.weigh();
         self.gap_seconds += child.gap_seconds;
         self.unbounded += child.unbounded;
         // The latest estimate underneath. Every one is RFC 3339 UTC to the second, so the
@@ -474,6 +552,9 @@ pub struct RollupRoot {
     /// Of its nodes, those with no `expected_fresh_at`: their gap grows until someone acts.
     #[serde(default)]
     pub unbounded: usize,
+    /// The weight of the nodes it holds: what `roots` is ranked by ([`CauseCounts::weight`]).
+    #[serde(default)]
+    pub weight: usize,
     /// What clears it.
     pub action: RootAction,
 }
@@ -508,8 +589,8 @@ pub struct Rollup {
     pub as_of: String,
     /// Every entry, the root first, then depth first in `children` order.
     pub entries: Vec<RollupEntry>,
-    /// What holds the nodes that are not fresh: roots holding nodes with no estimate first
-    /// (most nodes held first), then by gap held, then nodes held, then id.
+    /// What holds the nodes that are not fresh: the most weight held first, a failure first
+    /// among equals, then nodes held, gap held and id.
     pub roots: Vec<RollupRoot>,
     /// The root entry's data coverage.
     pub data_coverage: DataCoverage,
@@ -552,6 +633,7 @@ fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
         }
     }
     entry.not_fresh = usize::from(node.cause.is_some());
+    entry.weigh();
     entry.gap_seconds = node.gap_seconds;
     entry.unbounded = usize::from(!node.health.is_fresh() && node.expected_fresh_at.is_none());
     entry.fresh_by.clone_from(&node.expected_fresh_at);
@@ -803,19 +885,29 @@ pub fn total(nodes: &[NodeStatus], running: &HashSet<String>) -> RollupEntry {
     root
 }
 
-/// The order of a root list, by what each root holds: roots holding nodes with no estimate
-/// first, the most nodes first; then by gap held, nodes held and id.
-fn rank(a: (usize, i64, usize, &str), b: (usize, i64, usize, &str)) -> std::cmp::Ordering {
-    let ((a_unbounded, a_gap, a_nodes, a_id), (b_unbounded, b_gap, b_nodes, b_id)) = (a, b);
-    (a_unbounded == 0)
-        .cmp(&(b_unbounded == 0))
-        .then_with(|| match a_unbounded {
-            0 => b_gap.cmp(&a_gap),
-            _ => b_nodes.cmp(&a_nodes),
-        })
-        .then(b_gap.cmp(&a_gap))
-        .then(b_nodes.cmp(&a_nodes))
-        .then_with(|| a_id.cmp(b_id))
+/// What a root list is ranked by: what a root holds, and whether it is a failure.
+struct Rank<'a> {
+    weight: usize,
+    failure: bool,
+    nodes: usize,
+    gap: i64,
+    id: &'a str,
+}
+
+/// The order of a root list: the most weight held first (how far what the root holds is from
+/// fresh), a failure first among equals, then the most nodes, the largest gap, and id.
+fn rank(a: Rank<'_>, b: Rank<'_>) -> std::cmp::Ordering {
+    b.weight
+        .cmp(&a.weight)
+        .then(b.failure.cmp(&a.failure))
+        .then(b.nodes.cmp(&a.nodes))
+        .then(b.gap.cmp(&a.gap))
+        .then_with(|| a.id.cmp(b.id))
+}
+
+/// Whether a root id (`<kind>:<node id>`) is a failure's.
+fn is_failure(root: &str) -> bool {
+    root.starts_with("failure:")
 }
 
 /// What each root holds among `rows` (one scope's nodes), in the root list's order.
@@ -830,6 +922,7 @@ fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
             causes: CauseCounts::default(),
             gap_seconds: 0,
             unbounded: 0,
+            weight: 0,
             cumulative_nodes: 0,
         });
         entry.nodes += 1;
@@ -841,12 +934,19 @@ fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
         entry.unbounded += usize::from(node.expected_fresh_at.is_none());
     }
     let mut out: Vec<HeldBy> = held.into_values().collect();
-    out.sort_by(|a, b| {
-        rank(
-            (a.unbounded, a.gap_seconds, a.nodes, &a.root),
-            (b.unbounded, b.gap_seconds, b.nodes, &b.root),
-        )
-    });
+    for entry in &mut out {
+        entry.weight = entry.causes.weight();
+    }
+    fn key(h: &HeldBy) -> Rank<'_> {
+        Rank {
+            weight: h.weight,
+            failure: is_failure(&h.root),
+            nodes: h.nodes,
+            gap: h.gap_seconds,
+            id: &h.root,
+        }
+    }
+    out.sort_by(|a, b| rank(key(a), key(b)));
     let mut so_far = 0;
     for entry in &mut out {
         so_far += entry.nodes;
@@ -866,8 +966,8 @@ fn target<'a>(node: &'a NodeStatus, names: &HashMap<&str, usize>) -> &'a str {
 }
 
 /// The roots of `nodes`: each `root` the rows name, with what it holds and what clears it.
-/// Roots holding nodes with no estimate come first, the most nodes held first; then by gap
-/// held, nodes held and id. `evidence` and `server` as in [`build`].
+/// The most weight held comes first, a failure first among equals; then nodes held, gap
+/// held and id. `evidence` and `server` as in [`build`].
 pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<RollupRoot> {
     struct Held<'a> {
         root: RollupRoot,
@@ -889,6 +989,7 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
                 causes: CauseCounts::default(),
                 gap_seconds: 0,
                 unbounded: 0,
+                weight: 0,
                 action: RootAction {
                     kind: ActionKind::Wait,
                     command: None,
@@ -928,6 +1029,7 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
             let (detail, error_group) = detail(&root, &name, about, schedule, evidence);
             root.detail = detail;
             root.error_group = error_group;
+            root.weight = root.causes.weight();
             // The command that computes everything the root holds: the held nodes nothing
             // else held reads (a run computes what is above its targets). Tasks are run,
             // never got.
@@ -1015,12 +1117,16 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
             root
         })
         .collect();
-    out.sort_by(|a, b| {
-        rank(
-            (a.unbounded, a.gap_seconds, a.nodes, &a.id),
-            (b.unbounded, b.gap_seconds, b.nodes, &b.id),
-        )
-    });
+    fn key(r: &RollupRoot) -> Rank<'_> {
+        Rank {
+            weight: r.weight,
+            failure: r.kind == RootKind::Failure,
+            nodes: r.nodes,
+            gap: r.gap_seconds,
+            id: &r.id,
+        }
+    }
+    out.sort_by(|a, b| rank(key(a), key(b)));
     out
 }
 
@@ -1328,6 +1434,28 @@ mod tests {
             assert_eq!(e.asset_health.total(), e.assets, "{}", e.id);
             assert_eq!(e.data_coverage.assets, e.assets, "{}", e.id);
             assert_eq!(e.not_fresh, e.causes.total(), "{}", e.id);
+            // The weight is one per fresh node and each cause's weight per node that is
+            // not fresh (#1028), and what the roots hold here weighs the rest.
+            assert_eq!(e.weight, e.weights.total(), "{}", e.id);
+            assert_eq!(
+                e.weight,
+                (e.nodes - e.not_fresh) * FRESH_WEIGHT + e.causes.weight(),
+                "{}",
+                e.id
+            );
+            if e.kind != EntryKind::Node {
+                assert_eq!(
+                    e.held_by.iter().map(|h| h.weight).sum::<usize>(),
+                    e.causes.weight(),
+                    "{}",
+                    e.id
+                );
+                assert!(
+                    e.held_by.windows(2).all(|w| w[0].weight >= w[1].weight),
+                    "{}: held_by is ranked by weight",
+                    e.id
+                );
+            }
             if e.kind == EntryKind::Node {
                 assert!(e.children.is_empty());
                 assert_eq!(e.nodes, 1);
@@ -1346,6 +1474,7 @@ mod tests {
             assert_eq!((sum.health, sum.asset_health), (e.health, e.asset_health));
             assert_eq!((sum.causes, sum.asset_causes), (e.causes, e.asset_causes));
             assert_eq!(sum.not_fresh, e.not_fresh, "{}", e.id);
+            assert_eq!((sum.weight, sum.weights), (e.weight, e.weights), "{}", e.id);
             // The roots of a scope: what each holds adds up to the scope's not-fresh nodes,
             // gap and unbounded nodes, and to what its children's roots hold.
             assert_eq!(
@@ -1930,7 +2059,9 @@ mod tests {
                 "not_fresh",
                 "parent",
                 "running",
-                "unbounded"
+                "unbounded",
+                "weight",
+                "weights"
             ]
         );
         assert_eq!(json["entries"][0]["parent"], serde_json::Value::Null);
@@ -1971,7 +2102,20 @@ mod tests {
                 "kind",
                 "node",
                 "nodes",
-                "unbounded"
+                "unbounded",
+                "weight"
+            ]
+        );
+        assert_eq!(
+            keys(&json["entries"][0]["weights"]),
+            [
+                "catching_up",
+                "failing",
+                "fresh",
+                "no_refresh_path",
+                "overdue",
+                "queued",
+                "undecided"
             ]
         );
         assert_eq!(json["roots"][0]["kind"], "failure");
@@ -2030,5 +2174,50 @@ mod tests {
         }
         let back: Rollup = serde_json::from_value(json).unwrap();
         assert_eq!(back, rollup);
+    }
+
+    /// #1028: the order of a root list is the weight held; among roots that hold the same
+    /// weight a failure comes first, then the most nodes, the largest gap and the id.
+    #[test]
+    fn roots_rank_by_weight_then_failures_first() {
+        let r = |weight, failure, nodes, gap, id| Rank {
+            weight,
+            failure,
+            nodes,
+            gap,
+            id,
+        };
+        let mut list = [
+            r(12, false, 6, 0, "queue:a"),
+            r(12, false, 2, 900, "no_schedule:b"),
+            r(12, true, 2, 0, "failure:c"),
+            r(90, false, 15, 0, "no_schedule:d"),
+            r(12, false, 2, 900, "code:e"),
+            r(12, false, 2, 60, "input:f"),
+        ];
+        list.sort_by(|a, b| {
+            rank(
+                r(a.weight, a.failure, a.nodes, a.gap, a.id),
+                r(b.weight, b.failure, b.nodes, b.gap, b.id),
+            )
+        });
+        assert_eq!(
+            list.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [
+                "no_schedule:d",
+                "failure:c",
+                "queue:a",
+                "code:e",
+                "no_schedule:b",
+                "input:f"
+            ]
+        );
+        // A node's weight is its cause's, a fresh node's is 1.
+        assert_eq!(
+            Cause::ALL.map(Cause::weight),
+            [6, 6, 6, 2, 2, 2],
+            "failing, overdue, no refresh path; queued, undecided, catching up"
+        );
+        assert_eq!(FRESH_WEIGHT, 1);
     }
 }

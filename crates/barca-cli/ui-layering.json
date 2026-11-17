@@ -241,7 +241,7 @@
     },
     "causeDisplay": {
       "kind": "display",
-      "does": "a cause's word, tone, glyph, map colour and map weight; the served order"
+      "does": "a cause's word, tone, glyph and map colour; the served order"
     },
     "dataSignals": {
       "kind": "display",
@@ -380,7 +380,7 @@
     },
     "rollupView": {
       "kind": "layout",
-      "does": "the rollup indexed by id and the geometry of the health map over it: a segment's angle from its entry's counts and each cause's display weight"
+      "does": "the rollup indexed by id and the geometry of the health map over it: a segment's angle from its entry's served `weight`, its colours from the served `weights`"
     },
     "assetFilters": {
       "kind": "page",

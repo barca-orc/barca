@@ -93,7 +93,19 @@ def _held(rollup: dict, nodes: list[dict]) -> None:
     assert sum(r["nodes"] for r in rollup["roots"]) == len(behind)
     assert sum(r["gap_seconds"] for r in rollup["roots"]) == total["gap_seconds"]
     assert sum(r["unbounded"] for r in rollup["roots"]) == total["unbounded"]
+    # The distance from fresh (#1028): a fresh node weighs 1, a node that is not fresh its
+    # cause's weight; the list is ranked by what each root holds of it.
+    fresh = total["nodes"] - len(behind)
+    assert total["weight"] == sum(total["weights"].values())
+    assert total["weights"]["fresh"] == fresh
+    assert sum(r["weight"] for r in rollup["roots"]) == total["weight"] - fresh
+    weights = [r["weight"] for r in rollup["roots"]]
+    assert weights == sorted(weights, reverse=True)
+    assert [h["root"] for h in total["held_by"]] == [r["id"] for r in rollup["roots"]]
     for root in rollup["roots"]:
+        causes = root["causes"]
+        acted = causes["failing"] + causes["overdue"] + causes["no_refresh_path"]
+        assert root["weight"] == 6 * acted + 2 * (root["nodes"] - acted)
         assert sum(root["causes"].values()) == root["nodes"]
         assert set(root["action"]) == {"kind", "command", "estimated_seconds"}
 

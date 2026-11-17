@@ -220,10 +220,12 @@ UI's health map, bars and failures list all print this document.
      "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
      "asset_causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
      "not_fresh": 3,
+     "weight": 21,
+     "weights": {"failing": 18, "overdue": 0, "no_refresh_path": 0, "queued": 0, "undecided": 0, "catching_up": 0, "fresh": 3},
      "held_by": [
        {"root": "failure:pipeline.py:orders", "nodes": 3, "assets": 3,
         "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
-        "gap_seconds": 5400, "unbounded": 3, "cumulative_nodes": 3}
+        "gap_seconds": 5400, "unbounded": 3, "weight": 18, "cumulative_nodes": 3}
      ],
      "gap_seconds": 5400, "unbounded": 3, "fresh_by": null, "also_in": []}
   ],
@@ -232,7 +234,7 @@ UI's health map, bars and failures list all print this document.
      "detail": "ValueError: 12 rows rejected", "error_group": "ValueError: # rows rejected",
      "nodes": 3, "assets": 3,
      "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
-     "gap_seconds": 5400, "unbounded": 3,
+     "gap_seconds": 5400, "unbounded": 3, "weight": 18,
      "action": {"kind": "fix_failure", "command": "barca get orders", "estimated_seconds": 42}}
   ],
   "data_coverage": {"assets": 4, "measured": 0, "suspect": 0},
@@ -259,7 +261,9 @@ of `children`.
 | `data_coverage` | the coverage of "Data signals and coverage", for the assets underneath |
 | `causes`, `asset_causes` | how many nodes, and how many assets, that are not fresh have each cause ("Cause"); they add up to the nodes (assets) whose health is not `ok` or `suspect` |
 | `not_fresh` | nodes underneath that are not fresh: what `causes` counts, as one number |
-| `held_by` | the roots that hold those nodes, each with what it holds underneath this entry: `root` (an id of `roots`), `nodes`, `assets`, `causes`, `gap_seconds`, `unbounded`, and `cumulative_nodes` (the nodes held by this root and the ones listed before it). In the order of `roots`, applied to what is held here; their `nodes` add up to `not_fresh`. Empty on a node entry, whose root is on its row |
+| `weight` | the entry's distance from fresh, in weighted nodes: every node underneath counts 1, and one that is not fresh counts its cause's weight instead: 6 for `failing`, `overdue` and `no_refresh_path` (someone has to act), 2 for `queued`, `catching_up` and `undecided` (it will be fresh without anyone acting, or barca cannot say). A fully fresh scope weighs its `nodes`. The web UI's health map sizes a segment by it |
+| `weights` | `weight` by what the nodes are: one number per cause (its nodes times its weight) and `fresh` (the fresh nodes, 1 each). They add up to `weight` |
+| `held_by` | the roots that hold those nodes, each with what it holds underneath this entry: `root` (an id of `roots`), `nodes`, `assets`, `causes`, `gap_seconds`, `unbounded`, `weight` (the weight of those nodes), and `cumulative_nodes` (the nodes held by this root and the ones listed before it). In the order of `roots`, applied to what is held here; their `nodes` add up to `not_fresh`. Empty on a node entry, whose root is on its row |
 | `gap_seconds` | the freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds` ("Root") |
 | `unbounded` | nodes underneath that are not fresh and have no `expected_fresh_at` ("Times"): nothing known will leave them fresh, so the gap has no forward term for them |
 | `fresh_by` | the latest `expected_fresh_at` underneath (RFC 3339, UTC): when the nodes that have an estimate are all expected fresh. `null` when none has one. It speaks only for those nodes; `unbounded` counts the rest |
@@ -279,6 +283,10 @@ UI's sidebar) reads `files`.
 `roots` is the to-do list: what holds the nodes that are not fresh, and what clears each.
 There is one entry per `root` the nodes carry ("Root"), and every node that is not fresh is
 under exactly one, so the roots' `nodes` add up to the nodes that are not fresh.
+The list is ranked by `weight`, the most first: a root that holds 152 nodes nothing will
+refresh (6 each) comes before one that holds 180 the next tick computes (2 each). Among roots
+of the same weight a failure comes first, then the most `nodes`, the largest `gap_seconds`,
+and the id.
 A root's numbers are over every node in scope; what it holds under one group or file is that
 entry's `held_by`, which is the same list cut to the entry, so a group's to-do list is its own
 entry's. `cumulative_nodes` against `not_fresh` says how much the head of a list explains:
@@ -294,6 +302,7 @@ there are more than three roots.
 | `causes` | those nodes by cause |
 | `gap_seconds` | the sum of their `gap_seconds` |
 | `unbounded` | how many of them have no `expected_fresh_at` |
+| `weight` | the weight of the nodes it holds (each counts its cause's weight, as on an entry): what the list is ranked by |
 | `action` | what clears it: `{"kind", "command", "estimated_seconds"}` |
 
 | `action.kind` | Printed as | For | `command` |

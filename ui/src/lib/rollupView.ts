@@ -3,12 +3,12 @@
  * map over it. Nothing here counts, sums or classifies: every count shown is an entry's own
  * (`barca-core`'s `rollup`, the same response `barca status --rollup` prints), in nodes
  * (`nodes`, `health`, `causes`) and in assets (`assets`, `asset_health`). What stays here is
- * geometry (which angle a segment gets, from the entry's counts and a display weight per
- * cause), the path to an entry, and words.
+ * geometry (which angle a segment gets, from the entry's served `weight`), the path to an
+ * entry, and words.
  */
 
 import { HEALTH_ORDER, isUnhealthy, type Health } from './healthDisplay'
-import { MAP_PARTS, keyBandPart, leadingPart, mapPartWeight, type MapPart } from './causeDisplay'
+import { MAP_PARTS, keyBandPart, leadingPart, type MapPart } from './causeDisplay'
 import type { HeldBy } from './generated/HeldBy'
 import { formatSpan, parseTime } from './time'
 import type { HealthCounts } from './generated/HealthCounts'
@@ -40,7 +40,7 @@ const NO_CAUSES: RollupEntry['causes'] = { catching_up: 0, queued: 0, no_refresh
 
 /** A tree with only an empty root: what a page holds until the rollup has loaded. */
 export const EMPTY_ROLLUP: RollupTree = {
-  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
+  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, weight: 0, weights: { ...NO_CAUSES, fresh: 0 }, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
   files: new Map(),
   roots: [],
   coverage: { assets: 0, measured: 0, suspect: 0 },
@@ -161,30 +161,18 @@ const KEY_BANDS: readonly (readonly ['failed' | 'behind' | 'ok', string])[] = [
   ['ok', 'ok'],
 ]
 
-/** What a map entry is weighed by: its own counts, as served. */
-type Weighed = Pick<RollupEntry, 'nodes' | 'not_fresh' | 'causes'>
-
-/** The weight of each colour inside an entry, in stacking order, the empty ones left out. */
-function partWeights(entry: Weighed): [MapPart, number][] {
-  const out: [MapPart, number][] = []
-  for (const part of MAP_PARTS) {
-    const count = part === 'fresh' ? entry.nodes - entry.not_fresh : entry.causes[part]
-    if (count > 0) out.push([part, count * mapPartWeight(part)])
-  }
-  return out
-}
+/** What a map entry is laid out by: its distance from fresh, as served. */
+type Weighed = Pick<RollupEntry, 'weight' | 'weights'>
 
 /**
- * How much room an entry takes on the map: its distance from fresh, in weighted nodes. Every
- * node counts 1, so a fresh group is still there; a node that is not fresh counts its cause's
- * weight instead (`causeDisplay`: 6 where it needs someone, 2 where it will be fresh without
- * anyone acting or cannot be decided). It reads the entry's own `nodes`, `not_fresh` and
- * `causes`, so a level's weight is exactly the sum of its children's, and it grows with every
- * node that falls behind and with how much the cause matters. A display scale over served
- * counts: nothing is classified here.
+ * The served weight of each colour inside an entry (`weights`), in stacking order, the empty
+ * ones left out. How much room an entry takes is its `weight`: its distance from fresh in
+ * weighted nodes, which `barca-core` computes ("Distance from fresh": every node counts 1, a
+ * node that is not fresh its cause's weight) and `barca status --rollup` prints. A level's is
+ * exactly the sum of its children's. No weight is decided here.
  */
-export function mapWeight(entry: Weighed): number {
-  return partWeights(entry).reduce((sum, [, w]) => sum + w, 0)
+function partWeights(entry: Weighed): [MapPart, number][] {
+  return MAP_PARTS.map((part): [MapPart, number] => [part, entry.weights[part]]).filter(([, w]) => w > 0)
 }
 
 /** `weights` laid side by side over a segment from `start`, `span` wide. */
@@ -200,7 +188,7 @@ function bandsOver(weights: readonly [MapPart, number][], start: number, span: n
 
 /**
  * The segments of the map around `focus`, `rings` deep. A segment's angle is its entry's weight
- * (`mapWeight`: how far what is underneath is from fresh), so the room a group takes is how big
+ * (the served `weight`: how far what is underneath is from fresh), so the room a group takes is how big
  * its problem is, and a fresh group is a thin calm sliver, not gone. Its colours are what is
  * inside it, stacked by weight: failing, overdue, no refresh path, queued, undecided, catching
  * up, fresh. Children come worst first (the served order), so the trouble sits clockwise from
@@ -240,14 +228,14 @@ export function sunburst(tree: RollupTree, focus: string, rings = 3, minTurn = 0
   const place = (entry: RollupEntry, start: number, span: number, depth: number) => {
     if (depth > rings) return
     if (entry.children.length === 0) return keyRing(entry, start, span, depth)
-    const total = mapWeight(entry)
+    const total = entry.weight
     if (total <= 0) return
     let at = start
     const thin: RollupEntry[] = []
     for (const c of entry.children) {
       const child = tree.entries.get(c)
       if (!child || child.nodes === 0) continue
-      const share = (mapWeight(child) / total) * span
+      const share = (child.weight / total) * span
       if (share < minTurn) {
         thin.push(child)
         continue

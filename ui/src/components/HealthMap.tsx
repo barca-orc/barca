@@ -86,7 +86,7 @@ function estimateWords(entry: RollupEntry, asOf: string): string {
  * The scope as a sunburst, drawn the way a disk map draws a folder: the centre is the scope, each
  * ring one level down (groups, then their groups, then nodes, then a partitioned node's keys),
  * thinner as it goes out, and a branch ends where its members do. A segment's angle is how far
- * what is underneath is from fresh (`mapWeight`: every node counts 1, a node that is not fresh
+ * what is underneath is from fresh (the served `weight`: every node counts 1, a node that is not fresh
  * its cause's weight), so the room a group takes is how big its problem is. A segment's colours
  * are what is inside it, stacked: failing red, overdue orange, no refresh path amber, queued
  * and catching up in calm blues, undecided the one grey, fresh green; paler at each level out.

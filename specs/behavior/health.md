@@ -19,7 +19,9 @@ states; and the cause, the root and the gap ("Cause", "Root", "The freshness gap
 #973): `cause`, `root` with every kind, `gap_seconds` and their `barca.nodes` columns,
 `causes`, `asset_causes` and `gap_seconds` of a rollup entry, the root list with `causes`,
 `gap_seconds`, `unbounded` and `action`, and `as_of` and `rollup` in `barca status --json`,
-as those sections' "As implemented" state; the server query route ("Server query
+as those sections' "As implemented" state; the weight ("Distance from fresh", #1028): `weight`
+and `weights` of a rollup entry, `weight` of a root and of a `held_by` entry, and the root
+list ranked by it; the server query route ("Server query
 route", #972); a scope's own root list (`not_fresh` and `held_by` of a rollup entry) with
 the web UI's health map and to-do list over it ("Rollup", "The web UI's overview"; #966,
 #967); and the tables ("Tables", #965): `barca.schedules`, `barca.ticks` and
@@ -394,7 +396,7 @@ The list of roots (in the rollup, below) carries what each holds and what clears
  "detail": "no tick reaches orders", "error_group": null,
  "nodes": 152, "assets": 140,
  "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 152, "overdue": 0, "failing": 0, "undecided": 0},
- "gap_seconds": 8208000, "unbounded": 152,
+ "gap_seconds": 8208000, "unbounded": 152, "weight": 912,
  "action": {"kind": "add_schedule", "command": null, "estimated_seconds": 420}}
 ```
 
@@ -429,10 +431,11 @@ As implemented (`crates/barca-core/src/rollup.rs`, `roots`):
   `barca.toml` sets `[server] max_runs`.
 - `error_group` is a failure root's error headline with its numbers replaced by `#`; failure
   roots sharing one are shown as one entry. `null` for every other kind.
-- Ranking: roots holding nodes with no `expected_fresh_at` (`unbounded > 0`) first, by
-  `nodes`; then by `gap_seconds`, then `nodes`, then `id`. A gap that grows until someone acts
-  outranks one with an end, whatever its size today; this replaces the intent's plain
-  `gap_seconds` order, under which a root with no recorded `stale_since` ranked last.
+- Ranking (#1028): by `weight` held, the most first; among equals a failure first, then
+  `nodes`, `gap_seconds`, `id` ("Distance from fresh"). This replaces #963's order (roots
+  holding a node with no estimate first, by nodes), under which a `never_run` root that only
+  waits outranked a change holding four times as many nodes and a failure that blocks 14
+  nodes fell below the first three.
 
 Conformance: `a_root_is_the_change_the_walk_up_stops_at`,
 `a_node_nothing_refreshes_roots_where_a_schedule_is_missing_paused_or_not_fired`,
@@ -577,6 +580,42 @@ change with every second of the clock (an unchanged poll within a minute is stil
 A term whose time is `null` counts 0, so a node with no recorded `stale_since` and no
 estimate has gap 0 and is counted by `unbounded`.
 
+### Distance from fresh (#1028)
+
+One served measure of how far a scope is from a fresh DAG, in weighted nodes, computed in
+`crates/barca-core/src/rollup.rs` (`Cause::weight`, `FRESH_WEIGHT`, `Weights`) and read by the
+root list, the health map and `barca status --rollup` alike.
+
+| A node that is | Weighs | Why |
+| --- | --- | --- |
+| fresh (`ok`, `suspect`: no cause) | 1 | every node counts, so a fully fresh scope still has a size: its `nodes` |
+| `queued`, `catching_up`, `undecided` | 2 | it will be fresh without anyone acting, or barca cannot say |
+| `failing`, `overdue`, `no_refresh_path` | 6 | someone has to act |
+
+- A rollup entry carries `weight`, the sum over the nodes underneath, and `weights`, the same
+  by part (`failing`, `overdue`, `no_refresh_path`, `queued`, `undecided`, `catching_up`,
+  `fresh`), which add up to it. Both are linear in the entry's `nodes` and `causes`, so a
+  level's is the exact sum of its children's (INV-HEALTH-03).
+- A root and a `held_by` entry carry `weight`: the weight of the nodes held (never a fresh
+  node). In a scope, the `held_by` weights and one per fresh node add up to the entry's
+  `weight`.
+- **Ranking.** A root list (`roots`, and every entry's `held_by` over what is held there) is
+  ordered by `weight`, the most first; among equals a failure root first, then the most
+  `nodes`, the largest `gap_seconds`, then `id`. So a root holding nodes that need someone
+  outranks a larger one a tick will clear (152 with no refresh path, 912, before 180 catching
+  up or undecided, 360), and a failing node with what it blocks is ranked by all it holds.
+- It is not `gap_seconds`: one node out of date for a year would outweigh everything, and a
+  node with no recorded `stale_since` and no estimate (gap 0, counted by `unbounded`) would
+  weigh nothing. The gap is stated beside it.
+- `barca status --rollup` prints `Distance from fresh: 1728 (weighted nodes); 698 when every
+  node is fresh` under the gap line and `weight N` on each root.
+
+The three weights are chosen, not measured: 6 to 2 makes one node that needs someone count as
+three that do not. Conformance: `roots_rank_by_weight_then_failures_first` and INV-HEALTH-03
+with the weight on every fixture (`crates/barca-core/src/rollup.rs`);
+`roots_rank_by_weight_and_a_failure_with_blocked_nodes_is_among_the_first_three` and the audit
+shape (`crates/barca-core/src/causes.rs`).
+
 ### Node fields and where they appear
 
 All are fields of `NodeStatus`, so one struct serves every surface.
@@ -694,12 +733,12 @@ CLI and the web UI all read:
   with what it holds, why, and the action with its command and compute time.
 - **A scope's roots (#967).** An entry carries `not_fresh` (the nodes underneath with a
   cause: `causes` as one number) and `held_by`: the roots that hold those nodes, each as
-  `{root, nodes, assets, causes, gap_seconds, unbounded, cumulative_nodes}` over the nodes
+  `{root, nodes, assets, causes, gap_seconds, unbounded, weight, cumulative_nodes}` over the nodes
   underneath that entry alone. It is the root list cut to the scope: a root whose own node
   is in another group is listed where it holds a node, with what it holds there. The order
-  is the root list's rule applied to what is held in the scope (`rollup::rank`: roots holding
-  nodes with no estimate first, by nodes; then gap, nodes, id), so the root entry's `held_by`
-  is `roots` in order. `cumulative_nodes` is the running total of `nodes` down the list:
+  is the root list's rule applied to what is held in the scope (`rollup::rank`: the most
+  weight first, a failure first among equals; then nodes, gap, id), so the root entry's
+  `held_by` is `roots` in order. `cumulative_nodes` is the running total of `nodes` down the list:
   against `not_fresh` it says how much of the scope the first roots explain, and `barca
   status --rollup` prints it for the first three ("The first 3 hold 392 of them."). A node
   entry's `held_by` is empty (its root is on its row); a level's `held_by` holds exactly
@@ -716,19 +755,13 @@ list's words).
 
 - **Unit.** The map, its centre, the line beside it and the list count nodes, and say so;
   assets are stated beside them from the same entry (`assets`, a root's `assets`).
-- **Size.** A segment's angle is its entry's weight: every node underneath counts 1, and a
-  node that is not fresh counts its cause's weight instead: 6 for `failing`, `overdue` and
-  `no_refresh_path` (someone has to act), 2 for `queued`, `catching_up` and `undecided` (it
-  will be fresh without anyone acting, or barca cannot say). The weight reads `nodes`,
-  `not_fresh` and `causes` of the entry, so it is exactly the sum of the children's, grows
-  with every node that falls behind and with the severity of its cause, and leaves a fully
-  fresh group on the map at one unit a node. It is not `gap_seconds`: one node out of date
-  for a year would take the whole map, and a node with no recorded `stale_since` and no
-  estimate (gap 0, counted by `unbounded`) would take none. The gap is stated in words
-  beside the map and on each root. The six weights are a display table; if the CLI is to
-  print the same size, the weight moves to `rollup.rs` as a summed field.
-- **Colour.** A segment is drawn in the colours of what is inside it, stacked by weight in
-  the served order of the causes, then fresh: never in the colour of its worst member. Each
+- **Size.** A segment's angle is its entry's served `weight` ("Distance from fresh", #1028),
+  so it is exactly the sum of the children's, grows with every node that falls behind and
+  with the severity of its cause, and leaves a fully fresh group on the map at one unit a
+  node. The UI holds no weight table: it divides one served number by another to get an
+  angle. The gap is stated in words beside the map and on each root.
+- **Colour.** A segment is drawn in the colours of what is inside it, each as wide as its
+  part of the entry's served `weights`, in the served order of the causes, then fresh: never in the colour of its worst member. Each
   cause has one colour; `failing` keeps its own, `overdue` and `no_refresh_path` are the two
   alarm colours, `queued` and `catching_up` are calm, `undecided` is the one grey, and a
   node with no cause (`ok` and `suspect`) is fresh. `suspect` is a data warning and is
@@ -987,7 +1020,7 @@ cut at the row limit below.
 ## Acceptance and evidence
 
 Each issue lands its scenario with the code and replaces the matching source link. Passing
-today (with the #961, #962, #963, #966, #967 and #973 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+today (with the #961, #962, #963, #966, #967, #973 and #1028 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
@@ -1005,6 +1038,7 @@ row, the #964 row, the #965 row, the #972 row and the #985 row. The rest do not 
 | Estimates within the stated error on a real server (one run slot, two schedules); a node below a pending cutoff has `recheck_at` only | #962: [the rules](../../crates/barca-core/src/estimates.rs) (the start, the workers, what is only rechecked, `stale_since` by cause, the queue), [the tick timings in one read](../../crates/barca-db/src/db/ticks.rs), [measured on a server; CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, a read-only server](../../python/tests/test_estimates.py), [the node panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx) |
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963: [the cause rows, the walk, the roots where nothing refreshes, the audit shape (698 nodes, 422 not fresh, five roots, the top three hold 392)](../../crates/barca-core/src/causes.rs), [the root list, its actions and INV-HEALTH-03 with causes and the gap](../../crates/barca-core/src/rollup.rs), [the routes against each other](../../crates/barca-server/tests/openapi.rs), [CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, the commands of two actions run](../../python/tests/test_causes.py), [the causes list over the served roots](../../ui/src/lib/causesView.test.ts) |
 | A group with 13% of its nodes overdue is drawn 13 parts overdue by weight, not solid; grey has one word; the map and the bars state nodes | #966: [the weight, the stacked colours, a fresh group kept, the keys ring](../../ui/src/lib/rollupView.test.ts), [the centre in the terms of the gap and the one word for grey](../../ui/src/components/CausesList.test.tsx), [the map against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
+| With a failing node that blocks 20 added to the audit shape, the first three roots hold at least 75% of the not-fresh nodes and the failure is among them; `barca status --rollup --json` carries the weight; no weight table in TypeScript | #1028: [the order and the weights, and the weight in INV-HEALTH-03 on every fixture](../../crates/barca-core/src/rollup.rs), [the audit shape with a failure (719 nodes, 443 not fresh: 152, 180 and the failure's 21 are 353), and the #963 shape under the new order (392 of 422 still)](../../crates/barca-core/src/causes.rs), [the CLI contract snapshot](../../python/tests/snapshots/cli_contract/status_rollup.txt), [the map's angles from the served weight](../../ui/src/lib/rollupView.test.ts), [the guard's table: `rollupView` lays out the served weight, `causeDisplay` holds none](../../crates/barca-cli/ui-layering.json) |
 | Every not-fresh node of a scope is under one root of its list; "more" holds the rest; a root's command can be copied | #967: [a scope's roots, their order and running total, and their sums on every fixture](../../crates/barca-core/src/rollup.rs), [the audit shape's list and the line the CLI prints](../../crates/barca-core/src/causes.rs), [the list's join and words](../../ui/src/lib/causesView.test.ts), [the list rendered](../../ui/src/components/CausesList.test.tsx), [a served project: every root listed once, more in place, a picked root lit, its node opened](../../ui/e2e-groups/groups.spec.ts) |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
@@ -1030,10 +1064,9 @@ the causes list's grouping and the failures list's impact are deleted: their rul
   data coverage: it reads `root` and the rollup. What it still derives: a group row's "Last
   success" (its oldest member's, and how many members are failing, from the rows of
   `GET /state`), which `stale_since` and the times (#962) replace; a file's one state in the
-  sidebar and the asset list's filter counts, which read rows, not the rollup; a node
-  panel's count of nodes downstream, a graph walk for navigation; and the health map's
-  angles, a display weight per cause over an entry's served counts ("The web UI's
-  overview"), which the CLI does not print. A node declared in several
+  sidebar and the asset list's filter counts, which read rows, not the rollup; and a node
+  panel's count of nodes downstream, a graph walk for navigation. The health map's angles
+  are the served `weight` (#1028). A node declared in several
   groups is listed in each of them by the UI but counted in one by the rollup, so such a
   group's row lists more members than its bar counts.
 
