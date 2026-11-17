@@ -58,7 +58,10 @@ a check that found it up to date makes it `ok` until the next tick is overdue
 ([Last check](/reference/cli/status-fields/#last-check)). Below it the panel names the node's
 refresh path: the schedule whose tick will bring it up to date and when that next fires, with
 `paused`, `not firing` or the ticks that missed it when the server says so, or `no refresh
-path` ([Refresh path](/reference/cli/status-fields/#refresh-path)).
+path` ([Refresh path](/reference/cli/status-fields/#refresh-path)). For a node that is not
+fresh it then says since when it is out of date and either `expected fresh about in 3m`, the
+server's estimate, or `rechecked in 3m` where the next tick will look at the node and barca
+cannot promise it fresh ([Times](/reference/cli/status-fields/#times)).
 
 The data signals behind `suspect data` come from row counts barca records for every tabular
 result ([Row counts](/reference/cli/status-fields/#row-counts)); a node's panel lists them under its state.

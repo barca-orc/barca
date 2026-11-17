@@ -45,9 +45,9 @@ pub use barca_db::db::{
 // and `latest_ticks` (every node at once, what health reads) are the reads.
 pub use barca_db::db::{
     LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
-    TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome,
+    TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, TickTimings,
     components_of_rows, latest_ticks, record_tick, record_tick_finished, record_tick_started,
-    tick_outcomes_for_node, ticks_for_schedule, trim_ticks,
+    tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
 };
 
 // Fixtures for the tests of `barca-cli` and `barca-server`, which write runs without running

@@ -1367,6 +1367,18 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
         if entry.running > 0 {
             health.push_str(&format!(" · {} running", entry.running));
         }
+        // When what has an estimate is expected fresh, and how many have none (#962).
+        let now = chrono::Utc::now().timestamp();
+        if let Some(by) = entry
+            .fresh_by
+            .as_deref()
+            .and_then(|at| crate::estimates::clock(at, now, true))
+        {
+            health.push_str(&format!(" · fresh by ~{by}"));
+        }
+        if entry.unbounded > 0 {
+            health.push_str(&format!(" · {} with no estimate", entry.unbounded));
+        }
         rows.push([
             format!("{}{}", "  ".repeat(depth(entry)), entry.label),
             entry.nodes.to_string(),

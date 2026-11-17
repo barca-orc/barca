@@ -128,9 +128,9 @@ use stats::{IN_LIST_CHUNK, KEY_ROWS, avg_elapsed_on, partitioned_avg_elapsed_on}
 pub(crate) use ticks::CREATE as CREATE_SCHEDULE_TICKS;
 pub use ticks::{
     LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
-    TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, latest_ticks,
-    record_tick, record_tick_finished, record_tick_started, tick_outcomes_for_node,
-    ticks_for_schedule, trim_ticks,
+    TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, TickTimings,
+    latest_ticks, record_tick, record_tick_finished, record_tick_started, tick_outcomes_for_node,
+    tick_timings, ticks_for_schedule, trim_ticks,
 };
 
 /// Process-wide serialization of `metadata.db` operations. The server can run

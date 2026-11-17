@@ -491,7 +491,9 @@ its recorded results say about its data: `empty`, `rows_changed`, `behind_input`
 (whether its rows were counted at all; `null` for a task or sensor), `last_check` (what the
 newest tick that checked the node found, and when; `null` when no retained tick did) and
 `refresh_path` (the schedule whose tick will bring it up to date, its next tick, and the ticks
-that already missed it; `null` when none will). They are
+that already missed it; `null` when none will), and the times: `stale_since` (since when it is
+out of date), `expected_fresh_at` (when a run is expected to leave it fresh, an estimate) and
+`recheck_at` (when a tick next looks at it, where no fresh time can be promised). They are
 computed in barca from facts the metadata DB holds, never by reading an
 artifact, and are the same on every surface: `barca docs status-fields`, "Health" and "Data
 signals and coverage", has the tables. `GET /nodes` also has `data_coverage` beside `summary`.

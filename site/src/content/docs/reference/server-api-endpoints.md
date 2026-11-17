@@ -55,7 +55,7 @@ client prints it as it would print the local command's.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/state` | Every node: its `barca status` entry (with `health`, `last_check`, what the last tick that checked it found, and `refresh_path`, the schedule whose tick will refresh it) plus typical durations, next run and the run working on it now. |
+| `GET`  | `/state` | Every node: its `barca status` entry (with `health`, `last_check`, what the last tick that checked it found, `refresh_path`, the schedule whose tick will refresh it, and `stale_since`, `expected_fresh_at` and `recheck_at`, since when it is out of date and when it is expected fresh or only rechecked) plus typical durations, next run and the run working on it now. |
 | `GET`  | `/state/rollup` | Experimental: the rows of `/state` summed into one tree (root, groups, files, nodes), each level the exact sum of its children, in nodes and in assets, with the failing nodes and what each holds. What `barca status --rollup --json` prints and the web UI's health map, bars and failures list render. Same scope as `/state` (`?targets=`, `?files=`). |
 | `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
@@ -71,13 +71,13 @@ client prints it as it would print the local command's.
 | `DELETE` | `/assets/{name}/pin` | Remove the asset's pin, as `barca unpin`. `403` read-only. Experimental. |
 | `GET`  | `/pins` | Every pinned asset: `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason, run_id, upload}]}`. Experimental. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
-| `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause. |
+| `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause, and how long each schedule's ticks typically wait for a run slot and run (`typical_queue_wait_seconds`, `typical_run_seconds`, `queue_bound` when the wait exceeds the interval). |
 | `POST` | `/schedule/{id}/pause` | Hold one schedule back, optionally `?until=<RFC 3339>`. |
 | `POST` | `/schedule/{id}/resume` | Let a paused schedule fire again. |
 | `GET`  | `/pauses` | The paused assets (`barca pause`): `{total, paused: [{id, paused_at, via}]}`. Scheduled ticks skip them (step reason `paused`) until resumed. Experimental. |
 | `POST` | `/pauses` | Pause `{"target", "downstream"}`: a node, a node and everything below it, or a `file.py`. Answers `added` and every pause; `403` read-only. A `POST /runs` naming a paused node is `400` unless it sends `"allow_paused": true`. |
 | `POST` | `/pauses/resume` | Resume `{"target", "downstream"}` or `{"all": true}`. Answers `removed` and every pause; `403` read-only. |
-| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at}`; `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
+| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at, started_at, estimated_start_at, wait_seconds}` (`estimated_start_at`: when a run slot is expected to free for a waiting run, an estimate); `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
 | `POST` | `/queue/pause` | Hold every queued run back until resumed; runs in flight go on. Kept across restarts. Answers the queue; `403` read-only. |
 | `POST` | `/queue/resume` | Let queued runs start again, in order. Answers the queue; `403` read-only. |
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |

@@ -72,8 +72,10 @@ document and the fine print are in [barca status: Fields and JSON](/reference/cl
 one difference: status predicts a recompute of everything above a node, where `get`, `run` and
 a tick read a `Manual` or pinned node as it is ([Forcing a Recompute](/reference/refresh/)). So below a `Manual` node
 that is stale, status says `stale` or `unknown` where `barca get --dry-run` says `cached`; what
-the last tick found there is `last_check` ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)), and which
-schedule's tick will next bring a node up to date is `refresh_path` ("Refresh path"). In JSON the states are snake_case, spelled exactly like the `summary` keys
+the last tick found there is `last_check` ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)), which
+schedule's tick will next bring a node up to date is `refresh_path` ("Refresh path"), and since
+when a node is out of date and when it is expected fresh or only rechecked are `stale_since`,
+`expected_fresh_at` and `recheck_at` ("Times"). In JSON the states are snake_case, spelled exactly like the `summary` keys
 (`never_run`, `always_runs`); the table prints them as `never-run` and `always-runs`.
 
 | state | meaning | `reason` |
@@ -234,7 +236,9 @@ As of 2026-11-17T16:49:57Z
 ```
 
 Under the tree, each failing node is listed with what it holds: itself and every node it
-blocks, so three nodes that need attention here are one thing to fix. `Data` is the scope's
+blocks, so three nodes that need attention here are one thing to fix. With a server, a level
+whose nodes have estimates adds `fresh by ~15:05 UTC` (the latest of them) and `3 with no
+estimate` for the nodes that are not fresh and have none ([barca status: Fields and JSON: Times](/reference/cli/status-fields/#times)). `Data` is the scope's
 data coverage and `As of` the instant the nodes were classified at.
 
 ```bash

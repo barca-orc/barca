@@ -289,6 +289,22 @@ Where a schedule stands is decided once, on the server, and every surface reads 
   20 runs or, when longer, the wait of its newest tick's run. So a tick whose run waits for a
   run slot does not make its schedule late: the run queue is behind, and `GET /queue` says by
   how much. A paused schedule is never late.
+- `typical_queue_wait_seconds` is how long the schedule's ticks typically wait for a run slot:
+  the median, in whole seconds, of the queue waits its newest 20 fired ticks recorded (0 with
+  none). `typical_run_seconds` is how long their runs typically take from start to end: the
+  median of the newest 20 that succeeded, `null` with none. `queue_bound` is true when the
+  typical wait exceeds the schedule's interval: its ticks wait for a run slot longer than they
+  are apart, and more run slots (`--max-runs`) or a slower schedule is what helps.
+
+These feed two estimates, both computed on the server and both rounded up to 5 seconds. A run
+waiting in the queue has `estimated_start_at` in `GET /queue` (`barca queue --json`): each of
+the `max_runs` slots frees when its run ends (its start plus its schedule's typical run time,
+never before now), and a waiting run takes the slot that frees first, in queue order; a run
+no schedule started takes the median of the schedules' typical run times. `wait_seconds` is
+how long the run waits for a slot, to its start or to that estimate. And every node that is
+not fresh has `expected_fresh_at` or only `recheck_at` in `barca status --json`, `GET /state`
+and `GET /nodes`: the next tick that reaches it, the wait ahead of that tick's run, and the
+typical durations of the steps before the node (`barca docs status-fields`, "Times").
 
 The web UI's Schedules page shows a late schedule as `late by 12m`, late ones first, instead of
 a countdown to a next slot it will not keep, and the Assets page lists it among the causes with

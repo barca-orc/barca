@@ -30,6 +30,14 @@ it is a usage error (exit 2). The same is `GET /queue`, `POST /queue/pause` and
 `POST /queue/resume`, and the web UI's Runs page shows the queue with a Pause / Resume button.
 `GET /health` has `queue: {paused, queued, running, max_runs}`.
 
+Each run of `GET /queue` (`barca queue --json`) has `started_at` once it is running and, while
+it waits, `estimated_start_at`: when a run slot is expected to free for it, from the typical
+run time of the runs ahead of it over the `max_runs` slots, rounded up to 5 seconds
+(`barca docs scheduling`, "A schedule that missed its slot"). `wait_seconds` is how long it
+waits for a slot, to its start or to that estimate. Both are `null` while the queue is paused
+or draining and from a `--read-only` server; the table's `START` column shows them, an
+estimate with `~`.
+
 While the queue is paused, runs in flight finish, new runs are still accepted and wait, and a
 scheduled tick joins the queue too. The rule for a tick whose node already has a run pending or
 running holds: one tick waits, the ticks after it are skipped (`skip_reason: "in_flight"`), so a
