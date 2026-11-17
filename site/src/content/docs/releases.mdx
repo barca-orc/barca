@@ -19,6 +19,12 @@ export const latest = versions[0];
 
 ## Highlights
 
+**0.43.0 (2026-11-16).** The web UI opens on what is wrong and where: a health map of the
+project or group beside its causes, biggest first, with one health per node (`failing`,
+`blocked`, `suspect data`, `behind`, `waiting`) counted the same everywhere. barca records row
+counts and flags output that is empty or sharply changed, a run says why it ran and who asked
+for it, schedules say when they are late, and a run of tens of thousands of steps opens at once.
+
 **0.42.1 (2026-11-14).** A busy `barca serve` stays responsive: while runs write results, the
 web UI's read routes answer in about 100 ms on a 470k-result database, where `GET /state` took
 2.4 s. barca.sh is organized by task, with new pages on why a step did or didn't run, the
@@ -28,11 +34,6 @@ server, tokens and the web UI.
 an earlier version of just that key, from the web UI's key explorer or with
 `barca pin 'asset[dimension=value]'`. The web UI has one navigation in the sidebar, a key
 explorer that shows every key of a partitioned asset at once, and a quieter layout.
-
-**0.41.0 (2026-11-08).** The Runs page opens on what failed, with Re-run failed, Re-run all,
-Retry and Copy incident summary, and links each step to its Datadog trace. *Breaking, web UI
-only:* a node reads `fresh` where it read `cached`, and a node whose last attempt failed reads
-`failing`; the CLI and JSON keep their words.
 
 Every change, by version:
 

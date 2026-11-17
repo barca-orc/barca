@@ -8,6 +8,35 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- **The web UI shows what is wrong, and where (#925).** The Assets page opens on a health map of the open scope (project, group or file) beside its causes. The map's slices are sized by how much is wrong under them (failed keys of a partitioned asset, otherwise nodes) and coloured by the worst health inside; clicking one opens it, and the whole page follows. Causes list what is wrong once per cause, biggest first: failures that share an error are one entry, with their failed keys and the nodes they keep from running. Every count for a scope (the page header, group rows and panels, group cards on the graph, the map) now counts one health per node, so they agree: `failing`, `blocked`, `suspect data`, `behind`, `waiting`, `never run` or `ok`. A node keeps its precise state; `unknown` reads `waiting`, and a node waiting on a cutoff below a failure reads `blocked`.
+- **barca records row counts and raises data signals.** Every successful tabular result records its row count (pandas, polars and pyarrow frames in any format; polars lazy frames and DuckDB relations written to parquet; each key of a batched call): `materializations.rows`, `last_materialization.rows` and `partitions.empty` in `status --json`, `rows` in `history RUN_ID --json`, `stats --json` and `barca sql`. `GET /state` reports, from those facts only, `signals` per node: `empty` (it wrote 0 rows; for a partitioned asset, how many keys did), `rows_changed` (more than half up or down against its previous result) and `behind_input` (a node barca cannot decide on whose input has a newer result). The UI shows them as `suspect data` and `behind`, in the causes list and the node's panel, with each run's rows in its history.
+- **A run explains itself.** A run records why it executed what it did, aggregated by reason as it plans (never run, code or an input changed and which, new partition keys, a forced refresh, a retry of a failure, an evicted result), who asked for it (`principal`: an API token's name) and an optional `reason` given to `POST /runs`, and why it was cancelled (`cancellation`: by whom, whether it had started, which runs it waited behind and which did the same work). `GET /runs/{id}` and `barca history --json` carry `plan_reasons`, `principal`, `trigger_reason`, `retries` and `cancellation` (experimental), and `GET /runs/{id}` pages its steps (`?offset=`) and shows a live run's newest log lines. The run panel opens with a Run overview: why, who, attempts and retries, and for a live run its progress, what executes now, by group, and an estimate of what is left.
+- **Schedules say when they are late.** `GET /state` reports `prev_run` and `late_since` (the first cron slot no run has started for); the Schedules page shows `late by 12m` instead of counting down to a slot the schedule will miss, and puts late schedules first.
+- **The web UI's queue is visible everywhere:** while runs wait, the sidebar shows how many run and wait and the oldest wait, linking to the Runs page.
+- **The sidebar can be resized** by dragging its edge or with the arrow keys on it (the width is remembered), lists no file with nothing of the page's kind, and shows one project state when collapsed.
+
+### Bug Fixes
+
+- **A large run opens at once.** A run's logs and steps rendered every line (a run of 30,000 log lines and 5,000 keys built 167,000 elements and stalled the tab); they now render what is in view, and a node's keys are one row until opened.
+- **The Runs page keeps its history in view.** A long queue took the whole page and left the run history and the run's panel a 50-pixel strip. The queue scrolls inside a bounded strip and folds to one line, the run panel has the page's full height, and the filters visibly change the list. The queue lists the running run first, with how long it has run, and a filtered count over the runs loaded says it is partial ("21 not successful in the latest 100").
+- **The graph is readable at any size.** A fit never zooms below the size where a card's smallest text is 11 px (it centres on the selected, failing or running node and the rest is a pan away), edges no longer cross cards, cards keep their last known state while a scope loads instead of showing "Checking…", the top level shows the same groups as the list with the edges between them, opening a node's panel pans the graph to keep the node in view, and a group card leads with its failures.
+- **Counts agree across the UI.** A failing streak reads "N failed runs in a row" and a total "N runs recorded"; a partitioned asset's last success says it is any key's; a run requeued onto new code no longer counts a key twice in a node's history, its `last_run` or the run's node summary; group rows count all their failing members; the page header counts assets, tasks and sensors and the groups they are in.
+- **A read-only server reads as one.** `GET /health` on a `--read-only` server reports the queue the metadata DB records, as `GET /queue` does (it said 0 queued while 19 waited). The UI says read-only once, across the top, and shows no write buttons instead of dozens of disabled ones; the Schedules page says that schedules fire on the server that owns the scheduler.
+- **Tasks and sensors show how their last run went** (`succeeded`, `failing` or `never run`) instead of `always runs` on every row, and the Tasks page opens unfiltered, as its filter says.
+- **One time format:** every time in the UI is relative (`3m ago`, `in 5m`) with the exact time on hover; no timestamp is cut off.
+- **The node panel leads with what matters:** a partitioned asset's keys (total, cached, wrote 0 rows, rebuilt and failed in the last run), then the error, then a folded summary of what changed (`code, 2 inputs, 15 helpers`); History folds identical consecutive failures into one line; the Data tab names the key it shows and why.
+- **The command palette shows each result's state**, failing first; the Assets search lists matching members with their path instead of their ancestor groups; rows no longer move under the pointer while states load; pages have their own titles; a page that fails to render shows its error inside the app instead of a blank developer screen; the tables fit at a laptop's width without scrolling sideways.
+
+### Performance
+
+- **The UI polls less:** `/state` and the runs list refresh every 10 s when nothing runs (every 2 s while a run is live) and not at all in a hidden tab.
+
+### Documentation
+
+- **The Web UI page** describes the health map, the causes list and the health words, why a run ran, the queue in the sidebar and the read-only view. `barca docs status-fields` gains Row counts, `barca docs server-mode` Data health and `barca docs scheduling` A schedule that missed its slot.
+
 ## 0.42.1 (2026-11-14)
 
 - Internal: barca-core split into barca-model, barca-compile, barca-db and barca-engine crates; no behavior change.
