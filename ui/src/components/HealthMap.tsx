@@ -1,6 +1,7 @@
-import { useId, useMemo, useState } from 'react'
-import { arcPath, healthSummary, sunburst, treePath, ROOT, type Arc, type HealthTree } from '@/lib/healthTree'
-import { healthDisplay, type Health } from '@/lib/nodeHealth'
+import { useMemo, useState } from 'react'
+import { arcPath, healthSummary, ringRadii, sunburst, treePath, ROOT, type Arc, type HealthTree, type HealthTreeNode } from '@/lib/healthTree'
+import { HEALTH_ORDER, healthDisplay, healthFamily, isUnhealthy, type HealthFamily } from '@/lib/nodeHealth'
+import { plural } from '@/lib/plural'
 
 export interface HealthMapProps {
   tree: HealthTree
@@ -14,42 +15,40 @@ export interface HealthMapProps {
   size?: number
 }
 
-const RINGS = 2
-
-/** The map's four colours: what a health is drawn as. */
-type Family = 'failing' | 'attention' | 'ok' | 'unknown'
-
-const FAMILY: Record<Health, Family> = {
-  failing: 'failing',
-  blocked: 'attention',
-  suspect: 'attention',
-  behind: 'attention',
-  waiting: 'unknown',
-  never_run: 'unknown',
-  ok: 'ok',
-}
+/** How many levels below the centre are drawn: a branch ends where its members do. */
+const MAX_RINGS = 6
 
 /** What the map's colours mean: failing, needs attention, ok, not judged yet. */
-const KEY: readonly (readonly [Family, string])[] = [
+const KEY: readonly (readonly [HealthFamily, string])[] = [
   ['failing', 'failing'],
   ['attention', 'needs attention'],
   ['ok', 'ok'],
   ['unknown', 'not known yet'],
 ]
 
-/** A family's inner and rim tones (map tokens, so both themes follow). */
-const TONES: Record<Family, readonly [string, string]> = {
-  failing: ['var(--map-failing-0)', 'var(--map-failing-1)'],
-  attention: ['var(--map-attention-0)', 'var(--map-attention-1)'],
-  ok: ['var(--map-ok-0)', 'var(--map-ok-1)'],
-  unknown: ['var(--map-unknown-0)', 'var(--map-unknown-1)'],
+/**
+ * Geometry, as fractions of the radius. A small hole for one number; rings that thin out by
+ * `DECAY` each level, so the deep levels read as fine texture and the near ones as the shape;
+ * hairline gaps (px, at the drawing's size) between rings and between neighbours.
+ */
+const HOLE = 0.21
+const RING_SHAPE = { firstMax: 0.27, decay: 0.8, gap: 0.8 }
+const SEGMENT_GAP = 0.8
+
+/**
+ * A segment's colour: its family, a step lighter and a touch softer at each level out (same hue,
+ * so a family stays itself), the way a disk map's deep folders read paler than their parents.
+ */
+function fillOf(a: Arc): string {
+  const family = healthFamily(a.health)
+  const k = a.depth - 1
+  return k === 0 ? `var(--map-${family})` : `oklch(from var(--map-${family}) calc(l + ${(0.025 * k).toFixed(3)}) calc(c * ${(1 - 0.05 * k).toFixed(2)}) h)`
 }
 
-/** Geometry, as fractions of the radius: the hole, then the rings, parted by gaps. */
-const HOLE = 0.42
-const RING_GAP = 0.008
-/** The gap between neighbouring segments, px at the drawing's own size. */
-const SEGMENT_GAP = 0.6
+/** `12 assets`; `3 nodes` in a scope with no assets, where the map is sized by nodes. */
+function sizeWords(n: number, assets: boolean): string {
+  return plural(n, assets ? 'asset' : 'node')
+}
 
 /** The arc ids lit while `hover` is under the pointer: it, what is inside it, and what holds it. */
 function litIds(arcs: readonly Arc[], hover: string | null): Set<string> | null {
@@ -68,45 +67,57 @@ function litIds(arcs: readonly Arc[], hover: string | null): Set<string> | null 
   return lit
 }
 
+/** The centre's one number: how many nodes are in the scope's worst health (as the page header
+ * counts them), or, when all is well, how many assets. */
+function headline(node: Pick<HealthTreeNode, 'counts' | 'leaves' | 'assets'>): { value: number; word: string; family: HealthFamily } {
+  const worst = HEALTH_ORDER.find((h) => isUnhealthy(h) && node.counts[h] > 0)
+  if (worst) return { value: node.counts[worst], word: healthDisplay(worst).label, family: healthFamily(worst) }
+  return { value: node.assets > 0 ? node.assets : node.leaves, word: 'all ok', family: 'ok' }
+}
+
 /**
  * barca · HealthMap
- * The scope as a sunburst: the centre is the scope, each ring one level down (groups are the
- * unit). A segment's angle is how much is wrong underneath (unhealthy keys or nodes, with a thin
- * floor so a healthy group stays visible); its colour is the worst health inside, in three: red
- * failing, yellow needs attention, green ok (grey: not known yet). Members too thin to draw are
- * one quiet `N smaller` segment. The centre names the scope, or the segment under the pointer,
- * whose branch is lit while the rest dims. Click a segment to make it the centre, a node to open
- * it, the centre to go up.
+ * The scope as a sunburst, drawn the way a disk map draws a folder: the centre is the scope, each
+ * ring one level down (groups, then their groups, then assets, then a partitioned asset's keys),
+ * thinner as it goes out, and a branch ends where its members do. A segment's angle is how many
+ * assets are underneath; its colour is the worst health inside: red failing, amber needs
+ * attention, green ok, slate not known yet, paler at each level out. Members too thin to draw are
+ * one `N smaller` segment per colour; a partitioned asset with room shows its keys outside it
+ * (failed, not up to date, ok). The centre holds one number (how many nodes are in the scope's
+ * worst health); the line under the map names the segment under the pointer, whose branch is lit
+ * while the rest dims. Click a segment to make it the centre, an asset or its keys to open it,
+ * the centre to go up.
  */
 export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMapProps) {
-  const arcs = useMemo(() => sunburst(tree, focus, RINGS), [tree, focus])
+  const arcs = useMemo(() => sunburst(tree, focus, MAX_RINGS, 0.008), [tree, focus])
   const [hover, setHover] = useState<string | null>(null)
-  const uid = useId().replace(/:/g, '')
   const lit = useMemo(() => litIds(arcs, hover), [arcs, hover])
   const center = tree.nodes.get(focus)
   if (!center) return null
 
   const half = size / 2
-  const hole = half * HOLE
-  const ring = (half - hole - half * RING_GAP * RINGS) / RINGS
-  const radii = (a: Arc) => {
-    const inner = hole + half * RING_GAP * a.depth + ring * (a.depth - 1)
-    return [inner, inner + ring] as const
-  }
+  const outer = half - 1
+  const hole = outer * HOLE
+  const rings = ringRadii(arcs.reduce((max, a) => Math.max(max, a.depth), 0), hole, outer, RING_SHAPE)
   const parent = tree.parent.get(focus)
   const hovered = hover ? arcs.find((a) => a.id === hover) ?? null : null
-  const hoveredNode = hovered && hovered.kind !== 'rest' ? tree.nodes.get(hovered.id) : null
-  const activate = (a: Arc) => (a.kind === 'node' ? onOpen(a.id) : a.kind === 'rest' ? onFocus(a.parent) : onFocus(a.id))
+  const hoveredNode = hovered && hovered.kind !== 'rest' && hovered.kind !== 'keys' ? tree.nodes.get(hovered.id) : null
+  const activate = (a: Arc) => (a.kind === 'node' ? onOpen(a.id) : a.kind === 'keys' ? onOpen(a.parent) : a.kind === 'rest' ? onFocus(a.parent) : onFocus(a.id))
+  const top = headline(center)
 
-  // What the centre says: the segment under the pointer, else the scope.
-  const title = hovered ? hovered.label : focus === ROOT ? 'All pipelines' : center.label
-  const where = hovered && hovered.kind !== 'rest' ? treePath(tree, hovered.id).slice(1, -1).map((n) => n.label).join(' › ') : null
-  const detail = hoveredNode
+  // The line under the map: the segment under the pointer, else the scope.
+  const name = hovered ? hovered.label : focus === ROOT ? 'All pipelines' : center.label
+  // Where the segment sits: the path to it, or to what holds it (`N smaller`, a node's keys).
+  const synthetic = hovered?.kind === 'rest' || hovered?.kind === 'keys'
+  const where = hovered ? treePath(tree, synthetic ? hovered.parent : hovered.id).slice(1, synthetic ? undefined : -1).map((n) => n.label).join(' › ') : null
+  const summary = hoveredNode
     ? healthSummary(hoveredNode, 2) || healthDisplay(hoveredNode.health).label
     : hovered
       ? healthDisplay(hovered.health).label
-      : healthSummary(center, 2) || 'Nothing needs attention'
-  const count = (hovered ?? center).leaves
+      : healthSummary(center, 3) || 'nothing needs attention'
+  const amount = hovered?.keys
+    ? `${hovered.keys.count.toLocaleString()} of ${hovered.keys.of.toLocaleString()} keys`
+    : sizeWords(hovered ? hovered.size : center.assets > 0 ? center.assets : center.leaves, center.assets > 0)
 
   return (
     <figure className="barca-healthmap" aria-label={`Health map of ${center.label}`}>
@@ -118,36 +129,19 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
         data-hovering={hover !== null || undefined}
         onMouseLeave={() => setHover(null)}
       >
-        <defs>
-          {(Object.keys(TONES) as Family[]).flatMap((f) => [
-            // Each family brightens toward the rim, so the rings read as one lit disk.
-            <radialGradient key={f} id={`${uid}-${f}`} gradientUnits="userSpaceOnUse" cx="0" cy="0" r={half}>
-              <stop offset={HOLE} style={{ stopColor: TONES[f][0] }} />
-              <stop offset="1" style={{ stopColor: TONES[f][1] }} />
-            </radialGradient>,
-            // The `N smaller` segment: slate, faintly tinted by its family, so it reads as the rest.
-            <radialGradient key={`${f}-rest`} id={`${uid}-${f}-rest`} gradientUnits="userSpaceOnUse" cx="0" cy="0" r={half}>
-              <stop offset={HOLE} style={{ stopColor: `color-mix(in oklch, ${TONES[f][0]} 18%, var(--map-unknown-0))` }} />
-              <stop offset="1" style={{ stopColor: `color-mix(in oklch, ${TONES[f][1]} 18%, var(--map-unknown-1))` }} />
-            </radialGradient>,
-          ])}
-        </defs>
         {arcs.map((a) => {
-          const [inner, outer] = radii(a)
-          const family = FAMILY[a.health]
+          const [inner, out] = rings[a.depth - 1]!
           return (
             <path
               key={a.id}
               className="barca-healthmap-arc"
-              d={arcPath(a.start, a.end, inner, outer, SEGMENT_GAP)}
-              fill={`url(#${uid}-${family}${a.kind === 'rest' ? '-rest' : ''})`}
-              data-family={family}
+              d={arcPath(a.start, a.end, inner, out, SEGMENT_GAP)}
+              style={{ fill: fillOf(a) }}
               data-kind={a.kind}
-              data-depth={a.depth}
               data-lit={lit === null ? undefined : lit.has(a.id)}
               role="button"
               tabIndex={a.depth === 1 ? 0 : -1}
-              aria-label={`${a.label}: ${healthDisplay(a.health).label}, ${a.leaves.toLocaleString()} ${a.leaves === 1 ? 'node' : 'nodes'}`}
+              aria-label={`${a.label}: ${healthDisplay(a.health).label}, ${a.keys ? `${a.keys.count.toLocaleString()} of ${a.keys.of.toLocaleString()} keys` : sizeWords(a.size, center.assets > 0)}`}
               onMouseEnter={() => setHover(a.id)}
               onFocus={() => setHover(a.id)}
               onBlur={() => setHover(null)}
@@ -158,32 +152,32 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
         })}
         <circle
           className="barca-healthmap-hole"
-          r={hole - half * RING_GAP}
+          r={hole}
+          data-family={top.family}
           role={parent !== undefined ? 'button' : undefined}
           tabIndex={parent !== undefined ? 0 : undefined}
           aria-label={parent !== undefined ? `Up to ${tree.nodes.get(parent)?.label ?? 'All pipelines'}` : undefined}
           onClick={() => parent !== undefined && onFocus(parent)}
           onKeyDown={(e) => { if (parent !== undefined && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onFocus(parent) } }}
           onMouseEnter={() => setHover(null)}
-        />
-        {/* The centre's words are HTML: real type, wrapped and cut cleanly, at any scale. */}
-        <foreignObject x={-hole * 0.86} y={-hole * 0.66} width={hole * 1.72} height={hole * 1.32} pointerEvents="none">
-          <div className="barca-healthmap-center">
-            {where && <span className="barca-healthmap-where">{where}</span>}
-            <strong className="barca-healthmap-title">{title}</strong>
-            <span className="barca-healthmap-detail" data-family={FAMILY[(hoveredNode ?? hovered ?? center).health]}>
-              {/* A part never breaks inside itself (`1 blocked`); lines break between parts. */}
-              {detail.split(' · ').map((part, i) => (
-                <span key={i}>{i > 0 && ' · '}<span className="barca-healthmap-part">{part}</span></span>
-              ))}
-            </span>
-            <span className="barca-healthmap-count">
-              {count.toLocaleString()} {count === 1 ? 'node' : 'nodes'}
-              {!hovered && parent !== undefined && ' · click to go up'}
-            </span>
+        >
+          {parent !== undefined && <title>Up one level</title>}
+        </circle>
+        {/* One number, in real type: how many nodes are in the scope's worst health. */}
+        <foreignObject x={-hole} y={-hole} width={hole * 2} height={hole * 2} pointerEvents="none">
+          <div className="barca-healthmap-center" data-family={top.family}>
+            <strong>{top.value.toLocaleString()}</strong>
+            <span>{top.word}</span>
           </div>
         </foreignObject>
       </svg>
+      <figcaption className="barca-healthmap-caption" aria-live="polite">
+        <span className="barca-healthmap-where">{where ?? (hovered ? '' : parent !== undefined ? 'click the centre to go up' : '')}</span>
+        <span className="barca-healthmap-name">{name}</span>
+        <span className="barca-healthmap-summary" data-family={healthFamily((hoveredNode ?? hovered ?? center).health)}>
+          {summary} · {amount}
+        </span>
+      </figcaption>
       <ul className="barca-healthmap-key" aria-label="Colours">
         {KEY.map(([family, word]) => (
           <li key={family}><i data-family={family} />{word}</li>

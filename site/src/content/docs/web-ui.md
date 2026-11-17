@@ -13,17 +13,22 @@ page, and shows no buttons that would change anything.
 The Assets page opens on the health of what is open (the project, a group or a file): a map of it
 beside its causes, then its groups and nodes, worst first.
 
-![The Assets page of a 2,867-node project: a two-ring map coloured by health beside seven causes, the first a ValueError that failed 24 keys and blocks one node, then the groups, each with its failing and behind counts](../../assets/web-ui/health-overview.png)
-*The map's slices are sized by how much is wrong under them and coloured by the worst health inside: red failing, yellow needs attention, green ok; the causes list groups 20 failures into 7 errors.*
+![The Assets page of a 2,867-node project: a ringed map coloured by health beside seven causes, the first a ValueError that failed 24 keys and blocks one node, then the groups, each with its failing and behind counts](../../assets/web-ui/health-overview.png)
+*The map's segments are sized by how many assets are under them and coloured by the worst health inside: red failing, yellow needs attention, green ok; the outer ring shows how many of them are fine. The causes list groups 20 failures into 7 errors.*
 
-- **The map** draws the open scope at its centre and its groups (then their groups or nodes) in
-  two rings. A slice's size is how much is wrong under it: failed keys of a partitioned asset,
-  otherwise nodes; a scope with nothing wrong keeps a thin slice. Its colour is the worst health
-  inside, in three: red is failing, yellow needs attention (blocked, suspect data or behind),
-  green is ok, and grey is what barca cannot judge yet (waiting, never run). Members too thin to
-  draw one by one are one `N smaller` slice. Point at a slice and the centre names it, with its
-  path, health and size; click it to open it (the whole page follows), the centre to go up; hide
-  the map with **Hide health map**.
+- **The map** draws the open scope at its centre, then a ring for each level down: its groups,
+  their groups, its assets and, for a partitioned asset with room for it, its keys. A segment's
+  size is how many assets are under it (a partitioned asset counts once; tasks and sensors
+  colour their group but take no room). Its colour is the worst health inside: red is failing,
+  yellow needs attention (blocked, suspect data or behind), green is ok, and grey is what barca
+  cannot judge yet (waiting, never run). Members too thin to draw one by one become `N smaller`
+  bands, one per colour, sized by the assets inside them, so a run of small groups that are
+  mostly fine reads mostly green. A partitioned asset's keys ring shows its failed, not up to
+  date and ok keys, and a few failed keys stay visible among thousands. The centre holds one
+  number: how many nodes are in the worst health, as the page header counts them. Point at a
+  segment and the line under the map names it, with its path, health and size; click it to open
+  it (the whole page follows), an asset or its keys to select the asset, the centre to go up;
+  hide the map with **Hide health map**.
 - **Causes** list what is wrong once per cause, biggest first: failures that share an error
   (ignoring its numbers) are one entry, with the keys that failed and how many nodes they keep
   from running; then output that looks wrong; then what is behind.
