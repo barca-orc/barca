@@ -10,8 +10,11 @@ const FILE = 'grouped.py'
 const G = (name: string) => `group:${FILE}:${name}`
 const N = (name: string) => `${FILE}:${name}`
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`
-// A node that always runs shows its last run: `succeeded`, with the fresh check (one legend line for both).
-const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'unknown', 'never run', 'succeeded', 'fresh', 'fresh / succeeded', 'failing']
+// A node shows its state in the CLI's words (`unknown` reads `waiting`; a node that always runs
+// shows its last run, `succeeded`); a group card shows its members' health (#925). A legend line
+// names every word its glyph carries on screen, joined by ` / ` (`ok / succeeded`).
+const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'waiting', 'never run', 'succeeded', 'fresh', 'failing']
+const HEALTH_WORDS = ['failing', 'blocked', 'suspect data', 'behind', 'waiting', 'never run', 'ok']
 
 // The whole pipeline once, and the fold 2 check (which fails) once: a failed last attempt on
 // record beside cached models.
@@ -74,7 +77,8 @@ test('the legend names the states the graph shows, in the CLI\'s words', async (
   const legend = page.locator('.barca-legend')
   await expect(legend).toContainText('failing')
   const words = (await legend.locator('span').allTextContents()).map((w) => w.trim())
-  for (const word of words) expect([...CACHE_STATES, 'failing', 'running', 'pinned', 'Group', 'Pipeline']).toContain(word)
+  for (const line of words)
+    for (const word of line.split(' / ')) expect([...CACHE_STATES, ...HEALTH_WORDS, 'pinned', 'Group', 'Pipeline']).toContain(word)
   await expect(legend).not.toContainText(/Healthy|Not run|Stale/)
 })
 
