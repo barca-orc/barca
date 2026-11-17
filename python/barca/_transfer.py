@@ -186,6 +186,8 @@ class _Requests:
         # id -> (attempt number, attempt start time); absent until it starts.
         self._running: dict[int, tuple[int, float]] = {}
         self._open: set[int] = set()
+        # Replies being sent: resolved, and not idle until the bytes are written.
+        self._sending = 0
 
     def accept(self, req_id: int) -> None:
         with self._lock:
@@ -200,15 +202,25 @@ class _Requests:
             return True
 
     def resolve(self, reply: dict) -> None:
-        """Send `reply` unless the request was already resolved."""
+        """Send `reply` unless the request was already resolved.
+
+        The send happens outside the lock: it can block until the coordinator reads, and
+        the request reader takes this lock in `accept`, so holding it would stop requests
+        being read while a reply waits (#1001).
+        """
         with self._lock:
             req_id = reply["id"]
             if req_id not in self._open:
                 return
             self._open.discard(req_id)
             self._running.pop(req_id, None)
+            self._sending += 1
+        try:
             _send(reply)
-            self._idle.notify_all()
+        finally:
+            with self._lock:
+                self._sending -= 1
+                self._idle.notify_all()
 
     def expire(self) -> None:
         """Fail every attempt that has run past the timeout."""
@@ -235,7 +247,7 @@ class _Requests:
     def wait_idle(self) -> None:
         """Block until every accepted request has been replied to."""
         with self._lock:
-            while self._open:
+            while self._open or self._sending:
                 self._idle.wait(0.1)
 
     def abandon_all(self) -> None:

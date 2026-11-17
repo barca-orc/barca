@@ -8,6 +8,22 @@ Each frame is a four-byte unsigned big-endian length followed by UTF-8 JSON.
 Readers reject payload lengths greater than 256 MiB before allocation. Python's
 stdlib suffices; optional orjson changes encoding speed, not the wire layout.
 
+Either side may send a frame at any time after negotiation, so a reader never loses
+bytes it has taken off the socket. The coordinator's worker and transfer loops wait on
+the socket and on their own outgoing messages at once; their reader keeps a partly
+received frame across those waits and resumes it, instead of discarding it when an
+outgoing message is handled first (#1001). An end of stream inside a frame is an error;
+one at a frame boundary is a disconnect. Python helpers read with one thread and send
+each frame whole under a send lock, so their frames never interleave.
+
+Neither side of the transfer socket stops reading while it waits to write. The coordinator
+queues requests and writes them as the socket takes them, reading replies meanwhile; the
+transfer helper sends a reply without holding the lock its request reader takes. A side
+that read only between whole writes could fill both directions of the socket and wait on
+the other forever (#1001). A worker is sent a command only while it waits for one
+(`execute_batch` when idle, `parallel_response` while it blocks for it, `done`), so the
+worker loop writes each command whole.
+
 The helper first sends `{"type":"hello","role":"worker","protocol_version":5}`
 (or role `transfer`). The coordinator validates the role and integer version and
 acknowledges `{"type":"hello","role":"coordinator","protocol_version":5}`.
@@ -237,7 +253,15 @@ earlier side effects. [parallel tests](../../python/tests/test_parallel_results.
 nested handoff and file-only values; [handshake tests](../../python/tests/test_protocol_handshake.py)
 cover wrong versions, cancellation and reaping. The worker-pool shutdown test in
 [io_loop.rs](../../crates/barca-engine/src/io_loop.rs) holds a kill/wait job behind a gate
-and requires shutdown to wait for it. Runtime framing tests cover size limits.
+and requires shutdown to wait for it. Runtime framing tests cover size limits. Frame
+continuity is tested at three levels: a read abandoned at every byte of a frame resumes
+([protocol tests](../../crates/barca-engine/src/protocol/tests.rs)), and the worker and
+transfer loops are sent a message while each incoming frame is split inside its header and
+its payload, and lose none ([io_loop tests](../../crates/barca-engine/src/io_loop/tests.rs),
+[transfer tests](../../crates/barca-core/src/transfer/tests.rs)). The transfer tests also
+write a request and read a reply each larger than the socket's buffers against a helper that
+reads nothing while it writes, and the [helper tests](../../python/tests/test_transfer.py)
+require requests to be accepted while a reply's send is blocked.
 
 Plan documents independently carry `plan_version:1` on CLI and HTTP output. Consumers
 should reject unsupported versions; absence identifies an older unversioned document.

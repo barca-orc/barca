@@ -1,4 +1,5 @@
 use super::*;
+use crate::protocol::read_frame;
 
 // ── ArtifactLayout ──────────────────────────────────────────────────────
 
@@ -757,4 +758,138 @@ async fn real_helper_round_trip_through_plain_path_store() {
     );
     assert!(!fx.store.exists());
     within(c.shutdown()).await;
+}
+
+// ── Framing under interleaving (#1001) ──────────────────────────────────
+
+/// Requests keep arriving while the helper's replies are only partly received. Each reply is
+/// written in pieces, split at every offset class (inside the length header, at its end,
+/// inside the payload), and the next request is sent only after the coordinator has read the
+/// first piece and is waiting for the rest, so the I/O loop must take the request in the
+/// middle of a frame. A reader that drops the partial frame then reads from inside it and
+/// breaks the connection: every waiter gets "transfer helper exited".
+#[tokio::test]
+async fn requests_sent_while_a_reply_is_half_read_lose_no_reply() {
+    use tokio::io::AsyncWriteExt;
+    let (stream, mut helper) = tokio::net::UnixStream::pair().unwrap();
+    let (req_tx, req_rx) = mpsc::unbounded_channel();
+    let io = tokio::spawn(io_task(stream, req_rx));
+    let send = |id: u64| {
+        let (tx, rx) = oneshot::channel();
+        req_tx
+            .send(Request {
+                frame: TransferRequest::Stat {
+                    id,
+                    remote: format!("mem://store/n{id}/h.json"),
+                },
+                reply: tx,
+                uploaded: None,
+            })
+            .expect("the I/O loop ended: the connection lost its framing");
+        rx
+    };
+    let reply = |id: u64| {
+        let payload = serde_json::to_vec(&TransferReply::Done {
+            id,
+            size_bytes: id,
+            sha256: Some(format!("sha-{id}-{}", "x".repeat(40))),
+            fetched: true,
+            mismatch: false,
+        })
+        .unwrap();
+        [&(payload.len() as u32).to_be_bytes()[..], &payload].concat()
+    };
+    let n = 64u64;
+    let mut waiters = vec![send(0)];
+    let _: TransferRequest = within(read_frame(&mut helper)).await.unwrap().unwrap();
+    for id in 0..n {
+        let frame = reply(id);
+        // 1, 2, 3 (inside the header), 4 (header complete), then inside the payload.
+        let split = match id % 6 {
+            k @ 0..=3 => k as usize + 1,
+            4 => 5,
+            _ => frame.len() / 2,
+        };
+        helper.write_all(&frame[..split]).await.unwrap();
+        // Let the I/O loop read the piece and go back to waiting on both branches.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        if id + 1 < n {
+            waiters.push(send(id + 1));
+            // The loop took the request (and wrote it) while the reply was half read.
+            let req: TransferRequest = within(read_frame(&mut helper)).await.unwrap().unwrap();
+            assert!(matches!(req, TransferRequest::Stat { id: got, .. } if got == id + 1));
+        }
+        helper.write_all(&frame[split..]).await.unwrap();
+    }
+    for (id, rx) in waiters.into_iter().enumerate() {
+        let got = within(rx).await.unwrap();
+        let done = got.unwrap_or_else(|f| panic!("reply {id} lost: {}", f.message));
+        assert_eq!(done.bytes, id as u64);
+    }
+    drop(req_tx);
+    drop(helper);
+    within(io).await.unwrap();
+}
+
+/// The helper reads nothing while it writes a reply (the real one sends under the lock its
+/// request reader also takes), so the I/O loop must keep reading replies while a request it
+/// is writing waits for room (#1001). Here a reply and a request are each larger than the
+/// socket's buffers: a loop that stops reading during a write waits on the helper while the
+/// helper waits on it, and neither request is ever answered.
+#[tokio::test]
+async fn a_request_waiting_for_room_does_not_stop_replies_being_read() {
+    use tokio::io::AsyncWriteExt;
+    let (stream, mut helper) = tokio::net::UnixStream::pair().unwrap();
+    let big = "z".repeat(4 * 1024 * 1024);
+    let (req_tx, req_rx) = mpsc::unbounded_channel();
+    let mut waiters = Vec::new();
+    for (id, remote) in [
+        (0, "mem://store/small".to_string()),
+        (1, format!("mem://store/{big}")),
+    ] {
+        let (tx, rx) = oneshot::channel();
+        req_tx
+            .send(Request {
+                frame: TransferRequest::Stat { id, remote },
+                reply: tx,
+                uploaded: None,
+            })
+            .unwrap();
+        waiters.push(rx);
+    }
+    let io = tokio::spawn(io_task(stream, req_rx));
+    let fake = tokio::spawn(async move {
+        // A single-threaded helper: each request is answered in full before the next is read.
+        for _ in 0..2 {
+            let Some(TransferRequest::Stat { id, .. }) = read_frame(&mut helper).await.unwrap()
+            else {
+                panic!("expected a stat request");
+            };
+            let sha256 = (id == 0).then(|| big.clone());
+            let payload = serde_json::to_vec(&TransferReply::Done {
+                id,
+                size_bytes: id,
+                sha256,
+                fetched: true,
+                mismatch: false,
+            })
+            .unwrap();
+            helper
+                .write_all(&[&(payload.len() as u32).to_be_bytes()[..], &payload].concat())
+                .await
+                .unwrap();
+        }
+        helper
+    });
+    for (id, rx) in waiters.into_iter().enumerate() {
+        let done = within(rx)
+            .await
+            .unwrap()
+            .unwrap_or_else(|f| panic!("{id}: {}", f.message));
+        assert_eq!(done.bytes, id as u64);
+    }
+    drop(req_tx);
+    let helper = within(fake).await.unwrap();
+    drop(helper);
+    within(io).await.unwrap();
 }

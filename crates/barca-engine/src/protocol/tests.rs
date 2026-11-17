@@ -811,3 +811,59 @@ async fn helper_hello_requires_matching_version_and_role() {
         );
     }
 }
+
+/// A `FrameReader` read dropped at any byte of a frame resumes where it stopped (#1001), and
+/// several frames arriving in one read come out one by one.
+#[tokio::test]
+async fn frame_reader_survives_a_read_dropped_at_every_byte() {
+    use std::future::Future;
+    use tokio::io::AsyncWriteExt;
+    let msgs: Vec<serde_json::Value> = (0..3)
+        .map(|i| serde_json::json!({"type": "log", "i": i, "pad": "z".repeat(i * 50)}))
+        .collect();
+    let bytes: Vec<u8> = msgs
+        .iter()
+        .flat_map(|m| encode_message(m).unwrap())
+        .collect();
+    let (mut a, mut b) = tokio::io::duplex(64 * 1024);
+    let mut reader = FrameReader::new();
+    let mut got = Vec::new();
+    let noop = std::task::Waker::noop();
+    for byte in &bytes {
+        a.write_all(std::slice::from_ref(byte)).await.unwrap();
+        // Poll once and drop the read, as a `select!` that another branch won would.
+        let mut read = Box::pin(reader.next::<_, serde_json::Value>(&mut b));
+        if let std::task::Poll::Ready(frame) = read
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(noop))
+        {
+            got.push(frame.unwrap().unwrap());
+        }
+    }
+    assert_eq!(got, msgs);
+
+    // Frames coalesced into one read, then EOF at a frame boundary.
+    a.write_all(&bytes).await.unwrap();
+    drop(a);
+    for m in &msgs {
+        let frame: serde_json::Value = reader.next(&mut b).await.unwrap().unwrap();
+        assert_eq!(&frame, m);
+    }
+    assert!(
+        reader
+            .next::<_, serde_json::Value>(&mut b)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // EOF inside a frame is an error, not a clean end.
+    let (mut a, mut b) = tokio::io::duplex(64);
+    a.write_all(&bytes[..6]).await.unwrap();
+    drop(a);
+    let err = FrameReader::new()
+        .next::<_, serde_json::Value>(&mut b)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+}

@@ -1,5 +1,6 @@
 use super::*;
 use crate::coordinator::ItemSpec;
+use crate::protocol::read_frame;
 use std::collections::HashMap;
 
 #[test]
@@ -929,4 +930,66 @@ fn shutdown_terminates_all_workers_in_one_shared_grace_window() {
 
         let _ = std::fs::remove_file(&socket_path);
     });
+}
+
+/// The worker socket loop races its read against commands to send, like the transfer loop
+/// (#1001): a command that arrives while a worker's frame is half received must not lose the
+/// bytes read so far. Each frame is written in two pieces, split inside the header, at its end
+/// and inside the payload, with a command sent (and received by the worker) in between.
+#[tokio::test]
+async fn commands_sent_while_a_worker_frame_is_half_read_lose_no_frame() {
+    use tokio::io::AsyncWriteExt;
+    let (stream, mut peer) = UnixStream::pair().unwrap();
+    let (commands, rx) = mpsc::channel(4);
+    let (events, mut event_rx) = mpsc::channel(64);
+    let task = tokio::spawn(worker_io_task(0, stream, rx, events));
+    let n = 30;
+    for i in 0..n {
+        let line = format!("line {i} {}", "y".repeat(i * 7));
+        let frame = {
+            let payload = serde_json::to_vec(
+                &serde_json::json!({"type": "log", "node_id": "a", "line": line}),
+            )
+            .unwrap();
+            [&(payload.len() as u32).to_be_bytes()[..], &payload].concat()
+        };
+        let split = match i % 5 {
+            k @ 0..=3 => k + 1,
+            _ => frame.len() / 2,
+        };
+        peer.write_all(&frame[..split]).await.unwrap();
+        // Let the loop read the piece and wait on both branches again.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        commands
+            .send(serde_json::json!({"type": "noop", "n": i}))
+            .await
+            .unwrap();
+        let cmd: serde_json::Value =
+            tokio::time::timeout(Duration::from_secs(2), read_frame(&mut peer))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        assert_eq!(cmd["n"], i);
+        peer.write_all(&frame[split..]).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .unwrap_or_else(|_| panic!("frame {i} never arrived: the loop lost its framing"))
+            .unwrap();
+        match event {
+            IoEvent::Message { msg, .. } => match *msg {
+                WorkerMessage::Log { line: got, .. } => assert_eq!(got, line),
+                other => panic!("frame {i}: unexpected {other:?}"),
+            },
+            IoEvent::Disconnected { .. } => {
+                panic!("frame {i}: the loop lost its framing and disconnected")
+            }
+            _ => panic!("frame {i}: unexpected event"),
+        }
+    }
+    drop(commands);
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
 }

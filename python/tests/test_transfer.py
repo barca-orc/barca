@@ -1386,3 +1386,43 @@ class TestEntryPoint:
         monkeypatch.delenv("BARCA_SOCKET", raising=False)
         assert _transfer.main() == 1
         assert "BARCA_SOCKET" in capsys.readouterr().err
+
+
+class TestRepliesDoNotBlockRequests:
+    """A reply waiting for the coordinator to read must not stop requests being read (#1001).
+
+    The reply is sent outside the lock that `accept` (the request reader) takes, and
+    `wait_idle` still waits until the reply is written.
+    """
+
+    def test_accept_and_resolve_proceed_while_a_reply_send_is_blocked(self, monkeypatch):
+        entered, release = threading.Event(), threading.Event()
+        sent = []
+
+        def blocking_send(reply):
+            entered.set()
+            release.wait(5)
+            sent.append(reply["id"])
+
+        monkeypatch.setattr(_transfer, "_send", blocking_send)
+        requests = _transfer._Requests(timeout=None)
+        requests.accept(1)
+        sender = threading.Thread(target=requests.resolve, args=({"type": "done", "id": 1},))
+        sender.start()
+        assert entered.wait(5)
+        idle = threading.Thread(target=requests.wait_idle)
+        idle.start()
+        # The reader takes the same lock: it must not wait for the blocked send.
+        reader = threading.Thread(target=requests.accept, args=(2,))
+        reader.start()
+        reader.join(1)
+        assert not reader.is_alive(), "accept() waited for a reply to be sent"
+        # Idle only once the blocked reply (and the new request) are done.
+        idle.join(0.2)
+        assert idle.is_alive()
+        release.set()
+        sender.join(5)
+        requests.resolve({"type": "done", "id": 2})
+        idle.join(5)
+        assert not idle.is_alive()
+        assert sent == [1, 2]
