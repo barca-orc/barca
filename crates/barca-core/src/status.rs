@@ -32,6 +32,10 @@ pub struct StatusResult {
     pub nodes: Vec<NodeStatus>,
     /// Node counts per cache state, for every node in scope: a filter does not change them.
     pub summary: StatusSummary,
+    /// How many assets in scope had their data measured (a recorded row count), and how many of
+    /// those look wrong: `7 of 556 measured`. For every node in scope, like `summary`.
+    #[serde(default)]
+    pub data_coverage: crate::health::DataCoverage,
     /// `--state` / `--problems`: which nodes `nodes` keeps. Absent without a filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<StatusFilter>,
@@ -51,6 +55,22 @@ pub struct NodeStatus {
     pub inputs: Vec<String>,
     pub partitioned: bool,
     pub cache: CacheStatus,
+    /// Whether something needs doing about it, in one word, most severe first: `failing`,
+    /// `blocked`, `suspect`, `behind`, `undecided`, `never_run`, `ok` (`barca docs
+    /// status-fields`, "Health"). Beside `cache.state`, never in place of it.
+    #[serde(default)]
+    pub health: crate::health::Health,
+    /// Which rule decided `health`.
+    #[serde(default)]
+    pub health_reason: crate::health::HealthReason,
+    /// What its recorded results say about its data (`empty`, `rows_changed`,
+    /// `behind_input`); empty when nothing does, which for an unmeasured asset says nothing.
+    #[serde(default)]
+    pub signals: Vec<crate::health::DataSignal>,
+    /// Whether its latest successful result has a recorded row count (for a partitioned asset,
+    /// any key's); `null` for a task or sensor. `false` is "not measured", not ok.
+    #[serde(default)]
+    pub measured: Option<bool>,
     /// Per-key cache state of a partitioned node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionState>,
@@ -572,12 +592,21 @@ pub async fn status(
             .await?
             .0;
     // No scheduler runs here: a schedule's state is what the metadata DB holds.
+    let now = chrono::Utc::now();
     attach_schedules(
         &mut result.nodes,
         &dag,
         Some(&cfg.db_path),
         &crate::schedule::Zone::Local,
-        chrono::Utc::now(),
+        now,
+    )
+    .await?;
+    crate::health::attach_from_db(
+        &mut result,
+        &dag,
+        &cfg.db_path,
+        &crate::schedule::Zone::Local,
+        now,
     )
     .await?;
     Ok(result)
@@ -595,7 +624,17 @@ pub(crate) async fn status_with_membership(
     let t0 = std::time::Instant::now();
     let dag = crate::load::build_dag(file_args, python).await?;
     trace_since("status: load", t0);
-    status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape).await
+    let (mut result, membership) =
+        status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape).await?;
+    crate::health::attach_from_db(
+        &mut result,
+        &dag,
+        &cfg.db_path,
+        &crate::schedule::Zone::Local,
+        chrono::Utc::now(),
+    )
+    .await?;
+    Ok((result, membership))
 }
 
 /// Inspect a validated graph; shares cache decisions with strict status.
@@ -770,6 +809,11 @@ pub(crate) async fn status_from_dag_with_membership(
             inputs,
             partitioned: !node.extracted.partitions.is_empty(),
             cache,
+            // Filled by `health::attach`, once the whole scope is known.
+            health: Default::default(),
+            health_reason: Default::default(),
+            signals: Vec::new(),
+            measured: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
@@ -807,6 +851,7 @@ pub(crate) async fn status_from_dag_with_membership(
             target: explained.target,
             nodes,
             summary,
+            data_coverage: Default::default(),
             filter: None,
         },
         membership,
@@ -1095,6 +1140,10 @@ mod tests {
                 changed: None,
                 change_causes: None,
             },
+            health: Default::default(),
+            health_reason: Default::default(),
+            signals: Vec::new(),
+            measured: None,
             partitions: None,
             last_materialization: None,
             last_bytes_change: None,
@@ -1376,6 +1425,7 @@ mod tests {
             target: None,
             targets: vec![],
             summary: StatusSummary::of(&nodes),
+            data_coverage: Default::default(),
             nodes,
             filter: None,
         };
@@ -1480,6 +1530,7 @@ mod tests {
             target: None,
             targets: vec![],
             summary: StatusSummary::of(&nodes),
+            data_coverage: Default::default(),
             nodes,
             filter: None,
         };

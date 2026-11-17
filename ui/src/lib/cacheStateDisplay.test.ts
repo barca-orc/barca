@@ -42,12 +42,9 @@ describe('cache state display', () => {
     for (const state of states) expect(cacheStateRank(state)).toBeGreaterThanOrEqual(0)
   })
 
-  it('reads a failed last attempt as a fact of its own', () => {
-    const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'boom' }
-    expect(lastAttemptFailed({ last_materialization: failed })).toBe(true)
-    expect(lastAttemptFailed({ last_materialization: { ...failed, status: 'success', error: null } })).toBe(false)
-    expect(lastAttemptFailed({ last_materialization: null })).toBe(false)
-    // A partitioned node's last materialization is one key: its failed keys count.
-    expect(lastAttemptFailed({ last_materialization: null, partitions: { total: 10, cached: 9, missing: 1, missing_keys: [], failed: 1 } })).toBe(true)
+  it('reads a failed last attempt as the server says it: a failing health', () => {
+    expect(lastAttemptFailed({ health: 'failing' })).toBe(true)
+    expect(lastAttemptFailed({ health: 'blocked' })).toBe(false)
+    expect(lastAttemptFailed({ health: 'ok' })).toBe(false)
   })
 })

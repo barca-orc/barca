@@ -105,6 +105,7 @@ pub async fn nodes(
         .await
         .unwrap_or_default();
     crate::handlers::attach_live_schedules(&state, &mut result.nodes, &dag, &snapshot.path).await?;
+    crate::handlers::attach_health(&state, &mut result, &dag, &db_state, &snapshot.path).await?;
     filter.apply(&mut result);
     let rendered = barca_core::report::render_status(result, true, None, None, root().as_deref());
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))

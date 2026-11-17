@@ -3,6 +3,9 @@
  * group's summary, or that its state is not loaded. Every variant carries the tone, the word and
  * the hint a table cell, a graph node or a badge draws; the cache variant also carries the state
  * itself and whether the last attempt failed, which are shown as two facts.
+ *
+ * Display only: the state is the server's `cache.state` and "the last attempt failed" is the
+ * server's `health` being `failing` (`lib/healthDisplay.ts`); nothing here decides either.
  */
 
 import { lastAttemptFailed, nodeStateDisplay, shownCacheState, type CacheState } from './cacheStateDisplay'

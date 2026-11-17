@@ -66,7 +66,7 @@ describe('fileGroups', () => {
   })
 
   it('shows no status until every member is known', () => {
-    const node = { id: 'b.py:z', kind: 'asset', cache: { state: 'cached' }, last_materialization: null, running: null } as unknown as NodeState
+    const node = { id: 'b.py:z', kind: 'asset', cache: { state: 'cached' }, health: 'ok', last_materialization: null, running: null } as unknown as NodeState
     expect(fileGroups('a.py', tree, null, leaves, new Map())[0]!.tone).toBeNull()
     expect(fileGroups('b.py', tree, null, leaves, new Map([['b.py:z', node]]))[0]!.tone).toBe('success')
   })

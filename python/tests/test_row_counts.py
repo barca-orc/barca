@@ -2,7 +2,8 @@
 data-health signals", and specs/interfaces/worker-protocol.md, "Result row counts".
 
 A real worker counts the rows of what each step returned and the coordinator records them;
-`barca status`, `barca history RUN_ID`, `barca stats` and `GET /state` read them back.
+`barca status`, `barca history RUN_ID`, `barca stats` and `GET /state` read them back, and
+health, signals and data coverage (#954, #957) are classified from them on every surface.
 """
 
 import json
@@ -163,6 +164,40 @@ def test_state_signals_empty_keys_changed_counts_and_a_fan_in_behind_its_input(p
     assert state["orders_all"]["signals"] == []
     # Unscheduled nodes have no slots.
     assert (state["orders"]["prev_run"], state["orders"]["late_since"]) == (None, None)
+
+    # Health, signals and coverage are classified once, in barca-core (specs/behavior/health.md,
+    # INV-HEALTH-02): the CLI, `GET /nodes`, `GET /state` and `barca.nodes` say the same.
+    classified = ("health", "health_reason", "signals", "measured")
+    status = json.loads(barca(project, "status", "pipeline.py", "--json").stdout)
+    cli = {n["name"]: {k: n[k] for k in classified} for n in status["nodes"]}
+    assert cli == {name: {k: row[k] for k in classified} for name, row in state.items()}
+    served = get(server.port, "/nodes")
+    assert cli == {n["name"]: {k: n[k] for k in classified} for n in served["nodes"]}
+    assert (cli["orders"]["health"], cli["orders"]["health_reason"]) == ("suspect", "empty")
+    assert (cli["lazy"]["health"], cli["lazy"]["health_reason"]) == ("suspect", "rows_changed")
+    assert (cli["orders_all"]["health"], cli["orders_all"]["health_reason"]) == ("behind", "stale")
+    assert (cli["version"]["health"], cli["version"]["measured"]) == ("ok", None)
+    # A result no worker counted is not measured, and says nothing about its data.
+    assert cli["not_a_frame"]["measured"] is False and cli["lazy_csv"]["measured"] is False
+    assert cli["pickled"]["measured"] is True
+    coverage = {"assets": 7, "measured": 5, "suspect": 2}
+    assert status["data_coverage"] == coverage == served["data_coverage"]
+    table = barca(project, "status", "pipeline.py", "--pretty").stdout
+    assert "Data: 5 of 7 assets measured, 2 suspect" in table
+    assert "Health: 2 suspect data, 5 behind, 1 ok" in table
+    rows = json.loads(
+        barca(
+            project,
+            "sql",
+            "select name, health, health_reason, signals, measured from barca.nodes",
+            "pipeline.py",
+            "--json",
+        ).stdout
+    )["rows"]
+    assert {r["name"]: r["health"] for r in rows} == {n: v["health"] for n, v in cli.items()}
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["orders"]["signals"] == ["empty", "rows_changed"]
+    assert by_name["version"]["measured"] is None
 
     grid = get(server.port, "/assets/orders/partitions/grid")
     assert grid["counts"]["empty"] == 1

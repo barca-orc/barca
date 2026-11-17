@@ -245,9 +245,6 @@ pub struct NodeState {
     /// when no scheduled run is recorded.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub late_since: Option<i64>,
-    /// What its recorded results say about its data (`empty`, `rows_changed`,
-    /// `behind_input`); empty when nothing does.
-    pub signals: Vec<crate::signals::DataSignal>,
     /// The run working on this node now, whoever started it (`null` when none is).
     pub running: Option<crate::running::NodeRunning>,
     /// When its newest successful result was written (UTC `YYYY-MM-DD HH:MM:SS`, like

@@ -28,7 +28,7 @@ export function CausesList({ causes, name, onOpen, limit = 6, onShowAll, nowMs }
     return (
       <div className="barca-causes" data-empty>
         <StatusGlyph glyph="fresh" />
-        <span>Nothing is failing, blocked, suspect or behind in this scope.</span>
+        <span>Nothing is failing, blocked or behind in this scope.</span>
       </div>
     )
   const shown = causes.slice(0, limit)

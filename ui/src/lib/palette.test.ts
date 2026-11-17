@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { NodeState } from './types'
 import { INITIAL_PALETTE, isKeyQuery, keyItems, paletteActions, paletteIndex, searchPalette, updatePalette } from './palette'
+import { served } from './testdata/served'
 
 const index = paletteIndex(
   [{ id: 'billing.py:invoices', kind: 'asset' }, { id: 'billing.py:check__invoices', kind: 'task' }, { id: 'crm.py:poll', kind: 'sensor' }],
@@ -23,7 +24,7 @@ describe('paletteIndex', () => {
 })
 
 describe('a result\'s state', () => {
-  const node = (id: string, failed: boolean) => ({
+  const node = (id: string, failed: boolean) => served({
     id, name: id, kind: 'asset', inputs: [], partitioned: false, cache: { state: 'cached', reason: 'materialized', detail: '' },
     last_materialization: { status: failed ? 'failed' : 'success', created_at: '2026-10-30 00:00:00', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null },
     shape: null, env: [], durations: null, next_run: null, running: null, last_success_at: null, failing_since: null, consecutive_failures: 0, prev_run: null, late_since: null, signals: [],

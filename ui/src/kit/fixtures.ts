@@ -7,9 +7,10 @@
  */
 
 import type { Connection } from '@/lib/connection'
+import { served } from '@/lib/testdata/served'
 import type { CacheState } from '@/lib/cacheStateDisplay'
 import { emptyHealth, type Failure, type HealthCounts } from '@/lib/health'
-import type { Health } from '@/lib/nodeHealth'
+import type { Health } from '@/lib/healthDisplay'
 import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Remote } from '@/lib/remote'
@@ -80,7 +81,7 @@ const materialized = (overrides: Partial<LastMaterialization> = {}): LastMateria
 })
 
 function node(name: string, overrides: Partial<NodeState>): NodeState {
-  return {
+  return served({
     id: `pipeline.py:${name}`,
     name,
     kind: 'asset',
@@ -100,7 +101,7 @@ function node(name: string, overrides: Partial<NodeState>): NodeState {
     failing_since: null,
     consecutive_failures: 0,
     ...overrides,
-  }
+  })
 }
 
 /** A node in each cache state, in the CLI's words (`graphState` reads each back as its key). */
@@ -662,7 +663,7 @@ export const healthStates: Record<string, HealthCounts> = {
   'one failure in thousands': counts({ failing: 1, behind: 12, ok: 2399 }),
   'failing and blocking': counts({ failing: 3, blocked: 58, behind: 121, ok: 380 }),
   running: counts({ ok: 460, behind: 4 }, { running: 40 }),
-  'every health': counts({ failing: 2, blocked: 2, suspect: 1, behind: 8, waiting: 6, never_run: 7, ok: 80 }),
+  'every health': counts({ failing: 2, blocked: 2, suspect: 1, behind: 8, undecided: 6, never_run: 7, ok: 80 }),
   'not run yet': counts({ never_run: 120, ok: 8 }),
   checking: counts({}, { pending: 640 }),
   empty: counts({}),

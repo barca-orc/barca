@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { CacheStatus, NodeState } from './types'
 import { inPipeline, pipelineSummaries, sourceFile } from './pipeline'
 import { buildRows, fileDisplay, groupByFile } from './assetTable'
+import { served } from './testdata/served'
 
 function node(id: string, state: CacheStatus['state'] = 'cached', failed = false): NodeState {
-  return {
+  return served({
     id,
     name: id.split(':').pop()!,
     kind: 'asset',
@@ -29,7 +30,7 @@ function node(id: string, state: CacheStatus['state'] = 'cached', failed = false
     durations: null,
     next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
-  }
+  })
 }
 
 describe('pipelineSummaries', () => {

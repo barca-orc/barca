@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { knownStates } from './knownStates'
 import type { NodeState } from './types'
+import { served } from './testdata/served'
 
-const state = (id: string, cache: NodeState['cache']['state']): NodeState => ({
+const state = (id: string, cache: NodeState['cache']['state']): NodeState => served({
   id, name: id, kind: 'asset', inputs: [], partitioned: false,
   cache: { state: cache, reason: 'materialized', detail: 'd' },
   last_materialization: null, shape: null, env: [], durations: null, next_run: null, last_success_at: null,
