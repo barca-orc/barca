@@ -102,18 +102,6 @@ def alive(pid: int) -> bool:
     return True
 
 
-def exited(pid: int) -> bool:
-    """Whether `pid` has finished exiting: it is gone, or a zombie its parent has yet to reap.
-    A killed process is neither for a moment: it has dropped its command line (so `pgrep -f`
-    no longer lists it) while it still releases its memory, and its parent's wait does not
-    report it yet."""
-    out = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
-    )
-    state = out.stdout.strip()
-    return not state or state.startswith("Z")
-
-
 def without_duckdb(tmp: Path) -> str:
     """A directory that, first on `PYTHONPATH`, makes `import duckdb` fail."""
     shadow = tmp / "no-duckdb"
@@ -552,10 +540,20 @@ def test_a_killed_helper_is_started_again_and_none_outlives_its_server(project, 
     assert status == 200
     (first,) = helpers_of(server)
     os.kill(first, signal.SIGKILL)
-    # Until it has exited: a query sent while it is still dying is the 503 below, not this.
-    wait_until(lambda: exited(first), "the helper to die")
-    status, body = ask(server, "select count(*) as n from barca.runs")
-    assert (status, body["rows"]) == (200, [{"n": 0}])
+    # A killed process takes a moment to exit (its threads end one by one, and until the last
+    # has, its parent's wait does not report it and nothing seen from outside says so). A query
+    # that reaches the helper meanwhile is a 503 that says to send it again, as the one killed
+    # under a query below; so the query is sent until it is answered, as a client would.
+    seen: list[int] = []
+
+    def answered():
+        status, body = ask(server, "select count(*) as n from barca.runs")
+        seen.append(status)
+        return status == 200 and body
+
+    body = wait_until(answered, "a new helper to answer")
+    assert body["rows"] == [{"n": 0}]
+    assert set(seen) <= {200, 503}, seen
     (second,) = helpers_of(server)
     assert second != first
 
