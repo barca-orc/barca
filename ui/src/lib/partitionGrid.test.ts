@@ -136,3 +136,12 @@ it('never widens a nonrectangular key selection into additional partitions', () 
   expect(exactSelection(g, [])).toBeNull()
   expect(JSON.parse(exactSelection(g, [0, 1])!)).toEqual({ day: ['d1'], region: ['emea', 'apac'] })
 })
+
+describe('a grid from an older server', () => {
+  it('reads a key without row counts as unknown, not a crash', () => {
+    const older: Partial<PartitionGrid> = dayRegion('ffsx--')
+    delete older.rows
+    const g = gridOf(older as PartitionGrid)
+    expect(attemptOf(g, 0)).toMatchObject({ rows: null, sizeBytes: 100 })
+  })
+})

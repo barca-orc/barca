@@ -110,7 +110,8 @@ export function attemptOf(g: Grid, cell: number): { at: number | null; elapsedMs
   const at = g.raw.attempted_at[cell] ?? null
   const elapsedMs = g.raw.elapsed_ms[cell] ?? null
   const sizeBytes = g.raw.size_bytes[cell] ?? null
-  const rows = g.raw.rows[cell] ?? null
+  // A grid from a barca before row counts (0.43) has no `rows`: unknown, never a crash.
+  const rows = (g.raw.rows as readonly (number | null)[] | undefined)?.[cell] ?? null
   const run = g.raw.run[cell] ?? null
   if (at === null && elapsedMs === null && sizeBytes === null && run === null) return null
   return {

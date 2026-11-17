@@ -14,7 +14,7 @@ export interface HealthMapProps {
   size?: number
 }
 
-const RINGS = 3
+const RINGS = 2
 
 function shorten(label: string, max: number): string {
   return label.length <= max ? label : `${label.slice(0, max - 1)}…`

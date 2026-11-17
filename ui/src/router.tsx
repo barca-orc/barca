@@ -9,6 +9,7 @@ import { KitPage } from '@/pages/KitPage'
 import { TokensPage } from '@/pages/TokensPage'
 import { KeysPage } from '@/pages/KeysPage'
 import { AuthGate } from '@/context/AuthGate'
+import { RouteError } from '@/components/RouteError'
 
 // Hash routing: the page itself is always `<prefix>/ui/`, so relative asset URLs
 // and the API base (see lib/apiBase.ts) work under any reverse-proxy prefix,
@@ -18,16 +19,22 @@ export const router = createHashRouter([
     path: '/',
     element: <AuthGate><AppShell /></AuthGate>,
     children: [
-      { index: true, element: <IndexRedirect /> },
-      { path: 'graph', element: <LegacyGraph /> },
-      { path: 'runs', element: <RunsPage /> },
-      { path: 'assets', element: <AssetsView /> },
-      { path: 'keys', element: <KeysPage /> },
-      { path: 'tasks', element: <AssetsPage kind="task" /> },
-      { path: 'sensors', element: <AssetsPage kind="sensor" /> },
-      { path: 'schedules', element: <SchedulesPage /> },
-      { path: 'tokens', element: <TokensPage /> },
-      { path: 'docs', element: <DocsPage /> },
+      // A page that throws shows its error inside the shell, not the router's developer screen.
+      {
+        errorElement: <RouteError />,
+        children: [
+          { index: true, element: <IndexRedirect /> },
+          { path: 'graph', element: <LegacyGraph /> },
+          { path: 'runs', element: <RunsPage /> },
+          { path: 'assets', element: <AssetsView /> },
+          { path: 'keys', element: <KeysPage /> },
+          { path: 'tasks', element: <AssetsPage kind="task" /> },
+          { path: 'sensors', element: <AssetsPage kind="sensor" /> },
+          { path: 'schedules', element: <SchedulesPage /> },
+          { path: 'tokens', element: <TokensPage /> },
+          { path: 'docs', element: <DocsPage /> },
+        ],
+      },
     ],
   },
   // Every component in every state, from fixtures: development only, not in the built UI.

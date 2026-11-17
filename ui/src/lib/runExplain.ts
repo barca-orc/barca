@@ -83,8 +83,8 @@ export type PlanExplanation =
  * A run's `plan_reasons` grouped by category, most steps first (the order the server sends).
  * `live`: the run is still deciding phases, so the reasons are the ones so far.
  */
-export function planExplanation(plan: PlanReasons | null, live: boolean): PlanExplanation {
-  if (plan === null || plan.steps === 0) {
+export function planExplanation(plan: PlanReasons | null | undefined, live: boolean): PlanExplanation {
+  if (plan == null || plan.steps === 0) {
     return {
       kind: 'none',
       note: live ? 'No step decided to run yet.' : 'Every step was served from cache, or the run recorded no reasons.',
@@ -121,13 +121,13 @@ export function reasonSummary(plan: PlanReasons | null, parts = 2): string | nul
 // ── Who asked, attempts, cancellations ────────────────────────────────────────
 
 /** `api · token:ci-bot`: what started the run and, when the server knows, who. */
-export function triggerDetail(triggeredBy: TriggeredBy | null, principal: string | null): string {
+export function triggerDetail(triggeredBy: TriggeredBy | null, principal: string | null | undefined): string {
   const what = triggeredBy ?? 'unknown'
   return principal ? `${what} · ${principal}` : what
 }
 
 /** `19,461 attempts · 62 retries`; null before the run recorded any. */
-export function attemptsLabel(attempts: number | null, retries: number | null): string | null {
+export function attemptsLabel(attempts: number | null, retries: number | null | undefined): string | null {
   if (attempts === null || attempts === 0) return null
   const base = plural(attempts, 'attempt')
   return retries && retries > 0 ? `${base} · ${plural(retries, 'retry', 'retries')}` : base
@@ -140,8 +140,9 @@ export interface CancellationNotice {
   run: string | null
 }
 
-export function cancellationNotice(c: Cancellation | null): CancellationNotice | null {
-  if (c === null) return null
+// A run from a barca before 0.43 has none of these fields: absent reads as null, never a crash.
+export function cancellationNotice(c: Cancellation | null | undefined): CancellationNotice | null {
+  if (c == null) return null
   const by = c.principal ? ` by ${c.principal}` : ''
   const how = match(c.by)
     .with('request', () => `Cancelled${by}`)

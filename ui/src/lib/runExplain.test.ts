@@ -167,3 +167,12 @@ describe('helpers', () => {
     expect(small).toEqual({ label: 'running · started 0s ago', percent: null, large: false })
   })
 })
+
+describe('a run from an older server', () => {
+  it('reads the fields it does not send as absent', () => {
+    expect(cancellationNotice(undefined)).toBeNull()
+    expect(planExplanation(undefined, false).kind).toBe('none')
+    expect(triggerDetail('api', undefined)).toBe('api')
+    expect(attemptsLabel(3, undefined)).toBe('3 attempts')
+  })
+})
