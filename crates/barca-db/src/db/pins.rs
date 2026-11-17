@@ -175,7 +175,8 @@ async fn run_id_of(
 
 /// A pin changes what runs read without a new materialization, so the freshness proofs
 /// (`barca_core::incremental`, valid for one materialization generation) no longer hold.
-async fn forget_proofs(conn: &libsql::Connection) -> Result<(), BarcaError> {
+/// The same when a paused node is resumed (`asset_pauses::resume_assets`).
+pub(super) async fn forget_proofs(conn: &libsql::Connection) -> Result<(), BarcaError> {
     if has_column(conn, "freshness_proofs", "id").await? {
         conn.execute("DELETE FROM freshness_proofs", ())
             .await

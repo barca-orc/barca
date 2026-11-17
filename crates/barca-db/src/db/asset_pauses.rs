@@ -94,13 +94,21 @@ pub async fn pause_assets(
     Ok(())
 }
 
-/// Resume `ids` (`None`: every paused node). Resuming a node that is not paused changes nothing.
+/// Resume `ids` (`None`: every paused node). Resuming a node that is not paused removes no
+/// pause. The freshness proofs are forgotten, so the next run decides every node through the
+/// cache: it recomputes what changed while the node was held and nothing else.
 pub async fn resume_assets(db_path: &str, ids: Option<&[String]>) -> Result<(), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     if !has_table(&conn).await? {
         return Ok(());
     }
+    // Ticks read a paused node as it is, whatever changed above it. No run records a proof
+    // of a node it held (`barca_core::incremental`), but a proof written by an earlier
+    // version, or by a run that started before the pause, may say it is fresh: forget them
+    // before the pause is lifted, so a crash in between leaves a pause without proofs and
+    // never a resumed node with a stale one (#988).
+    super::pins::forget_proofs(&conn).await?;
     match ids {
         None => {
             conn.execute("DELETE FROM asset_pauses", ())
@@ -116,4 +124,37 @@ pub async fn resume_assets(db_path: &str, ids: Option<&[String]>) -> Result<(), 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A proof on record when a node is resumed may have been taken while it was held (#988).
+    #[tokio::test]
+    async fn resuming_forgets_the_freshness_proofs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        let ids = ["p.py:a".to_string()];
+        pause_assets(&path, &ids, "p.py:a", 1).await.unwrap();
+        {
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            conn.execute(
+                "INSERT INTO freshness_proofs (id, generation, snapshot) VALUES ('k:p.py:a', 0, '{}')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        resume_assets(&path, Some(&ids)).await.unwrap();
+        assert!(get_asset_pauses(&path).await.unwrap().is_empty());
+        let (_db, conn) = open_conn(&path).await.unwrap();
+        let mut rows = conn
+            .query("SELECT count(*) FROM freshness_proofs", ())
+            .await
+            .unwrap();
+        let left: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(left, 0);
+    }
 }
