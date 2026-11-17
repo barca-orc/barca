@@ -127,7 +127,8 @@ def _text(s: str, roots: list[str]) -> str:
     # Pretty memory measurements vary per process just like JSON *_rss_bytes; sizes of
     # independently serialized artifacts may vary too, as `_value` already allows.
     s = BYTES.sub("<bytes>", s)
-    return DURATION.sub("<n>s", s)
+    # A table pads its columns to the widest cell, and a duration's width varies per process.
+    return re.sub(r" {2,}", "  ", DURATION.sub("<n>s", s))
 
 
 def _value(v, roots: list[str], key: str = ""):
@@ -146,6 +147,9 @@ def _value(v, roots: list[str], key: str = ""):
         # The server completes a finished run's nodes with the planned ones it skipped or found
         # cached; the local `history RUN_ID` lists only the nodes with steps (server-mode.md).
         v = {k: x for k, x in v.items() if k != "nodes"}
+    if key == "explanation" and isinstance(v, dict) and isinstance(v.get("steps"), str):
+        # Skipped nodes are in the per-node summary only the server has (see `steps_page`).
+        v = {**v, "steps": re.sub(r" · [\d,]+ skipped", "", v["steps"])}
     if isinstance(v, dict) and v.get("partitioned") is True:
         v = {**v, "last_materialization": "<key>", "shape": "<key>"}
     if isinstance(v, dict):
@@ -153,6 +157,9 @@ def _value(v, roots: list[str], key: str = ""):
     if isinstance(v, list):
         return [_value(x, roots) for x in v]
     if key == "triggered_by" and v in ("manual", "api"):
+        return "<trigger>"
+    if key == "requested_by" and v in ("manual", "api"):
+        # The explanation's wording of `triggered_by`.
         return "<trigger>"
     if key in ("size_bytes", "content_hash"):
         # Each copy computes its own bytes: a step whose output is not byte-for-byte the same
