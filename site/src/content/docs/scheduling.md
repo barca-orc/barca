@@ -44,6 +44,13 @@ a target needs them as an input and they have no cached result.
 
 A tick brings each target up to date. It does not force anything to recompute.
 
+"Below it" means below the scheduled node, not below everything the run touches. A sensor that
+a target reads is polled as an input, whatever its own freshness, and its new value is
+recorded; `Always` nodes below that sensor that are not below the scheduled node become out of
+date and no tick rebuilds them. Put the schedule on the sensor, or give those nodes a
+`Schedule`, to have ticks keep them up to date (`barca docs scheduling`, "A sensor a tick only
+polls").
+
 | Node in the tick | On each tick |
 |---|---|
 | the scheduled sensor | The sensor is polled and its value is recorded. |

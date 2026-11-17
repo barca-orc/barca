@@ -98,7 +98,8 @@ to read costs nothing. Deleting all of `.barca/` removes the cache and the histo
 - `Always` nodes are brought up to date at each tick of a scheduled node above them: an asset
   when it has no cached result for its current run hash, a task when its inputs changed since
   its last successful run. The walk down stops at a node with its own `Schedule`. A node with
-  no scheduled node above it is never run by a tick.
+  no scheduled node above it is never run by a tick, even when a tick polls a sensor above it
+  as an input of one of its targets.
 - `Manual` assets and tasks pin themselves. A tick never runs one, and `barca get` or
   `barca run` of something below it reads its latest successful result, even when stale, and
   says so on stderr. Only naming it in `--refresh` (or `--refresh-all`) recomputes

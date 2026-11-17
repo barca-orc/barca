@@ -84,6 +84,16 @@ pub struct ScheduledJob {
     pub batch: Option<String>,
 }
 
+impl ScheduledJob {
+    /// The targets of one tick's run: the scheduled node, then its followers
+    /// ([`crate::freshness::tick_targets`]).
+    pub fn targets(&self) -> Vec<String> {
+        std::iter::once(self.id.clone())
+            .chain(self.followers.iter().cloned())
+            .collect()
+    }
+}
+
 /// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
 /// A DAG-analysis failure disables the scheduler (returns empty); individual
 /// invalid/empty cron strings are logged and skipped rather than aborting.

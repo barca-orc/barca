@@ -212,7 +212,8 @@ shows it (the `freshness` key in its JSON). Freshness is not part of the definit
 
 - `Schedule("<cron>")`: `barca serve` starts a run on each cron tick (see [Schedule](#schedule)).
 - `Always`: brought up to date at each tick of a scheduled node above it, in that tick's run.
-  A node with no scheduled node above it is never run by a tick.
+  A node with no scheduled node above it is never run by a tick, even when a tick polls a
+  sensor above it as an input of one of its targets.
 - `Manual`: refreshed by hand only. A tick never runs it, and `barca get` or `barca run` of
   something below it reads its latest successful result, even when stale, with a note on
   stderr. Only `--refresh <name>` or `--refresh-all` recomputes it, also when it is the

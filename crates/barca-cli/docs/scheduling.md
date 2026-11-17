@@ -84,6 +84,33 @@ nothing else runs. When it returns a new one, the same run computes `orders` onc
 `hourly_summary` and `send_report`. Upstream inputs that no scheduled node is above (a plain
 asset a target reads) are computed as part of the run when they have no cached result.
 
+### A sensor a tick only polls
+
+"Below it" means below the scheduled node, not below everything the tick's run touches. A
+sensor that a target reads is polled by the run as an input, whatever its own freshness
+(`Always`, `Manual`, or a slower `Schedule`), and its new value is recorded. That makes every
+node below the sensor out of date, and the tick rebuilds only the ones that are its targets:
+
+```python
+@sensor()
+def feed() -> str: ...
+
+@asset(inputs={"v": feed}, freshness=Schedule("*/5 * * * *"))
+def fast(v: str) -> str: ...
+
+@asset(inputs={"v": feed})        # Always, but no scheduled node above it
+def side(v: str) -> str: ...
+```
+
+Every five minutes the tick of `fast` polls `feed`. When `feed` returns a new value `fast` is
+recomputed and `side` is not: `barca status` shows it out of date after that tick and after
+every later one, until a `barca get side` (or a run that reads it) computes it. No tick ever
+will. To have ticks keep `side` up to date, put the schedule on the sensor
+(`@sensor(freshness=Schedule("*/5 * * * *"))`: `fast` and `side` are then both below it, and
+`fast` needs no schedule of its own), or give `side` a `Schedule`. When the sensor has a slower
+schedule of its own, `side` is rebuilt at the sensor's ticks only, so it can be out of date for
+up to one of the sensor's intervals after a faster tick saw the change.
+
 The cache is keyed by the sensor's value, not by time. A sensor that returns to a value it had
 before (a row count, a status flag) brings back the result computed for that value. Return
 something that identifies the version of the data, such as an etag or a last-modified time. A

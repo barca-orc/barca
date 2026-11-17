@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Documentation
+
+- **The manual says which nodes a tick leaves out of date (#952).** A tick's targets are the scheduled node and the `Always` nodes below it, and nothing else: a sensor that a target reads is polled as an input and its new value recorded, so `Always` nodes below that sensor with no scheduled node above them go out of date and no tick rebuilds them, however many poll the sensor. This is the rule as designed; `barca docs scheduling` ("A sensor a tick only polls"), the scheduling page and the freshness specification now state it with the remedy (put the schedule on the sensor, or give the node a `Schedule`). `barca_core::freshness::tick_reach` reports, per node, the schedules whose ticks reach it and how, for the refresh path of #961.
+
 ## 0.43.1 (2026-11-17)
 
 ### Bug Fixes

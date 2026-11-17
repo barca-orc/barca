@@ -83,6 +83,67 @@ pub fn followers(dag: &Dag, scheduled: &str) -> Vec<String> {
         .collect()
 }
 
+/// How the ticks of one schedule reach a node ([`tick_reach`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Reach {
+    /// A target of the tick: the scheduled node, or an `Always` node below it ([`followers`]).
+    /// Every tick brings it up to date.
+    Target,
+    /// Not a target, but something a target reads ([`walk_with`] from the targets): a sensor
+    /// is polled, an asset is computed when it has no cached result for its current run hash,
+    /// a task fires when it is out of date. What reads it and is not itself a target is not
+    /// touched.
+    Input,
+}
+
+/// The targets of a tick of `scheduled`, in the order the run names them: the scheduled node,
+/// then its [`followers`]. This is the scheduler's own list (`ScheduledJob::targets`).
+pub fn tick_targets(dag: &Dag, scheduled: &str) -> Vec<String> {
+    std::iter::once(scheduled.to_string())
+        .chain(followers(dag, scheduled))
+        .collect()
+}
+
+/// For each node some tick brings up to date, the schedules whose ticks do, and how
+/// ([`Reach`]), sorted by schedule. `scheduled` are the scheduled nodes (the jobs of
+/// [`crate::schedule::jobs_from_dag`]). A node that is not a key has no refresh path: no tick
+/// will ever rebuild it, whatever makes it stale. That includes an `Always` node below a
+/// sensor that is only polled as an input of another schedule's target: the poll records the
+/// sensor's new value, the node's run hash changes, and nothing targets the node (#952). A
+/// `Manual` asset or task is never a key either: a tick reads it as it is.
+///
+/// It depends on the DAG alone. At run time a pinned asset (`barca pin`) and a paused node are
+/// also read as they are, and what is above them is not walked.
+pub fn tick_reach<'a>(
+    dag: &Dag,
+    scheduled: impl IntoIterator<Item = &'a str>,
+) -> std::collections::BTreeMap<String, Vec<(String, Reach)>> {
+    let mut reach: std::collections::BTreeMap<String, Vec<(String, Reach)>> = Default::default();
+    let mut scheduled: Vec<&str> = scheduled.into_iter().collect();
+    scheduled.sort_unstable();
+    scheduled.dedup();
+    let none = HashSet::new();
+    for job in scheduled {
+        let targets = tick_targets(dag, job);
+        let refs: Vec<&str> = targets.iter().map(String::as_str).collect();
+        let walk = walk_with(dag, &refs, &CachePolicy::CacheAware, &none, true, &none);
+        for id in walk.cone {
+            let how = if refs.contains(&id) {
+                Reach::Target
+            } else if walk.stops.iter().any(|stop| stop == id) {
+                continue;
+            } else {
+                Reach::Input
+            };
+            reach
+                .entry(id.to_string())
+                .or_default()
+                .push((job.to_string(), how));
+        }
+    }
+    reach
+}
+
 /// Whether `id` pins itself: a `Manual` asset or task. Sensors are polled whenever a run needs
 /// them, whatever their freshness. A partitioned node is not pinned (it is computed as before).
 fn pins_itself(dag: &Dag, id: &str) -> bool {
@@ -551,6 +612,82 @@ mod tests {
         // from an unscheduled node.
         assert_eq!(names(&followers(&d, &id(&d, "tick"))), Vec::<&str>::new());
         assert_eq!(names(&all), ["clean"]);
+    }
+
+    /// `tick_reach` by node name: the schedules that reach it and how.
+    fn reach(d: &Dag, scheduled: &[&str]) -> HashMap<String, Vec<(String, Reach)>> {
+        let ids: Vec<String> = scheduled.iter().map(|n| id(d, n)).collect();
+        tick_reach(d, ids.iter().map(String::as_str))
+            .into_iter()
+            .map(|(node, by)| {
+                let by = by
+                    .into_iter()
+                    .map(|(job, how)| (short_name(&job).to_string(), how))
+                    .collect();
+                (short_name(&node).to_string(), by)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn always_nodes_beside_a_sensor_a_tick_only_polls_have_no_refresh_path() {
+        // #952. `fast` ticks; its run polls `feed` because `fast` reads it. `side` and `below`
+        // are `Always` and below `feed`, but no scheduled node is above them: the poll changes
+        // their run hashes and no tick targets them.
+        for sensor in ["manual", "always"] {
+            let d = dag(&[
+                node("feed", 's', sensor, &[]),
+                node("fast", 'a', "*/5 * * * *", &["feed"]),
+                node("after", 'a', "always", &["fast"]),
+                node("side", 'a', "always", &["feed"]),
+                node("below", 't', "always", &["side"]),
+            ]);
+            assert_eq!(names(&tick_targets(&d, &id(&d, "fast"))), ["fast", "after"]);
+            let r = reach(&d, &["fast"]);
+            assert_eq!(r["fast"], [("fast".to_string(), Reach::Target)]);
+            assert_eq!(r["after"], [("fast".to_string(), Reach::Target)]);
+            assert_eq!(r["feed"], [("fast".to_string(), Reach::Input)], "polled");
+            assert!(!r.contains_key("side") && !r.contains_key("below"), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn a_sensor_with_a_slower_schedule_is_an_input_of_the_faster_tick() {
+        // The five-minute tick polls `feed`; only the daily tick of `feed` targets `side`.
+        let d = dag(&[
+            node("feed", 's', "0 5 * * *", &[]),
+            node("fast", 'a', "*/5 * * * *", &["feed"]),
+            node("side", 'a', "always", &["feed"]),
+        ]);
+        let r = reach(&d, &["feed", "fast"]);
+        assert_eq!(
+            r["feed"],
+            [
+                ("fast".to_string(), Reach::Input),
+                ("feed".to_string(), Reach::Target)
+            ]
+        );
+        assert_eq!(r["side"], [("feed".to_string(), Reach::Target)]);
+        assert_eq!(r["fast"], [("fast".to_string(), Reach::Target)]);
+    }
+
+    #[test]
+    fn inputs_of_a_target_are_reached_and_a_manual_node_is_not() {
+        let d = dag(&[
+            node("src", 's', "* * * * *", &[]),
+            node("plain", 'a', "always", &[]),
+            node("held", 'a', "manual", &["src"]),
+            node("above_held", 'a', "always", &[]),
+            node("pinned", 'a', "manual", &["above_held"]),
+            node("out", 'a', "always", &["src", "plain", "held", "pinned"]),
+        ]);
+        let r = reach(&d, &["src"]);
+        assert_eq!(r["out"], [("src".to_string(), Reach::Target)]);
+        assert_eq!(r["plain"], [("src".to_string(), Reach::Input)]);
+        // A `Manual` node is read as it is, and what is above it is not walked.
+        for name in ["held", "pinned", "above_held"] {
+            assert!(!r.contains_key(name), "{name}: {r:?}");
+        }
     }
 
     #[test]
