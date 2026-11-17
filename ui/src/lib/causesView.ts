@@ -1,16 +1,21 @@
 /**
- * Causes, not rows: what is wrong in a scope, one entry per root, as the rollup serves them
- * (`roots` of `GET /state/rollup`: a failing node with the nodes it holds, the most nodes
- * first). Failures that share an error (the server's `error_group`) are one entry, headed by
- * the first of them, with its own numbers and how many more share the error; nothing is added
- * up here. The roots that are not failures follow as served (a changed sensor value or code, a
- * missing or paused schedule, a run queue that is behind), each with what it holds and the
- * action that clears it. Data signals and lateness follow, each naming the node and what is off.
+ * The to-do list of a scope: what holds the nodes that are not fresh, one entry per root, as
+ * the rollup serves them (`GET /state/rollup`). A scope's entry lists the roots that hold its
+ * nodes (`held_by`), ranked by the server with what each holds there; the root list (`roots`)
+ * carries what each root is, why, and what clears it. Every not-fresh node in the scope is
+ * under exactly one of them, so the list explains the whole scope and names no node twice.
+ * Nothing is ranked, counted or added up here: this joins the two by root id and words them.
+ * Data signals (output that looks wrong, a node older than its input) are not roots and are
+ * listed apart.
  */
 
-import type { Failure } from './health'
+import { causeLine } from './causeDisplay'
+import type { Glyph } from './glyph'
 import { plural } from './plural'
+import { formatSpan } from './time'
 import type { ActionKind } from './generated/ActionKind'
+import type { HeldBy } from './generated/HeldBy'
+import type { RollupEntry } from './generated/RollupEntry'
 import type { RollupRoot } from './generated/RollupRoot'
 import type { RootKind } from './generated/RootKind'
 
@@ -40,79 +45,126 @@ export const ACTION_WORD: Record<ActionKind, string> = {
   raise_max_runs: 'raise max_runs',
 }
 
-export type Cause =
-  | {
-      kind: 'failure'
-      /** The shared error headline, as the first failure recorded it. */
-      headline: string
-      /** The failure the entry names and opens: the one holding the most nodes. */
-      node: string
-      /** How many more failures share the error. */
-      others: number
-      /** Failed keys of that node (0 when it is not partitioned). */
-      failedKeys: number
-      /** Nodes that node holds, itself included, and how many of them are assets. */
-      held: number
-      heldAssets: number
-      failingSince: string | null
-    }
-  | {
-      /** A root that is not a failure, as served: what it is, what it holds, what clears it. */
-      kind: 'held'
-      node: string
-      /** The root's kind in words, and the fact in a line (`detail`). */
-      what: string
-      detail: string
-      held: number
-      heldAssets: number
-      /** The action in words, and its command when it has one. */
-      action: string
-      command: string | null
-    }
-  | { kind: 'suspect'; node: string; detail: string }
-  | { kind: 'behind'; node: string; detail: string }
+/** What to do where an action has no command: the hint `barca status --rollup` prints. */
+const ACTION_HINT: Partial<Record<ActionKind, string>> = {
+  add_schedule: 'freshness=Schedule(...) on it or on a node above it',
+  raise_max_runs: 'barca serve --max-runs N or [server] max_runs in barca.toml, or space the schedules',
+}
 
-export interface CausesInput {
-  /** The failures in scope (`health.failures`), in served order. */
-  failures: readonly Failure[]
-  /** The rollup's roots in scope, in served order: those that are not failures are listed as served. */
-  roots?: readonly RollupRoot[]
-  /** Data signals and lateness, already worded, by node. */
+/** One root and what it holds in the scope shown. */
+export interface Held {
+  /** The root as served: what it is, why, what clears it, and what it holds in all. */
+  root: RollupRoot
+  /** What it holds underneath the scope (`held_by` of the scope's entry). */
+  held: HeldBy
+}
+
+/** One entry of the list: a root, and the failures in scope that share its error. */
+export interface Todo extends Held {
+  /** Other failure roots with the same error (`error_group`), in served order. */
+  same: Held[]
+}
+
+/**
+ * The to-do list of `scope`: its `held_by`, in the order served, each joined with its root.
+ * Failure roots that share an error are one entry, headed by the first of them.
+ */
+export function todos(scope: Pick<RollupEntry, 'held_by'> | undefined, roots: readonly RollupRoot[]): Todo[] {
+  const byId = new Map(roots.map((r) => [r.id, r]))
+  const groups = new Map<string, Todo>()
+  const out: Todo[] = []
+  for (const held of scope?.held_by ?? []) {
+    const root = byId.get(held.root)
+    if (!root) continue
+    const first = root.error_group === null ? undefined : groups.get(root.error_group)
+    if (first) {
+      first.same.push({ root, held })
+      continue
+    }
+    const todo: Todo = { root, held, same: [] }
+    if (root.error_group !== null) groups.set(root.error_group, todo)
+    out.push(todo)
+  }
+  return out
+}
+
+/** `holds 40 nodes (38 assets)`, and `here, 180 in all` in a scope that holds only some of them. */
+export function heldLine({ root, held }: Held): string {
+  const here = `holds ${plural(held.nodes, 'node')} (${plural(held.assets, 'asset')})`
+  return held.nodes === root.nodes ? here : `${here} here, ${root.nodes.toLocaleString()} in all`
+}
+
+/** `17 catching up · 163 undecided`: what it holds in the scope, by cause, in nodes. */
+export function heldCauses({ held }: Held): string {
+  return causeLine(held.causes)
+}
+
+/** `2h of gap · 163 with no estimate`: the gap it holds in the scope; empty when it has neither. */
+export function heldGap({ held }: Held): string {
+  const parts: string[] = []
+  if (held.gap_seconds > 0) parts.push(`${formatSpan(held.gap_seconds)} of gap`)
+  if (held.unbounded > 0) parts.push(`${held.unbounded.toLocaleString()} with no estimate`)
+  return parts.join(' · ')
+}
+
+/** What clears a root: the action's word, its command or what to do instead, and what it costs. */
+export interface ActionWords {
+  word: string
+  /** The command to copy, when one clears the root. */
+  command: string | null
+  /** What to do where there is no command. */
+  hint: string | null
+  /** `about 7m of compute`: the typical compute time of what it holds, when sampled. */
+  cost: string | null
+}
+
+export function actionWords(root: RollupRoot): ActionWords {
+  const { kind, command, estimated_seconds: seconds } = root.action
+  return {
+    word: ACTION_WORD[kind],
+    command,
+    hint: command === null ? ACTION_HINT[kind] ?? null : null,
+    cost: seconds === null ? null : `about ${formatSpan(Math.max(1, seconds))} of compute`,
+  }
+}
+
+/** How much of the scope the head of the list explains, when there is more than a head. */
+export interface Explained {
+  /** How many roots the head is. */
+  roots: number
+  /** Nodes they hold (`cumulative_nodes` of the last of them), of the scope's `not_fresh`. */
+  nodes: number
+  of: number
+}
+
+/** The first `head` roots of `scope` against all its not-fresh nodes; null when they are all there is. */
+export function explained(scope: Pick<RollupEntry, 'held_by' | 'not_fresh'>, head = 3): Explained | null {
+  const last = scope.held_by[head - 1]
+  if (!last || scope.held_by.length <= head) return null
+  return { roots: head, nodes: last.cumulative_nodes, of: scope.not_fresh }
+}
+
+/** A data signal about a node: not a root, listed apart from the to-do list. */
+export interface Signal {
+  node: string
+  glyph: Glyph
+  /** What is off, in words: `suspect data: 0 rows`, `older than its input orders`. */
+  text: string
+}
+
+export interface SignalsInput {
+  /** Data signals and lateness, already worded, by node (`dataSignalSets`). */
   suspect?: ReadonlyMap<string, string>
   behind?: ReadonlyMap<string, string>
   /** Only signals about these nodes (a scope); every node when absent. */
   within?: ReadonlySet<string>
 }
 
-/** The causes in scope: failures as served, the other roots as served, then suspect data, then what is behind. */
-export function causes({ failures, roots, suspect, behind, within }: CausesInput): Cause[] {
+/** The data signals in scope: output that looks wrong, then what is older than its input. */
+export function signals({ suspect, behind, within }: SignalsInput): Signal[] {
   const inScope = (id: string) => !within || within.has(id)
-  const groups = new Map<string, Extract<Cause, { kind: 'failure' }>>()
-  for (const f of failures) {
-    const key = f.group ?? `node:${f.id}`
-    const known = groups.get(key)
-    if (known) known.others += 1
-    else groups.set(key, { kind: 'failure', headline: f.headline, node: f.id, others: 0, failedKeys: f.keys?.failed ?? 0, held: f.held, heldAssets: f.heldAssets, failingSince: f.failingSince })
-  }
-  const out: Cause[] = [...groups.values()]
-  for (const root of roots ?? []) {
-    if (root.kind === 'failure') continue
-    out.push({ kind: 'held', node: root.node, what: ROOT_KIND_WORD[root.kind], detail: root.detail, held: root.nodes, heldAssets: root.assets, action: ACTION_WORD[root.action.kind], command: root.action.command })
-  }
-  for (const [node, detail] of suspect ?? []) if (inScope(node)) out.push({ kind: 'suspect', node, detail })
-  for (const [node, detail] of behind ?? []) if (inScope(node)) out.push({ kind: 'behind', node, detail })
+  const out: Signal[] = []
+  for (const [node, detail] of suspect ?? []) if (inScope(node)) out.push({ node, glyph: 'partial', text: `suspect data: ${detail}` })
+  for (const [node, detail] of behind ?? []) if (inScope(node)) out.push({ node, glyph: 'stale', text: detail })
   return out
-}
-
-/** `holds 150 nodes (140 assets)`: what a root that is not a failure holds, each count with its unit. */
-export function heldImpact(cause: Extract<Cause, { kind: 'held' }>): string {
-  return `holds ${plural(cause.held, 'node')} (${plural(cause.heldAssets, 'asset')})`
-}
-
-/** `1,205 keys failed · holds 150 nodes (140 assets)`: a failure's size, each count with its unit. */
-export function causeImpact(cause: Extract<Cause, { kind: 'failure' }>): string {
-  const parts: string[] = []
-  if (cause.failedKeys > 0) parts.push(`${cause.failedKeys.toLocaleString()} ${cause.failedKeys === 1 ? 'key' : 'keys'} failed`)
-  if (cause.held > 1) parts.push(`holds ${plural(cause.held, 'node')} (${plural(cause.heldAssets, 'asset')})`)
-  return parts.join(' · ')
 }

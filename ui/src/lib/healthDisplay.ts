@@ -72,24 +72,6 @@ export function isUnhealthy(health: Health): boolean {
   return UNHEALTHY.includes(health)
 }
 
-/** The health map's four colours: failing, needs attention, ok, not known yet. */
-export type HealthFamily = 'failing' | 'attention' | 'ok' | 'unknown'
-
-const FAMILY = {
-  failing: 'failing',
-  blocked: 'attention',
-  suspect: 'attention',
-  behind: 'attention',
-  undecided: 'unknown',
-  never_run: 'unknown',
-  ok: 'ok',
-} satisfies Record<Health, HealthFamily>
-
-/** The colour a health is drawn in on the health map. */
-export function healthFamily(health: Health): HealthFamily {
-  return FAMILY[health]
-}
-
 /**
  * The failing node that keeps `node` from being brought up to date, as the server names it: the
  * `root` of a `blocked` row. Null when it is not blocked by a failing node (a failing node's

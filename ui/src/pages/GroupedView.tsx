@@ -40,6 +40,8 @@ export interface GroupedTableProps {
   /** The rollup (`GET /state/rollup`): a group's bar and its failing count are its entry. */
   rollup?: RollupTree
   visualStates: Readonly<Record<string, GraphState>>
+  /** What the root picked in the to-do list holds (groups and nodes, by id): the other rows dim. */
+  held?: ReadonlySet<string> | null
   /** What each row is called in this table, so no two read the same. */
   labels: ReadonlyMap<string, string>
   /** Rows found by a search beyond this level: clicking one jumps to where it lives. */
@@ -64,7 +66,7 @@ function blockersOf(node: NodeState): string[] {
   return by ? [by] : []
 }
 
-export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
+export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates, held = null, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
   const hasGroups = entries.some((e) => e.kind === 'group')
   const hasLeaves = entries.some((e) => e.kind !== 'group')
   const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 1 : 0)
@@ -117,6 +119,7 @@ export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates
               tabIndex={0}
               aria-selected={selected === entry.id}
               data-group={group ? entry.id : undefined}
+              data-held={held ? held.has(entry.id) : undefined}
               onClick={(event) => {
                 event.currentTarget.focus({ preventScroll: true })
                 if (isHit.has(entry.id)) onReveal(entry.id)

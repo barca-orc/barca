@@ -1320,6 +1320,22 @@ def pulse(): ...
                 ("queue:p.py:pulse", 6, ActionKind::RaiseMaxRuns),
             ]
         );
+        // The scope's own list says the same, and how much its head explains (#967).
+        let root = rollup.root();
+        assert_eq!(root.not_fresh, 422);
+        assert_eq!(
+            root.held_by
+                .iter()
+                .map(|h| (h.root.as_str(), h.nodes, h.cumulative_nodes))
+                .collect::<Vec<_>>(),
+            [
+                ("sensor_value:p.py:inbox", 180, 180),
+                ("no_schedule:p.py:ledger", 152, 332),
+                ("code:p.py:prices", 60, 392),
+                ("env:p.py:rates", 24, 416),
+                ("queue:p.py:pulse", 6, 422),
+            ]
+        );
         let top: usize = rollup.roots.iter().take(3).map(|r| r.nodes).sum();
         assert!(top * 10 >= behind * 9, "{top} of {behind}");
         assert_eq!(top, 392);
@@ -1346,6 +1362,7 @@ def pulse(): ...
             .collect();
         println!("{text}");
         assert!(text.contains("What holds the 422 nodes that are not fresh, and what clears it:"));
+        assert!(text.contains("The first 3 hold 392 of them."));
         assert!(text.contains("1. sensor value: inbox"));
         assert!(text.contains(
             "do:   add a schedule: freshness=Schedule(...) on it or on a node above it (about 7m of compute)"

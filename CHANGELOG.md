@@ -15,6 +15,39 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- **The health map is sized by how far a scope is from fresh and coloured by what is inside it (#966).**
+  A segment's angle on the Assets page's map was its asset count and its colour its worst
+  member's, so a group with 13% of its nodes behind was one solid colour. The angle is now the
+  scope's distance from fresh in weighted nodes: every node counts 1, a node that needs someone
+  (`failing`, `overdue`, `no refresh path`) counts 6, and one that will be fresh without anyone
+  acting or that barca cannot decide (`queued`, `catching up`, `undecided`) counts 2, so the
+  room a group takes is how big its problem is and a fully fresh group stays on the map, small
+  and green. A segment is drawn in the colours of the causes inside it, stacked by that weight;
+  each cause has one colour, `undecided` is the one grey and the one word for it ("not known
+  yet", "waiting" and "needs attention" are gone from the map). The centre says the scope in
+  the terms of the gap ("15 failing · 173 no refresh path · 40 undecided"), with "fresh within
+  about 16h" and how many nodes have no estimate under it. The map, its centre, the line
+  beside it and the list count nodes and say so; assets are stated beside them. Sizes come
+  from the rollup's own counts with a display weight per cause (`specs/behavior/health.md`,
+  "The web UI's overview").
+- **Causes are a ranked to-do list, and a scope's list is served (#967).** The list beside the
+  map is the open scope's roots as the server ranks them: what each is and which node it is
+  about, why, what it holds there (nodes and assets, by cause), the gap it holds or how many of
+  its nodes have no estimate, and what to do, with the command to copy and the compute it
+  takes. Every node that is not fresh is under exactly one entry, so no node is listed twice
+  (the old list appended one entry per behind node after the roots); failures with one error
+  are one entry that opens to the others, and data signals (empty output, rows changed, a node
+  older than its input) are a section of their own. The top three roots and how much of the
+  scope they hold ("The first 3 roots hold 392 of 422 nodes that are not fresh") show without
+  scrolling at 1440×900; "N more" opens the rest in place instead of the Failures tab, which
+  said "Nothing has failed here". Picking a root lights what it holds on the map and in the
+  table; its node's name opens the node. For this, every entry of `GET /state/rollup` and
+  `barca status --rollup --json` (and `rollup` of `barca status --json`) carries `not_fresh`
+  and `held_by`: the roots that hold its nodes, each with `nodes`, `assets`, `causes`,
+  `gap_seconds`, `unbounded` and `cumulative_nodes`, ranked like `roots` over what is held in
+  that scope, so a group's list is its own entry and nothing is filtered or counted in the
+  browser. `barca status --rollup` prints "The first 3 hold N of them." above a list of more
+  than three roots. Experimental, with the rest of the rollup.
 - **`barca sql` has the schedules, the ticks and the run queue as tables, and the manual ships
   the health queries** (#965). `barca.schedules` is one row per scheduled node (its `schedule`
   block from `barca status --json`, with `interval_seconds` and the `targets` of one tick),

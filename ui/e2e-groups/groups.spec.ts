@@ -390,12 +390,91 @@ test('the bar, the map and a group row state the numbers of one rollup response,
   // The scope's bar counts nodes, and says so.
   const bar = page.locator('.barca-scope-health .barca-health')
   await expect(bar).toHaveAttribute('title', new RegExp(`^${root.nodes} nodes: ${root.health.failing} failing`))
-  // The map is sized in assets, and says so; the line beside it gives both.
-  await expect(page.locator('.barca-healthmap-summary')).toContainText(`${root.assets} assets`)
-  await expect(page.locator('.barca-health-overview-sub')).toContainText(`${root.nodes} nodes, ${root.assets} assets`)
+  // The map counts nodes too, and says so; the line beside it gives the scope's assets.
+  await expect(page.locator('.barca-healthmap-summary')).toContainText(`${root.nodes} nodes`)
+  await expect(page.locator('.barca-health-overview-title')).toContainText(`${root.not_fresh} of ${root.nodes} nodes not fresh`)
+  await expect(page.locator('.barca-health-overview-sub')).toContainText(`${root.assets} assets`)
   // A group's row is its entry.
   const entry = rollup.entries.find((e: { id: string }) => e.id === G('cross_validation'))
   const row = page.locator(`tr[data-group="${G('cross_validation')}"]`)
   await expect(row.locator('.barca-health')).toHaveAttribute('title', new RegExp(`^${entry.nodes} nodes: ${entry.health.failing} failing`))
   await expect(row.locator('.gcol-failed')).toHaveText(String(entry.health.failing))
+})
+
+// The words the map and the list may say for grey: one, the server's.
+const OLD_GREY = ['not known yet', 'waiting', 'needs attention']
+
+test('the map says the scope in the terms of the gap, by cause and in nodes, and a segment is coloured by what is inside it', async ({ page, request }) => {
+  const rollup = await (await request.get(`${process.env.BARCA_E2E_API}/state/rollup`)).json()
+  const root = rollup.entries[0]
+  expect(root.not_fresh).toBeGreaterThan(0)
+  await page.goto('/ui/#/assets')
+  const overview = page.getByRole('region', { name: 'Health' })
+  const map = overview.locator('.barca-healthmap')
+  await expect(map.locator('svg')).toBeVisible()
+  // Every cause the scope counts is said with its count, in the line beside the map.
+  const words: Record<string, string> = { failing: 'failing', overdue: 'overdue', no_refresh_path: 'no refresh path', queued: 'queued', undecided: 'undecided', catching_up: 'catching up' }
+  const line = overview.getByLabel('Nodes that are not fresh, by cause')
+  for (const [cause, count] of Object.entries(root.causes as Record<string, number>)) {
+    if (count > 0) await expect(line).toContainText(`${count} ${words[cause]}`)
+  }
+  // The centre leads with the same counts; the caption gives the unit and what has no estimate.
+  const first = Object.entries(root.causes as Record<string, number>).find(([cause, count]) => count > 0 && ['failing', 'overdue', 'no_refresh_path'].includes(cause))!
+  await expect(map.locator('.barca-healthmap-center')).toContainText(`${first[1]} ${words[first[0]]}`)
+  await expect(map.locator('.barca-healthmap-summary')).toHaveText(`${root.nodes} nodes, ${root.not_fresh} not fresh`)
+  if (root.unbounded > 0) await expect(map.locator('.barca-healthmap-estimate')).toContainText(`${root.unbounded} with no estimate`)
+  // Grey has one word, and the key names colours by cause.
+  for (const old of OLD_GREY) await expect(overview).not.toContainText(old)
+  await expect(map.getByRole('list', { name: /Colours/ })).toContainText('undecided')
+  // A group with fresh and not-fresh nodes inside is drawn in both colours, not its worst one.
+  const mixed = rollup.entries.find((e: { kind: string; not_fresh: number; nodes: number }) => e.kind === 'group' && e.not_fresh > 0 && e.not_fresh < e.nodes)
+  expect(mixed).toBeTruthy()
+  const segment = map.locator(`g.barca-healthmap-arc[aria-label^="${mixed.label}:"]`).first()
+  await expect(segment).toHaveAttribute('data-part', 'mixed')
+  await expect(segment.locator('path[data-part="fresh"]')).toHaveCount(1)
+  // A fully fresh group is still on the map, in the fresh colour alone.
+  const fresh = rollup.entries.find((e: { kind: string; not_fresh: number; parent: string }) => e.kind === 'group' && e.not_fresh === 0 && e.parent === 'root')
+  if (fresh) await expect(map.locator(`g.barca-healthmap-arc[aria-label^="${fresh.label}:"]`).first()).toHaveAttribute('data-part', 'fresh')
+})
+
+test('the to-do list holds every not-fresh node under one root; more opens the rest in place; a root lights what it holds and opens its node', async ({ page, request }) => {
+  const rollup = await (await request.get(`${process.env.BARCA_E2E_API}/state/rollup`)).json()
+  const root = rollup.entries[0]
+  const held: { root: string; nodes: number; cumulative_nodes: number }[] = root.held_by
+  // INV-HEALTH-04, as served: the scope's roots add up to its not-fresh nodes.
+  expect(held.reduce((n, h) => n + h.nodes, 0)).toBe(root.not_fresh)
+  expect(held.length).toBeGreaterThan(3)
+  expect(held.map((h) => h.root)).toEqual(rollup.roots.map((r: { id: string }) => r.id))
+
+  await page.goto('/ui/#/assets')
+  const overview = page.getByRole('region', { name: 'Health' })
+  const list = overview.getByRole('list', { name: /What holds the nodes that are not fresh/ })
+  // The head of the list, and how much of the scope it explains, without scrolling.
+  await expect(list.locator('> li')).toHaveCount(3)
+  await expect(overview).toContainText(`The first 3 roots hold ${held[2]!.cumulative_nodes} of ${root.not_fresh} nodes that are not fresh`)
+  await expect(list.locator('> li').nth(2)).toBeInViewport()
+  // More opens the whole list in place: every root is there, none twice, and the page did not
+  // leave for the failures tab.
+  await overview.getByRole('button', { name: /more: show all/ }).click()
+  const ids = await overview.locator('[data-root]').evaluateAll((items) => items.map((item) => item.getAttribute('data-root')))
+  expect([...ids].sort()).toEqual(held.map((h) => h.root).sort())
+  await expect(page.getByRole('button', { name: /^Failures/ })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByText('Nothing has failed here')).toHaveCount(0)
+
+  // The failing check: its error, what it holds, and the command that retries it, to copy.
+  const failure = overview.locator(`[data-root="failure:${N('check__fold_02__model')}"]`)
+  await expect(failure).toContainText('failure')
+  await expect(failure).toContainText('feature count mismatch')
+  await expect(failure).toContainText('holds 1 node (0 assets)')
+  await expect(failure.locator('code')).toHaveText('barca run check__fold_02__model --server')
+  await expect(failure.getByRole('button', { name: 'Copy command' })).toBeVisible()
+  // Picking it lights what it holds: its group's row stays, the others step back.
+  await failure.getByRole('button', { name: 'failure', exact: true }).click()
+  await expect(failure).toHaveAttribute('data-selected', 'true')
+  await expect(page.locator('.barca-group-table tbody tr[data-held="true"]')).toHaveCount(1)
+  await expect(page.locator('.barca-group-table tbody tr[data-held="false"]').first()).toBeVisible()
+  await expect(overview.locator('.barca-healthmap svg')).toHaveAttribute('data-dimming', 'true')
+  // One click on its node's name reaches the node's panel.
+  await failure.getByRole('button', { name: 'check__fold_02__model', exact: true }).click()
+  await expect(page.getByRole('complementary', { name: 'check__fold_02__model details' })).toBeVisible()
 })

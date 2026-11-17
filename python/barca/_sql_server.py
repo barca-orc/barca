@@ -11,7 +11,12 @@ one runs, and each of these holds without the others:
 - No file, network or extension access: `enable_external_access` is off, extensions are neither
   installed nor loaded, Python variables are not scanned, and the configuration is locked, so no
   statement can turn any of it back on. Rows arrive as a JSON parameter, never as a file.
-- One statement, a `SELECT`, as DuckDB's own parser reads it (not a pattern over the text).
+- One statement, a `SELECT`, as DuckDB's own parser reads it (not a pattern over the text),
+  and one that starts as a query does (`_QUERY_WORDS`). The second is there for DuckDB 1.x,
+  whose parser rewrites a table-function pragma (`PRAGMA database_list`, `PRAGMA
+  table_info(...)`) into a `SELECT` before it says what the statement is, and runs the pragma
+  to do it; 2.x reads those as `PRAGMA`. The word is checked first, so no pragma reaches the
+  parser on either.
 - A read-only transaction, rolled back: DuckDB 2 accepts `WITH x AS (DELETE ... RETURNING *)
   SELECT ...` as a `SELECT`, and the transaction refuses the write.
 - Memory and threads are bounded, and nothing is spilled to disk: a query that needs more
@@ -96,6 +101,52 @@ _OPTIONAL = (
     "python_enable_replacements",
     "allow_persistent_secrets",
 )
+
+
+# How a query starts: the first word of the statement, after whitespace, comments and opening
+# parentheses. Everything else is refused before DuckDB parses it. `PIVOT` is left out: DuckDB
+# parses it as more than one statement.
+_QUERY_WORDS = frozenset(
+    {
+        "SELECT",
+        "WITH",
+        "FROM",
+        "VALUES",
+        "TABLE",
+        "SHOW",
+        "DESCRIBE",
+        "DESC",
+        "SUMMARIZE",
+        "UNPIVOT",
+    }
+)
+
+
+def _first_word(query: str) -> str:
+    """The first word of `query`, upper case: past whitespace, `--` and `/* */` comments (which
+    nest) and opening parentheses. Empty when it does not start with a word."""
+    at, end = 0, len(query)
+    while at < end:
+        if query[at].isspace() or query[at] == "(":
+            at += 1
+        elif query.startswith("--", at):
+            newline = query.find("\n", at)
+            at = end if newline < 0 else newline + 1
+        elif query.startswith("/*", at):
+            depth, at = 1, at + 2
+            while at < end and depth:
+                if query.startswith("/*", at):
+                    depth, at = depth + 1, at + 2
+                elif query.startswith("*/", at):
+                    depth, at = depth - 1, at + 2
+                else:
+                    at += 1
+        else:
+            break
+    word = at
+    while word < end and (query[word].isalpha() or query[word] == "_"):
+        word += 1
+    return query[at:word].upper()
 
 
 class Refused(Exception):
@@ -187,6 +238,9 @@ class Helper:
     def _select(self, query: str) -> str:
         """The query as one SELECT, as DuckDB parses it; anything else is refused."""
         duckdb = self.duckdb
+        word = _first_word(query)
+        if word not in _QUERY_WORDS:
+            raise Refused(f"only a SELECT, not a {word or 'statement like this'} statement")
         try:
             statements = self.con.extract_statements(query)
         except duckdb.Error as e:

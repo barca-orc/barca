@@ -1426,8 +1426,8 @@
 
 /* The Assets page's health overview: the map beside the causes. */
 /* Reserved while the project loads: the map (its own clamp), the caption, the key, the gaps and the padding. */
-.barca-health-overview { min-height: calc(clamp(180px, 22vw, 300px) + 116px); box-sizing: border-box; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 24px; align-items: start; padding: 12px 24px 16px; border-bottom: 1px solid var(--border-subtle); }
-.barca-health-overview-causes { display: flex; flex-direction: column; gap: 8px; min-width: 0; max-height: 340px; overflow-y: auto; }
+.barca-health-overview { min-height: calc(clamp(200px, 23vw, 320px) + 128px); box-sizing: border-box; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 24px; align-items: start; padding: 12px 24px 16px; border-bottom: 1px solid var(--border-subtle); }
+.barca-health-overview-causes { display: flex; flex-direction: column; gap: 8px; min-width: 0; max-height: calc(clamp(200px, 23vw, 320px) + 100px); overflow-y: auto; }
 .barca-health-overview-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: var(--text-md); font-weight: 600; color: var(--text-strong); }
 .barca-health-overview-sub { font-size: var(--text-xs); font-weight: 400; color: var(--text-muted); }
 /* Beside the causes down to a phone's width; the map shrinks with the window rather than stacking. */

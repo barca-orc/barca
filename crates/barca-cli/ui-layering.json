@@ -239,6 +239,10 @@
       "kind": "display",
       "does": "a health's word, tone, glyph and order; a tick outcome's word"
     },
+    "causeDisplay": {
+      "kind": "display",
+      "does": "a cause's word, tone, glyph, map colour and map weight; the served order"
+    },
     "dataSignals": {
       "kind": "display",
       "does": "the words of a node's data signals and of the coverage the server measured"
@@ -265,7 +269,7 @@
     },
     "causesView": {
       "kind": "display",
-      "does": "the causes list's words over the rollup's roots"
+      "does": "the to-do list's words: a scope's `held_by` joined with the rollup's roots; data signals apart"
     },
     "artifactSchema": {
       "kind": "format",
@@ -376,14 +380,7 @@
     },
     "rollupView": {
       "kind": "layout",
-      "does": "the rollup indexed by id and the geometry of the health map over it",
-      "derives": [
-        {
-          "what": "`behindAs`: the health the \"not up to date\" band of a node's keys is drawn as",
-          "reason": "key bands carry counts, not a health",
-          "issue": 992
-        }
-      ]
+      "does": "the rollup indexed by id and the geometry of the health map over it: a segment's angle from its entry's counts and each cause's display weight"
     },
     "assetFilters": {
       "kind": "page",
@@ -537,15 +534,6 @@
           "blocked"
         ],
         "reason": "which chip a row falls under",
-        "issue": 992
-      },
-      {
-        "file": "lib/rollupView.ts",
-        "words": [
-          "behind",
-          "failing"
-        ],
-        "reason": "`behindAs`: the health a node's key band is drawn as",
         "issue": 992
       },
       {
