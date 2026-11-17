@@ -426,7 +426,10 @@ Examples:
   barca pause clean --server               # scheduled runs skip clean until it is resumed
   barca pause clean --downstream --server  # clean and everything below it
   barca pause pipeline.py --server         # every node of the file
-  barca pause --server --json              # {total, paused: [{id, paused_at, via}]}
+  barca pause --server --json              # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
+  barca pause --schedule nightly --server  # the schedule of `nightly` does not fire until resumed
+  barca pause --schedule nightly --until 2h --server   # resumes by itself in two hours
+  barca pause --schedule nightly --until 2026-10-21T06:00:00Z --server --json   # the schedule's entry: {id, cron, paused, paused_until, next_fire, ...}
   barca get clean --allow-paused --server  # run a paused node by hand anyway
 
 More: barca docs incidents";
@@ -436,7 +439,9 @@ Examples:
   barca resume clean --server               # the next tick computes clean again
   barca resume clean --downstream --server  # clean and everything below it
   barca resume pipeline.py --server         # every node of the file
-  barca resume --all --server --json        # {removed, total, paused}
+  barca resume --all --server --json        # {removed, total, paused, schedules}
+  barca resume --schedule nightly --server  # the schedule fires again from its next tick
+  barca resume --schedule nightly --server --json   # the schedule's entry: {id, cron, paused: false, next_fire, ...}
 
 More: barca docs incidents";
 
@@ -479,8 +484,16 @@ Examples:
   barca status --rollup                    # counts by health per group and file, in nodes and assets, worst first
   barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
   barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
+  barca status scored --keys               # every key of a partitioned node: state, last attempt, rows, error
+  barca status scored --keys --state failed,blocked --json   # {id, known, dimensions, counts, errors, keys, total, truncated}
+  barca status scored --keys --limit 20    # the first 20 keys; a note says how many there are
+  barca status scored --grid               # every key's state, one character each, a row per value of the shorter dimensions
+  barca status scored --grid --json        # the whole grid in columns: what GET /assets/{name}/partitions/grid answers
+  barca status scored --key region=apac    # one key: its state along its chain, its attempts, what it wrote and read
+  barca status scored --key day=2026-01-01,region=apac --sample 5 --json   # what GET /assets/{name}/partitions/key answers
+  barca status scored --keys --state failed --server   # the same list from the configured server
 
-More: barca docs status, barca docs agents";
+More: barca docs status, barca docs partitions, barca docs agents";
 
 const SQL_HELP: &str = "\
 Examples:
@@ -1059,12 +1072,22 @@ pub(crate) enum Cli {
     #[command(after_help = quick_help("pause", PAUSE_HELP), after_long_help = PAUSE_HELP, long_about = None)]
     Pause {
         /// The node or file to pause; omit to list the paused nodes
-        #[arg(help = "Node or file.py to pause; omit to list paused nodes", long_help = None)]
+        #[arg(help = "Node or file.py to pause; omit to list paused nodes and schedules", long_help = None)]
         target: Option<String>,
         /// Pause every node downstream of TARGET too
         #[arg(long, requires = "target")]
         #[arg(help = "Also pause every node downstream of the target", long_help = None)]
         downstream: bool,
+        /// Pause one schedule instead: the scheduled NODE's ticks do not fire until it is
+        /// resumed (or --until passes). The ticks it skips are not caught up
+        #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream"])]
+        #[arg(help = "Pause the schedule of this scheduled node instead of nodes", long_help = None)]
+        schedule: Option<String>,
+        /// With --schedule: resume by itself at this time: a duration from now (30m, 2h, 7d)
+        /// or an RFC 3339 time (2026-10-21T06:00:00Z), on the server's clock
+        #[arg(long, value_name = "WHEN", requires = "schedule")]
+        #[arg(help = "With --schedule: pause until a duration from now (2h) or an RFC 3339 time", long_help = None)]
+        until: Option<String>,
         #[command(flatten)]
         format: FormatFlags,
         /// The server's environment, checked against it (as for the other --server commands)
@@ -1080,9 +1103,13 @@ pub(crate) enum Cli {
     #[command(after_help = quick_help("resume", RESUME_HELP), after_long_help = RESUME_HELP, long_about = None)]
     Resume {
         /// The node or file to resume
-        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        #[arg(required_unless_present_any = ["all", "schedule"], conflicts_with = "all")]
         #[arg(help = "Node or file.py to resume", long_help = None)]
         target: Option<String>,
+        /// Resume one paused schedule instead: the scheduled NODE fires again from its next tick
+        #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream", "all"])]
+        #[arg(help = "Resume the schedule of this scheduled node instead of nodes", long_help = None)]
+        schedule: Option<String>,
         /// Resume every node downstream of TARGET too
         #[arg(long, requires = "target")]
         #[arg(help = "Also resume every node downstream of the target", long_help = None)]
@@ -1158,7 +1185,9 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "N")]
         sample: Option<usize>,
         /// Show only nodes in these cache states (comma-separated): cached, unsynced, stale,
-        /// never_run, partial, blocked, unknown, always_runs. The summary still counts every node
+        /// never_run, partial, blocked, unknown, always_runs. The summary still counts every node.
+        /// With --keys: only keys in these key states: failed, blocked, stale, never_run,
+        /// pinned, fresh
         #[arg(long, value_name = "STATE", value_delimiter = ',')]
         state: Vec<String>,
         /// Show only nodes that need attention: not cached (unsynced, stale, never_run, partial,
@@ -1169,6 +1198,22 @@ pub(crate) enum Cli {
         /// file, in nodes and in assets
         #[arg(long, conflicts_with_all = ["limit", "all", "fields", "sample", "state", "problems"])]
         rollup: bool,
+        /// Experimental: list the keys of the one partitioned TARGET instead of the nodes:
+        /// each key's state, latest attempt, rows and error. --state filters by key state;
+        /// --limit bounds the list (default: every key in JSON, 100 in a table)
+        #[arg(long, conflicts_with_all = ["fields", "sample", "problems", "rollup", "grid", "key"])]
+        #[arg(help = "Experimental: list the keys of one partitioned target, each with its state", long_help = None)]
+        keys: bool,
+        /// Experimental: print every key's state of the one partitioned TARGET as a grid, one
+        /// character per key; with --json, the whole grid in columns
+        #[arg(long, conflicts_with_all = ["fields", "sample", "state", "problems", "rollup", "key"])]
+        #[arg(help = "Experimental: print one partitioned target's keys as a grid of states", long_help = None)]
+        grid: bool,
+        /// Experimental: show one key of the one partitioned TARGET: its state in each node of
+        /// its chain, its attempts, what it wrote and what it read (--sample N adds rows)
+        #[arg(long, value_name = "KEY", conflicts_with_all = ["fields", "state", "problems", "rollup", "limit", "all"])]
+        #[arg(help = "Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target", long_help = None)]
+        key: Option<String>,
         /// Environment name (separates cache/state per environment)
         #[arg(long)]
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]

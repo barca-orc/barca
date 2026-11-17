@@ -23,6 +23,7 @@ available topics for scripts and agents. Help and examples never load a project 
 | Recompute an asset and what is downstream | [`barca get revenue --refresh orders`](/reference/refresh/) |
 | See every node's cache state and why | [`barca status`](/reference/cli/status/) |
 | See only what failed or is stale | [`barca status --problems`](/reference/cli/status/) |
+| See a partitioned asset's keys, each with its state | [`barca status NODE --keys`](/reference/partitions/) |
 | See recent runs, or one run's errors | [`barca history`](/reference/cli/history/) |
 | Read a step's printed output | [`barca logs`](/reference/cli/logs/) |
 | Query cached results with SQL | [`barca sql "select * from revenue"`](/reference/cli/sql/) |
@@ -84,11 +85,11 @@ you have installed.
 | [`gc`](/reference/cli/gc/) | `barca gc [--dry-run] [--max-size SIZE] [--json]` | Evict cached results to keep .barca/ under its size limit (experimental) |
 | [`serve`](/reference/cli/serve/) | `barca serve [file.py\|dir/ ...] [--port N] [--host IP] [--watch] [--no-schedule] [--timezone TZ] [--read-only] [--drain-timeout SECONDS] [--max-runs N] [--capacity N] [--run-timeout SECONDS] [--auth off\|token]` | Run the HTTP API server |
 | [`queue`](/reference/cli/queue/) | `barca queue [pause\|resume] [--server [URL]] [--json]` | A server's run queue; pause or resume it (experimental) |
-| [`pause`](/reference/cli/pause/) | `barca pause [target] [--downstream] [--json]` | Stop scheduled ticks and requests from computing an asset (experimental) |
-| [`resume`](/reference/cli/pause/) | `barca resume [target] [--downstream \| --all] [--json]` | Let a paused asset be computed again (experimental) |
+| [`pause`](/reference/cli/pause/) | `barca pause [target] [--downstream] [--schedule NODE [--until WHEN]] [--json]` | Stop scheduled ticks and requests from computing an asset, or pause one schedule (experimental) |
+| [`resume`](/reference/cli/pause/) | `barca resume [target] [--downstream \| --all] [--schedule NODE] [--json]` | Let a paused asset be computed again, or resume one schedule (experimental) |
 | [`tokens`](/reference/cli/tokens/) | `barca tokens bootstrap` | Print a one-use code to connect to a server with --auth token (experimental) |
 | [`list`](/reference/cli/list/) | `barca list [file.py\|dir/ ...] [--groups] [-l N \| --all] [--json]` | List discovered definitions and their deps |
-| [`status`](/reference/cli/status/) | `barca status [target[,target...]] [file.py\|dir/ ...] [--json] [--sample N] [--problems] [--state S,S]` | Cache state, last run and artifact shape per node |
+| [`status`](/reference/cli/status/) | `barca status [target[,target...]] [file.py\|dir/ ...] [--json] [--sample N] [--problems] [--state S,S] [--keys \| --grid \| --key KEY]` | Cache state, last run and artifact shape per node; one partitioned node's keys |
 | [`sql`](/reference/cli/sql/) | `barca sql "<query>" [file.py\|dir/ ...] [--json] [-l N \| --all]` | Query cached results with DuckDB (experimental) (install: uv add 'barca[sql]') |
 | [`state backups`](/reference/cli/state/) | `barca state backups [--json]` | List the metadata backups, local and in the store |
 | [`state restore`](/reference/cli/state/) | `barca state restore [--from N\|NAME\|PATH]` | Put a metadata backup back (the current DB is kept aside) |

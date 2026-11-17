@@ -265,7 +265,7 @@ path:
 |---|---|
 | `schedule` | the scheduled node's id. With several schedules reaching the node, the one that fires earliest next; a schedule with no next tick comes last, and ties go to the lower id |
 | `next_tick` | that schedule's next slot (RFC 3339, UTC); the first slot after a timed pause ends; `null` for a pause until resumed and when `live` is false |
-| `paused` | the schedule is paused (`POST /schedule/{id}/pause`). A paused schedule is still the path |
+| `paused` | the schedule is paused (`barca pause --schedule NODE`, `POST /schedule/{id}/pause`). A paused schedule is still the path |
 | `live` | a running scheduler fires the schedule. `false` from `barca status` on a machine with no server, from a `--read-only` or `--no-schedule` server, and for a schedule held after `max_failures` failed ticks (`schedule.failing`) |
 | `missed_ticks` | how many finished ticks of the path's schedules had the node as a target and did not leave it fresh |
 
@@ -469,6 +469,10 @@ to 20 `missing_keys`, and `empty` when some keys' latest successful result wrote
 recorded count of 0; keys no longer in the key set count while their result is recorded). Its state is `cached` when every key is, `partial` when some are, and
 `stale`/`never_run` when none are. `last_materialization` is one key of the latest run (the first in
 sort order), named in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
+
+The keys themselves, each with its state, latest attempt, rows and error, are
+`barca status NODE --keys`; every key's state at once is `--grid`, and one key along its chain
+is `--key KEY` (`barca docs partitions`, "Listing keys").
 
 ## JSON
 

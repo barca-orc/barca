@@ -26,20 +26,30 @@ pub struct PauseRequest {
     pub all: bool,
 }
 
-/// `{paused: [{id, paused_at, via}], total}`: every paused node.
-async fn body(state: &AppState, changed: (&str, Vec<String>)) -> Result<Json<Value>, ApiError> {
-    let paused = pauses::list(&state.config.resolved.db_path).await?;
-    Ok(Json(json!({
-        changed.0: changed.1,
+/// `{paused: [{id, paused_at, via}], total, schedules: [{id, paused_at, until}]}`: every
+/// paused node, and every paused schedule (`POST /schedule/{id}/pause`).
+async fn body(
+    state: &AppState,
+    changed: Option<(&str, Vec<String>)>,
+) -> Result<Json<Value>, ApiError> {
+    let db_path = &state.config.resolved.db_path;
+    let paused = pauses::list(db_path).await?;
+    let schedules = pauses::paused_schedules(db_path, chrono::Utc::now().timestamp()).await?;
+    let mut body = json!({
         "total": paused.len(),
         "paused": paused,
-    })))
+        "schedules": schedules,
+    });
+    if let Some((key, ids)) = changed {
+        body[key] = json!(ids);
+    }
+    Ok(Json(body))
 }
 
-/// `GET /pauses` — every paused node, with when and through what it was paused.
+/// `GET /pauses` — every paused node, with when and through what it was paused, and every
+/// paused schedule.
 pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let paused = pauses::list(&state.config.resolved.db_path).await?;
-    Ok(Json(json!({ "total": paused.len(), "paused": paused })))
+    body(&state, None).await
 }
 
 async fn scope(state: &AppState, req: &PauseRequest) -> Result<Vec<String>, ApiError> {
@@ -69,7 +79,7 @@ pub async fn pause(
     let via = req.target.clone().unwrap_or_default();
     pauses::pause(cfg, &ids, &via, chrono::Utc::now().timestamp()).await?;
     barca_core::errln!("[barca] paused {} node(s) via {via}", ids.len());
-    body(&state, ("added", ids)).await
+    body(&state, Some(("added", ids))).await
 }
 
 /// `POST /pauses/resume` — resume `target` (with `downstream`, everything below it too), or
@@ -86,5 +96,5 @@ pub async fn resume(
         pauses::resume(db_path, Some(scope(&state, &req).await?)).await?
     };
     barca_core::errln!("[barca] resumed {} node(s)", removed.len());
-    body(&state, ("removed", removed)).await
+    body(&state, Some(("removed", removed))).await
 }

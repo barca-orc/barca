@@ -153,6 +153,18 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.44.0 (specs/behavior/health.md): the rollup document gains causes, the freshness gap and more root kinds as that specification lands",
     ),
     (
+        "status --keys",
+        "new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use",
+    ),
+    (
+        "status --grid",
+        "new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use",
+    ),
+    (
+        "status --key",
+        "new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use",
+    ),
+    (
         "get --batch",
         "new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use",
     ),
