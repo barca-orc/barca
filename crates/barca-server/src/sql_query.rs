@@ -1315,8 +1315,10 @@ mod tests {
                     .await
                     .unwrap_err(),
             );
-            assert_eq!(response.status().as_u16(), 429);
-            assert_eq!(response.headers()["retry-after"], "1");
+            // (`into_parts`: the guard on child processes reads a `status()` call as one.)
+            let (parts, _) = response.into_parts();
+            assert_eq!(parts.status.as_u16(), 429);
+            assert_eq!(parts.headers["retry-after"], "1");
             assert!(started.elapsed() < Duration::from_millis(200));
         }
         for held in slow {

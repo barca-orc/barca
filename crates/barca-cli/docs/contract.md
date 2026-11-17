@@ -91,7 +91,7 @@ command is experimental with it):
 | `barca stats --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
 | `barca logs --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
 | `barca logs --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
-| `barca sql --server` | new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows) and its errors may change |
+| `barca sql --server` | new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows and 4MB an answer, four queries at once) and its errors may change |
 | `barca sql --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
 | `barca logs --follow` | new in 0.29.2: how the end of a followed run is reported may change after field use |
 <!-- END GENERATED experimental -->
@@ -550,7 +550,7 @@ default, and any aliases.
 | `-l, --limit` | `LIMIT` | default `100` | experimental (with the command) | Maximum number of rows to return |
 | `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
-| `--server` | `URL` | - | experimental: new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows) and its errors may change | Use a server (URL or configured); get/run execute its deployed code |
+| `--server` | `URL` | - | experimental: new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows and 4MB an answer, four queries at once) and its errors may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
