@@ -200,13 +200,25 @@ def test_every_surface_carries_the_same_times(project, serve):
 
     def times(nodes: list[dict]) -> dict[str, tuple]:
         return {
-            n["name"]: (n["stale_since"], n["expected_fresh_at"], n["recheck_at"]) for n in nodes
+            n["name"]: (
+                n["stale_since"],
+                n["expected_fresh_at"],
+                n["recheck_at"],
+                n["no_estimate"],
+            )
+            for n in nodes
         }
 
     doc = json.loads(_ok(barca(project, "status", "pipeline.py", "--json", timeout=QUICK)))
     local = times(doc["nodes"])
     # No scheduler here: nothing is estimated; a code change is dated by the file.
-    assert all(fresh is None and recheck is None for _, fresh, recheck in local.values())
+    assert all(fresh is None and recheck is None for _, fresh, recheck, _ in local.values())
+    # So every node that is not fresh says why it has no estimate (#968), and a fresh one
+    # says nothing: no scheduler fires the chain's schedule, and nothing refreshes `loose`.
+    fresh_nodes = {n["name"] for n in doc["nodes"] if n["cause"] is None}
+    assert {name for name, t in local.items() if t[3] is None} == fresh_nodes, local
+    assert local["orders"][3] == local["report"][3] == "scheduler_off", local
+    assert local["loose"][3] == "no_path", local
     assert abs(_at(local["orders"][0]) - edited) <= 3, local
     # What is below `orders` has been out of date as long; a fresh node has no time.
     assert local["clean"][0] == local["orders"][0] == local["report"][0], local
@@ -220,11 +232,11 @@ def test_every_surface_carries_the_same_times(project, serve):
             "status",
             "pipeline.py",
             "--fields",
-            "name,stale_since,expected_fresh_at,recheck_at",
+            "name,stale_since,expected_fresh_at,recheck_at,no_estimate",
         )
     )
     assert times(json.loads(fields)["nodes"]) == local
-    query = "select name, stale_since, expected_fresh_at, recheck_at from barca.nodes"
+    query = "select name, stale_since, expected_fresh_at, recheck_at, no_estimate from barca.nodes"
     rows = json.loads(_ok(barca(project, "sql", query, "pipeline.py", "--json", timeout=QUICK)))
     assert times(rows["rows"]) == local
 

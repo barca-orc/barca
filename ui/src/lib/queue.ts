@@ -7,7 +7,7 @@
 import { match } from 'ts-pattern'
 import { runHref } from './running'
 import { triggeredByLabel } from './runs'
-import { parseTime } from './time'
+import { formatAbout, parseTime } from './time'
 import type { CapacitySnapshot, HealthQueue, QueueEntry, QueueView } from './types'
 
 /** `/queue` poll interval while anything runs or waits, and otherwise. */
@@ -132,7 +132,21 @@ interface QueueRow {
   queuedAt: string
   /** How long it has run (`running`) or waited (`waiting`): `20m`; `–` when not known. */
   elapsed: string
+  /**
+   * For a waiting run, when the server expects it to start (`estimated_start_at`), as an
+   * estimate: `starts in ~40s`; `no estimate` when the server gives none (the queue is paused
+   * or draining, or the server only reads). Null for a running run.
+   */
+  starts: string | null
   href: string
+}
+
+/** `starts in ~40s`: a waiting run's estimated start, from now; `starting` once the time has come. */
+export function startsLabel(estimatedStartAt: string | null, nowMs: number): string {
+  const at = estimatedStartAt === null ? null : parseTime(estimatedStartAt)
+  if (at === null) return 'no estimate'
+  const left = (at - nowMs) / 1000
+  return left <= 0 ? 'starting' : `starts in ${formatAbout(left)}`
 }
 
 /**
@@ -158,6 +172,7 @@ export function queueRows(
       scheduleId: entry.schedule_id,
       queuedAt: formatTime(entry.queued_at),
       elapsed: seconds === null ? '–' : waitLabel(seconds),
+      starts: state === 'running' ? null : startsLabel(entry.estimated_start_at, nowMs),
       href: runHref(entry.run_id),
     }
   }
@@ -219,6 +234,7 @@ export function queueSummary(view: QueueView, nowMs: number): string | null {
   const parts: string[] = []
   if (status.oldestWaitSeconds !== null) parts.push(`oldest waiting ${waitLabel(status.oldestWaitSeconds)}`)
   if (next) parts.push(`next ${next.target ?? 'all assets'}`)
+  if (next && next.estimated_start_at !== null) parts.push(startsLabel(next.estimated_start_at, nowMs))
   return parts.join(' · ') || null
 }
 

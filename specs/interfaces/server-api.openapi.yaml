@@ -4669,8 +4669,8 @@ components:
       additionalProperties: false
       description: One entry of the rollup tree. Every count is the exact sum of its children's.
       required: [id, kind, label, parent, children, nodes, assets, running, health, asset_health,
-        data_coverage, causes, asset_causes, not_fresh, held_by, gap_seconds, unbounded, fresh_by,
-        also_in]
+        data_coverage, causes, asset_causes, not_fresh, weight, weights, held_by, gap_seconds,
+        unbounded, fresh_by, also_in]
       properties:
         id:
           type: string
@@ -4757,15 +4757,37 @@ components:
           type: integer
           minimum: 0
           description: Nodes underneath that are not fresh; what causes counts, as one number.
+        weight:
+          type: integer
+          minimum: 0
+          description: The entry's distance from fresh, in weighted nodes. Every node underneath
+            counts 1; one that is not fresh counts its cause's weight instead (6 for failing,
+            overdue and no_refresh_path, 2 for queued, catching_up and undecided). The exact sum
+            of the children's.
+        weights:
+          description: weight by what the nodes are; each cause's nodes times its weight, and the
+            fresh nodes at 1 each. They add up to weight.
+          type: object
+          additionalProperties: false
+          required: [failing, overdue, no_refresh_path, queued, undecided, catching_up, fresh]
+          properties:
+            failing: {type: integer, minimum: 0}
+            overdue: {type: integer, minimum: 0}
+            no_refresh_path: {type: integer, minimum: 0}
+            queued: {type: integer, minimum: 0}
+            undecided: {type: integer, minimum: 0}
+            catching_up: {type: integer, minimum: 0}
+            fresh: {type: integer, minimum: 0}
         held_by:
           type: array
           description: The roots that hold the not-fresh nodes underneath, each with what it holds
-            under this entry, in the order of the root list applied to what is held here. Their
-            nodes add up to not_fresh. Empty on a node entry.
+            under this entry, in the order of the root list applied to what is held here (the
+            most weight first). Their nodes add up to not_fresh. Empty on a node entry.
           items:
             type: object
             additionalProperties: false
-            required: [root, nodes, assets, causes, gap_seconds, unbounded, cumulative_nodes]
+            required: [root, nodes, assets, causes, gap_seconds, unbounded, weight,
+              cumulative_nodes]
             properties:
               root:
                 type: string
@@ -4798,6 +4820,11 @@ components:
                 type: integer
                 minimum: 0
                 description: Of those nodes, the ones with no expected_fresh_at.
+              weight:
+                type: integer
+                minimum: 0
+                description: The weight of those nodes; each counts its cause's weight. What the
+                  list is ranked by.
               cumulative_nodes:
                 type: integer
                 minimum: 1
@@ -4846,7 +4873,7 @@ components:
       additionalProperties: false
       description: One upstream fact and what it holds; every node whose root.id is this root's.
       required: [id, kind, node, detail, error_group, nodes, assets, causes, gap_seconds,
-        unbounded, action]
+        unbounded, weight, action]
       properties:
         id:
           type: string
@@ -4896,6 +4923,12 @@ components:
           type: integer
           minimum: 0
           description: Of its nodes, those with no expected_fresh_at.
+        weight:
+          type: integer
+          minimum: 0
+          description: The weight of the nodes it holds; each counts its cause's weight. roots is
+            ranked by it, the most first, a failure first among equals, then nodes, gap_seconds
+            and id.
         action:
           type: object
           additionalProperties: false
@@ -4988,8 +5021,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RollupRoot'
-          description: What holds the nodes that are not fresh. Roots holding nodes with no
-            expected_fresh_at first, the most nodes held first; then by gap_seconds, nodes and id.
+          description: What holds the nodes that are not fresh, ranked by weight; the most weight
+            held first, a failure first among equals, then nodes, gap_seconds and id.
         data_coverage:
           $ref: '#/components/schemas/RollupCoverage'
         files:
@@ -5821,6 +5854,7 @@ components:
       - stale_since
       - expected_fresh_at
       - recheck_at
+      - no_estimate
       - last_materialization
       - shape
       - env
@@ -5956,6 +5990,12 @@ components:
             refresh path; a node with this and no expected_fresh_at will be rechecked, not
             necessarily fresh. null when it has no refresh path or the path has no next tick.
             Experimental.
+        no_estimate: &id_no_estimate
+          type: [string, 'null']
+          enum: [failing, paused, scheduler_off, no_path, undecided, missed, queue_stopped,
+            no_scheduler_here, not_promised, null]
+          description: Why a node that is not fresh has no expected_fresh_at, in one word; null
+            for a fresh node and one that has an estimate. Experimental.
         kind: &id047
           type: string
           enum:
@@ -6109,6 +6149,7 @@ components:
       - stale_since
       - expected_fresh_at
       - recheck_at
+      - no_estimate
       - last_materialization
       - shape
       - env
@@ -6141,6 +6182,7 @@ components:
         stale_since: *id_stale_since
         expected_fresh_at: *id_expected_fresh_at
         recheck_at: *id_recheck_at
+        no_estimate: *id_no_estimate
         partitions: *id050
         last_materialization: *id051
         shape: *id052

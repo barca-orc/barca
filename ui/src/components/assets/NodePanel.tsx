@@ -16,6 +16,7 @@ import { IncidentControls } from './IncidentControls'
 import { LastCheckLine } from './LastCheckLine'
 import { EstimateLine } from './EstimateLine'
 import { RefreshPathLine } from './RefreshPathLine'
+import { CauseLine } from './CauseLine'
 import { usePausedSet } from '@/hooks/usePauses'
 import { usePinNotes } from '@/hooks/usePins'
 import { usePausedRunGuard } from '@/hooks/usePausedRunGuard'
@@ -35,6 +36,7 @@ import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
 import type { AssetRunEntry, KeyArtifact, ListNode, NodeState, NodeStatus } from '@/lib/types'
 import type { NodeRunAction } from '@/hooks/useNodeRun'
+import type { RollupRoot } from '@/lib/rollupView'
 
 interface NodePanelProps {
   node: NodeState
@@ -47,6 +49,8 @@ interface NodePanelProps {
   onOpenGraph: (id: string) => void
   onClose: () => void
   runAction: NodeRunAction
+  /** The rollup's root list (`GET /state/rollup`), when the page has it: the node's root in a line and what clears it. */
+  rollupRoots?: readonly RollupRoot[]
 }
 
 /**
@@ -54,7 +58,9 @@ interface NodePanelProps {
  * attempt, run history, lineage and declared metadata. All from existing
  * endpoints — `/state` (passed in) and `/assets/{id}` (fetched here).
  */
-export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction }: NodePanelProps) {
+export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, onClose, runAction, rollupRoots }: NodePanelProps) {
+  // The node's root as the root list words it: a lookup by the id on the row.
+  const heldBy = rollupRoots?.find((r) => r.id === node.root?.id) ?? null
   const { zone } = useTimeZone()
   // The subject under the state: kept as the panel moves from node to node.
   const [tab, setTab] = useState<PanelTab>('overview')
@@ -191,14 +197,16 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             ))}
           </ul>
         )}
+        {/* Why it is not fresh, in the map's word, and the root that holds it, with a link to it. */}
+        <CauseLine node={node.id} cause={node.cause} root={node.root} held={heldBy} onSelect={onSelect} />
         {/* What the newest tick that checked it found; the server decides what that means for its health. */}
         {node.last_check && <LastCheckLine check={node.last_check} nowMs={nowMs} />}
         {/* Which schedule's tick will bring it up to date, or that none will: the server's answer. */}
         <RefreshPathLine path={node.refresh_path} nowMs={nowMs} />
         {/* Since when it is out of date and when it is expected fresh, or only rechecked: the server's estimates. */}
-        <EstimateLine staleSince={node.stale_since} expectedFreshAt={node.expected_fresh_at} recheckAt={node.recheck_at} nowMs={nowMs} />
+        <EstimateLine staleSince={node.stale_since} expectedFreshAt={node.expected_fresh_at} recheckAt={node.recheck_at} noEstimate={node.no_estimate} nowMs={nowMs} />
         {node.running && (
-          <KeyValue label="now">
+          <KeyValue label="computing now">
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}
             <span className="barca-cell-sub">started by {startedBy(node.running.triggered_by)}</span>
           </KeyValue>

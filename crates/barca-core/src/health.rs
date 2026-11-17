@@ -260,6 +260,17 @@ impl Cause {
         }
     }
 
+    /// How far one node with this cause is from fresh, against 1 for a fresh node
+    /// (`specs/behavior/health.md`, "Distance from fresh"): 6 where someone has to act
+    /// (`failing`, `overdue`, `no_refresh_path`), 2 where the node will be fresh without
+    /// anyone acting or barca cannot say (`queued`, `catching_up`, `undecided`).
+    pub fn weight(self) -> usize {
+        match self {
+            Cause::Failing | Cause::Overdue | Cause::NoRefreshPath => 6,
+            Cause::Queued | Cause::Undecided | Cause::CatchingUp => 2,
+        }
+    }
+
     /// The display word: what the CLI prints and the UI shows.
     pub fn word(self) -> &'static str {
         match self {
@@ -268,6 +279,91 @@ impl Cause {
             other => other.as_str(),
         }
     }
+}
+
+/// Why a node that is not fresh has no `expected_fresh_at` (`specs/behavior/health.md`,
+/// "Times"): the one reason a surface gives instead of a blank. [`no_estimate`] names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum NoEstimate {
+    /// It failed, or a failing node upstream holds it: nothing clears it until that is fixed.
+    Failing,
+    /// Its schedule, or the node itself, is paused.
+    Paused,
+    /// No scheduler is seen firing its schedule.
+    SchedulerOff,
+    /// Nothing scheduled refreshes it.
+    NoPath,
+    /// barca cannot decide it until a run reports.
+    Undecided,
+    /// Ticks reached it and did not leave it fresh: its estimate already failed.
+    Missed,
+    /// The run queue is paused or draining: a tick's run would start nothing.
+    QueueStopped,
+    /// The answering process runs no scheduler, so it has no next tick to estimate from.
+    NoSchedulerHere,
+    /// A tick will look at it, and may find it up to date or leave it: a result above it
+    /// may come out unchanged, or a node above it is read as it is.
+    NotPromised,
+}
+
+impl NoEstimate {
+    /// The value as JSON and `barca.nodes` spell it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoEstimate::Failing => "failing",
+            NoEstimate::Paused => "paused",
+            NoEstimate::SchedulerOff => "scheduler_off",
+            NoEstimate::NoPath => "no_path",
+            NoEstimate::Undecided => "undecided",
+            NoEstimate::Missed => "missed",
+            NoEstimate::QueueStopped => "queue_stopped",
+            NoEstimate::NoSchedulerHere => "no_scheduler_here",
+            NoEstimate::NotPromised => "not_promised",
+        }
+    }
+
+    /// The reason in words, after "no estimate: ".
+    pub fn word(self) -> &'static str {
+        match self {
+            NoEstimate::Failing => "until the failure is fixed",
+            NoEstimate::Paused => "paused",
+            NoEstimate::SchedulerOff => "no scheduler is firing its schedule",
+            NoEstimate::NoPath => "no refresh path",
+            NoEstimate::Undecided => "undecided until a run reports",
+            NoEstimate::Missed => "ticks missed it",
+            NoEstimate::QueueStopped => "the run queue is not starting runs",
+            NoEstimate::NoSchedulerHere => "no scheduler runs here",
+            NoEstimate::NotPromised => "a result above it may come out unchanged",
+        }
+    }
+}
+
+/// Why `node`, classified and attributed, has no estimate; `None` for a fresh node and one
+/// that has an `expected_fresh_at`. The first that applies: its failure; what its root says
+/// of its schedule (paused, not fired, missing); that barca cannot decide it; that ticks
+/// missed it; then, for a node a tick or a run will reach, why that promises nothing.
+pub fn no_estimate(node: &NodeStatus, evidence: Evidence<'_>) -> Option<NoEstimate> {
+    let cause = node.cause?;
+    if node.expected_fresh_at.is_some() {
+        return None;
+    }
+    Some(match (cause, node.root.as_ref().map(|r| r.kind)) {
+        (Cause::Failing, _) => NoEstimate::Failing,
+        (_, Some(RootKind::SchedulePaused)) => NoEstimate::Paused,
+        (_, Some(RootKind::SchedulerOff)) => NoEstimate::SchedulerOff,
+        (_, Some(RootKind::NoSchedule)) | (Cause::NoRefreshPath, _) => NoEstimate::NoPath,
+        (Cause::Undecided, _) => NoEstimate::Undecided,
+        (Cause::Overdue, _) => NoEstimate::Missed,
+        (Cause::Queued | Cause::CatchingUp, _) if !evidence.timing.queue_open => {
+            NoEstimate::QueueStopped
+        }
+        (Cause::Queued | Cause::CatchingUp, _) if node.recheck_at.is_none() => {
+            NoEstimate::NoSchedulerHere
+        }
+        (Cause::Queued | Cause::CatchingUp, _) => NoEstimate::NotPromised,
+    })
 }
 
 /// What kind of upstream fact a [`Root`] is (`specs/behavior/health.md`, "Root").
@@ -911,6 +1007,7 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
         node.cause = cause;
         node.root = root;
         node.gap_seconds = crate::causes::gap_seconds(node, gap_at);
+        node.no_estimate = no_estimate(node, evidence);
     }
 }
 

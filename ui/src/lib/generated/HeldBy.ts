@@ -31,6 +31,10 @@ gap_seconds: number,
  */
 unbounded: number,
 /**
+ * The weight of those nodes: what the list is ranked by ([`CauseCounts::weight`]).
+ */
+weight: number,
+/**
  * Nodes held by this root and by the roots listed before it: against the entry's
  * `not_fresh`, how much of the scope the first roots explain.
  */

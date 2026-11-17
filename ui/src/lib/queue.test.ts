@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { QueueEntry, QueueView } from './types'
-import {
+import { startsLabel,
   queueMatters,
   QUEUE_POLL_BUSY_MS,
   QUEUE_POLL_IDLE_MS,
@@ -128,9 +128,21 @@ describe('queueRows', () => {
       scheduleId: null,
       queuedAt: '2026-10-22T10:00:00Z',
       elapsed: '20m',
+      starts: 'no estimate',
       href: '/runs?run=r1',
     })
     expect(rows[1]).toMatchObject({ position: '#2', target: 'a.py:x,a.py:y', command: 'run', trigger: 'schedule', scheduleId: 'a.py:x' })
+  })
+  it("says when a waiting run is expected to start, as the server's estimate and rounded up", () => {
+    const soon = entry('r1', { estimated_start_at: '2026-10-22T10:20:38Z' })
+    const later = entry('r2', { position: 2, estimated_start_at: '2026-10-22T10:27:10Z' })
+    const running = entry('live', { status: 'running', position: null })
+    const rows = queueRows(view({ running: [running], queued: [soon, later] }), iso, now)
+    // 38s and 7m10s from now: never said to be sooner, never to the second.
+    expect(rows.map((r) => r.starts)).toEqual([null, 'starts in ~40s', 'starts in ~8m'])
+    expect(startsLabel('2026-10-22T10:19:00Z', now)).toBe('starting')
+    // No estimate from a paused or draining queue or a read-only server: said, not blank.
+    expect(startsLabel(null, now)).toBe('no estimate')
   })
   it('puts an entry without a position last', () => {
     expect(queueRows(view({ queued: [entry('a', { position: null }), entry('b', { position: 1 })] }), iso, now).map((r) => r.position)).toEqual(['#1', '–'])

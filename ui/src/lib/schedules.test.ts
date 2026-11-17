@@ -212,6 +212,27 @@ describe('lateness', () => {
     expect(rows[2]?.last).toBeNull()
   })
 
+  it("puts late then queue-bound schedules first, and says the typical wait and run as estimates", () => {
+    const rows = scheduleRows(
+      [asset('job.py:soon', '*/5 * * * *'), asset('job.py:pulse', '*/10 * * * * *'), asset('job.py:minutely', '* * * * *')],
+      [
+        state('job.py:soon', { next_run: s('2026-11-16T12:22:00Z'), schedule: stands({ typical_run_seconds: 4 }) }),
+        // The server's words: its ticks wait longer than they are apart.
+        state('job.py:pulse', { next_run: s('2026-11-16T12:25:00Z'), schedule: stands({ queue_bound: true, typical_queue_wait_seconds: 12, typical_run_seconds: 1 }) }),
+        state('job.py:minutely', { next_run: s('2026-11-16T12:30:00Z'), schedule: stands({ late: true, late_since: '2026-11-16T12:09:00Z' }) }),
+      ],
+      [],
+      now,
+    )
+    expect(rows.map((r) => [r.name, r.late !== null, r.queueBound, r.queueWait, r.typicalRun])).toEqual([
+      ['minutely', true, false, null, null],
+      ['pulse', false, true, '~15s', '<5s'],
+      ['soon', false, false, null, '<5s'],
+    ])
+    // A row without a schedule block is neither: nothing is worked out from its times.
+    expect(scheduleRows([asset('job.py:new', '0 6 * * *')], [])[0]).toMatchObject({ queueBound: false, queueWait: null, typicalRun: null })
+  })
+
   it('reads a pause from the schedule block when the scheduler published no entry', () => {
     const rows = scheduleRows(
       [asset('job.py:held', '* * * * *')],

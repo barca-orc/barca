@@ -2,12 +2,11 @@ import type { ReactNode } from "react";
 import { match } from "ts-pattern";
 import { Age, Button, EmptyNote, StatusBadge } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
-import { nodeStateDisplay } from "@/lib/cacheStateDisplay";
 import { inPipeline } from "@/lib/pipeline";
 import type { Remote } from "@/lib/remote";
-import { lastStatusLabel, scheduleRows, type ScheduleRow } from "@/lib/schedules";
+import { QUEUE_BOUND_HINT, lastStatusLabel, scheduleRows, type ScheduleRow } from "@/lib/schedules";
 import { nodeKindLabel } from "@/lib/status";
-import { formatInstant } from "@/lib/time";
+import { formatInstant, formatSlot } from "@/lib/time";
 import type { Health, ListNode, NodeState, ScheduleJob } from "@/lib/types";
 
 export interface SchedulesViewProps {
@@ -49,6 +48,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
   const current = !offline && assets.kind === "ready" && assets.refreshError === null;
   const canPause = health ? health.scheduler && !health.read_only : false;
   const late = rows?.filter((r) => r.late !== null).length ?? 0;
+  const queueBound = rows?.filter((r) => r.queueBound).length ?? 0;
 
   return (
     <div className="barca-view">
@@ -63,6 +63,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
               <span className="barca-count">
                 {health.read_only ? "read-only view" : health.scheduler ? "scheduler running" : "scheduler off (--no-schedule)"}
                 {late > 0 && ` · ${late.toLocaleString()} late`}
+                {queueBound > 0 && ` · ${queueBound.toLocaleString()} queue-bound`}
               </span>
             )}
             {/* No schedules: the page has nothing of its own to run. */}
@@ -136,6 +137,7 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
         <col className="col-schedule" />
         <col className="col-when" />
         <col className="col-when" />
+        <col className="col-wait" />
         <col className="col-state" />
         {canPause && <col className="col-action" />}
       </colgroup>
@@ -143,9 +145,10 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
         <tr>
           <th>Name</th>
           <th>Schedule</th>
-          <th>Next run</th>
+          <th title="The next slot of its cron: when its next tick is due. A late schedule waits behind the slots it missed">Next slot</th>
           <th>Last tick</th>
-          <th>State</th>
+          <th className="col-wait" title="How long its ticks' runs typically wait for a run slot, and how long they typically take: medians of its newest 20 ticks">Typical wait · run</th>
+          <th title="Where the schedule stands, as the server says: late (no tick fired for a slot that passed longer ago than its grace and queue wait), queue-bound (its ticks wait longer than they are apart), paused, or on time">State</th>
           {canPause && <th aria-label="Actions" />}
         </tr>
       </thead>
@@ -177,6 +180,10 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
                 >
                   <StatusBadge glyph="stale" label={r.late.by} size="sm" />
                 </time>
+              ) : r.nextRunMs !== null ? (
+                <span title={formatInstant(r.nextRunMs, zone)}>
+                  {formatSlot(new Date(r.nextRunMs).toISOString(), zone, nowMs)} <span className="barca-cell-sub">· <Age at={r.nextRunMs} nowMs={nowMs} /></span>
+                </span>
               ) : (
                 <Age at={r.nextRunMs} nowMs={nowMs} />
               )}
@@ -193,6 +200,10 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
                 "never"
               )}
             </td>
+            <td className="col-wait" data-queue-wait={r.queueWait ?? undefined}>
+              {r.queueWait ?? <span className="barca-cell-sub">none</span>}
+              <span className="barca-cell-sub"> · {r.typicalRun ?? "–"}</span>
+            </td>
             <td>
               {r.paused ? (
                 <span
@@ -204,12 +215,17 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
                 >
                   <StatusBadge glyph="paused" label="paused" size="sm" />
                 </span>
+              ) : r.late ? (
+                <span title="No tick has fired for a slot that passed longer ago than its grace and its typical queue wait">
+                  <StatusBadge glyph="stale" label="late" size="sm" />
+                </span>
+              ) : r.queueBound ? (
+                <span data-queue-bound title={QUEUE_BOUND_HINT}>
+                  <StatusBadge glyph="queued" label="queue-bound" size="sm" />
+                  <span className="barca-cell-sub barca-schedule-todo">raise max_runs or space the schedules</span>
+                </span>
               ) : (
-                r.state && (
-                  <span className="barca-state-line">
-                    <StatusBadge {...nodeStateDisplay({ state: r.state, lastFailed: r.lastFailed })} size="sm" />
-                  </span>
-                )
+                <span className="barca-cell-sub">on time</span>
               )}
             </td>
             {canPause && (

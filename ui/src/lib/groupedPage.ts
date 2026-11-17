@@ -22,7 +22,7 @@ import {
   type EntrySort,
   type GroupTree,
 } from './groups'
-import { consumersOf, needsAttention, scopeAge, type Failure } from './health'
+import { consumersOf, type Failure } from './health'
 import type { RollupTree } from './rollupView'
 import { GRAPH_LIMIT, lineage } from './lineage'
 import { inPipeline, pipelineName, sourceFile } from './pipeline'
@@ -34,7 +34,7 @@ const SEARCH_LIMIT = 500
 /** `x_2` before `x_10`; one collator, not one per comparison. */
 const NAME_ORDER = new Intl.Collator(undefined, { numeric: true })
 
-export const SORT_LABEL: Record<EntrySort, string> = { worst: 'worst first', name: 'name', oldest: 'oldest success' }
+export const SORT_LABEL: Record<EntrySort, string> = { worst: 'farthest from fresh', name: 'name' }
 
 type GroupedShow = 'items' | 'failures'
 type GroupedMode = 'groups' | 'flat' | 'failures'
@@ -217,11 +217,7 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
   const scopeIds = scope ? leaves(scope) : assets.map((a) => a.id)
   const inScope = new Set(scopeIds)
   const scopedStates = states.filter((s) => inScope.has(s.id))
-  const rankOf = (entry: GraphEntry): EntryRank => {
-    const ids = leaves(entry.id)
-    const counts = rollup?.entries.get(entry.id)
-    return { name: entry.name ?? entry.id, failed: counts?.health.failing ?? 0, stale: counts ? needsAttention(counts) : 0, lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
-  }
+  const rankOf = (entry: GraphEntry): EntryRank => ({ name: entry.name ?? entry.id, weight: rollup?.entries.get(entry.id)?.weight ?? 0 })
   const sorted = entries.map((entry) => ({ entry, rank: rankOf(entry) })).sort((a, b) => compareEntries(params.sort, a.rank, b.rank)).map(({ entry }) => entry)
   // A search lists what matches by its own name: a group because of its name, never because a
   // member deep inside it (or its output) matches; that member is listed itself, with its path.

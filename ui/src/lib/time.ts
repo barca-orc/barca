@@ -149,3 +149,41 @@ export function formatSpan(seconds: number): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h`
   return `${Math.floor(s / 86400)}d`
 }
+
+/**
+ * `~15:05`: an estimated time of day, to the minute and rounded up, so an estimate is never
+ * said to be sooner than the server gave it; with the day (`~Nov 18 06:00`) when it is not
+ * today's in the zone. A value that is not a time is returned as it is.
+ */
+export function formatEstimate(value: string, zone: TimeZone, nowMs: number): string {
+  const t = parseTime(value)
+  if (t === null) return value
+  return `~${clockOf(Math.ceil(t / 60_000) * 60_000, zone, nowMs)}`
+}
+
+/** `15:00`: a time of day to the minute (a tick's slot is exact), with the day when it is not today's. */
+export function formatSlot(value: string, zone: TimeZone, nowMs: number): string {
+  const t = parseTime(value)
+  return t === null ? value : clockOf(t, zone, nowMs)
+}
+
+function clockOf(ms: number, zone: TimeZone, nowMs: number): string {
+  const p = parts(ms, zone, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const today = parts(nowMs, zone, { month: 'short', day: '2-digit' })
+  const clock = `${p.hour}:${p.minute}`
+  return p.month === today.month && p.day === today.day ? clock : `${p.month} ${p.day} ${clock}`
+}
+
+/**
+ * `~40s`, `~3m`, `~2h`: a length of time that is an estimate, rounded up to a unit that does
+ * not claim more than it knows: 5 seconds under a minute (`<5s` below that), whole minutes
+ * under an hour, then whole hours and days.
+ */
+export function formatAbout(seconds: number): string {
+  const s = Math.max(0, seconds)
+  if (s < 5) return '<5s'
+  if (s < 60) return `~${Math.ceil(s / 5) * 5}s`
+  if (s < 3600) return `~${Math.ceil(s / 60)}m`
+  if (s < 86400) return `~${Math.ceil(s / 3600)}h`
+  return `~${Math.ceil(s / 86400)}d`
+}

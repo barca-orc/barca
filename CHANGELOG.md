@@ -10,6 +10,39 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- **Every place the web UI shows a state says when it will be fresh, or why there is no
+  estimate (#968).** A node's row and panel read `fresh ~15:05` (the server's
+  `expected_fresh_at`, to the minute and rounded up), `rechecked 15:00` where a tick will only
+  look (`recheck_at`), or `no estimate:` with the reason; the panel adds the cause in the
+  health map's word, the root that holds the node with a link to it, the root's fact and what
+  clears it, how many ticks missed the node and what the last one found. A group's row reads
+  `all fresh by ~15:02`, `152 with no estimate`, or both, from its rollup entry, in place of
+  "Last success · oldest member", and the State column, its bar and the page header's bar use
+  the map's cause words and colours (`1 failing · 84 catching up`, `all 116 fresh`), so a page
+  has one legend; "worst first" orders rows by the served `weight`. The Schedules page takes
+  late from the server alone and shows each schedule's next slot, its typical queue wait and
+  run time, and `queue-bound` with what to do, late and queue-bound schedules first; a
+  waiting run in the queue says `starts in ~40s`. One field is new: every node carries
+  `no_estimate`, why a node that is not fresh has no `expected_fresh_at` (`failing`, `paused`,
+  `scheduler_off`, `no_path`, `undecided`, `missed`, `queue_stopped`, `no_scheduler_here`,
+  `not_promised`; `null` for a fresh node and one with an estimate), in `barca status --json`,
+  `GET /state`, `GET /nodes` and as a `barca.nodes` column (`barca docs status-fields`,
+  "Times").
+- **Roots rank by how far what they hold is from fresh, and that distance is served (#1028).**
+  The to-do list put every root holding a node with no estimate first, by node count, so a
+  `never run` root whose action is "wait" outranked a change holding four times as many nodes,
+  and a failing node with what it blocks could sit below the first three. A root now carries
+  `weight`: each node it holds counts 6 when someone has to act (`failing`, `overdue`,
+  `no refresh path`) and 2 when it will be fresh without anyone acting or barca cannot say
+  (`queued`, `catching up`, `undecided`). `roots`, and every entry's `held_by`, are ordered by
+  it, the most first, a failure first among equals, then nodes, gap and id. A rollup entry
+  carries the same measure as `weight` (a fresh node counts 1, so a fully fresh scope weighs
+  its node count) and `weights` (by cause, and fresh); the web UI's health map sizes and
+  colours its segments from those two fields and no longer holds a weight table, so the map,
+  the list and the CLI order things by one rule. `barca status --rollup` prints `Distance from
+  fresh: 1728 (weighted nodes); 698 when every node is fresh` under the gap line and `weight N`
+  on each root; `--json`, `barca status --json` (`rollup`) and `GET /state/rollup` carry the
+  fields (`specs/behavior/health.md`, "Distance from fresh").
 - **The Runs page filters on the server, and `barca history` has the same filters** (#969,
   experimental). On a server that ticks every minute the page was filtering the 100 runs it had
   loaded: a status chip, the search and a click on a bar of the chart all missed what was not

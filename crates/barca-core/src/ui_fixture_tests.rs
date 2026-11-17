@@ -5,7 +5,10 @@
 //! This test classifies one row alone (no graph, no signals, no schedule, no tick) for every
 //! combination of the facts a fixture states, and keeps the answers in
 //! `ui/src/lib/testdata/health-alone.json`, which `ui/src/lib/testdata/served.ts` looks up.
-//! When the health table changes, regenerate the file and the UI's fixtures follow:
+//! The weights of "Distance from fresh" (#1028) are kept the same way, in
+//! `ui/src/lib/testdata/weights.json`, which `ui/src/lib/testdata/rollup.ts` states a fixture
+//! entry's `weight` with: the app holds no weight table, and neither does a fixture.
+//! When the health table or a weight changes, regenerate the files and the UI's fixtures follow:
 //!
 //! ```text
 //! BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture
@@ -120,6 +123,37 @@ fn the_ui_fixture_health_table_is_what_classify_says() {
         expected == actual,
         "{} is not what `health::classify` says of a row alone. The UI's fixtures read it \
          (ui/src/lib/testdata/served.ts): regenerate it with \
+         `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`, then run the UI's \
+         unit tests (`pnpm --dir ui test`).",
+        path.display()
+    );
+}
+
+/// `{"fresh": 1, "<cause>": <weight>, …}`: what one node of each part weighs.
+fn weights() -> String {
+    let mut out: BTreeMap<&str, usize> = crate::health::Cause::ALL
+        .iter()
+        .map(|c| (c.as_str(), c.weight()))
+        .collect();
+    out.insert("fresh", crate::rollup::FRESH_WEIGHT);
+    let mut text = serde_json::to_string_pretty(&out).unwrap();
+    text.push('\n');
+    text
+}
+
+#[test]
+fn the_ui_fixture_weights_are_the_rollups() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/src/lib/testdata/weights.json");
+    let actual = weights();
+    if std::env::var("BARCA_UPDATE_SNAPSHOTS").is_ok_and(|v| !v.is_empty() && v != "0") {
+        std::fs::write(&path, &actual).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        expected == actual,
+        "{} is not what `Cause::weight` and `FRESH_WEIGHT` say. The UI's fixtures read it \
+         (ui/src/lib/testdata/rollup.ts): regenerate it with \
          `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`, then run the UI's \
          unit tests (`pnpm --dir ui test`).",
         path.display()

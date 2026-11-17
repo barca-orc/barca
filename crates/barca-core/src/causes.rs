@@ -1190,6 +1190,11 @@ def rows(feed): ...
     /// and a few hundred the read path cannot decide, a chain no schedule reaches, and a
     /// queue-bound schedule, among nodes that are fresh. 698 nodes.
     fn audit() -> World {
+        audit_with(0)
+    }
+
+    /// [`audit`], and with `blocked > 0` a failing node `load` that blocks so many nodes.
+    fn audit_with(blocked: usize) -> World {
         use std::fmt::Write;
         let mut source = String::from(
             r#"
@@ -1248,6 +1253,13 @@ def pulse(): ...
         for i in 0..5 {
             asset(&format!("beat_{i}"), Some("beat"));
         }
+        // A failing node and what it blocks.
+        if blocked > 0 {
+            asset("load", Some("inbox"));
+            for i in 0..blocked {
+                asset(&format!("load_{i}"), Some("load"));
+            }
+        }
         // And what is fresh.
         for i in 0..273 {
             asset(&format!("ok_{i}"), Some(["inbox", "feed"][i % 2]));
@@ -1257,9 +1269,13 @@ def pulse(): ...
         world.set("prices", "stale", &["code"]);
         world.set("rates", "stale", &["env RATES_URL"]);
         world.set("beat", "stale", &["sensor p.py:pulse"]);
+        if blocked > 0 {
+            world.set("load", "stale", &["sensor p.py:inbox"]);
+            world.fail("load");
+        }
         let names: Vec<String> = world.nodes.iter().map(|n| n.name.clone()).collect();
         for name in &names {
-            if name.contains("_stage_") || name.starts_with("beat_") {
+            if name.contains("_stage_") || name.starts_with("beat_") || name.starts_with("load_") {
                 world.set(name, "stale", &[]);
             } else if name.contains("_out_") {
                 world.set(name, "unknown", &[]);
@@ -1313,8 +1329,8 @@ def pulse(): ...
         assert_eq!(
             seen,
             [
-                ("sensor_value:p.py:inbox", 180, ActionKind::Wait),
                 ("no_schedule:p.py:ledger", 152, ActionKind::AddSchedule),
+                ("sensor_value:p.py:inbox", 180, ActionKind::Wait),
                 ("code:p.py:prices", 60, ActionKind::Wait),
                 ("env:p.py:rates", 24, ActionKind::Wait),
                 ("queue:p.py:pulse", 6, ActionKind::RaiseMaxRuns),
@@ -1329,8 +1345,8 @@ def pulse(): ...
                 .map(|h| (h.root.as_str(), h.nodes, h.cumulative_nodes))
                 .collect::<Vec<_>>(),
             [
-                ("sensor_value:p.py:inbox", 180, 180),
-                ("no_schedule:p.py:ledger", 152, 332),
+                ("no_schedule:p.py:ledger", 152, 152),
+                ("sensor_value:p.py:inbox", 180, 332),
                 ("code:p.py:prices", 60, 392),
                 ("env:p.py:rates", 24, 416),
                 ("queue:p.py:pulse", 6, 422),
@@ -1350,7 +1366,18 @@ def pulse(): ...
             (17, 247, 152, 6)
         );
         // What clearing a root costs: the typical compute time of what it holds.
-        assert_eq!(rollup.roots[1].action.estimated_seconds, Some(456));
+        assert_eq!(rollup.roots[0].action.estimated_seconds, Some(456));
+        // The order is the weight held (#1028): 152 nodes nothing refreshes weigh 6 each,
+        // 180 that a tick will decide or compute 2 each.
+        assert_eq!(
+            rollup.roots.iter().map(|r| r.weight).collect::<Vec<_>>(),
+            [912, 360, 120, 48, 12]
+        );
+        assert_eq!(
+            rollup.roots.iter().map(|r| r.weight).sum::<usize>() + 276,
+            rollup.root().weight,
+            "the roots' weights and one per fresh node are the scope's"
+        );
         // The whole to-do list, as `barca status --rollup` prints it.
         let text: String = crate::report::render_rollup(&rollup, false)
             .chunks
@@ -1363,7 +1390,12 @@ def pulse(): ...
         println!("{text}");
         assert!(text.contains("What holds the 422 nodes that are not fresh, and what clears it:"));
         assert!(text.contains("The first 3 hold 392 of them."));
-        assert!(text.contains("1. sensor value: inbox"));
+        assert!(text.contains("1. no schedule: ledger"));
+        assert!(
+            text.contains(
+                "Distance from fresh: 1728 (weighted nodes); 698 when every node is fresh"
+            )
+        );
         assert!(text.contains(
             "do:   add a schedule: freshness=Schedule(...) on it or on a node above it (about 7m of compute)"
         ));
@@ -1371,5 +1403,75 @@ def pulse(): ...
             "Gap: 152 no refresh path · 6 queued · 247 undecided · 17 catching up (nodes); \
              about 23 fresh within 4m, 399 with no estimate"
         ));
+    }
+
+    /// #1028: roots rank by the weight they hold, so a failure that blocks 20 nodes is among
+    /// the first three, ahead of a change that holds 60 a tick will bring up to date, and the
+    /// first three hold three quarters of what is not fresh.
+    #[test]
+    fn roots_rank_by_weight_and_a_failure_with_blocked_nodes_is_among_the_first_three() {
+        let world = audit_with(20);
+        let rollup = assert_held(&world);
+        let behind = rollup.root().not_fresh;
+        assert_eq!(behind, 443);
+        let seen: Vec<(&str, usize, usize)> = rollup
+            .roots
+            .iter()
+            .map(|r| (r.id.as_str(), r.nodes, r.weight))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("no_schedule:p.py:ledger", 152, 912),
+                ("sensor_value:p.py:inbox", 180, 360),
+                ("failure:p.py:load", 21, 126),
+                ("code:p.py:prices", 60, 120),
+                ("env:p.py:rates", 24, 48),
+                ("queue:p.py:pulse", 6, 12),
+            ]
+        );
+        let third = &rollup.root().held_by[2];
+        assert_eq!(third.root, "failure:p.py:load");
+        assert!(
+            third.cumulative_nodes * 4 >= behind * 3,
+            "{} of {behind}",
+            third.cumulative_nodes
+        );
+    }
+
+    /// #968: a node that is not fresh and has no `expected_fresh_at` says why in one word;
+    /// a fresh node and one with an estimate say nothing.
+    #[test]
+    fn a_node_with_no_estimate_says_why() {
+        use crate::health::NoEstimate;
+        let world = audit_with(20);
+        let why = |name: &str| {
+            let node = world.node(name);
+            (node.expected_fresh_at.is_some(), node.no_estimate)
+        };
+        // Nothing scheduled reaches the ledger chain; a failure holds what it blocks.
+        assert_eq!(why("ledger_7"), (false, Some(NoEstimate::NoPath)));
+        assert_eq!(why("load"), (false, Some(NoEstimate::Failing)));
+        assert_eq!(why("load_3"), (false, Some(NoEstimate::Failing)));
+        // Only a run decides a node the read path cannot.
+        assert_eq!(why("orders_out_4"), (false, Some(NoEstimate::Undecided)));
+        // A fresh node, and a node the next tick computes, have no reason to give.
+        assert_eq!(why("ok_1"), (false, None));
+        assert_eq!(why("orders_stage_1"), (true, None));
+        // Every not-fresh node has an estimate or a reason, never neither or both.
+        for node in &world.nodes {
+            assert_eq!(
+                node.no_estimate.is_some(),
+                node.cause.is_some() && node.expected_fresh_at.is_none(),
+                "{}",
+                node.id
+            );
+        }
+        // The words a surface prints after "no estimate: ".
+        assert_eq!(NoEstimate::NoPath.word(), "no refresh path");
+        assert_eq!(
+            serde_json::to_value(NoEstimate::NoSchedulerHere).unwrap(),
+            "no_scheduler_here"
+        );
     }
 }

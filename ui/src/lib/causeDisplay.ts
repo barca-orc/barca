@@ -1,5 +1,6 @@
 /**
- * How a cause is shown: the word, tone, colour and weight of each value. Display only.
+ * How a cause is shown: the word, tone and colour of each value. Display only. What a node
+ * of a cause weighs on the health map is served (`weight` and `weights` of a rollup entry).
  *
  * Why a node is not fresh is decided in `barca-core` (`specs/behavior/health.md`, "Cause") and
  * arrives as `cause` on every row and as counts on every rollup entry (`causes`). Nothing here
@@ -16,6 +17,7 @@
 
 import type { Cause } from './generated/Cause'
 import type { CauseCounts } from './generated/CauseCounts'
+import type { NoEstimate } from './generated/NoEstimate'
 import type { Glyph } from './glyph'
 import type { Tone } from './tone'
 
@@ -30,23 +32,17 @@ interface CauseDisplay {
   glyph: Glyph
   /** Whether it needs someone: `failing`, `overdue` and `no_refresh_path` do, nothing else. */
   alarm: boolean
-  /**
-   * How much room one node with this cause takes on the health map, against 1 for a fresh
-   * node: a node that needs someone counts 6, one that will be fresh without anyone acting or
-   * that barca cannot decide counts 2. A display scale, like a tone: see `mapWeight`.
-   */
-  weight: number
   /** What the word means, in a line: the legend's and a tooltip's text. */
   meaning: string
 }
 
 const DISPLAY = {
-  failing: { label: 'failing', tone: 'failed', glyph: 'failed', alarm: true, weight: 6, meaning: 'It failed, or a failing node upstream holds it.' },
-  overdue: { label: 'overdue', tone: 'warning', glyph: 'blocked', alarm: true, weight: 6, meaning: 'Ticks reached it and did not leave it fresh.' },
-  no_refresh_path: { label: 'no refresh path', tone: 'warning', glyph: 'stale', alarm: true, weight: 6, meaning: 'Nothing scheduled will ever refresh it.' },
-  queued: { label: 'queued', tone: 'queued', glyph: 'queued', alarm: false, weight: 2, meaning: 'What would refresh it waits for a run slot.' },
-  undecided: { label: 'undecided', tone: 'neutral', glyph: 'unknown', alarm: false, weight: 2, meaning: 'barca cannot decide yet: a cutoff or sensor upstream has not reported.' },
-  catching_up: { label: 'catching up', tone: 'running', glyph: 'always', alarm: false, weight: 2, meaning: 'A run is computing it, or the next tick of its refresh path will.' },
+  failing: { label: 'failing', tone: 'failed', glyph: 'failed', alarm: true, meaning: 'It failed, or a failing node upstream holds it.' },
+  overdue: { label: 'overdue', tone: 'warning', glyph: 'blocked', alarm: true, meaning: 'Ticks reached it and did not leave it fresh.' },
+  no_refresh_path: { label: 'no refresh path', tone: 'warning', glyph: 'stale', alarm: true, meaning: 'Nothing scheduled will ever refresh it.' },
+  queued: { label: 'queued', tone: 'queued', glyph: 'queued', alarm: false, meaning: 'What would refresh it waits for a run slot.' },
+  undecided: { label: 'undecided', tone: 'neutral', glyph: 'unknown', alarm: false, meaning: 'barca cannot decide yet: a cutoff or sensor upstream has not reported.' },
+  catching_up: { label: 'catching up', tone: 'running', glyph: 'always', alarm: false, meaning: 'A run is computing it, or the next tick of its refresh path will.' },
 } satisfies Record<Cause, CauseDisplay>
 
 export function causeDisplay(cause: Cause): CauseDisplay {
@@ -67,11 +63,6 @@ export function mapPartLabel(part: MapPart): string {
 /** What a map colour means, in a line. */
 export function mapPartMeaning(part: MapPart): string {
   return part === 'fresh' ? 'Up to date, or its last run succeeded.' : DISPLAY[part].meaning
-}
-
-/** The room one node of a colour takes on the map: a cause's weight, 1 for a fresh node. */
-export function mapPartWeight(part: MapPart): number {
-  return part === 'fresh' ? 1 : DISPLAY[part].weight
 }
 
 /** The CSS colour of a map part (`--map-*`, tokens/colors.css). */
@@ -108,4 +99,42 @@ export function causeParts(counts: CauseCounts): CausePart[] {
 /** `14 overdue · 152 no refresh path · 180 catching up`: the line `barca status --rollup` prints. */
 export function causeLine(counts: CauseCounts): string {
   return causeParts(counts).map((p) => `${p.count.toLocaleString()} ${p.label}`).join(' · ')
+}
+
+/** Why a node has no estimate (`no_estimate`), in the words `barca-core` gives each reason. */
+const NO_ESTIMATE = {
+  failing: 'until the failure is fixed',
+  paused: 'paused',
+  scheduler_off: 'no scheduler is firing its schedule',
+  no_path: 'no refresh path',
+  undecided: 'undecided until a run reports',
+  missed: 'ticks missed it',
+  queue_stopped: 'the run queue is not starting runs',
+  no_scheduler_here: 'no scheduler runs here',
+  not_promised: 'a result above it may come out unchanged',
+} satisfies Record<NoEstimate, string>
+
+export function noEstimateWord(reason: NoEstimate): string {
+  return NO_ESTIMATE[reason]
+}
+
+/**
+ * The reasons a tick's next look can settle: a row with one of them and a `recheck_at` says
+ * when it is rechecked. Any other reason needs someone (or a queue or scheduler that is not
+ * there), so the row says the reason, and the recheck only in its tooltip.
+ */
+const SETTLED_BY_A_TICK: readonly NoEstimate[] = ['not_promised', 'undecided']
+
+export function settledByATick(reason: NoEstimate | null): boolean {
+  return reason === null || SETTLED_BY_A_TICK.includes(reason)
+}
+
+/** How a row or a bar shows a node's place on the map: its cause, or fresh. */
+export function mapPartOf(cause: Cause | null): MapPart {
+  return cause ?? 'fresh'
+}
+
+/** The glyph of a map part: a cause's, or the fresh one. */
+export function mapPartGlyph(part: MapPart): Glyph {
+  return part === 'fresh' ? 'fresh' : DISPLAY[part].glyph
 }

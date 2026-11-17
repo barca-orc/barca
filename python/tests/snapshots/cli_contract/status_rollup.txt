@@ -61,6 +61,7 @@ entries[].held_by[].gap_seconds : integer
 entries[].held_by[].nodes : integer
 entries[].held_by[].root : string
 entries[].held_by[].unbounded : integer
+entries[].held_by[].weight : integer
 entries[].id : string
 entries[].keys : object  (optional)
 entries[].keys.behind : integer
@@ -73,6 +74,15 @@ entries[].not_fresh : integer
 entries[].parent : null|string
 entries[].running : integer
 entries[].unbounded : integer
+entries[].weight : integer
+entries[].weights : object
+entries[].weights.catching_up : integer
+entries[].weights.failing : integer
+entries[].weights.fresh : integer
+entries[].weights.no_refresh_path : integer
+entries[].weights.overdue : integer
+entries[].weights.queued : integer
+entries[].weights.undecided : integer
 files : array
 files[] : object
 files[].asset_health : object
@@ -118,3 +128,4 @@ roots[].kind : string
 roots[].node : string
 roots[].nodes : integer
 roots[].unbounded : integer
+roots[].weight : integer

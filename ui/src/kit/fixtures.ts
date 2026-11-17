@@ -10,7 +10,9 @@ import type { Connection } from '@/lib/connection'
 import { served } from '@/lib/testdata/served'
 import type { CacheState } from '@/lib/cacheStateDisplay'
 import type { Failure, ScopeHealth } from '@/lib/health'
-import { counts as healthCountsOf } from '@/lib/testdata/rollup'
+import type { BarScope } from '@/components/HealthBar'
+import type { CauseCounts } from '@/lib/causeDisplay'
+import { causeCounts, counts as healthCountsOf, weightsOf } from '@/lib/testdata/rollup'
 import type { Health } from '@/lib/healthDisplay'
 import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
@@ -704,6 +706,24 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
 
 /** A rollup entry as served: its nodes by health, how many there are, and run work beside them. */
 const scopeOf = (nodes: number, states: Partial<Record<Health, number>>, running = 0): ScopeHealth => ({ health: healthCountsOf(states), nodes, running })
+
+/** A scope as a bar reads it: its causes as the rollup entry states them, with the weights the server gives them. */
+const barOf = (nodes: number, causes: Partial<CauseCounts>, running = 0): BarScope => {
+  const counted = causeCounts(causes)
+  const not_fresh = Object.values(causes).reduce((sum, n) => sum + (n ?? 0), 0)
+  return { nodes, not_fresh, causes: counted, weights: weightsOf(nodes, counted), running }
+}
+
+/** A scope in each mix the bar distinguishes: one legend with the health map. */
+export const barStates: Record<string, BarScope> = {
+  fresh: barOf(504, {}),
+  'one failure in thousands': barOf(2412, { failing: 1, catching_up: 12 }),
+  'failing and catching up': barOf(562, { failing: 61, catching_up: 121 }),
+  'a run working on it': barOf(504, { catching_up: 4 }, 40),
+  'every cause': barOf(106, { failing: 4, overdue: 3, no_refresh_path: 7, queued: 2, undecided: 6, catching_up: 4 }),
+  'nothing refreshes it': barOf(128, { no_refresh_path: 120 }),
+  empty: barOf(0, {}),
+}
 
 /** A scope in each state the health bar distinguishes, and the mixes that matter. */
 export const healthStates: Record<string, ScopeHealth> = {

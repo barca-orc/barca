@@ -135,8 +135,8 @@ export function distinctNames(ids: readonly string[]): Map<string, string> {
 }
 
 /** How a grouped table can be ordered; `worst` is the default and stays out of the URL. */
-export type EntrySort = 'worst' | 'name' | 'oldest'
-export const ENTRY_SORTS: readonly EntrySort[] = ['worst', 'name', 'oldest']
+export type EntrySort = 'worst' | 'name'
+export const ENTRY_SORTS: readonly EntrySort[] = ['worst', 'name']
 
 export function parseEntrySort(raw: string | null): EntrySort {
   return ENTRY_SORTS.find((s) => s === raw) ?? 'worst'
@@ -145,22 +145,21 @@ export function parseEntrySort(raw: string | null): EntrySort {
 /** What a row of a grouped table is ordered by. */
 export interface EntryRank {
   name: string
-  failed: number
-  stale: number
-  lastSuccessAt: string | null
+  /** The entry's served `weight` (`GET /state/rollup`): its distance from fresh. 0 until loaded. */
+  weight: number
 }
 
 const RANK_NAMES = new Intl.Collator(undefined, { numeric: true })
 
-/** Worst first (failed, then stale, then name), by name, or longest since a success (never first). */
+/**
+ * Worst first, or by name. Worst is the farthest from fresh: the served `weight` of the row's
+ * rollup entry, the number the health map sizes its segment by, so the table and the map put
+ * the same scope first. Nothing is weighed here.
+ */
 export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): number {
   const name = RANK_NAMES.compare(a.name, b.name)
   if (sort === 'name') return name
-  if (sort === 'oldest') {
-    const at = (a.lastSuccessAt ?? '').localeCompare(b.lastSuccessAt ?? '')
-    return at || name
-  }
-  return b.failed - a.failed || b.stale - a.stale || name
+  return b.weight - a.weight || name
 }
 
 const NO_SCOPE: ScopeHealth = { health: { failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: 0 }, running: 0, nodes: 0 }

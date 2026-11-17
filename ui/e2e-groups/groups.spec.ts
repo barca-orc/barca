@@ -131,10 +131,14 @@ test('groups open worst first, a sort is kept in the URL, and rows read by their
   await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('source')}`)
   await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Contents' })).toHaveCount(0)
-  // A row's state is in plain words; the reason the server gives is beside it. A check (a
-  // task) shows its last run: this one never ran.
+  // A row's state is its cause, in the health map's word, and when it will be fresh or why
+  // there is no estimate. A check (a task) that never ran and that nothing scheduled runs:
   const check = page.getByRole('row', { name: /check__clean_rows/ })
-  await expect(check).toContainText('never run')
+  await expect(check.locator('.barca-cause')).toHaveAttribute('data-cause', 'no_refresh_path')
+  await expect(check).toContainText('no refresh path')
+  await expect(check).toContainText('no estimate: no refresh path')
+  await expect(page.getByRole('columnheader', { name: 'Fresh by' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: 'Last success' })).toHaveCount(0)
   await expect(check.locator('.barca-dag[data-failed], .barca-tag[data-tone="failed"]')).toHaveCount(0)
 })
 
@@ -389,7 +393,10 @@ test('the bar, the map and a group row state the numbers of one rollup response,
   await page.goto(`/ui/#/assets?pipeline=${FILE}`)
   // The scope's bar counts nodes, and says so.
   const bar = page.locator('.barca-scope-health .barca-health')
-  await expect(bar).toHaveAttribute('title', new RegExp(`^${root.nodes} nodes: ${root.health.failing} failing`))
+  await expect(bar).toHaveAttribute('title', new RegExp(`^${root.nodes} nodes: ${root.not_fresh} not fresh \\(${root.causes.failing} failing`))
+  // The bar is in the map's words and colours: a segment per cause the entry counts, no health word.
+  await expect(bar.locator('[data-part="failing"]')).toHaveCount(1)
+  await expect(bar).not.toContainText(/behind|never run|blocked/)
   // The map counts nodes too, and says so; the line beside it gives the scope's assets.
   await expect(page.locator('.barca-healthmap-summary')).toContainText(`${root.nodes} nodes`)
   await expect(page.locator('.barca-health-overview-title')).toContainText(`${root.not_fresh} of ${root.nodes} nodes not fresh`)
@@ -397,7 +404,9 @@ test('the bar, the map and a group row state the numbers of one rollup response,
   // A group's row is its entry.
   const entry = rollup.entries.find((e: { id: string }) => e.id === G('cross_validation'))
   const row = page.locator(`tr[data-group="${G('cross_validation')}"]`)
-  await expect(row.locator('.barca-health')).toHaveAttribute('title', new RegExp(`^${entry.nodes} nodes: ${entry.health.failing} failing`))
+  await expect(row.locator('.barca-health')).toHaveAttribute('title', new RegExp(`^${entry.nodes} nodes: ${entry.not_fresh} not fresh \\(${entry.causes.failing} failing`))
+  // When the group will be fresh is its entry's too: nothing here has an estimate without a scheduler.
+  await expect(row).toContainText(`${entry.unbounded} with no estimate`)
   await expect(row.locator('.gcol-failed')).toHaveText(String(entry.health.failing))
 })
 
@@ -477,4 +486,35 @@ test('the to-do list holds every not-fresh node under one root; more opens the r
   // One click on its node's name reaches the node's panel.
   await failure.getByRole('button', { name: 'check__fold_02__model', exact: true }).click()
   await expect(page.getByRole('complementary', { name: 'check__fold_02__model details' })).toBeVisible()
+})
+
+test('a node panel says why the node is not fresh, what holds it with a link, and why it has no estimate: the row and the root list, as served', async ({ page, request }) => {
+  const api = process.env.BARCA_E2E_API
+  const states: { id: string; cause: string | null; root: { id: string; kind: string; node: string } | null; expected_fresh_at: string | null; no_estimate: string | null }[] = await (await request.get(`${api}/state?files=${FILE}`)).json()
+  const rollup = await (await request.get(`${api}/state/rollup?files=${FILE}`)).json()
+  // Every node that is not fresh has an estimate or a reason, never neither (#968).
+  for (const row of states) expect(row.no_estimate !== null).toBe(row.cause !== null && row.expected_fresh_at === null)
+  // A node held by another node's root: the panel names the cause in the map's word, links
+  // the root's node, and words the root as `barca status --rollup` does.
+  // (When every not-fresh node is its own root, the panel says "here" and there is no link.)
+  const row = (states.find((s) => s.root !== null && s.root.node !== s.id) ?? states.find((s) => s.root !== null))!
+  expect(row).toBeTruthy()
+  const held = rollup.roots.find((r: { id: string }) => r.id === row.root!.id)
+  const group = (await (await request.get(`${api}/groups`)).json()).find((g: { members: string[] }) => g.members.includes(row.id))
+  await page.goto(`/ui/#/assets?pipeline=${FILE}${group ? `&group=${encodeURIComponent(group.id)}` : ''}&node=${encodeURIComponent(row.id)}`)
+  const panel = page.getByRole('complementary', { name: /details$/ })
+  await expect(panel.locator('[data-cause-line]')).toHaveAttribute('data-cause-line', row.cause!)
+  await expect(panel.locator(`[data-root="${row.root!.id}"]`)).toBeVisible()
+  await expect(panel.locator('[data-root-detail]')).toHaveText(held.detail)
+  await expect(panel.locator('[data-root-action]')).toHaveAttribute('data-root-action', held.action.kind)
+  // No scheduler runs here: no estimate, and the reason is the server's word for it.
+  await expect(panel.locator('[data-no-estimate]')).toHaveAttribute('data-no-estimate', row.no_estimate!)
+  await expect(panel.locator('[data-expected-fresh-at]')).toHaveCount(0)
+  if (row.root!.node === row.id) {
+    await expect(panel.locator(`[data-root="${row.root!.id}"]`)).toContainText('here')
+    return
+  }
+  // The link opens the root's node.
+  await panel.locator(`[data-root="${row.root!.id}"] button`).click()
+  await expect(page).toHaveURL(new RegExp(`node=${encodeURIComponent(row.root!.node).replace(/\./g, '\\.')}`))
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ROOT, arcPath, freshWithin, healthSummary, heldIds, indexRollup, leafIds, mapWeight, nearestInTree, noEstimate, ringRadii, rootsWithin, sunburst, treePath, worstOf } from './rollupView'
+import { ROOT, arcPath, freshWithin, healthSummary, heldIds, indexRollup, leafIds, nearestInTree, noEstimate, ringRadii, rootsWithin, sunburst, treePath, worstOf } from './rollupView'
 import { causeCounts, counts, failureRoot, heldBy, nodeEntry, rollup, scopeEntry } from './testdata/rollup'
 
 // a.py: raw (failing, 100 of 120 keys failed) → clean, report (blocked by it)
@@ -73,21 +73,19 @@ describe('the rollup, indexed', () => {
 })
 
 describe('the health map', () => {
-  it('weighs an entry by how far it is from fresh: 1 a fresh node, 2 a calm or undecided one, 6 one that needs someone', () => {
+  it('lays an entry out by its served weight, and holds no weight of its own', () => {
+    // The fixture states what the server would ("Distance from fresh": 1 a fresh node, 2 one
+    // that will be fresh without anyone acting or is undecided, 6 one that needs someone).
     const entry = (id: string) => byFile.entries.get(id)!
-    expect(mapWeight(entry('b.py:src'))).toBe(1)
-    expect(mapWeight(entry('c.py:x'))).toBe(2)
-    expect(mapWeight(entry('c.py:waits'))).toBe(2)
-    expect(mapWeight(entry('b.py:mart'))).toBe(6)
-    expect(mapWeight(entry('a.py:raw'))).toBe(6)
-    // Every level is exactly the sum of its children, as the counts it reads are.
-    expect(mapWeight(entry('file:a.py'))).toBe(18)
-    expect(mapWeight(entry('file:c.py'))).toBe(4)
-    expect(mapWeight(entry('file:b.py'))).toBe(7)
-    expect(mapWeight(entry(ROOT))).toBe(18 + 4 + 7)
-    // Monotone: one more node behind, or a cause that matters more, is never less room.
-    expect(mapWeight({ nodes: 10, not_fresh: 1, causes: causeCounts({ catching_up: 1 }) })).toBeGreaterThan(mapWeight({ nodes: 10, not_fresh: 0, causes: causeCounts() }))
-    expect(mapWeight({ nodes: 10, not_fresh: 1, causes: causeCounts({ overdue: 1 }) })).toBeGreaterThan(mapWeight({ nodes: 10, not_fresh: 1, causes: causeCounts({ catching_up: 1 }) }))
+    expect([entry('b.py:src').weight, entry('c.py:x').weight, entry('c.py:waits').weight, entry('b.py:mart').weight, entry('a.py:raw').weight]).toEqual([1, 2, 2, 6, 6])
+    expect([entry('file:a.py').weight, entry('file:c.py').weight, entry('file:b.py').weight, entry(ROOT).weight]).toEqual([18, 4, 7, 29])
+    // A served weight the fixture's table would not give is drawn as served: half the turn.
+    const served = indexRollup(rollup([
+      scopeEntry(ROOT, 'root', null, ['file:a.py', 'file:b.py'], { ok: 2 }, { weight: 10 }),
+      scopeEntry('file:a.py', 'file', ROOT, [], { ok: 1 }, { weight: 5 }),
+      scopeEntry('file:b.py', 'file', ROOT, [], { ok: 1 }, { weight: 5 }),
+    ]))
+    expect(sunburst(served, ROOT, 1).map((a) => [a.id, a.end - a.start])).toEqual([['file:a.py', 0.5], ['file:b.py', 0.5]])
   })
 
   it('gives each entry the share of the turn its weight is, worst first, children inside their parent', () => {

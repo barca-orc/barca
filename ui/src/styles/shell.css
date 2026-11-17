@@ -546,8 +546,9 @@
 .barca-asset-table td { overflow: hidden; text-overflow: ellipsis; }
 .barca-asset-table td > div { overflow: hidden; text-overflow: ellipsis; }
 .barca-asset-table th { overflow: hidden; text-overflow: ellipsis; }
-.barca-asset-table col.col-state { width: 132px; }
-.barca-asset-table col.col-last { width: 264px; }
+.barca-asset-table col.col-state { width: 148px; }
+.barca-asset-table col.col-fresh { width: 232px; }
+.barca-asset-table col.col-last { width: 220px; }
 .barca-asset-table col.col-typical { width: 84px; }
 .barca-asset-table col.col-next { width: 140px; }
 /* A column that leaves keeps its place in the table (a file header spans every column) at no
@@ -555,6 +556,10 @@
 @container (max-width: 820px) {
   .barca-asset-table col.col-next { width: 0; }
   .barca-asset-table .col-next { padding: 0; visibility: hidden; }
+}
+@container (max-width: 900px) {
+  .barca-asset-table col.col-fresh { width: 0; }
+  .barca-asset-table .col-fresh { padding: 0; visibility: hidden; }
 }
 @container (max-width: 680px) {
   .barca-asset-table col.col-typical { width: 0; }
@@ -565,7 +570,7 @@
    tooltip and for a screen reader, so the name keeps its room. */
 @container (max-width: 520px) {
   .barca-asset-table col.col-state { width: 80px; }
-  .barca-asset-table td.col-state .barca-badge { font-size: 0; }
+  .barca-asset-table td.col-state :is(.barca-badge, .barca-cause) { font-size: 0; }
   .barca-asset-table col.col-last { width: 148px; }
   .barca-cell-name .barca-cell-why { display: none; }
 }
@@ -922,8 +927,10 @@
   table-layout: fixed;
   min-width: 520px;
 }
-.barca-group-table col.gcol-state { width: 200px; }
-.barca-group-table col.gcol-last { width: 210px; }
+.barca-group-table col.gcol-state { width: 220px; }
+.barca-group-table col.gcol-last { width: 230px; }
+/* A group's estimate is two facts ("152 with no estimate · the rest fresh by ~15:02"): it wraps. */
+.barca-group-table .barca-estimate { white-space: normal; }
 .barca-group-table col.gcol-contents { width: 140px; }
 .barca-group-table col.gcol-failed { width: 64px; }
 .barca-group-table col.gcol-age { width: 90px; }
@@ -1256,9 +1263,17 @@
 /* ---------- One line a row, everywhere (pages/SchedulesView.tsx, RunsView.tsx) ---------- */
 .barca-schedule-table { table-layout: fixed; }
 .barca-schedule-table td { overflow: hidden; text-overflow: ellipsis; }
-.barca-schedule-table col.col-schedule { width: 280px; }
-.barca-schedule-table col.col-when { width: 120px; }
-.barca-schedule-table col.col-state { width: 140px; }
+.barca-schedule-table col.col-schedule { width: 236px; }
+.barca-schedule-table col.col-when { width: 136px; }
+.barca-schedule-table col.col-wait { width: 136px; }
+.barca-schedule-table col.col-state { width: 232px; }
+/* What to do about a queue-bound schedule sits under its word, so the name keeps its room. */
+.barca-schedule-table .barca-schedule-todo { display: block; white-space: normal; }
+@container (max-width: 960px) {
+  .barca-schedule-table col.col-wait { width: 0; }
+  .barca-schedule-table :is(th, td).col-wait { padding: 0; font-size: 0; visibility: hidden; }
+  .barca-schedule-table :is(th, td).col-wait > * { display: none; }
+}
 .barca-schedule-table col.col-action { width: 88px; }
 .barca-schedule-cron { margin-left: 8px; font-size: var(--text-xs); }
 .barca-table td.barca-row-action { width: 1%; padding-right: 4px; text-align: right; }
