@@ -17,6 +17,7 @@ test_helper_hashing.py
 test_identity.py
 test_input_parameters.py
 test_protocol_handshake.py
+test_runs_filters.py
 test_runtime.py
 test_sql_query_route.py
 test_static_barca_bindings.py

@@ -4,7 +4,7 @@ import { pathBreaks, relativeTraceback } from '@/lib/health'
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
 import { Link } from 'react-router'
 import { match } from 'ts-pattern'
-import { Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
+import { Age, Button, Chip, ChipGroup, EmptyNote, ErrorLine, IconButton, LogViewer, MiddleName, SearchInput, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { RunOverview } from '@/components/runs/RunOverview'
 import { IncidentSummaryButton } from '@/components/IncidentSummary'
 import { CancelRun, RetryStep, RunActions } from '@/components/RunActions'
@@ -17,10 +17,10 @@ import { plural } from '@/lib/plural'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
-import { outcomeResult, parseOutcome, runGlyph, runIsLive, runLabel, triggeredByLabel } from '@/lib/runs'
+import { outcomeResult, parseOutcome, runGlyph, runIsLive, runLabel, runNodeOutcome, stepGlyph, triggeredByLabel } from '@/lib/runs'
 import { statusGlyph } from '@/lib/status'
-import { NO_STEPS_OPEN, activityBarLabel, activityHourAt, activityTicks, canLoadMore, failedChipCount, hourLabel, runFailed, runNodeOutcome, runNodeTime, runStepRows, runsCountLabel, stepName, toggleStepsOpen, visibleRuns, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
-import type { RunActivity, RunList, RunNodeSummary, RunStep, RunView } from '@/lib/types'
+import { NO_STEPS_OPEN, activityBarLabel, activityTicks, canLoadMore, runFailed, runNodeTime, runStepRows, runsCommand, runsNarrowed, stepName, toggleStepsOpen, windowLabel, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import type { ActivityHour, RunActivity, RunList, RunNodeSummary, RunStep, RunView } from '@/lib/types'
 
 /** A step's recorded error: its headline in words, the frames below it in mono, paths short and wrapping at `/`. */
 function Traceback({ error, root }: { error: string; root?: string | null }) {
@@ -76,7 +76,7 @@ function StepRow({ step, name, root, summarized }: { step: RunStep; name: string
   return <div className="barca-run-step">
     <div className="barca-run-node-line">
       <span className="barca-step-name" title={step.node_id}>{name}</span>
-      <StatusBadge size="sm" glyph={step.status === 'cached' ? 'cached' : runGlyph(step.status)} label={step.status} />
+      <StatusBadge size="sm" glyph={stepGlyph(step.status)} label={step.status} />
       {step.elapsed_seconds !== null && <span className="barca-run-node-time">{formatSeconds(step.elapsed_seconds)}</span>}
       <StepButtons stepId={step.node_id} failed={step.status === 'failed'} step={step} />
     </div>
@@ -287,7 +287,7 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
   const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
   const result = outcomeResult(outcome)
   const nodes = data.steps_page?.nodes ?? []
-  const { targets, target_outcomes: outcomes, steps: stepsLine } = data.explanation
+  const { targets, target_outcomes: outcomes, steps: stepsLine, slowest } = data.explanation
   const summarized = useMemo(() => new Set<RunStep>(failedSteps(data).slice(0, SUMMARY_STEPS)), [data])
   const logLines = useMemo(() => data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts })), [data.logs])
   return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
@@ -298,7 +298,6 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
           step failed or the run did, else here. */}
       <dl className="barca-facts">
         {!summarized.size && !runSummaryError(data) && <Fact label="Status"><StatusBadge size="sm" glyph={runGlyph(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} /></Fact>}
-        <Fact label="Trigger">{triggeredByLabel(data.triggered_by)}</Fact>
         <Fact label="Command"><code>{data.command}</code></Fact>
         <Fact label={targets.length > 1 ? `Targets (${targets.length.toLocaleString()})` : 'Target'} wide>
           {targets.length === 0
@@ -318,6 +317,17 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
       {/* The error itself is in the summary above, once. */}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
+    {/* What took longest, once the run has ended (a live run's is in its overview). */}
+    {!runIsLive(data.status) && slowest.length > 0 && <Section title="Slowest steps">
+      <ul className="barca-run-groups">
+        {slowest.map((s) => (
+          <li key={s.node_id}>
+            <Link to={`/assets?node=${encodeURIComponent(s.node_id)}`} title={s.node_id}><MiddleName name={shortName(s.node_id)} /></Link>
+            <span className="barca-cell-sub">{formatSeconds(s.seconds)}{s.keys > 1 && ` over ${plural(s.keys, 'key')}`}</span>
+          </li>
+        ))}
+      </ul>
+    </Section>}
     <Section title="Steps">
       {nodes.length === 0 && data.steps.length === 0
         ? <p className="barca-note">{runIsLive(data.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p>
@@ -362,11 +372,13 @@ const FILTERS: { value: RunFilter; label: string }[] = [
 
 /**
  * The last day hour by hour, the page's width, as the server counted it over every run of the
- * window (`activity` of `GET /runs`): a bar per hour, its runs stacked (the unsuccessful in red
- * at the base, then running, then the rest in a quiet grey), a muted axis every six hours and
- * `now` at the right; a bar filters the list to its hour. Above it, the day in one line.
+ * window the filters keep (`activity` of `GET /runs`): a bar per hour, its runs stacked (the
+ * unsuccessful in red at the base, then running, then the rest in a quiet grey), a muted axis
+ * every six hours and `now` at the right. A bar's tooltip is the server's hour: its counts, the
+ * median time and the leading failure. A bar filters the list to its hour, on the server.
+ * Above it, the day in one line, and the zone the hours are shown in.
  */
-function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivity; hour: number | null; now: number; dispatch: Dispatch<RunsMsg> }) {
+function ActivityStrip({ activity, window, now, dispatch }: { activity: RunActivity; window: RunsModel['window']; now: number; dispatch: Dispatch<RunsMsg> }) {
   const { zone } = useTimeZone()
   const peak = Math.max(1, ...activity.hours.map((h) => h.runs))
   const width = 100 / activity.hours.length
@@ -375,22 +387,21 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
   return (
     <section className="barca-activity" aria-label="Runs started in the last 24 hours, hour by hour">
       <div className="barca-activity-head">
-        <span className="barca-activity-title">Last 24 hours</span>
+        <span className="barca-activity-title">Last 24 hours <span className="barca-activity-zone">by hour, {zoneName(zone, now)}</span></span>
         <span className="barca-activity-summary" title={activity.summary}>
           {plural(total.runs, 'run')}
           {total.not_successful > 0 && <> · <span className="barca-activity-failed">{total.not_successful.toLocaleString()} not successful</span></>}
           {total.in_progress > 0 && <> · {total.in_progress.toLocaleString()} in progress</>}
-          {activity.triggered_by.length > 0 && <> · schedule runs hidden</>}
+          {total.median_seconds !== null && <> · median {formatSeconds(total.median_seconds)}</>}
         </span>
       </div>
       <div className="barca-activity-chart">
         <div className="barca-activity-bars">
           {activity.hours.map((h) => {
-            const at = activityHourAt(h)
             const label = activityBarLabel(h, zone)
             return (
-              <button key={h.at} type="button" className="barca-activity-bar" title={label} aria-label={label} aria-pressed={hour === at} disabled={h.runs === 0}
-                onClick={() => dispatch({ type: 'hour_toggled', at })}>
+              <button key={h.at} type="button" className="barca-activity-bar" title={label} aria-label={label} aria-pressed={window?.since === h.at} disabled={h.runs === 0}
+                onClick={() => dispatch({ type: 'hour_toggled', window: { since: h.at, until: h.until } })}>
                 {h.runs === 0 ? <span className="barca-activity-idle" /> : <span style={{ height: `${Math.max(10, (h.runs / peak) * 100)}%` }}>
                   {h.ok > 0 && <i data-kind="ok" style={{ flexGrow: h.ok }} />}
                   {h.in_progress > 0 && <i data-kind="live" style={{ flexGrow: h.in_progress }} />}
@@ -401,7 +412,7 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
           })}
         </div>
         <div className="barca-activity-axis" aria-hidden="true">
-          {activityTicks(activity.hours, 6, zone).map((t, i) => <span key={t.index} style={{ left: `${t.index * width}%` }}>{t.label}{i === 0 && ` ${zoneName(zone, now)}`}</span>)}
+          {activityTicks(activity.hours, 6, zone).map((t) => <span key={t.index} style={{ left: `${t.index * width}%` }}>{t.label}</span>)}
           <span className="barca-activity-now" style={{ left: `${nowAt}%` }}>now</span>
         </div>
       </div>
@@ -409,12 +420,33 @@ function ActivityStrip({ activity, hour, now, dispatch }: { activity: RunActivit
   )
 }
 
+/**
+ * What hiding the schedule's runs left out of the last day (`activity.excluded`, counted by
+ * the server): how many, how many of them did not succeed, and the way back to them.
+ */
+function HiddenSchedule({ hidden, dispatch }: { hidden: ActivityHour; dispatch: Dispatch<RunsMsg> }) {
+  return (
+    <p className="barca-runs-hidden" role="status">
+      <span>{plural(hidden.runs, 'schedule run')} in the last 24 hours {hidden.runs === 1 ? 'is' : 'are'} hidden</span>
+      {hidden.not_successful > 0 && <>
+        <span aria-hidden> · </span>
+        <button type="button" className="barca-run-link barca-activity-failed" title="Show the schedule's runs that did not succeed" onClick={() => dispatch({ type: 'schedule_failures_shown' })}>
+          {hidden.not_successful.toLocaleString()} not successful
+        </button>
+      </>}
+      {hidden.in_progress > 0 && <span> · {hidden.in_progress.toLocaleString()} in progress</span>}
+      <Button size="sm" variant="ghost" onClick={() => dispatch({ type: 'schedule_toggled' })}>Show schedule runs</Button>
+    </p>
+  )
+}
+
 export function RunsView({ model, runs, selected, queue, now, root, datadogUrl = null, actions, dispatch }: RunsViewProps) {
   const { zone } = useTimeZone()
   const list = runs.kind === 'ready' ? runs.data : null
-  const shown = list ? visibleRuns(list.runs, model) : []
-  const count = list ? runsCountLabel(list, shown.length, model) : null
-  const failedChip = list ? failedChipCount(list) : null
+  const narrowed = runsNarrowed(model)
+  // Nothing recorded and nothing asked for: the page has no controls to offer yet.
+  const blank = list !== null && list.total === 0 && !narrowed && !list.activity?.excluded?.runs && !model.hideSchedule
+  const command = runsCommand(model)
   // The run's panel beside the whole page, toolbar and queue included: full height, whatever the queue holds.
   return (
     <div className="barca-runs">
@@ -423,21 +455,19 @@ export function RunsView({ model, runs, selected, queue, now, root, datadogUrl =
         <div className="barca-view-head"><div className="barca-view-bar">
           <div className="barca-view-title">
             <h1>Runs</h1>
-            {list && count && <span className="barca-count" title={count.title}>{count.text}<span className="barca-sr-only"> {list.total === 1 ? 'run' : 'runs'}</span></span>}
+            {list && <span className="barca-count" title={`${plural(list.total, 'run')}${narrowed || model.hideSchedule ? ' the filters keep' : ''}: ${command}`}>{list.total.toLocaleString()}<span className="barca-sr-only"> {list.total === 1 ? 'run' : 'runs'}</span></span>}
           </div>
-          {list && (list.runs.length > 0 || model.hideSchedule) && <>
+          {list && !blank && <>
             <ChipGroup label="Show" segmented>
               {FILTERS.map((f) => (
-                <Chip key={f.value} pressed={model.filter === f.value} title={f.value === 'failed' ? failedChip?.title : undefined} onClick={() => dispatch({ type: 'filter_changed', filter: f.value })}>
-                  {f.label}{f.value === 'failed' && <b>{failedChip?.count ?? 0}</b>}
-                </Chip>
+                <Chip key={f.value} pressed={model.filter === f.value} onClick={() => dispatch({ type: 'filter_changed', filter: f.value })}>{f.label}</Chip>
               ))}
             </ChipGroup>
-            <Chip pressed={model.hideSchedule} title="Leave the runs a schedule started out of the list and the activity (barca history --triggered-by manual,api,client)" onClick={() => dispatch({ type: 'schedule_toggled' })}>Hide schedule runs</Chip>
-            {model.hour !== null && <Chip pressed onClick={() => dispatch({ type: 'hour_toggled', at: model.hour! })}>{hourLabel(model.hour, zone)}–{hourLabel(model.hour + 3_600_000, zone)} {zoneName(zone, model.hour)} <X size={12} /></Chip>}
+            <Chip pressed={model.hideSchedule} title="Leave the runs a schedule started out of the list, its count and the activity (barca history --not-triggered-by schedule); runs that recorded no trigger stay" onClick={() => dispatch({ type: 'schedule_toggled' })}>Hide schedule runs</Chip>
+            {model.window !== null && <Chip pressed title="Show every hour" onClick={() => dispatch({ type: 'hour_toggled', window: model.window! })}>{windowLabel(model.window, zone)} <X size={12} /></Chip>}
           </>}
           <div className="barca-view-actions">
-            {list && list.runs.length > 0 && <SearchInput placeholder="Filter runs" label="Filter by target or run id" value={model.query} onChange={(value) => dispatch({ type: 'query_changed', value })} />}
+            {list && !blank && <SearchInput placeholder="Search runs" label="Search every run by target, job or run id" value={model.query} onChange={(value) => dispatch({ type: 'query_changed', value })} />}
             {actions}
           </div>
         </div></div>
@@ -448,16 +478,19 @@ export function RunsView({ model, runs, selected, queue, now, root, datadogUrl =
             .with({ kind: 'failed' }, ({ error }) => <RunsError error={error} dispatch={dispatch} />)
             .with({ kind: 'ready' }, ({ data, refreshError }) => <>
               {refreshError && <RunsError error={refreshError} dispatch={dispatch} />}
-              {data.activity && (data.runs.length > 0 || model.hideSchedule) && <ActivityStrip activity={data.activity} hour={model.hour} now={now} dispatch={dispatch} />}
-              {data.runs.length === 0 && model.hideSchedule
-                ? <p className="barca-table-empty">No run but the schedule's.</p>
-                : data.runs.length === 0
+              {data.activity && !blank && <ActivityStrip activity={data.activity} window={model.window} now={now} dispatch={dispatch} />}
+              {data.activity?.excluded && data.activity.excluded.runs > 0 && <HiddenSchedule hidden={data.activity.excluded} dispatch={dispatch} />}
+              {blank
                 ? <EmptyNote title="No runs yet">Start one with Run all, from an asset's panel, or with <code>barca get</code> in a terminal: every run appears here with its steps and logs.</EmptyNote>
-                : shown.length === 0
-                  ? <p className="barca-table-empty">{data.truncated ? `No run of the latest ${data.runs.length.toLocaleString()} loaded matches.` : 'No run matches.'}</p>
-                  : <RunTable runs={shown} selected={selected?.id ?? null} now={now} dispatch={dispatch} />}
+                : data.runs.length === 0
+                  ? <p className="barca-table-empty">
+                      {narrowed ? 'No run matches.' : 'No run but the schedule\'s.'}
+                      {narrowed && <> <Button size="sm" onClick={() => dispatch({ type: 'filters_cleared' })}>Clear filters</Button></>}
+                      {!narrowed && model.hideSchedule && <> <Button size="sm" onClick={() => dispatch({ type: 'schedule_toggled' })}>Show schedule runs</Button></>}
+                    </p>
+                  : <RunTable runs={data.runs} selected={selected?.id ?? null} now={now} dispatch={dispatch} />}
               {data.truncated && <div className="barca-run-more">
-                <p className="barca-note">Showing the latest {plural(data.runs.length, 'run')} of {data.total.toLocaleString()}{model.filter !== 'all' || model.query || model.hour !== null ? '; the filters apply to these' : ''}.</p>
+                <p className="barca-note" title={command}>Showing {plural(data.runs.length, 'run')} of {data.total.toLocaleString()}: the ones in progress, then the newest.</p>
                 {canLoadMore(model) && <Button size="sm" onClick={() => dispatch({ type: 'load_more' })}>Load more</Button>}
               </div>}
             </>)

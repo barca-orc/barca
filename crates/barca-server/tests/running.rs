@@ -225,6 +225,52 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     assert!(detail["running"].is_null(), "{detail}");
 }
 
+/// #969: a step served from cache reports nothing until the run ends. It is not what the run
+/// is executing, and the node after it does not wait for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cached_upstream_step_is_not_executing_and_its_dependant_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = barca_server::app(config(dir.path(), false));
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/runs",
+        Some(json!({"command": "get", "targets": ["first"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let first = body["run_id"].as_str().unwrap().to_string();
+    let t0 = Instant::now();
+    loop {
+        let (_, run) = send(&app, "GET", &format!("/runs/{first}"), None).await;
+        if run["status"] == "success" {
+            break;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(60), "{run}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // `first` is cached now; `slow` prints nothing while it sleeps.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/runs",
+        Some(json!({"command": "get", "targets": ["after"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["run_id"].as_str().unwrap().to_string();
+    let slow = wait_for(&app, "slow", "ran", |r| r["step"] == "running").await;
+    assert_eq!(slow["run_id"], run_id.as_str(), "{slow}");
+    assert!(running_of(&app, "first").await.is_null());
+    assert_eq!(running_of(&app, "after").await["step"], "queued");
+    let runs = in_flight(&app).await;
+    let now = &runs[0]["now"];
+    assert_eq!(now["line"], "executing 1: slow · 1 queued", "{now}");
+    // A run asked to compute `first` again does execute it.
+    send(&app, "DELETE", &format!("/runs/{run_id}"), None).await;
+    wait_for(&app, "slow", "cleared", Value::is_null).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_partitioned_node_shows_its_keys_done() {
     let dir = tempfile::tempdir().unwrap();

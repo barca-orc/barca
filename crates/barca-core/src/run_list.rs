@@ -430,13 +430,29 @@ pub struct TriggerCounts {
     pub unknown: usize,
 }
 
-/// The runs started in one hour.
+/// What most of an hour's unsuccessful runs say went wrong.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct LeadingFailure {
+    /// The first failed step and its error, `orders: KeyError: 'region'` (a partitioned
+    /// node's keys under its name), or how the runs ended when no step failed: `cancelled`.
+    pub text: String,
+    /// How many of the hour's runs it is said of.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub runs: usize,
+}
+
+/// The runs started in one hour.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ActivityHour {
     /// The hour's start, RFC 3339 in UTC: `2026-10-22T08:00:00Z`. Hours are hours of UTC; a
     /// reader shows them in its own zone.
     pub at: String,
+    /// The hour's end, the next one's start: with `at`, the `since` and `until` that list its
+    /// runs (`barca history --since AT --until UNTIL`).
+    #[serde(default)]
+    pub until: String,
     /// Every run started in the hour.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub runs: usize,
@@ -451,6 +467,13 @@ pub struct ActivityHour {
     pub in_progress: usize,
     pub by_status: StatusCounts,
     pub by_trigger: TriggerCounts,
+    /// The median time its finished runs took, in seconds; `null` when none finished.
+    #[serde(default)]
+    pub median_seconds: Option<f64>,
+    /// What most of its unsuccessful runs say went wrong (the latest on a tie); `null` when
+    /// none ended that way.
+    #[serde(default)]
+    pub failure: Option<LeadingFailure>,
 }
 
 impl ActivityHour {
@@ -492,7 +515,7 @@ impl ActivityHour {
 /// the Runs page, `activity` of `GET /runs` and `barca history --activity`. Counted by the
 /// database over every run of the window ([`crate::db::run_activity`]), never over the runs a
 /// list happens to hold.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunActivity {
     /// The window's start: the start of the hour 23 hours before the current one (RFC 3339,
@@ -503,13 +526,61 @@ pub struct RunActivity {
     /// The triggers counted (`--triggered-by`); empty for every run, also the ones that
     /// recorded no trigger.
     pub triggered_by: Vec<TriggeredBy>,
+    /// The triggers left out (`--not-triggered-by`); a run that recorded no trigger is
+    /// counted.
+    #[serde(default)]
+    pub not_triggered_by: Vec<TriggeredBy>,
+    /// The statuses counted (`--status`); empty for every status.
+    #[serde(default)]
+    pub statuses: Vec<String>,
+    /// The text the runs counted hold in their run id, target or job (`--search`).
+    #[serde(default)]
+    pub search: Option<String>,
     /// One entry per hour, oldest first, the hours without runs included.
     pub hours: Vec<ActivityHour>,
     /// The window as a whole; its `at` is `since`.
     pub total: ActivityHour,
+    /// With `not_triggered_by`: the window's runs it left out and the other filters keep, so
+    /// what is hidden is said (`1,438 schedule runs, 3 not successful`). `null` without it.
+    #[serde(default)]
+    pub excluded: Option<ActivityHour>,
     /// The window in one line: `1,440 runs in the last 24 hours · 3 not successful · 1 in
-    /// progress · 1,400 schedule, 30 api, 10 manual`.
+    /// progress · median 1.2s · 1,400 schedule, 30 api, 10 manual`.
     pub summary: String,
+}
+
+/// What of a run filter the activity keeps: everything but its time window, which is the
+/// activity's own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActivityFilter {
+    pub statuses: Vec<String>,
+    pub triggered_by: Vec<TriggeredBy>,
+    pub not_triggered_by: Vec<TriggeredBy>,
+    /// Applied by the database ([`crate::db::run_activity`]); said back in the answer.
+    pub search: Option<String>,
+}
+
+impl ActivityFilter {
+    pub fn of(filter: &crate::history_filter::HistoryFilter) -> Self {
+        ActivityFilter {
+            statuses: filter.statuses.clone(),
+            triggered_by: filter.triggered_by.clone(),
+            not_triggered_by: filter.not_triggered_by.clone(),
+            search: filter.search.clone(),
+        }
+    }
+
+    fn status(&self, status: &str) -> bool {
+        self.statuses.is_empty() || self.statuses.iter().any(|s| s == status)
+    }
+
+    fn included(&self, trigger: Option<TriggeredBy>) -> bool {
+        self.triggered_by.is_empty() || trigger.is_some_and(|t| self.triggered_by.contains(&t))
+    }
+
+    fn excluded(&self, trigger: Option<TriggeredBy>) -> bool {
+        trigger.is_some_and(|t| self.not_triggered_by.contains(&t))
+    }
 }
 
 /// The start of `now`'s hour, [`ACTIVITY_HOURS`] - 1 hours earlier: where the window starts.
@@ -524,11 +595,63 @@ pub fn activity_since(now: chrono::DateTime<chrono::Utc>) -> chrono::NaiveDateTi
     hour - chrono::Duration::hours(ACTIVITY_HOURS as i64 - 1)
 }
 
-/// [`RunActivity`] at `now` from the database's counts, keeping the runs started by one of
-/// `triggers` (every run when empty). A count outside the window is left out.
+/// A length of time as a run list writes it: `1.2s`, `3.4m`, `1.5h`.
+pub fn seconds_text(seconds: f64) -> String {
+    match seconds.max(0.0) {
+        s if s < 60.0 => format!("{s:.1}s"),
+        s if s < 3600.0 => format!("{:.1}m", s / 60.0),
+        s => format!("{:.1}h", s / 3600.0),
+    }
+}
+
+/// The median of `times`; `None` when empty.
+fn median(times: &mut [f64]) -> Option<f64> {
+    if times.is_empty() {
+        return None;
+    }
+    times.sort_by(|a, b| a.total_cmp(b));
+    let mid = times.len() / 2;
+    Some(if times.len() % 2 == 1 {
+        times[mid]
+    } else {
+        (times[mid - 1] + times[mid]) / 2.0
+    })
+}
+
+/// What an unsuccessful run says went wrong, as [`LeadingFailure::text`] groups runs by it.
+fn failure_text(run: &crate::db::ActivityFailure) -> String {
+    match &run.failure {
+        Some(f) => format!("{}: {}", short_name(&f.node), line_of(&f.error)),
+        None if run.status == "failed" => "failed: no failed step recorded".to_string(),
+        None => run.status.clone(),
+    }
+}
+
+/// What most of `texts` say (in the order the runs started): the latest on a tie.
+fn leading(texts: &[String]) -> Option<LeadingFailure> {
+    let mut seen: Vec<(&str, usize, usize)> = Vec::new();
+    for (i, text) in texts.iter().enumerate() {
+        match seen.iter_mut().find(|(t, _, _)| *t == text.as_str()) {
+            Some(entry) => {
+                entry.1 += 1;
+                entry.2 = i;
+            }
+            None => seen.push((text.as_str(), 1, i)),
+        }
+    }
+    seen.into_iter()
+        .max_by_key(|(_, runs, last)| (*runs, *last))
+        .map(|(text, runs, _)| LeadingFailure {
+            text: text.to_string(),
+            runs,
+        })
+}
+
+/// [`RunActivity`] at `now` from what the database read of the window, keeping the runs
+/// `filter` keeps. A row outside the window is left out.
 pub fn run_activity(
-    counts: &[crate::db::ActivityRow],
-    triggers: &[TriggeredBy],
+    facts: &crate::db::RunActivityFacts,
+    filter: &ActivityFilter,
     now: chrono::DateTime<chrono::Utc>,
 ) -> RunActivity {
     let since = activity_since(now);
@@ -536,33 +659,70 @@ pub fn run_activity(
         t.and_utc()
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     };
+    let end = since + chrono::Duration::hours(ACTIVITY_HOURS as i64);
     let mut hours: Vec<ActivityHour> = (0..ACTIVITY_HOURS)
         .map(|i| ActivityHour {
             at: stamp(since + chrono::Duration::hours(i as i64)),
+            until: stamp(since + chrono::Duration::hours(i as i64 + 1)),
             ..Default::default()
         })
         .collect();
-    let mut total = ActivityHour {
+    let whole = || ActivityHour {
         at: stamp(since),
+        until: stamp(end),
         ..Default::default()
     };
-    for row in counts {
-        if !triggers.is_empty() && !row.triggered_by.is_some_and(|t| triggers.contains(&t)) {
-            continue;
-        }
-        let Ok(hour) = chrono::NaiveDateTime::parse_from_str(
-            &format!("{}:00:00", row.hour),
-            "%Y-%m-%d %H:%M:%S",
-        ) else {
+    let mut total = whole();
+    let mut excluded = whole();
+    // The index of a row's hour in the window; `None` outside it.
+    let index = |hour: &str| -> Option<usize> {
+        let at =
+            chrono::NaiveDateTime::parse_from_str(&format!("{hour}:00:00"), "%Y-%m-%d %H:%M:%S")
+                .ok()?;
+        let index = (at - since).num_hours();
+        (at >= since && index < ACTIVITY_HOURS as i64).then_some(index as usize)
+    };
+    // Whether a run counts, and whether it is one `not_triggered_by` left out.
+    let kept = |status: &str, trigger: Option<TriggeredBy>| -> Option<bool> {
+        (filter.status(status) && filter.included(trigger)).then(|| !filter.excluded(trigger))
+    };
+    for row in &facts.counts {
+        let (Some(i), Some(shown)) = (index(&row.hour), kept(&row.status, row.triggered_by)) else {
             continue;
         };
-        let index = (hour - since).num_hours();
-        if hour < since || index >= ACTIVITY_HOURS as i64 {
-            continue;
+        if shown {
+            hours[i].add(&row.status, row.triggered_by, row.runs);
+            total.add(&row.status, row.triggered_by, row.runs);
+        } else {
+            excluded.add(&row.status, row.triggered_by, row.runs);
         }
-        hours[index as usize].add(&row.status, row.triggered_by, row.runs);
-        total.add(&row.status, row.triggered_by, row.runs);
     }
+    let mut times: Vec<Vec<f64>> = vec![Vec::new(); ACTIVITY_HOURS];
+    let mut excluded_times = Vec::new();
+    for run in &facts.durations {
+        match (index(&run.hour), kept(&run.status, run.triggered_by)) {
+            (Some(i), Some(true)) => times[i].push(run.seconds),
+            (Some(_), Some(false)) => excluded_times.push(run.seconds),
+            _ => {}
+        }
+    }
+    let mut failures: Vec<Vec<String>> = vec![Vec::new(); ACTIVITY_HOURS];
+    let mut excluded_failures = Vec::new();
+    for run in &facts.failures {
+        match (index(&run.hour), kept(&run.status, run.triggered_by)) {
+            (Some(i), Some(true)) => failures[i].push(failure_text(run)),
+            (Some(_), Some(false)) => excluded_failures.push(failure_text(run)),
+            _ => {}
+        }
+    }
+    excluded.median_seconds = median(&mut excluded_times);
+    excluded.failure = leading(&excluded_failures);
+    for (i, hour) in hours.iter_mut().enumerate() {
+        hour.median_seconds = median(&mut times[i]);
+        hour.failure = leading(&failures[i]);
+    }
+    total.median_seconds = median(&mut times.concat());
+    total.failure = leading(&failures.concat());
     let mut summary = vec![format!(
         "{} {} in the last {ACTIVITY_HOURS} hours",
         count(total.runs as u64),
@@ -576,6 +736,9 @@ pub fn run_activity(
     }
     if total.in_progress > 0 {
         summary.push(format!("{} in progress", count(total.in_progress as u64)));
+    }
+    if let Some(median) = total.median_seconds {
+        summary.push(format!("median {}", seconds_text(median)));
     }
     let by = total.by_trigger;
     let started: Vec<String> = [
@@ -594,10 +757,14 @@ pub fn run_activity(
     }
     RunActivity {
         since: stamp(since),
-        until: stamp(since + chrono::Duration::hours(ACTIVITY_HOURS as i64)),
-        triggered_by: triggers.to_vec(),
+        until: stamp(end),
+        triggered_by: filter.triggered_by.clone(),
+        not_triggered_by: filter.not_triggered_by.clone(),
+        statuses: filter.statuses.clone(),
+        search: filter.search.clone(),
         hours,
         total,
+        excluded: (!filter.not_triggered_by.is_empty()).then_some(excluded),
         summary: summary.join(" · "),
     }
 }
@@ -819,7 +986,48 @@ mod tests {
             // A clock ahead of this one: past the window.
             counted("2026-10-22 15", "success", Some(Schedule), 5),
         ];
-        let activity = run_activity(&counts, &[], now);
+        let facts = crate::db::RunActivityFacts {
+            counts: counts.to_vec(),
+            durations: [
+                ("2026-10-21 15", 1.0),
+                ("2026-10-21 15", 3.0),
+                ("2026-10-22 00", 90.0),
+            ]
+            .iter()
+            .map(|(hour, seconds)| crate::db::ActivityDuration {
+                hour: hour.to_string(),
+                status: "success".into(),
+                triggered_by: Some(Schedule),
+                seconds: *seconds,
+            })
+            .collect(),
+            failures: [
+                (
+                    "2026-10-21 15",
+                    "failed",
+                    Some(("p.py:orders[day=1]", "KeyError: 'region'")),
+                ),
+                (
+                    "2026-10-21 15",
+                    "failed",
+                    Some(("p.py:orders[day=2]", "KeyError: 'region'")),
+                ),
+                ("2026-10-22 14", "interrupted", None),
+                ("2026-10-22 14", "error", None),
+            ]
+            .iter()
+            .map(|(hour, status, failure)| crate::db::ActivityFailure {
+                hour: hour.to_string(),
+                status: status.to_string(),
+                triggered_by: Some(Schedule),
+                failure: failure.map(|(node, error)| crate::db::RunFailure {
+                    node: node.into(),
+                    error: error.into(),
+                }),
+            })
+            .collect(),
+        };
+        let activity = run_activity(&facts, &ActivityFilter::default(), now);
         assert_eq!(activity.since, "2026-10-21T15:00:00Z");
         assert_eq!(activity.until, "2026-10-22T15:00:00Z");
         assert_eq!(activity.hours.len(), ACTIVITY_HOURS);
@@ -836,6 +1044,28 @@ mod tests {
             (62, 60, 2, 0)
         );
         assert_eq!(first.by_trigger.schedule, 62);
+        assert_eq!(first.until, "2026-10-21T16:00:00Z");
+        // The median of its finished runs, and what most of its unsuccessful ones say: the
+        // keys of one node count together.
+        assert_eq!(first.median_seconds, Some(2.0));
+        assert_eq!(
+            first.failure,
+            Some(LeadingFailure {
+                text: "orders: KeyError: 'region'".into(),
+                runs: 2
+            })
+        );
+        // On a tie, the latest.
+        assert_eq!(
+            activity.hours[23].failure,
+            Some(LeadingFailure {
+                text: "error".into(),
+                runs: 1
+            })
+        );
+        assert_eq!(activity.hours[1].median_seconds, None);
+        assert_eq!(activity.hours[1].failure, None);
+        assert_eq!(activity.total.median_seconds, Some(3.0));
         // Midnight UTC is the tenth hour, whatever zone the server shows times in.
         assert_eq!(activity.hours[9].at, "2026-10-22T00:00:00Z");
         assert_eq!(activity.hours[9].by_status.cancelled, 1);
@@ -869,9 +1099,25 @@ mod tests {
         );
         assert_eq!(
             activity.summary,
-            "66 runs in the last 24 hours · 5 not successful · 1 in progress · \
+            "66 runs in the last 24 hours · 5 not successful · 1 in progress · median 3.0s · \
              62 schedule, 2 api, 1 manual, 1 unknown"
         );
+        assert_eq!(activity.excluded, None);
+        // By status: only those runs, their times and their failures.
+        let failed = run_activity(
+            &facts,
+            &ActivityFilter {
+                statuses: vec!["failed".into(), "error".into()],
+                ..Default::default()
+            },
+            now,
+        );
+        assert_eq!(failed.total.runs, 3);
+        assert_eq!(failed.total.median_seconds, None);
+        assert_eq!(failed.statuses, ["failed", "error"]);
+        assert_eq!(seconds_text(0.04), "0.0s");
+        assert_eq!(seconds_text(90.0), "1.5m");
+        assert_eq!(seconds_text(5400.0), "1.5h");
     }
 
     #[test]
@@ -883,17 +1129,47 @@ mod tests {
             counted("2026-10-22 13", "success", Some(Api), 1),
             counted("2026-10-22 13", "success", None, 4),
         ];
-        let activity = run_activity(&counts, &[Manual, Api, Client], now);
+        let facts = crate::db::RunActivityFacts {
+            counts: counts.to_vec(),
+            ..Default::default()
+        };
+        let only = ActivityFilter {
+            triggered_by: vec![Manual, Api, Client],
+            ..Default::default()
+        };
+        let activity = run_activity(&facts, &only, now);
         assert_eq!(activity.triggered_by, vec![Manual, Api, Client]);
         assert_eq!(activity.total.runs, 1);
         assert_eq!(activity.summary, "1 run in the last 24 hours · 1 api");
         assert_eq!(
-            run_activity(&counts, &[], now).summary,
+            run_activity(&facts, &ActivityFilter::default(), now).summary,
             "1,445 runs in the last 24 hours · 1,440 schedule, 1 api, 4 unknown"
         );
         assert_eq!(
-            run_activity(&[], &[], now).summary,
+            run_activity(&Default::default(), &ActivityFilter::default(), now).summary,
             "0 runs in the last 24 hours"
+        );
+        // #969: leaving the schedule's runs out keeps the runs that recorded no trigger, and
+        // says what it left out.
+        let hidden = run_activity(
+            &facts,
+            &ActivityFilter {
+                not_triggered_by: vec![Schedule],
+                ..Default::default()
+            },
+            now,
+        );
+        assert_eq!(hidden.total.runs, 5);
+        assert_eq!(hidden.total.by_trigger.unknown, 4);
+        assert_eq!(hidden.not_triggered_by, vec![Schedule]);
+        let left_out = hidden.excluded.expect("what was left out");
+        assert_eq!(
+            (left_out.runs, left_out.by_trigger.schedule),
+            (1_440, 1_440)
+        );
+        assert_eq!(
+            hidden.summary,
+            "5 runs in the last 24 hours · 1 api, 4 unknown"
         );
     }
 }

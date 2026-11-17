@@ -241,6 +241,14 @@ every database from before 0.29.2 (#629):
   the history's length. The second answers `GET /runs?triggered_by=` (the run list without the
   schedule's runs) and its count. Opening an older database builds them, well under a second
   for 100k runs; older binaries ignore them.
+- `idx_runs_search (target, job, run_id)` (0.44.0, #969, a full index on `runs`). A text search
+  of the run list (`GET /runs?search=`, `barca history --search`) matches a substring, which no
+  index can seek; it scans this one, which holds the three columns it reads, instead of the
+  table, whose rows hold each run's stored outcome (about 50 ms against 250 ms for 500k runs).
+  The other filters of the run list need nothing new: a status reads `idx_runs_status`, a
+  trigger kept or left out `idx_runs_trigger`, and a window of start times `idx_runs_started`.
+  Opening an older database builds it, about two seconds for 500k runs; older binaries ignore
+  it.
 - `materializations.rows` (INTEGER, nullable, 0.43, #925): the rows a successful tabular result
   holds, as its worker counted them (an in-memory frame's length, or the row count in a written
   parquet file's footer). NULL when not counted, on failed rows, on older rows and on rows a

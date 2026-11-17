@@ -1,5 +1,5 @@
 use super::lifecycle::evict_over_budget;
-use super::projection::{RunsQuery, view};
+use super::projection::{RunList, RunsQuery, view};
 use super::*;
 use crate::ServeConfig;
 use crate::state::{RunChannel, RunState, RunStatus};
@@ -32,6 +32,7 @@ fn live(handle: &str) -> RunState {
         target: Some("first".into()),
         nodes: vec![],
         trigger: Trigger::api(),
+        refreshes: false,
         files: vec![],
         status: RunStatus::Pending,
         result: None,
@@ -82,6 +83,105 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     assert_eq!(history.runs.len(), 1);
     assert_eq!(history.runs[0].id, "durable");
     assert_eq!(history.runs[0].error.as_deref(), Some("boom"));
+}
+
+/// #941: a run in progress is listed whatever the page holds. A long run started before a
+/// page of newer ones leads the list; it is counted once; a filter that leaves it out does.
+#[tokio::test]
+async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let path = &state.config.resolved.db_path;
+    db::init_db(path).await.unwrap();
+    // The long run's row is the oldest; five ticks finished after it started.
+    db::create_run(path, "long", "get", "[\"p.py\"]", Some("backfill"), Some(1))
+        .await
+        .unwrap();
+    for i in 0..5 {
+        let id = format!("tick{i}");
+        db::create_run(path, &id, "get", "[\"p.py\"]", Some("first"), Some(1))
+            .await
+            .unwrap();
+        db::finish_run(path, &id, "success", 1, 0, 1.0)
+            .await
+            .unwrap();
+    }
+    let mut run = live("long");
+    run.db_run_id = Some("long".into());
+    run.target = Some("backfill".into());
+    run.status = RunStatus::Running;
+    state.runs.insert(run.handle.clone(), run);
+    let query = |limit, search: Option<&str>, status: Option<&str>| RunsQuery {
+        limit: Some(limit),
+        search: search.map(str::to_string),
+        status: status.map(str::to_string),
+        ..Default::default()
+    };
+    let ids = |list: &RunList| list.runs.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+    let Json(page) = list(State(state.clone()), Query(query(2, None, None)))
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(&page),
+        ["long", "tick4"],
+        "in progress first, then the newest"
+    );
+    assert_eq!(page.runs[0].status, "running");
+    assert_eq!(page.total, 6, "counted once");
+    assert!(page.truncated);
+    // The filters are the server's: a search keeps it or leaves it out, and counts.
+    let Json(found) = list(
+        State(state.clone()),
+        Query(query(1, Some("BACKFILL"), None)),
+    )
+    .await
+    .unwrap();
+    assert_eq!((ids(&found), found.total), (vec!["long".to_string()], 1));
+    let Json(others) = list(State(state.clone()), Query(query(2, Some("first"), None)))
+        .await
+        .unwrap();
+    assert_eq!(ids(&others), ["tick4", "tick3"]);
+    assert_eq!(others.total, 5);
+    let Json(ended) = list(
+        State(state.clone()),
+        Query(query(10, None, Some("success"))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ended.total, 5);
+    assert!(!ids(&ended).contains(&"long".to_string()));
+    // A run waiting in the queue has no row yet: the filters apply to it too.
+    let mut queued = live("queued");
+    queued.trigger = Trigger {
+        triggered_by: barca_core::outcome::TriggeredBy::Schedule,
+        ..Trigger::api()
+    };
+    state.runs.insert(queued.handle.clone(), queued);
+    let hidden = RunsQuery {
+        not_triggered_by: Some("schedule".into()),
+        ..query(10, None, None)
+    };
+    let Json(mine) = list(State(state.clone()), Query(hidden)).await.unwrap();
+    assert!(
+        !ids(&mine).contains(&"queued".to_string()),
+        "{:?}",
+        ids(&mine)
+    );
+    let Json(all) = list(State(state.clone()), Query(query(10, None, None)))
+        .await
+        .unwrap();
+    assert_eq!(&ids(&all)[..2], ["queued", "long"]);
+    assert_eq!(all.total, 7);
+    // An unknown value names the query parameter.
+    let bad = RunsQuery {
+        not_triggered_by: Some("cron".into()),
+        ..Default::default()
+    };
+    let error = match list(State(state.clone()), Query(bad)).await {
+        Err(crate::error::ApiError::BadRequest(message)) => message,
+        _ => panic!("an unknown trigger is a 400"),
+    };
+    assert!(error.starts_with("not_triggered_by 'cron'"), "{error}");
 }
 
 #[test]

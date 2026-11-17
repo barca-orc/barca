@@ -59,6 +59,32 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   fresh: 1728 (weighted nodes); 698 when every node is fresh` under the gap line and `weight N`
   on each root; `--json`, `barca status --json` (`rollup`) and `GET /state/rollup` carry the
   fields (`specs/behavior/health.md`, "Distance from fresh").
+- **The Runs page filters on the server, and `barca history` has the same filters** (#969,
+  experimental). On a server that ticks every minute the page was filtering the 100 runs it had
+  loaded: a status chip, the search and a click on a bar of the chart all missed what was not
+  on the page, and "Hide schedule runs" also hid the runs recorded before barca stored what
+  started a run. Now each of them is a query of `GET /runs`, by the name of the matching
+  `barca history` flag, and the list, its `total` and the chart are of the runs the filters
+  keep in the whole history: `status` (now a list, as `--status`; `not_successful` is every
+  status of a run that ended without succeeding), `not_triggered_by` / `--not-triggered-by`
+  (an exclusion, so a run with no recorded trigger stays), `since` and `until` / `--until` (a
+  window of start times: a bar of the chart is its `at` and `until`) and `search` / `--search`
+  (text in the run id, target or job). The database keeps the runs, each filter from an index,
+  so `barca history --triggered-by` and the other filters no longer read every run: on 500,000
+  runs a status, a trigger or a window answers in a few milliseconds and a text search in about
+  a tenth of a second (a new index, `idx_runs_search`, built in about two seconds when a
+  database of that size is first opened). The page hides a schedule's runs until asked and says
+  under the chart how many that is in the last 24 hours and how many of them did not succeed
+  (`activity.excluded`); the browser remembers the choice. `activity` (and
+  `barca history --activity`, which now takes `--status`, `--not-triggered-by` and `--search`)
+  gives each hour its `until`, the median time of its finished runs (`median_seconds`) and what
+  most of its unsuccessful runs say went wrong (`failure`), which a bar's tooltip shows; the
+  chart states the time zone its hours are in. Runs in progress come first in `GET /runs`
+  whatever `limit` lists, so a long backfill no longer drops off the page behind a hundred
+  newer runs (#941). A step served from cache no longer reads as executing in a run the server
+  started, nor the node after it as queued (`now`, the `running` field of `GET /state`): a
+  cached node the run has not touched counts as done unless the run was asked to refresh. A
+  finished run's panel lists its slowest steps.
 
 ## 0.44.0 (2026-11-17)
 
@@ -895,7 +921,6 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   Existing SQLite-format history remains readable. Sensors still discover their keys,
   and changed fan-ins read all inputs. Explicit partition selections stream only requested
   source values into Rust, including cold runs and dry-run predictions.
-
 
 ## 0.32.0 (2026-10-24)
 

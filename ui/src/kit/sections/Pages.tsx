@@ -1,7 +1,7 @@
 import { INITIAL_RUNS, RUNS_MAX } from '@/lib/runsPage'
 import { RunPanelView, RunsView } from '@/pages/RunsView'
 import { TokensOffView, TokensView } from '@/pages/TokensView'
-import { NOW_MS, failureLists, partialRunList, queueStates, runDetails, runLists, tokenStates } from '../fixtures'
+import { NOW_MS, everyRunList, failureLists, noMatchRunList, queueStates, runDetails, runHour, runLists, tokenStates } from '../fixtures'
 import { QueuePanelView } from '@/pages/QueuePanel'
 import { INITIAL_FAILURES, failureTable, type FailuresModel } from '@/lib/failuresView'
 import { distinctNames } from '@/lib/groups'
@@ -22,9 +22,10 @@ export function Pages() {
           states={{
             ...Object.fromEntries(Object.entries(runLists).map(([name, runs]) => [name, { runs, model: INITIAL_RUNS }])),
             'at the load-more cap': { runs: runLists.truncated, model: { ...INITIAL_RUNS, limit: RUNS_MAX } },
-            'failed only': { runs: runLists['every status'], model: { ...INITIAL_RUNS, filter: 'failed' as const } },
-            'failed only, of the latest 100': { runs: partialRunList, model: { ...INITIAL_RUNS, filter: 'failed' as const } },
-            'one hour': { runs: runLists['every status'], model: { ...INITIAL_RUNS, hour: Math.floor(NOW_MS / 3_600_000) * 3_600_000 } },
+            'not successful': { runs: runLists['every status'], model: { ...INITIAL_RUNS, filter: 'failed' as const } },
+            'schedule runs shown': { runs: everyRunList, model: { ...INITIAL_RUNS, hideSchedule: false } },
+            'one hour': { runs: runLists['every status'], model: { ...INITIAL_RUNS, window: runHour } },
+            'a search with no match': { runs: noMatchRunList, model: { ...INITIAL_RUNS, query: 'no_such_node' } },
           }}
           render={({ runs, model }, dispatch) => (
             <Frame height={420} width="100%">

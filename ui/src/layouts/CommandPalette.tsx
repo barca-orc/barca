@@ -9,6 +9,7 @@ import { groupPath, groupTree } from '@/lib/groups'
 import { usePartitionKeySearch } from '@/hooks/usePartitionKeys'
 import { useProgram } from '@/hooks/useProgram'
 import { useRuns } from '@/hooks/useRuns'
+import { everyRun } from '@/lib/runsPage'
 import { INITIAL_PALETTE, isKeyQuery, KEY_SEARCH_NODES, keyItems, paletteActions, paletteIndex, searchPalette, updatePalette, type PaletteItem } from '@/lib/palette'
 import type { TopbarRun } from './shellContext'
 
@@ -41,7 +42,7 @@ export function CommandPalette({ run, onRun, onClose }: CommandPaletteProps) {
   const assetQuery = useAssets()
   const assets = assetQuery.data
   const groups = useGroups().data
-  const runs = useRuns(RECENT_RUNS).data?.runs
+  const runs = useRuns(everyRun(RECENT_RUNS)).data?.runs
   // Every node's state, whatever is open: each result's glyph, and what a key query asks.
   const states = useWholeState().data
   // A group's or file's glyph is its entry of the whole project's rollup.

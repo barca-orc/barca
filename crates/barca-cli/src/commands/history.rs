@@ -6,12 +6,9 @@ use barca_core::history_filter::HistoryFilter;
 
 /// The filter flags of `barca history`, checked here (also before a server sees them).
 pub(crate) fn history_filter(
-    status: Option<&str>,
-    target: Option<&str>,
-    triggered_by: Option<&str>,
-    since: Option<&str>,
+    flags: barca_core::history_filter::HistoryFlags<'_>,
 ) -> Result<HistoryFilter, CliError> {
-    HistoryFilter::parse(status, target, triggered_by, since, chrono::Utc::now())
+    HistoryFilter::parse(flags, chrono::Utc::now())
         .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
 }
 
@@ -79,7 +76,7 @@ pub(crate) async fn activity_cmd(
     json: bool,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
-    let activity = barca_core::queries::activity(&cfg, &filter.triggered_by).await?;
+    let activity = barca_core::queries::activity(&cfg, filter).await?;
     super::emit(barca_core::report::render_activity(&activity, json));
     Ok(())
 }

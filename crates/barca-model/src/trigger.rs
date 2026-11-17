@@ -21,6 +21,14 @@ pub enum TriggeredBy {
 }
 
 impl TriggeredBy {
+    /// Every way a run is started.
+    pub const ALL: [TriggeredBy; 4] = [
+        TriggeredBy::Schedule,
+        TriggeredBy::Api,
+        TriggeredBy::Client,
+        TriggeredBy::Manual,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             TriggeredBy::Schedule => "schedule",

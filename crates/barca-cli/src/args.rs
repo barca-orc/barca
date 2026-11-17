@@ -326,12 +326,16 @@ Examples:
   barca history --status failed,interrupted --since 24h   # what went wrong in the last day
   barca history --target clean             # runs whose target or job is clean
   barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
-  barca history --triggered-by manual,api,client   # every run but the schedule's
+  barca history --not-triggered-by schedule   # every run but the schedule's, also the ones that recorded no trigger
+  barca history --status not_successful --not-triggered-by schedule   # what went wrong in the runs someone started
+  barca history --search daily_report      # runs whose run id, target or job contains the text
+  barca history --since 2026-10-22T08:00:00Z --until 2026-10-22T09:00:00Z   # the runs started in one hour
   barca history --status running           # runs in progress, each with the nodes it is executing now
   barca history --status running --json --fields run_id,now   # {running: [...], queued, keys, groups, line} per run
-  barca history --activity                 # the last 24 hours, hour by hour: runs by status and by trigger
-  barca history --activity --json          # {activity: {since, until, hours: [...], total, summary}}
-  barca history --activity --triggered-by manual,api,client --server   # a server's activity without its schedule's runs
+  barca history --activity                 # the last 24 hours, hour by hour: runs by status and by trigger, median time, leading failure
+  barca history --activity --json          # {activity: {since, until, hours: [...], total, excluded, summary}}
+  barca history --activity --not-triggered-by schedule --server   # a server's activity without its schedule's runs, and what that left out
+  barca history --activity --status not_successful --search daily_report   # when the runs of one target went wrong
   barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
   barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
   barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}
@@ -838,13 +842,13 @@ pub(crate) enum Cli {
         /// One run in detail: its fields, the steps it recorded (the first 1000, failed steps
         /// always; --limit and --all change it), and each failed step's error, traceback and
         /// how its worker ended
-        #[arg(value_name = "RUN_ID", conflicts_with_all = ["reconcile", "fields", "status", "target", "triggered_by", "since", "activity"])]
+        #[arg(value_name = "RUN_ID", conflicts_with_all = ["reconcile", "fields", "status", "target", "triggered_by", "not_triggered_by", "since", "until", "search", "activity"])]
         run_id: Option<String>,
         /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
-        #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all", "status", "target", "triggered_by", "since"])]
+        #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all", "status", "target", "triggered_by", "not_triggered_by", "since", "until", "search"])]
         reconcile: Option<String>,
         /// Only runs with one of these statuses (comma-separated): success, failed, cancelled,
-        /// error, running, interrupted
+        /// error, running, interrupted; not_successful is every one but success and running
         #[arg(long, value_name = "STATUS[,...]")]
         status: Option<String>,
         /// Only runs whose target or job is this node (a function name or node id); runs of
@@ -854,14 +858,25 @@ pub(crate) enum Cli {
         /// Only runs started this way (comma-separated): manual, api, schedule, client
         #[arg(long, value_name = "TRIGGER[,...]")]
         triggered_by: Option<String>,
+        /// Without the runs started this way (comma-separated): schedule hides the cron
+        /// ticks and keeps the runs that recorded no trigger
+        #[arg(long, value_name = "T[,...]")]
+        not_triggered_by: Option<String>,
+        /// Only runs whose run id, target or job contains this text, whatever its case
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
         /// Instead of the runs: how many started in each of the last 24 hours (UTC), by status
-        /// and by what started them, counted over every recorded run; takes --triggered-by
-        #[arg(long, conflicts_with_all = ["reconcile", "fields", "status", "target", "since", "limit", "all"])]
+        /// and by what started them, with each hour's median time and leading failure, counted
+        /// over every recorded run; takes --status, --triggered-by, --not-triggered-by, --search
+        #[arg(long, conflicts_with_all = ["reconcile", "fields", "target", "since", "until", "limit", "all"])]
         activity: bool,
         /// Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an
         /// RFC 3339 time or a UTC date (2026-10-22)
         #[arg(long, value_name = "WHEN")]
         since: Option<String>,
+        /// Only runs started before this, written as --since is: with it, a window
+        #[arg(long, value_name = "WHEN")]
+        until: Option<String>,
         /// Maximum recent runs (default: every run in JSON, 10 in a human table); with a
         /// RUN_ID, the most steps listed (default 1000)
         #[arg(short, long)]

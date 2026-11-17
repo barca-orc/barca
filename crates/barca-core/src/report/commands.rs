@@ -745,9 +745,31 @@ pub fn render_activity(activity: &crate::run_list::RunActivity, json: bool) -> R
     if busy.is_empty() {
         return rendered;
     }
+    if let Some(hidden) = activity.excluded.as_ref().filter(|h| h.runs > 0) {
+        let names: Vec<&str> = activity
+            .not_triggered_by
+            .iter()
+            .map(|t| t.as_str())
+            .collect();
+        line!(
+            rendered,
+            "left out: {} {} {}{}",
+            crate::run_explanation::count(hidden.runs as u64),
+            names.join(", "),
+            if hidden.runs == 1 { "run" } else { "runs" },
+            if hidden.not_successful > 0 {
+                format!(
+                    ", {} not successful",
+                    crate::run_explanation::count(hidden.not_successful as u64)
+                )
+            } else {
+                String::new()
+            }
+        );
+    }
     line!(
         rendered,
-        "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6}",
+        "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6} {:>7}  FAILURE",
         "HOUR",
         "RUNS",
         "NOT OK",
@@ -755,13 +777,21 @@ pub fn render_activity(activity: &crate::run_list::RunActivity, json: bool) -> R
         "SCHEDULE",
         "API",
         "MANUAL",
-        "CLIENT"
+        "CLIENT",
+        "MEDIAN"
     );
-    line!(rendered, "{}", "-".repeat(72));
+    line!(rendered, "{}", "-".repeat(89));
     for hour in busy {
+        let failure = hour.failure.as_ref().map(|f| {
+            if f.runs == hour.not_successful {
+                f.text.clone()
+            } else {
+                format!("{} ({} of {})", f.text, f.runs, hour.not_successful)
+            }
+        });
         line!(
             rendered,
-            "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6}",
+            "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6} {:>7}  {}",
             crate::report::utc_cell(hour.at.trim_end_matches(":00Z")),
             hour.runs,
             hour.not_successful,
@@ -770,6 +800,9 @@ pub fn render_activity(activity: &crate::run_list::RunActivity, json: bool) -> R
             hour.by_trigger.api,
             hour.by_trigger.manual,
             hour.by_trigger.client,
+            hour.median_seconds
+                .map_or("-".to_string(), crate::run_list::seconds_text),
+            failure.as_deref().unwrap_or("")
         );
     }
     rendered

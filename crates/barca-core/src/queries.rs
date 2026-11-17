@@ -113,46 +113,55 @@ pub async fn history(
 }
 
 /// The newest `limit` runs of the database at `db_path` that `filter` keeps (every one when
-/// `None`), and how many it keeps in all.
+/// `None`), and how many it keeps in all. The database keeps them, each filter from an index
+/// ([`db::RunFilter`]): the cost is the runs kept, not the runs recorded. `--target` is the
+/// exception: the database narrows the read to the runs whose target or job holds the node's
+/// name, and each of those is then checked here.
 pub async fn history_at(
     db_path: &str,
     limit: Option<usize>,
     filter: &crate::history_filter::HistoryFilter,
 ) -> Result<(Vec<db::RunRecord>, usize), BarcaError> {
-    let total = db::count_runs(db_path).await?;
-    if filter.is_empty() {
-        let runs = db::get_recent_runs(db_path, limit.unwrap_or(total)).await?;
+    let kept = filter.run_filter();
+    let total = db::count_runs_filtered(db_path, &kept).await?;
+    if filter.target.is_none() {
+        let runs = db::get_runs_filtered(db_path, limit.unwrap_or(total), &kept).await?;
         return Ok((runs, total));
     }
-    let mut runs = db::get_recent_runs(db_path, total).await?;
-    runs.retain(|run| filter.matches(run));
+    let mut runs = db::get_runs_filtered(db_path, total, &kept).await?;
+    runs.retain(|run| filter.names(run));
     let total = runs.len();
     runs.truncate(limit.unwrap_or(total));
     Ok((runs, total))
 }
 
-/// The runs started in the last 24 hours, hour by hour, in this environment
-/// ([`crate::run_list::RunActivity`]): `barca history --activity`.
+/// The runs started in the last 24 hours that `filter` keeps, hour by hour, in this
+/// environment ([`crate::run_list::RunActivity`]): `barca history --activity`.
 pub async fn activity(
     cfg: &crate::config::ResolvedConfig,
-    triggers: &[crate::outcome::TriggeredBy],
+    filter: &crate::history_filter::HistoryFilter,
 ) -> Result<crate::run_list::RunActivity, BarcaError> {
     open_metadata(cfg).await?;
-    activity_at(&cfg.db_path, triggers, chrono::Utc::now()).await
+    activity_at(&cfg.db_path, filter, chrono::Utc::now()).await
 }
 
-/// [`activity`] of the database at `db_path`, at `now`: one grouped query over the runs of
-/// the window ([`db::run_activity`]).
+/// [`activity`] of the database at `db_path`, at `now`: the runs of the window, read once
+/// ([`db::run_activity`]). The filter's own window is left out: the activity is always the
+/// last 24 hours.
 pub async fn activity_at(
     db_path: &str,
-    triggers: &[crate::outcome::TriggeredBy],
+    filter: &crate::history_filter::HistoryFilter,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<crate::run_list::RunActivity, BarcaError> {
     let since = crate::run_list::activity_since(now)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
-    let counts = db::run_activity(db_path, &since).await?;
-    Ok(crate::run_list::run_activity(&counts, triggers, now))
+    let facts = db::run_activity(db_path, &since, &filter.run_filter()).await?;
+    Ok(crate::run_list::run_activity(
+        &facts,
+        &crate::run_list::ActivityFilter::of(filter),
+        now,
+    ))
 }
 
 /// What each run of `runs` that is in progress on this machine is working on now, by run id

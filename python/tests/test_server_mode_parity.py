@@ -102,6 +102,30 @@ CONTRACT_TABLE += [
     # #991: the runs in progress (none here) and the last day's activity.
     ("history_running", ["history", "--status", "running", "--json"]),
     ("history_activity_schedule", ["history", "--activity", "--triggered-by", "schedule"]),
+    # #969: the filters the database applies. Each names a status both sides record the same
+    # runs of (a server also records a refused request, as `error`), so the counts agree.
+    (
+        "history_not_schedule",
+        ["history", "--status", "failed", "--not-triggered-by", "schedule", "--json"],
+    ),
+    (
+        "history_only_others",
+        ["history", "--status", "success", "--not-triggered-by", "manual,api,client", "--json"],
+    ),
+    ("history_search", ["history", "--status", "success", "--search", "TOTAL", "--json"]),
+    ("history_search_none", ["history", "--search", "no_such_node", "--pretty"]),
+    (
+        "history_window",
+        ["history", "--status", "success", "--since", "1d", "--until", "2999-01-01", "--pretty"],
+    ),
+    ("history_until_past", ["history", "--until", "2000-01-01", "--json"]),
+    ("history_bad_not_trigger", ["history", "--not-triggered-by", "cron", "--json"]),
+    ("history_bad_until", ["history", "--until", "soon", "--json"]),
+    (
+        "history_activity_failed_schedule",
+        ["history", "--activity", "--status", "failed", "--triggered-by", "schedule", "--json"],
+    ),
+    ("history_activity_search", ["history", "--activity", "--search", "no_such_node"]),
     ("pretty_history_failed", ["history", "--status", "failed", "--pretty", "-l", "2"]),
     ("history_bad_status", ["history", "--status", "nope", "--json"]),
     ("run_detail_failed", ["history", "FAILED_RUN", "--json"]),
