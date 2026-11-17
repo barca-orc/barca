@@ -19,9 +19,14 @@ const states = assets.map(asset => served({
 
 // `GET /state/rollup?files=forecast.py` for these rows, as the server sums them: the group's two
 // assets, and the file of the one in no group.
+const NO_CAUSES = { catching_up: 0, queued: 0, no_refresh_path: 0, overdue: 0, failing: 0, undecided: 0 }
 const ok = (n: number) => ({ failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: n })
 const entry = (id: string, kind: string, label: string, parent: string | null, children: string[], n: number) =>
-  ({ id, kind, label, parent, children, nodes: n, assets: n, running: 0, health: ok(n), asset_health: ok(n), data_coverage: { assets: n, measured: 0, suspect: 0 }, also_in: [] })
+  ({
+    id, kind, label, parent, children, nodes: n, assets: n, running: 0, health: ok(n), asset_health: ok(n), data_coverage: { assets: n, measured: 0, suspect: 0 },
+    // Every node is fresh: no cause, no root, no gap.
+    causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [],
+  })
 const rollup = {
   as_of: '2026-11-17T14:57:00Z',
   entries: [

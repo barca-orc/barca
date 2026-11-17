@@ -46,6 +46,21 @@ entries[].health.never_run : integer
 entries[].health.ok : integer
 entries[].health.suspect : integer
 entries[].health.undecided : integer
+entries[].held_by : array
+entries[].held_by[] : object
+entries[].held_by[].assets : integer
+entries[].held_by[].causes : object
+entries[].held_by[].causes.catching_up : integer
+entries[].held_by[].causes.failing : integer
+entries[].held_by[].causes.no_refresh_path : integer
+entries[].held_by[].causes.overdue : integer
+entries[].held_by[].causes.queued : integer
+entries[].held_by[].causes.undecided : integer
+entries[].held_by[].cumulative_nodes : integer
+entries[].held_by[].gap_seconds : integer
+entries[].held_by[].nodes : integer
+entries[].held_by[].root : string
+entries[].held_by[].unbounded : integer
 entries[].id : string
 entries[].keys : object  (optional)
 entries[].keys.behind : integer
@@ -54,6 +69,7 @@ entries[].keys.ok : integer
 entries[].kind : string
 entries[].label : string
 entries[].nodes : integer
+entries[].not_fresh : integer
 entries[].parent : null|string
 entries[].running : integer
 entries[].unbounded : integer

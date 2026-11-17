@@ -70,10 +70,13 @@
   --state-pinned:   var(--c-indigo-400);
   --state-idle:     #6B6B74;
 
-  --map-failing:   oklch(0.66 0.17 22);
-  --map-attention: oklch(0.80 0.14 80);
-  --map-ok:        oklch(0.72 0.12 164);
-  --map-unknown:   oklch(0.74 0.03 258);
+  --map-failing:         oklch(0.66 0.17 22);
+  --map-overdue:         oklch(0.72 0.15 50);
+  --map-no-refresh-path: oklch(0.82 0.14 86);
+  --map-queued:          oklch(0.74 0.08 290);
+  --map-undecided:       oklch(0.78 0.012 258);
+  --map-catching-up:     oklch(0.76 0.09 235);
+  --map-fresh:           oklch(0.72 0.12 164);
   --glyph-ink:      #FFFFFF;
 
   /* ---- Elevation: lift comes from soft grey shadow, not a white edge ---- */

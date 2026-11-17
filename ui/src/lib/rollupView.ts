@@ -1,12 +1,16 @@
 /**
  * The rollup as the UI draws it: `GET /state/rollup` indexed by id, and the layout of the health
- * map over it. Nothing here counts, sums or classifies: every count is an entry's own
+ * map over it. Nothing here counts, sums or classifies: every count shown is an entry's own
  * (`barca-core`'s `rollup`, the same response `barca status --rollup` prints), in nodes
- * (`nodes`, `health`) and in assets (`assets`, `asset_health`). What stays here is geometry
- * (which angle a segment gets), the path to an entry, and words.
+ * (`nodes`, `health`, `causes`) and in assets (`assets`, `asset_health`). What stays here is
+ * geometry (which angle a segment gets, from the entry's counts and a display weight per
+ * cause), the path to an entry, and words.
  */
 
-import { HEALTH_ORDER, healthFamily, isUnhealthy, type Health, type HealthFamily } from './healthDisplay'
+import { HEALTH_ORDER, isUnhealthy, type Health } from './healthDisplay'
+import { MAP_PARTS, keyBandPart, leadingPart, mapPartWeight, type MapPart } from './causeDisplay'
+import type { HeldBy } from './generated/HeldBy'
+import { formatSpan, parseTime } from './time'
 import type { HealthCounts } from './generated/HealthCounts'
 import type { Rollup } from './generated/Rollup'
 import type { RollupEntry } from './generated/RollupEntry'
@@ -15,13 +19,10 @@ import type { EntryKind } from './generated/EntryKind'
 import type { DataCoverage } from './generated/DataCoverage'
 import type { FileRollup } from './generated/FileRollup'
 
-export type { HealthCounts, Rollup, RollupEntry, RollupRoot, EntryKind }
+export type { HealthCounts, HeldBy, Rollup, RollupEntry, RollupRoot, EntryKind }
 
 /** The id of the root entry. */
 export const ROOT = 'root'
-
-/** What a count counts: every display names the one it shows. */
-export type Unit = 'nodes' | 'assets'
 
 /** A rollup response, its entries by id. */
 export interface RollupTree {
@@ -39,7 +40,7 @@ const NO_CAUSES: RollupEntry['causes'] = { catching_up: 0, queued: 0, no_refresh
 
 /** A tree with only an empty root: what a page holds until the rollup has loaded. */
 export const EMPTY_ROLLUP: RollupTree = {
-  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
+  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
   files: new Map(),
   roots: [],
   coverage: { assets: 0, measured: 0, suspect: 0 },
@@ -94,11 +95,38 @@ export function healthSummary(counts: HealthCounts, limit = HEALTH_ORDER.length)
   return parts.slice(0, limit).join(' · ')
 }
 
+/**
+ * `fresh within about 5m`: when the nodes of a scope that have an estimate are all expected
+ * fresh (`fresh_by`), from the instant the rows were classified (`as_of`), rounded up to the
+ * unit shown so an estimate is never said to be sooner. Null when no node has an estimate.
+ */
+export function freshWithin(entry: Pick<RollupEntry, 'fresh_by'>, asOf: string): string | null {
+  const at = entry.fresh_by === null ? null : parseTime(entry.fresh_by)
+  const now = parseTime(asOf)
+  if (at === null || now === null) return null
+  const left = Math.max(0, Math.ceil((at - now) / 1000))
+  const unit = left < 60 ? 1 : left < 3600 ? 60 : left < 86400 ? 3600 : 86400
+  return `fresh within about ${formatSpan(Math.ceil(left / unit) * unit)}`
+}
+
+/** `399 with no estimate`: the not-fresh nodes of a scope nothing known will leave fresh. */
+export function noEstimate(entry: Pick<RollupEntry, 'unbounded'>): string | null {
+  return entry.unbounded > 0 ? `${entry.unbounded.toLocaleString()} with no estimate` : null
+}
+
+/** One colour of a segment: a cause, or fresh, over the part of the segment its nodes take. */
+export interface Band {
+  part: MapPart
+  /** Where it starts and ends around the circle, inside its segment. */
+  start: number
+  end: number
+}
+
 /** One segment of the sunburst: an entry, the members too thin to draw one by one, or keys. */
 export interface Arc {
   /**
-   * The entry's id; for the thin members of a scope, `<scope>::rest:<family>`; for a
-   * partitioned node's keys, `<node>::keys:<failed|behind|ok>`.
+   * The entry's id; for the thin members of a scope, `<scope>::rest`; for a partitioned node's
+   * keys, `<node>::keys:<failed|behind|ok>`.
    */
   id: string
   /** The segment it sits on (or the focus, for the first ring): what a click on `rest` opens. */
@@ -108,55 +136,82 @@ export interface Arc {
   /** Where it starts and ends around the circle, as fractions of a turn from 12 o'clock. */
   start: number
   end: number
-  health: Health
   label: string
   /**
-   * `rest`: the members of `parent` too thin to draw, one band per colour.
+   * `rest`: the members of `parent` too thin to draw, as one segment.
    * `keys`: a partitioned node's keys that stand one way (failed, not up to date, ok).
    */
   kind: EntryKind | 'rest' | 'keys'
-  /** What its angle is, in the map's unit: assets underneath, or nodes in a scope with no assets (0 for keys). */
-  size: number
+  /**
+   * Its colours, stacked in the served order of the causes, then fresh: each as wide as the
+   * nodes of that colour underneath weigh, so a group reads as what is inside it, never as
+   * its worst member. One band for a node or for keys.
+   */
+  bands: Band[]
+  /** For `rest`: the members drawn together. */
+  members?: readonly string[]
   /** For `keys`: how many keys, and of how many the node has. */
   keys?: { count: number; of: number }
 }
 
-/** The keys ring's three bands: what each says, and the health it is drawn as. */
+/** The keys ring's three bands, and what each says. */
 const KEY_BANDS: readonly (readonly ['failed' | 'behind' | 'ok', string])[] = [
   ['failed', 'failed'],
   ['behind', 'not up to date'],
   ['ok', 'ok'],
 ]
 
-/** The order the thin members' bands are drawn in: worst first. */
-const FAMILY_ORDER: readonly HealthFamily[] = ['failing', 'attention', 'unknown', 'ok']
+/** What a map entry is weighed by: its own counts, as served. */
+type Weighed = Pick<RollupEntry, 'nodes' | 'not_fresh' | 'causes'>
 
-/** Keys not up to date take the node's own word (blocked, never run, …), else `behind`. */
-function behindAs(health: Health): Health {
-  return health === 'failing' || health === 'ok' ? 'behind' : health
-}
-
-/** The unit a map around `center` is sized in: assets, or nodes where there is no asset at all. */
-export function mapUnit(center: Pick<RollupEntry, 'assets'>): Unit {
-  return center.assets > 0 ? 'assets' : 'nodes'
+/** The weight of each colour inside an entry, in stacking order, the empty ones left out. */
+function partWeights(entry: Weighed): [MapPart, number][] {
+  const out: [MapPart, number][] = []
+  for (const part of MAP_PARTS) {
+    const count = part === 'fresh' ? entry.nodes - entry.not_fresh : entry.causes[part]
+    if (count > 0) out.push([part, count * mapPartWeight(part)])
+  }
+  return out
 }
 
 /**
- * The segments of the map around `focus`, `rings` deep. A segment's angle is how many assets the
- * entry says are underneath (tasks and sensors colour their group but take no room, unless the
- * scope has no assets at all), so the map is the project's shape; its colour is the worst health
- * the entry counts, so trouble shows from the centre. Children come worst first (the served
- * order), so the trouble sits clockwise from 12 o'clock. Members thinner than `minTurn` are drawn
- * together after them (`rest`, labelled `N smaller`): one band per colour, as wide as their
- * angles in that colour, so the ring stays whole instead of fraying into slivers. Outside a
- * partitioned node with room for it is a ring of its keys: failed, not up to date, ok.
+ * How much room an entry takes on the map: its distance from fresh, in weighted nodes. Every
+ * node counts 1, so a fresh group is still there; a node that is not fresh counts its cause's
+ * weight instead (`causeDisplay`: 6 where it needs someone, 2 where it will be fresh without
+ * anyone acting or cannot be decided). It reads the entry's own `nodes`, `not_fresh` and
+ * `causes`, so a level's weight is exactly the sum of its children's, and it grows with every
+ * node that falls behind and with how much the cause matters. A display scale over served
+ * counts: nothing is classified here.
+ */
+export function mapWeight(entry: Weighed): number {
+  return partWeights(entry).reduce((sum, [, w]) => sum + w, 0)
+}
+
+/** `weights` laid side by side over a segment from `start`, `span` wide. */
+function bandsOver(weights: readonly [MapPart, number][], start: number, span: number): Band[] {
+  const total = weights.reduce((sum, [, w]) => sum + w, 0)
+  let at = start
+  return weights.map(([part, w]) => {
+    const band = { part, start: at, end: at + (w / total) * span }
+    at = band.end
+    return band
+  })
+}
+
+/**
+ * The segments of the map around `focus`, `rings` deep. A segment's angle is its entry's weight
+ * (`mapWeight`: how far what is underneath is from fresh), so the room a group takes is how big
+ * its problem is, and a fresh group is a thin calm sliver, not gone. Its colours are what is
+ * inside it, stacked by weight: failing, overdue, no refresh path, queued, undecided, catching
+ * up, fresh. Children come worst first (the served order), so the trouble sits clockwise from
+ * 12 o'clock. Members thinner than `minTurn` are drawn together after them (`rest`, labelled
+ * `N smaller`): one segment as wide as they are, stacked the same way, so the ring stays whole
+ * instead of fraying into slivers. Outside a partitioned node with room for it is a ring of its
+ * keys: failed, not up to date, ok.
  */
 export function sunburst(tree: RollupTree, focus: string, rings = 3, minTurn = 0.01): Arc[] {
   const center = tree.entries.get(focus)
   if (!center || center.nodes === 0) return []
-  const unit = mapUnit(center)
-  const sizeOf = (e: RollupEntry) => (unit === 'assets' ? e.assets : e.nodes)
-  const countsOf = (e: RollupEntry) => (unit === 'assets' ? e.asset_health : e.health)
   const arcs: Arc[] = []
   const keyRing = (entry: RollupEntry, start: number, span: number, depth: number) => {
     const keys = entry.keys
@@ -170,72 +225,75 @@ export function sunburst(tree: RollupTree, focus: string, rings = 3, minTurn = 0
     const extra = raw.reduce((sum, w) => sum + w, 0) - span
     const roomy = raw.reduce((sum, w) => sum + (w > floor ? w - floor : 0), 0)
     const widths = raw.map((w) => (w > floor && roomy > 0 ? w - (extra * (w - floor)) / roomy : w))
-    const own = worstOf(entry.health)
+    // Keys not up to date take the node's own colour: why the node is not fresh.
+    const own = leadingPart(entry.causes)
     let at = start
     bands.forEach(([band, word], i) => {
       const count = keys[band]
-      const health: Health = band === 'failed' ? 'failing' : band === 'ok' ? 'ok' : behindAs(own)
+      const part = keyBandPart(band, own)
       const label = `${count.toLocaleString()} ${count === 1 ? 'key' : 'keys'} ${word}`
-      arcs.push({ id: `${entry.id}::keys:${band}`, parent: entry.id, depth, start: at, end: at + widths[i]!, health, label, kind: 'keys', size: 0, keys: { count, of } })
-      at += widths[i]!
+      const end = at + widths[i]!
+      arcs.push({ id: `${entry.id}::keys:${band}`, parent: entry.id, depth, start: at, end, label, kind: 'keys', bands: [{ part, start: at, end }], keys: { count, of } })
+      at = end
     })
   }
   const place = (entry: RollupEntry, start: number, span: number, depth: number) => {
     if (depth > rings) return
     if (entry.children.length === 0) return keyRing(entry, start, span, depth)
-    const total = sizeOf(entry)
+    const total = mapWeight(entry)
     if (total <= 0) return
     let at = start
     const thin: RollupEntry[] = []
     for (const c of entry.children) {
       const child = tree.entries.get(c)
-      if (!child || sizeOf(child) === 0) continue
-      const share = (sizeOf(child) / total) * span
+      if (!child || child.nodes === 0) continue
+      const share = (mapWeight(child) / total) * span
       if (share < minTurn) {
         thin.push(child)
         continue
       }
-      arcs.push({ id: c, parent: entry.id, depth, start: at, end: at + share, health: worstOf(child.health), label: child.label, kind: child.kind, size: sizeOf(child) })
+      arcs.push({ id: c, parent: entry.id, depth, start: at, end: at + share, label: child.label, kind: child.kind, bands: bandsOver(partWeights(child), at, share) })
       place(child, at, share, depth + 1)
       at += share
     }
-    // The thin members, last: one band per colour, as wide as the angles they would have had in
-    // that colour, so a run of small groups that are mostly fine reads mostly green.
-    for (const family of FAMILY_ORDER) {
-      const healths = HEALTH_ORDER.filter((h) => healthFamily(h) === family)
-      let size = 0
-      let worst: Health | null = null
-      for (const child of thin)
-        for (const h of healths) {
-          const n = countsOf(child)[h]
-          if (n === 0) continue
-          size += n
-          if (worst === null || HEALTH_ORDER.indexOf(h) < HEALTH_ORDER.indexOf(worst)) worst = h
-        }
-      if (size === 0 || worst === null) continue
-      const share = (size / total) * span
-      arcs.push({ id: `${entry.id}::rest:${family}`, parent: entry.id, depth, start: at, end: at + share, health: worst, label: `${thin.length.toLocaleString()} smaller`, kind: 'rest', size })
-      at += share
-    }
+    if (thin.length === 0) return
+    // The thin members, last: one segment, each colour as wide as it would have been across
+    // them, so a run of small groups that are mostly fine reads mostly green.
+    const weights = MAP_PARTS.map((part): [MapPart, number] => [part, thin.reduce((sum, child) => sum + (partWeights(child).find(([p]) => p === part)?.[1] ?? 0), 0)]).filter(([, w]) => w > 0)
+    const share = (weights.reduce((sum, [, w]) => sum + w, 0) / total) * span
+    arcs.push({ id: `${entry.id}::rest`, parent: entry.id, depth, start: at, end: at + share, label: `${thin.length.toLocaleString()} smaller`, kind: 'rest', bands: bandsOver(weights, at, share), members: thin.map((t) => t.id) })
   }
   place(center, 0, 1, 1)
   return arcs
 }
 
 /**
+ * What a root holds, as ids the map and the table can light: every entry whose `held_by` names
+ * the root (the scopes with a node it holds), and every node whose row names it (`root.id` of
+ * `GET /state`). Both are the server's attribution; this only collects the ids.
+ */
+export function heldIds(tree: RollupTree, rows: Iterable<{ id: string; root: { id: string } | null }>, root: string): Set<string> {
+  const out = new Set<string>()
+  for (const entry of tree.entries.values()) if (entry.held_by.some((h) => h.root === root)) out.add(entry.id)
+  for (const row of rows) if (row.root?.id === root) out.add(row.id)
+  return out
+}
+
+/**
  * An SVG path for a ring sector: from `start` to `end` (fractions of a turn, clockwise from 12
  * o'clock), between radii `r0` and `r1`, centred on (0, 0). `gap` (px) is taken off each side
  * as a constant width at every radius, so neighbouring sectors are parted by even, parallel gaps;
- * a sector thinner than its gaps keeps a hairline.
+ * a sector thinner than its gaps keeps a hairline. `sides` says which of its two sides give the
+ * gap up: a colour band inside a segment touches its neighbour band.
  */
-export function arcPath(start: number, end: number, r0: number, r1: number, gap = 0): string {
+export function arcPath(start: number, end: number, r0: number, r1: number, gap = 0, sides: readonly [boolean, boolean] = [true, true]): string {
   const full = end - start >= 0.9999
   const turn = 2 * Math.PI
   const at = (r: number): [number, number] => {
     if (full) return [start * turn, (start + 0.9999) * turn]
     const pad = r > 0 ? gap / 2 / r : 0
-    const a0 = start * turn + pad
-    const a1 = end * turn - pad
+    const a0 = start * turn + (sides[0] ? pad : 0)
+    const a1 = end * turn - (sides[1] ? pad : 0)
     if (a1 > a0) return [a0, a1]
     const mid = ((start + end) / 2) * turn
     return [mid - 0.0005, mid + 0.0005]

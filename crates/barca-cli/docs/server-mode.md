@@ -585,8 +585,10 @@ gap and the `action` that clears it (`wait`, `run`, `add_schedule`, `resume_sche
 typical compute time of what it holds). Every node that is not fresh is under one root. It
 takes the scope of `GET /state` (`?targets=`, `?files=`), is the document `barca status
 --rollup --json` prints (`barca docs status-fields`, "The rollup"), and is what the web UI's
-health map, health bars, group rows, causes and failures list render, so the map, the bars
-and the CLI state the same numbers. It sums the status result `GET /state` is built from: no
+health map, health bars, group rows, to-do list and failures list render, so the map, the bars
+and the CLI state the same numbers. An entry's `not_fresh` and `held_by` say how many of its
+nodes are not fresh and which roots hold them there, so the page's list for an open group is
+that group's entry, not a filter in the browser. It sums the status result `GET /state` is built from: no
 status is computed for it. Its `as_of` is the start of the current minute on the server's
 clock, so an unchanged poll within a minute is a `304`; `gap_seconds` is read at the start
 of the minute on every route for the same reason. Each row's `root` names what holds it; the

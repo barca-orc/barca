@@ -104,10 +104,13 @@
   /* The health map's colours (HealthMap): soft, luminous pastels in OKLCH, even in lightness, on
      the dark canvas; each ring out is a step lighter in the same hue. Only the map uses them;
      glyphs keep --state-*. */
-  --map-failing:   oklch(0.72 0.15 22);
-  --map-attention: oklch(0.84 0.12 86);
-  --map-ok:        oklch(0.80 0.11 162);
-  --map-unknown:   oklch(0.60 0.045 258);
+  --map-failing:         oklch(0.72 0.15 22);
+  --map-overdue:         oklch(0.78 0.14 52);
+  --map-no-refresh-path: oklch(0.86 0.12 88);
+  --map-queued:          oklch(0.72 0.09 290);
+  --map-undecided:       oklch(0.58 0.012 258);
+  --map-catching-up:     oklch(0.76 0.09 235);
+  --map-fresh:           oklch(0.80 0.11 162);
   /* The check or cross cut out of a filled glyph: the page behind it. */
   --glyph-ink:      var(--c-ink-900);
 
