@@ -157,5 +157,5 @@ def test_the_table_prints_the_reasons(tmp_path):
         check=True,
         env={**os.environ, "BARCA_OUTPUT": "pretty"},
     )
-    assert "why: 6 steps of 3 nodes were not cache hits" in table.stdout
-    assert "never_run" in table.stdout
+    assert "why: 6 steps ran: " in table.stdout
+    assert "  never run\n" in table.stdout

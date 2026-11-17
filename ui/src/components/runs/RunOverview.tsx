@@ -6,8 +6,8 @@ import { api } from '@/lib/api'
 import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
 import { plural } from '@/lib/plural'
-import { runHref } from '@/lib/running'
-import { ACTIVE_SHOWN, attemptsLabel, cancellationNotice, runOverview, triggerDetail } from '@/lib/runExplain'
+import { elapsedLabel, runHref } from '@/lib/running'
+import { ACTIVE_SHOWN, activityNow } from '@/lib/runLive'
 import { runIsLive } from '@/lib/runs'
 import type { ActiveStep, NodeGroup, RunView } from '@/lib/types'
 import { MiddleName } from '../MiddleName'
@@ -27,15 +27,15 @@ export interface RunOverviewViewProps {
 }
 
 /**
- * The top of a run's panel (issue 925): why the run was not served from cache, who asked for it and
- * why, how its attempts relate to its steps, why it was cancelled, and, while it runs, how far
- * it is, what it is doing now, by group, how long is left and what took longest.
+ * The top of a run's panel: why the run was not served from cache, who asked for it and why,
+ * its retries, why it was cancelled, and, while it runs, how far it is, what it is doing now,
+ * by group, how long is left and what took longest. The words are the server's
+ * (`run.explanation`); only the nodes in flight are laid out here.
  */
 export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewProps) {
   const live = runIsLive(run.status)
-  const cancel = cancellationNotice(run.cancellation)
-  const attempts = attemptsLabel(run.attempts, run.retries)
-  const overview = live ? runOverview(run, active, groups, nowMs) : null
+  const { cancellation: cancel, attempts, progress, slowest, why } = run.explanation
+  const overview = live && progress ? { progress, now: activityNow(active, groups), elapsed: elapsedLabel(run.started_at, nowMs) } : null
   return (
     <Section title="Run overview">
       {cancel && (
@@ -46,7 +46,7 @@ export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewP
         </div>
       )}
       <dl className="barca-facts">
-        <div className="barca-fact"><dt>Requested by</dt><dd>{triggerDetail(run.triggered_by, run.principal)}</dd></div>
+        <div className="barca-fact"><dt>Requested by</dt><dd>{run.explanation.requested_by}</dd></div>
         {attempts && <div className="barca-fact"><dt>Attempts</dt><dd>{attempts}</dd></div>}
         {run.trigger_reason && <div className="barca-fact" data-wide><dt>Reason</dt><dd>“{run.trigger_reason}”</dd></div>}
       </dl>
@@ -59,41 +59,41 @@ export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewP
             {overview.progress.percent !== null && <>{overview.progress.percent}% · </>}
             {overview.progress.done.toLocaleString()}{overview.progress.total !== null && <> of {plural(overview.progress.total, 'step')}</>}
             {' '}({overview.progress.executed.toLocaleString()} executed, {overview.progress.cached.toLocaleString()} cached)
-            {overview.progress.keys && <> · {overview.progress.keys.done.toLocaleString()} of {plural(overview.progress.keys.total, 'key')} of the nodes in flight</>}
-            {' '}· {overview.elapsed}{overview.eta && <> · {overview.eta} at the rate so far</>}
+            {overview.now.keys && <> · {overview.now.keys.done.toLocaleString()} of {plural(overview.now.keys.total, 'key')} of the nodes in flight</>}
+            {' '}· {overview.elapsed}{overview.progress.eta && <> · {overview.progress.eta} at the rate so far</>}
           </p>
           <span className="barca-run-reason-label">Executing now</span>
-          {overview.running.length === 0
-            ? <p className="barca-note barca-muted">{overview.queued > 0 ? `${plural(overview.queued, 'node')} waiting for a worker.` : 'Between steps.'}</p>
+          {overview.now.running.length === 0
+            ? <p className="barca-note barca-muted">{overview.now.queued > 0 ? `${plural(overview.now.queued, 'node')} waiting for a worker.` : 'Between steps.'}</p>
             : <ul className="barca-run-active">
-                {overview.running.slice(0, ACTIVE_SHOWN).map((node) => (
+                {overview.now.running.slice(0, ACTIVE_SHOWN).map((node) => (
                   <li key={node.nodeId}>
                     <StatusGlyph glyph="running" size={12} live />
                     <Link to={`/assets?node=${encodeURIComponent(node.nodeId)}`} title={node.nodeId}><MiddleName name={shortName(node.nodeId)} /></Link>
                     {node.keys && <span className="barca-cell-sub">{node.keys}</span>}
                   </li>
                 ))}
-                {(overview.running.length > ACTIVE_SHOWN || overview.queued > 0) && (
+                {(overview.now.running.length > ACTIVE_SHOWN || overview.now.queued > 0) && (
                   <li className="barca-note barca-muted">
-                    {overview.running.length > ACTIVE_SHOWN && <>{(overview.running.length - ACTIVE_SHOWN).toLocaleString()} more running</>}
-                    {overview.running.length > ACTIVE_SHOWN && overview.queued > 0 && ' · '}
-                    {overview.queued > 0 && <>{overview.queued.toLocaleString()} queued</>}
+                    {overview.now.running.length > ACTIVE_SHOWN && <>{(overview.now.running.length - ACTIVE_SHOWN).toLocaleString()} more running</>}
+                    {overview.now.running.length > ACTIVE_SHOWN && overview.now.queued > 0 && ' · '}
+                    {overview.now.queued > 0 && <>{overview.now.queued.toLocaleString()} queued</>}
                   </li>
                 )}
               </ul>}
-          {overview.groups.length > 0 && <>
+          {overview.now.groups.length > 0 && <>
             <span className="barca-run-reason-label">By group</span>
             <ul className="barca-run-groups">
-              {overview.groups.slice(0, GROUPS_SHOWN).map((g) => (
+              {overview.now.groups.slice(0, GROUPS_SHOWN).map((g) => (
                 <li key={g.group}><MiddleName name={g.group} /><span className="barca-cell-sub">{g.running} running{g.queued > 0 && `, ${g.queued} queued`}</span></li>
               ))}
             </ul>
           </>}
-          {overview.slowest.length > 0 && <>
+          {slowest.length > 0 && <>
             <span className="barca-run-reason-label">Slowest so far</span>
             <ul className="barca-run-groups">
-              {overview.slowest.map((s) => (
-                <li key={s.nodeId}><MiddleName name={shortName(s.nodeId)} /><span className="barca-cell-sub">{formatSeconds(s.seconds)}{s.keys > 1 && ` over ${plural(s.keys, 'key')}`}</span></li>
+              {slowest.map((s) => (
+                <li key={s.node_id}><MiddleName name={shortName(s.node_id)} /><span className="barca-cell-sub">{formatSeconds(s.seconds)}{s.keys > 1 && ` over ${plural(s.keys, 'key')}`}</span></li>
               ))}
             </ul>
           </>}
@@ -102,7 +102,7 @@ export function RunOverviewView({ run, active, groups, nowMs }: RunOverviewViewP
       {/* A run cancelled in the queue decided nothing: the notice above says so. */}
       {run.cancellation?.started !== false && <>
         <span className="barca-run-reason-label">Why these steps ran</span>
-        <RunReasons plan={run.plan_reasons} live={live} executed={run.steps_executed ?? 0} />
+        <RunReasons why={why} />
       </>}
     </Section>
   )

@@ -44,6 +44,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the verb of the multi-target summary line",
     ),
     (
+        "run_explanation.rs",
+        "ran",
+        "the verb of a run's `why` headline",
+    ),
+    (
         "telemetry/datadog.rs",
         "skipped",
         "a telemetry run status: a serve tick that started no run",

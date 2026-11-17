@@ -1195,6 +1195,9 @@
 .barca-run-step { padding: 8px 0; }
 .barca-run-node-ok { padding: 8px 0; font-size: var(--text-xs); color: var(--text-muted); }
 .barca-run-target-line { margin: 8px 0 0; font-size: var(--text-sm); color: var(--text-strong); }
+/* A run's targets, one to a line: a long name ends in an ellipsis, never wraps mid-word. */
+.barca-run-targets { list-style: none; margin: 0; padding: 0; min-width: 0; }
+.barca-run-targets > li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* A state and the facts beside it: the word, its reason, a failed last attempt. */
 .barca-state-line { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }

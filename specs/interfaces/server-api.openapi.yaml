@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '23'
+  version: '24'
   description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -6470,6 +6470,169 @@ components:
             - error
           envelope:
             $ref: '#/components/schemas/Error'
+    RunExplanation:
+      type: object
+      additionalProperties: false
+      required: [targets, requested_by, attempts, steps, target_outcomes, cancellation, why, progress, slowest]
+      description: The run in words, derived from what it recorded (plan_reasons, cancellation, its
+        counters and steps_page.nodes) by the code that prints barca history RUN_ID, whose --json has
+        the same object. The wording may change; parse the recorded fields. Experimental.
+      properties:
+        targets:
+          type: array
+          description: The run's targets, one each; its job's node ids, else the targets as given. Empty
+            for a run of every asset.
+          items:
+            type: string
+        requested_by:
+          type: string
+          description: What started the run and, when the server knows, who (api · token:ci-bot).
+        attempts:
+          type: [string, 'null']
+          description: Steps tried, with retries counted apart from each step's first attempt (29 steps,
+            no retries); null before the run recorded an attempt.
+        steps:
+          type: string
+          description: The run's steps by outcome (7 ok · 1 failed · 2 skipped · 0 cached), or what a run
+            that did not finish started.
+        target_outcomes:
+          type: array
+          description: What became of each target, one line each; empty for a run of every asset or when
+            the run's plan could not be rebuilt.
+          items:
+            type: string
+        cancellation:
+          anyOf:
+          - type: object
+            additionalProperties: false
+            required: [headline, detail, run]
+            properties:
+              headline:
+                type: string
+              detail:
+                type: [string, 'null']
+              run:
+                type: [string, 'null']
+                description: A run to open; the one doing the same work, else the first it waited behind.
+          - type: 'null'
+          description: For a cancelled run, why, in words.
+        why:
+          type: object
+          additionalProperties: false
+          required: [headline, groups, omitted, partial]
+          description: Why the run executed what it did; its steps grouped by the reason they ran.
+          properties:
+            headline:
+              type: string
+              description: The run's steps and its largest three reasons; with no groups, what there is to
+                say instead (Every step was served from cache.).
+            groups:
+              type: array
+              description: By reason category, most steps first.
+              items:
+                type: object
+                additionalProperties: false
+                required: [category, label, steps, rows]
+                properties:
+                  category:
+                    type: string
+                    description: A category of plan_reasons.
+                  label:
+                    type: string
+                  steps:
+                    type: integer
+                    minimum: 0
+                    description: The steps executed for it, at most the run's; a step with several changed
+                      components counts under each, so groups can add up to more.
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [subject, counts, nodes, steps, share, example, example_text, line]
+                      properties:
+                        subject:
+                          type: [string, 'null']
+                          description: What changed, without the word the category says; null when the
+                            category says it all.
+                        counts:
+                          type: string
+                          description: What was counted; nodes when each ran one step (27 nodes), else steps
+                            of nodes (5,000 steps of 1 node).
+                        nodes:
+                          type: integer
+                          minimum: 0
+                        steps:
+                          type: integer
+                          minimum: 0
+                        share:
+                          type: number
+                          minimum: 0
+                          maximum: 1
+                          description: Its share of the steps the run decided to execute.
+                        example:
+                          type: string
+                          description: The first node executed for it, a full node id.
+                        example_text:
+                          type: string
+                          description: That node's name, after e.g. when it is one of several.
+                        line:
+                          type: string
+                          description: The row in one line, as barca history RUN_ID prints it.
+            omitted:
+              type: integer
+              minimum: 0
+            partial:
+              type: boolean
+              description: The run is still deciding phases; these are the reasons so far.
+        progress:
+          anyOf:
+          - type: object
+            additionalProperties: false
+            required: [done, total, percent, executed, cached, eta_seconds, eta]
+            properties:
+              done:
+                type: integer
+                minimum: 0
+              total:
+                type: [integer, 'null']
+                minimum: 0
+              percent:
+                type: [integer, 'null']
+                minimum: 0
+                maximum: 100
+              executed:
+                type: integer
+                minimum: 0
+              cached:
+                type: integer
+                minimum: 0
+              eta_seconds:
+                type: [number, 'null']
+                description: Seconds left at the rate the run has executed steps so far; null when it
+                  cannot be told yet.
+              eta:
+                type: [string, 'null']
+                description: eta_seconds in words (about 4m left).
+          - type: 'null'
+          description: For a run in progress, how far it is; null otherwise.
+        slowest:
+          type: array
+          maxItems: 5
+          description: The nodes that took longest, slowest first.
+          items:
+            type: object
+            additionalProperties: false
+            required: [node_id, seconds, keys]
+            properties:
+              node_id:
+                type: string
+              seconds:
+                type: number
+                description: Summed over its keys, which may have overlapped.
+              keys:
+                type: integer
+                minimum: 0
     RunView:
       type: object
       additionalProperties: false
@@ -6499,6 +6662,7 @@ components:
       - retries
       - plan_reasons
       - cancellation
+      - explanation
       - outcome
       - error
       - steps
@@ -6577,6 +6741,8 @@ components:
           - type: 'null'
           description: Why the run executed what it did; null before it decided to execute anything.
         cancellation: *id_cancellation
+        explanation:
+          $ref: '#/components/schemas/RunExplanation'
         outcome:
           anyOf:
           - $ref: '#/components/schemas/Outcome'

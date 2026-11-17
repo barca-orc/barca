@@ -600,6 +600,11 @@ pub struct RunView {
     /// For a cancelled run: who cancelled it, whether it had started and what it waited behind.
     /// Experimental.
     pub cancellation: Option<crate::run_explain::Cancellation>,
+    /// The run in words (#956): its steps grouped by the reason they ran, its retries apart
+    /// from its attempts, its targets as a list and what became of them, and how far a run in
+    /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.
+    /// Experimental.
+    pub explanation: crate::run_explanation::RunExplanation,
     /// The run's full result once it finished; `null` while it runs, and for runs not started
     /// through `barca serve`.
     #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown> | null"))]

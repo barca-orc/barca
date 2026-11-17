@@ -280,6 +280,16 @@ changed, as `barca status` names it), `changed` (no components recorded to compa
 `retries` counts the attempts that retried a step, so `attempts` is the steps recorded plus
 `retries`.
 
+`explanation` (experimental) says the same in words, computed once on the server so that
+`barca history RUN_ID` and the web UI agree: `why` groups the steps by the reason they ran
+(`"headline": "29 steps ran: 27 sensors (always run), 2 never run"`, then `groups[]` of
+`{category, label, steps, rows}`), `attempts` counts retries apart from each step's first
+attempt (`"29 steps, no retries"`), `targets` is the run's targets as a list, `target_outcomes`
+says what became of each, `cancellation` is `{headline, detail, run}` for a cancelled run, and
+a run in progress has `progress` (`{done, total, percent, executed, cached, eta_seconds, eta}`)
+and `slowest`. Its wording may change: parse `plan_reasons`, `attempts`, `retries` and
+`cancellation`.
+
 `steps` lists at most 1000 steps; `?offset=N` (with `?limit=`) pages through the rest, and
 `steps_page.next_offset` is where the next page starts. While a run goes, `logs` holds its newest
 5,000 lines.

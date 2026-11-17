@@ -11,7 +11,7 @@ import { headline } from './health'
 import { only, type Next } from './program'
 import { parseRunStatus, runIsLive } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
-import type { FirstFailure, RunList, RunNodeSummary, RunStep, RunSummary, RunView, StatusKind } from './types'
+import type { FirstFailure, RunList, RunNodeSummary, RunStep, RunSummary, StatusKind } from './types'
 
 const RUNS_PAGE_SIZE = 100
 export const RUNS_MAX = 1000
@@ -211,16 +211,6 @@ export function stepsLabel(executed: number, cached: number, failed = 0, skipped
   return parts.join(' · ')
 }
 
-/** `stepsLabel` for a run's detail: failed keys and skipped nodes from its per-node summary. */
-export function runViewSteps(run: { steps_executed: number; steps_cached: number; status?: string }, nodes: readonly RunNodeSummary[]): string {
-  if (run.status === 'cancelled' || run.status === 'interrupted' || run.status === 'error') {
-    return `${run.steps_executed.toLocaleString()} started · ${run.steps_cached.toLocaleString()} cached`
-  }
-  const failed = nodes.reduce((sum, n) => sum + n.failed, 0)
-  const skipped = nodes.filter((n) => n.status === 'skipped').length
-  return stepsLabel(run.steps_executed, run.steps_cached, failed, skipped)
-}
-
 /** How far a run got, in steps, and the step it stopped at when it did not finish. */
 export function runProgress(run: RunSummary): { steps: string; stoppedAt: string | null; title: string } {
   const total = run.steps_total
@@ -379,32 +369,6 @@ export function runStepRows(steps: readonly RunStep[], nodes: readonly RunNodeSu
     if (unlisted > 0) rows.push({ kind: 'unlisted', node, count: unlisted })
   }
   return rows
-}
-
-/**
- * What became of each target, one line each, from the run's planned nodes:
- * `publish_plan did not run: upstream demand_forecast failed 7 keys`. Empty when the nodes carry
- * no status (the server could not rebuild the run's plan), or the run has no named target.
- */
-export function runTargetLines(run: Pick<RunView, 'target' | 'job'>, nodes: readonly RunNodeSummary[]): string[] {
-  if (!nodes.some((n) => n.status)) return []
-  const ids = run.job && run.job !== 'all' ? run.job.split(',') : (run.target?.split(',') ?? [])
-  const byShort = new Map(nodes.map((n) => [shortName(n.node_id), n]))
-  return ids.flatMap((id) => {
-    const name = shortName(id.trim())
-    const node = nodes.find((n) => n.node_id === id.trim()) ?? byShort.get(name)
-    if (!node) return []
-    const keys = (n: number) => `${n.toLocaleString()} key${n === 1 ? '' : 's'}`
-    if (node.status === 'skipped') {
-      if (!node.blocked_by) return [`${name} did not run: the run stopped before it`]
-      const up = nodes.find((n) => n.node_id === node.blocked_by)
-      const failed = up && up.keys > 1 ? ` ${keys(up.failed)}` : ''
-      return [`${name} did not run: upstream ${shortName(node.blocked_by)} failed${failed}`]
-    }
-    if (node.status === 'cached') return [`${name} was cached: nothing to do`]
-    if (node.failed) return [node.keys > 1 ? `${name} failed: ${node.failed.toLocaleString()} of ${keys(node.keys)}` : `${name} failed`]
-    return [node.keys > 1 ? `${name} ran: ${keys(node.keys)}` : `${name} ran`]
-  })
 }
 
 /** One hour of the activity strip. */
