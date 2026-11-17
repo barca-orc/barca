@@ -305,21 +305,20 @@
     },
     "schedules": {
       "kind": "format",
-      "does": "scheduled nodes as rows: next run, last run, the server's lateness in words"
+      "does": "scheduled nodes as rows: next slot, last tick, the server's `late` and `queue_bound`, its typical queue wait and run time in words"
     },
     "time": {
       "kind": "format",
       "does": "the one time format: relative, absolute, zones"
     },
+    "estimates": {
+      "kind": "format",
+      "does": "when a node or a scope is fresh, in words: the served `expected_fresh_at`, `recheck_at` and `no_estimate` of a row, `fresh_by` and `unbounded` of a rollup entry"
+    },
     "health": {
       "kind": "format",
       "does": "a scope's rollup entry and its roots as the words of a bar, a label and a failures list",
       "derives": [
-        {
-          "what": "`scopeAge`: a group row's \"Last success\" is the oldest of its members' times",
-          "reason": "the rollup has no times yet",
-          "issue": 962
-        },
         {
           "what": "`consumersOf`, `downstreamIds`: the node panel's downstream count and what a pause with `--downstream` would cover",
           "reason": "layout: a walk of the static graph (`inputs` of `GET /assets`, which `barca list --json` prints) for navigation; it reads no state and decides no health",

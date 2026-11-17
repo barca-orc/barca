@@ -10,6 +10,24 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- **Every place the web UI shows a state says when it will be fresh, or why there is no
+  estimate (#968).** A node's row and panel read `fresh ~15:05` (the server's
+  `expected_fresh_at`, to the minute and rounded up), `rechecked 15:00` where a tick will only
+  look (`recheck_at`), or `no estimate:` with the reason; the panel adds the cause in the
+  health map's word, the root that holds the node with a link to it, the root's fact and what
+  clears it, how many ticks missed the node and what the last one found. A group's row reads
+  `all fresh by ~15:02`, `152 with no estimate`, or both, from its rollup entry, in place of
+  "Last success · oldest member", and the State column, its bar and the page header's bar use
+  the map's cause words and colours (`1 failing · 84 catching up`, `all 116 fresh`), so a page
+  has one legend; "worst first" orders rows by the served `weight`. The Schedules page takes
+  late from the server alone and shows each schedule's next slot, its typical queue wait and
+  run time, and `queue-bound` with what to do, late and queue-bound schedules first; a
+  waiting run in the queue says `starts in ~40s`. One field is new: every node carries
+  `no_estimate`, why a node that is not fresh has no `expected_fresh_at` (`failing`, `paused`,
+  `scheduler_off`, `no_path`, `undecided`, `missed`, `queue_stopped`, `no_scheduler_here`,
+  `not_promised`; `null` for a fresh node and one with an estimate), in `barca status --json`,
+  `GET /state`, `GET /nodes` and as a `barca.nodes` column (`barca docs status-fields`,
+  "Times").
 - **Roots rank by how far what they hold is from fresh, and that distance is served (#1028).**
   The to-do list put every root holding a node with no estimate first, by node count, so a
   `never run` root whose action is "wait" outranked a change holding four times as many nodes,

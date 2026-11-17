@@ -10,7 +10,7 @@
 
 import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
 import { sourceFile } from './pipeline'
-import { parseTime } from './time'
+import { formatAbout, parseTime } from './time'
 import type { ListNode, NodeState, ScheduleJob } from './types'
 
 export interface ScheduleRow {
@@ -35,7 +35,19 @@ export interface ScheduleRow {
   lastFailed: boolean
   /** The scheduler skips this node's ticks; `until` (ms) ends a timed pause. */
   paused: { until: number | null } | null
+  /**
+   * How long its ticks' runs typically wait for a run slot (`schedule.typical_queue_wait_seconds`),
+   * as an estimate: `~12s`; null when they do not wait or nothing is recorded.
+   */
+  queueWait: string | null
+  /** How long its ticks' runs typically take (`schedule.typical_run_seconds`): `~17s`; null with none recorded. */
+  typicalRun: string | null
+  /** The server says its ticks wait longer than they are apart (`schedule.queue_bound`). */
+  queueBound: boolean
 }
+
+/** What to do about a queue-bound schedule: the hint `barca status --rollup` prints for `raise max_runs`. */
+export const QUEUE_BOUND_HINT = 'Its ticks wait for a run slot longer than they are apart. Give the server more run slots (barca serve --max-runs N, or [server] max_runs in barca.toml), or space the schedules.'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -87,7 +99,11 @@ export function formatLate(sinceMs: number, nowMs: number): string {
   return `late by ${Math.floor(h / 24)}d`
 }
 
-/** Every node with a cron schedule: the late ones first (longest late first), then soonest next run. */
+/**
+ * Every node with a cron schedule: the ones the server calls late first (longest late first),
+ * then the queue-bound ones, then soonest next slot. Late and queue-bound are the server's
+ * words (`schedule.late`, `schedule.queue_bound`); this only puts them on top.
+ */
 export function scheduleRows(
   assets: ListNode[],
   states: NodeState[],
@@ -128,12 +144,16 @@ export function scheduleRows(
           state: st ? shownCacheState(st) : null,
           lastFailed: st ? lastAttemptFailed(st) : false,
           paused: paused ? { until: pausedUntilMs } : null,
+          queueWait: stands && stands.typical_queue_wait_seconds > 0 ? formatAbout(stands.typical_queue_wait_seconds) : null,
+          typicalRun: stands && stands.typical_run_seconds !== null ? formatAbout(stands.typical_run_seconds) : null,
+          queueBound: stands?.queue_bound ?? false,
         },
       ]
     })
     .sort(
       (a, b) =>
         (a.late?.sinceMs ?? Infinity) - (b.late?.sinceMs ?? Infinity) ||
+        Number(b.queueBound) - Number(a.queueBound) ||
         (a.nextRunMs ?? Infinity) - (b.nextRunMs ?? Infinity) ||
         a.name.localeCompare(b.name),
     )

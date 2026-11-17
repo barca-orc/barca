@@ -233,7 +233,7 @@ export function GroupedPipelinePage() {
             </span>
           )}
           <div className="barca-scope-health">
-            {rollup.loaded && scopeEntry && <HealthBar scope={scopeEntry} labelLimit={3} width={80} />}
+            {rollup.loaded && scopeEntry && <HealthBar scope={scopeEntry} labelLimit={2} width={80} quiet />}
           </div>
           {scope && level.external.length > 0 && !flat && !graph && show === 'items' && (
             <span className="barca-group-external" title={level.external.map(shortName).join(', ')}>
@@ -421,6 +421,7 @@ export function GroupedPipelinePage() {
               onSelect={revealNode}
               onOpenGraph={(id) => update({ view: 'graph', group: tree.parents.get(id) ?? null, focus: id, node: null, show: null })}
               onClose={() => select(null)}
+              rollupRoots={rollup.tree.roots}
             />
           )}
         </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { failedKeyNodes, keysLine, consumersOf, downstreamIds, failures, headline, healthLabel, healthParts, needsAttention, partCount, scopeAge, ageCell, streakLabel, successOfLabel, relativeTraceback, pathBreaks, type ScopeHealth } from './health'
+import { failedKeyNodes, keysLine, consumersOf, downstreamIds, failures, headline, healthLabel, healthParts, partCount, streakLabel, relativeTraceback, pathBreaks, type ScopeHealth } from './health'
 import { blockerOf } from './healthDisplay'
 import { counts, failureRoot } from './testdata/rollup'
 import type { NodeState, PartitionKeys } from './types'
@@ -41,7 +41,6 @@ describe('health', () => {
     ])
     expect(healthLabel(scope, 1)).toBe('2 failing')
     expect(partCount(scope, 'blocked')).toBe(1)
-    expect(needsAttention(scope)).toBe(1)
     expect(healthLabel({ health: counts(), nodes: 0, running: 0 })).toBe('')
     expect(healthLabel({ health: counts({ suspect: 1, never_run: 2 }), nodes: 3, running: 0 })).toBe('1 suspect data · 2 never run')
   })
@@ -71,57 +70,11 @@ describe('health', () => {
   })
 })
 
-describe('scopeAge', () => {
-  const aged = (id: string, ok: string | null, since: string | null, runs: number) =>
-    ({ id, last_success_at: ok, failing_since: since, consecutive_failures: runs }) as unknown as NodeState
-
-  it('reports the worst of its members', () => {
-    const byId = new Map([
-      ['a', aged('a', '2026-10-28 10:00:00', '2026-10-29 01:00:00', 3)],
-      ['b', aged('b', '2026-10-29 10:00:00', '2026-10-29 05:00:00', 1)],
-      ['c', aged('c', null, null, 0)],
-    ])
-    expect(scopeAge(['a', 'b', 'c', 'unloaded'], byId)).toEqual({
-      lastSuccessAt: '2026-10-28 10:00:00', failingSince: '2026-10-29 01:00:00', failures: 3, failing: 2,
-    })
-    expect(scopeAge(['c'], byId)).toEqual({ lastSuccessAt: null, failingSince: null, failures: 0, failing: 0 })
-  })
-})
-
 describe('streakLabel', () => {
   it('says a failing streak in runs in a row, never as a total', () => {
     expect(streakLabel(1)).toBe('1 failed run')
     expect(streakLabel(130)).toBe('130 failed runs in a row')
     expect(streakLabel(1205)).toBe('1,205 failed runs in a row')
-  })
-})
-
-describe('ageCell', () => {
-  const age = { lastSuccessAt: '2026-10-28 10:00:00', failingSince: '2026-10-29 01:00:00', failures: 130, failing: 3 }
-
-  it('says a node is failing, since when and how many runs in a row', () => {
-    expect(ageCell({ ...age, failing: 1 }, { group: false, partitioned: false })).toEqual({
-      success: { at: '2026-10-28 10:00:00', of: 'node' },
-      failing: { lead: 'failing', since: '2026-10-29 01:00:00', tail: ' · 130 failed runs in a row' },
-    })
-  })
-
-  it("says a partitioned node's success is any key's, which can be newer than its failing streak", () => {
-    expect(ageCell({ ...age, failing: 1 }, { group: false, partitioned: true }).success).toEqual({ at: '2026-10-28 10:00:00', of: 'any key' })
-    expect(successOfLabel('any key')).toBe('any key')
-    expect(successOfLabel('node')).toBeNull()
-  })
-
-  it("summarizes every failing member of a group, not its oldest's streak, and says whose success it shows", () => {
-    expect(ageCell(age, { group: true, partitioned: false })).toEqual({
-      success: { at: '2026-10-28 10:00:00', of: 'oldest member' },
-      failing: { lead: '3 failing · oldest', since: '2026-10-29 01:00:00', tail: '' },
-    })
-    expect(ageCell({ ...age, failing: 1 }, { group: true, partitioned: false }).failing?.lead).toBe('1 failing')
-  })
-
-  it('has no failing line for a healthy scope, and no success for one that never succeeded', () => {
-    expect(ageCell({ lastSuccessAt: null, failingSince: null, failures: 0, failing: 0 }, { group: false, partitioned: false })).toEqual({ success: null, failing: null })
   })
 })
 

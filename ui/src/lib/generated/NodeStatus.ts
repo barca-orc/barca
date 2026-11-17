@@ -7,6 +7,7 @@ import type { Health } from "./Health";
 import type { HealthReason } from "./HealthReason";
 import type { LastCheck } from "./LastCheck";
 import type { LastMaterialization } from "./LastMaterialization";
+import type { NoEstimate } from "./NoEstimate";
 import type { PartitionState } from "./PartitionState";
 import type { RefreshPath } from "./RefreshPath";
 import type { Root } from "./Root";
@@ -101,6 +102,13 @@ expected_fresh_at: string | null,
  * `null` when it has no refresh path or the path has no next tick.
  */
 recheck_at: string | null,
+/**
+ * Why a node that is not fresh has no `expected_fresh_at`, in one word (`barca docs
+ * status-fields`, "Times"): `failing`, `paused`, `scheduler_off`, `no_path`,
+ * `undecided`, `missed`, `queue_stopped`, `no_scheduler_here` or `not_promised`. `null`
+ * for a fresh node and one that has an estimate.
+ */
+no_estimate: NoEstimate | null,
 /**
  * Per-key cache state of a partitioned node.
  */

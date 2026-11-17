@@ -44,6 +44,7 @@ nodes[].last_materialization.size_bytes : integer
 nodes[].last_materialization.status : string
 nodes[].measured : boolean
 nodes[].name : string
+nodes[].no_estimate : null
 nodes[].partitioned : boolean
 nodes[].recheck_at : null
 nodes[].refresh_path : null

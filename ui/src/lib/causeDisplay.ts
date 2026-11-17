@@ -17,6 +17,7 @@
 
 import type { Cause } from './generated/Cause'
 import type { CauseCounts } from './generated/CauseCounts'
+import type { NoEstimate } from './generated/NoEstimate'
 import type { Glyph } from './glyph'
 import type { Tone } from './tone'
 
@@ -98,4 +99,42 @@ export function causeParts(counts: CauseCounts): CausePart[] {
 /** `14 overdue · 152 no refresh path · 180 catching up`: the line `barca status --rollup` prints. */
 export function causeLine(counts: CauseCounts): string {
   return causeParts(counts).map((p) => `${p.count.toLocaleString()} ${p.label}`).join(' · ')
+}
+
+/** Why a node has no estimate (`no_estimate`), in the words `barca-core` gives each reason. */
+const NO_ESTIMATE = {
+  failing: 'until the failure is fixed',
+  paused: 'paused',
+  scheduler_off: 'no scheduler is firing its schedule',
+  no_path: 'no refresh path',
+  undecided: 'undecided until a run reports',
+  missed: 'ticks missed it',
+  queue_stopped: 'the run queue is not starting runs',
+  no_scheduler_here: 'no scheduler runs here',
+  not_promised: 'a result above it may come out unchanged',
+} satisfies Record<NoEstimate, string>
+
+export function noEstimateWord(reason: NoEstimate): string {
+  return NO_ESTIMATE[reason]
+}
+
+/**
+ * The reasons a tick's next look can settle: a row with one of them and a `recheck_at` says
+ * when it is rechecked. Any other reason needs someone (or a queue or scheduler that is not
+ * there), so the row says the reason, and the recheck only in its tooltip.
+ */
+const SETTLED_BY_A_TICK: readonly NoEstimate[] = ['not_promised', 'undecided']
+
+export function settledByATick(reason: NoEstimate | null): boolean {
+  return reason === null || SETTLED_BY_A_TICK.includes(reason)
+}
+
+/** How a row or a bar shows a node's place on the map: its cause, or fresh. */
+export function mapPartOf(cause: Cause | null): MapPart {
+  return cause ?? 'fresh'
+}
+
+/** The glyph of a map part: a cause's, or the fresh one. */
+export function mapPartGlyph(part: MapPart): Glyph {
+  return part === 'fresh' ? 'fresh' : DISPLAY[part].glyph
 }

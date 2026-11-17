@@ -153,10 +153,11 @@ describe('table names', () => {
 })
 
 describe('entry order', () => {
-  const rank = (name: string, failed = 0, stale = 0, lastSuccessAt: string | null = null) => ({ name, failed, stale, lastSuccessAt })
-  it('is worst first, then by name', () => {
-    const rows = [rank('a_10'), rank('a_2'), rank('z', 0, 3), rank('y', 1)]
+  const rank = (name: string, weight = 0) => ({ name, weight })
+  it('is the farthest from fresh first by the served weight, then by name', () => {
+    const rows = [rank('a_10'), rank('a_2'), rank('z', 6), rank('y', 912)]
     expect(rows.sort((a, b) => compareEntries('worst', a, b)).map((r) => r.name)).toEqual(['y', 'z', 'a_2', 'a_10'])
+    expect(rows.sort((a, b) => compareEntries('name', a, b)).map((r) => r.name)).toEqual(['a_2', 'a_10', 'y', 'z'])
   })
   it('reads the sort from the URL', () => {
     expect(parseEntrySort('name')).toBe('name')

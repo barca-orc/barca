@@ -2,21 +2,11 @@ import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ArrowDown, ArrowUp, ChevronDown } from 'lucide-react'
-import {
-  Age,
-  Button,
-  EmptyNote,
-  MiddleName,
-  ResetDatabaseButton,
-  RunningBadge,
-  Skeleton,
-  StatusBadge,
-  StatusGlyph,
-  TableSpacer,
-} from '@/components'
+import { Age, Button, EmptyNote, MiddleName, ResetDatabaseButton, RunningBadge, Skeleton, StatusBadge, StatusGlyph, TableSpacer, CauseBadge, EstimateCell } from '@/components'
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { RunNotice } from '@/components/RunNotice'
+import { nodeEstimate } from '@/lib/estimates'
 import { useTimeZone } from '@/context/timeZone'
 import { formatInstant } from '@/lib/time'
 import { useNodeRun } from '@/hooks/useNodeRun'
@@ -126,7 +116,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const lines = useMemo(() => tableLines(visible, grouped, new Set(collapsed)), [visible, grouped, collapsed])
   // Columns that say something on this page: Typical when a node takes 0.1s or more, Next run when one has a schedule.
   const columns = assetColumns(rows)
-  const columnCount = 3 + Number(columns.typical) + Number(columns.next)
+  const columnCount = 4 + Number(columns.typical) + Number(columns.next)
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const win = useTableWindow(lines.length, scroller, 36)
@@ -215,6 +205,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             <colgroup>
               <col />
               <col className="col-state" />
+              <col className="col-fresh" />
               <col className="col-last" />
               {columns.typical && <col className="col-typical" />}
               {columns.next && <col className="col-next" />}
@@ -222,7 +213,8 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
             <thead>
               <tr>
                 <SortHeader label="Name" column="name" sort={sort} onSort={onSort} />
-                <SortHeader label="State" column="state" sort={sort} onSort={onSort} className="col-state" />
+                <SortHeader label="State" column="state" sort={sort} onSort={onSort} className="col-state" title="Why it is not fresh, in the words and colours of the health map" />
+                <th className="col-fresh" title="When it is expected to be fresh (an estimate, rounded up), when a tick next rechecks it, or why there is no estimate">Fresh by</th>
                 <SortHeader label="Last run" column="last" sort={sort} onSort={onSort} className="col-last" />
                 {columns.typical && <SortHeader label="Typical" column="typical" sort={sort} onSort={onSort} numeric className="col-typical" title="Median of recent successful runs" />}
                 {columns.next && <SortHeader label="Next run" column="next" sort={sort} onSort={onSort} className="col-next" />}
@@ -311,10 +303,13 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                       <StatusBadge glyph={liveGraphState(liveStatus).glyph} label={liveGraphState(liveStatus).label} live={isLive(liveGraphState(liveStatus))} size="sm" />
                     ) : r.running ? (
                       <RunningBadge running={r.running} nowMs={now} />
-                    ) : (
+                    ) : r.pinned !== null && !r.lastFailed ? (
                       <StatusBadge glyph={nodeStateDisplay(r).glyph} label={nodeStateDisplay(r).label} size="sm" />
+                    ) : (
+                      <CauseBadge cause={r.cause} />
                     )}
                   </td>
+                  <td className="col-fresh"><EstimateCell words={nodeEstimate(r, zone, now)} /></td>
                   <td className="col-last" title={r.last && r.lastAtMs !== null ? `${lastRunTitle(r, now)} · ${formatInstant(r.lastAtMs, zone)}` : undefined}>
                     {lastRunText(r, now)}
                   </td>
@@ -342,6 +337,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
           onSelect={setSelected}
           onOpenGraph={openGraph}
           onClose={() => setSelected(null)}
+          rollupRoots={rollup.tree.roots}
         />
       )}
       </div>

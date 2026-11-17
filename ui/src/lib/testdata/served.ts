@@ -17,7 +17,7 @@ import type { HealthReason } from '../generated/HealthReason'
 import type { NodeState } from '../types'
 import table from './health-alone.json'
 
-type Classified = 'health' | 'health_reason' | 'measured' | 'cause' | 'root' | 'gap_seconds' | 'last_check' | 'refresh_path' | 'stale_since' | 'expected_fresh_at' | 'recheck_at'
+type Classified = 'health' | 'health_reason' | 'measured' | 'cause' | 'root' | 'gap_seconds' | 'last_check' | 'refresh_path' | 'stale_since' | 'expected_fresh_at' | 'recheck_at' | 'no_estimate'
 export type Unserved = Omit<NodeState, Classified> & Partial<Pick<NodeState, Classified>>
 
 const ALONE = table as Record<string, { health: Health; health_reason: HealthReason }>
@@ -37,7 +37,7 @@ export function served(row: Unserved): NodeState {
   // A failing node is its own root; a fixture about a node blocked by another states its `root`.
   const root = row.root ?? ((row.health ?? health) === 'failing' ? { id: `failure:${row.id}`, kind: 'failure' as const, node: row.id } : null)
   // A fixture states a cause and a gap when it is about them: no test reads them otherwise.
-  return { ...row, root, cause: row.cause ?? null, gap_seconds: row.gap_seconds ?? 0, health: row.health ?? health, health_reason: row.health_reason ?? (row.health ? REASON[row.health] : reason), measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null, refresh_path: row.refresh_path ?? null, stale_since: row.stale_since ?? null, expected_fresh_at: row.expected_fresh_at ?? null, recheck_at: row.recheck_at ?? null }
+  return { ...row, root, cause: row.cause ?? null, gap_seconds: row.gap_seconds ?? 0, health: row.health ?? health, health_reason: row.health_reason ?? (row.health ? REASON[row.health] : reason), measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null, refresh_path: row.refresh_path ?? null, stale_since: row.stale_since ?? null, expected_fresh_at: row.expected_fresh_at ?? null, recheck_at: row.recheck_at ?? null, no_estimate: row.no_estimate ?? null }
 }
 
 /** The reason a fixture that states a health without one gets: a default of the fixtures, not a rule. */

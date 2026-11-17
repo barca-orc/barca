@@ -19,7 +19,8 @@ states; and the cause, the root and the gap ("Cause", "Root", "The freshness gap
 #973): `cause`, `root` with every kind, `gap_seconds` and their `barca.nodes` columns,
 `causes`, `asset_causes` and `gap_seconds` of a rollup entry, the root list with `causes`,
 `gap_seconds`, `unbounded` and `action`, and `as_of` and `rollup` in `barca status --json`,
-as those sections' "As implemented" state; the weight ("Distance from fresh", #1028): `weight`
+as those sections' "As implemented" state; `no_estimate` ("Times", #968) and the web UI's
+estimates over the served times ("The web UI's estimates", #968); the weight ("Distance from fresh", #1028): `weight`
 and `weights` of a rollup entry, `weight` of a root and of a `held_by` entry, and the root
 list ranked by it; the server query route ("Server query
 route", #972); a scope's own root list (`not_fresh` and `held_by` of a rollup entry) with
@@ -466,6 +467,7 @@ overlapping schedules, `test_ticks_waiting_on_one_run_slot_name_the_queue_as_the
 | `expected_fresh_at` | when the node is expected to be fresh | fresh; or cause is not `catching_up` or `queued`; or the path has an undecided node |
 | `recheck_at` | when a tick next evaluates the node | no refresh path, or its `next_tick` is `null` |
 | `last_check` | `{"at", "outcome", "schedule"}`: the newest finished tick that had the node as a target (implemented, "Last check") | no retained tick did |
+| `no_estimate` | why a node that is not fresh has no `expected_fresh_at`, in one word (#968, below) | fresh; or it has an estimate |
 
 - `stale_since` by root kind: a changed observation or input is the `created_at` of the root's
   current result; a failure is `failing_since`; code, environment and never-run use the time
@@ -526,6 +528,16 @@ called by `health::classify` once per status result:
   run does not compute (a stale `Manual`, paused or pinned node, read as it is); missed by a
   tick (`missed_ticks >= 1`), unless a running run computes it; and while the run queue is
   paused or draining. Without a live scheduler `next_tick` is `null` and so are both times.
+- **`no_estimate`** (#968; `health::no_estimate`, after the cause and the root are known):
+  the first of `failing` (cause `failing`); `paused`, `scheduler_off`, `no_path` (the root is
+  `schedule_paused`, `scheduler_off`, `no_schedule`; or the cause is `no_refresh_path`);
+  `undecided` (cause `undecided`); `missed` (cause `overdue`); then, for a `queued` or
+  `catching_up` node, `queue_stopped` (the run queue is paused or draining),
+  `no_scheduler_here` (no `recheck_at`: the answering process fires no scheduler) and
+  `not_promised` (a tick will look, and a result above may come out unchanged or a node
+  above is read as it is). Every node that is not fresh has an estimate or a reason, never
+  neither, so no surface shows a blank. Conformance: `a_node_with_no_estimate_says_why`
+  (`crates/barca-core/src/causes.rs`).
 - **Queue entries** (`GET /queue`): each of `max_runs` slots frees when its run ends (its
   start plus its typical run time, never before `as_of`), and a waiting run takes the slot
   that frees first, in queue order. A run's typical time is its schedule's
@@ -630,6 +642,7 @@ All are fields of `NodeStatus`, so one struct serves every surface.
 | `stale_since` | time or `null` | yes | `stale_since` |
 | `expected_fresh_at` | time or `null` | yes | `expected_fresh_at` |
 | `recheck_at` | time or `null` | yes | `recheck_at` |
+| `no_estimate` | string enum or `null` | yes | `no_estimate` |
 | `last_check` | object or `null` | yes | `last_check_at`, `last_check_outcome` |
 | `gap_seconds` | number | yes | `gap_seconds` |
 | `signals` | array (today's `GET /state` shape) | yes (moves from `GET /state` only) | `signals` (list of kinds) |
@@ -777,6 +790,30 @@ list's words).
   the entries whose `held_by` names it and the rows whose `root.id` is its id, on the map
   and in the table; its node's name opens the node. Data signals (`empty`, `rows_changed`,
   `behind_input`, a late schedule) are a section of their own under the list.
+
+### The web UI's estimates (#968)
+
+Presentation over the served times, stated here because "fresh" and "rechecked" are different
+promises and a blank is neither. Implemented in `ui/src/lib/estimates.ts` (the words),
+`ui/src/lib/causeDisplay.ts` (the display tables) and `ui/src/lib/time.ts` (the rounding).
+
+- **A node** (a table row, the panel): `fresh ~15:05` from `expected_fresh_at`, to the minute
+  and rounded up; else, where a tick's look can settle it (`no_estimate` is `not_promised` or
+  `undecided`), `rechecked 15:00` from `recheck_at`, exact; else `no estimate:` and the word
+  of `no_estimate`, with the recheck in the tooltip. A fresh node says when it is next
+  rechecked, or when it was last built. The panel also shows `stale_since`, `refresh_path`
+  with `missed_ticks`, `last_check`, the `cause` in the map's word and colour, and the `root`
+  with a link to its node, its `detail` and its `action` from the root list.
+- **A group** (its row): `fresh` when `not_fresh` is 0; `all fresh by ~15:02` from `fresh_by`
+  when `unbounded` is 0; `152 with no estimate` when `fresh_by` is `null`; both otherwise.
+  The State column's bar is the entry's `weights` in the map's colours, its words the entry's
+  `causes` in the served order; rows are ordered by `weight`.
+- **A schedule**: late only by `late`; `queue-bound` by `queue_bound`, with what to do;
+  `typical_queue_wait_seconds` and `typical_run_seconds` as `~15s`; late and queue-bound
+  rows first.
+- **A queue entry**: `starts in ~40s` from `estimated_start_at`; `no estimate` when `null`.
+- An estimated length is rounded up to 5 seconds, whole minutes, hours or days (`<5s` below
+  5 seconds) and marked `~`; no surface shows a second it does not know.
 
 ### What a tick records (#960)
 
@@ -1020,7 +1057,7 @@ cut at the row limit below.
 ## Acceptance and evidence
 
 Each issue lands its scenario with the code and replaces the matching source link. Passing
-today (with the #961, #962, #963, #966, #967, #973 and #1028 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+today (with the #961, #962, #963, #966, #967, #968, #973 and #1028 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
@@ -1039,6 +1076,7 @@ row, the #964 row, the #965 row, the #972 row and the #985 row. The rest do not 
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963: [the cause rows, the walk, the roots where nothing refreshes, the audit shape (698 nodes, 422 not fresh, five roots, the top three hold 392)](../../crates/barca-core/src/causes.rs), [the root list, its actions and INV-HEALTH-03 with causes and the gap](../../crates/barca-core/src/rollup.rs), [the routes against each other](../../crates/barca-server/tests/openapi.rs), [CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, the commands of two actions run](../../python/tests/test_causes.py), [the causes list over the served roots](../../ui/src/lib/causesView.test.ts) |
 | A group with 13% of its nodes overdue is drawn 13 parts overdue by weight, not solid; grey has one word; the map and the bars state nodes | #966: [the weight, the stacked colours, a fresh group kept, the keys ring](../../ui/src/lib/rollupView.test.ts), [the centre in the terms of the gap and the one word for grey](../../ui/src/components/CausesList.test.tsx), [the map against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
 | With a failing node that blocks 20 added to the audit shape, the first three roots hold at least 75% of the not-fresh nodes and the failure is among them; `barca status --rollup --json` carries the weight; no weight table in TypeScript | #1028: [the order and the weights, and the weight in INV-HEALTH-03 on every fixture](../../crates/barca-core/src/rollup.rs), [the audit shape with a failure (719 nodes, 443 not fresh: 152, 180 and the failure's 21 are 353), and the #963 shape under the new order (392 of 422 still)](../../crates/barca-core/src/causes.rs), [the CLI contract snapshot](../../python/tests/snapshots/cli_contract/status_rollup.txt), [the map's angles from the served weight](../../ui/src/lib/rollupView.test.ts), [the guard's table: `rollupView` lays out the served weight, `causeDisplay` holds none](../../crates/barca-cli/ui-layering.json) |
+| A node with no estimate says why on every surface; a group row says when it is fresh from its entry; a schedule is late only by the server's word | #968: [the reason, and an estimate or a reason on every not-fresh node](../../crates/barca-core/src/causes.rs), [the words and the rounding](../../ui/src/lib/estimates.test.ts), [the panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx), [the bar in the map's vocabulary](../../ui/src/components/HealthBar.test.tsx), [late, queue-bound and the typical wait](../../ui/src/lib/schedules.test.ts), [a queue entry's start](../../ui/src/lib/queue.test.ts), [a served project's panel, rows and bar](../../ui/e2e-groups/groups.spec.ts), [the Schedules page over the server's words](../../ui/e2e/estimates.spec.ts), [CLI, `GET /state`, `barca.nodes`](../../python/tests/test_estimates.py) |
 | Every not-fresh node of a scope is under one root of its list; "more" holds the rest; a root's command can be copied | #967: [a scope's roots, their order and running total, and their sums on every fixture](../../crates/barca-core/src/rollup.rs), [the audit shape's list and the line the CLI prints](../../crates/barca-core/src/causes.rs), [the list's join and words](../../ui/src/lib/causesView.test.ts), [the list rendered](../../ui/src/components/CausesList.test.tsx), [a served project: every root listed once, more in place, a picked root lit, its node opened](../../ui/e2e-groups/groups.spec.ts) |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
@@ -1061,9 +1099,7 @@ the causes list's grouping and the failures list's impact are deleted: their rul
   holds, so a schedule no scheduler is firing reads `behind`, `schedule_late`. #958 replaces
   it with the one definition.
 - The web UI no longer attributes a blocked node to its failing node or sums health counts and
-  data coverage: it reads `root` and the rollup. What it still derives: a group row's "Last
-  success" (its oldest member's, and how many members are failing, from the rows of
-  `GET /state`), which `stale_since` and the times (#962) replace; a file's one state in the
+  data coverage: it reads `root` and the rollup. What it still derives: a file's one state in the
   sidebar and the asset list's filter counts, which read rows, not the rollup; and a node
   panel's count of nodes downstream, a graph walk for navigation. The health map's angles
   are the served `weight` (#1028). A node declared in several

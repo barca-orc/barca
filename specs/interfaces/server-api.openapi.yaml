@@ -5805,6 +5805,7 @@ components:
       - stale_since
       - expected_fresh_at
       - recheck_at
+      - no_estimate
       - last_materialization
       - shape
       - env
@@ -5940,6 +5941,12 @@ components:
             refresh path; a node with this and no expected_fresh_at will be rechecked, not
             necessarily fresh. null when it has no refresh path or the path has no next tick.
             Experimental.
+        no_estimate: &id_no_estimate
+          type: [string, 'null']
+          enum: [failing, paused, scheduler_off, no_path, undecided, missed, queue_stopped,
+            no_scheduler_here, not_promised, null]
+          description: Why a node that is not fresh has no expected_fresh_at, in one word; null
+            for a fresh node and one that has an estimate. Experimental.
         kind: &id047
           type: string
           enum:
@@ -6093,6 +6100,7 @@ components:
       - stale_since
       - expected_fresh_at
       - recheck_at
+      - no_estimate
       - last_materialization
       - shape
       - env
@@ -6125,6 +6133,7 @@ components:
         stale_since: *id_stale_since
         expected_fresh_at: *id_expected_fresh_at
         recheck_at: *id_recheck_at
+        no_estimate: *id_no_estimate
         partitions: *id050
         last_materialization: *id051
         shape: *id052

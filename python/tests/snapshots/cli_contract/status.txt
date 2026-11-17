@@ -43,6 +43,7 @@ nodes[].last_materialization.size_bytes : integer|null
 nodes[].last_materialization.status : string
 nodes[].measured : boolean|null
 nodes[].name : string
+nodes[].no_estimate : null|string
 nodes[].partitioned : boolean
 nodes[].partitions : object  (optional)
 nodes[].partitions.cached : integer

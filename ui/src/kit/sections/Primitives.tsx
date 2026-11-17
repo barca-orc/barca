@@ -8,10 +8,11 @@ import {
   ConnectionBadge,
   ErrorLine,
   HealthBar,
+  CauseBadge,
+  EstimateCell,
   IconButton,
   PageRunButton,
   KeyValue,
-  LastSuccess,
   MiddleName,
   SearchInput,
   Section,
@@ -22,7 +23,8 @@ import {
   StatusGlyph,
   Tag,
 } from '@/components'
-import { NOW_MS, STATUS_KINDS, connections, failedNode, healthStates, nodeByState, variants } from '../fixtures'
+import { CAUSE_ORDER } from '@/lib/causeDisplay'
+import { NOW_MS, STATUS_KINDS, barStates, connections, failedNode, nodeByState, variants } from '../fixtures'
 import { CACHE_STATES, cacheStateGlyph, cacheStateLabel, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { GLYPHS } from '@/lib/glyph'
 import { statusMeta } from '@/lib/status'
@@ -159,20 +161,25 @@ const [query, setQuery] = useState('')
       <Variant label="read-only server"><div style={{ width: 720 }}><ReadOnlyNotice /></div></Variant>
     </Spec>
 
-    <Spec title="HealthBar" note="A scope's nodes by health, from its entry of the rollup; a single failure stays visible among thousands.">
-      {Object.entries(healthStates).map(([label, c]) => (
+    <Spec title="HealthBar" note="A scope's distance from fresh in the health map's words and colours, from its entry of the rollup; a single failure stays visible among thousands.">
+      {Object.entries(barStates).map(([label, c]) => (
         <Variant key={label} label={label}><HealthBar scope={c} /></Variant>
       ))}
-      <Variant label="wide, every part named"><HealthBar scope={healthStates['every health']!} labelLimit={10} width={200} /></Variant>
+      <Variant label="wide, every cause named"><HealthBar scope={barStates['every cause']!} labelLimit={10} width={200} /></Variant>
     </Spec>
 
-    <Spec title="Age / LastSuccess" note="Relative, absolute in the chosen zone on hover; whose success it is when not the row's own; a failing row adds since when and how many runs in a row, a group how many members fail.">
+    <Spec title="CauseBadge / EstimateCell" note="A node's cause in the map's word and colour, and when a row is fresh: an estimate with ~, a recheck, or why there is none.">
+      {CAUSE_ORDER.map((cause) => <Variant key={cause} label={cause}><CauseBadge cause={cause} /></Variant>)}
+      <Variant label="fresh"><CauseBadge cause={null} /></Variant>
+      <Variant label="estimate"><EstimateCell words={{ kind: 'fresh', text: 'fresh ~15:05', title: '' }} /></Variant>
+      <Variant label="group"><EstimateCell words={{ kind: 'none', text: '152 with no estimate · the rest fresh by ~15:02', title: '' }} /></Variant>
+      <Variant label="rechecked"><EstimateCell words={{ kind: 'rechecked', text: 'rechecked 15:00', title: '' }} /></Variant>
+      <Variant label="no estimate"><EstimateCell words={{ kind: 'none', text: 'no estimate: no refresh path', title: '' }} /></Variant>
+      <Variant label="loading"><EstimateCell words={null} /></Variant>
+    </Spec>
+
+    <Spec title="Age" note="Relative, absolute in the chosen zone on hover.">
       <Variant label="minutes"><Age at={new Date(NOW_MS - 300_000).toISOString()} nowMs={NOW_MS} /></Variant>
-      <Variant label="healthy"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 3_600_000).toISOString(), of: 'node' }, failing: null }} nowMs={NOW_MS} /></Variant>
-      <Variant label="failing"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 172_800_000).toISOString(), of: 'node' }, failing: { lead: 'failing', since: new Date(NOW_MS - 50_400_000).toISOString(), tail: ' · 3 failed runs in a row' } }} nowMs={NOW_MS} /></Variant>
-      <Variant label="partitioned"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 600_000).toISOString(), of: 'any key' }, failing: { lead: 'failing', since: new Date(NOW_MS - 10_800_000).toISOString(), tail: ' · 130 failed runs in a row' } }} nowMs={NOW_MS} /></Variant>
-      <Variant label="group"><LastSuccess cell={{ success: { at: new Date(NOW_MS - 432_000_000).toISOString(), of: 'oldest member' }, failing: { lead: '3 failing · oldest', since: new Date(NOW_MS - 10_800_000).toISOString(), tail: '' } }} nowMs={NOW_MS} /></Variant>
-      <Variant label="never succeeded"><LastSuccess cell={{ success: null, failing: { lead: 'failing', since: new Date(NOW_MS - 3_600_000).toISOString(), tail: ' · 1 failed run' } }} nowMs={NOW_MS} /></Variant>
     </Spec>
     <Spec title="ConnectionBadge">
       {variants(connections).map((kind) => (

@@ -1438,4 +1438,40 @@ def pulse(): ...
             third.cumulative_nodes
         );
     }
+
+    /// #968: a node that is not fresh and has no `expected_fresh_at` says why in one word;
+    /// a fresh node and one with an estimate say nothing.
+    #[test]
+    fn a_node_with_no_estimate_says_why() {
+        use crate::health::NoEstimate;
+        let world = audit_with(20);
+        let why = |name: &str| {
+            let node = world.node(name);
+            (node.expected_fresh_at.is_some(), node.no_estimate)
+        };
+        // Nothing scheduled reaches the ledger chain; a failure holds what it blocks.
+        assert_eq!(why("ledger_7"), (false, Some(NoEstimate::NoPath)));
+        assert_eq!(why("load"), (false, Some(NoEstimate::Failing)));
+        assert_eq!(why("load_3"), (false, Some(NoEstimate::Failing)));
+        // Only a run decides a node the read path cannot.
+        assert_eq!(why("orders_out_4"), (false, Some(NoEstimate::Undecided)));
+        // A fresh node, and a node the next tick computes, have no reason to give.
+        assert_eq!(why("ok_1"), (false, None));
+        assert_eq!(why("orders_stage_1"), (true, None));
+        // Every not-fresh node has an estimate or a reason, never neither or both.
+        for node in &world.nodes {
+            assert_eq!(
+                node.no_estimate.is_some(),
+                node.cause.is_some() && node.expected_fresh_at.is_none(),
+                "{}",
+                node.id
+            );
+        }
+        // The words a surface prints after "no estimate: ".
+        assert_eq!(NoEstimate::NoPath.word(), "no refresh path");
+        assert_eq!(
+            serde_json::to_value(NoEstimate::NoSchedulerHere).unwrap(),
+            "no_scheduler_here"
+        );
+    }
 }
