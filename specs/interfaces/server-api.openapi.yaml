@@ -5148,6 +5148,10 @@ components:
       - inputs
       - partitioned
       - cache
+      - health
+      - health_reason
+      - signals
+      - measured
       - last_materialization
       - shape
       - env
@@ -5156,6 +5160,31 @@ components:
         name:
           type: string
           description: The declared name, or function name when no explicit name is set.
+        health: &id_health
+          type: string
+          enum: [failing, blocked, suspect, behind, undecided, never_run, ok]
+          description: Whether something needs doing about the node, in one word, most severe first
+            (specs/behavior/health.md). Beside cache.state, never in place of it. Classified per
+            response, so a late schedule shows without a change to the database. Experimental.
+        health_reason: &id_health_reason
+          type: string
+          enum: [last_attempt_failed, keys_failed, upstream_failing, cache_blocked, empty,
+            rows_changed, behind_input, schedule_late, stale, partial, unsynced, unknown,
+            never_run, no_successful_run, last_run_succeeded, cached]
+          description: The rule that decided health. Experimental.
+        signals: &id_signals
+          type: array
+          items:
+            $ref: '#/components/schemas/DataSignal'
+          description: What the node's recorded results say about its data, from recorded facts only
+            (row counts its workers counted, when each result was written); empty when nothing does,
+            which for an asset that is not measured says nothing. Only assets have signals.
+            Experimental.
+        measured: &id_measured
+          type: [boolean, 'null']
+          description: Whether the asset's latest successful result has a recorded row count (for a
+            partitioned asset, any key's); null for a task or sensor. false is "not measured",
+            never ok for data. Experimental.
         kind: &id047
           type: string
           enum:
@@ -5259,6 +5288,9 @@ components:
       - inputs
       - partitioned
       - cache
+      - health
+      - health_reason
+      - measured
       - last_materialization
       - shape
       - env
@@ -5280,6 +5312,9 @@ components:
         inputs: *id048
         partitioned: *id043
         cache: *id049
+        health: *id_health
+        health_reason: *id_health_reason
+        measured: *id_measured
         partitions: *id050
         last_materialization: *id051
         shape: *id052
@@ -5306,13 +5341,7 @@ components:
             tick of the newest run its schedule started (runs.scheduled_at), when that slot is at or
             before now; null while on time, while paused, when no scheduled run is recorded, and for
             a node without a schedule. Experimental.
-        signals:
-          type: array
-          items:
-            $ref: '#/components/schemas/DataSignal'
-          description: What the node's recorded results say about its data, from recorded facts only
-            (row counts its workers counted, when each result was written); empty when nothing does.
-            Only assets have signals. Experimental.
+        signals: *id_signals
         last_success_at:
           anyOf:
           - *id003
@@ -5343,7 +5372,7 @@ components:
           description: The node's newest run as a whole (the run last_materialization is from);
             absent until a run recorded a row for it.
     DataSignal:
-      description: One data-health signal of a GET /state row, tagged by kind.
+      description: One data-health signal of a node (barca status --json, GET /nodes, GET /state), tagged by kind.
       oneOf:
       - type: object
         additionalProperties: false
@@ -6830,8 +6859,29 @@ components:
       - total
       - truncated
       - disk_usage
+      - data_coverage
       description: barca status --json --all for the server ledger.
       properties:
+        data_coverage:
+          type: object
+          additionalProperties: false
+          description: How much of the scope's data was measured, over every node in scope (a filter
+            does not change it). An asset that is not measured raised no signal because nothing was
+            counted. Experimental.
+          required: [assets, measured, suspect]
+          properties:
+            assets:
+              type: integer
+              minimum: 0
+              description: Assets in scope; tasks and sensors are not counted.
+            measured:
+              type: integer
+              minimum: 0
+              description: Assets whose latest successful result has a recorded row count.
+            suspect:
+              type: integer
+              minimum: 0
+              description: Measured assets with an empty or rows_changed signal.
         disk_usage:
           type: object
           additionalProperties: false

@@ -17,6 +17,7 @@ import {
 } from './running'
 import { statusMeta } from './status'
 import type { NodeRunning, NodeState } from './types'
+import { served } from './testdata/served'
 
 const STARTED = '2026-10-21T10:00:00.000Z'
 const NOW = Date.parse(STARTED) + 75_000
@@ -33,7 +34,7 @@ function run(overrides: Partial<NodeRunning> = {}): NodeRunning {
 }
 
 function node(id: string, running: NodeRunning | null = null, failed = false): NodeState {
-  return {
+  return served({
     id,
     name: id.split(':').pop()!,
     kind: 'asset',
@@ -58,7 +59,7 @@ function node(id: string, running: NodeRunning | null = null, failed = false): N
     durations: null,
     next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running,
-  }
+  })
 }
 
 describe('running state from /state', () => {

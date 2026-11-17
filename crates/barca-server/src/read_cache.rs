@@ -160,6 +160,7 @@ struct SharedSnapshot {
 
 /// Every node's age, shared by the polls of one database state.
 type NodeAges = Arc<HashMap<String, barca_core::db::NodeAge>>;
+type Pinned = Arc<std::collections::HashSet<String>>;
 
 /// What a status result was computed from.
 #[derive(Clone)]
@@ -238,6 +239,9 @@ pub struct ReadCache {
     /// The last node ages read, and the database state they are of ([`AppState::cached_ages`]).
     /// An async lock, held while they are read, so that concurrent polls read them once.
     ages: tokio::sync::Mutex<Option<(Stamp, NodeAges)>>,
+    /// The pinned assets last read, and the database state they are of
+    /// ([`AppState::cached_pinned`]).
+    pinned: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
     /// What node ages are folded from, kept so that a read after a run recorded a few rows
     /// reads those rows only ([`barca_core::db::NodeAgesIndex`]).
     ages_index: Arc<tokio::sync::Mutex<barca_core::db::NodeAgesIndex>>,
@@ -595,6 +599,30 @@ impl AppState {
         );
         *kept = Some((db.clone(), ages.clone()));
         Ok(ages)
+    }
+
+    /// The ids of the pinned assets for the database in state `db`, kept until it changes: what
+    /// health reads to stop a failure at a pin (`barca_core::health`).
+    pub(crate) async fn cached_pinned(
+        &self,
+        db: &Stamp,
+        db_path: &str,
+    ) -> Result<Pinned, BarcaError> {
+        let mut kept = self.reads.pinned.lock().await;
+        if let Some((stamp, pinned)) = kept.as_ref()
+            && stamp == db
+        {
+            return Ok(pinned.clone());
+        }
+        let pinned: Pinned = Arc::new(
+            barca_core::pins::list(db_path)
+                .await?
+                .into_iter()
+                .map(|pin| pin.node_id)
+                .collect(),
+        );
+        *kept = Some((db.clone(), pinned.clone()));
+        Ok(pinned)
     }
 
     /// Typical durations for the database in state `db`, kept like a status result (read

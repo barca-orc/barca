@@ -24,10 +24,11 @@ const tree = groupTree(metadata)
 const FAILING_CHECK = 'modeling.py:validate__cv__fold_03__trained_model'
 
 import type { ListNode, NodeState } from './types'
+import { served } from './testdata/served'
 
 function state(id: string): NodeState {
   const task = id.includes(':validate__')
-  return {
+  return served({
     id,
     name: id.split(':')[1]!,
     kind: task ? 'task' : 'asset',
@@ -53,7 +54,7 @@ function state(id: string): NodeState {
     running: null,
     env: [],
     shape: null,
-  }
+  })
 }
 
 describe('organizational groups', () => {
@@ -73,6 +74,7 @@ describe('organizational groups', () => {
     const states = new Map(leaves.map((id) => [id, state(id)]))
     const failure = states.get(FAILING_CHECK)!
     failure.last_materialization!.status = 'failed'
+    failure.health = 'failing'
     for (const id of [
       'group:modeling.py:fold_03__fitting',
       'group:modeling.py:fold_03',
@@ -102,6 +104,7 @@ describe('organizational groups', () => {
     states.set(ids[0]!, {
       ...state(ids[0]!),
       cache: { state: 'stale', reason: 'changed', detail: 'Changed' },
+      health: 'behind',
     })
     expect(groupHealth(ids, states)).toMatchObject({ tone: 'warning', label: '1 behind' })
   })

@@ -170,11 +170,17 @@ every node. Unknown groups and files answer `404`. Unknown targets answer `404`;
 to the selected cone; clients can render `/assets` and `/groups` before requesting it.
 
 Each `NodeState` is a `barca status --json` node (`id`, `name`, `kind`, `inputs`, `partitioned`,
-`cache`, `partitions`, `last_materialization`, `shape`, `env`) plus `durations` — `{ median_seconds,
+`cache`, `health`, `health_reason`, `signals`, `measured`, `partitions`, `last_materialization`,
+`shape`, `env`) plus `durations` — `{ median_seconds,
 p95_seconds, samples }` over the last 20 successful runs, or `null` — and `next_run`, the next cron
 fire time in unix seconds for scheduled nodes, with `prev_run`, the most recent fire time at or
 before now, and `late_since`, the first slot no run of the schedule has started for when one has
-passed (`null` while on time, paused, or never fired). `signals` lists what the node's recorded
+passed (`null` while on time, paused, or never fired). `health` is the node's health word
+(`failing`, `blocked`, `suspect`, `behind`, `undecided`, `never_run`, `ok`) and `health_reason`
+the rule that decided it, classified per response
+([Health](/reference/cli/status-fields/#health)); `measured` says whether an asset's rows were
+counted (`null` for a task or sensor), so an empty `signals` on an unmeasured asset says
+nothing about its data. `signals` lists what the node's recorded
 results say about its data: `empty` (its latest result wrote no rows; `empty_keys` of `keys` for
 a partitioned node, with `previous_empty_keys`), `rows_changed` (a row count moved by more than
 half against the previous result of the same key: `rows`, `previous_rows`, `key`,

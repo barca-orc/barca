@@ -8,7 +8,7 @@
  * project without groups is shown by source file. Pure: no React, no fetching.
  */
 
-import { HEALTH_ORDER, blockedCauses, healthFamily, healthRank, healthWeight, isUnhealthy, nodeHealth, worstHealth, type Health, type HealthFamily } from './nodeHealth'
+import { HEALTH_ORDER, healthFamily, healthRank, healthWeight, isUnhealthy, worstHealth, type Health, type HealthFamily } from './healthDisplay'
 import { shortName } from './graph'
 import { sourceFile } from './pipeline'
 import type { NodeGroup, NodeState } from './types'
@@ -62,11 +62,39 @@ export interface HealthTreeInput {
   /** The graph's edges, as `GET /assets` reports them (node ids and their inputs). */
   graph: readonly { id: string; inputs: readonly string[] }[]
   groups: readonly NodeGroup[]
-  /** Nodes whose output looks wrong (data signals). */
-  suspect?: ReadonlySet<string>
-  /** Scheduled nodes that missed their slot. */
-  late?: ReadonlySet<string>
-  pinned?: { has(id: string): boolean }
+}
+
+/**
+ * Which failing node each blocked node is counted under: the nearest node upstream whose
+ * `health` is `failing`, through inputs that are `blocked` themselves. It reads the server's
+ * words only (who is failing, who is blocked) and attributes one to the other for the causes
+ * list; the server's `root` field (issue 963) replaces it.
+ */
+function blockedAttribution(byId: ReadonlyMap<string, NodeState>, inputs: ReadonlyMap<string, readonly string[]>): Map<string, string> {
+  const known = new Map<string, string | null>()
+  const visiting = new Set<string>()
+  const failingAbove = (id: string): string | null => {
+    if (known.has(id)) return known.get(id)!
+    if (visiting.has(id)) return null
+    visiting.add(id)
+    let found: string | null = null
+    for (const input of inputs.get(id) ?? []) {
+      const health = byId.get(input)?.health
+      if (health === 'failing') found = input
+      else if (health === 'blocked') found = failingAbove(input)
+      if (found) break
+    }
+    visiting.delete(id)
+    known.set(id, found)
+    return found
+  }
+  const out = new Map<string, string>()
+  for (const [id, node] of byId) {
+    if (node.health_reason !== 'upstream_failing') continue
+    const by = failingAbove(id)
+    if (by) out.set(id, by)
+  }
+  return out
 }
 
 function zeroCounts(): Record<Health, number> {
@@ -79,13 +107,9 @@ export function buildHealthTree(input: HealthTreeInput): HealthTree {
   const inputs = new Map<string, readonly string[]>()
   for (const g of input.graph) inputs.set(g.id, g.inputs)
   for (const s of input.states) if (!inputs.has(s.id)) inputs.set(s.id, s.inputs)
-  const blocked = blockedCauses(byId, inputs, input.pinned)
   const healthOf = new Map<string, Health>()
-  for (const s of input.states)
-    healthOf.set(
-      s.id,
-      nodeHealth(s, { blocked: blocked.has(s.id), suspect: input.suspect?.has(s.id) ?? false, late: input.late?.has(s.id) ?? false }),
-    )
+  for (const s of input.states) healthOf.set(s.id, s.health)
+  const blocked = blockedAttribution(byId, inputs)
 
   const nodes = new Map<string, HealthTreeNode>()
   const parent = new Map<string, string>()

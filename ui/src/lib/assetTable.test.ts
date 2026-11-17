@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { served } from './testdata/served'
 import type { CacheStatus, NodeState } from './types'
 import { CACHE_STATES } from './cacheStateDisplay'
 import {
@@ -38,7 +39,7 @@ function cache(
 }
 
 function node(over: Partial<NodeState> & { id: string }): NodeState {
-  return {
+  return served({
     name: over.id.split(':').pop()!,
     kind: 'asset',
     inputs: [],
@@ -51,7 +52,7 @@ function node(over: Partial<NodeState> & { id: string }): NodeState {
     next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     ...over,
-  }
+  })
 }
 
 const failedAttempt = {

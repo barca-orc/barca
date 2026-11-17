@@ -42,6 +42,7 @@ pub mod envelope;
 pub(crate) mod execution;
 pub mod freshness;
 pub mod gc;
+pub mod health;
 pub mod history_filter;
 pub mod http;
 mod incremental;

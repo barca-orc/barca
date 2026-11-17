@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { arcPath, healthSummary, ringRadii, sunburst, treePath, ROOT, type Arc, type HealthTree, type HealthTreeNode } from '@/lib/healthTree'
-import { HEALTH_ORDER, healthDisplay, healthFamily, isUnhealthy, type HealthFamily } from '@/lib/nodeHealth'
+import { HEALTH_ORDER, healthDisplay, healthFamily, isUnhealthy, type HealthFamily } from '@/lib/healthDisplay'
 import { plural } from '@/lib/plural'
 
 export interface HealthMapProps {

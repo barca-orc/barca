@@ -2,11 +2,15 @@
 
 ## Scope and status
 
-Specification version: 1. Status: approved intent, implemented in part. Implemented: the tick
-record ("What a tick records", #960), as the `schedule_ticks` table and its two reads; nothing
-reads it yet. Everything else below is not on `main`: no other field, enum value, route, flag
-or table named here exists until the issue that owns it lands (the 0.44.0 series,
-[#974](https://github.com/barca-orc/barca/issues/974)).
+Specification version: 1. Status: approved intent, implemented in part. The 0.44.0 series
+([#974](https://github.com/barca-orc/barca/issues/974)) lands it issue by issue; a field, enum
+value, route, flag or table named here exists only once the issue that owns it has landed.
+Implemented: "Health from existing state" (#954); of "Node fields and where they appear",
+`health`, `health_reason`, `signals`, `measured` and `data_coverage` (#957), experimental in
+the CLI contract; and the tick record ("What a tick records", #960), as the `schedule_ticks`
+table and its two reads, which nothing reads yet. Everything else below is intent: `cause`,
+`root`, `refresh_path`, the times, `gap_seconds`, `as_of`, the rollup, the new tables and the
+query route do not exist yet, and the `checked_up_to_date` reason is not among the values served.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
 health word, its cause bucket and root, its refresh path, when it is expected fresh or
 rechecked, the freshness gap, the rollup tree, what a tick records, the `barca.schedules`,
@@ -79,7 +83,8 @@ happens at one instant, `as_of`, carried by every response that holds a derived 
 
 ### Health from existing state (#954)
 
-Ported from `ui/src/lib/nodeHealth.ts` without change of meaning. Inputs: the node's
+Implemented in `crates/barca-core/src/health.rs` (`classify`), ported from the web UI's
+TypeScript without change of meaning. Inputs: the node's
 `NodeStatus`, the graph, the node's data signals, and whether its schedule is late.
 
 `last_attempt_failed` is `last_materialization.status == "failed"` or `partitions.failed > 0`.
@@ -89,7 +94,9 @@ an input whose last attempt failed is the answer; an input that is itself neithe
 `cached` nor `always_runs` passes the question to its own inputs. Only a node that is neither
 failing, `cached` nor `always_runs` can be blocked. A pinned asset (`barca pin`) is never
 blocked and stops the walk. This walk passes through `unknown` nodes, so a node waiting on a
-cutoff below a failure is blocked by the failure.
+cutoff below a failure is blocked by the failure. As implemented, "declared order" is the
+order of the node's `inputs` in `NodeStatus`, which is sorted by node id: two failing inputs
+answer with the first by id.
 
 The first matching row decides `health`; `health_reason` (string enum) names the row.
 
@@ -268,7 +275,11 @@ All are fields of `NodeStatus`, so one struct serves every surface.
 
 `measured` is whether the asset's latest successful result has a recorded row count (for a
 partitioned asset, any current key). An unmeasured asset raises no signal and is never `ok`
-for data: it is "not measured".
+for data: it is "not measured". As implemented, a partitioned asset is measured when the latest
+successful result of any key recorded a count, a key no longer in the key set included (the
+per-key row facts of the metadata database do not know the current key set). `data_coverage`
+counts assets only; `suspect` is the measured assets with an `empty` or `rows_changed` signal,
+whatever their `health` (a failing asset whose last good result was empty is still counted).
 
 `barca status --json` adds, beside `summary`: `as_of`; `rollup`, the root entry of the tree
 below; and `data_coverage`: `{"assets": 556, "measured": 7, "suspect": 0}`. Without a server,
@@ -456,8 +467,12 @@ the rollup by group, and the top roots.
 
 ## Acceptance and evidence
 
-Only the #960 row is implemented; nothing else below passes yet. Each issue lands its scenario
-with the code and replaces the matching source link.
+Each issue lands its scenario with the code and replaces the matching source link. Passing
+today: #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
+test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
+the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)) and the #960 row. The rest
+do not pass yet.
 
 | Scenario | Issue |
 | --- | --- |
@@ -475,13 +490,22 @@ with the code and replaces the matching source link.
 | A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972 |
 | One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973 |
 
-Sources the rules are ported from, until each is deleted by its issue:
-[node health](../../ui/src/lib/nodeHealth.ts), [health tree](../../ui/src/lib/healthTree.ts),
-[causes](../../ui/src/lib/causes.ts), [data signals](../../crates/barca-server/src/signals.rs),
+Sources the rules are ported from, until each is deleted by its issue (node health and the
+data signals are deleted: their rules are `crates/barca-core/src/health.rs`):
+[health tree](../../ui/src/lib/healthTree.ts), [causes](../../ui/src/lib/causes.ts),
 [tick targets](../../crates/barca-core/src/freshness.rs),
 [status](../../crates/barca-core/src/status.rs), [tables](../../crates/barca-core/src/sql/tables.rs).
 
 ## Open questions and gaps
+
+- Row 6 reads a provisional late (`health::schedule_late`): the grace alone, without the
+  typical queue wait, evaluated wherever status is classified. On a machine without a server
+  that is this machine's clock and time zone against the last tick the metadata database
+  holds, so a schedule no scheduler is firing reads `behind`, `schedule_late`. #958 replaces
+  it with the one definition.
+- The web UI still attributes each blocked node to its failing node, and sums health counts
+  and data coverage per scope, in TypeScript, from the served `health` and `measured`. `root`
+  (#963) and the rollup (#955) replace both.
 
 - Which nodes a tick reaches when a polled sensor changes below-`Always` assets (#952) is
   unresolved; this document takes the walk's answer and adds no rule of its own.

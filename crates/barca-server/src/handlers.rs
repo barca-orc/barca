@@ -212,6 +212,7 @@ async fn state_rows_for_targets(
     let snapshot = snapshot_db(state).await?;
     // Read at most once per database state, whatever the scope (`read_cache`).
     let ages = state.cached_ages(&db_state, &snapshot.path).await?;
+    let pinned = state.cached_pinned(&db_state, &snapshot.path).await?;
     let (status, durations) = if targets.is_empty() {
         // Together: after a change, each waits a moment for its new value (`read_cache`).
         let (status, durations) = tokio::join!(
@@ -252,6 +253,7 @@ async fn state_rows_for_targets(
         &status.nodes,
         &durations,
         &ages,
+        &pinned,
         &dag,
         (&zone, now, &paused),
         running,
@@ -307,6 +309,7 @@ fn rows(
     nodes: &[barca_core::status::NodeStatus],
     durations: &std::collections::HashMap<String, Durations>,
     ages: &std::collections::HashMap<String, db::NodeAge>,
+    pinned: &std::collections::HashSet<String>,
     dag: &barca_core::dag::Dag,
     clock: Clock<'_>,
     mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
@@ -324,32 +327,34 @@ fn rows(
                 (job.id, slots)
             })
             .collect();
-    nodes
+    // Health, signals and coverage are classified here, per answer: lateness moves with the
+    // clock, so it is never kept with the status result.
+    let late: std::collections::HashSet<String> = slots
         .iter()
+        .filter(|(_, s)| barca_core::health::schedule_late(s, now.timestamp()))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut nodes = nodes.to_vec();
+    barca_core::health::classify(
+        &mut nodes,
+        barca_core::health::Evidence {
+            ages,
+            pinned,
+            late: &late,
+        },
+    );
+    nodes
+        .into_iter()
         .map(|n| {
             let slot = slots.get(&n.id);
-            let signals = crate::signals::signals(n, ages, || {
-                dag.get_node(&n.id)
-                    .map(|node| {
-                        node.resolved_inputs
-                            .values()
-                            .chain(node.resolved_collected.values())
-                            .filter_map(|input| {
-                                dag.get_node(input).map(|i| (input.as_str(), i.kind()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            });
             let age = ages.get(&n.id).cloned().unwrap_or_default();
             NodeState {
                 durations: durations.get(&n.id).cloned(),
                 next_run: slot.and_then(|s| s.next),
                 prev_run: slot.and_then(|s| s.prev),
                 late_since: slot.and_then(|s| s.late_since),
-                signals,
                 running: running.remove(&n.id),
-                status: n.clone(),
+                status: n,
                 last_success_at: age.last_success_at,
                 failing_since: age.failing_since,
                 consecutive_failures: age.consecutive_failures,
@@ -589,6 +594,34 @@ pub(crate) async fn attach_live_schedules(
         schedule.skip_reason = text(&job["skip_reason"]);
         schedule.live = true;
     }
+    Ok(())
+}
+
+/// Health, data signals and data coverage of `result` (`barca_core::health`), for every node
+/// in scope: called before a filter cuts `nodes`. Lateness is read on the server's clock and
+/// in its `--timezone`; a paused schedule is not late.
+pub(crate) async fn attach_health(
+    state: &AppState,
+    result: &mut barca_core::status::StatusResult,
+    dag: &barca_core::dag::Dag,
+    db_state: &crate::read_cache::Stamp,
+    db_path: &str,
+) -> Result<(), ApiError> {
+    let ages = state.cached_ages(db_state, db_path).await?;
+    let pinned = state.cached_pinned(db_state, db_path).await?;
+    let now = chrono::Utc::now();
+    let zone = crate::scheduler::zone_of(&state.config);
+    crate::pause::pauses(state).await?;
+    let paused = |id: &str| crate::pause::active(state, id, now.timestamp()).is_some();
+    let late = barca_core::health::late_schedules(dag, &ages, &zone, now, &paused);
+    barca_core::health::attach(
+        result,
+        barca_core::health::Evidence {
+            ages: &ages,
+            pinned: &pinned,
+            late: &late,
+        },
+    );
     Ok(())
 }
 

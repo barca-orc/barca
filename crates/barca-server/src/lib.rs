@@ -31,7 +31,6 @@ mod routes;
 mod running;
 mod runs;
 mod scheduler;
-mod signals;
 mod state;
 mod telemetry;
 mod ui;

@@ -19,7 +19,7 @@ import {
 import { shortName, type GraphEntry } from '@/lib/graph'
 import { cacheGraphState, isLive, memberHealth, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { groupOutput, groupOutputNote, lastRunDuration, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
-import type { Health } from '@/lib/nodeHealth'
+import type { Health } from '@/lib/healthDisplay'
 import { ageCell, failedUpstream, healthCounts, isFailed, scopeAge, type Failure, type HealthCounts } from '@/lib/health'
 import { isCheck, nodeKindLabel } from '@/lib/status'
 import type { TableWindow } from '@/hooks/useTableWindow'

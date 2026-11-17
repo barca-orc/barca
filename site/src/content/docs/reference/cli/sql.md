@@ -82,12 +82,13 @@ barca's own records are tables in a `barca` schema, so they never clash with a v
 |---|---|---|
 | `barca.runs` | run | the keys of `barca history --json` runs: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure` (a struct of `node` and `error`, null when no step failed), `principal`, `trigger_reason`, `cancellation` (a struct of `by`, `principal`, `started`, `waiting_behind`, `same_as`, null unless a server cancelled the run) |
 | `barca.materializations` | step result (successful or failed; cache hits are not results) | `node_id` (with `[key]` for a partition), `partition`, `run_id`, `run_hash`, `status`, `created_at`, `elapsed_seconds`, `cpu_seconds`, `max_rss_bytes`, `attempts`, `format`, `size_bytes`, `artifact`, `content_hash`, `error_type`, `error_message`, `rows` (rows of a tabular result, null when not counted) |
-| `barca.nodes` | node | `barca status --json`, flattened: `id`, `name`, `kind`, `partitioned`, `inputs`, `env`, `state`, `reason`, `detail`, `run_hash`, `artifact`, `local`, `partitions_total`, `partitions_cached`, `partitions_missing`, `partitions_empty`, and `last_status`, `last_created_at`, `last_elapsed_seconds`, `last_run_hash`, `last_artifact`, `last_format`, `last_size_bytes`, `last_rows`, `last_content_hash`, `last_error` from `last_materialization` |
+| `barca.nodes` | node | `barca status --json`, flattened: `id`, `name`, `kind`, `partitioned`, `inputs`, `env`, `state`, `reason`, `detail`, `health`, `health_reason`, `signals` (the kinds, a list), `measured`, `run_hash`, `artifact`, `local`, `partitions_total`, `partitions_cached`, `partitions_missing`, `partitions_empty`, and `last_status`, `last_created_at`, `last_elapsed_seconds`, `last_run_hash`, `last_artifact`, `last_format`, `last_size_bytes`, `last_rows`, `last_content_hash`, `last_error` from `last_materialization` |
 
 ```bash
 barca sql "select target, status, elapsed_seconds from barca.runs where status = 'failed' order by started_at desc limit 10"
 barca sql "select node_id, avg(elapsed_seconds) as secs from barca.materializations group by 1 order by 2 desc"
 barca sql "select name, state, reason from barca.nodes where state <> 'cached'"
+barca sql "select health, health_reason, count(*) as nodes from barca.nodes group by all order by nodes desc"
 barca sql "select r.target, m.node_id, m.size_bytes from barca.runs r join barca.materializations m using (run_id)"
 barca sql "select node_id, created_at, rows from barca.materializations where rows = 0 order by created_at desc"
 ```
@@ -99,7 +100,9 @@ barca sql "select node_id, created_at, rows from barca.materializations where ro
   with times (`started_at::timestamp > now()::timestamp - interval 1 day`). `files`, `inputs` and
   `env` are lists.
 - `barca.nodes` comes from the same prediction as the views (`barca status`); `local` is `null`
-  without a server.
+  without a server. `health`, `health_reason`, `signals` and `measured` are the values `barca
+  status --json` prints ([barca status: Fields and JSON: Health](/reference/cli/status-fields/#health)); `measured` is `null` for a task
+  or sensor.
 - The tables are a read-only copy for the query: writing to them changes nothing.
 
 ## With a server

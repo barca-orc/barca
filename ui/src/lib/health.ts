@@ -4,7 +4,7 @@
  * panel's "Why" section, only render these.
  */
 
-import { blockedCauses, healthDisplay, HEALTH_ORDER, nodeHealth, type Health } from './nodeHealth'
+import { healthDisplay, HEALTH_ORDER, type Health } from './healthDisplay'
 import type { Glyph } from './glyph'
 import { memberHealth, type GraphState } from './graphState'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
@@ -18,7 +18,7 @@ export interface GraphLink {
 }
 
 /**
- * How many nodes of a scope are in each health (`lib/nodeHealth.ts`), as a health bar shows
+ * How many nodes of a scope are in each health (the server's `health`), as a health bar shows
  * them, plus the nodes a run is working on and those whose state is not loaded. A rollup counts
  * health, not cache states: a scope says `3 failing · 12 blocked · 40 behind`, and each node in
  * it keeps its own precise state word (`stale`, `partial`) beside its health.
@@ -61,32 +61,9 @@ export function healthPartGlyph(part: HealthPart): Glyph {
 }
 
 /**
- * Each node's health within `byId` (its own state rows and their inputs). Computed once per map
- * and its rows: a table asks for every row's counts over the same map, and a map changed in place
- * (a new row for a node) is worked out again.
- */
-const healthCache = new WeakMap<ReadonlyMap<string, NodeState>, { rows: NodeState[]; health: Map<string, Health> }>()
-function healthWithin(byId: ReadonlyMap<string, NodeState>): Map<string, Health> {
-  const known = healthCache.get(byId)
-  if (known && known.rows.length === byId.size) {
-    let i = 0
-    let same = true
-    for (const row of byId.values()) if (known.rows[i++] !== row) { same = false; break }
-    if (same) return known.health
-  }
-  const inputs = new Map<string, readonly string[]>()
-  for (const [id, node] of byId) inputs.set(id, node.inputs)
-  const blocked = blockedCauses(byId, inputs)
-  const out = new Map<string, Health>()
-  for (const [id, node] of byId) out.set(id, nodeHealth(node, { blocked: blocked.has(id) }))
-  healthCache.set(byId, { rows: [...byId.values()], health: out })
-  return out
-}
-
-/**
  * Counts of `ids`; a live run's status (`live`) outranks the polled state. `healthOf` is each
- * node's health over the whole project (the page's health tree), so a scope's counts agree with
- * the health map; without it, health is worked out within `byId`.
+ * node's health as the page's health tree holds it; without it, each row's own `health` (the
+ * server's word) is counted, which is the same word.
  */
 export function healthCounts(
   ids: readonly string[],
@@ -95,13 +72,12 @@ export function healthCounts(
   healthOf?: ReadonlyMap<string, Health>,
 ): HealthCounts {
   const counts = emptyHealth(ids.length)
-  const within = healthOf ? null : healthWithin(byId)
   for (const id of ids) {
     const status = live[id]
     const node = byId.get(id)
     if (status === 'running' || status === 'queued' || node?.running) counts.running += 1
     else if (status === 'failed') counts.states.failing += 1
-    else if (node) counts.states[healthOf?.get(id) ?? within?.get(id) ?? nodeHealth(node)] += 1
+    else if (node) counts.states[healthOf?.get(id) ?? node.health] += 1
     else counts.pending += 1
   }
   return counts

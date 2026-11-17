@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { AssetRunEntry, NodeState } from './types'
 import { barSegments, changedSummary, collapseRuns, dataKey, dataKeyNote, failuresOnlyNote, keyFigures, runScopeNote, runsRecorded, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, partitionSelection, raisedAtLabel, sinceLastSuccess, previewRows, runPace, shortHash, sourcePath, truncateCell, whatChanged } from './nodeDetail'
+import { served } from './testdata/served'
 
 function node(id: string, inputs: string[] = []): NodeState {
-  return {
+  return served({
     id,
     name: id.split(':').pop()!,
     kind: 'asset',
@@ -16,7 +17,7 @@ function node(id: string, inputs: string[] = []): NodeState {
     durations: null,
     next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
-  }
+  })
 }
 
 describe('downstreamOf', () => {
