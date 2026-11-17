@@ -102,6 +102,18 @@ def alive(pid: int) -> bool:
     return True
 
 
+def exited(pid: int) -> bool:
+    """Whether `pid` has finished exiting: it is gone, or a zombie its parent has yet to reap.
+    A killed process is neither for a moment: it has dropped its command line (so `pgrep -f`
+    no longer lists it) while it still releases its memory, and its parent's wait does not
+    report it yet."""
+    out = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+    )
+    state = out.stdout.strip()
+    return not state or state.startswith("Z")
+
+
 def without_duckdb(tmp: Path) -> str:
     """A directory that, first on `PYTHONPATH`, makes `import duckdb` fail."""
     shadow = tmp / "no-duckdb"
@@ -540,7 +552,8 @@ def test_a_killed_helper_is_started_again_and_none_outlives_its_server(project, 
     assert status == 200
     (first,) = helpers_of(server)
     os.kill(first, signal.SIGKILL)
-    wait_until(lambda: not alive(first) or helpers_of(server) == [], "the helper to die")
+    # Until it has exited: a query sent while it is still dying is the 503 below, not this.
+    wait_until(lambda: exited(first), "the helper to die")
     status, body = ask(server, "select count(*) as n from barca.runs")
     assert (status, body["rows"]) == (200, [{"n": 0}])
     (second,) = helpers_of(server)

@@ -1146,13 +1146,27 @@ mod tests {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
         };
         // Killed between queries: the next one starts another and loads its tables again.
+        // (A query that reaches the helper while it is still dying is the 503 below: a killed
+        // process takes a moment to exit, so the query is sent until it is answered.)
         kill(pid);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let runs = ask(&state, "select count(*) as n from barca.runs")
-            .await
-            .unwrap();
-        assert_eq!(runs.rows, [json!({"n": 0})]);
-        assert_eq!(state.sql.starts.load(Ordering::Relaxed), 2);
+        let mut answered = None;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            match ask(&state, "select count(*) as n from barca.runs").await {
+                Ok(runs) => {
+                    answered = Some(runs);
+                    break;
+                }
+                Err((503, _)) => {}
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(
+            answered.expect("a new helper answers").rows,
+            [json!({"n": 0})]
+        );
+        let started = state.sql.starts.load(Ordering::Relaxed);
+        assert!(started >= 2, "{started}");
         // Killed under a query: that query is a 503 naming what to do, the next is answered.
         let second = state.sql.pid().await.unwrap();
         assert_ne!(second, pid);
@@ -1165,7 +1179,7 @@ mod tests {
         assert_eq!(body["kind"], "infra");
         assert!(body["remediation"].as_str().unwrap().contains("again"));
         ask(&state, "select 1").await.unwrap();
-        assert_eq!(state.sql.starts.load(Ordering::Relaxed), 3);
+        assert_eq!(state.sql.starts.load(Ordering::Relaxed), started + 1);
     }
 
     /// A query that needs more memory than DuckDB is given fails as a usage error: nothing is
