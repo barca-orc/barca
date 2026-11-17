@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { formatAbsolute, formatAgo, formatClock, formatHour, formatInstant, formatRelative, hourOf, isTimeZone, parseTime, zoneName } from './time'
+import { formatAbsolute, formatAgo, formatClock, formatCountdown, formatHour, formatInstant, formatRelative, hourOf, isTimeZone, parseTime, zoneName } from './time'
 
 const NOW = Date.parse('2026-10-30T12:00:00Z')
 
@@ -19,6 +19,20 @@ describe('time format', () => {
     expect(formatAgo('2026-10-30 11:15:00', NOW)).toBe('45m ago')
     expect(formatAgo('2026-10-30T09:00:00.000Z', NOW)).toBe('3h ago')
     expect(formatAgo('2026-10-28 12:00:00', NOW)).toBe('2d ago')
+  })
+
+  // A query's `dataUpdatedAt` is 0 until its first answer: a time measured from it read
+  // `in 20774d` (#970). No caller can ask for that: an absent time or an absent now is a dash.
+  it('never measures a time from the epoch', () => {
+    const at = NOW - 3 * 3_600_000
+    expect(formatRelative(at, 0)).toBe('–')
+    expect(formatRelative(0, NOW)).toBe('–')
+    expect(formatRelative(Number.NaN, NOW)).toBe('–')
+    expect(formatCountdown(NOW + 60_000, 0)).toBe('–')
+    expect(formatCountdown(0, NOW)).toBe('–')
+    expect(formatAgo('2026-10-30 09:00:00', 0)).toBe('–')
+    expect(formatAgo('1970-01-01 00:00:00', NOW)).toBe('–')
+    expect(formatRelative(at, NOW)).toBe('3h ago')
   })
 
   it('shows an absolute time in the chosen zone and names the zone', () => {

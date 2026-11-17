@@ -239,6 +239,40 @@ test('the grouped page header fits a 1280×720 window on one line', async ({ pag
   expect(bar.headingCut, `the heading is whole: ${bar.parts}`).toBe(false)
 })
 
+// A deep path with long names at 1440×900 (#970): the header used to cut the breadcrumb, the
+// contents line and the health summary all at once. Now only the crumbs between the root and the
+// heading are shortened (whole in their tooltip), and what does not fit wraps to a second line.
+test('the grouped page header is readable at 1440×900 under a deep path with long names', async ({ page }) => {
+  const names: Record<string, string> = {
+    [G('cross_validation')]: 'Cross-validation of every candidate planning model',
+    [G('fold_02')]: 'Second held-out fold of the driver assumptions',
+  }
+  await page.route('**/groups', async (route) => {
+    const groups = await (await route.fetch()).json() as { id: string; name: string }[]
+    await route.fulfill({ json: groups.map((g) => ({ ...g, name: names[g.id] ?? g.name })) })
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('fold_02')}`)
+  await expect(page.getByRole('heading', { name: names[G('fold_02')]!, exact: true })).toBeVisible()
+  await expect(page.locator('.barca-scope-health .barca-health-label')).toContainText('failing')
+  const bar = await page.locator('.barca-view-bar').evaluate((el) => {
+    const cut = (sel: string) => [...el.querySelectorAll(sel)].filter((e) => e.scrollWidth > e.clientWidth).map((e) => e.textContent)
+    const right = el.getBoundingClientRect().right
+    return {
+      height: el.getBoundingClientRect().height,
+      cut: cut('h1, .barca-group-crumbs > button, :scope > .barca-count, .barca-health-label, .barca-group-external'),
+      middle: [...el.querySelectorAll('.barca-group-crumbs > span > button')].map((e) => ({ title: e.getAttribute('title'), width: e.getBoundingClientRect().width })),
+      overflowing: [...el.children].filter((child) => child.getBoundingClientRect().right > right + 0.5).map((child) => child.className),
+    }
+  })
+  expect(bar.cut, 'the heading, the root, the contents and the health are whole').toEqual([])
+  expect(bar.overflowing, 'nothing runs off the bar').toEqual([])
+  // The one crumb between the root and the heading: shortened, its whole name in its tooltip.
+  expect(bar.middle.map((m) => m.title)).toEqual([names[G('cross_validation')]])
+  expect(bar.middle[0]!.width).toBeGreaterThan(60)
+  expect(bar.height, 'at most two lines').toBeLessThanOrEqual(72)
+})
+
 for (const view of ['list', 'graph']) {
   for (const [target, verb] of [['summary', 'get'], ['publish', 'run']] as const) {
     test(`${view}: runs the grouped ${target} with ${verb}`, async ({ page, request }) => {
