@@ -162,8 +162,9 @@ steps), `cost_estimates` (the time estimate per node, used to size batches) and
 `schedule_failures` (the consecutive failed ticks of a scheduled node) and `sink_publications`
 (the run hash each `@sink` last wrote) and `asset_pins` (assets held at an earlier
 materialization by `barca pin`), and for `barca serve`
-`run_queue` (the runs it accepted and has not finished, in order) and `server_state` (whether
-that queue is paused).
+`run_queue` (the runs it accepted and has not finished, in order), `server_state` (whether
+that queue is paused) and `schedule_ticks` (what each due tick of a schedule decided and what
+its run did with each target; the newest 1,000 per schedule, none older than 14 days).
 
 Artifacts are files at `.barca/artifacts/{node}/{run_hash}{ext}`, in json, pickle, parquet or CSV.
 They are cached by run hash: the hash covers the function's code, the helper code it reaches

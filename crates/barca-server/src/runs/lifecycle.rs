@@ -18,6 +18,82 @@ pub(crate) async fn start(state: AppState, spec: RunSpec) -> Result<String, ApiE
     crate::queue::admit(&state, spec).await.map(|a| a.run_id)
 }
 
+/// [`start`] under a run id the caller allocated ([`crate::queue::admit_as`]).
+pub(crate) async fn start_as(
+    state: AppState,
+    run_id: String,
+    spec: RunSpec,
+) -> Result<String, ApiError> {
+    crate::queue::admit_as(&state, spec, run_id)
+        .await
+        .map(|a| a.run_id)
+}
+
+/// The tick a scheduled run was started for: its schedule and slot (unix seconds). `None` for
+/// every other run, which the tick record does not concern.
+fn tick_of(spec: &RunSpec) -> Option<(&str, i64)> {
+    if spec.trigger.triggered_by != barca_core::outcome::TriggeredBy::Schedule {
+        return None;
+    }
+    let schedule = spec.trigger.schedule_id.as_deref()?;
+    let slot = barca_core::time::parse_rfc3339(spec.trigger.scheduled_at.as_deref()?)?;
+    Some((schedule, slot))
+}
+
+/// Record on the tick that started `run_id` that the run left the queue (#960): now, and how
+/// long since the queue accepted it. Values the run holds; one write, best-effort.
+async fn record_tick_started(state: &AppState, run_id: &str, spec: &RunSpec) {
+    let Some((schedule, slot)) = tick_of(spec) else {
+        return;
+    };
+    let Some(queued_at) = state.runs.get(run_id).map(|r| r.started_at) else {
+        return;
+    };
+    let now = now_ts();
+    if let Err(e) = db::record_tick_started(
+        &state.config.resolved.db_path,
+        schedule,
+        slot,
+        run_id,
+        now,
+        now - queued_at,
+    )
+    .await
+    {
+        barca_core::errln!("[barca] tick record write failed for run {run_id}: {e}");
+    }
+}
+
+/// Record on the tick that started `run_id` how the run ended (#960): now, `status`, and what
+/// the run did with each of the tick's targets, from the run's own step results (`outcome`;
+/// `None` for a run that has none: no target was reached). One write, best-effort.
+pub(crate) async fn record_tick_finished(
+    state: &AppState,
+    run_id: &str,
+    spec: &RunSpec,
+    status: &str,
+    outcome: Option<&Outcome>,
+) {
+    let Some((schedule, slot)) = tick_of(spec) else {
+        return;
+    };
+    let targets =
+        barca_core::serve::ticks::target_outcomes(&spec.nodes, outcome.map_or("", |o| o.text()));
+    if let Err(e) = db::record_tick_finished(
+        &state.config.resolved.db_path,
+        schedule,
+        slot,
+        run_id,
+        now_ts(),
+        status,
+        &targets,
+    )
+    .await
+    {
+        barca_core::errln!("[barca] tick record write failed for run {run_id}: {e}");
+    }
+}
+
 /// Execute a run the queue let start, in the background, holding one of the run slots.
 pub(crate) fn launch(
     state: AppState,
@@ -74,6 +150,7 @@ async fn execute(
     {
         barca_core::errln!("[barca] warning: run {run_id}: {e}");
     }
+    record_tick_started(&state, &run_id, &spec).await;
     channel.emit(RunEvent::RunStarted {
         run_id: run_id.clone(),
     });
@@ -348,6 +425,8 @@ pub(super) async fn finish(
     {
         barca_core::errln!("[barca] could not record why run {run_id} was cancelled: {e}");
     }
+    // A run stopped at its timeout is an `error`, as its row says.
+    record_tick_finished(state, run_id, spec, status.as_str(), Some(&outcome)).await;
     // Recorded: it leaves the queue.
     if let Err(e) =
         barca_core::serve::run_queue::remove(&state.config.resolved.db_path, run_id).await
