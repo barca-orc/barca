@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- **The health map is drawn cleanly.** Its segments are shaded fills parted by hairline gaps instead of 1-pixel strokes, in a palette of its own (crimson failing, amber needs attention, teal-green ok, slate not known yet) that brightens toward the rim; members too thin to draw one by one are one quiet `N smaller` segment instead of a frayed edge; no names are printed on the rings. The centre names the scope, or the segment under the pointer with its path, health and size, in real type, and the hovered branch lights up while the rest dims.
+
 ## 0.43.0 (2026-11-17)
 
 ### Features
