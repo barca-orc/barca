@@ -11,8 +11,9 @@ the CLI contract; the tick record ("What a tick records", #960), as the `schedul
 table and its reads; `last_check` with the `checked_up_to_date` reason ("Last check", #964);
 and the rollup ("Rollup", #955): `GET /state/rollup` and `barca status --rollup`, with the
 counts in both units, `keys`, and of `root` and the root list the `failure` kind only, as
-that section's "As implemented" states. Everything else below is intent: `cause`, every root
-kind but `failure`, `refresh_path`, the other times, `gap_seconds`, the cause and gap fields
+that section's "As implemented" states; and `refresh_path` with its `barca.nodes` columns
+("Refresh path", #961). Everything else below is intent: `cause`, every root
+kind but `failure`, the other times, `gap_seconds`, the cause and gap fields
 of a rollup entry and of a root, `as_of` and `rollup` in `barca status --json`, the new
 tables and the query route do not exist yet.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
@@ -214,7 +215,8 @@ which the next tick recomputes), and a new value of a declared environment varia
 
 ### Refresh path (#961)
 
-`refresh_path` is the schedule whose tick reaches the node, or `null`.
+Implemented in `crates/barca-core/src/refresh_path.rs` (`Paths`, `path_schedule`,
+`refresh_path`). `refresh_path` is the schedule whose tick reaches the node, or `null`.
 
 ```json
 {"schedule": "pipeline.py:inbox", "next_tick": "2026-11-17T15:00:00Z",
@@ -228,13 +230,43 @@ which the next tick recomputes), and a new value of a declared environment varia
   `Input` has none. Which nodes a tick reaches is that walk's answer and is specified in
   [freshness](freshness.md) and the scheduling manual, not here.
 - A scheduled node's refresh path is its own schedule. When several schedules reach a node,
-  the one with the earliest `next_tick` is reported; ties break by `schedule` id.
+  the one with the earliest `next_tick` is reported, one with no `next_tick` last; ties break
+  by `schedule` id. The flags are that schedule's, so a node reached by a paused schedule and
+  a firing one reports the firing one.
 - `next_tick` is the schedule's next slot; the first slot after `paused_until` for a timed
   pause; `null` for an indefinite pause or when `live` is false.
-- `live` is whether a running scheduler fires it (`schedule.live` today). Without one, ticks
-  never happen and no time is estimated.
-- `missed_ticks` counts fired, finished ticks of that schedule since `stale_since` that did not
-  leave the node fresh (the tick record, bounded by its retention).
+- `live` is whether a running scheduler fires it. It is false when the answering process runs
+  no scheduler for the schedule (`barca status` without a server, a `--read-only` or
+  `--no-schedule` server: `schedule.live` is false too) and when the scheduler holds the
+  schedule as `failing` past `max_failures` (`schedule.live` stays true there; `schedule.failing`
+  says why). Without a firing scheduler ticks never happen and no time is estimated. A cron
+  that does not parse is refused when the graph loads, so no loaded graph has one.
+- A paused schedule (`paused`) and a schedule that is not `live` are still the path: the
+  field says which schedule would refresh the node and why it does not. What makes the path
+  `null` is on the node itself: a paused node (`barca pause`) is a skipped step of every tick,
+  and a pinned asset (`barca pin`) is read as its pinned result, so neither has a path. The
+  nodes below one keep theirs: the target list is fixed by the graph, and a tick brings them
+  up to date against what the paused or pinned node holds.
+- `missed_ticks` counts the finished fired ticks of the path's schedules (every schedule that
+  reaches the node as a target, not only the one reported) that had the node as a target and
+  did not leave it fresh: outcome `failed` or `not_reached`. It counts back from the newest
+  finished tick to the last one, of any schedule, whose outcome for the node was `up_to_date`
+  or `rebuilt`, and only ticks that ended after the node's newest successful result (a run no
+  tick started made the earlier ones good). It is 0 for a fresh node. A node still not fresh
+  after an `up_to_date` or `rebuilt` outcome was not missed by that tick. Until `stale_since`
+  exists (#962) this is what "since the node went out of date" means. The count is bounded by
+  the tick record: the newest 20 fired ticks of each schedule keep their target lists, so a
+  schedule contributes at most 20; a skipped, paused or unfired tick is not a miss.
+
+Cost: the walk depends on the graph alone and takes seconds on a graph of thousands of nodes
+and dozens of schedules, so it runs once per loaded graph (`AppState::cached_paths`; once per
+CLI command), never per poll or per node. The schedule state is each schedule's standing,
+already computed per answer; the misses come with the one read "Last check" makes.
+
+Entry points for what is derived from a path (#962, #963): `refresh_path::path_schedule(node,
+evidence)` answers the path's schedule with its `PathSchedule` (`next_tick`, `paused`, `live`,
+`failing` and the schedule's `Standing`: last tick, typical queue wait, lateness);
+`health::Evidence::path` carries that evidence into classification.
 
 ### Cause (#963, #973)
 
@@ -366,7 +398,7 @@ whatever their `health` (a failing asset whose last good result was empty is sti
 
 `barca status --json` adds, beside `summary`: `as_of`; `rollup`, the root entry of the tree
 below; and `data_coverage`: `{"assets": 556, "measured": 7, "suspect": 0}`. Without a server,
-`refresh_path.live` is false, the times are `null`, and a scheduled chain's cause is
+`refresh_path.live` is false, `next_tick` and the times are `null`, and a scheduled chain's cause is
 `no_refresh_path` with root kind `scheduler_off`.
 
 ### Rollup (#955)
@@ -582,8 +614,9 @@ the rollup by group, and the top roots.
 - After a restart, `GET /schedule`'s in-memory skip fields are empty as today; the tick record
   keeps what was skipped.
 - A `--read-only` server classifies from the shared metadata: it reads the ticks the
-  scheduling server wrote (`last_check` and row 7a work there as on the scheduling server),
-  and `refresh_path.live` reflects that server's scheduler.
+  scheduling server wrote (`last_check`, `missed_ticks` and row 7a work there as on the
+  scheduling server). It runs no scheduler, so its `refresh_path.live` is false and its
+  `next_tick` is `null`: it cannot tell whether the scheduling server is up.
 - When ticks stop (the scheduler is down, the schedule paused or removed), a standing verdict
   expires within one interval plus the last tick's duration and grace, and the node reads
   `undecided` again; `last_check` keeps the record.
@@ -594,7 +627,7 @@ the rollup by group, and the top roots.
 ## Acceptance and evidence
 
 Each issue lands its scenario with the code and replaces the matching source link. Passing
-today: #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+today (with the #961 row): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #960 row and the
@@ -608,7 +641,7 @@ the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #960 ro
 | A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late (passes: `a_queued_tick_reads_the_same_on_every_surface`) | #958 |
 | Re-adding a derived word in TypeScript fails CI | #959 |
 | A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
-| A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961 |
+| A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961: [the shapes, a paused schedule, no live scheduler, paused and pinned nodes, missed ticks](../../crates/barca-core/src/refresh_path.rs) ("membership is the scheduler's own target list"), [the batched misses](../../crates/barca-db/src/db/ticks.rs), [the walk once per graph](../../crates/barca-server/src/read_cache.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a scheduling and a read-only server](../../python/tests/test_refresh_path.py) |
 | Estimates within the stated error on the seeded server simulation; a node below a pending cutoff has `recheck_at` only | #962 |
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963 |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
@@ -651,8 +684,11 @@ the causes list's grouping and the failures list's impact are deleted: their rul
   unresolved; this document takes the walk's answer and adds no rule of its own.
 - Where the time of a code or environment change is recorded for `stale_since` is #962's
   decision; until then such nodes may have `stale_since: null` and contribute no backward term.
-- Assets paused with `barca pause` and pinned assets keep the health their cache state gives;
-  whether a paused asset is `no_refresh_path` with its own root kind is left to #961.
+- Assets paused with `barca pause` and pinned assets keep the health their cache state gives
+  and have no refresh path (#961); whether #963 gives them a root kind of their own, instead
+  of `no_schedule`, is its decision.
+- `refresh_path` does not see a schedule that is late or whose server is down from a
+  `--read-only` server: `live` there is that process's scheduler, which it does not have.
 - The estimate ignores worker contention and heavy-step capacity; its error is unmeasured.
 - A node declared in several groups is placed by group id (#955 keeps the rule: it is the one
   that keeps every level an exact sum). Whether overlapping groups should instead be refused

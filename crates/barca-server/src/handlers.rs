@@ -254,6 +254,8 @@ async fn state_rows_for_targets(
     let checks = state
         .cached_checks(&dag, &db_state, &snapshot.path, &ages)
         .await?;
+    let paused = state.cached_paused_nodes(&db_state, &snapshot.path).await?;
+    let paths = state.cached_paths(&dag).await?;
     let (status, durations) = if targets.is_empty() {
         // Together: after a change, each waits a moment for its new value (`read_cache`).
         let (status, durations) = tokio::join!(
@@ -293,7 +295,7 @@ async fn state_rows_for_targets(
     Ok(rows(
         &status.nodes,
         &durations,
-        (&ages, &pinned, &checks),
+        (&ages, &pinned, &checks, &paused, &paths),
         &schedules,
         now.timestamp(),
         running,
@@ -336,10 +338,12 @@ async fn status_for_targets(
         .await?)
 }
 
-/// Where one schedule stands and its `schedule` block, as this server reports them.
+/// Where one schedule stands, its `schedule` block, and what a refresh path through it says
+/// (its next tick, paused, live), as this server reports them.
 pub(crate) type LiveSchedule = (
     barca_core::schedule_standing::Standing,
     barca_core::status::ScheduleStatus,
+    barca_core::refresh_path::PathSchedule,
 );
 
 /// Every scheduled node of `dag` as of `now`: where its schedule stands
@@ -391,7 +395,9 @@ pub(crate) async fn live_schedules(
             );
             block.skip_reason = live.and_then(|p| p.skip_reason).map(str::to_string);
             block.live = live.is_some();
-            (job.id.clone(), (standing, block))
+            // A refresh path through it: live when this server's scheduler fires it.
+            let path = barca_core::refresh_path::PathSchedule::of(job, &zone, &standing, &block);
+            (job.id.clone(), (standing, block, path))
         })
         .collect())
 }
@@ -415,12 +421,25 @@ pub(crate) async fn published_ticks(
 }
 
 /// What health reads of the metadata database, each kept per database state (`read_cache`):
-/// every node's age, the pinned assets, and what the newest ticks found.
+/// every node's age, the pinned assets, what the newest ticks found and the paused nodes; and
+/// of the graph, kept as long as it is: which schedules reach each node.
 type Records<'a> = (
     &'a std::collections::HashMap<String, db::NodeAge>,
     &'a std::collections::HashSet<String>,
     &'a barca_core::health::Checks,
+    &'a std::collections::HashSet<String>,
+    &'a barca_core::refresh_path::Paths,
 );
+
+/// Each schedule of [`live_schedules`] as a refresh path reads it.
+fn path_schedules(
+    schedules: &std::collections::HashMap<String, LiveSchedule>,
+) -> barca_core::refresh_path::PathSchedules {
+    schedules
+        .iter()
+        .map(|(id, (_, _, path))| (id.clone(), path.clone()))
+        .collect()
+}
 
 /// The `GET /state` rows: each node's status with its durations, its schedule
 /// ([`live_schedules`]), run and data signals, as of `now` (unix seconds).
@@ -432,7 +451,8 @@ fn rows(
     now: i64,
     mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
 ) -> Vec<NodeState> {
-    let (ages, pinned, checks) = records;
+    let (ages, pinned, checks, paused, paths) = records;
+    let path_schedules = path_schedules(schedules);
     // Health, signals and coverage are classified here, per answer: lateness moves with the
     // clock, so it is never kept with the status result. Late is the schedule's standing
     // (`barca_core::schedule_standing::standing`), the one `GET /schedule` reports.
@@ -445,6 +465,12 @@ fn rows(
             pinned,
             late: &late,
             checks,
+            path: barca_core::refresh_path::PathEvidence {
+                paths,
+                schedules: &path_schedules,
+                paused,
+                pinned,
+            },
             now,
         },
     );
@@ -452,9 +478,9 @@ fn rows(
         .into_iter()
         .map(|mut n| {
             let schedule = schedules.get(&n.id);
-            let slot = schedule.map(|(standing, _)| standing);
+            let slot = schedule.map(|(standing, _, _)| standing);
             let age = ages.get(&n.id).cloned().unwrap_or_default();
-            n.schedule = schedule.map(|(_, block)| block.clone());
+            n.schedule = schedule.map(|(_, block, _)| block.clone());
             NodeState {
                 durations: durations.get(&n.id).cloned(),
                 next_run: slot.and_then(|s| s.next_fire),
@@ -671,7 +697,7 @@ pub(crate) async fn attach_live_schedules(
     let db_state = state.db_state();
     let mut schedules = live_schedules(state, dag, &db_state, db_path, chrono::Utc::now()).await?;
     for node in nodes.iter_mut() {
-        if let Some((_, block)) = schedules.remove(&node.id) {
+        if let Some((_, block, _)) = schedules.remove(&node.id) {
             node.schedule = Some(block);
         }
     }
@@ -704,7 +730,11 @@ pub(crate) async fn attach_health_at(
     let ages = state.cached_ages(db_state, db_path).await?;
     let pinned = state.cached_pinned(db_state, db_path).await?;
     let checks = state.cached_checks(dag, db_state, db_path, &ages).await?;
-    let late = late_of(&live_schedules(state, dag, db_state, db_path, now).await?);
+    let paused = state.cached_paused_nodes(db_state, db_path).await?;
+    let paths = state.cached_paths(dag).await?;
+    let schedules = live_schedules(state, dag, db_state, db_path, now).await?;
+    let late = late_of(&schedules);
+    let path_schedules = path_schedules(&schedules);
     barca_core::health::attach(
         result,
         barca_core::health::Evidence {
@@ -712,6 +742,12 @@ pub(crate) async fn attach_health_at(
             pinned: &pinned,
             late: &late,
             checks: &checks,
+            path: barca_core::refresh_path::PathEvidence {
+                paths: &paths,
+                schedules: &path_schedules,
+                paused: &paused,
+                pinned: &pinned,
+            },
             now: now.timestamp(),
         },
     );
@@ -724,7 +760,7 @@ fn late_of(
 ) -> std::collections::HashSet<String> {
     schedules
         .iter()
-        .filter(|(_, (standing, _))| standing.late)
+        .filter(|(_, (standing, _, _))| standing.late)
         .map(|(id, _)| id.clone())
         .collect()
 }

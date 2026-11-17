@@ -14,7 +14,7 @@ import type { Health } from '../generated/Health'
 import type { HealthReason } from '../generated/HealthReason'
 import type { NodeState } from '../types'
 
-type Classified = 'health' | 'health_reason' | 'measured' | 'root' | 'last_check'
+type Classified = 'health' | 'health_reason' | 'measured' | 'root' | 'last_check' | 'refresh_path'
 export type Unserved = Omit<NodeState, Classified> & Partial<Pick<NodeState, Classified>>
 
 function alone(row: Unserved): [Health, HealthReason] {
@@ -37,7 +37,7 @@ export function served(row: Unserved): NodeState {
   const [health, reason] = alone(row)
   // A failing node is its own root; a fixture about a node blocked by another states its `root`.
   const root = row.root ?? ((row.health ?? health) === 'failing' ? { id: `failure:${row.id}`, kind: 'failure' as const, node: row.id } : null)
-  return { ...row, root, health: row.health ?? health, health_reason: row.health_reason ?? (row.health ? REASON[row.health] : reason), measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null }
+  return { ...row, root, health: row.health ?? health, health_reason: row.health_reason ?? (row.health ? REASON[row.health] : reason), measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null, refresh_path: row.refresh_path ?? null }
 }
 
 /** The usual reason of a health a fixture states without one. */

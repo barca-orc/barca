@@ -14,6 +14,7 @@ import { CopyButton, KeyErrors, NodeKeys, PartitionBar } from './NodeKeys'
 import { BlastRadius } from './BlastRadius'
 import { IncidentControls } from './IncidentControls'
 import { LastCheckLine } from './LastCheckLine'
+import { RefreshPathLine } from './RefreshPathLine'
 import { usePausedSet } from '@/hooks/usePauses'
 import { usePinNotes } from '@/hooks/usePins'
 import { usePausedRunGuard } from '@/hooks/usePausedRunGuard'
@@ -191,6 +192,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         )}
         {/* What the newest tick that checked it found; the server decides what that means for its health. */}
         {node.last_check && <LastCheckLine check={node.last_check} nowMs={nowMs} />}
+        {/* Which schedule's tick will bring it up to date, or that none will: the server's answer. */}
+        <RefreshPathLine path={node.refresh_path} nowMs={nowMs} />
         {node.running && (
           <KeyValue label="now">
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}

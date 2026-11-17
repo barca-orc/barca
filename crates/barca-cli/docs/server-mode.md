@@ -488,8 +488,10 @@ Each row of `GET /state` and each node of `GET /nodes` carries what `barca statu
 `health` and `health_reason` (whether something needs doing about the node, and the rule that
 decided it), `root` (the failing node that explains a failing or blocked one), `signals` (what
 its recorded results say about its data: `empty`, `rows_changed`, `behind_input`), `measured`
-(whether its rows were counted at all; `null` for a task or sensor) and `last_check` (what the
-newest tick that checked the node found, and when; `null` when no retained tick did). They are
+(whether its rows were counted at all; `null` for a task or sensor), `last_check` (what the
+newest tick that checked the node found, and when; `null` when no retained tick did) and
+`refresh_path` (the schedule whose tick will bring it up to date, its next tick, and the ticks
+that already missed it; `null` when none will). They are
 computed in barca from facts the metadata DB holds, never by reading an
 artifact, and are the same on every surface: `barca docs status-fields`, "Health" and "Data
 signals and coverage", has the tables. `GET /nodes` also has `data_coverage` beside `summary`.
