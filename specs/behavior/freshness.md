@@ -98,9 +98,10 @@ set closed under both steps. Nothing else is touched.
 - A paused target is skipped and a pinned target is read as its pinned result. The static set
   is computed without them: at run time they also stop the upstream walk, so a tick can poll
   fewer sensors than the static set follows, never an unscheduled one it does not.
-- A node targeted by two schedules is computed once when their runs do not overlap (the second
-  finds the result). Runs in flight together share an asset step while it is leased; a task is
-  never shared, so both runs fire it. Current limitation.
+- An asset targeted by two schedules is computed once per run hash: a later run finds the
+  result, and runs in flight together share the step ([execution](execution.md)). A task is
+  never shared between runs, so two ticks that fire in the same second both fire a task they
+  have in common. Current limitation.
 
 `barca_core::freshness::tick_targets` is the scheduler's target list and
 `barca_core::freshness::tick_reach` the one statement of which schedules reach a node and how
@@ -177,6 +178,7 @@ Conformance: [freshness rules](../../crates/barca-core/src/freshness.rs)
 [tick reach](../../python/tests/test_freshness_propagation.py)
 (`test_a_tick_rebuilds_the_always_nodes_below_a_sensor_it_polls`,
 `test_two_schedules_that_reach_the_same_node_compute_it_once_when_their_ticks_do_not_overlap`,
+`test_two_ticks_in_the_same_second_compute_a_shared_asset_once`,
 `test_a_paused_or_pinned_node_below_a_polled_sensor_is_left_alone`),
 [early cutoff](../../python/tests/test_asset_cutoff.py),
 [selection](../../python/tests/test_partition_selection.py).

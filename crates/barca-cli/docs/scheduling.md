@@ -135,10 +135,11 @@ poll is the only step that runs: `fast` and `side` are cache hits.
   (`barca docs pins`).
 - **Two schedules can have the same target** (both poll the same unscheduled sensor, or one
   node is below two scheduled nodes). When their ticks do not overlap, the second finds
-  a cached result and a task that is up to date. When they fire in the same second, both runs
-  can compute a shared asset whose step finishes within moments (a step still running is shared,
-  not repeated), and both fire a shared task. Put one schedule on the sensor, or give the task
-  a `Schedule` of its own, when a task must fire once per change.
+  a cached result and a task that is up to date. When they fire in the same second, a shared
+  asset is still computed once (the second run waits for the first, or takes the result it just
+  finished), but each run fires a shared task: a task is never shared between runs. Put one
+  schedule on the sensor, or give the task a `Schedule` of its own, when a task must fire once
+  per change.
 - A failure of any target counts as a failed tick of the schedule ("Failures and
   `max_failures`").
 
@@ -257,9 +258,9 @@ in flight, `last_skipped`, `skip_reason: "in_flight"` and `skipped_for` in `GET 
 The next tick after the run ends fires as usual. Only a run of the node itself counts: a run of
 a node downstream of it does not hold the tick back, though it computes the same upstream cone.
 Two scheduled nodes that share an upstream, or a target below an unscheduled sensor both poll, run
-separately, and if their ticks coincide both may compute it (an asset step still running is
-shared between the server's runs; a task never is): schedule the sensor once and let the
-`Always` nodes below it follow instead.
+separately. If their ticks coincide, an asset they share is computed by one run and taken by
+the other, a task they share fires in both, and the sensor is polled by both: schedule the
+sensor once and let the `Always` nodes below it follow instead.
 
 ```text
 [barca] scheduled run pipeline.py:orders skipped — run 1b942bb33182 of the same node still in flight

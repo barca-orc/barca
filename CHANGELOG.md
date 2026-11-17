@@ -21,6 +21,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- **Two runs of a server that start together no longer compute the same asset step twice when it is quick.** Runs of one `barca serve` already shared an asset step while one of them was executing it (#654). A run that looked for the result before it existed and reached the step just after the other run finished it found no claim and executed it again. It now takes the result the other run finished, when it was already going at that moment; a run that starts later looks in the cache as before. Two ticks that fire in the same second and have a target in common are such runs (#978).
 - **Rough edges in the web UI (#970).** A node's panel no longer reads `success · in 20774d` while its group's state loads: a time is never measured from a `now` that is not known yet (it is read against the clock), and a zero or absent time is a dash. The Last success column is drawn with its rows when their state is already known, and otherwise holds its place with a skeleton instead of painting blank. The grouped page's header no longer cuts its breadcrumb, contents (`399 assets · 49 tasks`) and health summary to fit one line: only the crumbs between the root and the heading are shortened (whole in their tooltip), and the view switch wraps to a second line when the rest does not fit.
 
 ### Documentation

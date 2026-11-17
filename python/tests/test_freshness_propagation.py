@@ -603,7 +603,10 @@ def _polled(tmp_path, freshness: str, source: str = POLLED, also: tuple[str, ...
     assert _barca(tmp_path, "get", "below", "pipeline.py").returncode == 0
     assert _status(tmp_path)["side"]["state"] == "cached"
     with Serve(tmp_path) as serve:
-        serve.wait("the first tick", lambda: serve.rows().get("fast", 0) >= 1)
+        serve.wait(
+            "the first ticks",
+            lambda: all(serve.rows().get(name, 0) >= 1 for name in ("fast", *also)),
+        )
         _write(tmp_path, "feed.txt", "b")
         # The tick of `fast` polls `feed`, sees the new value and rebuilds what is below it.
         serve.wait(
@@ -667,6 +670,20 @@ def test_two_schedules_that_reach_the_same_node_compute_it_once_when_their_ticks
     for name in ("fast", "also", "after", "side", "below"):
         assert rows.get(name) == 2, (name, rows)
     assert _lines(tmp_path / "told.log") == ["a", "b"]
+
+
+def test_two_ticks_in_the_same_second_compute_a_shared_asset_once(tmp_path):
+    # `fast` and `also` fire together and both target `side` and `below`. The run that reaches
+    # an asset second waits for the first, or takes the result it just finished.
+    same = TWICE.replace('"*/4 * * * * *"', '"* * * * * *"').replace(
+        '"2-58/4 * * * * *"', '"* * * * * *"'
+    )
+    rows, _outcome = _polled(tmp_path, "Manual", same, also=("fast", "also"))
+    for name in ("fast", "also", "after", "side", "below"):
+        assert rows.get(name) == 2, (name, rows)
+    # A task is never shared between runs: each run that finds it out of date fires it.
+    told = _lines(tmp_path / "told.log")
+    assert set(told) == {"a", "b"} and len(told) <= 4, told
 
 
 def test_a_paused_or_pinned_node_below_a_polled_sensor_is_left_alone(tmp_path):

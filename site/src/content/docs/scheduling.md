@@ -247,9 +247,9 @@ publishing {'rows': 3}
 ### Two scheduled nodes that share an upstream
 
 Each scheduled node gets its own run. Two scheduled nodes that are due at the same tick and
-share an upstream, or a target below an unscheduled sensor both poll, run separately, and both may compute
-it (an asset step still running is shared between the server's runs; a task is not, so a task
-below a sensor both poll fires in both runs); the sensor also runs twice, so the two runs can
+share an upstream, or a target below an unscheduled sensor both poll, run separately. An asset
+they share is computed by one run and taken by the other; a task is never shared, so a task
+below a sensor both poll fires in both runs; the sensor also runs twice, so the two runs can
 see different data
 ([issue #80](https://github.com/barca-orc/barca/issues/80)). Schedule the sensor once instead
 and leave the nodes below it `Always`: one tick then updates all of them in one run.
