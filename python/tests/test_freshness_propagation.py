@@ -535,3 +535,80 @@ def test_a_tick_below_a_refreshed_manual_node_reads_its_new_result(tmp_path):
         # Once: the ticks after it serve `priced` from cache, and never recompute fx.
         assert rows.get("priced") == 2 and rows.get("fx") == 2, rows
     assert _value(tmp_path, "priced", "pipeline.py") == 120.0
+
+
+# ─── a tick polls a sensor it reads, and targets nothing beside it (#952) ────
+
+POLLED = """
+from pathlib import Path
+
+from barca import asset, sensor, Always, Manual, Schedule
+
+
+@sensor(freshness=Manual)
+def feed() -> str:
+    return Path("feed.txt").read_text()
+
+
+@asset(inputs={"v": feed}, freshness=Schedule("* * * * * *"))
+def fast(v: str) -> str:
+    return v
+
+
+@asset(inputs={"v": fast})
+def after(v: str) -> str:
+    return v
+
+
+@asset(inputs={"v": feed})
+def side(v: str) -> str:
+    return v
+
+
+@asset(inputs={"v": side})
+def below(v: str) -> str:
+    return v
+"""
+
+
+def _polled(tmp_path, freshness: str):
+    """`side` and `below` are `Always` and below `feed`, with no scheduled node above them."""
+    (tmp_path / "pipeline.py").write_text(
+        POLLED.replace("@sensor(freshness=Manual)", f"@sensor(freshness={freshness})")
+    )
+    _write(tmp_path, "feed.txt", "a")
+    assert _barca(tmp_path, "get", "below", "pipeline.py").returncode == 0
+    assert _status(tmp_path)["side"]["state"] == "cached"
+    with Serve(tmp_path) as serve:
+        serve.wait("the first tick", lambda: serve.rows().get("fast", 0) >= 1)
+        _write(tmp_path, "feed.txt", "b")
+        # The tick of `fast` polls `feed`, sees the new value and rebuilds its own targets.
+        serve.wait("the new value", lambda: serve.rows().get("after", 0) >= 2)
+        rows = serve.settle()
+        run = serve.finished(serve.schedule()["fast"]["last_run"])
+    targets = {t.rsplit(":", 1)[1] for t in run["outcome"]["targets"]}
+    steps = {step["id"].rsplit(":", 1)[1] for step in run["outcome"]["steps"]}
+    return rows, targets, steps
+
+
+def test_a_tick_leaves_always_nodes_beside_a_sensor_it_only_polls(tmp_path):
+    for n, freshness in enumerate(("Manual", "Always")):
+        root = tmp_path / str(n)
+        root.mkdir()
+        rows, targets, steps = _polled(root, freshness)
+        # The sensor is an input of the tick's run, not a target, and `side` is in neither.
+        assert targets == {"fast", "after"}, targets
+        assert steps == {"feed", "fast", "after"}, steps
+        assert rows.get("fast") == 2 and rows.get("after") == 2, rows
+        # No tick rebuilt them, however many polled the sensor that made them stale.
+        assert rows.get("side") == 1 and rows.get("below") == 1, rows
+        assert _status(root)["side"]["state"] != "cached", _status(root)
+        # A request does.
+        assert _barca(root, "get", "below", "pipeline.py").returncode == 0
+        assert _rows(root).get("side") == 2 and _rows(root).get("below") == 2
+        assert _status(root)["side"]["state"] == "cached"
+
+
+def test_a_schedule_on_the_sensor_gives_what_is_below_it_a_tick(tmp_path):
+    rows, _targets, _steps = _polled(tmp_path, 'Schedule("* * * * * *")')
+    assert rows.get("side") == 2 and rows.get("below") == 2, rows

@@ -539,7 +539,7 @@ def test_scheduling_topic_example(binary, topics, tmp_path):
 
 def test_scheduling_topic_manual_example(binary, topics, tmp_path):
     """`Manual` pins itself in `barca get`: the note and the never-computed error it shows."""
-    code = blocks(topics["scheduling"], "python")[1]
+    code = blocks(topics["scheduling"], "python")[2]
     assert "freshness=Manual" in code
     (tmp_path / "pipeline.py").write_text(code)
     (tmp_path / "prices.txt").write_text("p1")

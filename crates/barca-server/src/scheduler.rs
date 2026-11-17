@@ -129,9 +129,7 @@ async fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<Str
         NodeKind::Task => barca_core::outcome::RunCommand::Run,
         NodeKind::Asset | NodeKind::Sensor => barca_core::outcome::RunCommand::Get,
     };
-    let targets: Vec<String> = std::iter::once(job.id.clone())
-        .chain(job.followers.iter().cloned())
-        .collect();
+    let targets = job.targets();
     runs::start(
         state.clone(),
         runs::RunSpec {
