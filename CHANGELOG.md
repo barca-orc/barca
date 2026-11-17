@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.44.0 (2026-11-17)
+
 ### Breaking
 
 - **`barca status` decides a node below a `Manual` or pinned node as a run does (#985).** A run (`get`, `run`, a scheduled tick) reads a `Manual` node, and an asset pinned with `barca pin`, as it is and never recomputes it; `barca status`, `GET /state`, `GET /nodes`, `barca.nodes` in `barca sql` and a node's partition grid predicted a recompute of it instead. So below a stale `Manual` node they said `stale` / `upstream_stale` (health `behind`), or `unknown` / `cutoff_pending` behind an `@asset(cutoff=True)`, for nodes that `barca get --dry-run` called `cached` and every tick found up to date. `cache.state` of those nodes changes: a node that is up to date against the held node's current result is now `cached` (reason `materialized`, health `ok`), with the run hash a run gives it, and its `detail` names the nearest stale held node above and the command that recomputes it (`up to date against 'baseline' as it is: ...`). The held node itself still reads `stale` when its code or inputs moved on, and a held input is no longer a cause of `upstream_stale`. A status scoped to targets now lists the nodes above a pinned asset too, and decides the pinned asset for its current code and inputs as the unscoped one does. No value was added or removed. To find what is held back, select the `stale` `Manual` or pinned nodes; there is no replacement for the old answer, which described a recompute no run performs. A node paused with `barca pause` is read as it is by ticks only, so status still says what a request would do there (`barca docs status`, "Cache state").
