@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '22'
+  version: '23'
   description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -2935,6 +2935,14 @@ paths:
           type: integer
           minimum: 0
         description: The most steps to list (default 1000).
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+        description: List the steps from this position of the page order (failed steps first, then
+          as recorded); steps_page.next_offset is where the next page starts.
       - name: all
         in: query
         required: false
@@ -4833,6 +4841,17 @@ components:
           items: *id003
           maxItems: 20
           description: The first of them in key order. Absent when none did.
+        changed:
+          type: object
+          additionalProperties:
+            type: array
+            items: *id003
+          description: For each missing key with an earlier result, what changed in its run hash.
+        empty:
+          type: integer
+          minimum: 1
+          description: Keys whose latest successful result wrote no rows (a recorded count of 0). Absent
+            when none did.
     PartitionKeys:
       type: object
       additionalProperties: false
@@ -4845,7 +4864,7 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [key, status, created_at, elapsed_seconds, error, run_id, artifact_path, size_bytes]
+            required: [key, status, created_at, elapsed_seconds, error, run_id, artifact_path, size_bytes, rows]
             properties:
               key: *id003
               status: *id003
@@ -4860,6 +4879,9 @@ components:
                 type: [string, "null"]
               size_bytes:
                 type: [integer, "null"]
+              rows:
+                type: [integer, "null"]
+                description: Rows the result holds, as its worker counted them (a frame's length or a parquet footer); null when not counted.
         total:
           type: integer
           minimum: 0
@@ -4892,7 +4914,7 @@ components:
       description: Every key of a partitioned node. Keys are the cells of the dimensions' product
         in row-major order, the last dimension varying fastest; each per-key array has one entry
         per cell.
-      required: [id, chain, known, dimensions, states, counts, attempted_base, attempted_at, elapsed_ms, size_bytes, run, error, errors, runs]
+      required: [id, chain, known, dimensions, states, counts, attempted_base, attempted_at, elapsed_ms, size_bytes, rows, run, error, errors, runs]
       properties:
         id: *id003
         chain:
@@ -4923,7 +4945,7 @@ components:
         counts:
           type: object
           additionalProperties: false
-          required: [fresh, pinned, stale, never_run, failed, blocked]
+          required: [fresh, pinned, stale, never_run, failed, blocked, empty]
           properties:
             fresh: {type: integer, minimum: 0}
             pinned: {type: integer, minimum: 0}
@@ -4931,6 +4953,10 @@ components:
             never_run: {type: integer, minimum: 0}
             failed: {type: integer, minimum: 0}
             blocked: {type: integer, minimum: 0}
+            empty:
+              type: integer
+              minimum: 0
+              description: Keys whose latest attempt succeeded and wrote no rows, whatever their state.
         attempted_base:
           type: integer
           description: Unix seconds that attempted_at counts from.
@@ -4948,6 +4974,11 @@ components:
         size_bytes:
           type: array
           description: The size of each cell's latest artifact.
+          items:
+            type: [integer, "null"]
+        rows:
+          type: array
+          description: The rows each cell's latest successful attempt wrote; null where not counted or failed.
           items:
             type: [integer, "null"]
         run:
@@ -5029,7 +5060,7 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [status, created_at, elapsed_seconds, error, run_id, artifact_path, format, size_bytes]
+            required: [status, created_at, elapsed_seconds, error, run_id, artifact_path, format, size_bytes, rows]
             properties:
               status: *id003
               created_at: *id003
@@ -5045,6 +5076,9 @@ components:
                 type: [string, "null"]
               size_bytes:
                 type: [integer, "null"]
+              rows:
+                type: [integer, "null"]
+                description: Rows the result holds, as its worker counted them (a frame's length or a parquet footer); null when not counted.
         output:
           oneOf:
           - $ref: '#/components/schemas/KeyArtifact'
@@ -5066,6 +5100,7 @@ components:
       - artifact
       - format
       - size_bytes
+      - rows
       properties:
         status: *id003
         created_at: *id003
@@ -5073,6 +5108,9 @@ components:
           anyOf:
           - *id045
           - type: 'null'
+        rows:
+          type: [integer, "null"]
+          description: Rows the result holds, as its worker counted them (a frame's length or a parquet footer); null when not counted.
         run_hash: &id046
           anyOf:
           - *id003
@@ -5229,6 +5267,9 @@ components:
       - failing_since
       - consecutive_failures
       - next_run
+      - prev_run
+      - late_since
+      - signals
       - running
       properties:
         id: *id003
@@ -5251,6 +5292,27 @@ components:
           anyOf:
           - *id054
           - type: 'null'
+        prev_run:
+          anyOf:
+          - *id054
+          - type: 'null'
+          description: For a scheduled node, the cron's most recent fire time at or before now (unix
+            seconds, in the server's --timezone); null otherwise.
+        late_since:
+          anyOf:
+          - *id054
+          - type: 'null'
+          description: For a scheduled node that missed a slot, the first slot (unix seconds) after the
+            tick of the newest run its schedule started (runs.scheduled_at), when that slot is at or
+            before now; null while on time, while paused, when no scheduled run is recorded, and for
+            a node without a schedule. Experimental.
+        signals:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataSignal'
+          description: What the node's recorded results say about its data, from recorded facts only
+            (row counts its workers counted, when each result was written); empty when nothing does.
+            Only assets have signals. Experimental.
         last_success_at:
           anyOf:
           - *id003
@@ -5280,6 +5342,47 @@ components:
           $ref: '#/components/schemas/LastRun'
           description: The node's newest run as a whole (the run last_materialization is from);
             absent until a run recorded a row for it.
+    DataSignal:
+      description: One data-health signal of a GET /state row, tagged by kind.
+      oneOf:
+      - type: object
+        additionalProperties: false
+        required: [kind, empty_keys, keys, previous_empty_keys]
+        description: The latest successful result wrote no rows; for a partitioned node, empty_keys of
+          the keys whose latest result recorded a row count (1 of 1 for a node without keys).
+        properties:
+          kind: {const: empty}
+          empty_keys: {type: integer, minimum: 1}
+          keys: {type: integer, minimum: 1}
+          previous_empty_keys:
+            type: [integer, "null"]
+            minimum: 0
+            description: How many were empty as of before the node's newest run; null when no key had
+              a counted result before it.
+      - type: object
+        additionalProperties: false
+        required: [kind, changed_keys, key, rows, previous_rows]
+        description: A latest successful result's row count differs from the one before it (same node,
+          same key) by more than half of it, or rows came after an empty result. rows and
+          previous_rows are of key, the key that moved the most relative to before (null without
+          keys); changed_keys counts every key that moved.
+        properties:
+          kind: {const: rows_changed}
+          changed_keys: {type: integer, minimum: 1}
+          key: {type: [string, "null"]}
+          rows: {type: integer, minimum: 0}
+          previous_rows: {type: integer, minimum: 0}
+      - type: object
+        additionalProperties: false
+        required: [kind, input, input_success_at, last_success_at]
+        description: The node's cache state is unknown and its latest successful result is older than
+          the newest successful result (from another run) of input, an asset it reads; times are UTC
+          YYYY-MM-DD HH:MM:SS.
+        properties:
+          kind: {const: behind_input}
+          input: {type: string}
+          input_success_at: {type: string}
+          last_success_at: {type: string}
     LastRun:
       type: object
       additionalProperties: false
@@ -5392,7 +5495,16 @@ components:
       - run_id
       - cpu_seconds
       - max_rss_bytes
+      - rows
       properties:
+        rows:
+          type: [integer, "null"]
+          description: Rows the result holds, as its worker counted them; a partitioned node's entry adds
+            up its successful keys' rows, null unless every one was counted.
+        empty_keys:
+          type: integer
+          minimum: 0
+          description: A partitioned node's entry, how many of its keys wrote no rows.
         keys:
           type: integer
           minimum: 0
@@ -5704,6 +5816,9 @@ components:
       - triggered_by
       - scheduled_at
       - schedule_id
+      - principal
+      - trigger_reason
+      - cancellation
       properties:
         id: *id003
         handle:
@@ -5761,6 +5876,22 @@ components:
           description: Null for runs recorded before barca recorded it.
         scheduled_at: *id042
         schedule_id: *id042
+        principal: &id_principal
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Who asked for the run, the project token its request was authenticated with
+            (token:NAME); null without authentication. Experimental.
+        trigger_reason: &id_trigger_reason
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The reason its request gave (RunRequest.reason). Experimental.
+        cancellation: &id_cancellation
+          anyOf:
+          - $ref: '#/components/schemas/RunCancellation'
+          - type: 'null'
+          description: For a cancelled run, why. Experimental.
         active_steps:
           type: array
           items:
@@ -5803,6 +5934,7 @@ components:
       - worker_exit
       - cpu_seconds
       - max_rss_bytes
+      - rows
       - output_tail
       properties:
         batch:
@@ -5906,6 +6038,9 @@ components:
           - type: 'null'
           description: The worker process's peak RSS while the step ran, in bytes; null for a failed step,
             a row from an older barca or a platform that cannot tell.
+        rows:
+          type: [integer, "null"]
+          description: Rows the result holds, as its worker counted them (a frame's length or a parquet footer); null when not counted.
         output_tail:
           anyOf:
           - type: array
@@ -6151,6 +6286,97 @@ components:
           type: boolean
           description: --allow-paused. Run a target that is paused (POST /pauses); without it a request
             naming a paused node is 400. Experimental.
+        reason:
+          type: string
+          maxLength: 500
+          description: Why the caller asks for the run, in one line of at most 500 characters (trimmed;
+            a control character is 400). Recorded with the run as its trigger_reason. Experimental.
+    RunPlanReasons:
+      type: object
+      additionalProperties: false
+      required: [nodes, steps, reasons, omitted]
+      description: Why a run executed what it did instead of serving it from cache, by reason, recorded as
+        each phase of the run was decided (a run in progress has the phases decided so far). Experimental.
+      properties:
+        nodes:
+          type: integer
+          minimum: 0
+          description: The nodes the run decided to execute.
+        steps:
+          type: integer
+          minimum: 0
+          description: The steps it decided to execute, a partitioned node's keys each counted.
+        reasons:
+          type: array
+          maxItems: 64
+          description: By (category, subject), most steps first. A step with several changed components
+            counts under each.
+          items:
+            $ref: '#/components/schemas/RunPlanReason'
+        omitted:
+          type: integer
+          minimum: 0
+          description: How many (category, subject) entries were left out of reasons.
+    RunPlanReason:
+      type: object
+      additionalProperties: false
+      required: [category, subject, nodes, steps, example]
+      properties:
+        category:
+          type: string
+          enum: [never_run, new_keys, failed, code_changed, inputs_changed, env_changed, changed, refresh,
+            refresh_cascade, refresh_all, artifact_missing, evicted, task, sensor, not_examined]
+          description: 'never_run: no success ever recorded; new_keys: keys of a partitioned node that never
+            succeeded while others did; failed: the last attempt at this run hash failed; code_changed,
+            inputs_changed, env_changed: what changed since the last success (subject: the component, as
+            barca status words it); changed: the run hash differs and the last success recorded no
+            components; refresh, refresh_cascade (subject: the refreshed node), refresh_all; artifact_missing
+            and evicted: a valid result whose artifact is gone; task and sensor always run; not_examined: no
+            cache hit and not looked up (a server ledger answered, or more than 10,000 keys of one node in a
+            phase).'
+        subject:
+          anyOf:
+          - type: string
+          - type: 'null'
+        nodes:
+          type: integer
+          minimum: 0
+        steps:
+          type: integer
+          minimum: 0
+        example:
+          type: string
+          description: The first node executed for this reason.
+    RunCancellation:
+      type: object
+      additionalProperties: false
+      required: [by, principal, started, waiting_behind, same_as]
+      description: Why a cancelled run was cancelled. Experimental.
+      properties:
+        by:
+          type: string
+          enum: [request, shutdown]
+          description: 'request: DELETE /runs/{run_id} (the UI''s Cancel, a --server client''s first stop
+            signal); shutdown: the server stopped.'
+        principal:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: The token the cancel request was authenticated with (token:NAME).
+        started:
+          type: boolean
+          description: False for a run cancelled while it waited in the queue; it executed nothing.
+        waiting_behind:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+          description: For a run cancelled before it started, the runs executing then.
+        same_as:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Of those, one with the same command, targets and files.
     Explain:
       type: object
       required:
@@ -6268,6 +6494,11 @@ components:
       - attempts
       - client_run_id
       - failure
+      - principal
+      - trigger_reason
+      - retries
+      - plan_reasons
+      - cancellation
       - outcome
       - error
       - steps
@@ -6331,6 +6562,21 @@ components:
           - $ref: '#/components/schemas/RunFailure'
           - type: 'null'
           description: The first failed step and its error; null for a run with no failed step.
+        principal: *id_principal
+        trigger_reason: *id_trigger_reason
+        retries:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          description: Of attempts, those that retried a step (each attempt after a step's first); null
+            while the run has recorded none. Experimental.
+        plan_reasons:
+          anyOf:
+          - $ref: '#/components/schemas/RunPlanReasons'
+          - type: 'null'
+          description: Why the run executed what it did; null before it decided to execute anything.
+        cancellation: *id_cancellation
         outcome:
           anyOf:
           - $ref: '#/components/schemas/Outcome'
@@ -6339,8 +6585,9 @@ components:
         error: *id042
         steps:
           type: array
-          description: At most ?limit=N steps (default 1000; failed recorded steps are kept first),
-            every one with ?all=true.
+          description: At most ?limit=N steps (default 1000) from ?offset=M, in the page order (failed
+            recorded steps first, then as recorded), every one with ?all=true. Page through the rest
+            with steps_page.next_offset.
           items:
             $ref: '#/components/schemas/RunStep'
         steps_page:
@@ -6353,6 +6600,14 @@ components:
           properties:
             total: *id056
             truncated: *id059
+            offset:
+              type: integer
+              minimum: 1
+              description: The position of the first step listed (?offset=); absent when 0.
+            next_offset:
+              type: integer
+              minimum: 1
+              description: Where the next page starts (?offset=); absent on the last page.
             nodes:
               type: array
               description: Per node over every recorded step, listed or not. For a finished run
@@ -6650,6 +6905,9 @@ components:
       - failure
       - failed_node
       - error
+      - principal
+      - trigger_reason
+      - cancellation
       properties:
         run_id: *id005
         command: *id005
@@ -6695,6 +6953,17 @@ components:
           - string
           - 'null'
           description: failure.error, flat for --fields.
+        principal: *id_principal
+        trigger_reason: *id_trigger_reason
+        cancellation: *id_cancellation
+        retries:
+          type: integer
+          minimum: 0
+          description: For one run (barca history RUN_ID), its retries; absent in a list. Experimental.
+        plan_reasons:
+          $ref: '#/components/schemas/RunPlanReasons'
+          description: For one run (barca history RUN_ID) that executed something, why; absent in a
+            list. Experimental.
     SqlCatalog:
       type: object
       additionalProperties: false
@@ -6854,6 +7123,7 @@ components:
       - content_hash
       - error_type
       - error_message
+      - rows
       description: One recorded step result (barca sql's barca.materializations).
       properties:
         node_id:
@@ -6918,6 +7188,11 @@ components:
           type:
           - string
           - 'null'
+        rows:
+          type:
+          - integer
+          - 'null'
+          description: Rows the result holds, as its worker counted them; null when not counted.
     HistoryBody:
       type: object
       additionalProperties: false

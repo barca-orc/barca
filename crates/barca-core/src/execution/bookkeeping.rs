@@ -18,6 +18,8 @@ pub(super) struct RunResults {
     /// What each step's sinks hold after this run (`crate::sink_publications`).
     pub(super) publications: Vec<crate::sink_publications::Publication>,
     pub(super) timings: HashMap<String, (Option<f64>, Option<u64>)>,
+    /// Rows each executed step's tabular result holds, when its worker counted them.
+    pub(super) rows: HashMap<String, u64>,
     pub(super) observations: HashMap<String, serde_json::Value>,
     pub(super) clocks: HashMap<String, (f64, f64)>,
     pub(super) failures: Vec<StepFailure>,
@@ -132,6 +134,9 @@ impl RunResults {
         let rss = artifact_val.get("max_rss_bytes").and_then(|v| v.as_u64());
         if cpu.is_some() || rss.is_some() {
             self.timings.insert(node_id.to_string(), (cpu, rss));
+        }
+        if let Some(rows) = artifact_val.get("rows").and_then(|v| v.as_u64()) {
+            self.rows.insert(node_id.to_string(), rows);
         }
         if let (Some(finished), Some(wall)) = (
             artifact_val.get("finished_at").and_then(|v| v.as_f64()),
@@ -275,6 +280,7 @@ impl RunResults {
             sink_publications: &self.publications,
             all_attempts: &self.attempts,
             all_timings: &self.timings,
+            all_rows: &self.rows,
             batches: &self.batches,
             cached_node_ids: run.cached_node_ids,
             run_hashes: run.decisions.run_hashes(),
@@ -283,6 +289,7 @@ impl RunResults {
             store_paths: run.store_paths,
             cost_snapshot: &evidence.cost_snapshot,
             touched: run.touched,
+            plan_reasons: run.decisions.plan_tally.json(),
         }
     }
 }

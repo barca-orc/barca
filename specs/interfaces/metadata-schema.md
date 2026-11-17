@@ -175,6 +175,12 @@ every database from before 0.29.2 (#629):
   ids are not stored: they are derived from the run id and the step id
   (`telemetry::datadog::step_trace_ref`), so `barca history RUN_ID --json` and `GET /runs/{id}`
   serve `trace_id`/`span_id` only for steps of a run with this set. Older binaries ignore it.
+- `runs.principal`, `runs.trigger_reason`, `runs.plan_reasons` and `runs.cancellation` (TEXT,
+  nullable, #925): who asked a server for the run (`token:<name>`) and the free-text reason its
+  request gave; why the run executed what it did (`PlanReasons` JSON: `{nodes, steps, reasons,
+  omitted}`, at most 64 reasons), written as each phase is decided and with the outcome; and for
+  a run a server cancelled, `{by, principal, started, waiting_behind, same_as}`. `NULL` otherwise
+  and on older rows. Older binaries ignore them.
 - `ledger_posts` (0.27.0, RFC-0007): on a machine that runs against a server's ledger, one row per
   run it posted or has yet to post (`client_run_id` primary key, `server`, the post `body` as
   JSON, `state` `unsynced` or `shared`, `server_run_id`, the last `error`, `attempts`,
@@ -228,6 +234,15 @@ every database from before 0.29.2 (#629):
   then its keys' range). With `idx_mat_run` alone that read every row of the run once per node.
   Opening an older database builds it, under half a second for 470k rows; older binaries ignore
   it.
+- `materializations.rows` (INTEGER, nullable, 0.43, #925): the rows a successful tabular result
+  holds, as its worker counted them (an in-memory frame's length, or the row count in a written
+  parquet file's footer). NULL when not counted, on failed rows, on older rows and on rows a
+  server's ledger received from a client. Read by `barca status`, `barca history RUN_ID`,
+  `barca stats`, `barca sql` and the server's data-health signals; never part of a cache key.
+  Older binaries ignore it. With it, the partial index `idx_mat_empty (node_id, id) WHERE rows = 0
+  AND status = 'success'`: `barca status` counts a partitioned node's keys whose latest success is
+  empty from these rows, a probe each. Opening an older database adds both; the index is empty
+  until a result is counted.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
   `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,
   `running`, or `draining` (0.31.0: in flight when the server was told to stop); `spec` is the server's description of the run (JSON: command, targets, nodes,

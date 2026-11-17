@@ -54,4 +54,9 @@ batch?: Array<string>,
  * `--allow-paused`: run a target that is paused (`barca pause`). Without it, a request
  * naming a paused node is refused. Experimental.
  */
-allow_paused?: boolean, };
+allow_paused?: boolean,
+/**
+ * Why the caller asks for the run, in free text (at most 500 characters, one line),
+ * recorded with it and shown as its `trigger_reason`. Experimental.
+ */
+reason?: string, };

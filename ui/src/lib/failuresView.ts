@@ -40,7 +40,11 @@ export function updateFailures(model: FailuresModel, msg: FailuresMsg): Next<Fai
 
 export type FailureRow =
   | { kind: 'cause'; group: FailureGroup }
-  | { kind: 'failure'; failure: Failure }
+  /**
+   * `sameError`: the failure's headline is its cause heading's, word for word, so its row does
+   * not repeat it (the heading says it once; the row keeps the copy action and its keys line).
+   */
+  | { kind: 'failure'; failure: Failure; sameError: boolean }
 
 interface FailureTable {
   rows: FailureRow[]
@@ -51,7 +55,7 @@ export function failureTable(list: readonly Failure[]): FailureTable {
   return {
     rows: failureGroups(list).flatMap((group): FailureRow[] => [
       { kind: 'cause', group },
-      ...group.failures.map((failure): FailureRow => ({ kind: 'failure', failure })),
+      ...group.failures.map((failure): FailureRow => ({ kind: 'failure', failure, sameError: failure.headline === group.headline })),
     ]),
   }
 }

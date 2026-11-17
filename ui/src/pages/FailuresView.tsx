@@ -3,12 +3,11 @@ import { plural } from '@/lib/plural'
 import { Copy, ExternalLink, RotateCw } from 'lucide-react'
 import { Age, ErrorLine, IconButton, MiddleName, StatusGlyph, TableSpacer, Tag } from '@/components'
 import type { FailureRow, FailuresModel, FailuresMsg } from '@/lib/failuresView'
-import { impactLabel, keysLine, type Failure } from '@/lib/health'
+import { impactLabel, keysLine, streakLabel, type Failure } from '@/lib/health'
 import type { Dispatch } from '@/lib/program'
 import { nodeKindLabel } from '@/lib/status'
 
 const COLUMNS = 6
-const runs = (n: number) => `${n} ${n === 1 ? 'run' : 'runs'}`
 
 export interface FailuresViewProps {
   model: FailuresModel
@@ -46,7 +45,7 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
           <th>Failed node</th>
           <th>Error</th>
           <th>When</th>
-          <th title="The first failed attempt after the last clean run, and runs failed in a row">Failing since</th>
+          <th title="The first failed attempt after the last clean run, and how many runs in a row have failed it (not its total runs: its History counts those)">Failing since</th>
           <th className="num" title="Nodes downstream of it, transitively">Waiting on it</th>
           <th><span className="barca-sr-only">Actions</span></th>
         </tr>
@@ -61,13 +60,16 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
             return (
               <tr key={`cause:${cause}`} ref={win.measure} data-index={index} className="barca-failure-cause">
                 <td colSpan={COLUMNS}>
-                  <strong title={headline}>{headline}</strong>
-                  <span>{failures.length.toLocaleString()} failed · {impactLabel(impact)} waiting</span>
+                  <div className="barca-failure-cause-line">
+                    <strong title={headline}>{headline}</strong>
+                    <span>{failures.length.toLocaleString()} failed · {impactLabel(impact)} waiting</span>
+                  </div>
                 </td>
               </tr>
             )
           }
           const f = row.failure
+          const keysNote = f.keys ? keysLine(f.keys) : f.missingKeys !== null && f.missingKeys > 0 ? `${plural(f.missingKeys, 'key')} without a result` : null
           return (
             <tr
               key={f.id}
@@ -95,15 +97,18 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
                 <div className="barca-cell-sub" title={placeOf(f.id)}>{placeOf(f.id)}</div>
               </td>
               <td className="barca-failure-error">
-                <ErrorLine error={f.error} text={f.headline} />
-                {f.keys ? (
-                  <div className="barca-cell-sub">{keysLine(f.keys)}</div>
-                ) : f.missingKeys !== null && f.missingKeys > 0 && (
-                  <div className="barca-cell-sub">{plural(f.missingKeys, 'key')} without a result</div>
+                {/* The cause heading above says the error; a row with the same words does not repeat it. */}
+                {row.sameError ? (
+                  <div className="barca-cell-sub" title={f.headline}>{keysNote ?? 'the error above'}</div>
+                ) : (
+                  <>
+                    <ErrorLine error={f.error} text={f.headline} />
+                    {keysNote && <div className="barca-cell-sub">{keysNote}</div>}
+                  </>
                 )}
               </td>
               <td>{f.at ? <Age at={f.at} nowMs={nowMs} /> : '–'}</td>
-              <td>{f.failingSince ? <><Age at={f.failingSince} nowMs={nowMs} /> · {runs(f.failures)}</> : '–'}</td>
+              <td>{f.failingSince ? <><Age at={f.failingSince} nowMs={nowMs} /><div className="barca-cell-sub">{streakLabel(f.failures)}</div></> : '–'}</td>
               <td className="num">{impactLabel(f.impact)}</td>
               <td onClick={(event) => event.stopPropagation()}>
                 <FailureActions failure={f} readOnly={readOnly} name={labels.get(f.id) ?? f.name} dispatch={dispatch} />
@@ -125,9 +130,10 @@ function FailureActions({ failure: f, readOnly, name, dispatch }: {
 }) {
   return (
     <div className="barca-failure-actions">
-      <IconButton size="sm" label={`Retry ${name}`} title={readOnly ? 'This server is read-only' : `Retry ${name}`} disabled={readOnly} onClick={() => dispatch({ type: 'retry', id: f.id, kind: f.kind, name })}>
+      {/* A read-only server retries nothing: no Retry at all. */}
+      {!readOnly && <IconButton size="sm" label={`Retry ${name}`} title={`Retry ${name}`} onClick={() => dispatch({ type: 'retry', id: f.id, kind: f.kind, name })}>
         <RotateCw size={13} />
-      </IconButton>
+      </IconButton>}
       <IconButton size="sm" label={`Copy error of ${name}`} title="Copy error" onClick={() => dispatch({ type: 'copy', error: f.error || f.headline })}>
         <Copy size={13} />
       </IconButton>

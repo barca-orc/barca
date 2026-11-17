@@ -202,6 +202,21 @@ compute it: schedule the sensor once and let the `Always` nodes below it follow 
 [barca] scheduled run pipeline.py:orders skipped — run 1b942bb33182 of the same node still in flight
 ```
 
+## A schedule that missed its slot
+
+A tick that waits in the queue, is skipped behind a run in flight, or falls while the server is
+down has not run. `GET /state` gives each scheduled node `prev_run` (its last slot) and
+`late_since`: the first slot after the tick of the newest run its schedule started, when that
+slot has passed (`barca docs server-mode`, "Data health"). The web UI's Schedules page shows such
+a schedule as `late by 12m`, late ones first, instead of a countdown to a next slot it will not
+keep. A paused schedule is not late. A `--read-only` server shows the same lateness from the
+shared metadata: schedules fire on the server that owns the scheduler, and the read-only one
+only reads their runs and the queue.
+
+```bash
+curl -s localhost:8274/state | jq '.[] | select(.late_since != null) | {id, late_since, prev_run, next_run}'
+```
+
 ## Pausing one schedule
 
 To hold one job back for a maintenance window or a planned manual rebuild, pause it; the rest of

@@ -116,6 +116,7 @@ async fn persist_run_records_failure_type_and_its_own_attempts() {
         sink_publications: &[],
         all_attempts: &all_attempts,
         all_timings: &HashMap::new(),
+        all_rows: &HashMap::new(),
         batches: &HashMap::new(),
         cached_node_ids: &std::collections::HashSet::new(),
         run_hashes: &run_hashes,
@@ -124,6 +125,7 @@ async fn persist_run_records_failure_type_and_its_own_attempts() {
         store_paths: &HashMap::new(),
         cost_snapshot: &[],
         touched: &[],
+        plan_reasons: None,
     };
     persist_run(&db_path, &ledger).await.unwrap();
 
@@ -176,6 +178,7 @@ async fn persist_run_records_store_locations() {
         sink_publications: &[],
         all_attempts: &HashMap::new(),
         all_timings: &HashMap::new(),
+        all_rows: &HashMap::new(),
         batches: &HashMap::new(),
         cached_node_ids: &std::collections::HashSet::new(),
         run_hashes: &run_hashes,
@@ -184,6 +187,7 @@ async fn persist_run_records_store_locations() {
         store_paths: &store_paths,
         cost_snapshot: &[],
         touched: &[],
+        plan_reasons: None,
     };
     persist_run(&db_path, &ledger).await.unwrap();
 

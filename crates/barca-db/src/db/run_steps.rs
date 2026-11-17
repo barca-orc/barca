@@ -66,6 +66,12 @@ pub struct RunStep {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub max_rss_bytes: Option<i64>,
+    /// Rows the step's tabular result holds, when its worker counted them (#925): a frame's
+    /// length or a parquet file's footer. `null` when not counted (a failed step, a result that
+    /// is not a frame, a CSV of a lazy frame or relation, a row from an older barca).
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub rows: Option<i64>,
     /// A failed step's last lines of output, stdout and stderr in the order they were written,
     /// without the traceback barca already shows (at most [`OUTPUT_TAIL_LINES`]; `barca logs
     /// RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it
@@ -170,6 +176,16 @@ pub struct StepsPage {
     pub total: usize,
     /// True when `steps` lists fewer than `total`.
     pub truncated: bool,
+    /// The position of the first step listed, in the page order (failed steps first, then as
+    /// recorded): `?offset=` of `GET /runs/{run_id}`. Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub offset: usize,
+    /// Where the next page starts (`?offset=`): absent on the last page. Set by
+    /// `GET /runs/{run_id}` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub next_offset: Option<usize>,
     /// Per node over every recorded step, listed or not, when the run has a partitioned node.
     /// Failed nodes first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -210,10 +226,25 @@ pub const RUN_STEPS_LIMIT: usize = 1000;
 
 /// At most `limit` of `run_id`'s recorded steps (every one with `None`), in the order they were
 /// recorded, failed steps first among those kept; and how many there are.
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 pub async fn get_run_steps_page(
     db_path: &str,
     run_id: &str,
     limit: Option<usize>,
+) -> Result<(Vec<RunStep>, StepsPage), BarcaError> {
+    get_run_steps_window(db_path, run_id, limit, 0).await
+}
+
+/// [`get_run_steps_page`] from the `offset`-th step of the page order (failed steps first, then
+/// as recorded): the page after it starts at `offset + limit`.
+pub async fn get_run_steps_window(
+    db_path: &str,
+    run_id: &str,
+    limit: Option<usize>,
+    offset: usize,
 ) -> Result<(Vec<RunStep>, StepsPage), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
@@ -226,6 +257,7 @@ pub async fn get_run_steps_page(
         "max_rss_bytes",
         "batch_id",
         "error_phase",
+        "rows",
     ] {
         columns.push(if has_column(&conn, "materializations", name).await? {
             name
@@ -233,8 +265,8 @@ pub async fn get_run_steps_page(
             "NULL"
         });
     }
-    let (attempts, error_type, cpu, rss, batch, phase) = (
-        columns[0], columns[1], columns[2], columns[3], columns[4], columns[5],
+    let (attempts, error_type, cpu, rss, batch, phase, counted) = (
+        columns[0], columns[1], columns[2], columns[3], columns[4], columns[5], columns[6],
     );
     let total = match limit {
         None => None,
@@ -255,13 +287,13 @@ pub async fn get_run_steps_page(
     };
     // Past the limit, the failed steps are kept before the others.
     let page = match (limit, total) {
-        (Some(limit), Some(total)) if total > limit => format!(
-            " AND id IN (SELECT id FROM materializations WHERE run_id = ?1 ORDER BY (status = 'failed') DESC, id LIMIT {limit})"
+        (Some(limit), Some(total)) if total > limit || offset > 0 => format!(
+            " AND id IN (SELECT id FROM materializations WHERE run_id = ?1 ORDER BY (status = 'failed') DESC, id LIMIT {limit} OFFSET {offset})"
         ),
         _ => String::new(),
     };
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase}, {counted} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &libsql::Row, i: i32| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -303,6 +335,7 @@ pub async fn get_run_steps_page(
             error: raw_error,
             cpu_seconds: row.get::<f64>(11).ok(),
             max_rss_bytes: row.get::<i64>(12).ok().filter(|rss| *rss > 0),
+            rows: row.get::<i64>(15).ok(),
             output_tail: None,
             batch: text(&row, 13),
             error_phase: text(&row, 14),
@@ -348,12 +381,15 @@ pub async fn get_run_steps_page(
         total,
         truncated: steps.len() < total,
         nodes,
+        offset,
+        next_offset: None,
     };
     Ok((steps, page))
 }
 
 /// Every node `run_id` recorded steps for, with their counts: failed nodes first, then in the
-/// order they were first recorded. `batch` is the batch id column, or `NULL` without one.
+/// order they were first recorded. Keys are counted once each: a run requeued onto new code can
+/// hold two rows for a key, one per run hash (#794), and a key with a failed row counts as failed. `batch` is the batch id column, or `NULL` without one.
 async fn node_summaries(
     conn: &libsql::Connection,
     run_id: &str,
@@ -362,7 +398,7 @@ async fn node_summaries(
     let mut summary = conn
         .query(
             &format!(
-                "SELECT substr(node_id, 1, instr(node_id || '[', '[') - 1) AS base, COUNT(*), SUM(status = 'failed'), SUM(elapsed_seconds), COUNT(DISTINCT {batch}) \
+                "SELECT substr(node_id, 1, instr(node_id || '[', '[') - 1) AS base, COUNT(DISTINCT node_id), COUNT(DISTINCT CASE WHEN status = 'failed' THEN node_id END), SUM(elapsed_seconds), COUNT(DISTINCT {batch}) \
                  FROM materializations WHERE run_id = ?1 GROUP BY base ORDER BY SUM(status = 'failed') > 0 DESC, MIN(id)"
             ),
             [run_id],
@@ -480,6 +516,9 @@ pub struct StepRow {
     pub content_hash: Option<String>,
     pub error_type: Option<String>,
     pub error_message: Option<String>,
+    /// Rows the result holds, when its worker counted them (#925).
+    #[serde(default)]
+    pub rows: Option<i64>,
 }
 
 /// Step results, newest first: at most `limit` rows from `offset`, and how many there are in
@@ -508,6 +547,7 @@ pub async fn read_step_rows(
         "output_hash",
         "error_type",
         "error_message",
+        "rows",
     ] {
         if has_column(&conn, "materializations", column).await? {
             select.push(column.to_string());
@@ -565,6 +605,7 @@ pub async fn read_step_rows(
             content_hash: text(12),
             error_type: text(13),
             error_message: text(14),
+            rows: row.get::<i64>(15).ok(),
         });
     }
     Ok((out, total))
@@ -606,6 +647,7 @@ mod tests {
                 total: 5,
                 truncated: true,
                 nodes: page.nodes.clone(),
+                ..Default::default()
             }
         );
         let (steps, page) = super::get_run_steps_page(&path, "many", None)
@@ -618,6 +660,7 @@ mod tests {
                 total: 5,
                 truncated: false,
                 nodes: page.nodes.clone(),
+                ..Default::default()
             }
         );
         let (steps, page) = super::get_run_steps_page(&path, "many", Some(10))

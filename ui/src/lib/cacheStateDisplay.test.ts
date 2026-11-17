@@ -23,7 +23,9 @@ describe('cache state display', () => {
 
   it('draws each state with a glyph of its own, though tones are shared', () => {
     const glyphs = CACHE_STATES.map((state) => cacheStateDisplay(state).glyph)
-    expect(new Set(glyphs).size).toBe(CACHE_STATES.length)
+    // One exception: a node that always runs shows its last run, `succeeded`, with the success check.
+    expect(new Set(glyphs).size).toBe(CACHE_STATES.length - 1)
+    expect(cacheStateDisplay('always_runs')).toMatchObject({ label: 'succeeded', glyph: cacheStateDisplay('cached').glyph })
     for (const glyph of glyphs) expect(GLYPHS).toContain(glyph)
     // The warnings (blocked, stale, partial, unsynced) share a tone, never a glyph or a hue.
     const warnings = CACHE_STATES.filter((s) => cacheStateDisplay(s).tone === 'warning')
@@ -41,7 +43,7 @@ describe('cache state display', () => {
   })
 
   it('reads a failed last attempt as a fact of its own', () => {
-    const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error: 'boom' }
+    const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'boom' }
     expect(lastAttemptFailed({ last_materialization: failed })).toBe(true)
     expect(lastAttemptFailed({ last_materialization: { ...failed, status: 'success', error: null } })).toBe(false)
     expect(lastAttemptFailed({ last_materialization: null })).toBe(false)

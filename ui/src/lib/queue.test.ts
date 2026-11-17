@@ -9,6 +9,10 @@ import {
   queueControl,
   queuePollInterval,
   queueRows,
+  queueStatus,
+  queueStatusLabel,
+  queueSummary,
+  waitLabel,
   queueState,
   queueStateLabel,
   queuedLabel,
@@ -104,26 +108,83 @@ describe('queueControl', () => {
 })
 
 describe('queueRows', () => {
+  const now = Date.parse('2026-10-22T10:20:00Z')
   it('orders the waiting runs next first and links each to its run', () => {
-    const rows = queueRows([
+    const rows = queueRows(view({ queued: [
       entry('r2', { position: 2, target: 'a.py:x,a.py:y', command: 'run', triggered_by: 'schedule', schedule_id: 'a.py:x' }),
       entry('r1', { position: 1 }),
-    ], iso)
+    ] }), iso, now)
     expect(rows.map((r) => r.runId)).toEqual(['r1', 'r2'])
     expect(rows[0]).toEqual({
       runId: 'r1',
+      state: 'waiting',
       position: '#1',
       target: 'all assets',
       command: 'get',
       trigger: 'api',
       scheduleId: null,
       queuedAt: '2026-10-22T10:00:00Z',
+      elapsed: '20m',
       href: '/runs?run=r1',
     })
     expect(rows[1]).toMatchObject({ position: '#2', target: 'a.py:x,a.py:y', command: 'run', trigger: 'schedule', scheduleId: 'a.py:x' })
   })
   it('puts an entry without a position last', () => {
-    expect(queueRows([entry('a', { position: null }), entry('b', { position: 1 })], iso).map((r) => r.position)).toEqual(['#1', '–'])
+    expect(queueRows(view({ queued: [entry('a', { position: null }), entry('b', { position: 1 })] }), iso, now).map((r) => r.position)).toEqual(['#1', '–'])
+  })
+  it('lists the running runs first, marked running, with how long each has run', () => {
+    const running = entry('live', { status: 'running', position: null, queued_at: '2026-10-22T09:00:00Z' })
+    const rows = queueRows(view({ running: [running], queued: [entry('r1')] }), iso, now)
+    expect(rows.map((r) => [r.runId, r.state, r.position, r.elapsed])).toEqual([
+      ['live', 'running', 'running', '1h 20m'],
+      ['r1', 'waiting', '#1', '20m'],
+    ])
+  })
+  it('counts a running run from its start when the run list knows it', () => {
+    const running = entry('live', { status: 'running', position: null, queued_at: '2026-10-22T09:00:00Z' })
+    const rows = queueRows(view({ running: [running] }), iso, now, (id) => (id === 'live' ? '2026-10-22T10:15:30Z' : null))
+    expect(rows[0]!.elapsed).toBe('4m')
+  })
+})
+
+describe('waitLabel', () => {
+  it('says the two largest units', () => {
+    expect(waitLabel(12.6)).toBe('12s')
+    expect(waitLabel(20 * 60 + 5)).toBe('20m')
+    expect(waitLabel(2 * 3600)).toBe('2h')
+    expect(waitLabel(2 * 3600 + 5 * 60)).toBe('2h 5m')
+    expect(waitLabel(3 * 86400 + 4 * 3600)).toBe('3d 4h')
+    expect(waitLabel(-5)).toBe('0s')
+  })
+})
+
+describe('queueStatus', () => {
+  const now = Date.parse('2026-10-22T10:20:00Z')
+  const live = entry('live', { status: 'running', position: null })
+  it('is nothing without a queue: idle, or a run with nothing behind it', () => {
+    expect(queueStatus(view(), now)).toBeNull()
+    expect(queueStatus(view({ running: [live] }), now)).toBeNull()
+  })
+  it('counts the running and waiting runs and how long the oldest has waited', () => {
+    const status = queueStatus(view({ running: [live], queued: [entry('a', { queued_at: '2026-10-22T10:15:00Z' }), entry('b', { position: 2, queued_at: '2026-10-22T10:00:00Z' })] }), now)
+    expect(status).toEqual({ running: 1, waiting: 2, oldestWaitSeconds: 1200, paused: false, draining: false })
+    expect(queueStatusLabel(status!)).toBe('1 running · 2 waiting · oldest 20m')
+  })
+  it('says a queue that holds work back, waiting or not', () => {
+    const paused = queueStatus(view({ paused: true }), now)!
+    expect(queueStatusLabel(paused)).toBe('0 running · 0 waiting · paused')
+    expect(queueStatusLabel(queueStatus(view({ paused: true, draining: true, queued: [entry('a')] }), now)!)).toBe('0 running · 1 waiting · oldest 20m · draining')
+  })
+})
+
+describe('queueSummary', () => {
+  const now = Date.parse('2026-10-22T10:20:00Z')
+  it('names the oldest wait and what starts next', () => {
+    expect(queueSummary(view({ queued: [entry('b', { position: 2, target: 'b.py:y' }), entry('a', { target: 'a.py:x', queued_at: '2026-10-22T10:10:00Z' })] }), now))
+      .toBe('oldest waiting 20m · next a.py:x')
+  })
+  it('is nothing while nothing waits', () => {
+    expect(queueSummary(view({ paused: true }), now)).toBeNull()
   })
 })
 

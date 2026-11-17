@@ -7,4 +7,9 @@ export type PartitionKeyRow = {
 /**
  * `retailer=acct_0001`.
  */
-key: string, status: string, created_at: string, elapsed_seconds: number | null, error: string | null, run_id: string | null, artifact_path: string | null, size_bytes: number | null, };
+key: string, status: string, created_at: string, elapsed_seconds: number | null, error: string | null, run_id: string | null, artifact_path: string | null, size_bytes: number | null,
+/**
+ * Rows the attempt's result holds, when its worker counted them; `null` otherwise (a
+ * failed attempt, a result that is not a frame, an older barca's row).
+ */
+rows: number | null, };

@@ -71,6 +71,9 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "failure",
     "failed_node",
     "error",
+    "principal",
+    "trigger_reason",
+    "cancellation",
 ];
 
 /// Item fields of `steps[]` in `get`/`run` JSON (real and `--dry-run`). Optional fields only
@@ -109,6 +112,8 @@ pub const STATS_FIELDS: &[&str] = &[
     "run_id",
     "cpu_seconds",
     "max_rss_bytes",
+    "rows",
+    "empty_keys",
     "keys",
     "failed_keys",
 ];
@@ -219,6 +224,7 @@ mod tests {
             schedule_id: None,
             client_run_id: None,
             failure: None,
+            ..Default::default()
         };
         assert_eq!(
             keys(&barca_core::report::history_json(&run)),
@@ -266,6 +272,8 @@ mod tests {
             run_id: None,
             cpu_seconds: None,
             max_rss_bytes: None,
+            rows: None,
+            empty_keys: Some(0),
             keys: Some(0),
             failed_keys: Some(0),
         };
@@ -298,6 +306,7 @@ mod tests {
                 failed: 0,
                 failed_keys: vec![],
                 changed: None,
+                empty: 0,
             }),
             last_materialization: None,
             last_bytes_change: Some(barca_core::db::BytesChange {

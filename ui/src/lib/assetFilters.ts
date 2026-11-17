@@ -49,31 +49,6 @@ export const EMPTY_FILTERS: Filters = {
   partitioned: false,
 }
 
-/** The state filters a page opens on, before the URL says otherwise. */
-export type StateDefaults = Pick<Filters, 'states' | 'failed' | 'blocked'>
-
-export const NO_DEFAULTS: StateDefaults = { states: [], failed: false, blocked: false }
-
-/**
- * What the Tasks page opens on: a task always runs, so its state says nothing to pick it by; what
- * needs a look is a failed last attempt, and a state other than `always_runs` (blocked, stale
- * keys, an unsynced result).
- */
-export const NEEDS_ATTENTION: StateDefaults = { states: ['blocked', 'stale', 'partial', 'unsynced'], failed: true, blocked: true }
-
-/**
- * With the default in force, a row that ran this recently is shown whatever its state: a task
- * that just ran is what its page is opened for, and tasks record no cache state to pick it by.
- */
-export const RECENT_MS = 24 * 3_600_000
-
-const hasDefaults = (d: StateDefaults) => d.states.length > 0 || d.failed || d.blocked
-
-/** The default's states are in force: only `state=all` in the URL lifts them. */
-export function onDefaultStates(f: Filters, defaults: StateDefaults): boolean {
-  return hasDefaults(defaults) && !f.pinned && f.failed === defaults.failed && f.blocked === defaults.blocked && f.states.length === defaults.states.length && defaults.states.every((s) => f.states.includes(s))
-}
-
 export function isFiltered(f: Filters): boolean {
   return (
     f.query.trim() !== '' ||
@@ -121,18 +96,11 @@ function matchesStates(r: AssetRow, f: Filters): boolean {
   return r.lastFailed ? f.failed : r.pinned !== null ? f.pinned : isBlocked(r) ? f.blocked : f.states.includes(r.state)
 }
 
-interface FilterOptions {
-  /** Rows that ran within this many ms pass the state filter whatever their state. */
-  recentMs?: number
-}
-
 /** Rows passing every filter except those of `skip` (for faceted counts). */
-function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group, opts: FilterOptions = {}): AssetRow[] {
-  const recent = (r: AssetRow) =>
-    opts.recentMs !== undefined && r.lastAtMs !== null && nowMs - r.lastAtMs <= opts.recentMs
+function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group): AssetRow[] {
   return filterRows(rows, f.query).filter(
     (r) =>
-      (skip === 'states' || matchesStates(r, f) || recent(r)) &&
+      (skip === 'states' || matchesStates(r, f)) &&
       (skip === 'kinds' || f.kinds.length === 0 || f.kinds.includes(r.kind)) &&
       (skip === 'lastRun' || matchesLastRun(r, f.lastRun, nowMs)) &&
       (skip === 'scheduled' || !f.scheduled || r.nextRunMs !== null) &&
@@ -140,8 +108,8 @@ function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group,
   )
 }
 
-export function applyFilters(rows: AssetRow[], f: Filters, nowMs: number, opts: FilterOptions = {}): AssetRow[] {
-  return filterExcept(rows, f, nowMs, undefined, opts)
+export function applyFilters(rows: AssetRow[], f: Filters, nowMs: number): AssetRow[] {
+  return filterExcept(rows, f, nowMs)
 }
 
 interface FacetCounts {
@@ -158,12 +126,12 @@ interface FacetCounts {
   partitioned: number
 }
 
-export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: FilterOptions = {}): FacetCounts {
+export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number): FacetCounts {
   const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
   let failed = 0
   let blocked = 0
   let pinned = 0
-  for (const r of filterExcept(rows, f, nowMs, 'states', opts)) {
+  for (const r of filterExcept(rows, f, nowMs, 'states')) {
     if (r.lastFailed) failed += 1
     else if (r.pinned !== null) pinned += 1
     else if (isBlocked(r)) blocked += 1
@@ -171,9 +139,9 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
   }
 
   const kinds = { asset: 0, task: 0, sensor: 0 } as Record<Kind, number>
-  for (const r of filterExcept(rows, f, nowMs, 'kinds', opts)) kinds[r.kind] += 1
+  for (const r of filterExcept(rows, f, nowMs, 'kinds')) kinds[r.kind] += 1
 
-  const forLastRun = filterExcept(rows, f, nowMs, 'lastRun', opts)
+  const forLastRun = filterExcept(rows, f, nowMs, 'lastRun')
   const lastRun = Object.fromEntries(
     LAST_RUNS.map((l) => [l, forLastRun.filter((r) => matchesLastRun(r, l, nowMs)).length]),
   ) as Record<LastRun, number>
@@ -185,9 +153,9 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, opts: F
     pinned,
     kinds,
     lastRun,
-    scheduled: filterExcept(rows, f, nowMs, 'scheduled', opts).filter((r) => r.nextRunMs !== null)
+    scheduled: filterExcept(rows, f, nowMs, 'scheduled').filter((r) => r.nextRunMs !== null)
       .length,
-    partitioned: filterExcept(rows, f, nowMs, 'partitioned', opts).filter((r) => r.partitioned).length,
+    partitioned: filterExcept(rows, f, nowMs, 'partitioned').filter((r) => r.partitioned).length,
   }
 }
 
@@ -201,18 +169,18 @@ function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] 
 }
 
 /**
- * `defaults`: the state filters of a URL that names none (`state=all` asks for every state).
- * `state=` carries the CLI's words; `failed=1` asks for nodes whose last attempt failed, `blocked=1` for those a failure upstream keeps from running.
+ * The filters a URL names; one that names none filters nothing, on every page (what the page
+ * shows is what its controls say). `state=` carries the CLI's words; `failed=1` asks for nodes
+ * whose last attempt failed, `blocked=1` for those a failure upstream keeps from running.
  */
-export function parseFilters(p: URLSearchParams, defaults: StateDefaults = NO_DEFAULTS): Filters {
+export function parseFilters(p: URLSearchParams): Filters {
   const ran = p.get('ran')
-  const named = p.has('state') || p.has('failed') || p.has('blocked') || p.has('pinned')
   return {
     query: p.get('q') ?? '',
-    states: named ? list(p.get('state'), CACHE_STATES) : [...defaults.states],
-    failed: named ? p.get('failed') === '1' : defaults.failed,
-    blocked: named ? p.get('blocked') === '1' : defaults.blocked,
-    pinned: named ? p.get('pinned') === '1' : false,
+    states: list(p.get('state'), CACHE_STATES),
+    failed: p.get('failed') === '1',
+    blocked: p.get('blocked') === '1',
+    pinned: p.get('pinned') === '1',
     kinds: list(p.get('kind'), KINDS),
     lastRun: LAST_RUNS.find((l) => l === ran) ?? 'any',
     scheduled: p.get('scheduled') === '1',
@@ -221,17 +189,14 @@ export function parseFilters(p: URLSearchParams, defaults: StateDefaults = NO_DE
 }
 
 /** `params` with the filter keys replaced by `f` (other keys are kept). */
-export function writeFilters(params: URLSearchParams, f: Filters, defaults: StateDefaults = NO_DEFAULTS): URLSearchParams {
+export function writeFilters(params: URLSearchParams, f: Filters): URLSearchParams {
   const p = new URLSearchParams(params)
   for (const k of PARAMS) p.delete(k)
   if (f.query.trim()) p.set('q', f.query)
-  if (!onDefaultStates(f, defaults)) {
-    if (f.states.length) p.set('state', f.states.join(','))
-    else if (hasDefaults(defaults)) p.set('state', 'all')
-    if (f.failed) p.set('failed', '1')
-    if (f.blocked) p.set('blocked', '1')
-    if (f.pinned) p.set('pinned', '1')
-  }
+  if (f.states.length) p.set('state', f.states.join(','))
+  if (f.failed) p.set('failed', '1')
+  if (f.blocked) p.set('blocked', '1')
+  if (f.pinned) p.set('pinned', '1')
   if (f.kinds.length) p.set('kind', f.kinds.join(','))
   if (f.lastRun !== 'any') p.set('ran', f.lastRun)
   if (f.scheduled) p.set('scheduled', '1')

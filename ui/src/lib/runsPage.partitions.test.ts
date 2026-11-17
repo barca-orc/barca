@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupRunSteps, runNodeIdle, runNodeLine, runNodeOutcome, runNodeTime, runTargetLines, splitRunSteps } from './runsPage'
+import { NO_STEPS_OPEN, groupRunSteps, runNodeIdle, runNodeLine, runNodeOutcome, runNodeTime, runStepRows, runTargetLines, splitRunSteps, toggleStepsOpen } from './runsPage'
 import { failedKeysLabel, formatSeconds, keyBreakdown } from './assetTable'
 import { lastAttemptFailed } from './cacheStateDisplay'
 import type { NodeState, RunNodeSummary, RunStep } from './types'
@@ -84,5 +84,45 @@ describe('a partitioned node with failed keys', () => {
 
   it('splits its keys into parts that add up to the total', () => {
     expect(keyBreakdown({ ...partial, cached: 3000, missing: 77 })).toEqual({ cached: 3000, failed: 40, stale: 37, total: 3077 })
+  })
+})
+
+describe('runStepRows', () => {
+  const s = (node_id: string, status: string) => ({ node_id, status, partition_key: node_id.slice(node_id.indexOf('[') + 1, -1) }) as RunStep
+  const keys = Array.from({ length: 1205 }, (_, i) => s(`p.py:a[k=${i}]`, i % 4 === 1 ? 'failed' : 'success'))
+  const nodes: RunNodeSummary[] = [
+    { node_id: 'p.py:a', keys: 5000, failed: 302, elapsed_seconds: 9, calls: 0, status: 'ran' },
+    { node_id: 'p.py:b', keys: 1, failed: 0, elapsed_seconds: 1, calls: 0, status: 'ran' },
+    { node_id: 'p.py:c', keys: 0, failed: 0, elapsed_seconds: 0, calls: 0, status: 'skipped', blocked_by: 'p.py:a' },
+  ]
+  const steps = [...keys, s('p.py:b', 'success')]
+
+  it('is one row per planned node, a node of many keys one row with its count', () => {
+    const rows = runStepRows(steps, nodes, NO_STEPS_OPEN)
+    expect(rows.map((r) => r.kind)).toEqual(['node', 'single', 'idle'])
+    const [node] = rows
+    expect(node).toMatchObject({ kind: 'node', open: false, group: { summary: { keys: 5000, failed: 302 } } })
+  })
+
+  it('lists an opened node\'s failed keys, its successful ones behind their count, then the keys not listed', () => {
+    const opened = toggleStepsOpen(NO_STEPS_OPEN, 'nodes', 'p.py:a')
+    const rows = runStepRows(steps, nodes, opened)
+    const failed = keys.filter((k) => k.status === 'failed').length
+    expect(rows.slice(1, 1 + failed).every((r) => r.kind === 'key' && r.step.status === 'failed')).toBe(true)
+    expect(rows[1 + failed]).toEqual({ kind: 'ok_keys', node: 'p.py:a', count: 1205 - failed, open: false })
+    expect(rows[2 + failed]).toEqual({ kind: 'unlisted', node: 'p.py:a', count: 5000 - 1205 })
+    const all = runStepRows(steps, nodes, toggleStepsOpen(opened, 'ok', 'p.py:a'))
+    expect(all.filter((r) => r.kind === 'key')).toHaveLength(1205)
+    expect(toggleStepsOpen(opened, 'nodes', 'p.py:a').nodes.has('p.py:a')).toBe(false)
+  })
+
+  it('lists the keys of a node with none failed at once when opened', () => {
+    const ok = [s('p.py:d[k=1]', 'success'), s('p.py:d[k=2]', 'success')]
+    const rows = runStepRows(ok, [{ node_id: 'p.py:d', keys: 2, failed: 0, elapsed_seconds: 1, calls: 0, status: 'ran' }], toggleStepsOpen(NO_STEPS_OPEN, 'nodes', 'p.py:d'))
+    expect(rows.map((r) => r.kind)).toEqual(['node', 'key', 'key'])
+  })
+
+  it('is a row per step without a per-node summary', () => {
+    expect(runStepRows([s('p.py:x', 'success'), s('p.py:y', 'failed')], [], NO_STEPS_OPEN).map((r) => r.kind)).toEqual(['step', 'step'])
   })
 })

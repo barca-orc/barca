@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { DagNode } from '@/components'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
-import { domainMap } from '@/lib/domainMap'
 import type { GraphEntry } from '@/lib/graph'
-import { withPorts } from '@/lib/groups'
+import { groupHealth, withPorts } from '@/lib/groups'
 import { graphState, isLive, liveGraphState, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
 import { runningGraphState } from '@/lib/running'
@@ -31,7 +30,9 @@ const PIPELINE_STATES: Record<string, GraphState> = {
   'p:product_catalog': graphState(nodeByState.cached),
   'p:orders_clean': graphState(nodeByState.cached),
   'p:orders_enriched': runningGraphState(runningPartitioned),
-  'group:p:modeling': { kind: 'group', tone: 'failed', glyph: 'failed', label: '1 failing', hint: '1 failing · 23 fresh' },
+  'group:p:modeling': groupHealth(['m:a', 'm:b', 'm:c', 'm:d'], new Map([
+    ['m:a', failedNode], ['m:b', { ...nodeByState.cached, id: 'm:b' }], ['m:c', { ...nodeByState.stale, id: 'm:c' }], ['m:d', { ...nodeByState.cached, id: 'm:d', running: runningPartitioned }],
+  ])),
   'p:revenue_daily': graphState(nodeByState.stale),
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
@@ -43,25 +44,32 @@ const MEMBERS: GraphEntry[] = withPorts(
   () => 'q',
 )
 
-// More edges than a map can draw: a grid in dependency order, with the selection's edges.
-const DENSE_MAP = domainMap(
-  Array.from({ length: 12 }, (_, f) =>
-    Array.from({ length: 4 }, (_, n) => ({
-      id: `file_${f}.py:n${n}`,
-      kind: 'asset' as const,
-      freshness: 'always' as const,
-      env: [], file: 'p.py', line: 1,
-      inputs: Array.from({ length: f }, (_, up) => `file_${up}.py:n${n}`),
-    })),
-  ).flat(),
-)!
-const MAP_STATES: Record<string, GraphState> = Object.fromEntries(
-  DENSE_MAP.entries.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', glyph: 'fresh', label: '4 fresh', hint: '' } : { kind: 'group', tone: 'failed', glyph: 'failed', label: '2 failing', hint: '' }]),
+// A graph of groups: each feeds every group after it, so most edges are ones another path
+// already shows; those are drawn for the selected card only.
+const GROUP_GRAPH: GraphEntry[] = Array.from({ length: 6 }, (_, g) => ({
+  id: `group:p:stage_${g}`,
+  kind: 'group',
+  inputs: Array.from({ length: g }, (_, up) => `group:p:stage_${up}`),
+  name: `Stage ${g}`,
+  summary: '4 assets',
+  inputWeights: Object.fromEntries(Array.from({ length: g }, (_, up) => [`group:p:stage_${up}`, g - up])),
+}))
+const GROUP_GRAPH_STATES: Record<string, GraphState> = Object.fromEntries(
+  GROUP_GRAPH.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', glyph: 'fresh', label: '4 fresh', hint: '' } : { kind: 'group', tone: 'failed', glyph: 'failed', label: '2 failing', hint: '' }]),
 )
+
+/** A group card in each case its health line has: from `groupHealth` over real member states. */
+const GROUP_CARDS: Record<string, GraphState> = {
+  'failing while running': groupHealth(['a', 'b', 'c'], new Map([['a', { ...failedNode, id: 'a' }], ['b', { ...nodeByState.cached, id: 'b', running: runningPartitioned }], ['c', { ...nodeByState.stale, id: 'c' }]])),
+  'running, nothing failed': groupHealth(['a', 'b'], new Map([['a', { ...nodeByState.cached, id: 'a', running: runningPartitioned }], ['b', { ...nodeByState.cached, id: 'b' }]])),
+  'stale and more': groupHealth(['a', 'b', 'c', 'd', 'e'], new Map([['a', { ...nodeByState.stale, id: 'a' }], ['b', { ...nodeByState.partial, id: 'b' }], ['c', { ...nodeByState.never_run, id: 'c' }], ['d', { ...nodeByState.always_runs, id: 'd' }], ['e', { ...nodeByState.cached, id: 'e' }]])),
+  'all fresh': groupHealth(['a'], new Map([['a', { ...nodeByState.cached, id: 'a' }]])),
+}
+const GROUP_CARD_ENTRIES: GraphEntry[] = Object.keys(GROUP_CARDS).map((name) => ({ id: name, kind: 'group', inputs: [], name, summary: '12 assets · 12 tasks', outputName: 'model' }))
 
 export function Graph() {
   const [selected, setSelected] = useState<string | null>('p:orders_clean')
-  const [mapSelected, setMapSelected] = useState<string | null>(DENSE_MAP.entries[5]?.id ?? null)
+  const [groupSelected, setGroupSelected] = useState<string | null>(GROUP_GRAPH[3]?.id ?? null)
   return (
     <>
       <Spec id="kit-graph" title="DagNode · resting states" note="graphState() of a node in each cache state, in plain words, most urgent first; then failing, which replaces the state word when the last attempt failed.">
@@ -123,15 +131,21 @@ export function Graph() {
         </Frame>
       </Spec>
 
+      <Spec title="GroupNode · health" note="groupHealth(): the most severe fact first, in words (failing beats running beats stale); the rest as glyph and count, every part in the tooltip and the legend.">
+        <Frame height={340} width="100%">
+          <GraphCanvas assets={GROUP_CARD_ENTRIES} dir="LR" selected={null} onSelect={() => undefined} states={GROUP_CARDS} />
+        </Frame>
+      </Spec>
+
       <Spec title="GraphCanvas · unconnected members" note="Packed in a grid; an input from outside the view is a faded port.">
         <Frame height={300} width="100%">
           <GraphCanvas assets={MEMBERS} dir="LR" selected={null} onSelect={() => undefined} states={{}} />
         </Frame>
       </Spec>
 
-      <Spec title="GraphCanvas · pipeline map" note="All pipelines: a card per file; the selected card's edges carry how many inputs cross them.">
+      <Spec title="GraphCanvas · groups" note="A level of groups, by dependency depth, edges routed between the cards; an edge another path already shows (implied) is drawn for the selected card only, with how many inputs cross it.">
         <Frame height={380} width="100%">
-          <GraphCanvas assets={DENSE_MAP.entries} dir="LR" selected={mapSelected} onSelect={setMapSelected} states={MAP_STATES} />
+          <GraphCanvas assets={GROUP_GRAPH} dir="LR" selected={groupSelected} onSelect={setGroupSelected} states={GROUP_GRAPH_STATES} />
         </Frame>
       </Spec>
     </>

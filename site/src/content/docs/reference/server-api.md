@@ -94,9 +94,16 @@ Content-Type: application/json
   "partition": "region=emea",   // optional --partition, as the flag takes it (a JSON object or array for exact keys)
   "values": false,              // get -o value: final_output holds the values, not artifact pointers
   "allow_paused": false,        // --allow-paused: run a target that `barca pause` paused
+  "reason": "backfill after the fees fix", // optional: why, recorded with the run
   "agent": true                 // which stderr lines the client will print
 }
 ```
+
+`reason` (experimental) is one line of at most 500 characters, recorded with the run as its
+`trigger_reason`. With [token authentication](/reference/server-mode/), the run also records the
+token the request was authenticated with as its `principal` (`token:<name>`), so a shared
+server's history says who started a full rebuild and why. Both appear in `GET /runs`,
+`GET /runs/{run_id}` and `barca history`.
 
 A partitioned `run` returns every key's value in `outcome.final_output`, keyed by partition
 key, with tables as JSON rows. The same bounded summary as `get` applies above 1000 keys.
@@ -240,6 +247,42 @@ that had already finished are kept, and the run ends `cancelled` (in its events,
 `GET /runs/{run_id}` and in `barca history`). The response is
 `{ "run_id": "...", "status": "cancelling" }`. Cancelling a run that already finished returns
 `409`, and an unknown id `404`.
+
+The run records why it was cancelled as `cancellation` (experimental): `by` is `request` (this
+route: the web UI's Cancel, or the first Ctrl-C of a `--server` client) or `shutdown`,
+`principal` the token of the cancel request, and `started: false` for a run cancelled while it
+waited in the queue, which executed nothing. Such a run also names the runs it waited behind
+(`waiting_behind`) and, in `same_as`, the one doing the same work. The server does not
+deduplicate requests: the same request sent twice is two runs, and the second waits behind the
+first or shares its in-flight steps.
+
+### Why a run executes what it does
+
+`GET /runs/{run_id}` has `plan_reasons` (experimental): why the run executed the steps it did
+instead of serving them from cache, recorded as each phase is decided, so a run in progress
+shows the phases decided so far:
+
+```json
+{
+  "nodes": 469, "steps": 5492, "omitted": 0,
+  "reasons": [
+    {"category": "code_changed", "subject": "helper billing.py:_n", "nodes": 29, "steps": 29, "example": "billing.py:billing__raw__dunning_05"},
+    {"category": "new_keys", "subject": null, "nodes": 1, "steps": 5000, "example": "billing.py:billing__raw__invoices_by_account"}
+  ]
+}
+```
+
+The categories are what the engine decides: `never_run`, `new_keys`, `failed` (the last attempt at
+these inputs failed), `code_changed`, `inputs_changed`, `env_changed` (with the component that
+changed, as `barca status` names it), `changed` (no components recorded to compare),
+`refresh`, `refresh_cascade`, `refresh_all`, `artifact_missing`, `evicted`, `task`, `sensor` and
+`not_examined`. The [CLI contract](/reference/cli-contract/) has the details and bounds.
+`retries` counts the attempts that retried a step, so `attempts` is the steps recorded plus
+`retries`.
+
+`steps` lists at most 1000 steps; `?offset=N` (with `?limit=`) pages through the rest, and
+`steps_page.next_offset` is where the next page starts. While a run goes, `logs` holds its newest
+5,000 lines.
 
 ### Run history
 

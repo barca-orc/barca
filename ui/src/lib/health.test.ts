@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { causeOf, emptyHealth, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, healthTone, scopeAge, relativeTraceback, pathBreaks } from './health'
+import { causeOf, emptyHealth, failedKeyNodes, failureGroups, impactLabel, keysLine, type Failure, consumersOf, downstreamIds, failedUpstream, failures, headline, healthCounts, healthLabel, healthParts, healthTone, scopeAge, ageCell, streakLabel, successOfLabel, relativeTraceback, pathBreaks } from './health'
 import type { NodeState, PartitionKeys } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
   return {
     id, name: id.split(':')[1]!, kind: 'asset', inputs, partitioned: false,
     cache: { state: 'cached', reason: 'materialized', detail: '' },
-    last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null },
-    shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, ...over,
+    last_materialization: { status: 'success', created_at: '2026-10-29 10:00:00', elapsed_seconds: 1, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null },
+    shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, ...over,
   }
 }
 const failedAt = (at: string, error: string) => ({
-  last_materialization: { status: 'failed', created_at: at, elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error },
+  last_materialization: { status: 'failed', created_at: at, elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error },
 })
 
 // raw → clean → (report, check); orphan fails alone.
@@ -26,21 +26,23 @@ const byId = new Map(nodes.map((n) => [n.id, n]))
 const consumers = consumersOf(nodes)
 
 describe('health', () => {
-  it('counts a scope by state word, failed last attempts beside them, a live run first', () => {
+  it('counts a scope by health, each node once: a failure first, then run work, then the rest by severity', () => {
     const ids = nodes.map((n) => n.id)
     const counts = healthCounts(ids, byId)
-    // `raw` and `orphan` are cached assets whose last attempt failed: in the cached count, and in lastFailed.
-    expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, cached: 4, stale: 1 }, lastFailed: 2 })
-    expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ cached: 3 }) })
-    expect(healthLabel(counts)).toBe('2 failing · 1 stale · 4 fresh')
+    // `raw` and `orphan` failed; `clean` (stale, below `raw`) and `report`, `check` (below it) are blocked.
+    expect(counts).toEqual({ ...emptyHealth(5), states: { ...emptyHealth().states, failing: 2, blocked: 1, ok: 2 } })
+    expect(healthCounts([...ids, 'p.py:unloaded'], byId, { 'p.py:report': 'running' })).toMatchObject({ running: 1, pending: 1, states: expect.objectContaining({ ok: 1 }) })
+    expect(healthLabel(counts)).toBe('2 failing · 1 blocked · 2 ok')
     expect(healthParts(counts, 2)).toEqual([
-      { key: 'lastFailed', tone: 'failed', glyph: 'failed', text: '2 failing' },
-      { key: 'stale', tone: 'warning', glyph: 'stale', text: '1 stale' },
+      { key: 'failing', tone: 'failed', glyph: 'failed', count: 2, word: 'failing', text: '2 failing' },
+      { key: 'blocked', tone: 'warning', glyph: 'blocked', count: 1, word: 'blocked', text: '1 blocked' },
     ])
     expect(healthLabel(counts, 1)).toBe('2 failing')
     expect(healthTone(counts)).toBe('failed')
     expect(healthTone(emptyHealth())).toBe('neutral')
-    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 fresh')
+    expect(healthLabel(healthCounts(['p.py:report'], byId))).toBe('1 ok')
+    // A whole-project health map, when the page has one, decides instead.
+    expect(healthLabel(healthCounts(['p.py:report'], byId, {}, new Map([['p.py:report', 'blocked']])))).toBe('1 blocked')
   })
 
   it('lists failures by downstream impact, with their headline', () => {
@@ -90,9 +92,46 @@ describe('scopeAge', () => {
       ['c', aged('c', null, null, 0)],
     ])
     expect(scopeAge(['a', 'b', 'c', 'unloaded'], byId)).toEqual({
-      lastSuccessAt: '2026-10-28 10:00:00', failingSince: '2026-10-29 01:00:00', failures: 3,
+      lastSuccessAt: '2026-10-28 10:00:00', failingSince: '2026-10-29 01:00:00', failures: 3, failing: 2,
     })
-    expect(scopeAge(['c'], byId)).toEqual({ lastSuccessAt: null, failingSince: null, failures: 0 })
+    expect(scopeAge(['c'], byId)).toEqual({ lastSuccessAt: null, failingSince: null, failures: 0, failing: 0 })
+  })
+})
+
+describe('streakLabel', () => {
+  it('says a failing streak in runs in a row, never as a total', () => {
+    expect(streakLabel(1)).toBe('1 failed run')
+    expect(streakLabel(130)).toBe('130 failed runs in a row')
+    expect(streakLabel(1205)).toBe('1,205 failed runs in a row')
+  })
+})
+
+describe('ageCell', () => {
+  const age = { lastSuccessAt: '2026-10-28 10:00:00', failingSince: '2026-10-29 01:00:00', failures: 130, failing: 3 }
+
+  it('says a node is failing, since when and how many runs in a row', () => {
+    expect(ageCell({ ...age, failing: 1 }, { group: false, partitioned: false })).toEqual({
+      success: { at: '2026-10-28 10:00:00', of: 'node' },
+      failing: { lead: 'failing', since: '2026-10-29 01:00:00', tail: ' · 130 failed runs in a row' },
+    })
+  })
+
+  it("says a partitioned node's success is any key's, which can be newer than its failing streak", () => {
+    expect(ageCell({ ...age, failing: 1 }, { group: false, partitioned: true }).success).toEqual({ at: '2026-10-28 10:00:00', of: 'any key' })
+    expect(successOfLabel('any key')).toBe('any key')
+    expect(successOfLabel('node')).toBeNull()
+  })
+
+  it("summarizes every failing member of a group, not its oldest's streak, and says whose success it shows", () => {
+    expect(ageCell(age, { group: true, partitioned: false })).toEqual({
+      success: { at: '2026-10-28 10:00:00', of: 'oldest member' },
+      failing: { lead: '3 failing · oldest', since: '2026-10-29 01:00:00', tail: '' },
+    })
+    expect(ageCell({ ...age, failing: 1 }, { group: true, partitioned: false }).failing?.lead).toBe('1 failing')
+  })
+
+  it('has no failing line for a healthy scope, and no success for one that never succeeded', () => {
+    expect(ageCell({ lastSuccessAt: null, failingSince: null, failures: 0, failing: 0 }, { group: false, partitioned: false })).toEqual({ success: null, failing: null })
   })
 })
 
@@ -111,7 +150,7 @@ describe('partitioned failures', () => {
   const SAMPLE = 'BatchKeyFailed: forecast model diverged for ra-02541: NaN in week 14\n  File "p.py", line 9'
   const page: PartitionKeys = {
     total: 7, recorded: 3077, failed: 7,
-    keys: [{ key: 'account=ra-02541', status: 'failed', created_at: '2026-10-31 15:30:12', elapsed_seconds: null, error: SAMPLE, run_id: 'd9becbdf4a92', artifact_path: null, size_bytes: null }],
+    keys: [{ key: 'account=ra-02541', status: 'failed', created_at: '2026-10-31 15:30:12', elapsed_seconds: null, error: SAMPLE, run_id: 'd9becbdf4a92', artifact_path: null, size_bytes: null, rows: null }],
     errors: [{ error: KEY_ERROR, keys: 5 }, { error: 'KeyError: <key>', keys: 2 }],
   }
   const forecast = (over: Partial<NodeState> = {}) =>

@@ -67,9 +67,10 @@ describe('AssetVersionsView', () => {
     expect(buttons(html).map((b) => b.label)).toEqual(['Unpin', 'Pin this version'])
   })
 
-  it('disables every action on a read-only server', () => {
-    const html = render(data({ pin: { node_id: 'p.py:orders', run_hash: 'aaaaaaaaaaaaaaaa', pinned_at: '2026-11-07T11:30:00Z', pinned_by: null, reason: null, run_id: null, upload: null } }), { readOnly: true })
-    expect(buttons(html).every((b) => b.disabled)).toBe(true)
+  it('offers no action on a read-only server, and still says what is pinned', () => {
+    const html = render(data({ pin: { node_id: 'p.py:orders', run_hash: 'aaaaaaaaaaaaaaaa', pinned_at: '2026-11-07T11:30:00Z', pinned_by: null, reason: null, run_id: null, upload: null } }), { readOnly: true, upload: true })
+    expect(buttons(html)).toEqual([])
+    expect(text(html)).toContain('Pinned at aaaaaaaaaaaa')
   })
 
   it('asks before pinning and before unpinning', () => {
@@ -93,7 +94,6 @@ describe('AssetVersionsView', () => {
   it('offers an upload, asks first with the file name and size, and marks the uploaded version', () => {
     const offered = render(data(), { upload: true })
     expect(buttons(offered).map((b) => b.label)).toContain('Upload replacement…')
-    expect(buttons(render(data(), { upload: true, readOnly: true })).find((b) => b.label === 'Upload replacement…')?.disabled).toBe(true)
     expect(buttons(render(data({ pinnable: false }), { upload: true })).map((b) => b.label)).not.toContain('Upload replacement…')
 
     const file = new File(['{"v": 1}'], 'fix.json')

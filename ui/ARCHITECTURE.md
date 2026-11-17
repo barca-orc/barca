@@ -61,29 +61,33 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 |---|---|---|
 | `lib/runStream.ts` | `reduceRunEvent(state, event)` — fold an SSE event stream into UI state | `runStream.test.ts` |
 | `lib/runs.ts` | `runStatus`, `runIsLive`, `triggeredByLabel`, `parseOutcome` — a run's status, trigger and outcome → display | `runs.test.ts` |
-| `lib/queue.ts` | `queueState`, `queueControl`, `queueRows`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list | `queue.test.ts` |
-| `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause | `schedules.test.ts` |
+| `lib/queue.ts` | `queueState`, `queueControl`, `queueRows` (running runs first, then the waiting ones, each with its elapsed time), `queueSummary`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list; `queueStatus`, `queueStatusLabel` — the queue in brief that every page shows while runs wait (`components/QueueStatus.tsx`) | `queue.test.ts` |
+| `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause; `lateness` — a schedule that missed its slot (`late_since` past the grace), "late by 12m" | `schedules.test.ts` |
+| `lib/dataSignals.ts` | `signalLine(signal)` — a data-health signal of `GET /state` (`empty`, `rows_changed`, `behind_input`) in one line | `dataSignals.test.ts` |
 | `lib/runFeedback.ts` | `runFeedback(status, logs, error)` — map a node's status to a feedback descriptor | `runFeedback.test.ts` |
-| `lib/cacheStateDisplay.ts` | the one table from `CacheState` to display: each of the CLI's eight words with its tone and rank; `lastAttemptFailed` — the fact shown beside a state | `cacheStateDisplay.test.ts` |
+| `lib/cacheStateDisplay.ts` | the one table from `CacheState` to display: each of the CLI's eight words with its tone and rank; `lastAttemptFailed` — the fact shown beside a state; `shownCacheState` — a node that always runs shows its last run (`succeeded`, or `never run`) | `cacheStateDisplay.test.ts` |
 | `lib/status.ts` | `statusMeta` — the run lifecycle's one table (`StatusKind` → tone and word); `freshnessLabel`, `nodeKindLabel` | `status.test.ts` |
 | `lib/tone.ts` | `Tone`, `toneMeta` — the status hues both tables map onto; colour is never the only carrier | — |
 | `lib/graphState.ts` | `graphState(node)` — a node's box: its cache state (word, tone, detail, failed last attempt), the run on it, or no state yet | `graphState.test.ts` |
-| `lib/graphView.ts` | `fitTarget`, `neighborInDirection`, `waitsOn` — what a fit shows, where the keyboard goes, what a never-run node waits on | `graphView.test.ts` |
-| `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation | `groupedPage.test.ts` |
-| `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout | `graph.test.ts` |
-| `lib/graphLayout.ts` | `layout(input)` — dagre per connected part, parts packed in rows, no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
-| `lib/domainMap.ts` | `domainMap(assets)` — All pipelines as a card per file, weighted edges between files | `domainMap.test.ts` |
+| `lib/graphView.ts` | `fitViewport`, `fitTarget`, `revealViewport`, `neighborInDirection`, `waitsOn` — the viewport a fit sets (never below the zoom where a card's smallest label is 11px: what fits there around the selected, failed, running node or the start, the rest a pan away), the pan that keeps a selection clear of an opening panel, where the keyboard goes, what a never-run node waits on | `graphView.test.ts` |
+| `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation, header counts (`scopeCountsLabel`), rows held in place under the pointer (`holdOrder`, `hooks/useHeldOrder.ts`); the graph draws the same entries as the list at every level, All pipelines included | `groupedPage.test.ts` |
+| `lib/knownStates.ts` | `knownStates(current, loaded)` — while a scope's state loads, each node's newest row already loaded (`useKnownStates`): a navigation keeps the last known state, "Checking…" only for a node never loaded | `knownStates.test.ts` |
+| `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout; `impliedEdges` — in a graph of groups, the edges another path already shows (left out of the layout, drawn for the selection) | `graph.test.ts` |
+| `lib/graphLayout.ts` | `layout(input)` — dagre per connected part (by dependency depth), parts packed in rows, and each edge's route (`routeEdges`: straight through a rank between its boxes, curving only between ranks, so no edge crosses a card; drawn by `routePath` in `components/graph/RoutedEdge.tsx`), no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
 | `lib/pipeline.ts` | derive pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count and state, through `assetTable.fileDisplay`, as its table header shows it); `mergeStates` for the sidebar | `pipeline.test.ts` |
-| `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge` — what is broken in a scope, why, and how late | `health.test.ts` |
-| `lib/time.ts` | `parseTime`, `formatAgo`, `formatAbsolute` — the one time format (drawn by `Age`) | `time.test.ts` |
-| `lib/sidebar.ts` | `updateSidebar`, `fileGroups` — the sidebar's collapse and the tree of groups under a file | `sidebar.test.ts` |
+| `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge`, `ageCell`, `streakLabel` — what is broken in a scope, why, and how late; a failing streak is always "N failed runs in a row", a partitioned node's success is "any key"'s, a group's "oldest member"'s | `health.test.ts` |
+| `lib/time.ts` | `parseTime`, `formatAgo`, `formatRelative` (`3h ago`, `in 5m`), `formatInstant` — the one time format, drawn by `Age` (relative, absolute on hover) | `time.test.ts` |
+| `lib/sidebar.ts` | `updateSidebar`, `fileGroups`, `listedPipelines` — the sidebar's collapse and width (dragged, by keyboard, reset), the files it lists and the tree of groups under a file | `sidebar.test.ts` |
+| `lib/documentTitle.ts` | `documentTitle` — the tab's title from the route: what is open, the section, the app | `documentTitle.test.ts` |
+| `lib/writeAccess.ts` | `writeAccess`, `writeControl` — whether every write action is drawn: hidden on a read-only server, disabled until `/health` answers | `writeAccess.test.ts` |
 | `lib/names.ts` | `splitMiddle` — a long name's cuttable head and its kept tail (`MiddleName`) | `names.test.ts` |
-| `lib/palette.ts` | `paletteIndex`, `searchPalette`, `updatePalette` — the command palette (⌘K) | `palette.test.ts` |
+| `lib/palette.ts` | `paletteIndex`, `searchPalette`, `updatePalette` — the command palette (⌘K): each result with its state, failing first among equal matches | `palette.test.ts` |
 | `lib/runTarget.ts` | `runTarget`, `runButton` — what a page toolbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/partitionGrid.ts` | `gridOf`, `filterCells`, `issueGroups`, `heatmap`, `filterSelection`, `issueSelection` — every key of a partitioned node (`GET /assets/{id}/partitions/grid`) decoded and filtered, its problems grouped with where they are, binned into the overview, and a filter or a problem turned into a run's `partition` | `partitionGrid.test.ts` |
 | `lib/keysPage.ts` | `keysParams`, `keysSearch`, `keysHref` — the key explorer's URL (node, open key, filters) | `keysPage.test.ts` |
-| `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity` | `*.test.ts` |
+| `lib/runExplain.ts` | `planExplanation`, `runOverview`, `cancellationNotice`, `attemptsLabel`, `inFlightSummary` — a run's `plan_reasons`, trigger, cancellation and attempts → what the run overview says; a live run's progress, nodes in flight by group, ETA at the rate so far and slowest nodes; one line for a large run in flight | `runExplain.test.ts` |
+| `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity`; `runsCountLabel` (a filtered count over the runs loaded says it is partial), `runStepRows` (a run's Steps as rows: a node's keys one row with their count, listed when opened) | `*.test.ts` |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.
 `runFeedback` returns `{ kind: 'failed', error, logs }`, not an `<ErrorPanel>`.
@@ -92,7 +96,7 @@ These return **descriptors** (plain data / discriminated unions), never JSX. e.g
 
 - `components/`, `pages/`, `layouts/` — map descriptors and state to elements. A component
   should mostly be a `match` over a descriptor's `kind`, one arm per variant.
-- `hooks/` — thin wrappers that connect I/O to the pure core. `useRunStream` opens the
+- `hooks/` — thin wrappers that connect I/O to the pure core. `useWriteControl` is the one place a write button learns whether to draw itself (`lib/writeAccess.ts`); `useNow` is one shared 15 s clock for an `Age` with no fetch time of its own; `useDocumentTitle` keeps the tab's title. `useRunStream` opens the
   `EventSource` and pipes each event through `reduceRunEvent`; all the folding logic lives
   in `lib/runStream.ts`, so the hook itself needs no test.
 
@@ -195,8 +199,10 @@ Rules:
   state has its own glyph, shape and hue (`--state-*`): `failing` a red filled cross, `running`
   a blue turning arc, `fresh` a green filled check, `stale` amber half-filled, `blocked` an
   orange barred ring, `partial` violet three-quarters, `unsynced` teal arrow, `pinned` indigo,
-  and the quiet states (never run dashed, unknown, always runs, paused, queued, cancelled,
-  skipped) grey. A `Tone` (`lib/tone.ts`) is the separate question of urgency, which logic reads
+  and the quiet states (never run dashed, unknown, paused, queued, cancelled, skipped) grey. A
+  node that always runs (a task, a sensor) has no cache to describe: it shows its last run,
+  `succeeded` with the fresh check (the one state that shares a glyph), `failing`, or `never run`;
+  that it always runs is said in its tooltip. A `Tone` (`lib/tone.ts`) is the separate question of urgency, which logic reads
   (what needs attention, what sorts first); states may share a tone, never a glyph. A node's
   cache state is one of the CLI's eight words, mapped once in `lib/cacheStateDisplay.ts`; a run's
   status once in `lib/status.ts`. `--signal` (primary actions, links, selection) is neutral;
@@ -217,6 +223,11 @@ A project can have thousands of nodes; a view must not render all of them at onc
   sticky header and the scrollbar behave as before. Keyboard navigation goes through
   `focusWindowRow`, which scrolls to a row that is not rendered yet. A table short enough to fit
   renders no spacer, so it has only its own rows. The assets and the groups tables use it.
+- **Run details render what is in view.** `LogViewer` renders only the log lines in view
+  (TanStack Virtual, each line measured, since a long line wraps), and a run's Steps are rows
+  from `runStepRows` in a box of their own, rendered the same way: a node's keys are one row with
+  their count until it is opened. A failed run of 5,000 keys and 30,000 log lines renders about
+  1,700 elements, not 150,000.
 - **Big graphs are laid out in a worker.** `hooks/useGraphLayout.ts` lays out a graph of 300
   nodes or more in `lib/graphLayout.worker.ts` and shows "Laying out N nodes…" in the canvas
   until it arrives; a smaller one is laid out in place, with its data. A poll that returns the
@@ -264,6 +275,10 @@ they arrive. The tests do not exercise that (fonts are local and fast).
   be a second opinion that can disagree).
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
+
+A group card (`groupHealth`) leads with its most severe fact in words (failing beats running beats
+stale, the order of `healthParts`), the other parts beside it as glyph and count; the graph's
+legend lists every state on its cards, each part of a group card included.
 
 Graph state presentation lives in `src/lib/graphState.ts`. A resting node shows its
 `cache.state` from `/state` as its glyph and the CLI's word; a failed last attempt shows as

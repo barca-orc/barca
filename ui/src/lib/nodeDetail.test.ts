@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AssetRunEntry, NodeState } from './types'
-import { barSegments, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, partitionSelection, raisedAtLabel, sinceLastSuccess, previewRows, runPace, shortHash, sourcePath, truncateCell, whatChanged } from './nodeDetail'
+import { barSegments, changedSummary, collapseRuns, dataKey, dataKeyNote, failuresOnlyNote, keyFigures, runScopeNote, runsRecorded, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, partitionSelection, raisedAtLabel, sinceLastSuccess, previewRows, runPace, shortHash, sourcePath, truncateCell, whatChanged } from './nodeDetail'
 
 function node(id: string, inputs: string[] = []): NodeState {
   return {
@@ -14,7 +14,7 @@ function node(id: string, inputs: string[] = []): NodeState {
     shape: null,
     env: [],
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
   }
 }
@@ -42,6 +42,7 @@ describe('historyBars', () => {
     run_id: null,
     cpu_seconds: null,
     max_rss_bytes: null,
+    rows: null,
   })
 
   it('oldest first, heights relative to the slowest run, failures marked', () => {
@@ -89,6 +90,7 @@ const timed = (elapsed: number | null, status = 'success'): AssetRunEntry => ({
   run_id: null,
   cpu_seconds: null,
   max_rss_bytes: null,
+  rows: null,
 })
 
 describe('durationHistogram', () => {
@@ -253,9 +255,104 @@ describe('failure facts', () => {
   })
 
   it('a history of only failures has nothing to summarize', () => {
-    const r = (status: string): AssetRunEntry => ({ status, elapsed_seconds: null, created_at: '', error_message: null, attempts: 1, run_id: null, cpu_seconds: null, max_rss_bytes: null })
+    const r = (status: string): AssetRunEntry => ({ status, elapsed_seconds: null, created_at: '', error_message: null, attempts: 1, run_id: null, cpu_seconds: null, max_rss_bytes: null, rows: null })
     expect(onlyFailures([r('failed')])).toBe(true)
     expect(onlyFailures([r('failed'), r('success')])).toBe(false)
     expect(onlyFailures([])).toBe(false)
+  })
+})
+
+describe('changedSummary', () => {
+  it('counts each kind of change, in the order they first appear', () => {
+    const helpers = Array.from({ length: 15 }, (_, i) => `helper lib.py:h${i}`)
+    expect(changedSummary(['code', 'input a.py:x', ...helpers, 'input a.py:y'])).toBe('code, 2 inputs, 15 helpers')
+    expect(changedSummary(['decorator argument retries', 'env TOKEN', 'kind'])).toBe('1 decorator argument, 1 env var, kind')
+    expect(changedSummary(['something new'])).toBe('something new')
+  })
+})
+
+describe('collapseRuns', () => {
+  const run = (status: string, at: string, error: string | null = null, keys?: number, failed?: number): AssetRunEntry => ({
+    elapsed_seconds: null, status, created_at: at, error_message: error, attempts: 1, run_id: at, cpu_seconds: null, max_rss_bytes: null, rows: null,
+    ...(keys === undefined ? {} : { keys, failed_keys: failed }),
+  })
+
+  it('folds a stretch of identical failures into one line with its count and span', () => {
+    const runs = [
+      run('failed', '12:03', 'ValueError: x\n  File "a.py"'),
+      run('failed', '12:02', 'ValueError: x\n  File "b.py"'),
+      run('failed', '12:01', 'ValueError: x'),
+      run('success', '12:00'),
+      run('success', '11:59'),
+      run('failed', '11:58', 'ValueError: x'),
+    ]
+    expect(collapseRuns(runs).map((g) => [g.run.created_at, g.count, g.oldestAt])).toEqual([
+      ['12:03', 3, '12:01'], ['12:00', 1, '12:00'], ['11:59', 1, '11:59'], ['11:58', 1, '11:58'],
+    ])
+  })
+
+  it('keeps apart failures that differ in their error or their keys', () => {
+    expect(collapseRuns([run('failed', '2', 'A'), run('failed', '1', 'B')])).toHaveLength(2)
+    expect(collapseRuns([run('failed', '2', 'A', 10, 2), run('failed', '1', 'A', 10, 3)])).toHaveLength(2)
+    expect(collapseRuns([run('failed', '2', 'A', 10, 2), run('failed', '1', 'A', 10, 2)])).toHaveLength(1)
+  })
+})
+
+describe('failuresOnlyNote', () => {
+  it('claims every run failed only when the failing streak covers every run recorded', () => {
+    expect(failuresOnlyNote(4, 4, 4, true)).toBe('No run has computed every key yet (all 4 runs had keys fail), so there are no durations to show.')
+    expect(failuresOnlyNote(1, 1, 1, false)).toBe('No successful run yet: its only attempt failed, so there are no durations to show.')
+  })
+
+  it('names the streak when older runs succeeded: 130 in a row of 158 recorded', () => {
+    expect(failuresOnlyNote(158, 130, 10, true)).toBe('Keys failed in each of the last 130 runs (158 runs recorded), so there are no recent durations to show.')
+    expect(failuresOnlyNote(158, 130, 10, false)).toBe('The last 130 runs failed (158 runs recorded), so there are no recent durations to show.')
+    expect(runsRecorded(1)).toBe('1 run recorded')
+  })
+})
+
+describe('keyFigures', () => {
+  it("leads with a partitioned node's keys: total, cached, and what its newest run did", () => {
+    expect(keyFigures({ total: 1205, cached: 0 }, { keys: 1205, failed: 1205 })).toEqual([
+      { id: 'total', label: 'keys', value: 1205 },
+      { id: 'cached', label: 'cached', value: 0 },
+      { id: 'rebuilt', label: 'rebuilt in the last run', value: 0 },
+      { id: 'failed', label: 'failed in the last run', value: 1205 },
+    ])
+  })
+
+  it('leaves the newest run out until one recorded keys', () => {
+    expect(keyFigures({ total: 40, cached: 40 }, undefined).map((f) => f.id)).toEqual(['total', 'cached'])
+  })
+})
+
+describe('dataKey', () => {
+  const last = (status: string, partition: string | null) => ({
+    status, created_at: 't', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, partition,
+  })
+
+  it("says which key a partitioned node's Data tab shows, and why", () => {
+    expect(dataKey({ partitioned: false, last_materialization: last('failed', null) })).toEqual({ kind: 'whole' })
+    expect(dataKey({ partitioned: true, last_materialization: null })).toEqual({ kind: 'none' })
+    const newest = dataKey({ partitioned: true, last_materialization: last('success', 'k=a') })
+    expect(newest).toEqual({ kind: 'newest', key: 'k=a' })
+    expect(dataKeyNote(newest, null)).toBe('Key k=a: the newest key recorded, which succeeded.')
+  })
+
+  it("shows a failed key's cached result rather than its error, and says when there is none", () => {
+    const cached = dataKey({ partitioned: true, last_materialization: last('failed', 'k=b') })
+    expect(cached).toEqual({ kind: 'cached', key: 'k=b' })
+    expect(dataKeyNote(cached, true)).toMatch(/^Key k=b: the newest key recorded. Its last attempt failed, so this is the result it still has cached/)
+    expect(dataKeyNote(cached, false)).toMatch(/no cached result; open the key explorer/)
+    expect(dataKeyNote({ kind: 'whole' }, null)).toBeNull()
+  })
+})
+
+describe('runScopeNote', () => {
+  it('says what a Run computes, and does not mention other keys when there are none', () => {
+    expect(runScopeNote(77, 3077)).toBe('Run computes only these 77 keys; the other 3,000 keys stay cached.')
+    expect(runScopeNote(1205, 1205)).toBe('Run computes all 1,205 keys; none is cached.')
+    expect(runScopeNote(1, 1)).toBe('Run computes its one key; it has no cached result.')
+    expect(runScopeNote(0, 10)).toBeNull()
   })
 })

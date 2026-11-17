@@ -104,17 +104,21 @@ export function errorOf(g: Grid, cell: number): { index: number; text: string } 
   return { index, text: g.raw.errors[index]?.error ?? '' }
 }
 
-/** A cell's latest attempt; null where there is none. */
-export function attemptOf(g: Grid, cell: number): { at: number | null; elapsedMs: number | null; sizeBytes: number | null; run: string | null } | null {
+/** A cell's latest attempt; null where there is none. `rows`: what a successful attempt wrote,
+ * where its worker counted it (null otherwise, never a guess). */
+export function attemptOf(g: Grid, cell: number): { at: number | null; elapsedMs: number | null; sizeBytes: number | null; rows: number | null; run: string | null } | null {
   const at = g.raw.attempted_at[cell] ?? null
   const elapsedMs = g.raw.elapsed_ms[cell] ?? null
   const sizeBytes = g.raw.size_bytes[cell] ?? null
+  // A grid from a barca before row counts (0.43) has no `rows`: unknown, never a crash.
+  const rows = (g.raw.rows as readonly (number | null)[] | undefined)?.[cell] ?? null
   const run = g.raw.run[cell] ?? null
   if (at === null && elapsedMs === null && sizeBytes === null && run === null) return null
   return {
     at: at === null ? null : g.raw.attempted_base + at,
     elapsedMs,
     sizeBytes,
+    rows,
     run: run === null ? null : g.raw.runs[run] ?? null,
   }
 }

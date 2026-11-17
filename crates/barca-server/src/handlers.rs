@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 /// `GET /health` — liveness (or `draining`), version, the API version a client checks, the
 /// environment and artifact store this server uses, whether it is read-only, whether it runs
 /// the scheduler (and whether it is still running), why the metadata DB cannot be used if it
-/// cannot, and the cache size against its limit. No core work.
+/// cannot, and the cache size against its limit. No core work, and no wait on a read.
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     let cfg = &state.config.resolved;
     Json(json!({
@@ -246,7 +246,16 @@ async fn state_rows_for_targets(
     };
     let runs = crate::running::in_flight(state, Some(&snapshot.path)).await;
     let running = crate::running::by_node(&runs, &status.nodes, &dag);
-    Ok(rows(&status.nodes, &durations, &ages, &dag, &zone, running))
+    let now = chrono::Utc::now();
+    let paused = |id: &str| crate::pause::active(state, id, now.timestamp()).is_some();
+    Ok(rows(
+        &status.nodes,
+        &durations,
+        &ages,
+        &dag,
+        (&zone, now, &paused),
+        running,
+    ))
 }
 
 /// `barca status` of every node without artifact shapes, against `snapshot` of the database in
@@ -285,27 +294,60 @@ async fn status_for_targets(
         .await?)
 }
 
-/// The `GET /state` rows: each node's status with its durations, next fire time and run.
+/// The server's cron zone, now, and whether a schedule is paused: what a row's slots are read in.
+type Clock<'a> = (
+    &'a crate::scheduler::Zone,
+    chrono::DateTime<chrono::Utc>,
+    &'a dyn Fn(&str) -> bool,
+);
+
+/// The `GET /state` rows: each node's status with its durations, schedule slots, run and data
+/// signals. `clock`: the server's cron zone, now, and whether a schedule is paused.
 fn rows(
     nodes: &[barca_core::status::NodeStatus],
     durations: &std::collections::HashMap<String, Durations>,
     ages: &std::collections::HashMap<String, db::NodeAge>,
     dag: &barca_core::dag::Dag,
-    zone: &crate::scheduler::Zone,
+    clock: Clock<'_>,
     mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
 ) -> Vec<NodeState> {
-    let next_run: std::collections::HashMap<String, i64> =
-        barca_core::schedule::describe_schedule_from_dag(Some(dag), zone)
+    let (zone, now, paused) = clock;
+    let slots: std::collections::HashMap<String, barca_core::schedule::Slots> =
+        barca_core::schedule::jobs_from_summaries(barca_core::queries::list_assets_from_dag(dag))
             .into_iter()
-            .filter_map(|s| s.next_fire.map(|t| (s.id, t)))
+            .map(|job| {
+                let tick = ages.get(&job.id).and_then(|a| a.last_tick);
+                let mut slots = barca_core::schedule::slots(&job.cron, zone, now, tick);
+                if paused(&job.id) {
+                    slots.late_since = None;
+                }
+                (job.id, slots)
+            })
             .collect();
     nodes
         .iter()
         .map(|n| {
+            let slot = slots.get(&n.id);
+            let signals = crate::signals::signals(n, ages, || {
+                dag.get_node(&n.id)
+                    .map(|node| {
+                        node.resolved_inputs
+                            .values()
+                            .chain(node.resolved_collected.values())
+                            .filter_map(|input| {
+                                dag.get_node(input).map(|i| (input.as_str(), i.kind()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
             let age = ages.get(&n.id).cloned().unwrap_or_default();
             NodeState {
                 durations: durations.get(&n.id).cloned(),
-                next_run: next_run.get(&n.id).copied(),
+                next_run: slot.and_then(|s| s.next),
+                prev_run: slot.and_then(|s| s.prev),
+                late_since: slot.and_then(|s| s.late_since),
+                signals,
                 running: running.remove(&n.id),
                 status: n.clone(),
                 last_success_at: age.last_success_at,

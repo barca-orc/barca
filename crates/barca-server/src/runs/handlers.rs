@@ -11,9 +11,11 @@ use super::{
     RunSpec, Wording, check_any_asset, check_files, check_target, check_target_as, context,
     json_text, refuse_if_read_only, run_files, stdout_of,
 };
+use crate::auth_http::Principal;
 use crate::error::ApiError;
 use crate::handlers::snapshot_db;
 use crate::state::{AppState, RunChannel, RunState, RunStatus};
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
@@ -21,6 +23,7 @@ use axum::{Json, http::StatusCode};
 use barca_core::cache::CachePolicy;
 use barca_core::envelope::Context;
 use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunRequest, RunView, Trigger};
+use barca_core::run_explain::{Cancellation, CancelledBy};
 use barca_core::{BarcaError, db};
 use futures::StreamExt;
 use serde::Deserialize;
@@ -30,19 +33,57 @@ use std::collections::HashMap;
 /// `POST /runs` — start a run on this server: `202 {"run_id"}`, or `200` with the `--dry-run`
 /// JSON when `dry_run` is set (nothing starts). The targets are checked first: no run is
 /// started for a request a local `barca get` / `barca run` would refuse.
-pub async fn create(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
-    match create_run(state, &body).await {
+pub async fn create(
+    State(state): State<AppState>,
+    principal: Option<Extension<Principal>>,
+    body: axum::body::Bytes,
+) -> Response {
+    match create_run(state, principal.map(|p| p.0.0), &body).await {
         Ok(response) => response,
         Err(e) => e.into_response(),
     }
 }
 
-async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> {
+/// What started a run over HTTP: the API, by whom (the request's token), and why (#925).
+fn api_trigger(principal: Option<String>, reason: Option<String>) -> Trigger {
+    Trigger {
+        principal,
+        reason,
+        ..Trigger::api()
+    }
+}
+
+/// `RunRequest.reason`, checked: trimmed, one line of at most
+/// [`barca_core::outcome::MAX_REASON_CHARS`] characters; empty is none.
+fn reason_of(request: &RunRequest) -> Result<Option<String>, ApiError> {
+    let Some(reason) = request.reason.as_deref().map(str::trim) else {
+        return Ok(None);
+    };
+    if reason.chars().count() > barca_core::outcome::MAX_REASON_CHARS {
+        return Err(ApiError::BadRequest(format!(
+            "`reason` is longer than {} characters\nSay why in one short line.",
+            barca_core::outcome::MAX_REASON_CHARS
+        )));
+    }
+    if reason.chars().any(char::is_control) {
+        return Err(ApiError::BadRequest(
+            "`reason` holds a control character (a line break, a tab)\nSay why in one line.".into(),
+        ));
+    }
+    Ok((!reason.is_empty()).then(|| reason.to_string()))
+}
+
+async fn create_run(
+    state: AppState,
+    principal: Option<String>,
+    body: &[u8],
+) -> Result<Response, ApiError> {
     let request: RunRequest = serde_json::from_slice(body).map_err(|e| {
         ApiError::BadRequest(format!(
             "the request body is not a run request: {e}\nSend JSON such as {{\"command\": \"get\", \"targets\": [\"daily_report\"]}}."
         ))
     })?;
+    let reason = reason_of(&request)?;
     let files = check_files(&state, &request.files)?;
     if request.command == RunCommand::Run && request.targets.is_empty() {
         return Err(ApiError::BadRequest(
@@ -84,7 +125,7 @@ async fn create_run(state: AppState, body: &[u8]) -> Result<Response, ApiError> 
             targets: request.targets,
             nodes,
             files,
-            trigger: Trigger::api(),
+            trigger: api_trigger(principal, reason),
             values: request.values,
             partition,
             batch: request.batch.clone(),
@@ -155,10 +196,15 @@ async fn dry_run(
 // ─── older trigger routes ───────────────────────────────────────────────────
 
 /// `POST /run` (alias) — get every asset and sensor; `200 {"run_id"}`.
-pub async fn run_all(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+pub async fn run_all(
+    State(state): State<AppState>,
+    principal: Option<Extension<Principal>>,
+) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
     check_any_asset(&state).await?;
-    let run_id = start(state, RunSpec::api(RunCommand::Get, vec![], vec![])).await?;
+    let mut spec = RunSpec::api(RunCommand::Get, vec![], vec![]);
+    spec.trigger = api_trigger(principal.map(|p| p.0.0), None);
+    let run_id = start(state, spec).await?;
     Ok(Json(json!({ "run_id": run_id })))
 }
 
@@ -166,23 +212,27 @@ pub async fn run_all(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
 /// `--refresh-all` does; `200 {"run_id"}`.
 pub async fn run_target(
     State(state): State<AppState>,
+    principal: Option<Extension<Principal>>,
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
     let node = check_target_as(&state, &target, "run", Wording::Route).await?;
     let mut spec = RunSpec::api(RunCommand::Run, vec![target], vec![node]);
     spec.policy = CachePolicy::RefreshAll;
+    spec.trigger = api_trigger(principal.map(|p| p.0.0), None);
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
 /// `POST /get/{target}` (alias) — a cache-aware get of one target; `200 {"run_id"}`.
 pub async fn get_target(
     State(state): State<AppState>,
+    principal: Option<Extension<Principal>>,
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
     let node = check_target_as(&state, &target, "get", Wording::Route).await?;
-    let spec = RunSpec::api(RunCommand::Get, vec![target], vec![node]);
+    let mut spec = RunSpec::api(RunCommand::Get, vec![target], vec![node]);
+    spec.trigger = api_trigger(principal.map(|p| p.0.0), None);
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
@@ -206,12 +256,16 @@ pub async fn status(
 /// `409`.
 pub async fn cancel(
     State(state): State<AppState>,
+    principal: Option<Extension<Principal>>,
     Path(run_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     refuse_if_read_only(&state)?;
+    let principal = principal.map(|p| p.0.0);
     if let Some(waiting) = state.queue.take(&run_id) {
+        let cancellation = queued_cancellation(&state, &run_id, principal);
         if let Some(mut run) = state.runs.get_mut(&run_id) {
             run.cancel_requested = true;
+            run.cancellation = Some(cancellation);
             run.cancel.cancel();
         }
         let ctx = context(waiting.spec.command, &waiting.spec.files);
@@ -235,6 +289,13 @@ pub async fn cancel(
         Some(mut run) => match run.status {
             RunStatus::Pending | RunStatus::Running => {
                 run.cancel_requested = true;
+                run.cancellation = Some(Cancellation {
+                    by: CancelledBy::Request,
+                    principal,
+                    started: run.status == RunStatus::Running,
+                    waiting_behind: Vec::new(),
+                    same_as: None,
+                });
                 run.cancel.cancel();
                 return Ok(Json(json!({ "run_id": run_id, "status": "cancelling" })));
             }
@@ -253,6 +314,58 @@ pub async fn cancel(
     )))
 }
 
+/// How many of the runs a queued run waited behind its cancellation names.
+const WAITING_BEHIND: usize = 10;
+
+/// The cancellation of `run_id`, taken off the queue before it started: the runs executing
+/// then, and one of them doing the same work (the same command, targets and files), if any.
+pub(super) fn queued_cancellation(
+    state: &AppState,
+    run_id: &str,
+    principal: Option<String>,
+) -> Cancellation {
+    let this = state.runs.get(run_id).map(|r| {
+        (
+            r.command.clone(),
+            r.nodes.clone(),
+            r.target.clone(),
+            r.files.clone(),
+        )
+    });
+    let mut running: Vec<(f64, String, bool)> = state
+        .runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Running && r.handle != run_id)
+        .map(|r| {
+            let same = this
+                .as_ref()
+                .is_some_and(|(command, nodes, target, files)| {
+                    *command == r.command
+                        && *files == r.files
+                        && if nodes.is_empty() && r.nodes.is_empty() {
+                            *target == r.target
+                        } else {
+                            *nodes == r.nodes
+                        }
+                });
+            (r.started_at, r.handle.clone(), same)
+        })
+        .collect();
+    running.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let same_as = running.iter().find(|r| r.2).map(|r| r.1.clone());
+    Cancellation {
+        by: CancelledBy::Request,
+        principal,
+        started: false,
+        waiting_behind: running
+            .into_iter()
+            .take(WAITING_BEHIND)
+            .map(|r| r.1)
+            .collect(),
+        same_as,
+    }
+}
+
 // ─── inspection of one run ──────────────────────────────────────────────────
 
 /// `GET /runs/{run_id}` — the run: what started it, where it is and, once finished, its
@@ -263,14 +376,18 @@ pub async fn detail(
     Query(page): Query<StepsQuery>,
 ) -> Result<Json<RunView>, ApiError> {
     let limit = (!page.all).then(|| page.limit.unwrap_or(db::RUN_STEPS_LIMIT));
-    Ok(Json(view_page(&state, &id, limit).await?))
+    let offset = if page.all { 0 } else { page.offset };
+    Ok(Json(view_page(&state, &id, limit, offset).await?))
 }
 
-/// `GET /runs/{run_id}?limit=N` lists at most N of the run's steps (default
-/// [`db::RUN_STEPS_LIMIT`]), `?all=true` every one; `steps_page` says how many there are.
+/// `GET /runs/{run_id}?limit=N&offset=M` lists at most N of the run's steps (default
+/// [`db::RUN_STEPS_LIMIT`]) from the M-th (failed steps first, then as recorded), `?all=true`
+/// every one; `steps_page` says how many there are and where the next page starts.
 #[derive(Debug, Default, Deserialize)]
 pub struct StepsQuery {
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: usize,
     #[serde(default)]
     pub all: bool,
 }

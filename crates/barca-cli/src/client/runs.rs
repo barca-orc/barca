@@ -57,6 +57,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         partition: args.partition.clone(),
         batch: args.batch.clone(),
         allow_paused: args.allow_paused,
+        reason: None,
     };
     let body = serde_json::to_value(&request).expect("a run request is JSON");
     let answer = server

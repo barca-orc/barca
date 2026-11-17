@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { GraphEntry } from './graph'
 import {
   compareEntries,
+  groupOutputNote,
   contentsSummary,
   lastRunDuration,
   distinctNames,
@@ -45,9 +46,10 @@ function state(id: string): NodeState {
       artifact: null,
       format: null,
       size_bytes: null,
+      rows: null,
     },
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     env: [],
     shape: null,
@@ -81,27 +83,27 @@ describe('organizational groups', () => {
       expect(output).toMatchObject({ label: 'fresh', tone: 'success' })
       expect(isFailed(output)).toBe(false)
     }
-    // A fold with no failure: its checks (always_runs) head the summary, its assets are cached.
-    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states)).toMatchObject({ tone: 'neutral', label: expect.stringMatching(/always runs$/) })
+    // A fold with no failure: its checks (which ran and succeeded) and its cached assets are all ok.
+    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states)).toMatchObject({ tone: 'success', label: expect.stringMatching(/^\d+ ok$/) })
     expect(groupPath('group:modeling.py:fold_03__fitting', tree).map((g) => g.name)).toEqual(
       ['Cross-validation', 'Fold 3', 'Model fitting'],
     )
   })
 
-  it('summarizes members in their own words: always_runs checks are not cached, and a missing state is checking', () => {
+  it('summarizes members by health: checks that ran and cached assets are ok, and a missing state is checking', () => {
     const ids = groupLeaves('group:modeling.py:final_training', tree)
     const states = new Map(ids.map((id) => [id, state(id)]))
     const summary = groupHealth(ids, states)
-    expect(summary.tone).toBe('neutral')
-    expect(summary.label).toMatch(/^\d+ always runs$/)
-    expect(summary.hint).toMatch(/always runs · \d+ fresh$/)
+    expect(summary.tone).toBe('success')
+    expect(summary.label).toBe(`${ids.length} ok`)
+    expect(summary.hint).toBe(`${ids.length} ok`)
     states.delete(ids[0]!)
     expect(groupHealth(ids, states).hint).toContain('1 checking')
     states.set(ids[0]!, {
       ...state(ids[0]!),
       cache: { state: 'stale', reason: 'changed', detail: 'Changed' },
     })
-    expect(groupHealth(ids, states)).toMatchObject({ tone: 'warning', label: '1 stale' })
+    expect(groupHealth(ids, states)).toMatchObject({ tone: 'warning', label: '1 behind' })
   })
 
   it('preserves dependencies crossing a collapsed boundary even through a non-output member', () => {
@@ -235,5 +237,15 @@ describe('lastRunDuration', () => {
     expect(lastRunDuration({ ...base, last_materialization: { ...base.last_materialization!, elapsed_seconds: 61 } })).toEqual({ text: '1.0m' })
     expect(lastRunDuration({ ...base, last_materialization: null })).toBeNull()
     expect(lastRunDuration(undefined)).toBeNull()
+  })
+})
+
+describe('groupOutputNote', () => {
+  const output = (detail: string) => ({ cache: { state: 'unknown', reason: 'upstream_failed', detail } }) as unknown as Pick<NodeState, 'cache'>
+
+  it("explains a group's output that is not up to date: what failed upstream of it, then the server's reason", () => {
+    expect(groupOutputNote(output('an input failed'), ['p.py:a', 'p.py:b'])).toBe('Not up to date: 2 failed nodes upstream of it (a, b). An input failed.')
+    expect(groupOutputNote(output(''), ['p.py:a', 'p.py:b', 'p.py:c', 'p.py:d'])).toBe('Not up to date: 4 failed nodes upstream of it (a, b, c and 1 more).')
+    expect(groupOutputNote(output('cached'), [])).toBe('Cached')
   })
 })

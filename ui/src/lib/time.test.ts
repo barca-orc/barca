@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { formatAbsolute, formatAgo, formatClock, formatHour, formatInstant, formatShort, hourOf, isTimeZone, parseTime, zoneName } from './time'
+import { formatAbsolute, formatAgo, formatClock, formatHour, formatInstant, formatRelative, hourOf, isTimeZone, parseTime, zoneName } from './time'
 
 const NOW = Date.parse('2026-10-30T12:00:00Z')
 
@@ -37,10 +37,8 @@ describe('time format', () => {
     expect(zoneName('local', Date.parse('2026-01-15T12:00:00Z'))).toBe('EST')
   })
 
-  it('formats next runs, log lines and histogram hours in the chosen zone', () => {
+  it('formats log lines and histogram hours in the chosen zone', () => {
     const at = Date.parse('2026-10-31T16:00:00Z')
-    expect(formatShort(at, 'utc')).toBe('Oct 31, 16:00 UTC')
-    expect(formatShort(at, 'local')).toBe('Oct 31, 12:00 EDT')
     expect(formatClock('2026-10-31T15:23:56.719Z', 'utc')).toBe('15:23:56.719 UTC')
     expect(formatClock('2026-10-31T15:23:56.719Z', 'local')).toBe('11:23:56.719 EDT')
     expect(formatClock('2026-10-31T15:23:56Z', 'utc')).toBe('15:23:56.000 UTC')
@@ -62,5 +60,16 @@ describe('time format', () => {
     expect(isTimeZone('local')).toBe(true)
     expect(isTimeZone('Europe/Berlin')).toBe(false)
     expect(isTimeZone(null)).toBe(false)
+  })
+})
+
+describe('formatRelative', () => {
+  const now = Date.parse('2026-11-16T12:00:00Z')
+  it('reads a past time as an age and a future one as a countdown', () => {
+    expect(formatRelative(now - 11 * 60_000, now)).toBe('11m ago')
+    expect(formatRelative(now - 3 * 86_400_000, now)).toBe('3d ago')
+    expect(formatRelative(now + 50_000, now)).toBe('in 50s')
+    expect(formatRelative(now + (2 * 60 + 5) * 60_000, now)).toBe('in 2h 5m')
+    expect(formatRelative(now, now)).toBe('just now')
   })
 })

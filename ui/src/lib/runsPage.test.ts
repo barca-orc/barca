@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
 import type { RunSummary } from './types'
-import { activityBarLabel, activityTicks, canLoadMore, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, stepsLabel, runViewSteps, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, failedChipCount, INITIAL_RUNS, runsCountLabel, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, stepsLabel, runViewSteps, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
@@ -49,6 +49,7 @@ describe('run list telemetry', () => {
     id, handle: null, run_id: id, command: 'get', files: [], target: `t_${id}`, status, triggered_by: null,
     scheduled_at: null, schedule_id: null, started_at: new Date(NOW - minutesAgo * 60_000).toISOString(),
     finished_at: null, elapsed_seconds: elapsed, steps_total: null, steps_executed: 0, steps_cached: 0, error: null, first_failure: null,
+    principal: null, trigger_reason: null, cancellation: null,
   })
   const NOW = Date.parse('2026-10-29T12:30:00Z')
   const runs = [run('a', 'success', 5, 1), run('b', 'failed', 10, 3), run('c', 'running', 1, null), run('d', 'cancelled', 90, 5), run('e', 'success', 60 * 30)]
@@ -119,5 +120,28 @@ describe('runFailureLine', () => {
   })
   it('is nothing for a run with nothing to say', () => {
     expect(runFailureLine({ ...run, status: 'success', first_failure: null })).toBeNull()
+  })
+})
+
+describe('the header count', () => {
+  const r = (status: string) => ({ status }) as RunSummary
+  const loaded = [...Array.from({ length: 21 }, () => r('failed')), ...Array.from({ length: 79 }, () => r('success'))]
+  const partial = { runs: loaded, total: 37_955, truncated: true }
+  const all = { filter: 'all' as const, query: '', hour: null }
+  it('is every run the server has while nothing narrows the list', () => {
+    expect(runsCountLabel(partial, 100, all).text).toBe('37,955')
+  })
+  it('says a count over the latest runs loaded is partial', () => {
+    expect(runsCountLabel(partial, 21, { ...all, filter: 'failed' }).text).toBe('21 not successful in the latest 100')
+    expect(runsCountLabel(partial, 1, { ...all, filter: 'live' }).text).toBe('1 in progress in the latest 100')
+    expect(runsCountLabel(partial, 3, { ...all, query: 'orders' }).text).toBe('3 matching in the latest 100')
+    expect(runsCountLabel(partial, 21, { ...all, filter: 'failed' }).title).toContain('Load more')
+  })
+  it('is a share of all runs when all of them are loaded', () => {
+    expect(runsCountLabel({ runs: loaded, total: 100, truncated: false }, 21, { ...all, filter: 'failed' }).text).toBe('21 of 100')
+  })
+  it('the Not successful chip says what it counted over when the list is partial', () => {
+    expect(failedChipCount(partial)).toEqual({ count: 21, title: '21 not successful in the latest 100 runs loaded' })
+    expect(failedChipCount({ runs: loaded, truncated: false })).toEqual({ count: 21, title: undefined })
   })
 })

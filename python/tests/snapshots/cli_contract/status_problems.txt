@@ -24,6 +24,7 @@ nodes[].last_materialization.created_at : string
 nodes[].last_materialization.elapsed_seconds : null
 nodes[].last_materialization.error : string
 nodes[].last_materialization.format : null
+nodes[].last_materialization.rows : null
 nodes[].last_materialization.run_hash : string
 nodes[].last_materialization.size_bytes : null
 nodes[].last_materialization.status : string

@@ -4,6 +4,7 @@ import { plural } from './plural'
 import { shortName, type GraphEntry } from './graph'
 import type { GraphState } from './graphState'
 import { healthCounts, healthLabel, healthParts } from './health'
+import type { Health } from './nodeHealth'
 import { isCheck } from './status'
 import { formatSeconds } from './assetTable'
 
@@ -144,24 +145,28 @@ export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): num
 }
 
 /**
- * A group's box: its most urgent fact, from its members' counts (`healthCounts`). Run work comes
- * first (the group pulses while a run is inside it), then failed last attempts, then the state
- * most in need of attention by rank; the hint names every part. A group has no state of its own:
- * this summarizes its members in their own words.
+ * A group's box: its most severe fact first, from its members' counts (`healthCounts`, ordered
+ * by `healthParts`): failed last attempts, then run work, then the state most in need of
+ * attention by rank; `parts` carries every part, for a card to show the rest compactly, and the
+ * hint names them all. A group with run work and no failure is a run box (it pulses); a failure
+ * inside a group that is also running still leads. A group has no state of its own: this
+ * summarizes its members in their own words.
  */
 export function groupHealth(
   ids: string[],
   states: Map<string, NodeState>,
   live: Record<string, StatusKind> = {},
+  healthOf?: ReadonlyMap<string, Health>,
 ): GraphState {
-  const counts = healthCounts(ids, states, live)
+  const counts = healthCounts(ids, states, live, healthOf)
   const hint = healthLabel(counts) || 'No members with a state.'
-  if (counts.running > 0) {
-    return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: `${counts.running.toLocaleString()} running`, hint }
+  const parts = healthParts(counts).map(({ glyph, tone, count, word, text }) => ({ glyph, tone, count, word, text }))
+  const [first] = parts
+  if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint, parts }
+  if (counts.running > 0 && counts.states.failing === 0) {
+    return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: first.text, hint, parts }
   }
-  const [first] = healthParts(counts, 1)
-  if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint }
-  return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint }
+  return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint, parts }
 }
 
 /** Collapse only visual edges. Real inputs and the original graph stay intact. */
@@ -301,4 +306,18 @@ export function lastRunDuration(node: NodeState | undefined): { text: string; ti
     text: formatRunSeconds(run.elapsed_seconds),
     title: keys ? `Summed over ${keys}${run.failed ? `, ${run.failed.toLocaleString()} failed` : ''} (run ${run.run_id})` : `Run ${run.run_id}`,
   }
+}
+
+/**
+ * Why a group's output node is in the state it is, when it did not fail itself: a group can be
+ * failing while its output reads `unknown` or `stale`, because a member upstream of the output
+ * failed. Names up to three of those members, then the server's own reason (`cache.detail`).
+ */
+export function groupOutputNote(output: Pick<NodeState, 'cache'>, failedUp: readonly string[]): string | null {
+  const detail = output.cache.detail ? `${output.cache.detail[0]!.toUpperCase()}${output.cache.detail.slice(1)}` : ''
+  if (failedUp.length === 0) return detail || null
+  const names = failedUp.slice(0, 3).map(shortName).join(', ')
+  const more = failedUp.length > 3 ? ` and ${failedUp.length - 3} more` : ''
+  const waits = `Not up to date: ${plural(failedUp.length, 'failed node')} upstream of it (${names}${more}).`
+  return detail ? `${waits} ${detail}${/[.!?]$/.test(detail) ? '' : '.'}` : waits
 }

@@ -56,6 +56,8 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
     let mut uncached: Vec<Vec<crate::planner::StreamStep>> =
         vec![Vec::new(); phase_ref.streams.len()];
     let mut due_costs = Vec::new();
+    // The steps that run because they had no cache hit: their history says why (#925).
+    let mut missed = crate::plan_reasons::Missed::default();
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
         if step.kind == crate::NodeKind::Sensor {
@@ -70,6 +72,47 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
         let decision = localize_decision(decision, &step, store);
         step_reports.push(report_for(dag, &step, &decision, false));
         let display_id = step.step_id.display();
+        match &decision {
+            Decision::Run(reason) => {
+                let base = step.step_id.base_id();
+                let steps = step.partition_keys.len().max(1) as u64;
+                match crate::plan_reasons::of_run_reason(base, reason) {
+                    Some(why) => decide_state.plan_tally.add(base, &[why], steps),
+                    None if step.partition_keys.is_empty() => missed.steps.push(display_id.clone()),
+                    None => missed.keys.push((
+                        base.to_string(),
+                        step.partition_keys
+                            .iter()
+                            .map(|k| k.display_id(&step.step_id.base))
+                            .collect(),
+                        false,
+                    )),
+                }
+            }
+            Decision::Partitioned {
+                cached,
+                missing,
+                refresh,
+                ..
+            } if !missing.is_empty() => {
+                let base = step.step_id.base_id();
+                match refresh
+                    .as_ref()
+                    .and_then(|r| crate::plan_reasons::of_run_reason(base, r))
+                {
+                    // A refresh forces every key it names; the others are not refreshed.
+                    Some(why) => decide_state
+                        .plan_tally
+                        .add(base, &[why], missing.len() as u64),
+                    None => missed.keys.push((
+                        base.to_string(),
+                        missing.iter().map(|k| k.display_id(base)).collect(),
+                        !cached.is_empty(),
+                    )),
+                }
+            }
+            _ => {}
+        }
         match decision {
             Decision::Run(_) => {
                 // What the store already holds for a sensor at this run hash: a poll whose data
@@ -160,6 +203,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
     if !due_costs.is_empty() {
         cost_model.seed_exact(db::cost_estimates_for(cache.conn(), &due_costs).await?);
     }
+    crate::plan_reasons::explain(&cache, dag, decide_state, missed).await;
     for (stream, uncached_steps) in phase_ref.streams.iter().zip(uncached) {
         if !uncached_steps.is_empty() {
             uncached_streams.push(crate::planner::WorkerStream {

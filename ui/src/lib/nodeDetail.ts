@@ -4,9 +4,11 @@
  * run history). Nothing here fetches.
  */
 
+import { match } from 'ts-pattern'
 import { formatSeconds } from './assetTable'
 import { plural } from './plural'
-import type { AssetRunEntry, CacheStatus, FailureFacts } from './types'
+import type { AssetRunEntry, CacheStatus, FailureFacts, NodeState, PartitionState } from './types'
+import type { LastRun } from './generated/LastRun'
 import type { RunNodeSummary } from './generated/RunNodeSummary'
 
 /** Nodes that take `id` as an input, sorted by name. */
@@ -272,4 +274,163 @@ export function sinceLastSuccess(
     return { text: `Changed since the last success: ${shown}${more}`, at: last.created_at }
   }
   return { text: 'Run hash differs from the last success; which part changed was not recorded', at: last.created_at }
+}
+
+/** What a `changed` entry is about: its first words (`helper`, `input`, `decorator argument`). */
+const CHANGE_KINDS: ReadonlyArray<{ prefix: string; noun: string; counted: boolean }> = [
+  { prefix: 'code', noun: 'code', counted: false },
+  { prefix: 'kind', noun: 'kind', counted: false },
+  { prefix: 'decorator argument ', noun: 'decorator argument', counted: true },
+  { prefix: 'decorator ', noun: 'decorator', counted: true },
+  { prefix: 'helper ', noun: 'helper', counted: true },
+  { prefix: 'input ', noun: 'input', counted: true },
+  { prefix: 'sensor ', noun: 'sensor', counted: true },
+  { prefix: 'env ', noun: 'env var', counted: true },
+  { prefix: 'value ', noun: 'key value', counted: true },
+]
+
+/**
+ * `changed` (what moved the run hash) in a few words: `code, 2 inputs, 15 helpers`, in the order
+ * the kinds first appear. An entry of no known kind is named as it is.
+ */
+export function changedSummary(changed: readonly string[]): string {
+  const counts = new Map<string, { noun: string; counted: boolean; n: number }>()
+  for (const entry of changed) {
+    const kind = CHANGE_KINDS.find((k) => (k.counted ? entry.startsWith(k.prefix) : entry === k.prefix))
+    const key = kind?.noun ?? entry
+    const seen = counts.get(key)
+    if (seen) seen.n += 1
+    else counts.set(key, { noun: kind?.noun ?? entry, counted: kind?.counted ?? false, n: 1 })
+  }
+  return [...counts.values()].map((c) => (c.counted ? plural(c.n, c.noun) : c.noun)).join(', ')
+}
+
+/** Consecutive runs of the History that failed the same way, as one line. */
+export interface RunGroup {
+  /** The newest of them. */
+  run: AssetRunEntry
+  count: number
+  /** When the oldest of them was recorded. */
+  oldestAt: string
+}
+
+/** An error's first line, to tell whether two runs failed the same way. */
+export function errorFirstLine(error: string | null | undefined): string {
+  return (error ?? '').trim().split('\n')[0]!.trim()
+}
+
+/**
+ * `runs` (newest first) with each stretch of identical failures folded into one entry: the same
+ * status, the same error's first line and, for a partitioned node, the same key counts. A
+ * schedule that fails every minute reads as one line, `×12`, not twelve. Successes stay apart.
+ */
+export function collapseRuns(runs: readonly AssetRunEntry[]): RunGroup[] {
+  const out: RunGroup[] = []
+  for (const run of runs) {
+    const last = out.at(-1)
+    const same = last && run.status !== 'success' && last.run.status === run.status
+      && errorFirstLine(last.run.error_message) === errorFirstLine(run.error_message)
+      && (last.run.keys ?? null) === (run.keys ?? null) && (last.run.failed_keys ?? null) === (run.failed_keys ?? null)
+    if (last && same) {
+      last.count += 1
+      last.oldestAt = run.created_at
+    } else out.push({ run, count: 1, oldestAt: run.created_at })
+  }
+  return out
+}
+
+/** `158 runs recorded`: a node's total in its history, never to be read as a failing streak. */
+export function runsRecorded(total: number): string {
+  return `${total.toLocaleString()} ${total === 1 ? 'run' : 'runs'} recorded`
+}
+
+/**
+ * Why the History has no durations, when every run it lists failed. The list is the newest runs
+ * only, so it claims "all" only when the failing streak covers every run recorded; otherwise it
+ * names the streak, as the list and the failures view do.
+ */
+export function failuresOnlyNote(total: number, streak: number, listed: number, partitioned: boolean): string {
+  if (streak >= total) {
+    return partitioned
+      ? `No run has computed every key yet (${total === 1 ? 'its only run' : `all ${total.toLocaleString()} runs`} had keys fail), so there are no durations to show.`
+      : `No successful run yet: ${total === 1 ? 'its only attempt' : `all ${total.toLocaleString()} attempts`} failed, so there are no durations to show.`
+  }
+  const n = Math.max(streak, listed)
+  return partitioned
+    ? `Keys failed in each of the last ${n.toLocaleString()} runs (${runsRecorded(total)}), so there are no recent durations to show.`
+    : `The last ${n.toLocaleString()} runs failed (${runsRecorded(total)}), so there are no recent durations to show.`
+}
+
+/**
+ * A partitioned node's keys at a glance, the first thing its panel says: how many there are, how
+ * many have a cached result, how many of those wrote no rows (when barca counted rows), and what
+ * its newest run did to them. The newest run's figures are left out until a run recorded keys.
+ */
+export type KeyFigure = { id: 'total' | 'cached' | 'empty' | 'rebuilt' | 'failed'; label: string; value: number }
+
+export function keyFigures(
+  partitions: Pick<PartitionState, 'total' | 'cached' | 'empty'>,
+  lastRun: Pick<LastRun, 'keys' | 'failed'> | null | undefined,
+): KeyFigure[] {
+  const figures: KeyFigure[] = [
+    { id: 'total', label: 'keys', value: partitions.total },
+    { id: 'cached', label: 'cached', value: partitions.cached },
+  ]
+  if (partitions.empty) figures.push({ id: 'empty', label: 'wrote 0 rows', value: partitions.empty })
+  if (lastRun && lastRun.keys > 0) {
+    figures.push({ id: 'rebuilt', label: 'rebuilt in the last run', value: Math.max(lastRun.keys - lastRun.failed, 0) })
+    figures.push({ id: 'failed', label: 'failed in the last run', value: lastRun.failed })
+  }
+  return figures
+}
+
+/** `1,205 rows`, `1 row`; null when barca did not count them. */
+export function rowsLabel(rows: number | null | undefined): string | null {
+  if (rows === null || rows === undefined) return null
+  return `${rows.toLocaleString()} ${rows === 1 ? 'row' : 'rows'}`
+}
+
+/**
+ * Which output a node's Data tab inspects, and why. A node without keys has one output. A
+ * partitioned node's is one key: the newest key recorded when it succeeded; when that key's
+ * last attempt failed, the result the key still has cached from an earlier run (if any), never
+ * an error in place of data.
+ */
+export type DataKey =
+  | { kind: 'whole' }
+  | { kind: 'none' }
+  | { kind: 'newest'; key: string }
+  | { kind: 'cached'; key: string }
+
+export function dataKey(node: Pick<NodeState, 'partitioned' | 'last_materialization'>): DataKey {
+  if (!node.partitioned) return { kind: 'whole' }
+  const last = node.last_materialization
+  if (!last?.partition) return { kind: 'none' }
+  return last.status === 'success' ? { kind: 'newest', key: last.partition } : { kind: 'cached', key: last.partition }
+}
+
+/** The sentence over a partitioned node's output in the Data tab: which key, and why that one. */
+export function dataKeyNote(choice: DataKey, hasCached: boolean | null): string | null {
+  return match(choice)
+    .with({ kind: 'whole' }, () => null)
+    .with({ kind: 'none' }, () => 'No key has been recorded yet.')
+    .with({ kind: 'newest' }, ({ key }) => `Key ${key}: the newest key recorded, which succeeded.`)
+    .with({ kind: 'cached' }, ({ key }) =>
+      hasCached === null
+        ? `Key ${key}: the newest key recorded. Its last attempt failed; looking for its cached result…`
+        : hasCached
+          ? `Key ${key}: the newest key recorded. Its last attempt failed, so this is the result it still has cached from an earlier run.`
+          : `Key ${key}: the newest key recorded. Its last attempt failed and it has no cached result; open the key explorer to inspect another key.`)
+    .exhaustive()
+}
+
+/**
+ * What a Run of a partitioned node computes, when some keys need it: only those, when others are
+ * cached; every key, when none is (`Run computes all 1,205 keys; none is cached`). Null when
+ * nothing needs computing.
+ */
+export function runScopeNote(needed: number, total: number): string | null {
+  if (needed <= 0) return null
+  if (needed >= total) return total === 1 ? 'Run computes its one key; it has no cached result.' : `Run computes all ${total.toLocaleString()} keys; none is cached.`
+  return `Run computes only these ${plural(needed, 'key')}; the other ${plural(total - needed, 'key')} stay cached.`
 }

@@ -208,7 +208,21 @@ tracebacks (at most 1000 steps unless `--limit N` or `--all` asks for more; `ste
 many there are). For a finished run whose plan the server can still rebuild from the sources,
 `steps_page.nodes` lists every planned node in plan order with a `status`: `ran`, `cached`, or
 `skipped` with `blocked_by` naming the failed node upstream of it (experimental; the local
-`barca history RUN_ID` lists only the nodes with recorded steps). A run only this machine has (a failed run against the ledger is never posted) fails
+`barca history RUN_ID` lists only the nodes with recorded steps). The run also says why it
+executed what it did (`run.plan_reasons`: never run, new keys, a failed last attempt, which
+code, input or env component changed, a refresh, a missing artifact), who asked for it
+(`principal`, the token of its request) and why (`trigger_reason`, the `reason` its
+`POST /runs` gave), and for a cancelled run who cancelled it and whether it had started
+(`cancellation`; [CLI Contract: history](/reference/cli-contract/#history)). `GET /runs/{run_id}?offset=N` pages through
+the steps (`steps_page.next_offset`), and while a run goes it shows its newest 5,000 spooled
+lines in `logs`.
+
+Two identical requests are two runs: the server does not deduplicate them. With a free run slot
+the second starts at once and waits on the steps the first is computing (it takes their
+results as cache hits); otherwise it waits in the queue. A run cancelled while it waits
+(`DELETE /runs/{run_id}`, which the first Ctrl-C of a `--server` client sends) ends `cancelled`
+with no steps, and its `cancellation` says so: `started: false`, the runs it waited behind, and
+`same_as`, the one doing the same work. A run only this machine has (a failed run against the ledger is never posted) fails
 (exit 2) with the remediation `this run is on this machine: barca history RUN_ID --local`.
 
 `barca status` (without `--server`) also says what this machine holds. Each node in `--json`
@@ -469,6 +483,39 @@ The selected node shows as running as soon as the server accepts it; View run op
 durable status, steps and logs. Ungrouped list panels offer the same action.
 The full schemas are in `specs/interfaces/server-api.openapi.yaml`; every route is
 described at [Server API Endpoints](/reference/server-api-endpoints/).
+
+### Data health
+
+Each row of `GET /state` carries `signals`: what the node's recorded results say about its data,
+computed by the server from facts the metadata DB holds (row counts its workers recorded, when
+each result was written), never by reading an artifact. An empty list means nothing does. Only
+assets have signals, in this order:
+
+| `kind` | When | Fields |
+|---|---|---|
+| `empty` | its latest successful result wrote no rows: for a partitioned node, some keys' latest successful results | `empty_keys` of `keys` (the keys whose latest result recorded a count; 1 of 1 without keys), `previous_empty_keys`: how many were empty before its newest run, `null` when no key had a counted result before it |
+| `rows_changed` | a latest successful result's row count differs from the one before it, same node and key, by more than half of it (any rows after an empty result count) | `rows` and `previous_rows` of `key` (`null` without keys), the key that moved the most relative to before; `changed_keys`: how many moved |
+| `behind_input` | its cache state is `unknown` (nothing else says it is behind, typically a `collect()` fan-in below a pending cutoff) and its latest successful result is older than the newest successful result of an asset it reads, from another run | `input` (the input with the newest result), `input_success_at`, `last_success_at` (UTC `YYYY-MM-DD HH:MM:SS`) |
+
+A count no worker recorded ([barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)) raises no signal. A signal
+stays until the next successful result of the node (or key) replaces the one it is about; there
+is no acknowledgement yet. A `stale`, `partial` or `blocked` node gets no `behind_input`: its
+state already says it will run.
+
+```bash
+curl -s localhost:8274/state | jq '.[] | select(.signals != []) | {id, signals}'
+```
+
+A scheduled node's row also has `prev_run`, the cron's most recent fire time at or before now,
+beside `next_run` (unix seconds, in the server's `--timezone`), and `late_since`: the first slot
+after the tick of the newest run its schedule started (`scheduled_at`, `barca docs
+scheduling`), when that slot has passed, so no run has started for it yet (the queue is deep, or
+the server that fires the schedule is down). `late_since` is
+`null` while on time, while the schedule is paused and when no scheduled run is recorded. The web
+UI's Schedules page shows such a schedule as `late by 12m` instead of a countdown, once the slot
+is a minute old (half the interval for a schedule more frequent than every two minutes). A
+`--read-only` server reads the same runs from the shared metadata, so its `late_since` is the
+scheduling server's lateness, with slots in its own `--timezone`.
 
 See also: [Scheduling With Cron](/scheduling/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 

@@ -1,45 +1,48 @@
 import { useTimeZone } from '@/context/timeZone'
-import { formatAbsolute, formatAgo, formatInstant } from '@/lib/time'
+import { useNow } from '@/hooks/useNow'
+import { successOfLabel, type AgeCell } from '@/lib/health'
+import { formatInstant, formatRelative, parseTime } from '@/lib/time'
 
 export interface AgeProps {
-  /** A time as the server writes it. */
-  at: string
-  nowMs: number
-}
-
-/** How long ago, with the absolute time on hover: the one way a time is shown. */
-export function Age({ at, nowMs }: AgeProps) {
-  const { zone } = useTimeZone()
-  return <time dateTime={at} title={formatAbsolute(at, zone)}>{formatAgo(at, nowMs)}</time>
-}
-
-export interface AbsoluteProps {
   /** A time as the server writes it, or ms since the epoch; `null` is shown as a dash. */
   at: string | number | null
+  /**
+   * What the time is relative to: the fetch time of the data it came with, so it changes with
+   * the data. Without it, the time now (refreshed every 15 s).
+   */
+  nowMs?: number
 }
 
-/** An absolute time in the reader's zone, zone named: run start and finish, next run, expiry. */
-export function Absolute({ at }: AbsoluteProps) {
+/**
+ * The one way a time is shown: relative (`3h ago`, `in 5m`), the absolute time in the reader's
+ * zone on hover. A run's start, a next run, a token's expiry all read the same.
+ */
+export function Age({ at, nowMs }: AgeProps) {
   const { zone } = useTimeZone()
+  const ticking = useNow(nowMs === undefined)
   if (at === null) return <>–</>
-  if (typeof at === 'number') return <time dateTime={new Date(at).toISOString()}>{formatInstant(at, zone)}</time>
-  return <time dateTime={at}>{formatAbsolute(at, zone)}</time>
+  const ms = typeof at === 'number' ? at : parseTime(at)
+  if (ms === null) return <>{at}</>
+  return <time dateTime={new Date(ms).toISOString()} title={formatInstant(ms, zone)}>{formatRelative(ms, nowMs ?? ticking)}</time>
 }
 
 export interface LastSuccessProps {
-  at: string | null
-  failingSince: string | null
-  failures: number
+  /** What the cell says (`ageCell` in `lib/health.ts`). */
+  cell: AgeCell
   nowMs: number
 }
 
-/** The age a table row answers: its last success and, while failing, since when and how often. */
-export function LastSuccess({ at, failingSince, failures, nowMs }: LastSuccessProps) {
+/**
+ * The age a table row answers: its last success, whose it is when not the row's own (`any key`,
+ * `oldest member`), and, while failing, since when and how many runs in a row.
+ */
+export function LastSuccess({ cell, nowMs }: LastSuccessProps) {
+  const of = cell.success ? successOfLabel(cell.success.of) : null
   return <>
-    {at ? <Age at={at} nowMs={nowMs} /> : <span className="barca-cell-sub">never</span>}
-    {failingSince && (
-      <div className="barca-cell-sub">
-        failing since <Age at={failingSince} nowMs={nowMs} /> · {failures} {failures === 1 ? 'run' : 'runs'}
+    {cell.success ? <><Age at={cell.success.at} nowMs={nowMs} />{of && <span className="barca-cell-sub"> · {of}</span>}</> : <span className="barca-cell-sub">never</span>}
+    {cell.failing && (
+      <div className="barca-cell-sub barca-age-failing">
+        {cell.failing.lead} since <Age at={cell.failing.since} nowMs={nowMs} />{cell.failing.tail}
       </div>
     )}
   </>

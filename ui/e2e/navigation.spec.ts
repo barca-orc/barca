@@ -33,9 +33,9 @@ test('primary sections are separate from the Assets view toggle', async ({ page 
   await expect(row).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('complementary', { name: 'numbers details' })).toBeVisible()
 
+  // Tasks opens unfiltered, as every page does: its controls show the filter in effect.
   await navigation.getByRole('link', { name: 'Tasks', exact: true }).click()
-  await page.getByRole('button', { name: /^Show all/ }).click()
-  await expect(page).toHaveURL(/state=all/)
+  await expect(page.getByRole('combobox', { name: 'Last run' })).toHaveValue('any')
   await expect(page.locator('.barca-table tbody tr')).toHaveCount(2)
   await expect(page.getByRole('row', { name: /say_hello/ })).toBeVisible()
   await expect(toggle).toHaveCount(0)

@@ -342,6 +342,55 @@ def publish_file(
     return size, digest, (str(snapshot) if snapshot is not None else None)
 
 
+def row_count(value: Any, path: "Path | str | None", fmt: str) -> int | None:
+    """How many rows a tabular result holds, when that is cheap to know exactly: the length of
+    an in-memory frame (a pandas or polars DataFrame, a pyarrow Table) whatever format it was
+    written in, or the row count in a written parquet file's footer (a LazyFrame or a DuckDB
+    relation, which ran while it was written, and a batched call's per-key file). None for
+    anything else, a CSV written from a lazy frame or a relation included: counting it would
+    read the whole file. Never raises: a count that cannot be read is unknown, not an error."""
+    try:
+        kind = dataframe_library(value)
+        name = type(value).__name__
+        if kind == "pandas" and name == "DataFrame":
+            return len(value)
+        if kind == "polars" and name == "DataFrame":
+            return int(value.height)
+        if kind == "pyarrow":
+            return int(value.num_rows)
+        if fmt == "parquet" and path is not None:
+            return _parquet_rows(str(path))
+    except Exception:
+        return None
+    return None
+
+
+def _parquet_rows(path: str) -> int | None:
+    """The row count in a parquet file's footer, read with whichever library is installed:
+    only the footer is read, never the data."""
+    import importlib.util
+    import sys
+
+    if "pyarrow" in sys.modules or importlib.util.find_spec("pyarrow") is not None:
+        import pyarrow.parquet as pq
+
+        return int(pq.read_metadata(path).num_rows)
+    if "duckdb" in sys.modules or importlib.util.find_spec("duckdb") is not None:
+        import duckdb
+
+        con = duckdb.connect()
+        try:
+            row = con.execute("SELECT num_rows FROM parquet_file_metadata(?)", [path]).fetchone()
+        finally:
+            con.close()
+        return int(row[0]) if row is not None else None
+    if "polars" in sys.modules or importlib.util.find_spec("polars") is not None:
+        import polars as pl
+
+        return int(pl.scan_parquet(path).select(pl.len()).collect().item())
+    return None
+
+
 def _write_csv(value: Any, path: Path) -> None:
     """Write tabular CSV with a header and no pandas index column."""
     kind = dataframe_library(value)

@@ -30,3 +30,41 @@ test('failed state requests leave nodes neutral and fully visible',async({page})
   await expect(page.locator('.react-flow__node .barca-dag[data-tone="neutral"]')).toHaveCount(5)
   await expect(page.locator('.react-flow__node .barca-dag[data-failed]')).toHaveCount(0)
 })
+
+test('a navigation keeps each card\'s last known state while the new scope\'s state loads', async ({ page }) => {
+  const rows = assets.map((a, i) => ({ ...a, name: a.id.split(':')[1], partitioned: false, cache: { state: 'cached', reason: 'materialized', detail: 'demo' }, last_materialization: i === 2 ? { status: 'failed', error: 'validation failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null } : null, shape: null, env: [], durations: null, next_run: null }))
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/assets', (route) => route.fulfill({ json: assets }))
+  await page.route('**/groups', (route) => route.fulfill({ json: [] }))
+  await page.route(/\/state(?:\?.*)?$/, async (route) => {
+    // The pipeline's own state is held back; the whole project's answers at once.
+    if (route.request().url().includes('files=')) await held
+    await route.fulfill({ json: rows })
+  })
+  await page.goto('/ui/#/assets?view=graph')
+  const validate = page.locator('.react-flow__node').filter({ hasText: 'validate' }).locator('.barca-dag')
+  await expect(validate).toHaveAttribute('data-failed', 'true')
+  await page.evaluate(() => { location.hash = '/assets?view=graph&pipeline=demo.py' })
+  await expect(page).toHaveURL(/pipeline=demo\.py/)
+  await page.waitForTimeout(300)
+  await expect(page.locator('.react-flow__node')).toHaveCount(5)
+  // Not one card reads Checking…: each keeps what it last said.
+  await expect(page.locator('.react-flow__node .barca-dag[data-glyph="pending"]')).toHaveCount(0)
+  await expect(validate).toHaveAttribute('data-failed', 'true')
+  release()
+})
+
+test('only a page that has never loaded state shows Checking…', async ({ page }) => {
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/assets', (route) => route.fulfill({ json: assets }))
+  await page.route('**/groups', (route) => route.fulfill({ json: [] }))
+  await page.route(/\/state(?:\?.*)?$/, async (route) => {
+    await held
+    await route.fulfill({ json: [] })
+  })
+  await page.goto('/ui/#/assets?view=graph')
+  await expect(page.locator('.react-flow__node .barca-dag[data-glyph="pending"]')).toHaveCount(5)
+  release()
+})

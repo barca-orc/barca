@@ -51,6 +51,14 @@ export function runLabel(status: string): string {
   return known === 'pending' ? 'queued' : known ?? status
 }
 
+/** The runs list's poll: every 2s while a listed run is live (its status changes), else every 10s. */
+export const RUNS_LIVE_POLL_MS = 2_000
+export const RUNS_IDLE_POLL_MS = 10_000
+
+export function runsPollInterval(runs: readonly { status: string }[] | undefined): number {
+  return runs?.some((r) => runIsLive(r.status)) ? RUNS_LIVE_POLL_MS : RUNS_IDLE_POLL_MS
+}
+
 /** `pending` and `running` are live; every other status is terminal. */
 export function runIsLive(status: string): boolean {
   const known = parseRunStatus(status)

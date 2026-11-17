@@ -29,7 +29,7 @@ use barca_core::time::{now_secs_f64 as now_ts, rfc3339_millis as timestamp};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The queue of one server.
 pub struct Queue {
@@ -44,6 +44,19 @@ pub struct Queue {
     /// Set when the drain deadline passed: the runs it stops go back to the queue instead of
     /// ending `cancelled`.
     pub requeue: AtomicBool,
+    /// A `--read-only` server's last read of the queue the metadata DB records, as `GET /health`
+    /// reports it without waiting on a read: (paused, queued, running) and when it was read.
+    recorded: Mutex<Option<(RecordedCounts, std::time::Instant)>>,
+    /// A background read of the recorded queue is in flight.
+    recording: AtomicBool,
+}
+
+/// The counts of a recorded queue: paused, queued, running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedCounts {
+    pub paused: bool,
+    pub queued: usize,
+    pub running: usize,
 }
 
 /// A run waiting to start.
@@ -60,6 +73,27 @@ impl Queue {
             admit: tokio::sync::Mutex::new(()),
             max_runs: max_runs.max(1),
             requeue: AtomicBool::new(false),
+            recorded: Mutex::new(None),
+            recording: AtomicBool::new(false),
+        }
+    }
+
+    /// Note what a read of the recorded queue found.
+    fn note_recorded(&self, view: &QueueView) {
+        let counts = RecordedCounts {
+            paused: view.paused,
+            queued: view.queued.len(),
+            running: view.running.len(),
+        };
+        *self.recorded.lock().unwrap() = Some((counts, std::time::Instant::now()));
+    }
+
+    /// The last recorded counts, and whether they are older than `max_age` (or missing).
+    fn recorded(&self, max_age: std::time::Duration) -> (Option<RecordedCounts>, bool) {
+        let got = *self.recorded.lock().unwrap();
+        match got {
+            Some((counts, at)) => (Some(counts), at.elapsed() > max_age),
+            None => (None, true),
         }
     }
 
@@ -302,6 +336,7 @@ fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, chann
             outcome: None,
             cancel,
             cancel_requested: false,
+            cancellation: None,
         },
     );
     state.events.insert(run_id.to_string(), channel);
@@ -605,7 +640,7 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             queued.push(item);
         }
     }
-    Ok(QueueView {
+    let view = QueueView {
         paused: paused_at.is_some(),
         paused_at: paused_at.map(barca_core::outcome::rfc3339),
         draining: state.is_draining(),
@@ -613,7 +648,9 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
         running,
         queued,
         capacity: None,
-    })
+    };
+    state.queue.note_recorded(&view);
+    Ok(view)
 }
 
 /// `GET /queue` — the runs executing and the runs waiting, in order, and whether the queue is
@@ -667,11 +704,35 @@ pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, Ap
 }
 
 /// `queue` of `GET /health`: whether the queue is paused and how many runs wait and execute.
+/// A `--read-only` server runs nothing itself, so it reports the queue the metadata DB records
+/// (what `GET /queue` lists), not its own empty one. `/health` never waits on a read: it reports
+/// the last recorded counts (read by `GET /queue`, or in the background when they are older than
+/// a few seconds) and its own counts until there are any.
 pub fn health(state: &AppState) -> serde_json::Value {
+    let mut paused = state.queue.paused_at().is_some();
+    let mut queued = state.queue.waiting_ids().len();
+    let mut running = state
+        .runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Running)
+        .count();
+    if state.config.read_only {
+        let (recorded, old) = state.queue.recorded(std::time::Duration::from_secs(5));
+        if let Some(c) = recorded {
+            (paused, queued, running) = (c.paused, c.queued, c.running);
+        }
+        if old && !state.queue.recording.swap(true, Ordering::AcqRel) {
+            let state = state.clone();
+            tokio::spawn(async move {
+                let _ = recorded_view(&state).await;
+                state.queue.recording.store(false, Ordering::Release);
+            });
+        }
+    }
     serde_json::json!({
-        "paused": state.queue.paused_at().is_some(),
-        "queued": state.queue.waiting_ids().len(),
-        "running": state.runs.iter().filter(|r| r.status == RunStatus::Running).count(),
+        "paused": paused,
+        "queued": queued,
+        "running": running,
         "max_runs": state.queue.max_runs,
         "capacity": state.capacity.as_ref().map(|c| {
             let s = c.snapshot();
@@ -690,6 +751,10 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     fn state(dir: &std::path::Path) -> AppState {
+        state_with(dir, false)
+    }
+
+    fn state_with(dir: &std::path::Path, read_only: bool) -> AppState {
         let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
         resolved.db_path = dir.join("metadata.db").display().to_string();
         resolved.server_max_runs = Some(1);
@@ -702,8 +767,30 @@ mod tests {
             timezone: "utc".into(),
             python: "/nonexistent-barca-python".into(),
             resolved,
-            read_only: false,
+            read_only,
         })
+    }
+
+    #[test]
+    fn a_read_only_server_reports_the_recorded_queue_in_health() {
+        crate::test_support::bounded(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let writer = state(dir.path());
+            let _ = pause(State(writer.clone())).await.unwrap();
+            for target in ["a", "b"] {
+                let spec = RunSpec::api(RunCommand::Get, vec![target.into()], vec![]);
+                admit(&writer, spec).await.unwrap();
+            }
+            let reader = state_with(dir.path(), true);
+            // Health never waits on a read: the first answer starts one in the background.
+            let _ = health(&reader);
+            let listed = get(State(reader.clone())).await.unwrap().0;
+            assert_eq!(listed.queued.len(), 2);
+            let health = health(&reader);
+            assert_eq!(health["queued"], 2, "/health and /queue agree: {health}");
+            assert_eq!(health["paused"], true, "{health}");
+            assert_eq!(health["running"], 0, "{health}");
+        });
     }
 
     #[test]

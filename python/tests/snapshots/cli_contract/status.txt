@@ -26,6 +26,7 @@ nodes[].last_materialization.elapsed_seconds : null|number
 nodes[].last_materialization.error : string  (optional)
 nodes[].last_materialization.format : null|string
 nodes[].last_materialization.partition : string  (optional)
+nodes[].last_materialization.rows : integer|null
 nodes[].last_materialization.run_hash : string
 nodes[].last_materialization.size_bytes : integer|null
 nodes[].last_materialization.status : string

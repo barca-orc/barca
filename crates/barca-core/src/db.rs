@@ -21,15 +21,16 @@ pub use barca_db::db::{
 pub use barca_db::db::{
     AliveRun, LogEntry, RUN_STEPS_LIMIT, RunRecord, RunStep, RunTotals, StepsPage,
     alive_running_runs, alive_running_runs_in, attach_trace_ids, count_runs, generate_run_id,
-    get_logs, get_recent_runs, get_run, get_run_outcome, get_run_steps_page, get_run_traced,
-    replace_run_outcome, run_artifact, run_node_summaries, set_run_outcome,
+    get_logs, get_recent_runs, get_run, get_run_outcome, get_run_steps_page, get_run_steps_window,
+    get_run_traced, replace_run_outcome, run_artifact, run_node_summaries, set_cancellation,
+    set_run_outcome,
 };
 
 // Assets: stats, ages, durations, partitions, step rows, pins and their versions.
 pub use barca_db::db::{
     AssetPin, AssetRunEntry, AssetStats, BytesChange, NodeAge, NodeAgesIndex, PartitionKeys,
-    PartitionKeysFilter, StepRow, Version, failure_facts, get_asset_stats, node_ages,
-    partition_keys, read_step_rows, recent_durations,
+    PartitionKeysFilter, RowChange, RowFacts, StepRow, Version, failure_facts, get_asset_stats,
+    node_ages, partition_keys, read_step_rows, recent_durations,
 };
 
 // The scheduler's durable state: last ticks, schedule pauses, failure streaks.

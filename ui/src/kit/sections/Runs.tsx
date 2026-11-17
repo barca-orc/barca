@@ -1,14 +1,18 @@
 import { LogViewer, RunningBadge } from '@/components'
+import { QueueStatusView } from '@/components/QueueStatus'
 import { ResetDatabaseDialog } from '@/components/ResetDatabase'
 import { ArtifactSchema } from '@/components/assets/ArtifactSchema'
 import { NodeInspector } from '@/components/graph/NodeInspector'
+import { RunOverviewView } from '@/components/runs/RunOverview'
 import { liveGraphState } from '@/lib/graphState'
 import type { ListNode, LogLine, StatusKind } from '@/lib/types'
 import {
   NOW_MS,
   feedbackInputs,
   logLines,
+  queueStatusStates,
   resetPhases,
+  runOverviews,
   runningByStep,
   runningPartitioned,
   schemaNodes,
@@ -44,6 +48,14 @@ export function Runs() {
         <Variant label="live"><LogViewer lines={logLines.slice(0, 3)} live height={120} style={{ width: 360 }} /></Variant>
       </Spec>
 
+      <Spec title="QueueStatus" note="The sidebar's queue line, on every page while runs wait or the queue holds them; links to Runs. Nothing without a queue.">
+        {Object.entries(queueStatusStates).map(([label, status]) => (
+          <Variant key={label} label={label}>
+            <div className="barca-side-links" style={{ width: 215 }}><QueueStatusView status={status} /></div>
+          </Variant>
+        ))}
+      </Spec>
+
       <Spec title="RunningBadge" note="A node a run works on now, with elapsed time; links to the run.">
         {variants(runningByStep).map((step) => (
           <Variant key={step} label={step}><RunningBadge running={runningByStep[step]} nowMs={NOW_MS} /></Variant>
@@ -73,6 +85,14 @@ export function Runs() {
               />
             </div>
           )}
+        />
+      </Spec>
+
+      <Spec title="RunOverviewView" note="The top of a run's panel: why its steps ran, who asked and why, attempts against steps, a cancellation, and while it runs how far it is (issue 925).">
+        <States
+          label="Run"
+          states={runOverviews}
+          render={(s) => <div className="barca-kit-panel"><RunOverviewView run={s.run} active={s.active} groups={s.groups} nowMs={s.nowMs} /></div>}
         />
       </Spec>
 

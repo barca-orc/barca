@@ -4,6 +4,7 @@ import { CommandPaletteView } from '@/components/CommandPaletteView'
 import { useAssets } from '@/hooks/useAssets'
 import { useWholeState } from '@/hooks/useAssetStates'
 import { useGroups } from '@/hooks/useGroups'
+import { groupPath, groupTree, leavesByGroup } from '@/lib/groups'
 import { usePartitionKeySearch } from '@/hooks/usePartitionKeys'
 import { useProgram } from '@/hooks/useProgram'
 import { useRuns } from '@/hooks/useRuns'
@@ -40,11 +41,17 @@ export function CommandPalette({ run, onRun, onClose }: CommandPaletteProps) {
   const assets = assetQuery.data
   const groups = useGroups().data
   const runs = useRuns(RECENT_RUNS).data?.runs
-  const index = useMemo(() => paletteIndex(assets ?? [], groups ?? [], runs ?? []), [assets, groups, runs])
+  // Every node's state, whatever is open: each result's glyph, and what a key query asks.
+  const states = useWholeState().data
+  const known = useMemo(() => {
+    const tree = groupTree(groups ?? [])
+    const placeOf = new Map((groups ?? []).map((g) => [g.id, groupPath(tree.parents.get(g.id) ?? null, tree).map((p) => p.name).join(' › ')]))
+    return { byId: new Map((states ?? []).map((n) => [n.id, n])), leavesOf: leavesByGroup(tree), placeOf }
+  }, [states, groups])
+  const index = useMemo(() => paletteIndex(assets ?? [], groups ?? [], runs ?? [], known), [assets, groups, runs, known])
   const canGraph = location.pathname === '/assets' && !new URLSearchParams(location.search).has('view')
   const actions = paletteActions(run && !run.disabled ? run.label : null, canGraph)
   // A key lives on a partitioned node, which every node's state (`GET /state`) knows, whatever is open; the first few are asked.
-  const states = useWholeState().data
   const partitioned = useMemo(() => states?.filter((n) => n.partitioned).map((n) => n.id).slice(0, KEY_SEARCH_NODES) ?? NO_NODES, [states])
   const keyQuery = useDebounced(isKeyQuery(model.query) ? model.query.trim() : '', KEY_SEARCH_DEBOUNCE_MS)
   const { hits, searching, answeredAt } = usePartitionKeySearch(partitioned, keyQuery)

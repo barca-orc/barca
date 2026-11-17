@@ -15,11 +15,12 @@ function dayRegion(states: string, extra: Partial<PartitionGrid> = {}): Partitio
       { name: 'region', values: ['emea', 'apac'] },
     ],
     states,
-    counts: { pinned: 0, fresh: 0, stale: 0, never_run: 0, failed: 0, blocked: 0 },
+    counts: { pinned: 0, fresh: 0, stale: 0, never_run: 0, failed: 0, blocked: 0, empty: 0 },
     attempted_base: 1000,
     attempted_at: [0, 0, 5, 5, null, null],
     elapsed_ms: [10, 12, 9, 40, null, null],
     size_bytes: [100, 100, 90, null, null, null],
+    rows: [10, 10, 0, null, null, null],
     run: [0, 0, 1, 1, null, null],
     error: { '3': 0 },
     errors: [{ error: 'no rows for <region> on <day>', keys: 1 }],
@@ -44,7 +45,8 @@ describe('a grid', () => {
     expect([0, 1, 2, 3, 4, 5].map((c) => stateOf(g, c))).toEqual(['fresh', 'fresh', 'stale', 'failed', 'never_run', null])
     expect(errorOf(g, 3)).toEqual({ index: 0, text: 'no rows for <region> on <day>' })
     expect(errorOf(g, 2)).toBeNull()
-    expect(attemptOf(g, 3)).toEqual({ at: 1005, elapsedMs: 40, sizeBytes: null, run: 'r2' })
+    expect(attemptOf(g, 3)).toEqual({ at: 1005, elapsedMs: 40, sizeBytes: null, rows: null, run: 'r2' })
+    expect(attemptOf(g, 2)?.rows).toBe(0)
     expect(attemptOf(g, 4)).toBeNull()
   })
 
@@ -133,4 +135,13 @@ it('never widens a nonrectangular key selection into additional partitions', () 
   ])
   expect(exactSelection(g, [])).toBeNull()
   expect(JSON.parse(exactSelection(g, [0, 1])!)).toEqual({ day: ['d1'], region: ['emea', 'apac'] })
+})
+
+describe('a grid from an older server', () => {
+  it('reads a key without row counts as unknown, not a crash', () => {
+    const older: Partial<PartitionGrid> = dayRegion('ffsx--')
+    delete older.rows
+    const g = gridOf(older as PartitionGrid)
+    expect(attemptOf(g, 0)).toMatchObject({ rows: null, sizeBytes: 100 })
+  })
 })

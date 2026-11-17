@@ -5,7 +5,6 @@
  * effects and renders; everything it decides is here, so it can be tested without a browser.
  */
 
-import { domainFile, domainMap, type DomainMap } from './domainMap'
 import { shortName, type GraphEntry } from './graph'
 import { liveGraphState, memberHealth, PENDING_GRAPH_STATE, type GraphState } from './graphState'
 import {
@@ -22,9 +21,11 @@ import {
   type EntrySort,
   type GroupTree,
 } from './groups'
+import type { Health } from './nodeHealth'
 import { consumersOf, healthCounts, isFailed, needsAttention, scopeAge, type Failure } from './health'
 import { GRAPH_LIMIT, lineage } from './lineage'
 import { inPipeline, pipelineName, sourceFile } from './pipeline'
+import { plural } from './plural'
 import type { ListNode, NodeState, StatusKind } from './types'
 
 /** How many nodes a search lists beyond the open level. */
@@ -86,10 +87,9 @@ export function selectChanges(graph: boolean, id: string | null): ParamChanges {
   return { [graph ? 'focus' : 'node']: id }
 }
 
-/** Open group `id` (null: the root); a pipeline card of the map opens that pipeline. */
+/** Open group `id` (null: the root). */
 export function openGroupChanges(id: string | null, sole: string | null): ParamChanges {
-  const file = id && domainFile(id)
-  return { ...(file ? { pipeline: file, group: null } : { group: id === sole ? null : id }), node: null, focus: null, q: null, show: null }
+  return { group: id === sole ? null : id, node: null, focus: null, q: null, show: null }
 }
 
 /** Jump to node `id` where it lives: its group open, the node selected. */
@@ -134,6 +134,8 @@ interface GroupedInput {
   statesFailed: boolean
   /** The run this page streams: a status per node it has reached. */
   live: Readonly<Record<string, StatusKind>>
+  /** Each node's health over the whole project (`useHealthTree`), so counts agree with the health map. */
+  healthOf?: ReadonlyMap<string, Health>
 }
 
 /** The level the page shows: its scope and what is drawn or listed in it. */
@@ -149,8 +151,6 @@ interface GroupedLevel {
   entries: GraphEntry[]
   /** Inputs of the open group from outside it. */
   external: string[]
-  /** All pipelines as a map of files, when the graph shows that. */
-  map: DomainMap | null
   /** A graph too big to draw: the lineage of the selected node is drawn, or a picker shown. */
   tooBig: boolean
   lineageOf: string | null
@@ -177,7 +177,7 @@ interface GroupedLevel {
 /** The leaves of `id`: a group's, or the node itself. */
 const leavesIn = (leavesOf: Map<string, string[]>) => (id: string) => leavesOf.get(id) ?? [id]
 
-export function groupedLevel({ params, tree, allAssets, states, statesFailed, live }: GroupedInput): GroupedLevel {
+export function groupedLevel({ params, tree, allAssets, states, statesFailed, live, healthOf }: GroupedInput): GroupedLevel {
   const { pipeline, graph, flat, show, selected, requestedScope, query } = params
   const leavesOf = leavesByGroup(tree)
   const leaves = leavesIn(leavesOf)
@@ -188,25 +188,24 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
   const scope = requestedScope ?? (flat ? null : sole)
   const projected = projectGroups(assets, tree, scope)
   const entries: GraphEntry[] = flat ? assets.map((a) => ({ ...a, name: shortName(a.id) })) : projected.entries
-  const map = graph && !pipeline && !scope && !flat ? domainMap([...allAssets]) : null
-  const tooBig = graph && !map && entries.length > GRAPH_LIMIT
+  // The graph draws what the list lists at every level, All pipelines included: its groups and
+  // loose nodes, with the edges between them.
+  const tooBig = graph && entries.length > GRAPH_LIMIT
   const lineageOf = tooBig && selected && !tree.groups.has(selected) ? selected : null
   // Lineage crosses pipelines: a consumer in another file is still downstream.
   const consumers = consumersOf(allAssets)
   const pathOf = (id: string) => groupPath(tree.parents.get(id) ?? null, tree).map((g) => g.name).join(' › ')
   const placeOf = (id: string) => groupPath(tree.parents.get(id) ?? null, tree).filter((g) => g.id !== sole).map((g) => g.name).join(' › ') || sourceFile(id)
-  const drawn: GraphEntry[] = map
-    ? map.entries
-    : tooBig
-      ? lineageOf ? lineage(lineageOf, assets, 2, consumers).map((a) => ({ ...a, name: shortName(a.id) })) : []
-      : scope && !flat ? withPorts(entries, projected.consumers, placeOf) : entries
+  const drawn: GraphEntry[] = tooBig
+    ? lineageOf ? lineage(lineageOf, assets, 2, consumers).map((a) => ({ ...a, name: shortName(a.id) })) : []
+    : scope && !flat ? withPorts(entries, projected.consumers, placeOf) : entries
   const needle = query.trim().toLowerCase()
   const hits = searchHits({ needle, flat, show, graph, entries, scope, leavesOf, assets, byId, byKind })
   const stateOf = (entry: GraphEntry): GraphState => {
-    const memberIds = map?.leaves.get(entry.id) ?? leaves(entry.id)
+    const memberIds = leaves(entry.id)
     const liveStatus = live[entry.id]
     const health = entry.kind === 'group'
-      ? groupHealth(memberIds, byId, live)
+      ? groupHealth(memberIds, byId, live, healthOf)
       : liveStatus
         ? liveGraphState(liveStatus)
         : memberHealth(byId.get(entry.id))
@@ -219,16 +218,18 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
   const scopedStates = states.filter((s) => inScope.has(s.id))
   const rankOf = (entry: GraphEntry): EntryRank => {
     const ids = leaves(entry.id)
-    const counts = healthCounts(ids, byId, live)
-    return { name: entry.name ?? entry.id, failed: counts.lastFailed, stale: needsAttention(counts), lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
+    const counts = healthCounts(ids, byId, live, healthOf)
+    return { name: entry.name ?? entry.id, failed: counts.states.failing, stale: needsAttention(counts), lastSuccessAt: scopeAge(ids, byId).lastSuccessAt }
   }
   const sorted = entries.map((entry) => ({ entry, rank: rankOf(entry) })).sort((a, b) => compareEntries(params.sort, a.rank, b.rank)).map(({ entry }) => entry)
+  // A search lists what matches by its own name: a group because of its name, never because a
+  // member deep inside it (or its output) matches; that member is listed itself, with its path.
   const visibleEntries = [
-    ...sorted.filter((entry) => !needle || `${entry.name} ${entry.outputName ?? ''} ${leaves(entry.id).join(' ')}`.toLowerCase().includes(needle)),
+    ...sorted.filter((entry) => !needle || (entry.name ?? entry.id).toLowerCase().includes(needle)),
     ...hits,
   ]
   return {
-    assets, byId, leavesOf, sole, scope, entries, external: projected.external, map, tooBig, lineageOf, drawn, hits,
+    assets, byId, leavesOf, sole, scope, entries, external: projected.external, tooBig, lineageOf, drawn, hits,
     consumers, visualStates, scopeIds, scopedStates, visibleEntries, isHit: new Set(hits.map((h) => h.id)), pathOf, placeOf, leaves,
   }
 }
@@ -247,10 +248,10 @@ interface SearchInput {
 }
 
 /**
- * A search reaches every node in scope, not just this level: a match deep in a nested group is
- * listed with its path, what needs attention first (a failed last attempt, then a state other
- * than cached), then by name; at most `SEARCH_LIMIT`. Nothing in a flat view, the failures list
- * or the graph.
+ * A search reaches every node in scope, not just this level: a node whose name matches, deep in
+ * a nested group, is listed with its path, what needs attention first (a failed last attempt,
+ * then a state other than cached), then by name; at most `SEARCH_LIMIT`. Nothing in a flat
+ * view, the failures list or the graph.
  */
 export function searchHits({ needle, flat, show, graph, entries, scope, leavesOf, assets, byId, byKind }: SearchInput): GraphEntry[] {
   if (!needle || flat || show === 'failures' || graph) return []
@@ -261,7 +262,7 @@ export function searchHits({ needle, flat, show, graph, entries, scope, leavesOf
     return isFailed(box) ? 0 : box.kind === 'cache' && box.state !== 'cached' ? 1 : 2
   }
   return ids
-    .filter((id) => !level.has(id) && id.toLowerCase().includes(needle))
+    .filter((id) => !level.has(id) && shortName(id).toLowerCase().includes(needle))
     .map((id) => ({ id, rank: rank(id), name: shortName(id) }))
     .sort((a, b) => a.rank - b.rank || NAME_ORDER.compare(a.name, b.name))
     .slice(0, SEARCH_LIMIT)
@@ -277,4 +278,49 @@ export function visibleFailures(list: readonly Failure[], query: string): Failur
 /** The root of the breadcrumb: the open pipeline's file, or every pipeline. */
 export function rootName(pipeline: string | null): string {
   return pipeline ? pipelineName(pipeline) : 'All pipelines'
+}
+
+/** The groups under `scope` at any depth (every group of the tree for the root). */
+export function groupsUnder(scope: string | null, tree: GroupTree): number {
+  if (scope === null) return tree.groups.size
+  let n = 0
+  const stack = [...(tree.groups.get(scope)?.members ?? [])]
+  while (stack.length) {
+    const group = tree.groups.get(stack.pop()!)
+    if (!group) continue
+    n += 1
+    stack.push(...group.members)
+  }
+  return n
+}
+
+/**
+ * What the header counts, named: the nodes in scope by kind, and the groups they are organized
+ * in at any depth. `541 assets · 82 tasks · 51 sensors in 19 groups`. Checks are tasks here, as
+ * the sidebar counts them; how many rows the table lists is the toolbar's `N shown`.
+ */
+export function scopeCountsLabel(ids: readonly string[], kindOf: ReadonlyMap<string, ListNode['kind']>, groups: number): string {
+  const counts = { asset: 0, task: 0, sensor: 0 }
+  for (const id of ids) counts[kindOf.get(id) ?? 'asset'] += 1
+  const kinds = (['asset', 'task', 'sensor'] as const).filter((k) => counts[k] > 0).map((k) => plural(counts[k], k))
+  const nodes = kinds.length ? kinds.join(' · ') : '0 nodes'
+  return groups > 0 ? `${nodes} in ${plural(groups, 'group')}` : nodes
+}
+
+/**
+ * The rows in the order they were shown (`previous`, ids), new rows after them in `sorted`'s
+ * order: while the pointer is over a table its rows do not move when states arrive or change
+ * (a group's Checking… resolving to failing). The table takes the fresh order when the pointer
+ * leaves, or at once when the sort, the scope or the search changes.
+ */
+export function holdOrder<T extends { id: string }>(previous: readonly string[] | null, sorted: readonly T[]): T[] {
+  if (!previous) return [...sorted]
+  const rank = new Map(previous.map((id, i) => [id, i]))
+  const kept = sorted.filter((e) => rank.has(e.id)).sort((a, b) => rank.get(a.id)! - rank.get(b.id)!)
+  return [...kept, ...sorted.filter((e) => !rank.has(e.id))]
+}
+
+/** Whether two id lists are the same, in the same order. */
+export function sameOrder(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i])
 }

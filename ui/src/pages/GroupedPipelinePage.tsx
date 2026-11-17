@@ -1,5 +1,5 @@
 import { StreamNotice } from '@/components/StreamNotice'
-import { useDeferredValue, useEffect, useMemo, useRef } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { match } from 'ts-pattern'
 import { ArrowLeft, ChevronRight, FolderOpen } from 'lucide-react'
@@ -7,11 +7,14 @@ import { Button, HealthBar, IconButton, PageRunButton, ResetDatabaseButton, Sear
 import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodePanel } from '@/components/assets/NodePanel'
+import { HealthOverview } from '@/components/assets/HealthOverview'
+import { useHealthTree } from '@/hooks/useHealthTree'
+import { useStoredFlag } from '@/hooks/useStoredFlag'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
-import { useAssetStates } from '@/hooks/useAssetStates'
-import { useHealth } from '@/hooks/useHealth'
+import { useAssetStates, useKnownStates } from '@/hooks/useAssetStates'
+import { useWriteControl } from '@/hooks/useWriteControl'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { useProgram } from '@/hooks/useProgram'
 import { usePartitionErrors } from '@/hooks/usePartitionErrors'
@@ -19,7 +22,7 @@ import { api, ApiError, metadataUnusable } from '@/lib/api'
 import { INITIAL_FAILURES, failureTable, updateFailures, type FailuresEffect } from '@/lib/failuresView'
 import { PENDING_GRAPH_STATE } from '@/lib/graphState'
 import { failedKeyNodes, failures } from '@/lib/health'
-import { distinctNames, ENTRY_SORTS, groupHealth, groupPath, groupTree, plural } from '@/lib/groups'
+import { distinctNames, ENTRY_SORTS, groupHealth, groupPath, groupTree } from '@/lib/groups'
 import {
   SORT_LABEL,
   applyChanges,
@@ -31,6 +34,8 @@ import {
   parseGroupedParams,
   revealChanges,
   rootName,
+  groupsUnder,
+  scopeCountsLabel,
   selectChanges,
   visibleFailures,
   type ParamChanges,
@@ -41,6 +46,7 @@ import { healthCounts } from '@/lib/health'
 import { FailuresView } from './FailuresView'
 import { GroupedTable, GroupPanel, LineagePicker } from './GroupedView'
 import { usePinNotes } from '@/hooks/usePins'
+import { useHeldOrder } from '@/hooks/useHeldOrder'
 
 /** The hash route's query, as it is now (`#/assets?pipeline=…`). */
 function currentParams(): URLSearchParams {
@@ -59,7 +65,7 @@ export function GroupedPipelinePage() {
   const groupsQuery = useGroups()
   const assetQuery = useAssets()
   const stateQuery = useAssetStates()
-  const healthQuery = useHealth()
+  const writes = useWriteControl()
   const pipeline = params.get('pipeline')
   const tree = useMemo(() => groupTree((groupsQuery.data ?? []).filter((g) => !pipeline || g.id.startsWith(`group:${pipeline}:`))), [groupsQuery.data, pipeline])
   const view = useMemo(() => parseGroupedParams(params, tree), [params, tree])
@@ -67,21 +73,33 @@ export function GroupedPipelinePage() {
   // Typing stays ahead of the list: a one-letter search can match thousands of nodes.
   const query = useDeferredValue(view.query)
   const allAssets = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
-  const states = useMemo(() => stateQuery.data ?? [], [stateQuery.data])
+  // While a new scope's state loads, its nodes keep their last known state (not "Checking…").
+  const knownRows = useKnownStates(stateQuery.data)
+  const states = useMemo(() => [...(knownRows ?? [])], [knownRows])
   const selectedAsset = allAssets.find((a) => a.id === selected) ?? null
   const nodeRun = useNodeRun(selectedAsset)
   const live = nodeRun.statuses
+  // One health per node over the whole project, the page's fresher rows in place: every count
+  // here reads it, and the health map draws it.
+  const projectHealth = useHealthTree(pipeline, states)
+  const healthOf = projectHealth.loaded ? projectHealth.tree.healthOf : undefined
   const level = useMemo(
-    () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live }),
-    [view, query, tree, allAssets, states, stateQuery.isError, live],
+    () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live, healthOf }),
+    [view, query, tree, allAssets, states, stateQuery.isError, live, healthOf],
   )
-  const { assets, byId, leaves, sole, scope, entries, map, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, visibleEntries, isHit, pathOf, placeOf } = level
+  const { assets, byId, leaves, sole, scope, entries, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, isHit, pathOf, placeOf } = level
+  // Rows never move under the pointer: while it is over the table, states that arrive (a group's
+  // Checking… resolving) keep the order shown until it leaves or the sort, scope or search changes.
+  const [pointerOver, setPointerOver] = useState(false)
+  const visibleEntries = useHeldOrder(level.visibleEntries, JSON.stringify([pipeline, scope, flat, show, sort, query]), pointerOver)
   const canvas = useRef<GraphCanvasHandle>(null)
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
 
-  const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, live), [scopeIds, byId, live])
+  const kindOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.kind])), [allAssets])
+  const inputsOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.inputs])), [allAssets])
+  const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, live, healthOf), [scopeIds, byId, live, healthOf])
   const graphKnown = !!assetQuery.data
   const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scopedStates), [scopedStates]))
   const failureList = useMemo(() => failures(scopedStates, graphKnown ? level.consumers : null, keyErrors), [scopedStates, graphKnown, level.consumers, keyErrors])
@@ -125,7 +143,7 @@ export function GroupedPipelinePage() {
   const selectedGroup = tree.groups.get(selected ?? '')
   const selectedNode = byId.get(selected ?? '')
   const selectedLeaves = selectedGroup ? leaves(selectedGroup.id) : []
-  const selectedGroupHealth = groupHealth(selectedLeaves, byId, live)
+  const selectedGroupHealth = groupHealth(selectedLeaves, byId, live, healthOf)
   const groupState = selectedGroup
     ? selectedLeaves.some((id) => !byId.has(id)) && !stateQuery.isError && selectedGroupHealth.kind !== 'run'
       ? PENDING_GRAPH_STATE : selectedGroupHealth
@@ -167,7 +185,9 @@ export function GroupedPipelinePage() {
   const failure = assetQuery.error ?? groupsQuery.error
   const root = rootName(pipeline)
   const nowMs = stateQuery.dataUpdatedAt
-  const readOnly = healthQuery.data?.read_only ?? false
+  const readOnly = writes === 'hidden'
+  const [mapOpen, setMapOpen] = useStoredFlag('barca.healthMap', true)
+  const showMap = show === 'items' && !graph && !flat && !view.query
 
   return (
     <div className="barca-view">
@@ -193,9 +213,9 @@ export function GroupedPipelinePage() {
               </span>
             ))}
           </nav>
-          <span className="barca-count">
-            {plural(scopeIds.length, 'node')}
-            {!flat && show === 'items' && ` · ${map ? plural(map.entries.length, 'pipeline') : plural(entries.length, scope ? 'item' : 'group')}`}
+          <span className="barca-count" title="The nodes in view by kind, and the groups they are organized in at any depth; the toolbar counts the rows shown">
+            {/* The pipeline's one group, opened at once, is in view too. */}
+            {scopeCountsLabel(scopeIds, kindOf, groupsUnder(scope, tree) + (scope !== null && scope === sole ? 1 : 0))}
           </span>
           {runningHere > 0 && (
             <span className="barca-count barca-count-running">
@@ -204,7 +224,7 @@ export function GroupedPipelinePage() {
             </span>
           )}
           <div className="barca-scope-health" title="Every node in view, by state">
-            {stateQuery.data && <HealthBar counts={scopeHealth} labelLimit={3} width={80} />}
+            {knownRows && <HealthBar counts={scopeHealth} labelLimit={3} width={80} />}
           </div>
           {scope && level.external.length > 0 && !flat && !graph && show === 'items' && (
             <span className="barca-group-external" title={level.external.map(shortName).join(', ')}>
@@ -244,11 +264,25 @@ export function GroupedPipelinePage() {
               />
             )}
             <span className="barca-count">{(show === 'failures' ? shownFailures.length : rowCount).toLocaleString()} shown</span>
+            {showMap && (
+              <button type="button" className="barca-clear barca-map-toggle" aria-expanded={mapOpen} onClick={() => setMapOpen(!mapOpen)}>
+                {mapOpen ? 'Hide health map' : 'Show health map'}
+              </button>
+            )}
           </div>
         )}
       </div>
 
       <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
+      {showMap && mapOpen && !error && !loading && (
+        <HealthOverview
+          health={projectHealth}
+          scope={scope}
+          onScope={openGroup}
+          onOpen={revealNode}
+          onShowFailures={() => update(modeChanges('failures', scope))}
+        />
+      )}
       {error ? (
         <div className="barca-table-empty">
           <p>
@@ -257,7 +291,7 @@ export function GroupedPipelinePage() {
             <Button size="sm" onClick={() => { void assetQuery.refetch(); void groupsQuery.refetch() }}>Retry</Button>
           </p>
           {failure instanceof ApiError && failure.remediation && <p>{failure.remediation}</p>}
-          {metadataUnusable(failure) && <ResetDatabaseButton readOnly={readOnly} />}
+          {metadataUnusable(failure) && <ResetDatabaseButton />}
         </div>
       ) : loading ? (
         <p className="barca-table-empty">Loading pipeline…</p>
@@ -271,7 +305,7 @@ export function GroupedPipelinePage() {
               <span> {stateQuery.error.remediation}</span>
             )}
             {/* Starting over mends a database barca cannot use, and nothing else. */}
-            {metadataUnusable(stateQuery.error) && <ResetDatabaseButton readOnly={readOnly} />}
+            {metadataUnusable(stateQuery.error) && <ResetDatabaseButton />}
           </div>
         )}
         <div className={graph && show === 'items' ? 'barca-graph-wrap' : 'barca-assets-split'}>
@@ -297,7 +331,7 @@ export function GroupedPipelinePage() {
                     pins={pins}
                     handleRef={canvas}
                     onToggleDir={() => update(dirChanges(dir))}
-                    legend={drawn.some((entry) => entry.kind === 'group') && <span><FolderOpen size={12} />{map ? 'Pipeline' : 'Group'}</span>}
+                    legend={drawn.some((entry) => entry.kind === 'group') && <span><FolderOpen size={12} />Group</span>}
                   />
                 </>
               )}
@@ -324,13 +358,14 @@ export function GroupedPipelinePage() {
               )}
             </div>
           ) : (
-            <div className="barca-view-body barca-table-scroll" ref={scroller}>
+            <div className="barca-view-body barca-table-scroll" ref={scroller} onPointerEnter={() => setPointerOver(true)} onPointerLeave={() => setPointerOver(false)}>
               <GroupedTable
                 entries={visibleEntries}
                 tree={tree}
                 byId={byId}
                 leaves={leaves}
                 live={live}
+                healthOf={healthOf}
                 visualStates={visualStates}
                 labels={labels}
                 isHit={isHit}
@@ -355,8 +390,10 @@ export function GroupedPipelinePage() {
               byId={byId}
               leaves={selectedLeaves}
               live={live}
+              healthOf={healthOf}
               state={groupState}
               statesFailed={stateQuery.isError}
+              inputs={inputsOf}
               nowMs={nowMs}
               onOpen={openGroup}
               onReveal={revealNode}

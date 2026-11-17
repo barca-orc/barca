@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from './Button'
 import { api } from '@/lib/api'
 import type { ResetResult } from '@/lib/types'
+import { useWriteControl } from '@/hooks/useWriteControl'
 
 /**
  * barca · Reset database
@@ -88,13 +89,9 @@ export function ResetDatabaseDialog({ phase, onConfirm, onCancel, onReload }: Re
   )
 }
 
-export interface ResetDatabaseButtonProps {
-  /** A `--read-only` server refuses a reset (403): the button is shown disabled. */
-  readOnly?: boolean
-}
-
-/** The Reset database button and its dialog. */
-export function ResetDatabaseButton({ readOnly = false }: ResetDatabaseButtonProps) {
+/** The Reset database button and its dialog; none on a `--read-only` server, which refuses a reset (403). */
+export function ResetDatabaseButton() {
+  const writes = useWriteControl()
   const [open, setOpen] = useState(false)
   const client = useQueryClient()
   const reset = useMutation({
@@ -112,13 +109,13 @@ export function ResetDatabaseButton({ readOnly = false }: ResetDatabaseButtonPro
             remediation: 'remediation' in reset.error ? (reset.error.remediation as string | null) : null,
           }
         : { kind: 'confirm' }
+  if (writes === 'hidden') return null
   return (
     <>
       <Button
         variant="danger"
         size="sm"
-        disabled={readOnly}
-        title={readOnly ? 'This server is read-only (barca serve --read-only)' : undefined}
+        disabled={writes === 'disabled'}
         onClick={() => {
           reset.reset()
           setOpen(true)

@@ -133,3 +133,68 @@ test('a failed run names its first failed step, and a bar filters to its hour', 
   await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
   await expect(failed).toBeVisible()
 })
+
+// A deep queue (the fixture's runs finish too fast to make one): the running run is listed first,
+// the list scrolls in a box of its own, and the run history keeps most of the page.
+test('a deep queue lists its running run first and leaves the history the page', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+  const entry = (n: number) => ({ run_id: `q${n}`, status: 'pending', position: n, command: 'get', target: `pipeline.py:t${n}`, triggered_by: 'api', schedule_id: null, queued_at: at(20 - n / 2) })
+  await page.route(/\/queue$/, (route) => route.fulfill({ json: {
+    paused: false, paused_at: null, draining: false, max_runs: 1, capacity: null,
+    running: [{ ...entry(0), run_id: 'live', status: 'running', position: null, target: 'pipeline.py:slow', queued_at: at(25) }],
+    queued: Array.from({ length: 18 }, (_, i) => entry(i + 1)),
+  } }))
+  await page.goto('/ui/#/runs')
+  const queue = page.getByRole('region', { name: 'Queue' })
+  const rows = queue.getByRole('table', { name: 'Queued runs' }).locator('tbody tr')
+  await expect(rows).toHaveCount(19)
+  await expect(rows.first()).toContainText('running')
+  await expect(rows.first()).toContainText('live')
+  await expect(rows.first()).toContainText('25m')
+  await expect(rows.nth(1)).toContainText('#1')
+  const history = page.locator('.barca-runs-history')
+  expect((await queue.boundingBox())!.height).toBeLessThan(340)
+  expect((await history.boundingBox())!.height).toBeGreaterThan(450)
+  // Every page says the queue in brief, and it opens Runs.
+  await expect(page.getByRole('link', { name: /^Queue: 1 running · 18 waiting · oldest \d+m$/ })).toBeVisible()
+
+  await queue.getByRole('button', { name: 'Hide the queued runs' }).click()
+  await expect(rows).toHaveCount(0)
+  await expect(queue).toContainText(/oldest waiting \d+m · next pipeline\.py:t1/)
+  await queue.getByRole('button', { name: 'Show the queued runs' }).click()
+  await expect(rows).toHaveCount(19)
+})
+
+// A run of thousands of keys: the logs and the steps render what is in view, not every line.
+test('a run of 30,000 log lines and 1,000 keys renders only what is in view', async ({ page }) => {
+  const key = (i: number) => `account=acct_${String(i).padStart(6, '0')}`
+  const step = (i: number) => ({
+    node_id: `p.py:invoices[${key(i)}]`, status: i < 250 ? 'failed' : 'success', elapsed_seconds: 0.1,
+    error: i < 250 ? 'ValueError: negative total' : null, partition_key: key(i), attempts: 1, run_hash: null,
+    artifact_path: null, artifact_format: null, artifact_size_bytes: null, error_type: null, error_message: null,
+    error_traceback: null, error_phase: null, worker_exit: null, cpu_seconds: null, max_rss_bytes: null, output_tail: null, batch: null,
+  })
+  const started = new Date(Date.now() - 60_000).toISOString()
+  await page.route(/\/runs\/big$/, (route) => route.fulfill({ json: {
+    run_id: 'big', status: 'failed', command: 'get', target: null, files: [], triggered_by: 'api', scheduled_at: null, schedule_id: null,
+    started_at: started, finished_at: started, elapsed_seconds: 13, steps_total: 7644, steps_executed: 5000, steps_cached: 0,
+    job: 'all', attempts: null, client_run_id: null, failure: null, outcome: null, error: 'invoices: 1,250 keys failed',
+    steps: Array.from({ length: 1000 }, (_, i) => step(i)),
+    steps_page: { total: 5000, truncated: true, nodes: [{ node_id: 'p.py:invoices', keys: 5000, failed: 1250, elapsed_seconds: 58, calls: 0, status: 'ran' }] },
+    logs: Array.from({ length: 30_000 }, (_, seq) => ({ node_id: `p.py:invoices[${key(Math.floor(seq / 6))}]`, seq, line: `line ${seq + 1}`, stream: 'stdout', ts: started })),
+  } }))
+  await page.goto('/ui/#/runs?run=big')
+  const details = page.getByRole('complementary', { name: 'Run details' })
+  // Pinned to the end, as a live log is.
+  await expect(details.locator('.barca-log-line').last()).toContainText('line 30000')
+  expect(await details.locator('.barca-log-line').count()).toBeLessThan(100)
+  // The node's 1,000 listed keys are one row with their count until it is opened.
+  const steps = details.locator('.barca-run-nodes')
+  await expect(steps.locator('.barca-run-row')).toHaveCount(1)
+  await expect(steps).toContainText('5,000 keys · 1,250 failed')
+  await steps.getByRole('button', { name: /invoices/ }).click()
+  await expect(steps).toContainText('account=acct_000000')
+  expect(await steps.locator('.barca-run-row').count()).toBeLessThan(60)
+  expect(await page.locator('*').count()).toBeLessThan(5000)
+})

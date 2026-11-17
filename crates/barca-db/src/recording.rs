@@ -36,6 +36,8 @@ pub struct RunLedger<'a> {
     pub all_attempts: &'a HashMap<String, u32>,
     /// Per-node worker self-timing: (cpu_seconds, max_rss_bytes).
     pub all_timings: &'a HashMap<String, (Option<f64>, Option<u64>)>,
+    /// Rows of each executed step's tabular result, when its worker counted them.
+    pub all_rows: &'a HashMap<String, u64>,
     pub cached_node_ids: &'a std::collections::HashSet<String>,
     pub run_hashes: &'a HashMap<String, String>,
     /// Executed step -> its run hash's components as JSON (`barca_core::changes`).
@@ -52,6 +54,9 @@ pub struct RunLedger<'a> {
     /// `last_read_at` is set first, on the ledger's connection, so the run's backup carries it
     /// (RFC-0012). It was a connection of its own (#560).
     pub touched: &'a [String],
+    /// Why the run executed what it did (`barca_model::run_explain::PlanReasons` as JSON, #925),
+    /// `None` when it executed nothing.
+    pub plan_reasons: Option<String>,
 }
 
 /// The steps of `run_id` already recorded, by node id and run hash: an earlier attempt of a
@@ -117,6 +122,7 @@ pub async fn write_terminal_ledger(
         row.sinks_json = l.all_sinks.get(node_id).cloned();
         row.cpu_seconds = cpu;
         row.max_rss_bytes = rss;
+        row.rows = l.all_rows.get(node_id).copied();
         row.output_hash = oref.content_hash.clone();
         row.observation_hash = l.output_hashes.get(node_id).cloned();
         row.components = l.components.get(node_id).cloned();
@@ -167,6 +173,11 @@ pub async fn write_terminal_ledger(
         return Err(BarcaError::Db(
             "terminal run row was not written".to_string(),
         ));
+    }
+    if let Some(plan) = &l.plan_reasons {
+        db::runs::set_plan_reasons(conn, l.run_id, plan)
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record plan reasons: {e}")))?;
     }
     Ok(())
 }

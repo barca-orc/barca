@@ -13,24 +13,26 @@ import {
   useReactFlow,
   useStore,
   type Edge,
+  type EdgeTypes,
   type Node,
   type NodeTypes,
 } from '@xyflow/react'
 import { AssetNode } from './AssetNode'
 import { GroupNode } from './GroupNode'
 import { PortNode } from './PortNode'
+import { RoutedEdge } from './RoutedEdge'
 import { GraphLegend } from './GraphLegend'
 import { BLOCKED_UPSTREAM, PINNED } from '@/lib/cacheStateDisplay'
-import { fitTarget, isArrowKey, MIN_FIT_ZOOM, neighborInDirection, READABLE_ZOOM, waitStatus, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
+import { fitViewport, isArrowKey, neighborInDirection, revealViewport, waitStatus, waitsOn, type Inset, type ViewNode, type WaitStatus } from '@/lib/graphView'
 import { isLive, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
 import { edgeClassName, type LayoutDir, type GraphEdgeData, type GraphNode, type GraphEntry } from '@/lib/graph'
-import { domainFile } from '@/lib/domainMap'
 import { useGraphLayout } from '@/hooks/useGraphLayout'
 import { glyphColor, toneGlyph } from '@/lib/glyph'
 
 // Defined once, outside the component — a fresh object each render is a perf bug.
 const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: PortNode }
+const edgeTypes: EdgeTypes = { routed: RoutedEdge }
 
 /**
  * Room around a fit: 48px on every side, and above the bottom row of what floats over the
@@ -40,9 +42,8 @@ const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: Por
 const FIT_INSET: Inset = { top: 48, right: 48, bottom: 72, left: 48 }
 const FIT_INSET_BESIDE_MINIMAP: Inset = { ...FIT_INSET, right: 236 }
 const FIT_DURATION = 200
-/** Of the height a fitted graph leaves free, the share above it (the rest is below), at most so many px. */
-const OPTICAL_TOP = 0.35
-const OPTICAL_TOP_MAX = 120
+/** Room kept around a node the view pans to show (a selection beside an opening panel). */
+const REVEAL_INSET: Inset = { top: 24, right: 24, bottom: 64, left: 24 }
 
 /** Below this many nodes the whole graph fits on screen, and a minimap only covers it. */
 const MINIMAP_FROM = 60
@@ -89,7 +90,9 @@ function viewNodes(nodes: GraphNode[]): ViewNode[] {
     y: n.position.y,
     width: n.measured?.width ?? n.initialWidth ?? 0,
     height: n.measured?.height ?? n.initialHeight ?? 0,
-    failed: n.data.lastFailed ?? false,
+    // A group card counts as failed when any member's last attempt failed.
+    failed: (n.data.lastFailed ?? false) || !!n.data.parts?.some((p) => p.glyph === 'failed'),
+    live: (n.data.live ?? false) || !!n.data.parts?.some((p) => p.glyph === 'running'),
     inert: n.type === 'port',
   }))
 }
@@ -99,11 +102,16 @@ function viewNodes(nodes: GraphNode[]): ViewNode[] {
  * direction flips. React Flow can't fit unmeasured nodes, so the `fitView` prop
  * alone races the first paint of DOM-rendered custom nodes.
  *
- * A fit shows a graph whole, centred with room on every side, between 0.8 and 1:1; a graph too
- * big for that is shown at 0.8 from its selected node, else its failed nodes (`fitTarget`).
+ * A fit (`fitViewport`) never zooms out past the point where the smallest label on a card is
+ * 11px: a graph that fits at that zoom is shown whole, a bigger one around its selected node,
+ * else its failed nodes, else its running ones, else its start; the rest is a pan away. The Fit
+ * control alone shows the whole graph at any zoom: the user asked for the overview.
+ *
+ * When the canvas narrows (a side panel opens beside it) or the selection changes, the view pans
+ * just enough to keep the selected node in sight (`revealViewport`).
  */
-function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes: GraphNode[]; layoutKey: string; focus: string | null; minimap: boolean; handleRef?: Ref<GraphCanvasHandle> }) {
-  const { fitView, setViewport } = useReactFlow()
+function FitController({ nodes, layoutKey, focus, selected, minimap, handleRef }: { nodes: GraphNode[]; layoutKey: string; focus: string | null; selected: string | null; minimap: boolean; handleRef?: Ref<GraphCanvasHandle> }) {
+  const { setViewport, getViewport } = useReactFlow()
   const width = useStore((s) => s.width)
   const height = useStore((s) => s.height)
   const inset = minimap ? FIT_INSET_BESIDE_MINIMAP : FIT_INSET
@@ -115,34 +123,9 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
 
   const fit = useCallback((whole = false) => {
     const { nodes, focus, width, height, inset } = latest.current
-    const all = viewNodes(nodes)
-    const target = whole ? all : fitTarget(all, width, height, inset, focus)
-    if (target === all && all.length > 0 && width > 0 && height > 0) {
-      // The whole graph fits: at most 1:1, centred across, and placed a little above the middle
-      // (optical centre), so a small graph does not float in the middle of a tall canvas.
-      const x0 = Math.min(...all.map((n) => n.x))
-      const y0 = Math.min(...all.map((n) => n.y))
-      const w = Math.max(...all.map((n) => n.x + n.width)) - x0
-      const h = Math.max(...all.map((n) => n.y + n.height)) - y0
-      const roomX = width - inset.left - inset.right
-      const roomY = height - inset.top - inset.bottom
-      const zoom = Math.max(0.05, Math.min(READABLE_ZOOM, roomX / w, roomY / h))
-      const free = Math.max(0, roomY - h * zoom)
-      void setViewport({
-        x: inset.left + (roomX - w * zoom) / 2 - x0 * zoom,
-        y: inset.top + Math.min(free * OPTICAL_TOP, OPTICAL_TOP_MAX) - y0 * zoom,
-        zoom,
-      }, { duration: FIT_DURATION })
-      return
-    }
-    void fitView({
-      nodes: target.map(({ id }) => ({ id })),
-      padding: { top: `${inset.top}px`, right: `${inset.right}px`, bottom: `${inset.bottom}px`, left: `${inset.left}px` },
-      minZoom: MIN_FIT_ZOOM,
-      maxZoom: READABLE_ZOOM,
-      duration: FIT_DURATION,
-    })
-  }, [fitView, setViewport])
+    const viewport = fitViewport(viewNodes(nodes), width, height, inset, focus, whole)
+    if (viewport) void setViewport(viewport, { duration: FIT_DURATION })
+  }, [setViewport])
 
   // Fit once the nodes are measured and the canvas has a size, and again on a new layout. A fit
   // on a timer alone no-ops when the nodes are measured late (a slow status load), leaving the
@@ -156,12 +139,16 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
   })
   const sized = width > 0 && height > 0
   // Until the user pans or zooms, a canvas that changes size (a banner above it, the panel
-  // opening, the window) re-fits; after that the view is theirs until the layout changes.
+  // opening, the window) re-fits; after that the view is theirs until the layout changes. A
+  // click on a node selects it: that is not moving the view.
   const moved = useRef(false)
   const pane = useStore((s) => s.domNode)
   useEffect(() => {
     if (!pane) return
-    const mine = () => { moved.current = true }
+    const mine = (event: Event) => {
+      if (event.type === 'pointerdown' && event.target instanceof Element && event.target.closest('.react-flow__node, .react-flow__panel')) return
+      moved.current = true
+    }
     pane.addEventListener('wheel', mine, { passive: true })
     pane.addEventListener('pointerdown', mine)
     return () => {
@@ -178,6 +165,20 @@ function FitController({ nodes, layoutKey, focus, minimap, handleRef }: { nodes:
     const t = setTimeout(() => { if (!moved.current) fit() }, 60)
     return () => clearTimeout(t)
   }, [layoutKey, fit, measured, sized, width, height])
+
+  // Keep the selected node in sight when the canvas changes size (its panel opening) or the
+  // selection moves, after any re-fit has settled; the zoom stays as it is.
+  useEffect(() => {
+    if (!measured || !sized || !selected) return
+    const t = setTimeout(() => {
+      const node = latest.current.nodes.find((n) => n.id === selected)
+      if (!node) return
+      const [box] = viewNodes([node])
+      const next = revealViewport(getViewport(), box!, width, height, REVEAL_INSET)
+      if (next) void setViewport(next, { duration: FIT_DURATION })
+    }, 60 + FIT_DURATION)
+    return () => clearTimeout(t)
+  }, [selected, measured, sized, width, height, getViewport, setViewport])
 
   useImperativeHandle(handleRef, () => ({ fit: () => { moved.current = true; fit(true) } }), [fit])
   return null
@@ -201,6 +202,29 @@ function GraphControls({ dir, onFit, onToggleDir }: { dir: LayoutDir; onFit: () 
       )}
     </Controls>
   )
+}
+
+/**
+ * Every state on the graph's cards, by glyph, with its word: a node's one state (failing,
+ * blocked and pinned as it draws them), and every part of a group card, not only the one it
+ * leads with. A state not loaded yet is not listed.
+ */
+function legendGlyphs(nodes: readonly GraphNode[]): Map<string, string> {
+  const seen = new Map<string, string[]>()
+  // A glyph can carry two words: a node's state (`stale`) and a group's health (`behind`).
+  const add = (glyph: string, word: string | null | undefined) => {
+    if (!word) return
+    const list = seen.get(glyph) ?? []
+    if (!list.includes(word)) list.push(word)
+    seen.set(glyph, list)
+  }
+  for (const n of nodes) {
+    if (n.type === 'port') continue
+    const parts = n.data.parts
+    if (parts) for (const part of parts) add(part.glyph, part.word)
+    else add(n.data.lastFailed ? 'failed' : n.data.glyph ?? toneGlyph(n.data.tone), n.data.label)
+  }
+  return new Map([...seen].map(([glyph, list]) => [glyph, list.join(' / ')]))
 }
 
 /** The node a key event came from, when it came from one. */
@@ -262,6 +286,7 @@ export function GraphCanvas({
           live: isLive(state),
           stateHint: pin !== undefined ? `Pinned: ${pin}. Runs read this version until it is unpinned.` : wait ? `${state.hint} ${wait.hint}` : state.hint,
           keys: state.kind === 'cache' ? state.keys : undefined,
+          parts: state.kind === 'group' || state.kind === 'run' ? state.parts : undefined,
         } }
     })
   }, [base.nodes, base.edges, selected, states, pins, shown])
@@ -272,10 +297,10 @@ export function GraphCanvas({
     () =>
       base.edges.map((e) => {
         const hot = e.source === selected || e.target === selected || (hovered !== null && (e.source === hovered || e.target === hovered))
-        const { weight, port, loose } = e.data as GraphEdgeData
+        const { weight, port, loose, implied } = e.data as GraphEdgeData
         return {
           ...e,
-          hidden: loose && !hot,
+          hidden: (loose || !!implied) && !hot,
           // A count on each of a dense map's edges would be a wall of numbers.
           label: weight && (hot || base.edges.length <= LABEL_EDGES_UP_TO) ? weight.toLocaleString() : undefined,
           className: [
@@ -288,16 +313,8 @@ export function GraphCanvas({
       }),
     [base.edges, selected, hovered, nodeTones, shown],
   )
-  // The legend names only the states this graph shows.
-  const shownGlyphs = useMemo(() => {
-    const words = new Map<string, string>()
-    for (const n of nodes) {
-      if (n.type === 'port') continue
-      const glyph = n.data.lastFailed ? 'failed' : n.data.glyph ?? toneGlyph(n.data.tone)
-      if (!words.has(glyph) && n.data.label) words.set(glyph, n.data.label)
-    }
-    return words
-  }, [nodes])
+  // The legend names every state this graph shows: each card's, and each part of a group card.
+  const shownGlyphs = useMemo(() => legendGlyphs(nodes), [nodes])
 
   const onNodeClick = useCallback((_: unknown, n: Node) => {
     if (n.type !== 'port') onSelect(n.id)
@@ -342,6 +359,7 @@ export function GraphCanvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={(_, node) => node.data.kind === 'group' && onOpenGroup?.(node.id)}
         onKeyDown={onKeyDown}
@@ -363,7 +381,7 @@ export function GraphCanvas({
           <GraphLegend shown={shownGlyphs}>{legend}</GraphLegend>
         </Panel>
         {minimap && <MiniMap position="top-right" nodeColor={n => glyphColor(nodeGlyphs.get(n.id) ?? 'pending')} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
-        <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected && domainFile(selected) ? null : selected} minimap={minimap} handleRef={fitRef} />
+        <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected} selected={selected} minimap={minimap} handleRef={fitRef} />
       </ReactFlow>
     </ReactFlowProvider>
   )

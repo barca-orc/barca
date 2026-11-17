@@ -16,6 +16,13 @@ describe('failures view', () => {
     expect(rows.filter((r) => r.kind === 'failure')).toHaveLength(list.length)
   })
 
+  it('says an error once: a row under a heading with the same words does not repeat it', () => {
+    const { rows } = failureTable(list)
+    const same = Object.fromEntries(rows.flatMap((r) => (r.kind === 'failure' ? [[r.failure.id, r.sameError]] : [])))
+    // `a` heads its cause; `b` differs in its numbers, so its own words are shown.
+    expect(same).toEqual({ c: true, a: true, b: false })
+  })
+
   it('asks for each action and reports it', () => {
     expect(updateFailures(INITIAL_FAILURES, { type: 'retry', id: 'a', kind: 'task', name: 'a' })[1]).toEqual([{ type: 'retry', id: 'a', kind: 'task', name: 'a' }])
     expect(updateFailures(INITIAL_FAILURES, { type: 'action_failed', text: 'no' })[0].notice).toEqual({ text: 'no', failed: true })

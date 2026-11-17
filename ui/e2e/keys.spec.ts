@@ -207,7 +207,9 @@ test('read-only key inspection does not offer execution', async ({ page }) => {
   await mock(page)
   await page.route(/\/health$/, route => route.fulfill({ json: { read_only: true } }))
   await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&key=day%3Dd2%2Cregion%3Demea`)
-  await expect(page.getByRole('button', { name: 'Run 2 keys shown' })).toBeDisabled()
+  // A read-only server offers no run at all, and says once that it is read-only.
+  await expect(page.getByRole('note').filter({ hasText: 'Read-only.' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Run 2 keys shown' })).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'What needs attention' }).getByRole('button', { name: 'Run', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Run this key' })).toHaveCount(0)
 })

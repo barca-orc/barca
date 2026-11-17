@@ -31,6 +31,7 @@ from barca._artifacts import (
     deserialize,
     detect_format,
     resolve_format,
+    row_count,
     serialize_for_upload,
     serialize_hashed,
 )
@@ -590,6 +591,14 @@ def _materialize(
         if peak:
             timing["max_rss_bytes"] = peak
     artifact: dict[str, Any] = {"path": str(path), "format": fmt, "size_bytes": size}
+    # Rows of a tabular result (a frame's length, or a parquet file's footer); absent when
+    # unknown, never guessed. A parallel() branch's file is the caller's input, not a result.
+    # A batched call's key was written by the split: its file is what counts.
+    rows = (
+        None if branch_path else row_count(None if prewritten is not None else result, local, fmt)
+    )
+    if rows is not None:
+        artifact["rows"] = rows
     if upload_snapshot is not None:
         artifact["upload_snapshot"] = upload_snapshot
     if content_hash is not None:

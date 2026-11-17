@@ -15,8 +15,30 @@ status and finding problems is [barca status](/reference/cli/status/).
 
 `last_materialization` is the most recent execution recorded in the metadata DB, successful or
 failed: `status`, `created_at` (UTC), `elapsed_seconds`, `run_hash`, `artifact`, `format`,
-`size_bytes`, and `error` for a failure. A cache hit is not an execution, so serving from cache
-does not change it. It is `null` when the node never ran.
+`size_bytes`, `rows`, and `error` for a failure. A cache hit is not an execution, so serving from
+cache does not change it. It is `null` when the node never ran.
+
+`rows` is how many rows a successful tabular result holds, counted by the worker when the step
+wrote it ("Row counts" below); `null` when it was not counted.
+
+## Row counts
+
+The worker records the rows of a result when that is cheap to know exactly, and never guesses:
+
+| result | `rows` |
+|---|---|
+| a pandas or polars DataFrame, a pyarrow Table, in any format (parquet, CSV, pickle) | its length |
+| a polars LazyFrame or a DuckDB relation written to parquet, and each key of a batched call | the row count in the written file's footer (pyarrow, else duckdb, else polars reads it; only the footer is read) |
+| a LazyFrame or relation written to CSV, anything that is not a frame (json, pickle of other values), a failed attempt | `null` |
+
+Results recorded by an older barca, and results a server's ledger received from a client, have
+`null`. The count is in `last_materialization.rows` here, in each step of `barca history RUN_ID
+--json` (`steps[].rows`), in `barca stats --json` (`recent_runs[].rows`; for a partitioned
+node the rows of the run's successful keys added up, `null` unless every one was counted, and
+`recent_runs[].empty_keys`), in `barca sql` (`materializations.rows`, `nodes.last_rows`,
+`nodes.partitions_empty`), and in the server's routes ([Server Mode: a Shared Ledger and --server: Data health](/reference/server-mode/#data-health)).
+A partitioned node's `partitions.empty` counts its keys whose latest successful result wrote no
+rows (absent when none did).
 For a partitioned node it is one key's row from the latest run, the first key in sort order
 (`partition` names it), so two identical runs report the same key whatever order the keys
 finished in.
@@ -82,7 +104,8 @@ not one per node.
 ## Partitioned assets
 
 A partitioned asset is one node with a `partitions` summary: `total`, `cached`, `missing` and up
-to 20 `missing_keys`. Its state is `cached` when every key is, `partial` when some are, and
+to 20 `missing_keys`, and `empty` when some keys' latest successful result wrote no rows (a
+recorded count of 0; keys no longer in the key set count while their result is recorded). Its state is `cached` when every key is, `partial` when some are, and
 `stale`/`never_run` when none are. `last_materialization` is one key of the latest run (the first in
 sort order), named in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
 
@@ -100,7 +123,7 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "inputs": [],
       "partitioned": false,
       "cache": {"state": "cached", "reason": "materialized", "detail": "...", "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet"},
-      "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182},
+      "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
   ],
@@ -149,7 +172,8 @@ Completion lines retain their existing final-attempt duration. `history --json` 
 run; upload-failure rows from earlier versions retain their transfer-attempt counts). `stats` shows
 attempts per recorded materialization and its stored final-attempt duration. For a partitioned
 node (`barca stats scored`) an execution is a run: `total_runs` counts runs, `elapsed_seconds` and
-`cpu_seconds` sum its keys, and each `recent_runs` entry adds `keys` and `failed_keys`.
+`cpu_seconds` sum its keys, and each `recent_runs` entry adds `keys`, `failed_keys` and
+`empty_keys` (keys that wrote no rows).
 Timeout errors name the step id, including its partition key.
 
 Older read-only snapshots without attempt metadata report a null history attempt total.

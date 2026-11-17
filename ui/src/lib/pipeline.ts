@@ -43,8 +43,8 @@ export interface PipelineSummary extends Pipeline {
 /**
  * One line per source file of the project, in file order: how many of its nodes are of `kind`
  * (the page's: Assets counts assets), and their one state from `rows` (`buildRows` over the
- * loaded states of that kind). A file with none of that kind stays listed, at 0, so the list
- * does not move from page to page.
+ * loaded states of that kind). A file with none of that kind is here at 0; the sidebar leaves it
+ * out (`listedPipelines`).
  */
 export function pipelineSummaries(
   rows: readonly AssetRow[],

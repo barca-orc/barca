@@ -184,7 +184,8 @@ def test_history_of_one_run_pages_its_steps_failed_ones_first(tmp_path):
     with served.Serve(tmp_path, "--no-schedule", env=env()) as serve:
         serve.ready()
         view = serve.get(f"/runs/{run_id}?limit=5")
-        assert paged(view) == {"total": 30, "truncated": True}
+        # A truncated page says where the next one starts (`?offset=`).
+        assert paged(view) == {"total": 30, "truncated": True, "next_offset": 5}
         assert len(view["steps"]) == 5
         assert len(serve.get(f"/runs/{run_id}?all=true")["steps"]) == 30
         remote = barca(
@@ -197,7 +198,12 @@ def test_history_of_one_run_pages_its_steps_failed_ones_first(tmp_path):
             "--server",
             f"http://127.0.0.1:{serve.port}",
         )
-        assert paged(json.loads(remote.stdout)) == {"total": 30, "truncated": True}
+        # `--server` prints the server's page, with where the next one starts.
+        assert paged(json.loads(remote.stdout)) == {
+            "total": 30,
+            "truncated": True,
+            "next_offset": 5,
+        }
 
 
 def _rss_mb(pid: int) -> float:

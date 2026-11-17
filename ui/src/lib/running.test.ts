@@ -6,6 +6,8 @@ import { buildRows } from './assetTable'
 import {
   POLL_IDLE_MS,
   POLL_RUNNING_MS,
+  POLL_RUNNING_LARGE_MS,
+  LARGE_SCOPE,
   elapsedLabel,
   runningBadge,
   runningCount,
@@ -47,13 +49,14 @@ function node(id: string, running: NodeRunning | null = null, failed = false): N
           artifact: null,
           format: null,
           size_bytes: null,
+          rows: null,
           error: 'boom',
         }
       : null,
     shape: null,
     env: [],
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running,
   }
 }
@@ -128,9 +131,13 @@ describe('running state from /state', () => {
     ])
     const byId = new Map(nodes.map((n) => [n.id, n]))
     expect(runningCount(['p.py:a', 'p.py:b', 'q.py:c'], byId)).toBe(1)
+    // A failure inside a running group leads: running is shown beside it, never instead (#925).
     const group = groupHealth(['p.py:a', 'p.py:b'], byId)
-    expect(group).toMatchObject({ kind: 'run', tone: 'running', label: '1 running' })
-    // Once the run ends, the failed last attempt shows again.
+    expect(group).toMatchObject({ kind: 'group', tone: 'failed', label: '1 failing' })
+    expect(group.kind === 'group' && group.parts?.map((p) => p.text)).toEqual(['1 failing', '1 running'])
+    // A group with run work and nothing failed pulses as a run.
+    expect(groupHealth(['p.py:a'], byId)).toMatchObject({ kind: 'run', tone: 'running', label: '1 running' })
+    // Once the run ends, the failed last attempt is the one fact left.
     byId.set('p.py:a', node('p.py:a'))
     expect(groupHealth(['p.py:a', 'p.py:b'], byId)).toMatchObject({ tone: 'failed', label: '1 failing' })
   })
@@ -141,5 +148,11 @@ describe('running state from /state', () => {
     expect(statePollInterval(undefined)).toBe(POLL_IDLE_MS)
     expect(statePollInterval([node('p.py:a')])).toBe(POLL_IDLE_MS)
     expect(statePollInterval([node('p.py:a'), node('p.py:b', run())])).toBe(POLL_RUNNING_MS)
+  })
+
+  it('polls a big scope less often while it runs', () => {
+    const many = Array.from({ length: LARGE_SCOPE }, (_, i) => node(`p.py:n${i}`))
+    expect(statePollInterval(many)).toBe(POLL_IDLE_MS)
+    expect(statePollInterval([...many.slice(1), node('p.py:busy', run())])).toBe(POLL_RUNNING_LARGE_MS)
   })
 })

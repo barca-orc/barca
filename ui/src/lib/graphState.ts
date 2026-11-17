@@ -5,7 +5,7 @@
  * itself and whether the last attempt failed, which are shown as two facts.
  */
 
-import { lastAttemptFailed, nodeStateDisplay, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, nodeStateDisplay, shownCacheState, type CacheState } from './cacheStateDisplay'
 import { statusMeta } from './status'
 import { runningGraphState } from './running'
 import type { Tone } from './tone'
@@ -15,12 +15,27 @@ import type { NodeState, StatusKind } from './types'
 export type GraphState =
   /** The node's cache state, as `GET /state` reports it. */
   | { kind: 'cache'; tone: Tone; glyph: Glyph; label: string; hint: string; state: CacheState; lastFailed: boolean; keys?: GraphKeys }
-  /** A run working on the node now, or the run this page streams. */
-  | { kind: 'run'; tone: Tone; glyph: Glyph; label: string; hint: string; status: StatusKind }
-  /** A group of nodes: its most urgent fact. */
-  | { kind: 'group'; tone: Tone; glyph: Glyph; label: string; hint: string }
+  /** A run working on the node now, or the run this page streams; for a group, its parts as above. */
+  | { kind: 'run'; tone: Tone; glyph: Glyph; label: string; hint: string; status: StatusKind; parts?: readonly GroupPart[] }
+  /**
+   * A group of nodes: its most severe fact (`label`, `glyph`), and every part of its members'
+   * health, most severe first (`healthParts`), for a card to show the rest compactly.
+   */
+  | { kind: 'group'; tone: Tone; glyph: Glyph; label: string; hint: string; parts?: readonly GroupPart[] }
   /** No state for it: not loaded yet, or the state request failed. */
   | { kind: 'none'; tone: Tone; glyph: Glyph; label: string; hint: string }
+
+/** One part of a group's health: `2 failing`, `1 running`, `48 stale`, with its glyph. */
+export interface GroupPart {
+  glyph: Glyph
+  tone: Tone
+  /** How many of its members. */
+  count: number
+  /** The whole part in words: `2 failing`. */
+  text: string
+  /** The state's word alone: `failing`. */
+  word: string
+}
 
 export const UNKNOWN_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'unknown', label: 'State unavailable', hint: 'Asset state has not been loaded.' }
 export const PENDING_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'pending', label: 'Checking…', hint: 'Cache state is being checked.' }
@@ -32,9 +47,9 @@ export interface GraphKeys {
   waiting: number
 }
 
-/** A node's resting state: `cache.state` as the server says it, with the server's `detail`. */
+/** A node's resting state: `cache.state` as the server says it (`shownCacheState`), with the server's `detail`. */
 export function cacheGraphState(node: NodeState): GraphState {
-  const state = node.cache.state
+  const state = shownCacheState(node)
   const lastFailed = lastAttemptFailed(node)
   const shown = nodeStateDisplay({ state, lastFailed })
   const p = node.partitions

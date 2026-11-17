@@ -1,7 +1,8 @@
 import { INITIAL_RUNS, RUNS_MAX } from '@/lib/runsPage'
 import { RunPanelView, RunsView } from '@/pages/RunsView'
 import { TokensOffView, TokensView } from '@/pages/TokensView'
-import { NOW_MS, failureLists, runDetails, runLists, tokenStates } from '../fixtures'
+import { NOW_MS, failureLists, partialRunList, queueStates, runDetails, runLists, tokenStates } from '../fixtures'
+import { QueuePanelView } from '@/pages/QueuePanel'
 import { INITIAL_FAILURES, failureTable, type FailuresModel } from '@/lib/failuresView'
 import { distinctNames } from '@/lib/groups'
 import { FailuresView } from '@/pages/FailuresView'
@@ -22,6 +23,7 @@ export function Pages() {
             ...Object.fromEntries(Object.entries(runLists).map(([name, runs]) => [name, { runs, model: INITIAL_RUNS }])),
             'at the load-more cap': { runs: runLists.truncated, model: { ...INITIAL_RUNS, limit: RUNS_MAX } },
             'failed only': { runs: runLists['every status'], model: { ...INITIAL_RUNS, filter: 'failed' as const } },
+            'failed only, of the latest 100': { runs: partialRunList, model: { ...INITIAL_RUNS, filter: 'failed' as const } },
             'one hour': { runs: runLists['every status'], model: { ...INITIAL_RUNS, hour: Math.floor(NOW_MS / 3_600_000) * 3_600_000 } },
           }}
           render={({ runs, model }, dispatch) => (
@@ -32,6 +34,29 @@ export function Pages() {
                 selected={null}
                 now={NOW_MS}
                 dispatch={dispatch}
+              />
+            </Frame>
+          )}
+        />
+      </Spec>
+
+      <Spec title="Run queue" note="QueuePanelView: the running runs first, then the waiting ones; the list scrolls past a few rows and folds to one line.">
+        <States
+          label="Queue"
+          states={queueStates}
+          render={({ queue, collapsed, readOnly, loadError }, dispatch) => (
+            <Frame height={360} width="100%">
+              <QueuePanelView
+                queue={queue}
+                loadError={loadError ?? null}
+                onRetry={() => dispatch({ type: 'retry' })}
+                readOnly={readOnly ?? false}
+                pending={false}
+                toggleError={null}
+                onPause={(pause) => dispatch({ type: pause ? 'pause' : 'resume' })}
+                collapsed={collapsed ?? false}
+                onCollapse={(next) => dispatch({ type: next ? 'collapse' : 'expand' })}
+                nowMs={NOW_MS}
               />
             </Frame>
           )}

@@ -1,5 +1,5 @@
-export { Absolute, Age, LastSuccess } from './Age'
-export type { AbsoluteProps, AgeProps, LastSuccessProps } from './Age'
+export { Age, LastSuccess } from './Age'
+export type { AgeProps, LastSuccessProps } from './Age'
 
 export { Button } from './Button'
 export type { ButtonProps, ButtonVariant, ButtonSize } from './Button'
@@ -47,7 +47,7 @@ export { ConnectionBadge } from './ConnectionBadge'
 export type { ConnectionBadgeProps } from './ConnectionBadge'
 
 export { ResetDatabaseButton, ResetDatabaseDialog } from './ResetDatabase'
-export type { ResetDatabaseButtonProps, ResetDatabaseDialogProps, ResetPhase } from './ResetDatabase'
+export type { ResetDatabaseDialogProps, ResetPhase } from './ResetDatabase'
 
 export { RunningBadge } from './RunningBadge'
 export type { RunningBadgeProps } from './RunningBadge'

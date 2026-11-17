@@ -12,6 +12,10 @@ import {
   searchHits,
   selectChanges,
   visibleFailures,
+  groupsUnder,
+  holdOrder,
+  sameOrder,
+  scopeCountsLabel,
 } from './groupedPage'
 import type { ListNode, NodeState } from './types'
 import type { Failure } from './health'
@@ -26,10 +30,10 @@ const assets = [asset('p.py:x'), asset('p.py:y'), asset('p.py:check__y', 'task',
 const state = (id: string, over: Partial<NodeState> = {}): NodeState => ({
   id, name: id.split(':')[1]!, kind: id.includes('check__') ? 'task' : 'asset', inputs: [], partitioned: false,
   cache: { state: id.includes('check__') ? 'always_runs' : 'cached', reason: 'materialized', detail: 'd' },
-  last_materialization: null, shape: null, env: [], durations: null, next_run: null, last_success_at: null,
+  last_materialization: null, shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null,
   failing_since: null, consecutive_failures: 0, running: null, ...over,
 })
-const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, error: 'boom' }
+const failed = { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'boom' }
 const states = assets.map((a) => state(a.id))
 const params = (search: string) => parseGroupedParams(new URLSearchParams(search), tree)
 
@@ -46,9 +50,8 @@ describe('grouped page params', () => {
     expect(selectChanges(false, 'p.py:x')).toEqual({ node: 'p.py:x' })
     expect(selectChanges(true, null)).toEqual({ focus: null })
     expect(openGroupChanges('group:p.py:inner', null)).toMatchObject({ group: 'group:p.py:inner', node: null, focus: null, q: null, show: null })
-    // The sole group is the root: opening it clears the scope; a pipeline card opens its file.
+    // The sole group is the root: opening it clears the scope.
     expect(openGroupChanges('group:p.py:outer', 'group:p.py:outer')).toMatchObject({ group: null })
-    expect(openGroupChanges('domain:q.py', null)).toMatchObject({ pipeline: 'q.py', group: null })
     expect(revealChanges('p.py:y', tree, false)).toEqual({ group: 'group:p.py:inner', node: 'p.py:y', focus: null, q: null, show: null })
     expect(revealChanges('p.py:y', tree, true)).toMatchObject({ focus: 'p.py:y', node: null })
     expect(modeChanges('flat', 'group:p.py:inner')).toMatchObject({ flat: '1', group: null })
@@ -84,6 +87,29 @@ describe('grouped level', () => {
     expect(level.visualStates['p.py:loose']).toMatchObject({ kind: 'cache', state: 'cached' })
   })
 
+  it('draws in the graph, at the top level of a project with groups, what the list lists: groups and loose nodes, with edges', () => {
+    // A second file with a chain of forty nodes, none of them grouped, fed by the outer group.
+    const many = [
+      ...assets,
+      ...Array.from({ length: 40 }, (_, i) => asset(`q.py:n${i}`, 'asset', i ? [`q.py:n${i - 1}`] : ['p.py:x'])),
+    ]
+    const manyStates = many.map((a) => state(a.id))
+    const list = groupedLevel({ params: params(''), tree, allAssets: many, states: manyStates, statesFailed: false, live: {} })
+    const graph = groupedLevel({ params: params('view=graph'), tree, allAssets: many, states: manyStates, statesFailed: false, live: {} })
+    expect(graph.drawn.map((e) => e.id)).toEqual(list.entries.map((e) => e.id))
+    expect(graph.drawn.find((e) => e.id === 'q.py:n0')?.inputs).toEqual(['group:p.py:outer'])
+  })
+
+  it('leads a group\'s card with its failure even while a run works inside it', () => {
+    const level = input('pipeline=p.py&view=graph', {
+      states: states.map((s) => (s.id === 'p.py:y' ? state(s.id, { last_materialization: failed as NodeState['last_materialization'] }) : s)),
+      live: { 'p.py:x': 'running' },
+    })
+    expect(level.visualStates['group:p.py:outer']).toMatchObject({ kind: 'group', label: '1 failing' })
+    const parts = (level.visualStates['group:p.py:outer'] as { parts?: { text: string }[] }).parts
+    expect(parts?.map((p) => p.text).slice(0, 2)).toEqual(['1 failing', '1 running'])
+  })
+
   it('opens a group to its members and knows its external inputs', () => {
     const level = input('pipeline=p.py&group=group:p.py:inner')
     expect(level.entries.map((e) => e.id).sort()).toEqual(['p.py:check__y', 'p.py:y'])
@@ -114,14 +140,17 @@ describe('grouped level', () => {
       byId: new Map([['p.py:check__y', state('p.py:check__y', { last_materialization: failed })], ['p.py:y', state('p.py:y')]]),
       byKind: new Map(assets.map((a) => [a.id, a.kind])),
     })
-    // Every id matches (`.py` has a y): the failed check first, then the rest by name.
-    expect(hits.map((h) => h.id)).toEqual(['p.py:check__y', 'p.py:loose', 'p.py:x', 'p.py:y'])
+    // Names match, not files (`p.py` has a y): the failed check first, then the rest by name.
+    expect(hits.map((h) => h.id)).toEqual(['p.py:check__y', 'p.py:y'])
     expect(hits[0]).toMatchObject({ kind: 'task', name: 'check__y' })
     // Nothing in a flat view, the failures list or the graph.
     expect(searchHits({ needle: 'y', flat: true, show: 'items', graph: false, entries: [], scope: null, leavesOf: new Map(), assets, byId: new Map(), byKind: new Map() })).toEqual([])
+    // The member is the hit, with its path; the group it is in is not listed because of it.
     const level = input('pipeline=p.py&q=check')
-    expect(level.visibleEntries.map((e) => e.id)).toEqual(['group:p.py:outer', 'p.py:check__y'])
+    expect(level.visibleEntries.map((e) => e.id)).toEqual(['p.py:check__y'])
     expect(level.isHit.has('p.py:check__y')).toBe(true)
+    // A group whose own name matches is listed.
+    expect(input('pipeline=p.py&q=outer').visibleEntries.map((e) => e.id)).toEqual(['group:p.py:outer'])
   })
 
   it('filters failures by id or headline', () => {
@@ -129,5 +158,34 @@ describe('grouped level', () => {
     const list = [f('p.py:a', 'KeyError'), f('p.py:b', 'ValueError')]
     expect(visibleFailures(list, 'key').map((x) => x.id)).toEqual(['p.py:a'])
     expect(visibleFailures(list, ' ').length).toBe(2)
+  })
+})
+
+describe('header counts', () => {
+  it('names what it counts: nodes by kind, in the groups at any depth', () => {
+    const kinds = new Map<string, ListNode['kind']>([['a', 'asset'], ['b', 'asset'], ['t', 'task'], ['s', 'sensor']])
+    expect(scopeCountsLabel(['a', 'b', 't', 's'], kinds, 19)).toBe('2 assets · 1 task · 1 sensor in 19 groups')
+    expect(scopeCountsLabel(['a'], kinds, 0)).toBe('1 asset')
+    expect(scopeCountsLabel([], kinds, 0)).toBe('0 nodes')
+  })
+
+  it('counts every group under a scope, nested ones included', () => {
+    expect(groupsUnder(null, tree)).toBe(tree.groups.size)
+    expect(groupsUnder('group:p.py:outer', tree)).toBe(1)
+  })
+})
+
+describe('holdOrder', () => {
+  const rows = (...ids: string[]) => ids.map((id) => ({ id }))
+
+  it('keeps the rows where they were shown; new rows go after them', () => {
+    expect(holdOrder(['b', 'a', 'c'], rows('a', 'c', 'd', 'b')).map((r) => r.id)).toEqual(['b', 'a', 'c', 'd'])
+    expect(holdOrder(['b', 'a'], rows('a')).map((r) => r.id)).toEqual(['a'])
+  })
+
+  it('takes the fresh order with nothing to hold', () => {
+    expect(holdOrder(null, rows('c', 'a')).map((r) => r.id)).toEqual(['c', 'a'])
+    expect(sameOrder(['a', 'b'], ['a', 'b'])).toBe(true)
+    expect(sameOrder(['a', 'b'], ['b', 'a'])).toBe(false)
   })
 })

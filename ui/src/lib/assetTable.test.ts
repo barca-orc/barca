@@ -48,7 +48,7 @@ function node(over: Partial<NodeState> & { id: string }): NodeState {
     shape: null,
     env: [],
     durations: null,
-    next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0,
+    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     ...over,
   }
@@ -62,6 +62,7 @@ const failedAttempt = {
   artifact: null,
   format: null,
   size_bytes: null,
+  rows: null,
   error: 'AssertionError: 3 rows with negative units',
 }
 
@@ -69,7 +70,8 @@ describe('rows carry the state as the server says it', () => {
   it('shows every cache state in its own word, never another', () => {
     for (const state of CACHE_STATES) {
       const row = only(buildRows([node({ id: 'a', cache: cache(state, 'no_record') })], NOW))
-      expect(row.state).toBe(state)
+      // A node that always runs and never ran has no last run to show: it reads `never_run`.
+      expect(row.state).toBe(state === 'always_runs' ? 'never_run' : state)
       expect(row.lastFailed).toBe(false)
     }
     // A task keeps `always_runs` whatever its last run did: the run is a second fact.
@@ -129,6 +131,9 @@ describe('buildRows', () => {
             },
             durations: { median_seconds: 3.04, p95_seconds: 9.5, samples: 12 },
             next_run: Date.parse('2026-10-03T06:00:00Z') / 1000,
+            prev_run: null,
+            late_since: null,
+            signals: [],
           }),
         ],
         NOW,
@@ -285,6 +290,9 @@ describe('sorting', () => {
         durations: { median_seconds: 0.5, p95_seconds: 1, samples: 3 },
         last_materialization: { ...failedAttempt, status: 'success', error: null, created_at: '2026-10-02 11:00:00' },
         next_run: Date.parse('2026-10-03T06:00:00Z') / 1000,
+        prev_run: null,
+        late_since: null,
+        signals: [],
       }),
       node({ id: 'p.py:never', cache: cache('never_run', 'no_record') }),
       node({
@@ -292,6 +300,9 @@ describe('sorting', () => {
         cache: cache('stale', 'changed'),
         durations: { median_seconds: 3, p95_seconds: 4, samples: 2 },
         next_run: Date.parse('2026-10-02T13:00:00Z') / 1000,
+        prev_run: null,
+        late_since: null,
+        signals: [],
       }),
     ],
     NOW,
@@ -345,7 +356,7 @@ describe('one line a row', () => {
     expect(lastRunText(failing!, NOW)).toBe('failed 35m ago · never succeeded')
     const [recovered] = buildRows([node({ id: 'a.py:x', last_materialization: failedAttempt, last_success_at: '2026-09-30 12:00:00', failing_since: '2026-10-01 12:00:00', consecutive_failures: 3 })], NOW)
     expect(lastRunText(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago')
-    expect(lastRunTitle(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago · failing since 1d ago · 3 runs')
+    expect(lastRunTitle(recovered!, NOW)).toBe('failed 35m ago · last ok 2d ago · failing since 1d ago · 3 failed runs in a row')
   })
 
   it('shows a typical duration only when it says something', () => {

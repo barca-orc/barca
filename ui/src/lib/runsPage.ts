@@ -11,7 +11,7 @@ import { headline } from './health'
 import { only, type Next } from './program'
 import { parseRunStatus, runIsLive } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
-import type { FirstFailure, RunNodeSummary, RunStep, RunSummary, RunView, StatusKind } from './types'
+import type { FirstFailure, RunList, RunNodeSummary, RunStep, RunSummary, RunView, StatusKind } from './types'
 
 const RUNS_PAGE_SIZE = 100
 export const RUNS_MAX = 1000
@@ -118,6 +118,44 @@ export function visibleRuns(runs: readonly RunSummary[], model: Pick<RunsModel, 
     (!needle || `${run.id} ${run.target ?? 'all assets'}`.toLowerCase().includes(needle)) &&
     (model.hour === null || inHour(run, model.hour)),
   )
+}
+
+/** Whether the list is narrowed by a filter, a search or an hour. */
+function narrowed(model: Pick<RunsModel, 'filter' | 'query' | 'hour'>): boolean {
+  return model.filter !== 'all' || model.query.trim() !== '' || model.hour !== null
+}
+
+/**
+ * The Runs header's count. Unnarrowed, every run the server has (`37,955`). Narrowed, the count
+ * is over the runs loaded, so when those are not every run it says so
+ * (`21 not successful in the latest 100`) rather than reading as a share of all history
+ * (`GET /runs` counts only all runs; a filtered count would need the server to count it).
+ */
+export function runsCountLabel(
+  list: Pick<RunList, 'runs' | 'total' | 'truncated'>,
+  shown: number,
+  model: Pick<RunsModel, 'filter' | 'query' | 'hour'>,
+): { text: string; title: string } {
+  const loaded = list.runs.length
+  const runs = (n: number) => `${n.toLocaleString()} run${n === 1 ? '' : 's'}`
+  if (!narrowed(model)) return { text: list.total.toLocaleString(), title: runs(list.total) }
+  if (!list.truncated) return { text: `${shown.toLocaleString()} of ${list.total.toLocaleString()}`, title: `${shown.toLocaleString()} of ${runs(list.total)}` }
+  const word = match(model.filter)
+    .with('failed', () => 'not successful')
+    .with('live', () => 'in progress')
+    .with('all', () => 'matching')
+    .exhaustive()
+  return {
+    text: `${shown.toLocaleString()} ${word} in the latest ${loaded.toLocaleString()}`,
+    title: `Counted over the latest ${runs(loaded)} loaded, of ${list.total.toLocaleString()} in all; Load more counts further back`,
+  }
+}
+
+/** The "Not successful" chip's count, and what it is counted over. */
+export function failedChipCount(list: Pick<RunList, 'runs' | 'truncated'>): { count: number; title: string | undefined } {
+  const count = list.runs.filter((r) => runFailed(r.status)).length
+  const n = list.runs.length
+  return { count, title: list.truncated ? `${count.toLocaleString()} not successful in the latest ${n.toLocaleString()} run${n === 1 ? '' : 's'} loaded` : undefined }
 }
 
 function inHour(run: RunSummary, at: number): boolean {
@@ -266,6 +304,81 @@ export function runNodeTime(n: RunNodeSummary, format: (seconds: number) => stri
 /** A run's listed steps by outcome: the failed ones (first), then the rest. */
 export function splitRunSteps(steps: readonly RunStep[]): { failed: RunStep[]; ok: RunStep[] } {
   return { failed: steps.filter((s) => s.status === 'failed'), ok: steps.filter((s) => s.status !== 'failed') }
+}
+
+/**
+ * One row of a run's Steps list, which the panel renders only in view (`RunsView`'s
+ * `RunSteps`), so a run of 60,000 planned nodes and 1,000 listed keys stays a few dozen rows
+ * in the DOM. A node's keys are one row with their count; opening it lists them under it.
+ */
+export type RunStepRow =
+  /** A planned node that recorded no step: cached, or skipped. */
+  | { kind: 'idle'; summary: RunNodeSummary }
+  /** A node of one key and one listed step: the node's row is the step's. */
+  | { kind: 'single'; summary: RunNodeSummary; step: RunStep }
+  /** A node of several keys (or whose keys the page does not list): its count, opened or not. */
+  | { kind: 'node'; group: RunNodeGroup; open: boolean }
+  /** One listed key of an opened node. */
+  | { kind: 'key'; node: string; step: RunStep }
+  /** An opened node's successful keys, behind their count when it also has failed ones. */
+  | { kind: 'ok_keys'; node: string; count: number; open: boolean }
+  /** An opened node's keys the page does not list. */
+  | { kind: 'unlisted'; node: string; count: number }
+  /** A step of a run without a per-node summary (no partitioned node): one row each. */
+  | { kind: 'step'; step: RunStep }
+
+/** Which nodes of the Steps list are open, and which of those show their successful keys. */
+export interface RunStepsOpen {
+  nodes: ReadonlySet<string>
+  ok: ReadonlySet<string>
+}
+
+export const NO_STEPS_OPEN: RunStepsOpen = { nodes: new Set(), ok: new Set() }
+
+/** `open` with `id` opened or closed in `which`. */
+export function toggleStepsOpen(open: RunStepsOpen, which: keyof RunStepsOpen, id: string): RunStepsOpen {
+  const next = new Set(open[which])
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  return { ...open, [which]: next }
+}
+
+/**
+ * The Steps list's rows: a row per planned node (`groupRunSteps`), and under each opened one its
+ * failed keys, then its successful ones (behind their count when some failed), then how many
+ * keys the page leaves out. Without a per-node summary, a row per listed step.
+ */
+export function runStepRows(steps: readonly RunStep[], nodes: readonly RunNodeSummary[], open: RunStepsOpen): RunStepRow[] {
+  if (nodes.length === 0) return steps.map((step) => ({ kind: 'step', step }))
+  const rows: RunStepRow[] = []
+  for (const group of groupRunSteps(steps, nodes)) {
+    const { summary } = group
+    if (runNodeIdle(summary)) {
+      rows.push({ kind: 'idle', summary })
+      continue
+    }
+    if (summary.keys <= 1 && group.steps.length === 1) {
+      rows.push({ kind: 'single', summary, step: group.steps[0]! })
+      continue
+    }
+    const opened = open.nodes.has(summary.node_id)
+    rows.push({ kind: 'node', group, open: opened })
+    if (!opened) continue
+    const node = summary.node_id
+    const { failed, ok } = splitRunSteps(group.steps)
+    for (const step of failed) rows.push({ kind: 'key', node, step })
+    if (ok.length > 0) {
+      if (failed.length === 0) for (const step of ok) rows.push({ kind: 'key', node, step })
+      else {
+        const okOpen = open.ok.has(node)
+        rows.push({ kind: 'ok_keys', node, count: ok.length, open: okOpen })
+        if (okOpen) for (const step of ok) rows.push({ kind: 'key', node, step })
+      }
+    }
+    const unlisted = summary.keys - group.steps.length
+    if (unlisted > 0) rows.push({ kind: 'unlisted', node, count: unlisted })
+  }
+  return rows
 }
 
 /**

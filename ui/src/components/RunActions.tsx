@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useHealth } from '@/hooks/useHealth'
+import { useWriteControl } from '@/hooks/useWriteControl'
 import { api } from '@/lib/api'
 import { rerunAllRequest, rerunFailedRequest, retryStepRequest } from '@/lib/runRecovery'
 import type { RunRequest, RunView } from '@/lib/types'
@@ -12,7 +12,7 @@ type Rerunnable = Pick<RunView, 'command' | 'target' | 'files'>
 /** Start `request`, then show the new run: `onStarted` gets its id. One request at a time. */
 function useStart(onStarted: (runId: string) => void) {
   const client = useQueryClient()
-  const readOnly = useHealth().data?.read_only === true
+  const writes = useWriteControl()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const start = async (request: RunRequest) => {
@@ -28,31 +28,33 @@ function useStart(onStarted: (runId: string) => void) {
       setBusy(false)
     }
   }
-  return { start, busy, error, readOnly }
+  return { start, busy, error, writes }
 }
-
-const READ_ONLY = 'This server is read-only: it starts no runs.'
 
 /**
  * A finished run's recovery: run it again cache-aware (the steps that succeeded are cached, so
- * only the failed steps and what they stopped run), or with every step recomputed.
+ * only the failed steps and what they stopped run), or with every step recomputed. None on a
+ * read-only server.
  */
 export function RunActions({ run, failed, onStarted }: { run: Rerunnable; failed: boolean; onStarted: (runId: string) => void }) {
-  const { start, busy, error, readOnly } = useStart(onStarted)
+  const { start, busy, error, writes } = useStart(onStarted)
+  if (writes === 'hidden') return null
+  const off = busy || writes === 'disabled'
   return <div className="barca-run-actions" style={{ display: 'contents' }}>
-    {failed && <Button size="sm" variant="signal" loading={busy} disabled={busy || readOnly} title={readOnly ? READ_ONLY : 'Re-run the failed steps and everything downstream of them: the same target again, the steps that succeeded are cached'}
+    {failed && <Button size="sm" variant="signal" loading={busy} disabled={off} title="Re-run the failed steps and everything downstream of them: the same target again, the steps that succeeded are cached"
       onClick={() => void start(rerunFailedRequest(run))}>Re-run failed</Button>}
-    <Button size="sm" disabled={busy || readOnly} title={readOnly ? READ_ONLY : 'Re-run the whole run: the same target with every step recomputed (--refresh-all)'}
+    <Button size="sm" disabled={off} title="Re-run the whole run: the same target with every step recomputed (--refresh-all)"
       onClick={() => void start(rerunAllRequest(run))}>Re-run all</Button>
     {error && <p className="barca-run-error" role="alert">Could not start the run: {error}</p>}
   </div>
 }
 
-/** "Retry" of one failed step (one key of a partitioned node: only that key). */
+/** "Retry" of one failed step (one key of a partitioned node: only that key). None on a read-only server. */
 export function RetryStep({ run, stepId, onStarted }: { run: Rerunnable; stepId: string; onStarted: (runId: string) => void }) {
-  const { start, busy, error, readOnly } = useStart(onStarted)
+  const { start, busy, error, writes } = useStart(onStarted)
+  if (writes === 'hidden') return null
   return <>
-    <Button size="sm" variant="ghost" loading={busy} disabled={busy || readOnly} title={readOnly ? READ_ONLY : `Run ${stepId} again`}
+    <Button size="sm" variant="ghost" loading={busy} disabled={busy || writes === 'disabled'} title={`Run ${stepId} again`}
       onClick={(e) => { e.stopPropagation(); void start(retryStepRequest(run, stepId)) }}>Retry</Button>
     {error && <span className="barca-run-error" role="alert">{error}</span>}
   </>
@@ -61,7 +63,7 @@ export function RetryStep({ run, stepId, onStarted }: { run: Rerunnable; stepId:
 /** Cancel one live run, keeping the request visible until polling reports its terminal state. */
 export function CancelRun({ id, queued }: { id: string; queued: boolean }) {
   const client = useQueryClient()
-  const readOnly = useHealth().data?.read_only ?? true
+  const writes = useWriteControl()
   const [asking, setAsking] = useState(false)
   const cancel = useMutation({
     mutationFn: () => api.cancelRun(id),
@@ -70,7 +72,8 @@ export function CancelRun({ id, queued }: { id: string; queued: boolean }) {
       void client.invalidateQueries({ queryKey: ['queue'] })
     },
   })
-  if (readOnly) return null
+  // Hidden until the server is known to take writes: a cancel is never offered to be refused.
+  if (writes !== 'enabled') return null
   return <>
     <Button size="sm" disabled={cancel.isPending || cancel.isSuccess} onClick={() => setAsking(true)}>
       {cancel.isSuccess ? 'Cancellation requested' : cancel.isPending ? 'Cancelling…' : 'Cancel run'}

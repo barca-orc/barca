@@ -212,6 +212,22 @@ pub(crate) async fn run_log_lines(
         .collect())
 }
 
+/// The newest `n` lines a run in progress has spooled (#925): what `GET /runs/{run_id}` shows
+/// of its logs until the run records them. Empty when it has spooled none.
+pub fn live_log_tail(db_path: &str, run_id: &str, n: usize) -> Vec<db::LogEntry> {
+    let spool = crate::run_logs::spool_path(db_path, run_id);
+    let Ok((lines, _)) = crate::run_logs::read_spool(&spool, 0) else {
+        return Vec::new();
+    };
+    let skip = lines.len().saturating_sub(n);
+    lines
+        .into_iter()
+        .enumerate()
+        .skip(skip)
+        .map(|(seq, line)| db::LogEntry::at(seq, line))
+        .collect()
+}
+
 /// Whether `--step <step>` selects the line of node `id`: its exact id, its base id (every
 /// partition key), or its function name.
 pub fn step_matches(id: &str, step: &str) -> bool {

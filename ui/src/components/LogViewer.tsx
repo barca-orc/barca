@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Check, Copy, Download, X } from 'lucide-react'
 import { useTimeZone } from '@/context/timeZone'
 import { formatAbsolute, formatClock } from '@/lib/time'
@@ -37,6 +38,9 @@ export interface LogViewerProps {
  * bottom while the user is pinned there. With `tools`, a toolbar filters the lines by step,
  * text (matches highlighted) and errors (stderr and traceback lines), jumps to the first
  * error, and copies or downloads the lines shown.
+ *
+ * Only the lines in view are in the DOM (TanStack Virtual, each line measured as it renders,
+ * since a long line wraps): a run of 30,000 lines renders a few dozen, not 30,000.
  */
 export function LogViewer({
   lines,
@@ -56,12 +60,25 @@ export function LogViewer({
   const [errorsOnly, setErrorsOnly] = useState(false)
   const [copied, setCopied] = useState(false)
   const shown = useMemo(() => filterLogs(lines, { step, query, errorsOnly }), [lines, step, query, errorsOnly])
-  const firstError = shown.findIndex(({ line }) => isErrorLine(line))
+  const firstError = useMemo(() => shown.findIndex(({ line }) => isErrorLine(line)), [shown])
+  // Not memoized, as the lint notes: its functions are read while rendering, each render.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: shown.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => LINE_HEIGHT,
+    overscan: OVERSCAN,
+    paddingStart: PAD,
+    paddingEnd: PAD,
+    // The first render (and a server render) shows the lines that fit, before any measurement.
+    initialRect: { width: 0, height: typeof height === 'number' ? height : 320 },
+    // Measure a resized line on the next frame: a live log grows while it is measured.
+    useAnimationFrameWithResizeObserver: true,
+  })
 
   useEffect(() => {
-    const el = scrollRef.current
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [shown.length])
+    if (pinnedRef.current && shown.length > 0) virtualizer.scrollToIndex(shown.length - 1, { align: 'end' })
+  }, [shown.length, virtualizer])
 
   const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget
@@ -69,10 +86,9 @@ export function LogViewer({
   }
 
   const jumpToError = () => {
-    const row = scrollRef.current?.querySelector<HTMLElement>(`[data-index="${firstError}"]`)
-    if (!row || !scrollRef.current) return
+    if (firstError < 0) return
     pinnedRef.current = false
-    scrollRef.current.scrollTop = row.offsetTop - 8
+    virtualizer.scrollToIndex(firstError, { align: 'start' })
   }
   const text = () => logsText(shown.map(({ line }) => line))
   const copy = () => {
@@ -106,32 +122,44 @@ export function LogViewer({
         {shown.length === 0 ? (
           <div className="barca-log-empty">{lines.length === 0 ? 'no output yet' : 'no line matches'}</div>
         ) : (
-          <div className="barca-log-lines">
-            {shown.map(({ line: ln, number }, i) => (
-              <div key={number} data-index={i} className="barca-log-line" data-stream={ln.stream ?? 'stdout'} data-error={isErrorLine(ln) || undefined}>
-                {showLineNumbers && <span className="barca-log-gutter">{number}</span>}
-                {ln.ts && (
-                  <span className="barca-log-ts" title={formatAbsolute(ln.ts, zone)}>
-                    {formatClock(ln.ts, zone)}
+          <div className="barca-log-lines" style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((item) => {
+              const { line: ln, number } = shown[item.index]!
+              return (
+                <div key={number} ref={virtualizer.measureElement} data-index={item.index} className="barca-log-line"
+                  data-stream={ln.stream ?? 'stdout'} data-error={isErrorLine(ln) || undefined}
+                  style={{ transform: `translateY(${item.start}px)` }}>
+                  {showLineNumbers && <span className="barca-log-gutter">{number}</span>}
+                  {ln.ts && (
+                    <span className="barca-log-ts" title={formatAbsolute(ln.ts, zone)}>
+                      {formatClock(ln.ts, zone)}
+                    </span>
+                  )}
+                  {tools && step === null && ln.nodeId && (
+                    <button type="button" className="barca-log-step" title={`Show only ${ln.nodeId}`} onClick={() => onStepChange?.(ln.nodeId)}>
+                      {shortStep(ln.nodeId)}
+                    </button>
+                  )}
+                  <span className="barca-log-text">
+                    {highlightParts(ln.text, query).map((part, j) => part.match ? <mark key={j}>{part.text}</mark> : part.text)}
+                    {live && item.index === shown.length - 1 && <span className="barca-log-cursor" />}
                   </span>
-                )}
-                {tools && step === null && ln.nodeId && (
-                  <button type="button" className="barca-log-step" title={`Show only ${ln.nodeId}`} onClick={() => onStepChange?.(ln.nodeId)}>
-                    {shortStep(ln.nodeId)}
-                  </button>
-                )}
-                <span className="barca-log-text">
-                  {highlightParts(ln.text, query).map((part, j) => part.match ? <mark key={j}>{part.text}</mark> : part.text)}
-                  {live && i === shown.length - 1 && <span className="barca-log-cursor" />}
-                </span>
-              </div>
-            ))}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
     </div>
   </>
 }
+
+/** A line's height before it is measured (one line of text at the log's line height), px. */
+const LINE_HEIGHT = 25
+/** Lines rendered beyond each edge of the view. */
+const OVERSCAN = 20
+/** Space above the first line and below the last, px. */
+const PAD = 8
 
 /** `a/b.py:regional[region=amer]` → `regional[region=amer]`. */
 function shortStep(id: string): string {

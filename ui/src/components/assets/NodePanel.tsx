@@ -3,14 +3,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { GitBranch, Play, X } from 'lucide-react'
-import { Absolute, Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge } from '@/components'
+import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
 import { runGlyph } from '@/lib/runs'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
 import { formatAbsolute } from '@/lib/time'
 import { ArtifactSchema } from './ArtifactSchema'
 import { AssetVersions } from './AssetVersions'
-import { CopyButton, NodeKeys, PartitionBar } from './NodeKeys'
+import { CopyButton, KeyErrors, NodeKeys, PartitionBar } from './NodeKeys'
 import { BlastRadius } from './BlastRadius'
 import { IncidentControls } from './IncidentControls'
 import { usePausedSet } from '@/hooks/usePauses'
@@ -20,15 +20,17 @@ import { useAssetSchema } from '@/hooks/useAssetSchema'
 import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
 import { useRunDetail } from '@/hooks/useRuns'
+import { usePartitionKey } from '@/hooks/usePartitionGrid'
 import { buildRows, formatSeconds } from '@/lib/assetTable'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { blockedBy as blockedByMap } from '@/lib/graphView'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
-import { EDITOR_ROOTS_KEY, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, formatBytes, historyBars, onlyFailures, raisedAtLabel, runPace, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
-import { consumersOf, downstreamIds, failedUpstream, headline, isFailed } from '@/lib/health'
+import { signalLine } from '@/lib/dataSignals'
+import { EDITOR_ROOTS_KEY, changedSummary, collapseRuns, dataKey, dataKeyNote, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, errorFirstLine, failuresOnlyNote, formatBytes, historyBars, keyFigures, onlyFailures, rowsLabel, raisedAtLabel, runPace, runsRecorded, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
+import { consumersOf, downstreamIds, failedUpstream, headline, isFailed, streakLabel } from '@/lib/health'
 import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
-import type { AssetRunEntry, ListNode, NodeState } from '@/lib/types'
+import type { AssetRunEntry, KeyArtifact, ListNode, NodeState, NodeStatus } from '@/lib/types'
 import type { NodeRunAction } from '@/hooks/useNodeRun'
 
 interface NodePanelProps {
@@ -103,6 +105,15 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const paced = useRunDetail(pacedRun)
   const pace = runPace(paced.data?.steps_page.nodes?.find((n) => n.node_id === node.id))
 
+  // A partitioned node's last success is its newest successful key's, possibly in a run where
+  // other keys failed: said so wherever it is shown beside a failure.
+  const successWord = node.partitioned ? 'last success (any key)' : 'last success'
+  const figures = node.partitions ? keyFigures(node.partitions, node.last_run) : []
+  // Which output the Data tab inspects; a key whose last attempt failed shows what it has cached.
+  const shownKey = dataKey(node)
+  const cachedKey = usePartitionKey(node.id, shownKey.kind === 'cached' && tab === 'data' ? shownKey.key : null)
+  const cachedOutput = cachedKey.data?.output ? { output: cachedKey.data.output, at: cachedKey.data.attempts.find((a) => a.status === 'success')?.created_at ?? null } : null
+
   const pausedSet = usePausedSet()
   const runGuard = usePausedRunGuard(node.id, runAction.fire)
 
@@ -123,11 +134,11 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       subtitleAction={<CopyButton label="Copy id" text={node.id} />}
       actions={
         <>
-          <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
-            disabled={runAction.readOnly} loading={runAction.triggering}
+          {runAction.writes !== 'hidden' && <Button variant="signal" size="sm" iconLeft={<Play size={12} />}
+            disabled={runAction.writes === 'disabled'} loading={runAction.triggering}
             title={runAction.title} onClick={runGuard.onRun}>
             Run
-          </Button>
+          </Button>}
           <IconButton label="Open in graph" size="sm" onClick={() => onOpenGraph(node.id)}>
             <GitBranch size={14} />
           </IconButton>
@@ -155,6 +166,28 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           )}
         </div>
         {runAction.error && <p className="barca-note" role="alert">Could not start run: {runAction.error.message}</p>}
+        {/* A partitioned node leads with its keys: how many, cached, and what its newest run did. */}
+        {figures.length > 0 && (
+          <div className="barca-stats barca-key-figures" role="group" aria-label="Keys">
+            {figures.map((f) => (
+              <div key={f.id} data-figure={f.id}>
+                <b>{f.value.toLocaleString()}</b>
+                <span>{f.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* What the recorded row counts and times say about its data: empty, sharply changed, older than an input. */}
+        {(node.signals ?? []).length > 0 && (
+          <ul className="barca-signals" aria-label="Data signals">
+            {(node.signals ?? []).map((signal, i) => (
+              <li key={i}>
+                <StatusGlyph glyph={signal.kind === 'behind_input' ? 'stale' : 'partial'} size={12} />
+                <span>{signal.kind === 'behind_input' ? 'Behind: ' : 'Suspect data: '}{signalLine(signal)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         {node.running && (
           <KeyValue label="now">
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}
@@ -171,10 +204,14 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           </p>
         ) : !(failed && last) && <p className="barca-note">{sentence(node.cache.detail)}</p>}
         {failedKeys > 0 && (
-          <p className="barca-note">
-            {failedRun && <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>Open the run</Link>}
-            {node.last_success_at && <> · last success <Age at={node.last_success_at} nowMs={nowMs} /></>}
-          </p>
+          <div className="barca-why" role="group" aria-label="Why its keys failed">
+            <KeyErrors id={node.id} failed={failedKeys} />
+            <p className="barca-note">
+              {node.failing_since && <>Failing since <Age at={node.failing_since} nowMs={nowMs} /> · {streakLabel(node.consecutive_failures)}</>}
+              {node.last_success_at ? <> · {successWord} <Age at={node.last_success_at} nowMs={nowMs} /></> : <> · never succeeded</>}
+              {failedRun && <> · <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>open the run</Link></>}
+            </p>
+          </div>
         )}
         {failed && last && failedKeys === 0 && (
           <div className="barca-why" role="group" aria-label="Why it failed">
@@ -184,8 +221,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             </div>
             <p className="barca-note">
               Failed <Age at={last.created_at} nowMs={nowMs} />
-              {node.failing_since && node.consecutive_failures > 1 && <> · failing since <Age at={node.failing_since} nowMs={nowMs} /> · {node.consecutive_failures} runs</>}
-              {node.last_success_at ? <> · last success <Age at={node.last_success_at} nowMs={nowMs} /></> : <> · never succeeded</>}
+              {node.failing_since && node.consecutive_failures > 1 && <> · failing since <Age at={node.failing_since} nowMs={nowMs} /> · {streakLabel(node.consecutive_failures)}</>}
+              {node.last_success_at ? <> · {successWord} <Age at={node.last_success_at} nowMs={nowMs} /></> : <> · never succeeded</>}
               {failedRun && <> · <Link to={`/runs?run=${encodeURIComponent(failedRun)}`}>open the run</Link></>}
             </p>
             {raised && (
@@ -228,8 +265,18 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           </div>
         )}
         {change && <p className="barca-note barca-what-changed">{change}</p>}
+        {/* What moved the run hash, in a few words; the list (often many helpers) on request. */}
         {node.cache.changed && node.cache.changed.length > 0 && (
-          <KeyValue label="changed">{node.cache.changed.join(', ')}</KeyValue>
+          <KeyValue label="changed">
+            {node.cache.changed.length <= 3 ? (
+              <span className="barca-wrap">{node.cache.changed.join(', ')}</span>
+            ) : (
+              <details className="barca-changed">
+                <summary>{changedSummary(node.cache.changed)}</summary>
+                <ul>{node.cache.changed.map((c) => <li key={c}><code>{c}</code></li>)}</ul>
+              </details>
+            )}
+          </KeyValue>
         )}
         {node.partitions && <PartitionBar partitions={node.partitions} waiting={node.cache.state === 'blocked'} />}
         {definition && definition.line > 0 && source !== null && (
@@ -250,7 +297,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       <div className="barca-panel-tabs" role="tablist" aria-label="Asset details">
         {PANEL_TABS.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
-            {t.label}{t.id === 'history' && stats && stats.total_runs > 0 ? <span className="barca-count">{stats.total_runs.toLocaleString()}</span> : null}
+            {t.label}{t.id === 'history' && stats && stats.total_runs > 0 ? <span className="barca-count" title={runsRecorded(stats.total_runs)}>{stats.total_runs.toLocaleString()}</span> : null}
           </button>
         ))}
       </div>
@@ -264,7 +311,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
               {' · '}<Age at={(lastRun ?? last).created_at} nowMs={nowMs} />
               {lastElapsed !== null && <>{' · '}{formatSeconds(lastElapsed)}</>}
               {lastRun?.keys != null && <> · {plural(lastRun.keys, 'key')}{lastRun.failed_keys ? `, ${lastRun.failed_keys.toLocaleString()} failed` : ''}</>}
-              {stats && <> · {stats.total_runs.toLocaleString()} {stats.total_runs === 1 ? 'run' : 'runs'}</>}
+              {stats && <> · {runsRecorded(stats.total_runs)}</>}
             </p>}
             {/* The distribution of successful durations, when there are two or more to compare
                 (`durations.samples`, known before the history loads, so nothing moves). */}
@@ -277,6 +324,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                   <Skeleton height={36} />
                 ) : (
                   <>
+                    <div className="barca-hist-title">Successful run durations{histogram.some((b) => b.isLast) ? ' · the last attempt highlighted' : ''}</div>
                     <div className="barca-hist-bars">
                       {histogram.map((b, i) => (
                         <span
@@ -288,8 +336,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                       ))}
                     </div>
                     <div className="barca-hist-axis">
-                      <span>{formatSeconds(histogram[0]?.from ?? 0)}</span>
-                      <span>{formatSeconds(histogram[histogram.length - 1]?.to ?? 0)}</span>
+                      <span>fastest {formatSeconds(histogram[0]?.from ?? 0)}</span>
+                      <span>slowest {formatSeconds(histogram[histogram.length - 1]?.to ?? 0)}</span>
                     </div>
                   </>
                 )}
@@ -340,7 +388,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           {detail ? freshnessLabel(detail.asset) : <Skeleton width={72} height={12} />}
         </KeyValue>
         {row?.nextRunMs != null && (
-          <KeyValue label="next run"><Absolute at={row.nextRunMs} /></KeyValue>
+          <KeyValue label="next run"><Age at={row.nextRunMs} nowMs={nowMs} /></KeyValue>
         )}
         {/* Blast radius lists everything downstream; the direct readers are a detail. */}
         {downstream.length > 0 && (
@@ -376,8 +424,18 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           ) : (
             <>
               <h4 className="barca-schema-label">Output</h4>
+              {node.partitioned && (
+                <p className="barca-schema-key">
+                  {dataKeyNote(shownKey, shownKey.kind === 'cached' ? (cachedKey.isPending ? null : cachedOutput !== null) : null)}{' '}
+                  <Link to={keysHref(node.id)}>Key explorer</Link>
+                </p>
+              )}
               <div className="barca-schema-output">
-                {output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
+                {shownKey.kind === 'cached'
+                  ? cachedOutput && output
+                    ? <ArtifactSchema node={keyOutput(output, cachedOutput.output, cachedOutput.at, shownKey.key)} />
+                    : cachedKey.isPending ? <Skeleton height={60} /> : null
+                  : output ? <ArtifactSchema node={output} /> : <p className="barca-schema-empty">Output schema unavailable.</p>}
               </div>
               {/* A source node's inputs are one muted line, not a heading over nothing. */}
               {node.inputs.length === 0 ? <p className="barca-schema-empty">No inputs: a source node.</p> : (
@@ -415,11 +473,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {isError && <p className="barca-note">Couldn't load run history.</p>}
         {stats && stats.total_runs === 0 && <p className="barca-note">No runs recorded.</p>}
         {stats && failuresOnly && (
-          <p className="barca-note">
-            {node.partitioned
-              ? <>No run has computed every key yet ({stats.total_runs === 1 ? 'its only run' : `all ${stats.total_runs.toLocaleString()} runs`} had keys fail), so there are no durations to show.</>
-              : <>No successful run yet: {stats.total_runs === 1 ? 'its only attempt' : `all ${stats.total_runs.toLocaleString()} attempts`} failed, so there are no durations to show.</>}
-          </p>
+          <p className="barca-note">{failuresOnlyNote(stats.total_runs, node.consecutive_failures, stats.recent_runs.length, node.partitioned)}</p>
         )}
         {stats && failuresOnly && <RunList runs={stats.recent_runs} nowMs={nowMs} said={summarized ? last?.error : null} />}
         {stats && stats.total_runs > 0 && !failuresOnly && (
@@ -427,7 +481,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             <div className="barca-stats">
               <div>
                 <b>{stats.total_runs.toLocaleString()}</b>
-                <span>{stats.total_runs === 1 ? 'run' : 'runs'}</span>
+                <span>{stats.total_runs === 1 ? 'run recorded' : 'runs recorded'}</span>
               </div>
               {pace && (
                 <div>
@@ -501,30 +555,30 @@ const PANEL_TABS: ReadonlyArray<{ id: PanelTab; label: string }> = [
   { id: 'incident', label: 'Incident' },
 ]
 
-/** A node's recent executions, newest first, each failure's error behind a disclosure. */
-/** An error's first line, to tell whether two runs failed the same way. */
-const firstLine = (error: string) => error.trim().split('\n')[0]!.trim()
-
 /**
- * Recent runs, one line each. `said` is the error the panel's summary already shows in full: a
- * run that failed with it says nothing more, so the error is read once.
+ * Recent runs, one line each, a stretch of identical failures folded into one (`collapseRuns`:
+ * `×12 · 1h ago – 1m ago`). `said` is the error the panel's summary already shows in full: a run
+ * that failed with it says nothing more, so the error is read once.
  */
 function RunList({ runs, nowMs, said }: { runs: AssetRunEntry[]; nowMs: number; said?: string | null }) {
-  const saidLine = said ? firstLine(said) : null
+  const saidLine = said ? errorFirstLine(said) : null
   return (
     <ul className="barca-runs">
-      {runs.map((r, i) => (
+      {collapseRuns(runs).map(({ run: r, count, oldestAt }, i) => (
         <li key={i}>
           <div className="barca-run-line">
             <StatusBadge glyph={runGlyph(r.status)} label={r.status} size="sm" />
-            <Age at={r.created_at} nowMs={nowMs} />
-            {r.elapsed_seconds !== null && <span>{formatSeconds(r.elapsed_seconds)}</span>}
-            {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}</span>}
+            {count > 1 ? (
+              <span title={`${count} runs in a row failed the same way`}>×{count} · <Age at={oldestAt} nowMs={nowMs} /> – <Age at={r.created_at} nowMs={nowMs} /></span>
+            ) : <Age at={r.created_at} nowMs={nowMs} />}
+            {r.elapsed_seconds !== null && count === 1 && <span>{formatSeconds(r.elapsed_seconds)}</span>}
+            {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}{r.empty_keys ? `, ${r.empty_keys.toLocaleString()} empty` : ''}{count > 1 ? ' each' : ''}</span>}
+            {r.status === 'success' && rowsLabel(r.rows) && <span title="Rows the run wrote">{rowsLabel(r.rows)}</span>}
             {r.attempts > 1 && <span>{r.attempts} attempts</span>}
           </div>
-          {r.error_message && !(saidLine && (firstLine(r.error_message) === saidLine || saidLine.endsWith(firstLine(r.error_message)))) && (
+          {r.error_message && !(saidLine && (errorFirstLine(r.error_message) === saidLine || saidLine.endsWith(errorFirstLine(r.error_message)))) && (
             <details>
-              <summary>{r.error_message.split('\n')[0]}</summary>
+              <summary>{errorFirstLine(r.error_message)}</summary>
               <pre className="barca-error">{r.error_message}</pre>
             </details>
           )}
@@ -532,6 +586,27 @@ function RunList({ runs, nowMs, said }: { runs: AssetRunEntry[]; nowMs: number; 
       ))}
     </ul>
   )
+}
+
+/**
+ * The node's output as the schema view reads it, with a key's cached result (`GET
+ * /assets/{id}/partitions/key`) in place of its failed last attempt.
+ */
+function keyOutput(node: NodeStatus, output: KeyArtifact, at: string | null, key: string): NodeStatus {
+  return {
+    ...node,
+    shape: output.shape,
+    last_materialization: {
+      status: 'success',
+      created_at: at ?? '',
+      elapsed_seconds: null,
+      run_hash: null,
+      artifact: output.artifact_path,
+      format: output.format,
+      size_bytes: output.size_bytes, rows: null,
+      partition: key,
+    },
+  }
 }
 
 /** The server's state detail is a clause ("a successful materialization matches…"); shown alone it

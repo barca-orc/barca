@@ -5,10 +5,11 @@ import { Button } from '@/components'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
+import { useKnownStates } from '@/hooks/useAssetStates'
 import { useQueryClient } from '@tanstack/react-query'
 import { graphState, liveGraphState, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
-import { useHealth } from '@/hooks/useHealth'
+import { useWriteControl } from '@/hooks/useWriteControl'
 import { useRunStream } from '@/hooks/useRunStream'
 import { useTriggerNode } from '@/hooks/useTriggerNode'
 import { useTopbarRun } from '@/hooks/useTopbarRun'
@@ -28,7 +29,6 @@ export function GraphPage() {
   const filter = useAssetFilter('asset')
   const stateQuery = filter.states
   const queryClient = useQueryClient()
-  const { data: health } = useHealth()
   // `?focus=<node id>` (from the Assets table) opens with that node selected.
   const [searchParams, setSearchParams] = useSearchParams()
   const selected = searchParams.get('focus')
@@ -73,7 +73,7 @@ export function GraphPage() {
     [],
   )
   const trigger = useTriggerNode(selectedAsset, onTrigger)
-  const readOnly = health?.read_only ?? false
+  const readOnly = useWriteControl() === 'hidden'
 
   // The toolbar's Run acts on what is open; the inspector's on its node; the command palette on
   // the selected node, else what is open.
@@ -90,12 +90,14 @@ export function GraphPage() {
     [stream.statuses, stream.running, run],
   )
 
+  // While a new pipeline's state loads, its nodes keep their last known state (not "Checking…").
+  const knownRows = useKnownStates(stateQuery.data)
   const visualStates = useMemo(() => {
     const base = Object.fromEntries(assets.map(a => [a.id, stateQuery.isError ? UNKNOWN_GRAPH_STATE : PENDING_GRAPH_STATE]))
-    if (!stateQuery.isError) for (const node of stateQuery.data ?? []) base[node.id] = graphState(node)
+    if (!stateQuery.isError) for (const node of knownRows ?? []) base[node.id] = graphState(node)
     if (stream.running) for (const [id, status] of Object.entries(statuses)) base[id] = liveGraphState(status)
     return base
-  }, [assets, stateQuery.data, stateQuery.isError, statuses, stream.running])
+  }, [assets, knownRows, stateQuery.isError, statuses, stream.running])
   useEffect(() => {
     if (run && !stream.running) void queryClient.invalidateQueries({queryKey:['state']})
   }, [run, stream.running, queryClient])

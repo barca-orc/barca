@@ -9,6 +9,8 @@
 import type { Connection } from '@/lib/connection'
 import type { CacheState } from '@/lib/cacheStateDisplay'
 import { emptyHealth, type Failure, type HealthCounts } from '@/lib/health'
+import type { Health } from '@/lib/nodeHealth'
+import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Remote } from '@/lib/remote'
 import { ready, failed, loading } from '@/lib/remote'
@@ -16,13 +18,19 @@ import type { ResetPhase } from '@/components/ResetDatabase'
 import type { TokensModel } from '@/lib/tokensPage'
 import { INITIAL_TOKENS } from '@/lib/tokensPage'
 import type {
+  DataSignal,
+  ActiveStep,
   IssuedToken,
   LastMaterialization,
   LogLine,
+  NodeGroup,
   NodeKind,
   NodeRunning,
   NodeState,
   NodeStatus,
+  QueueEntry,
+  QueueView,
+  PlanReasons,
   RunList,
   RunningStep,
   RunSummary,
@@ -64,6 +72,7 @@ const materialized = (overrides: Partial<LastMaterialization> = {}): LastMateria
   artifact: '.barca/artifacts/orders_clean/9f2c0a41be77.parquet',
   format: 'parquet',
   size_bytes: 482_113,
+  rows: null,
   ...overrides,
 })
 
@@ -80,6 +89,9 @@ function node(name: string, overrides: Partial<NodeState>): NodeState {
     env: [],
     durations: { median_seconds: 4.1, p95_seconds: 6.3, samples: 12 },
     next_run: null,
+    prev_run: null,
+    late_since: null,
+    signals: [],
     running: null,
     last_success_at: ago(3_600),
     failing_since: null,
@@ -122,6 +134,24 @@ export const nodeByState = {
   }),
   cached: node('orders_clean', {}),
 } satisfies Record<CacheState, NodeState>
+
+/** A node carrying each data-health signal (`NodeState.signals`), as `GET /state` sends it. */
+export const nodeBySignal = {
+  empty: node('orders_by_region', {
+    partitioned: true,
+    partitions: { total: 1205, cached: 1205, missing: 0, missing_keys: [], empty: 3 },
+    signals: [{ kind: 'empty', empty_keys: 3, keys: 1205, previous_empty_keys: 0 }],
+  }),
+  rows_changed: node('invoices_clean', {
+    last_materialization: materialized({ rows: 300 }),
+    signals: [{ kind: 'rows_changed', changed_keys: 1, key: null, rows: 300, previous_rows: 1200 }],
+  }),
+  behind_input: node('orders_all', {
+    cache: { state: 'unknown', reason: 'cutoff_pending', detail: 'an input with cutoff=True runs first' },
+    last_success_at: ago(2 * 86_400),
+    signals: [{ kind: 'behind_input', input: 'pipeline.py:orders_by_region', input_success_at: sqlTime(3_600), last_success_at: sqlTime(2 * 86_400) }],
+  }),
+} satisfies Record<DataSignal['kind'], NodeState>
 
 /**
  * A node whose last attempt failed: the fact shown beside its state. `stale` with reason `failed`
@@ -262,6 +292,11 @@ function runView(status: RunViewStatus, overrides: Partial<RunView> = {}): RunVi
     attempts: null,
     client_run_id: null,
     failure: null,
+    principal: null,
+    trigger_reason: null,
+    retries: null,
+    plan_reasons: null,
+    cancellation: null,
     outcome: null,
     error: null,
     steps: status === 'pending' ? [] : [
@@ -281,7 +316,7 @@ function step(node_id: string, status: string, error: string | null = null): Run
     node_id, status, elapsed_seconds: 4.2, error, partition_key: null, attempts: 1, run_hash: null,
     artifact_path: null, artifact_format: null, artifact_size_bytes: null, error_type: null,
     error_message: null, error_traceback: null, error_phase: null, worker_exit: null,
-    cpu_seconds: null, max_rss_bytes: null, output_tail: null, batch: null,
+    cpu_seconds: null, max_rss_bytes: null, rows: null, output_tail: null, batch: null,
   }
 }
 
@@ -316,13 +351,43 @@ const runTruncated = runView('failed', {
   steps_page: { total: 1440, truncated: true },
 })
 
+/**
+ * A failed run of a partitioned node: 5,000 keys, 1,250 failed, 1,000 listed, and a log line per
+ * key. Its node is one row with the count; the logs and the opened keys render only what is in view.
+ */
+const manyKeys = Array.from({ length: 1000 }, (_, i) => {
+  const key = `account=acct_${String(i * 4 + 1).padStart(6, '0')}`
+  const failedKey = i < 250
+  return { ...step(`billing.py:invoices_by_account[${key}]`, failedKey ? 'failed' : 'success', failedKey ? 'ValueError: 3 rows with a negative total' : null), partition_key: key }
+})
+const runManyKeys = runView('failed', {
+  error: 'invoices_by_account: 1,250 keys failed',
+  steps_total: 7644,
+  steps_executed: 5021,
+  steps: manyKeys,
+  steps_page: {
+    total: 5885,
+    truncated: true,
+    nodes: [
+      { node_id: 'billing.py:invoices_by_account', keys: 5000, failed: 1250, elapsed_seconds: 57.9, calls: 0, status: 'ran' },
+      { node_id: 'billing.py:invoice_totals', keys: 0, failed: 0, elapsed_seconds: 0, calls: 0, status: 'skipped', blocked_by: 'billing.py:invoices_by_account' },
+      { node_id: 'web.py:events_by_day', keys: 0, failed: 0, elapsed_seconds: 0, calls: 0, status: 'cached' },
+    ],
+  },
+  logs: Array.from({ length: 30_000 }, (_, seq) => ({
+    node_id: `billing.py:invoices_by_account[account=acct_${String(Math.floor(seq / 5)).padStart(6, '0')}]`,
+    seq, line: `exporting acct_${String(Math.floor(seq / 5)).padStart(6, '0')}: page ${seq % 5} of 5, 120 rows`, stream: 'stdout' as const, ts: ago(150),
+  })),
+})
+
 function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {}): RunSummary {
   return {
     id, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
     status: view.status, triggered_by: view.triggered_by, scheduled_at: null, schedule_id: null,
     started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
     steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
-    error: view.error, first_failure: null, ...overrides,
+    error: view.error, first_failure: null, principal: view.principal, trigger_reason: view.trigger_reason,
+    cancellation: view.cancellation, ...overrides,
   }
 }
 
@@ -351,6 +416,9 @@ export const runLists = {
   'refresh failed': ready(runList, 'connection refused'),
 } satisfies Record<string, Remote<RunList>>
 
+/** The latest 100 of 37,955 runs: a filter counts over those, and says so. */
+export const partialRunList: Remote<RunList> = ready({ ...runList, total: 37_955, truncated: true })
+
 /** The run panel in each state: its request's, then each run status. */
 export const runDetails: Record<string, Remote<RunView>> = {
   loading,
@@ -358,6 +426,104 @@ export const runDetails: Record<string, Remote<RunView>> = {
   'refresh failed': ready(runByStatus.running, 'connection refused'),
   ...Object.fromEntries(Object.entries(runByStatus).map(([status, view]) => [status, ready(view)])),
   'truncated steps': ready(runTruncated),
+  '5,000 keys, 30,000 log lines': ready(runManyKeys),
+}
+
+// ── Queue ─────────────────────────────────────────────────────────────────────
+
+const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => ({
+  run_id: `a8ba${String(n).padStart(4, '0')}`, status: 'pending', position: n, command: 'get',
+  target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
+  schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30), ...overrides,
+})
+const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
+const deepQueue: QueueView = {
+  paused: false, paused_at: null, draining: false, max_runs: 1,
+  running: [runningEntry], queued: Array.from({ length: 18 }, (_, i) => queued(i + 1)), capacity: null,
+}
+
+/** The Runs page's queue in each state it shows. */
+export const queueStates: Record<string, { queue: QueueView | undefined; collapsed?: boolean; readOnly?: boolean; loadError?: string }> = {
+  '1 running, 18 waiting': { queue: deepQueue },
+  collapsed: { queue: deepQueue, collapsed: true },
+  'running, nothing waiting': { queue: { ...deepQueue, queued: [] } },
+  paused: { queue: { ...deepQueue, paused: true, paused_at: ago(600), running: [] } },
+  draining: { queue: { ...deepQueue, draining: true } },
+  'waiting for capacity': { queue: { ...deepQueue, queued: deepQueue.queued.slice(0, 2), capacity: { total: 4, source: '--capacity', in_use: 3, runs: [{ run_id: runningEntry.run_id, weight: 3 }], waiting: [{ run_id: 'a8ba0001', node: 'web.py:big_join', weight: 3, waiting_seconds: 42 }] } } },
+  'read-only': { queue: deepQueue, readOnly: true },
+  unavailable: { queue: undefined, loadError: 'connection refused' },
+}
+
+/** The queue line every page shows, in each state. */
+export const queueStatusStates: Record<string, QueueStatus | null> = {
+  'no queue': null,
+  'runs waiting': { running: 1, waiting: 18, oldestWaitSeconds: 1200, paused: false, draining: false },
+  'waiting for hours': { running: 4, waiting: 312, oldestWaitSeconds: 3 * 3600 + 12 * 60, paused: false, draining: false },
+  paused: { running: 0, waiting: 3, oldestWaitSeconds: 600, paused: true, draining: false },
+  draining: { running: 1, waiting: 2, oldestWaitSeconds: 45, paused: false, draining: true },
+}
+
+// ── A run that explains itself (issue 925) ────────────────────────────────────────
+
+const rebuildReasons: PlanReasons = {
+  nodes: 469,
+  steps: 23_278,
+  omitted: 3,
+  reasons: [
+    { category: 'code_changed', subject: 'helper pipelines/common.py:bucket_ltv', nodes: 412, steps: 21_104, example: 'pipeline.py:ltv_by_account' },
+    { category: 'new_keys', subject: null, nodes: 2, steps: 1_205, example: 'pipeline.py:sessionize' },
+    { category: 'inputs_changed', subject: 'input pipeline.py:orders_clean', nodes: 40, steps: 957, example: 'pipeline.py:revenue_daily' },
+    { category: 'never_run', subject: null, nodes: 12, steps: 12, example: 'pipeline.py:churn_model' },
+  ],
+}
+
+const rebuildActive: ActiveStep[] = [
+  { node_id: 'pipeline.py:sessionize', step: 'running', partitions: { running: 880, done: 3_120, total: 5_000 } },
+  { node_id: 'pipeline.py:ltv_by_account', step: 'running', partitions: null },
+  { node_id: 'pipeline.py:revenue_daily', step: 'queued', partitions: null },
+]
+
+const rebuildGroups: NodeGroup[] = [
+  { id: 'group:web', name: 'web', description: '', members: ['pipeline.py:sessionize'], output: 'pipeline.py:sessionize' },
+  { id: 'group:finance', name: 'finance', description: '', members: ['pipeline.py:ltv_by_account', 'pipeline.py:revenue_daily'], output: 'pipeline.py:revenue_daily' },
+]
+
+/** The run overview (`RunOverviewView`) in each state it says something different in. */
+export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; groups: NodeGroup[]; nowMs: number }> = {
+  'full rebuild in flight': {
+    run: runView('running', {
+      triggered_by: 'api', principal: 'token:ci-bot', trigger_reason: 'backfill after the bucket_ltv fix',
+      started_at: ago(360), steps_total: 23_278, steps_executed: 19_399, steps_cached: 0, attempts: 19_461, retries: 62,
+      plan_reasons: rebuildReasons,
+      steps_page: { total: 19_399, truncated: true, nodes: [
+        { node_id: 'pipeline.py:sessionize', keys: 3_120, failed: 0, elapsed_seconds: 1_840.5, calls: 0 },
+        { node_id: 'pipeline.py:ltv_by_account', keys: 1, failed: 0, elapsed_seconds: 212.3, calls: 0 },
+      ] },
+    }),
+    active: rebuildActive, groups: rebuildGroups, nowMs: NOW_MS,
+  },
+  'just started': {
+    run: runView('running', { triggered_by: 'schedule', started_at: ago(4), steps_total: 23_278, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false } }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
+  'finished, served mostly from cache': {
+    run: runView('success', {
+      attempts: 3, retries: 0,
+      plan_reasons: { nodes: 2, steps: 3, omitted: 0, reasons: [{ category: 'inputs_changed', subject: 'sensor pipeline.py:orders_feed', nodes: 2, steps: 3, example: 'pipeline.py:orders_clean' }] },
+    }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
+  'cancelled before it started': {
+    run: runView('cancelled', {
+      triggered_by: 'api', principal: 'token:ops', steps_total: 0, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false },
+      cancellation: { by: 'request', principal: 'token:ops', started: false, waiting_behind: ['a7e8f06a4890'], same_as: 'a7e8f06a4890' },
+    }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
+  'cancelled by the server stopping': {
+    run: runView('cancelled', { cancellation: { by: 'shutdown', principal: null, started: true, waiting_behind: [], same_as: null } }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
 }
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
@@ -386,7 +552,7 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-const counts = (states: Partial<Record<CacheState, number>>, extra: Partial<Pick<HealthCounts, 'running' | 'pending' | 'lastFailed'>> = {}): HealthCounts => {
+const counts = (states: Partial<Record<Health, number>>, extra: Partial<Pick<HealthCounts, 'running' | 'pending'>> = {}): HealthCounts => {
   const all = emptyHealth()
   Object.assign(all.states, states)
   Object.assign(all, extra)
@@ -396,12 +562,12 @@ const counts = (states: Partial<Record<CacheState, number>>, extra: Partial<Pick
 
 /** A scope in each state the health bar distinguishes, and the mixes that matter. */
 export const healthStates: Record<string, HealthCounts> = {
-  cached: counts({ cached: 504 }),
-  'one failure in thousands': counts({ stale: 12, cached: 2400 }, { lastFailed: 1 }),
-  'failed and stale': counts({ stale: 121, cached: 380 }, { lastFailed: 3 }),
-  running: counts({ cached: 460, stale: 4 }, { running: 40 }),
-  'every state': counts({ blocked: 2, stale: 3, partial: 1, unsynced: 4, unknown: 1, never_run: 7, always_runs: 20, cached: 60 }, { lastFailed: 2 }),
-  'not run yet': counts({ never_run: 120, cached: 8 }),
+  ok: counts({ ok: 504 }),
+  'one failure in thousands': counts({ failing: 1, behind: 12, ok: 2399 }),
+  'failing and blocking': counts({ failing: 3, blocked: 58, behind: 121, ok: 380 }),
+  running: counts({ ok: 460, behind: 4 }, { running: 40 }),
+  'every health': counts({ failing: 2, blocked: 2, suspect: 1, behind: 8, waiting: 6, never_run: 7, ok: 80 }),
+  'not run yet': counts({ never_run: 120, ok: 8 }),
   checking: counts({}, { pending: 640 }),
   empty: counts({}),
 }
@@ -421,5 +587,10 @@ export const failureLists = {
     failureOf('check__ledger', "KeyError: 'currency'", 0, 'task'),
   ],
   'graph loading': [failureOf('invoices_00', 'row count fell 64% day over day', null)],
+  // A long error heads its cause wrapped (its count stays in view); rows with the same words do not repeat it.
+  'long error, said once': [
+    failureOf('invoices_by_account', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 58),
+    failureOf('invoices_by_region', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 3),
+  ],
   nothing: [],
 } satisfies Record<string, Failure[]>

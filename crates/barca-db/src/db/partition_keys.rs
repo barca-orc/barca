@@ -44,6 +44,31 @@ pub async fn failed_partition_keys(
     Ok(out)
 }
 
+/// The keys whose latest successful result wrote no rows (see [`empty_partition_keys`]).
+const EMPTY_KEYS: &str = "SELECT e.node_id FROM materializations e INDEXED BY idx_mat_empty \
+     WHERE e.rows = 0 AND e.status = 'success' AND instr(e.node_id, '[') > 0 AND NOT EXISTS ( \
+     SELECT 1 FROM materializations s WHERE s.node_id = e.node_id AND s.status = 'success' \
+     AND s.artifact_path IS NOT NULL AND s.id > e.id) \
+     GROUP BY e.node_id";
+
+/// How many keys of each partitioned node have an empty latest successful result: rows counted
+/// and 0 (#925). Reads `idx_mat_empty`, the empty results only, then one `idx_mat_node_latest`
+/// probe per empty key, so keys with rows cost nothing. Keys no longer in the node's key set
+/// still count while their result is recorded, as [`failed_partition_keys`] counts them.
+pub async fn empty_partition_keys(db_path: &str) -> Result<HashMap<String, usize>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let failure = |e: libsql::Error| BarcaError::Db(format!("failed to query empty keys: {e}"));
+    let mut rows = conn.query(EMPTY_KEYS, ()).await.map_err(failure)?;
+    let mut out: HashMap<String, usize> = HashMap::new();
+    while let Some(row) = rows.next().await.map_err(failure)? {
+        let node = row.get::<String>(0).unwrap_or_default();
+        *out.entry(barca_model::StepId::parse(&node).base_id().to_string())
+            .or_default() += 1;
+    }
+    Ok(out)
+}
+
 /// A key's latest recorded attempt (`GET /assets/{name}/partitions`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -58,6 +83,10 @@ pub struct PartitionKeyRow {
     pub artifact_path: Option<String>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub size_bytes: Option<i64>,
+    /// Rows the attempt's result holds, when its worker counted them; `null` otherwise (a
+    /// failed attempt, a result that is not a frame, an older barca's row).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub rows: Option<i64>,
 }
 
 /// How many keys last failed with one error.
@@ -109,6 +138,7 @@ pub struct LatestAttempt {
     pub run_id: Option<String>,
     pub artifact_path: Option<String>,
     pub size_bytes: Option<i64>,
+    pub rows: Option<i64>,
 }
 
 /// The latest attempt of each of `node_id`'s keys, in key order. Reads the node's rows through
@@ -124,7 +154,7 @@ pub async fn latest_attempts(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT node_id, MAX(id), status, created_at, elapsed_seconds, error_message, run_id, artifact_path, artifact_size_bytes \
+                "SELECT node_id, MAX(id), status, created_at, elapsed_seconds, error_message, run_id, artifact_path, artifact_size_bytes, rows \
                  FROM materializations WHERE {KEY_ROWS} GROUP BY node_id ORDER BY node_id"
             ),
             [node_id],
@@ -142,6 +172,7 @@ pub async fn latest_attempts(
             run_id: row.get::<String>(6).ok().filter(|r| !r.is_empty()),
             artifact_path: row.get::<String>(7).ok().filter(|p| !p.is_empty()),
             size_bytes: row.get::<i64>(8).ok(),
+            rows: row.get::<i64>(9).ok(),
         });
     }
     Ok(out)
@@ -219,6 +250,7 @@ pub async fn partition_keys(
                 run_id: row.run_id,
                 artifact_path: row.artifact_path,
                 size_bytes: row.size_bytes,
+                rows: row.rows,
             });
         }
     }
@@ -245,6 +277,9 @@ pub struct KeyAttempt {
     pub format: Option<String>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub size_bytes: Option<i64>,
+    /// Rows its result holds, when its worker counted them.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub rows: Option<i64>,
 }
 
 /// The latest `limit` attempts of one step (`node[key]`), newest first.
@@ -259,7 +294,7 @@ pub async fn key_attempts(
         |e: libsql::Error| BarcaError::Db(format!("failed to query a key's attempts: {e}"));
     let mut rows = conn
         .query(
-            "SELECT status, created_at, elapsed_seconds, error_message, run_id, artifact_path, artifact_format, artifact_size_bytes \
+            "SELECT status, created_at, elapsed_seconds, error_message, run_id, artifact_path, artifact_format, artifact_size_bytes, rows \
              FROM materializations WHERE node_id = ?1 ORDER BY id DESC LIMIT ?2",
             libsql::params![step_id, limit as i64],
         )
@@ -276,6 +311,7 @@ pub async fn key_attempts(
             artifact_path: row.get::<String>(5).ok().filter(|p| !p.is_empty()),
             format: row.get::<String>(6).ok().filter(|f| !f.is_empty()),
             size_bytes: row.get::<i64>(7).ok(),
+            rows: row.get::<i64>(8).ok(),
         });
     }
     Ok(out)

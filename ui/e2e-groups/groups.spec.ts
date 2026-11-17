@@ -10,7 +10,11 @@ const FILE = 'grouped.py'
 const G = (name: string) => `group:${FILE}:${name}`
 const N = (name: string) => `${FILE}:${name}`
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`
-const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'unknown', 'never run', 'always runs', 'fresh', 'failing']
+// A node shows its state in the CLI's words (`unknown` reads `waiting`; a node that always runs
+// shows its last run, `succeeded`); a group card shows its members' health (#925). A legend line
+// names every word its glyph carries on screen, joined by ` / ` (`ok / succeeded`).
+const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'waiting', 'never run', 'succeeded', 'fresh', 'failing']
+const HEALTH_WORDS = ['failing', 'blocked', 'suspect data', 'behind', 'waiting', 'never run', 'ok']
 
 // The whole pipeline once, and the fold 2 check (which fails) once: a failed last attempt on
 // record beside cached models.
@@ -73,7 +77,8 @@ test('the legend names the states the graph shows, in the CLI\'s words', async (
   const legend = page.locator('.barca-legend')
   await expect(legend).toContainText('failing')
   const words = (await legend.locator('span').allTextContents()).map((w) => w.trim())
-  for (const word of words) expect([...CACHE_STATES, 'failing', 'running', 'pinned', 'Group', 'Pipeline']).toContain(word)
+  for (const line of words)
+    for (const word of line.split(' / ')) expect([...CACHE_STATES, ...HEALTH_WORDS, 'pinned', 'Group', 'Pipeline']).toContain(word)
   await expect(legend).not.toContainText(/Healthy|Not run|Stale/)
 })
 
@@ -96,11 +101,11 @@ test('table groups support search, arrow selection and Enter to open', async ({ 
   await expect(page).not.toHaveURL(/group=/)
   await expect(rows).toHaveCount(3)
   await page.getByPlaceholder('Search groups and members').fill('fold_02__model')
-  // The group that holds the matches, then every matching node in it, with its path.
-  await expect(rows).toHaveCount(3)
-  await expect(rows.first()).toContainText('Cross-validation')
+  // Every matching node, with its path; not the group that holds them, which does not match.
+  await expect(rows).toHaveCount(2)
+  await expect(rows.first()).toContainText('in Cross-validation › Fold 2')
   await expect(rows.nth(1)).toContainText('in Cross-validation › Fold 2')
-  await rows.nth(1).click()
+  await rows.first().click()
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Fold 2')
 })
 
@@ -126,9 +131,10 @@ test('groups open worst first, a sort is kept in the URL, and rows read by their
   await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('source')}`)
   await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Contents' })).toHaveCount(0)
-  // A row's state is in plain words; the reason the server gives is beside it.
+  // A row's state is in plain words; the reason the server gives is beside it. A check (a
+  // task) shows its last run: this one never ran.
   const check = page.getByRole('row', { name: /check__clean_rows/ })
-  await expect(check).toContainText('always runs')
+  await expect(check).toContainText('never run')
   await expect(check.locator('.barca-dag[data-failed], .barca-tag[data-tone="failed"]')).toHaveCount(0)
 })
 
@@ -151,27 +157,64 @@ test('failures are grouped by cause, and a failure row retries its node and open
   await expect(page.getByRole('complementary', { name: 'Run details' })).toContainText('feature count mismatch')
 })
 
-test('All pipelines is a map of files, and a pipeline of one group opens that group', async ({ page }) => {
+test('All pipelines draws what its list lists: the groups and loose nodes, with the edges between them', async ({ page }) => {
+  // Source data, Cross-validation and Marts; publish and other.py's standalone, which no group holds.
+  const top = [G('source'), G('cross_validation'), 'group:marts.py:marts', N('publish'), 'other.py:standalone']
+  await page.goto('/ui/#/assets')
+  await expect(page.locator('.barca-group-table tbody tr')).toHaveCount(top.length)
   await page.goto('/ui/#/assets?view=graph')
-  await expect(page.locator('.react-flow__node')).toHaveCount(3)
-  await expect(page.getByText('32 nodes · 3 pipelines')).toBeVisible()
-  // The one edge between files carries how many inputs cross it.
-  await expect(page.locator('.react-flow__edge-text')).toHaveText('22')
-  await page.locator(`.react-flow__node[data-id="domain:${FILE}"]`).dblclick()
-  await expect(page).toHaveURL(/pipeline=grouped\.py/)
-  await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText(FILE)
-  await expect(page.getByText('9 nodes · 3 groups')).toBeVisible()
+  await expect(page.locator('.react-flow__node')).toHaveCount(top.length)
+  await expect(page.getByText('28 assets · 4 tasks in 5 groups')).toBeVisible()
+  for (const id of top) await expect(page.locator(node(id))).toHaveCount(1)
+  // Edges by dependency, never a grid without them: source feeds the folds, which feed the marts and publish.
+  for (const [source, target] of [[G('source'), G('cross_validation')], [G('cross_validation'), 'group:marts.py:marts'], [G('cross_validation'), N('publish')]]) {
+    await expect(page.locator(`.react-flow__edge[data-id="${source}->${target}"]`)).toHaveCount(1)
+  }
+  const [x0, x1] = await Promise.all([G('source'), G('cross_validation')].map(async (id) => (await page.locator(node(id)).boundingBox())!.x))
+  expect(x1).toBeGreaterThan(x0!)
+  // A failing group says so first, and the legend lists it.
+  await expect(page.locator(node(G('cross_validation')))).toContainText('1 failing')
+  await expect(page.locator('.barca-legend')).toContainText('failing')
+  await page.locator(node('group:marts.py:marts')).dblclick()
+  await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toContainText('Marts')
   // marts.py is one group: it opens at once, its 22 marts in a grid fed by one port.
-  await page.goto('/ui/#/assets?view=graph')
-  await page.locator('.react-flow__node[data-id="domain:marts.py"]').dblclick()
+  await page.goto('/ui/#/assets?pipeline=marts.py&view=graph')
   await expect(page.getByRole('navigation', { name: 'Group breadcrumb' })).toHaveText('marts.py')
-  await expect(page.getByText('22 nodes · 22 items')).toBeVisible()
+  await expect(page.getByText('22 assets in 1 group')).toBeVisible()
   await expect(page.locator('.barca-port-node')).toHaveText('summary')
   const rows = await page.locator('.react-flow__node-asset').evaluateAll((all) => new Set(all.map((n) => n.getBoundingClientRect().top)).size)
   expect(rows).toBeLessThan(8)
   // A fold's inputs from outside it are one faded port too.
   await page.goto(`/ui/#/assets?pipeline=${FILE}&view=graph&group=${G('fold_01')}`)
   await expect(page.locator('.barca-port-node')).toHaveText('clean_rows')
+})
+
+test('a group\'s graph keeps its labels at 11px or more, and moving between levels never flashes Checking…', async ({ page }) => {
+  // A group's own state answers late, as it does on a busy server.
+  await page.route(/\/state\?.*targets=/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    await route.continue()
+  })
+  await page.goto(`/ui/#/assets?pipeline=${FILE}&view=graph`)
+  await expect(page.locator(node(G('cross_validation')))).toContainText('1 failing')
+  const pending = page.locator('.react-flow__node [data-glyph="pending"]')
+  for (const group of [G('cross_validation'), G('fold_02'), G('source')]) {
+    await page.evaluate((g) => { location.hash = `/assets?pipeline=grouped.py&view=graph&group=${encodeURIComponent(g)}` }, group)
+    // Sampled while the open group's own state request is in flight.
+    for (let i = 0; i < 6; i++) {
+      expect(await pending.count()).toBe(0)
+      await page.waitForTimeout(40)
+    }
+    await page.waitForTimeout(500)
+    const smallest = await page.evaluate(() => {
+      const zoom = new DOMMatrix(getComputedStyle(document.querySelector('.react-flow__viewport')!).transform).a
+      const sizes = [...document.querySelectorAll('.react-flow__node *')]
+        .filter((el) => [...el.childNodes].some((c) => c.nodeType === Node.TEXT_NODE && c.textContent!.trim()) && !el.closest('.barca-sr-only'))
+        .map((el) => parseFloat(getComputedStyle(el).fontSize))
+      return Math.min(...sizes) * zoom
+    })
+    expect(smallest).toBeGreaterThanOrEqual(11 - 1e-6)
+  }
 })
 
 test('the grouped page header fits a 1280×720 window on one line', async ({ page }) => {
@@ -223,7 +266,7 @@ for (const view of ['list', 'graph']) {
     })
   }
 
-  test(`${view}: read-only mode disables the panel's Run`, async ({ page }) => {
+  test(`${view}: read-only mode offers no Run, and says so once`, async ({ page }) => {
     await page.route('**/health', async (route) => {
       const response = await route.fetch()
       await route.fulfill({ json: { ...(await response.json()), read_only: true } })
@@ -231,8 +274,9 @@ for (const view of ['list', 'graph']) {
     const selection = view === 'graph' ? `view=graph&focus=${N('raw_rows')}` : `node=${N('raw_rows')}`
     await page.goto(`/ui/#/assets?pipeline=${FILE}&group=${G('source')}&${selection}`)
     const panel = page.getByRole('complementary', { name: 'raw_rows details' })
-    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeDisabled()
-    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toHaveAttribute('title', 'This server is read-only')
+    await expect(panel).toBeVisible()
+    await expect(panel.getByRole('button', { name: 'Run', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('note').filter({ hasText: 'Read-only.' })).toBeVisible()
   })
 }
 
@@ -287,6 +331,6 @@ test('mixed groups and nodes keep their columns readable at laptop width', async
   const widths = await table.locator('th').evaluateAll(cells => cells.map(c => ({ name: c.textContent?.trim(), width: c.getBoundingClientRect().width })))
   for (const cell of widths) {
     if (cell.name === 'Contents') expect(cell.width).toBeGreaterThanOrEqual(140)
-    if (cell.name === 'Age' || cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
+    if (cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
   }
 })

@@ -8,6 +8,11 @@
  * compile error here until it has a row, and `cache.state` is never rewritten on the client: a
  * failed last attempt is a second fact (`lastAttemptFailed`), shown beside the state, not in
  * place of it.
+ *
+ * One word is shown differently: `always_runs` (a task, a sensor, an `always` asset) has no
+ * cache to describe, so it shows how its last run went, `succeeded` (or `never run`, see
+ * `shownCacheState`; a failed one is `failing` like any node). That it always runs is a
+ * property, said in its tooltip (the server's detail, "tasks always re-run").
  */
 
 import type { CacheState } from './generated/CacheState'
@@ -47,14 +52,24 @@ const DISPLAY = {
   stale: { word: 'stale', label: 'stale', tone: 'warning', glyph: 'stale' },
   partial: { word: 'partial', label: 'partial', tone: 'warning', glyph: 'partial' },
   unsynced: { word: 'unsynced', label: 'unsynced', tone: 'warning', glyph: 'unsynced' },
-  unknown: { word: 'unknown', label: 'unknown', tone: 'neutral', glyph: 'unknown' },
+  // `unknown` is the CLI's word: barca cannot say yet, because a cutoff or sensor upstream has
+  // not decided. Expected, so the UI says what the node is doing: waiting.
+  unknown: { word: 'unknown', label: 'waiting', tone: 'neutral', glyph: 'unknown' },
   never_run: { word: 'never_run', label: 'never run', tone: 'neutral', glyph: 'never_run' },
-  always_runs: { word: 'always_runs', label: 'always runs', tone: 'neutral', glyph: 'always' },
+  always_runs: { word: 'always_runs', label: 'succeeded', tone: 'success', glyph: 'fresh' },
   cached: { word: 'cached', label: 'fresh', tone: 'success', glyph: 'fresh' },
 } satisfies Record<CacheState, CacheStateDisplay>
 
 export function cacheStateDisplay(state: CacheState): CacheStateDisplay {
   return DISPLAY[state]
+}
+
+/**
+ * The state a node is shown and counted in: its `cache.state`, except a node that always runs
+ * and never ran, which has no last run to show and reads `never_run`.
+ */
+export function shownCacheState(node: Pick<NodeState, 'cache' | 'last_materialization'>): CacheState {
+  return node.cache.state === 'always_runs' && node.last_materialization === null ? 'never_run' : node.cache.state
 }
 
 /** The words the UI shows for a state: `never run`, `fresh`. */
