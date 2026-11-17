@@ -120,7 +120,7 @@ def test_a_scheduled_tick_does_not_compute_a_pinned_asset(project):
         run_id = served.wait(
             "a finished tick of raw",
             lambda: (j := served.schedule()["raw"]).get("last_run")
-            and j["last_status"] == "complete"
+            and j["last_status"] == "success"
             and j["last_run"],
         )
         run = served.finished(run_id)

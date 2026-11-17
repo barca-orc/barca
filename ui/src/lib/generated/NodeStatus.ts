@@ -3,6 +3,7 @@ import type { BytesChange } from "./BytesChange";
 import type { CacheStatus } from "./CacheStatus";
 import type { LastMaterialization } from "./LastMaterialization";
 import type { PartitionState } from "./PartitionState";
+import type { ScheduleStatus } from "./ScheduleStatus";
 
 export type NodeStatus = {
 /**
@@ -48,4 +49,9 @@ env: Array<string>,
  * (`barca docs cache`, "Environment variables"), sorted; not part of its run hash. Absent
  * when there are none. Experimental (#574).
  */
-undeclared_env?: Array<string>, };
+undeclared_env?: Array<string>,
+/**
+ * A node with `freshness=Schedule(...)`: its schedule's state (`barca status`, "Schedules").
+ * Absent for a node that is not scheduled.
+ */
+schedule?: ScheduleStatus, };

@@ -7,6 +7,7 @@ import type { LastMaterialization } from "./LastMaterialization";
 import type { LastRun } from "./LastRun";
 import type { NodeRunning } from "./NodeRunning";
 import type { PartitionState } from "./PartitionState";
+import type { ScheduleStatus } from "./ScheduleStatus";
 
 /**
  * One row of `GET /state`: the node's `barca status` entry plus what the
@@ -27,10 +28,11 @@ next_run: number | null,
  */
 prev_run: number | null,
 /**
- * For a scheduled node that missed a slot: the first slot (unix epoch seconds) after the
- * tick of the newest run its schedule started (`runs.scheduled_at`), when that slot is at
- * or before now, so no run has started for it yet. `null` while on time, while paused, and
- * when no scheduled run is recorded.
+ * For a scheduled node that missed a slot: the first slot (unix epoch seconds) after its
+ * schedule's newest fired tick, when that slot is at or before now. `null` while on time,
+ * while paused, and when no tick is recorded. The same value as `late_since` of
+ * `GET /schedule` and of its `schedule` block, which also says whether it is `late`
+ * (`barca_core::schedule_standing::standing`).
  */
 late_since: number | null,
 /**
@@ -104,4 +106,9 @@ env: Array<string>,
  * (`barca docs cache`, "Environment variables"), sorted; not part of its run hash. Absent
  * when there are none. Experimental (#574).
  */
-undeclared_env?: Array<string>, };
+undeclared_env?: Array<string>,
+/**
+ * A node with `freshness=Schedule(...)`: its schedule's state (`barca status`, "Schedules").
+ * Absent for a node that is not scheduled.
+ */
+schedule?: ScheduleStatus, };

@@ -59,6 +59,7 @@ pub mod report;
 pub mod results;
 pub mod run_explanation;
 pub mod schedule;
+pub mod schedule_standing;
 pub mod serve;
 #[cfg(test)]
 mod source_scan;

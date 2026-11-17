@@ -126,7 +126,8 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
 ```
 
 A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-23T06:00:00Z",
-"last_fired": null, "last_status": null, "failures": 0, "max_failures": 5, "failing": false,
+"last_fired": null, "last_status": null, "last_run_id": null, "late": false, "late_since": null,
+"failures": 0, "max_failures": 5, "failing": false,
 "paused": false, "paused_until": null, "skip_reason": null, "live": false}`, and `--state` or
 `--problems` add `"filter"` beside `summary`.
 

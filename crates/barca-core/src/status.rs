@@ -80,7 +80,7 @@ pub struct NodeStatus {
     /// A node with `freshness=Schedule(...)`: its schedule's state (`barca status`, "Schedules").
     /// Absent for a node that is not scheduled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(skip))]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub schedule: Option<ScheduleStatus>,
 }
 
@@ -89,17 +89,28 @@ pub struct NodeStatus {
 /// scheduler, so it is read from the metadata DB, which holds what a `barca serve` of this
 /// `.barca/` recorded (failures, pauses, the last tick), and `live` is false.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ScheduleStatus {
     /// The cron expression.
     pub cron: String,
     /// When the cron expression next matches (RFC 3339, UTC): in the server's `--timezone` from
     /// a server, in this machine's local time otherwise, as `barca list` computes it.
     pub next_fire: Option<String>,
-    /// The last tick the scheduler fired (RFC 3339, UTC), if any.
+    /// The newest tick the scheduler fired (RFC 3339, UTC): the slot of the newest run the
+    /// schedule started or queued. `null` when none is recorded.
     pub last_fired: Option<String>,
-    /// Status of the run the last tick started, while the server remembers it (`null` after a
-    /// restart, and always on this machine).
+    /// Status of the run that tick started, in the words of `barca history`: `pending` while
+    /// it waits in the server's run queue, then `running`, `success`, `failed`, `cancelled`,
+    /// `error` or `interrupted`.
     pub last_status: Option<String>,
+    /// The run that tick started (`barca history --run <id>`).
+    pub last_run_id: Option<String>,
+    /// The schedule missed a slot and that was longer ago than its grace plus its queue wait
+    /// ([`crate::schedule_standing::standing`]). Never while paused.
+    pub late: bool,
+    /// The first slot after `last_fired` that has passed (RFC 3339, UTC); `null` while on
+    /// time, while paused and when no tick is recorded.
+    pub late_since: Option<String>,
     /// Consecutive failed ticks.
     pub failures: u32,
     /// `Schedule(..., max_failures=N)`, default 5.
@@ -125,7 +136,8 @@ impl ScheduleStatus {
     }
 
     /// The table's SCHEDULE cell: `*/5 * * * *; failing 3/3`, `0 6 * * *; paused`,
-    /// `0 6 * * *; next 2026-10-23 06:00:00 UTC`.
+    /// `0 6 * * *; next 2026-10-23 06:00:00 UTC`,
+    /// `0 6 * * *; late since 2026-10-23 06:00:00 UTC, next 2026-10-24 06:00:00 UTC`.
     pub fn cell(&self) -> String {
         let state = if self.failing {
             format!("failing {}/{}", self.failures, self.max_failures)
@@ -140,6 +152,10 @@ impl ScheduleStatus {
                 .as_deref()
                 .map(|t| format!("next {}", crate::report::utc_cell(t)))
                 .unwrap_or_else(|| "no next fire".to_string());
+            let next = match self.late_since.as_deref().filter(|_| self.late) {
+                Some(since) => format!("late since {}, {next}", crate::report::utc_cell(since)),
+                None => next,
+            };
             match self.failures {
                 0 => next,
                 1 => format!("1 failure, {next}"),
@@ -166,14 +182,31 @@ pub async fn attach_schedules(
     if jobs.is_empty() {
         return Ok(());
     }
-    let (fired, failures, pauses) = match db_path.filter(|p| Path::new(p).exists()) {
+    let ids: Vec<String> = jobs.iter().map(|j| j.id.clone()).collect();
+    let (ticks, failures, pauses) = match db_path.filter(|p| Path::new(p).exists()) {
         Some(path) => (
-            db::get_schedule_state(path).await?,
+            crate::schedule_standing::recorded(path, &ids).await?,
             db::get_schedule_failures(path).await?,
             db::get_schedule_pauses(path).await?,
         ),
         None => Default::default(),
     };
+    attach_standings(nodes, &jobs, &ticks, &failures, &pauses, zone, now);
+    Ok(())
+}
+
+/// [`attach_schedules`] over ticks, failures and pauses already read: each scheduled node's
+/// [`ScheduleStatus`] from the one definition of where its schedule stands
+/// ([`crate::schedule_standing::standing`]).
+pub fn attach_standings(
+    nodes: &mut [NodeStatus],
+    jobs: &[crate::schedule::ScheduledJob],
+    ticks: &HashMap<String, crate::schedule_standing::Ticks>,
+    failures: &HashMap<String, db::ScheduleFailures>,
+    pauses: &HashMap<String, db::SchedulePause>,
+    zone: &crate::schedule::Zone,
+    now: chrono::DateTime<chrono::Utc>,
+) {
     for node in nodes.iter_mut() {
         let Some(job) = jobs.iter().find(|j| j.id == node.id) else {
             continue;
@@ -182,22 +215,49 @@ pub async fn attach_schedules(
         let pause = pauses
             .get(&job.id)
             .filter(|p| p.until.is_none_or(|until| until > now.timestamp()));
-        node.schedule = Some(ScheduleStatus {
+        let standing = crate::schedule_standing::standing(
+            &job.cron,
+            zone,
+            now,
+            pause.is_some(),
+            ticks.get(&job.id),
+        );
+        node.schedule = Some(ScheduleStatus::of(
+            job,
+            standing,
+            (failures, job.max_failures),
+            pause,
+        ));
+    }
+}
+
+impl ScheduleStatus {
+    /// `job`'s schedule as it stands (`standing`), with its failed ticks `(failures,
+    /// max_failures)` and its pause when one is on. Not `live`: a server that runs the
+    /// scheduler says so itself.
+    pub fn of(
+        job: &crate::schedule::ScheduledJob,
+        standing: crate::schedule_standing::Standing,
+        (failures, max_failures): (u32, u32),
+        pause: Option<&db::SchedulePause>,
+    ) -> Self {
+        Self {
             cron: job.cron_str.clone(),
-            next_fire: crate::schedule::next_fire(&job.cron, zone, now)
-                .and_then(|t| rfc3339_secs(t.timestamp())),
-            last_fired: fired.get(&job.id).and_then(|s| rfc3339_secs(*s)),
-            last_status: None,
+            next_fire: standing.next_fire.and_then(rfc3339_secs),
+            last_fired: standing.last_fired.and_then(rfc3339_secs),
+            last_status: standing.last_status,
+            last_run_id: standing.last_run_id,
+            late: standing.late,
+            late_since: standing.late_since.and_then(rfc3339_secs),
             failures,
-            max_failures: job.max_failures,
-            failing: failures >= job.max_failures,
+            max_failures,
+            failing: failures >= max_failures,
             paused: pause.is_some(),
             paused_until: pause.and_then(|p| p.until).and_then(rfc3339_secs),
             skip_reason: None,
             live: false,
-        });
+        }
     }
-    Ok(())
 }
 
 /// The `cache.state` values, as JSON and `--state` spell them.

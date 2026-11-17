@@ -205,8 +205,6 @@ async fn state_rows_for_targets(
     state: &AppState,
     targets: &[String],
 ) -> Result<Vec<NodeState>, ApiError> {
-    let cfg = &state.config;
-    let zone = crate::scheduler::zone_of(cfg);
     let dag = state.inspect_dag().await?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(state).await?;
@@ -247,13 +245,13 @@ async fn state_rows_for_targets(
     let runs = crate::running::in_flight(state, Some(&snapshot.path)).await;
     let running = crate::running::by_node(&runs, &status.nodes, &dag);
     let now = chrono::Utc::now();
-    let paused = |id: &str| crate::pause::active(state, id, now.timestamp()).is_some();
+    let schedules = live_schedules(state, &dag, &db_state, &snapshot.path, now).await?;
     Ok(rows(
         &status.nodes,
         &durations,
         &ages,
         &dag,
-        (&zone, now, &paused),
+        &schedules,
         running,
     ))
 }
@@ -294,40 +292,101 @@ async fn status_for_targets(
         .await?)
 }
 
-/// The server's cron zone, now, and whether a schedule is paused: what a row's slots are read in.
-type Clock<'a> = (
-    &'a crate::scheduler::Zone,
-    chrono::DateTime<chrono::Utc>,
-    &'a dyn Fn(&str) -> bool,
+/// Where one schedule stands and its `schedule` block, as this server reports them.
+pub(crate) type LiveSchedule = (
+    barca_core::schedule_standing::Standing,
+    barca_core::status::ScheduleStatus,
 );
 
-/// The `GET /state` rows: each node's status with its durations, schedule slots, run and data
-/// signals. `clock`: the server's cron zone, now, and whether a schedule is paused.
+/// Every scheduled node of `dag` as of `now`: where its schedule stands
+/// ([`barca_core::schedule_standing::standing`], in the server's cron zone, over the ticks the
+/// database in state `db_state` records) and its `schedule` block. `GET /state` and
+/// `GET /nodes` (`barca status`) both read this, and `GET /schedule` the same standing
+/// ([`schedule_at`]), so they say the same of a schedule. While the scheduler runs, its
+/// failure count, the last skip and `live` are the scheduler's.
+pub(crate) async fn live_schedules(
+    state: &AppState,
+    dag: &barca_core::dag::Dag,
+    db_state: &crate::read_cache::Stamp,
+    db_path: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<std::collections::HashMap<String, LiveSchedule>, ApiError> {
+    let jobs = barca_core::schedule::jobs_from_dag(dag);
+    if jobs.is_empty() {
+        return Ok(Default::default());
+    }
+    crate::pause::pauses(state).await?;
+    let ids = jobs.iter().map(|j| j.id.clone()).collect();
+    let facts = state.cached_ticks(db_state, db_path, ids).await?;
+    let zone = crate::scheduler::zone_of(&state.config);
+    let published = state.schedule.read().map(|g| g.clone()).unwrap_or_default();
+    Ok(jobs
+        .iter()
+        .map(|job| {
+            let pause = crate::pause::active(state, &job.id, now.timestamp());
+            let standing = barca_core::schedule_standing::standing(
+                &job.cron,
+                &zone,
+                now,
+                pause.is_some(),
+                facts.ticks.get(&job.id),
+            );
+            let live = published.iter().find(|p| p.id == job.id);
+            let failed = match live {
+                Some(p) => (p.failures, p.max_failures),
+                None => (
+                    facts.failures.get(&job.id).map_or(0, |f| f.failures),
+                    job.max_failures,
+                ),
+            };
+            let mut block = barca_core::status::ScheduleStatus::of(
+                job,
+                standing.clone(),
+                failed,
+                pause.as_ref(),
+            );
+            block.skip_reason = live.and_then(|p| p.skip_reason).map(str::to_string);
+            block.live = live.is_some();
+            (job.id.clone(), (standing, block))
+        })
+        .collect())
+}
+
+/// The recorded ticks of the schedules the scheduler has published, read once per database
+/// state and shared with `GET /state` ([`AppState::cached_ticks`]).
+pub(crate) async fn published_ticks(
+    state: &AppState,
+) -> Result<std::sync::Arc<crate::read_cache::ScheduleFacts>, ApiError> {
+    let ids: Vec<String> = state
+        .schedule
+        .read()
+        .map(|jobs| jobs.iter().map(|j| j.id.clone()).collect())
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let db_state = state.db_state();
+    let snapshot = snapshot_db(state).await?;
+    Ok(state.cached_ticks(&db_state, &snapshot.path, ids).await?)
+}
+
+/// The `GET /state` rows: each node's status with its durations, its schedule
+/// ([`live_schedules`]), run and data signals.
 fn rows(
     nodes: &[barca_core::status::NodeStatus],
     durations: &std::collections::HashMap<String, Durations>,
     ages: &std::collections::HashMap<String, db::NodeAge>,
     dag: &barca_core::dag::Dag,
-    clock: Clock<'_>,
+    schedules: &std::collections::HashMap<String, LiveSchedule>,
     mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
 ) -> Vec<NodeState> {
-    let (zone, now, paused) = clock;
-    let slots: std::collections::HashMap<String, barca_core::schedule::Slots> =
-        barca_core::schedule::jobs_from_summaries(barca_core::queries::list_assets_from_dag(dag))
-            .into_iter()
-            .map(|job| {
-                let tick = ages.get(&job.id).and_then(|a| a.last_tick);
-                let mut slots = barca_core::schedule::slots(&job.cron, zone, now, tick);
-                if paused(&job.id) {
-                    slots.late_since = None;
-                }
-                (job.id, slots)
-            })
-            .collect();
     nodes
         .iter()
         .map(|n| {
-            let slot = slots.get(&n.id);
+            let schedule = schedules.get(&n.id);
+            let slot = schedule.map(|(standing, _)| standing);
+            let mut status = n.clone();
+            status.schedule = schedule.map(|(_, block)| block.clone());
             let signals = crate::signals::signals(n, ages, || {
                 dag.get_node(&n.id)
                     .map(|node| {
@@ -344,12 +403,12 @@ fn rows(
             let age = ages.get(&n.id).cloned().unwrap_or_default();
             NodeState {
                 durations: durations.get(&n.id).cloned(),
-                next_run: slot.and_then(|s| s.next),
-                prev_run: slot.and_then(|s| s.prev),
+                next_run: slot.and_then(|s| s.next_fire),
+                prev_run: slot.and_then(|s| s.prev_fire),
                 late_since: slot.and_then(|s| s.late_since),
                 signals,
                 running: running.remove(&n.id),
-                status: n.clone(),
+                status,
                 last_success_at: age.last_success_at,
                 failing_since: age.failing_since,
                 consecutive_failures: age.consecutive_failures,
@@ -544,57 +603,38 @@ async fn running_node(
 /// status) are computed per request.
 pub async fn schedule(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     crate::pause::pauses(&state).await?;
-    Ok(Json(schedule_at(&state, chrono::Utc::now())))
+    let facts = published_ticks(&state).await?;
+    Ok(Json(schedule_at(&state, chrono::Utc::now(), &facts.ticks)))
 }
 
-/// Each scheduled node's `schedule` in `GET /nodes` (`barca status`): what the metadata DB holds
-/// (failures, pauses, the last tick), with next fire times in the server's `--timezone`, and,
-/// while the scheduler runs, its `GET /schedule` entry, so the numbers are the ones the web UI
-/// shows.
+/// Each scheduled node's `schedule` in `GET /nodes` (`barca status`): [`live_schedules`], the
+/// block `GET /state` carries, so the numbers are the ones the web UI shows.
 pub(crate) async fn attach_live_schedules(
     state: &AppState,
     nodes: &mut [barca_core::status::NodeStatus],
     dag: &barca_core::dag::Dag,
     db_path: &str,
 ) -> Result<(), ApiError> {
-    let now = chrono::Utc::now();
-    let zone = crate::scheduler::zone_of(&state.config);
-    barca_core::status::attach_schedules(nodes, dag, Some(db_path), &zone, now).await?;
-    crate::pause::pauses(state).await?;
-    let live = schedule_at(state, now);
-    let secs = |v: &Value| v.as_i64().and_then(barca_core::status::rfc3339_secs);
-    let text = |v: &Value| v.as_str().map(str::to_string);
+    let db_state = state.db_state();
+    let mut schedules = live_schedules(state, dag, &db_state, db_path, chrono::Utc::now()).await?;
     for node in nodes.iter_mut() {
-        let Some(schedule) = node.schedule.as_mut() else {
-            continue;
-        };
-        let Some(job) = live
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|j| j["id"].as_str() == Some(node.id.as_str()))
-        else {
-            continue;
-        };
-        schedule.next_fire = secs(&job["next_fire"]);
-        schedule.last_fired = secs(&job["last_fired"]);
-        schedule.last_status = text(&job["last_status"]);
-        schedule.failures = job["failures"].as_u64().unwrap_or(0) as u32;
-        schedule.max_failures = job["max_failures"]
-            .as_u64()
-            .map_or(schedule.max_failures, |n| n as u32);
-        schedule.failing = job["failing"].as_bool().unwrap_or(false);
-        schedule.paused = job["paused"].as_bool().unwrap_or(false);
-        schedule.paused_until = secs(&job["paused_until"]);
-        schedule.skip_reason = text(&job["skip_reason"]);
-        schedule.live = true;
+        if let Some((_, block)) = schedules.remove(&node.id) {
+            node.schedule = Some(block);
+        }
     }
     Ok(())
 }
 
-/// The body of `GET /schedule` as of `now`. `next_fire` is computed in the zone the server
-/// evaluates cron in (`--timezone`), so it is the time the scheduler will fire the job.
-pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) -> Value {
+/// The body of `GET /schedule` as of `now`, over the recorded `ticks`
+/// ([`published_ticks`]). Where each schedule stands (`next_fire`, `last_fired`,
+/// `last_run_id`, `last_status`, `late`, `late_since`) is
+/// [`barca_core::schedule_standing::standing`], in the zone the server evaluates cron in
+/// (`--timezone`), so `next_fire` is the time the scheduler will fire the job.
+pub(crate) fn schedule_at(
+    state: &AppState,
+    now: chrono::DateTime<chrono::Utc>,
+    ticks: &std::collections::HashMap<String, barca_core::schedule_standing::Ticks>,
+) -> Value {
     use barca_core::CronExpr;
 
     let zone = crate::scheduler::zone_of(&state.config);
@@ -602,23 +642,29 @@ pub(crate) fn schedule_at(state: &AppState, now: chrono::DateTime<chrono::Utc>) 
     let items: Vec<Value> = jobs
         .into_iter()
         .map(|j| {
-            let next_fire = CronExpr::parse(&j.cron)
-                .ok()
-                .and_then(|c| barca_core::schedule::next_fire(&c, &zone, now))
-                .map(|t| t.timestamp());
-            let last_status = j
-                .last_handle
-                .as_ref()
-                .and_then(|h| state.runs.get(h).map(|r| r.status));
             let pause = crate::pause::active(state, &j.id, now.timestamp());
+            let standing = CronExpr::parse(&j.cron).ok().map(|cron| {
+                barca_core::schedule_standing::standing(
+                    &cron,
+                    &zone,
+                    now,
+                    pause.is_some(),
+                    ticks.get(&j.id),
+                )
+            });
+            let standing = standing.as_ref();
             json!({
                 "id": j.id,
                 "cron": j.cron,
                 "kind": j.kind,
-                "next_fire": next_fire,
-                "last_fired": j.last_fired,
-                "last_run": j.last_handle,
-                "last_status": last_status,
+                "next_fire": standing.and_then(|s| s.next_fire),
+                "last_fired": standing.and_then(|s| s.last_fired),
+                "last_run_id": standing.and_then(|s| s.last_run_id.clone()),
+                // The same id under its older name.
+                "last_run": standing.and_then(|s| s.last_run_id.clone()),
+                "last_status": standing.and_then(|s| s.last_status.clone()),
+                "late": standing.is_some_and(|s| s.late),
+                "late_since": standing.and_then(|s| s.late_since),
                 "last_skipped": j.last_skipped,
                 "skipped_for": j.skipped_for,
                 "skip_reason": j.skip_reason,

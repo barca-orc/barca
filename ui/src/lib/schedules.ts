@@ -2,13 +2,15 @@
  * Schedules page logic — pure.
  *
  * A scheduled node is one whose freshness is `schedule` (from `GET /assets`,
- * cron in `schedule`); its next run, last attempt, state and whether it missed a slot
- * (`late_since`) come from `GET /state`, and whether the scheduler has it paused from
- * `GET /schedule`.
+ * cron in `schedule`). Where its schedule stands (its last tick and that tick's run, whether
+ * it is late and since when) is decided by the server, once, and read from the `schedule`
+ * block of `GET /state`; this module words it and orders the rows. Whether the scheduler has
+ * it paused is read from `GET /schedule`, which the pause control updates.
  */
 
 import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
 import { sourceFile } from './pipeline'
+import { parseTime } from './time'
 import type { ListNode, NodeState, ScheduleJob } from './types'
 
 export interface ScheduleRow {
@@ -20,12 +22,13 @@ export interface ScheduleRow {
   /** The schedule in words, when it is a common shape; null otherwise. */
   human: string | null
   nextRunMs: number | null
-  /** It missed a slot: no run has started for the slot at `sinceMs` (`late_since`), and that
-   * was longer ago than the grace (`lateGraceMs`). `by`: "late by 12m". While late, the next
-   * slot is not when it runs: it waits behind the slots it missed. */
+  /** The server says it is late (`schedule.late`): no tick fired for the slot at `sinceMs`
+   * (`schedule.late_since`). `by`: "late by 12m". While late, the next slot is not when it
+   * runs: it waits behind the slots it missed. */
   late: { sinceMs: number; by: string } | null
-  /** The latest attempt: how it went, and when (as the server writes it; `Age` draws it). */
-  last: { status: string; at: string } | null
+  /** Its newest tick (`schedule.last_fired`, as the server writes it; `Age` draws it), and the
+   * run that tick started: its status (`pending` while it waits in the run queue) and id. */
+  last: { status: string | null; at: string; runId: string | null } | null
   /** `cache.state`, in the CLI's word (`shownCacheState`); null until `/state` has the node. */
   state: CacheState | null
   /** Its last attempt failed: a fact beside the state. */
@@ -68,12 +71,9 @@ export function humanizeCron(cron: string): string | null {
   return null
 }
 
-/** How long a run may take to start after its slot before the schedule reads as late: a
- * minute, or half the interval of a schedule that fires more often than every two minutes. */
-export function lateGraceMs(prevRunMs: number | null, nextRunMs: number | null): number {
-  const minute = 60_000
-  if (prevRunMs === null || nextRunMs === null || nextRunMs <= prevRunMs) return minute
-  return Math.max(1_000, Math.min(minute, (nextRunMs - prevRunMs) / 2))
+/** The status of a tick's run in the page's words: a run that waits for a run slot is `queued`. */
+export function lastStatusLabel(status: string): string {
+  return status === 'pending' ? 'queued' : status
 }
 
 /** "late by 12m": how long ago the first missed slot was. */
@@ -87,23 +87,7 @@ export function formatLate(sinceMs: number, nowMs: number): string {
   return `late by ${Math.floor(h / 24)}d`
 }
 
-/** Whether a schedule missed its slot, as of `nowMs`: `late_since` (the first slot no run has
- * started for) is further back than the grace, and it is not paused. */
-export function lateness(
-  state: Pick<NodeState, 'late_since' | 'prev_run' | 'next_run'> | undefined,
-  nowMs: number,
-  paused: boolean,
-): { sinceMs: number; by: string } | null {
-  if (!state || paused || state.late_since === null) return null
-  const sinceMs = state.late_since * 1000
-  const grace = lateGraceMs(
-    state.prev_run === null ? null : state.prev_run * 1000,
-    state.next_run === null ? null : state.next_run * 1000,
-  )
-  return nowMs - sinceMs > grace ? { sinceMs, by: formatLate(sinceMs, nowMs) } : null
-}
-
-/** Every node with a cron schedule: the late ones first (latest first), then soonest next run. */
+/** Every node with a cron schedule: the late ones first (longest late first), then soonest next run. */
 export function scheduleRows(
   assets: ListNode[],
   states: NodeState[],
@@ -118,11 +102,16 @@ export function scheduleRows(
       const cron = a.schedule
       const st = byId.get(a.id)
       const job = jobById.get(a.id)
+      // Where the schedule stands is the server's answer (`schedule` of `GET /state`, the
+      // same values as `GET /schedule` and `barca status`): nothing here compares times.
+      const stands = st?.schedule
       const nextRunSecs = st?.next_run ?? job?.next_fire ?? null
       const nextRunMs = nextRunSecs !== null ? nextRunSecs * 1000 : null
-      const last = st?.last_materialization
-      const paused = job?.paused ?? false
-      const late = lateness(st, nowMs, paused)
+      const lateSinceMs = stands?.late && stands.late_since ? parseTime(stands.late_since) : null
+      const paused = job?.paused ?? stands?.paused ?? false
+      const pausedUntilMs = job
+        ? job.paused_until !== null ? job.paused_until * 1000 : null
+        : stands?.paused_until ? parseTime(stands.paused_until) : null
       return [
         {
           id: a.id,
@@ -132,13 +121,13 @@ export function scheduleRows(
           cron,
           human: humanizeCron(cron),
           nextRunMs,
-          late,
-          last: last ? { status: last.status, at: last.created_at } : null,
+          late: lateSinceMs !== null ? { sinceMs: lateSinceMs, by: formatLate(lateSinceMs, nowMs) } : null,
+          last: stands?.last_fired
+            ? { status: stands.last_status, at: stands.last_fired, runId: stands.last_run_id }
+            : null,
           state: st ? shownCacheState(st) : null,
           lastFailed: st ? lastAttemptFailed(st) : false,
-          paused: paused && job
-            ? { until: job.paused_until !== null ? job.paused_until * 1000 : null }
-            : null,
+          paused: paused ? { until: pausedUntilMs } : null,
         },
       ]
     })

@@ -510,15 +510,15 @@ curl -s localhost:8274/state | jq '.[] | select(.signals != []) | {id, signals}'
 ```
 
 A scheduled node's row also has `prev_run`, the cron's most recent fire time at or before now,
-beside `next_run` (unix seconds, in the server's `--timezone`), and `late_since`: the first slot
-after the tick of the newest run its schedule started (`scheduled_at`, `barca docs
-scheduling`), when that slot has passed, so no run has started for it yet (the queue is deep, or
-the server that fires the schedule is down). `late_since` is
-`null` while on time, while the schedule is paused and when no scheduled run is recorded. The web
-UI's Schedules page shows such a schedule as `late by 12m` instead of a countdown, once the slot
-is a minute old (half the interval for a schedule more frequent than every two minutes). A
-`--read-only` server reads the same runs from the shared metadata, so its `late_since` is the
-scheduling server's lateness, with slots in its own `--timezone`.
+beside `next_run` (unix seconds, in the server's `--timezone`), `late_since`: the first slot
+after its schedule's newest tick, when that slot has passed (no tick fired for it: it was
+skipped behind a run in flight, or the server that fires the schedule is down), and a
+`schedule` block, the one `barca status --json` prints, whose `late` says whether the schedule
+is late ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot"). `late_since` is
+`null` while on time, while the schedule is paused and when no tick is recorded. The web
+UI shows a schedule as `late by 12m` when `schedule.late` is true and compares no times itself.
+A `--read-only` server reads the same runs and run queue from the shared metadata, so its
+answer is the scheduling server's, with slots in its own `--timezone`.
 
 See also: [Scheduling With Cron](/scheduling/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 

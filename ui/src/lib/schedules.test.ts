@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ListNode, NodeState, ScheduleJob } from './types'
-import { formatLate, humanizeCron, lateGraceMs, lateness, scheduleRows } from './schedules'
+import type { ScheduleStatus } from './generated/ScheduleStatus'
+import { formatLate, humanizeCron, lastStatusLabel, scheduleRows } from './schedules'
 import { formatCountdown } from './time'
 
 describe('humanizeCron', () => {
@@ -49,8 +50,11 @@ function job(id: string, over: Partial<ScheduleJob> = {}): ScheduleJob {
     kind: 'task',
     next_fire: null,
     last_fired: null,
+    last_run_id: null,
     last_run: null,
     last_status: null,
+    late: false,
+    late_since: null,
     last_skipped: null,
     skipped_for: null,
     skip_reason: null,
@@ -116,7 +120,7 @@ describe('scheduleRows', () => {
     expect(rows.map((r) => r.name)).toEqual(['heartbeat', 'refresh'])
   })
 
-  it('carries the cron, its words, the next run and the last run', () => {
+  it('carries the cron, its words and the next run; the last tick is the schedule\'s, not the node\'s last result', () => {
     const [, refresh] = scheduleRows(assets, states)
     expect(refresh).toMatchObject({
       cron: '*/10 * * * *',
@@ -124,7 +128,8 @@ describe('scheduleRows', () => {
       nextRunMs: now + 300_000,
       state: 'always_runs',
       lastFailed: true,
-      last: { status: 'failed', at: '2026-10-06 11:50:00' },
+      // No tick recorded: the node's own last materialization is not its schedule's last run.
+      last: null,
     })
   })
 
@@ -160,51 +165,58 @@ describe('scheduleRows', () => {
 describe('lateness', () => {
   const now = Date.parse('2026-11-16T12:21:30Z')
   const s = (iso: string) => Date.parse(iso) / 1000
-  // Every 5 minutes: slots 12:20 and 12:25 around now.
-  const slots = { prev_run: s('2026-11-16T12:20:00Z'), next_run: s('2026-11-16T12:25:00Z') }
-
-  it('is late once the first missed slot is further back than the grace', () => {
-    expect(lateness({ ...slots, late_since: s('2026-11-16T12:05:00Z') }, now, false)).toEqual({
-      sinceMs: Date.parse('2026-11-16T12:05:00Z'),
-      by: 'late by 16m',
-    })
-    // The 12:20 slot has had 90 s: a minute's grace has passed.
-    expect(lateness({ ...slots, late_since: slots.prev_run }, now, false)?.by).toBe('late by 1m')
+  const stands = (over: Partial<ScheduleStatus> = {}): ScheduleStatus => ({
+    cron: '* * * * *', next_fire: null, last_fired: null, last_status: null, last_run_id: null,
+    late: false, late_since: null, failures: 0, max_failures: 5, failing: false, paused: false,
+    paused_until: null, skip_reason: null, live: true, ...over,
   })
 
-  it('is on time with no missed slot, within the grace, or while paused', () => {
-    expect(lateness({ ...slots, late_since: null }, now, false)).toBeNull()
-    expect(lateness({ ...slots, late_since: slots.prev_run }, Date.parse('2026-11-16T12:20:40Z'), false)).toBeNull()
-    expect(lateness({ ...slots, late_since: s('2026-11-16T12:05:00Z') }, now, true)).toBeNull()
-    expect(lateness(undefined, now, false)).toBeNull()
-  })
-
-  it('gives a frequent schedule half its interval, at most a minute', () => {
-    expect(lateGraceMs(0, 15_000)).toBe(7_500)
-    expect(lateGraceMs(0, 3_600_000)).toBe(60_000)
-    expect(lateGraceMs(null, null)).toBe(60_000)
+  it('words how long ago the missed slot was', () => {
     expect(formatLate(now - 2 * 3_600_000 - 5 * 60_000, now)).toBe('late by 2h 5m')
     expect(formatLate(now - 30_000, now)).toBe('late by 30s')
   })
 
-  it('a late row says so instead of a countdown, and sorts first', () => {
-    const assets = [asset('job.py:minutely', '* * * * *'), asset('job.py:soon', '*/5 * * * *')]
+  it('a row is late when the server says so, and only then', () => {
+    const assets = [asset('job.py:minutely', '* * * * *'), asset('job.py:queued', '* * * * *'), asset('job.py:soon', '*/5 * * * *')]
     const rows = scheduleRows(
       assets,
       [
-        state('job.py:minutely', {
-          prev_run: s('2026-11-16T12:21:00Z'),
+        state('job.py:soon', { next_run: s('2026-11-16T12:25:00Z'), schedule: stands() }),
+        // Slots have passed since its last tick, and the server does not call it late: its
+        // run waits in the run queue. Nothing here second-guesses that from the times.
+        state('job.py:queued', {
           next_run: s('2026-11-16T12:22:00Z'),
-          late_since: s('2026-11-16T12:09:00Z'),
+          late_since: s('2026-11-16T12:01:00Z'),
+          schedule: stands({ late: false, late_since: '2026-11-16T12:01:00Z', last_fired: '2026-11-16T12:00:00Z', last_status: 'pending', last_run_id: 'r7' }),
         }),
-        state('job.py:soon', { ...slots, late_since: null }),
+        state('job.py:minutely', {
+          next_run: s('2026-11-16T12:22:00Z'),
+          schedule: stands({ late: true, late_since: '2026-11-16T12:09:00Z', last_fired: '2026-11-16T12:08:00Z', last_status: 'success', last_run_id: 'r3' }),
+        }),
       ],
       [],
       now,
     )
+    // Late first, then soonest next run.
     expect(rows.map((r) => [r.name, r.late?.by ?? null])).toEqual([
       ['minutely', 'late by 12m'],
+      ['queued', null],
       ['soon', null],
     ])
+    expect(rows[0]?.last).toEqual({ status: 'success', at: '2026-11-16T12:08:00Z', runId: 'r3' })
+    expect(rows[1]?.last).toEqual({ status: 'pending', at: '2026-11-16T12:00:00Z', runId: 'r7' })
+    expect(lastStatusLabel('pending')).toBe('queued')
+    expect(lastStatusLabel('failed')).toBe('failed')
+    expect(rows[2]?.last).toBeNull()
+  })
+
+  it('reads a pause from the schedule block when the scheduler published no entry', () => {
+    const rows = scheduleRows(
+      [asset('job.py:held', '* * * * *')],
+      [state('job.py:held', { schedule: stands({ paused: true, paused_until: '2026-11-16T13:00:00Z' }) })],
+      [],
+      now,
+    )
+    expect(rows[0]?.paused).toEqual({ until: Date.parse('2026-11-16T13:00:00Z') })
   })
 })

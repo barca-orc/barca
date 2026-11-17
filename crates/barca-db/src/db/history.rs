@@ -72,9 +72,6 @@ pub struct NodeAge {
     pub last_run: Option<RunTotals>,
     /// The row counts of its latest successful results (#925); `None` until one succeeded.
     pub rows: Option<RowFacts>,
-    /// For a scheduled node: the tick (`runs.scheduled_at`, unix seconds) of the newest run its
-    /// schedule started; `None` when no scheduled run is recorded.
-    pub last_tick: Option<i64>,
 }
 
 /// What a node's latest successful results say about their rows: each key's (the node's own,
@@ -278,10 +275,6 @@ pub struct NodeAgesIndex {
     successes: HashMap<String, HashMap<String, KeySuccesses>>,
     /// base id -> [`RowFacts`], computed again for the bases a read touched.
     rows: HashMap<String, RowFacts>,
-    /// schedule (node id) -> the newest tick a run of it started for (unix seconds), and the
-    /// highest `runs` row id read for them.
-    ticks: HashMap<String, i64>,
-    runs_read: i64,
 }
 
 /// One row as [`NodeAgesIndex`] folds it in.
@@ -359,7 +352,6 @@ impl NodeAgesIndex {
                 None => self.rows.remove(base),
             };
         }
-        self.read_ticks(conn).await?;
         Ok(self.ages())
     }
 
@@ -558,47 +550,6 @@ impl NodeAgesIndex {
         Ok(())
     }
 
-    /// The newest tick of each schedule that a run started for, from the `runs` rows added
-    /// since the last read (all of them when rows were deleted below what was read).
-    async fn read_ticks(&mut self, conn: &libsql::Connection) -> Result<(), BarcaError> {
-        let failure = |e| BarcaError::Db(format!("failed to read scheduled runs: {e}"));
-        let mut rows = conn
-            .query("SELECT COALESCE(max(id), 0) FROM runs", ())
-            .await
-            .map_err(failure)?;
-        let max_id = match rows.next().await.map_err(failure)? {
-            Some(row) => row.get::<i64>(0).unwrap_or(0),
-            None => 0,
-        };
-        drop(rows);
-        if max_id < self.runs_read {
-            self.ticks.clear();
-            self.runs_read = 0;
-        }
-        if max_id == self.runs_read {
-            return Ok(());
-        }
-        let mut rows = conn
-            .query(
-                "SELECT schedule_id, scheduled_at FROM runs \
-                 WHERE id > ?1 AND id <= ?2 AND schedule_id IS NOT NULL AND scheduled_at IS NOT NULL",
-                [self.runs_read, max_id],
-            )
-            .await
-            .map_err(failure)?;
-        while let Some(row) = rows.next().await.map_err(failure)? {
-            let (Ok(schedule), Ok(at)) = (row.get::<String>(0), row.get::<String>(1)) else {
-                continue;
-            };
-            if let Some(at) = barca_model::time::parse_rfc3339(&at) {
-                let tick = self.ticks.entry(schedule).or_insert(at);
-                *tick = (*tick).max(at);
-            }
-        }
-        self.runs_read = max_id;
-        Ok(())
-    }
-
     fn ages(&self) -> HashMap<String, NodeAge> {
         let mut out: HashMap<String, NodeAge> = HashMap::with_capacity(self.success.len());
         for (base, runs) in &self.failed {
@@ -622,9 +573,6 @@ impl NodeAgesIndex {
         }
         for (base, facts) in &self.rows {
             out.entry(base.clone()).or_default().rows = Some(facts.clone());
-        }
-        for (schedule, tick) in &self.ticks {
-            out.entry(schedule.clone()).or_default().last_tick = Some(*tick);
         }
         out
     }
@@ -1533,22 +1481,6 @@ mod failure_index_tests {
             ],
         )
         .await;
-        {
-            let _g = db_guard().await;
-            let (_db, conn) = open_conn(&path).await.unwrap();
-            for (id, at) in [
-                ("s1", "2026-11-16T12:00:00Z"),
-                ("s2", "2026-11-16T12:05:00Z"),
-            ] {
-                conn.execute(
-                    "INSERT INTO runs (run_id, command, files, schedule_id, scheduled_at) \
-                     VALUES (?1, 'get', '[]', 'p.py:a', ?2)",
-                    [id, at],
-                )
-                .await
-                .unwrap();
-            }
-        }
         let ages = index.read(&path).await.unwrap();
         let a = ages["p.py:a"].rows.clone().unwrap();
         assert_eq!(
@@ -1566,12 +1498,9 @@ mod failure_index_tests {
         let k = ages["p.py:k"].rows.clone().unwrap();
         // Before r3: d=1 empty (r2) and d=4 empty; now only d=4.
         assert_eq!((k.empty, k.previous_empty), (1, Some(2)));
-        assert_eq!(ages["p.py:a"].last_tick, Some(1_794_830_700));
-        assert_eq!(ages["p.py:k"].last_tick, None);
         // Read in full, the same facts.
         let full = node_ages(&path).await.unwrap();
         assert_eq!(full["p.py:k"].rows, ages["p.py:k"].rows);
-        assert_eq!(full["p.py:a"].last_tick, ages["p.py:a"].last_tick);
     }
 
     #[test]

@@ -119,6 +119,16 @@ separate fact shown beside its health; it does not change it.
   seconds, or half the interval for a schedule more frequent than every two minutes. Typical
   queue wait is the median `queue_wait_seconds` of its newest 20 fired ticks (0 with none).
   `GET /schedule`, `GET /state` and `barca status` read this one function.
+  Implemented (#958) as `barca_core::schedule_standing::standing`, with these fields on
+  `GET /schedule` entries and in the `schedule` block of `GET /state`, `GET /nodes` and `barca
+  status --json`: `last_fired`, `last_run_id`, `last_status`, `next_fire`, `late`,
+  `late_since`. As implemented, a tick is one whose run was started or queued, so
+  `late_since` is the first slot after the newest such tick; the queue wait is the typical
+  one or, when longer, the newest tick's own (to now while its run still waits), so a tick
+  waiting for a run slot is not late; and until the tick records of #960 exist, the waits
+  are read from the `runs` rows a schedule started (slot to start), not from
+  `queue_wait_seconds`. Conformance: `a_queued_tick_reads_the_same_on_every_surface`
+  (`crates/barca-server/tests/running.rs`) and the tests of `schedule_standing`.
 - Row 8 gains a row before it: when the newest finished tick that checked the node recorded
   `up_to_date` and no record newer than that tick says otherwise, `health` is `ok` with
   `health_reason: "checked_up_to_date"`, and `last_check` carries the tick.
@@ -464,7 +474,7 @@ with the code and replaces the matching source link.
 | The twelve health rows, `blocked_by` through `unknown` nodes and past pins, as Rust tests ported from the TypeScript ones | #954 |
 | The map, the bars and `barca status --rollup` print the same counts from one response; asset and node units both present | #955 |
 | A project with 7 of 556 assets counted reads "7 of 556 measured" in status JSON and the UI | #957 |
-| A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late | #958 |
+| A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late (passes: `a_queued_tick_reads_the_same_on_every_surface`) | #958 |
 | Re-adding a derived word in TypeScript fails CI | #959 |
 | A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
 | A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961 |
