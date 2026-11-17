@@ -239,10 +239,11 @@ pub struct NodeState {
     /// `--timezone`, if scheduled: the slot it last had.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub prev_run: Option<i64>,
-    /// For a scheduled node that missed a slot: the first slot (unix epoch seconds) after the
-    /// tick of the newest run its schedule started (`runs.scheduled_at`), when that slot is at
-    /// or before now, so no run has started for it yet. `null` while on time, while paused, and
-    /// when no scheduled run is recorded.
+    /// For a scheduled node that missed a slot: the first slot (unix epoch seconds) after its
+    /// schedule's newest fired tick, when that slot is at or before now. `null` while on time,
+    /// while paused, and when no tick is recorded. The same value as `late_since` of
+    /// `GET /schedule` and of its `schedule` block, which also says whether it is `late`
+    /// (`barca_core::schedule_standing::standing`).
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub late_since: Option<i64>,
     /// The run working on this node now, whoever started it (`null` when none is).
@@ -305,8 +306,9 @@ pub struct Durations {
 pub(crate) use crate::replay::RunChannel;
 
 /// Durable, mutable view of one scheduled job, published by the scheduler and
-/// read by `GET /schedule`. The volatile bits (next fire time, live run status)
-/// are computed at request time from `cron` and `last_handle`.
+/// read by `GET /schedule`. Where the schedule stands (its last tick and run, its next slot,
+/// whether it is late) is not here: it is computed at request time from the recorded ticks
+/// (`barca_core::schedule_standing::standing`), as every other surface computes it.
 #[derive(Clone, Debug, Serialize)]
 pub struct JobStatus {
     /// Full node id (the run target).
@@ -315,10 +317,6 @@ pub struct JobStatus {
     pub cron: String,
     /// Node kind (asset / sensor / task).
     pub kind: barca_core::NodeKind,
-    /// Last time the scheduler fired this job (unix epoch seconds), if ever.
-    pub last_fired: Option<i64>,
-    /// Handle of the most recent run the scheduler triggered for this job.
-    pub last_handle: Option<String>,
     /// Last time a due tick of this job was skipped (unix epoch seconds) because a run of
     /// its node was already in flight. Kept in memory only; a restart clears it.
     pub last_skipped: Option<i64>,

@@ -225,7 +225,7 @@ pub fn explain(
         targets: targets(run),
         requested_by: requested_by(run.triggered_by, run.principal),
         attempts: attempts_label(run.attempts, run.retries),
-        steps: steps_label(run, nodes),
+        steps: steps_label(run, nodes, steps),
         target_outcomes: target_outcomes(run, nodes),
         cancellation: run.cancellation.map(cancellation_notice),
         why: why_ran(
@@ -329,13 +329,23 @@ fn outcome_label(executed: u64, cached: u64, failed: u64, skipped: u64) -> Strin
 
 /// A run's steps by outcome: failed keys and skipped nodes from its per-node summary. A run
 /// that did not finish says what it started, since what it did not reach is not an outcome.
-fn steps_label(run: RunFacts<'_>, nodes: &[RunNodeSummary]) -> String {
+fn steps_label(run: RunFacts<'_>, nodes: &[RunNodeSummary], steps: &[RunStep]) -> String {
     let executed = run.steps_executed.max(0) as u64;
     let cached = run.steps_cached.max(0) as u64;
     if matches!(run.status, "cancelled" | "interrupted" | "error") {
         return format!("{} started · {} cached", count(executed), count(cached));
     }
-    let failed: usize = nodes.iter().map(|n| n.failed).sum();
+    // A local `barca history RUN_ID` has no per-node summary (only a server rebuilds the run's
+    // plan), so the failed steps it lists are counted too: a failed step is never "ok".
+    let listed_failed = steps
+        .iter()
+        .filter(|s| StepStatus::Failed.is(Some(s.status.as_str())))
+        .count();
+    let failed: usize = nodes
+        .iter()
+        .map(|n| n.failed)
+        .sum::<usize>()
+        .max(listed_failed);
     let skipped = nodes
         .iter()
         .filter(|n| StepStatus::Skipped.is(n.status.as_deref()))
@@ -1115,7 +1125,7 @@ mod tests {
             planned("c", "skipped", None),
         ];
         assert_eq!(
-            steps_label(run, &nodes),
+            steps_label(run, &nodes, &[]),
             "2 ok · 1 failed · 1 skipped · 1 cached"
         );
         let cancelled = RunFacts {
@@ -1123,7 +1133,7 @@ mod tests {
             steps_executed: 1,
             ..facts()
         };
-        assert_eq!(steps_label(cancelled, &[]), "1 started · 0 cached");
+        assert_eq!(steps_label(cancelled, &[], &[]), "1 started · 0 cached");
     }
 
     #[test]

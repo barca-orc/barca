@@ -10,6 +10,7 @@
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
 import type { DataCoverage } from './generated/DataCoverage'
+import { formatLate } from './schedules'
 import type { DataSignal, NodeState } from './types'
 
 const n = (count: number) => count.toLocaleString('en-US')
@@ -55,8 +56,8 @@ export function dataSignalSets(states: readonly NodeState[], nowMs: number = Dat
     const older = s.signals.find((x) => x.kind === 'behind_input')
     if (older) behind.set(s.id, signalLine(older))
     else if (s.health_reason === 'schedule_late') {
-      const minutes = s.late_since === null ? null : Math.round((nowMs - s.late_since * 1000) / 60_000)
-      const by = minutes === null ? '' : `: late by ${minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`}`
+      // Late is the server's word, the one the Schedules page shows; this only says by how much.
+      const by = s.late_since === null ? '' : `: ${formatLate(s.late_since * 1000, nowMs)}`
       behind.set(s.id, `schedule missed its slot${by}`)
     }
   }

@@ -5,7 +5,7 @@ import { useTimeZone } from "@/context/timeZone";
 import { nodeStateDisplay } from "@/lib/cacheStateDisplay";
 import { inPipeline } from "@/lib/pipeline";
 import type { Remote } from "@/lib/remote";
-import { scheduleRows, type ScheduleRow } from "@/lib/schedules";
+import { lastStatusLabel, scheduleRows, type ScheduleRow } from "@/lib/schedules";
 import { nodeKindLabel } from "@/lib/status";
 import { formatInstant } from "@/lib/time";
 import type { Health, ListNode, NodeState, ScheduleJob } from "@/lib/types";
@@ -74,8 +74,8 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
             <p className="barca-note">
               Schedules fire on the server that owns the scheduler (a <code>barca serve</code>{" "}
               without <code>--read-only</code>). This view only reads their runs and the queue
-              from the shared metadata, as of each refresh: a schedule is late when no run has
-              started for a slot that has passed.
+              from the shared metadata, as of each refresh: a schedule is late when no tick has
+              fired for a slot that passed longer ago than its grace and its queue wait.
             </p>
           ) : (
             <p className="barca-note">
@@ -144,7 +144,7 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
           <th>Name</th>
           <th>Schedule</th>
           <th>Next run</th>
-          <th>Last run</th>
+          <th>Last tick</th>
           <th>State</th>
           {canPause && <th aria-label="Actions" />}
         </tr>
@@ -173,7 +173,7 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
                 // Missed a slot: the next one is not when it runs, so no countdown.
                 <time
                   dateTime={new Date(r.late.sinceMs).toISOString()}
-                  title={`no run has started for the ${formatInstant(r.late.sinceMs, zone)} slot${r.nextRunMs !== null ? `; next slot ${formatInstant(r.nextRunMs, zone)}` : ""}`}
+                  title={`no tick has fired for the ${formatInstant(r.late.sinceMs, zone)} slot${r.nextRunMs !== null ? `; next slot ${formatInstant(r.nextRunMs, zone)}` : ""}`}
                 >
                   <StatusBadge glyph="stale" label={r.late.by} size="sm" />
                 </time>
@@ -183,8 +183,11 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
             </td>
             <td>
               {r.last ? (
-                <span className={r.last.status === "failed" ? "barca-cell-failed" : undefined}>
-                  {r.last.status !== "success" && `${r.last.status} `}<Age at={r.last.at} nowMs={nowMs} />
+                <span
+                  className={r.last.status === "failed" ? "barca-cell-failed" : undefined}
+                  title={r.last.runId ? `run ${r.last.runId}` : undefined}
+                >
+                  {r.last.status !== null && r.last.status !== "success" && `${lastStatusLabel(r.last.status)} `}<Age at={r.last.at} nowMs={nowMs} />
                 </span>
               ) : (
                 "never"

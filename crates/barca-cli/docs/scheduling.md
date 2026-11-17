@@ -268,18 +268,38 @@ sensor once and let the `Always` nodes below it follow instead.
 
 ## A schedule that missed its slot
 
-A tick that waits in the queue, is skipped behind a run in flight, or falls while the server is
-down has not run. `GET /state` gives each scheduled node `prev_run` (its last slot) and
-`late_since`: the first slot after the tick of the newest run its schedule started, when that
-slot has passed (`barca docs server-mode`, "Data health"). The web UI's Schedules page shows such
-a schedule as `late by 12m`, late ones first, instead of a countdown to a next slot it will not
-keep. A paused schedule is not late. A `--read-only` server shows the same lateness from the
-shared metadata: schedules fire on the server that owns the scheduler, and the read-only one
-only reads their runs and the queue.
+Where a schedule stands is decided once, on the server, and every surface reads that answer:
+`GET /schedule`, the `schedule` block of `GET /state` and of `barca status --json` (`GET
+/nodes`), and the web UI, which shows the values and compares no times itself.
+
+- `last_fired` is its newest tick: the slot of the newest run the schedule started or queued.
+  `last_run_id` is that run and `last_status` its status as `barca history` words it, `pending`
+  while it waits in the run queue. The node's own last result is not the schedule's last run:
+  a tick that found the node up to date ran and wrote nothing.
+- `late_since` is the first slot after `last_fired` that has passed: a slot no tick fired for
+  (it was skipped behind a run in flight, or the server was down). It is `null` while on time,
+  while the schedule is paused, and when no tick is recorded.
+- `late` is true when `late_since` is further back than the schedule's grace plus its queue
+  wait. The grace is 60 seconds, or half the interval for a schedule more frequent than every
+  two minutes. The queue wait is the median wait, from slot to start, of the schedule's newest
+  20 runs or, when longer, the wait of its newest tick's run. So a tick whose run waits for a
+  run slot does not make its schedule late: the run queue is behind, and `GET /queue` says by
+  how much. A paused schedule is never late.
+
+The web UI's Schedules page shows a late schedule as `late by 12m`, late ones first, instead of
+a countdown to a next slot it will not keep, and the Assets page lists it among the causes with
+the same words. A `--read-only` server gives the same answer from the shared metadata:
+schedules fire on the server that owns the scheduler, and the read-only one only reads their
+runs and the queue. Without a server, `barca status --json` reads the same from this
+machine's `.barca/`.
 
 ```bash
-curl -s localhost:8274/state | jq '.[] | select(.late_since != null) | {id, late_since, prev_run, next_run}'
+curl -s localhost:8274/schedule | jq '.[] | select(.late) | {id, late_since, last_fired, last_status}'
+barca status --json | jq '.nodes[] | select(.schedule.late) | {id, schedule}'
 ```
+
+Known limitation: the queue wait is read from the runs a schedule started, so a schedule whose
+run history was deleted (`barca gc`) has a typical wait of 0 until it runs again.
 
 ## Pausing one schedule
 

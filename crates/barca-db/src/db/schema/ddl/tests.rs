@@ -264,6 +264,10 @@ async fn a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_r
     {
         // As a 0.24 release left it: format 1 without the columns added since.
         let (_db, conn) = raw(&path).await;
+        // The index on `schedule_id` is as new as the column it reads.
+        conn.execute("DROP INDEX idx_runs_schedule", ())
+            .await
+            .unwrap();
         for (table, name) in [
             ("runs", "triggered_by"),
             ("runs", "scheduled_at"),

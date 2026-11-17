@@ -351,6 +351,30 @@ last run id, last status and consecutive failed ticks
 `/ui/` shows the next scheduled run of each node. Both are computed in the server's
 `--timezone`, so they are the times the job will fire at.
 
+### A schedule that missed its slot
+
+Whether a schedule is late is decided once, on the server, and `GET /schedule`, the `schedule`
+block of `GET /state` and of `barca status --json`, and the web UI all show that answer:
+
+- `last_fired` is its newest tick, the slot of the newest run the schedule started or queued;
+  `last_run_id` is that run and `last_status` its status (`pending` while it waits in the run
+  queue). The node's own last result is not the schedule's last run: a tick that found the node
+  up to date ran and wrote nothing.
+- `late_since` is the first slot after `last_fired` that has passed: no tick fired for it (it
+  was skipped behind a run in flight, or the server was down).
+- `late` is true when `late_since` is further back than the schedule's grace (60 seconds, or
+  half the interval for a schedule more frequent than every two minutes) plus its queue wait:
+  the median wait of its newest 20 runs or, when longer, the wait of its newest tick's run. A
+  tick whose run waits for a run slot does not make its schedule late; `GET /queue` says how
+  far behind the run queue is. A paused schedule is never late.
+
+```bash
+curl -s localhost:8274/schedule | jq '.[] | select(.late) | {id, late_since, last_fired, last_status}'
+barca status --json | jq '.nodes[] | select(.schedule.late) | {id, schedule}'
+```
+
+The Schedules page lists late schedules first, as `late by 12m`.
+
 A scheduled run shows in the web UI while it runs, like any other: the node pulses on the graph
 and the pipeline page, the assets list shows a Running badge with the elapsed time and a link to
 the run, and Runs in the sidebar counts the runs in progress. The UI reads it from `GET /state`'s

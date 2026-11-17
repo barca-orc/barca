@@ -5224,6 +5224,9 @@ components:
       - next_fire
       - last_fired
       - last_status
+      - last_run_id
+      - late
+      - late_since
       - failures
       - max_failures
       - failing
@@ -5246,6 +5249,24 @@ components:
           type:
           - string
           - 'null'
+          description: Status of the run the newest tick started, in the words of GET /runs (pending
+            while it waits in the run queue).
+        last_run_id:
+          type:
+          - string
+          - 'null'
+          description: The run the newest tick (last_fired) started.
+        late:
+          type: boolean
+          description: late_since is further back than the schedule's grace (60 seconds, or half the
+            interval of a schedule more frequent than every two minutes) plus its queue wait. Never
+            while paused. The same value as late of GET /schedule.
+        late_since:
+          type:
+          - string
+          - 'null'
+          description: The first slot after last_fired that has passed; null while on time, while
+            paused and when no tick is recorded.
         failures:
           type: integer
           minimum: 0
@@ -5337,10 +5358,11 @@ components:
           anyOf:
           - *id054
           - type: 'null'
-          description: For a scheduled node that missed a slot, the first slot (unix seconds) after the
-            tick of the newest run its schedule started (runs.scheduled_at), when that slot is at or
-            before now; null while on time, while paused, when no scheduled run is recorded, and for
-            a node without a schedule. Experimental.
+          description: For a scheduled node that missed a slot, the first slot (unix seconds) after
+            its schedule's newest tick (the slot of the newest run it started or queued), when that
+            slot is at or before now; null while on time, while paused, when no tick is recorded, and
+            for a node without a schedule. schedule.late says whether the schedule is late.
+            Experimental.
         signals: *id_signals
         last_success_at:
           anyOf:
@@ -5680,8 +5702,11 @@ components:
       - kind
       - next_fire
       - last_fired
+      - last_run_id
       - last_run
       - last_status
+      - late
+      - late_since
       - last_skipped
       - skipped_for
       - skip_reason
@@ -5707,14 +5732,44 @@ components:
           anyOf:
           - *id054
           - type: 'null'
+          description: The schedule's newest tick, the slot of the newest run it started or queued
+            (unix epoch seconds); null when none is recorded.
+        last_run_id:
+          anyOf:
+          - *id003
+          - type: 'null'
+          description: The run that tick started.
         last_run:
           anyOf:
           - *id003
           - type: 'null'
+          description: last_run_id under its older name.
         last_status:
           anyOf:
-          - $ref: '#/components/schemas/RunStatus'
+          - type: string
+            enum:
+            - pending
+            - running
+            - success
+            - failed
+            - cancelled
+            - error
+            - interrupted
           - type: 'null'
+          description: That run's status, in the words of GET /runs; pending while it waits in the
+            run queue.
+        late:
+          type: boolean
+          description: late_since is further back than the schedule's grace (60 seconds, or half the
+            interval of a schedule more frequent than every two minutes) plus its queue wait (the
+            median wait of its newest 20 runs or, when longer, the wait of its newest tick's run).
+            Never while paused. GET /state and barca status report the same value.
+        late_since:
+          anyOf:
+          - *id054
+          - type: 'null'
+          description: The first slot after last_fired that has passed (unix epoch seconds); null
+            while on time, while paused and when no tick is recorded.
         last_skipped:
           description: Last time a due tick was skipped (unix epoch seconds), because a run of the node
             was in flight or the job is paused; in memory only, null after a restart

@@ -215,25 +215,29 @@ table adds a SCHEDULE column when a node it shows is scheduled:
 |---|---|
 | `cron` | the cron expression |
 | `next_fire` | when it next matches (RFC 3339, UTC) |
-| `last_fired` | the last tick fired (RFC 3339, UTC), or `null` |
-| `last_status` | the status of the run that tick started, while the server remembers it (`null` after a restart) |
+| `last_fired` | its newest tick: the slot of the newest run the schedule started or queued (RFC 3339, UTC), or `null` |
+| `last_run_id`, `last_status` | the run that tick started and its status as `barca history` words it (`pending` while it waits in the server's run queue), or `null` |
+| `late`, `late_since` | `late_since` is the first slot after `last_fired` that has passed (RFC 3339, UTC, or `null`); `late` is true when that is further back than the schedule's grace plus its queue wait ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot") |
 | `failures`, `max_failures`, `failing` | consecutive failed ticks, `Schedule(..., max_failures=N)` (default 5), and `failures >= max_failures`: ticks are skipped ([Scheduling With Cron](/scheduling/)) |
 | `paused`, `paused_until` | held back by `POST /schedule/{id}/pause`; `paused_until` is `null` for a pause until resumed |
 | `skip_reason` | why the last due tick was skipped: `in_flight` or `paused`, or `null` |
 | `live` | `true` when a running scheduler reported this entry |
 
 The SCHEDULE cell is `<cron>; failing 2/2`, `<cron>; paused` (or `paused until <time> UTC`), or
-`<cron>; next <time> UTC`, with `1 failure, ` before `next` while failures are counting.
+`<cron>; next <time> UTC`, with `1 failure, ` before `next` while failures are counting and
+`late since <time> UTC, ` before `next` while the schedule is late.
 
 - **From a server** (configured, or `--server`): the server's scheduler's view, the same numbers
-  `GET /schedule` and the web UI's Schedules page show, with `next_fire` in the server's
+  `GET /schedule`, `GET /state` and the web UI's Schedules page show, with `next_fire` in the server's
   `--timezone`, and `live: true`. A server started with `--no-schedule` or `--read-only` fires
   nothing: its entries come from its metadata DB as below, with `live: false`.
 - **On this machine** (`--local`, or no server): no scheduler runs, so the entry is what the
-  metadata DB holds: the failures and pauses a `barca serve` of this `.barca/` recorded, and the
-  last tick it fired. `next_fire` is the next match in this machine's local time, as `barca
-  list` computes it. `last_status` and `skip_reason` are `null` and `live` is `false`. A laptop
-  that never ran `barca serve` shows `failures: 0` and `paused: false`.
+  metadata DB holds: the failures, pauses, runs and run queue a `barca serve` of this `.barca/`
+  recorded, so `last_fired`, `last_run_id`, `last_status`, `late` and `late_since` are the ones
+  that server reports. `next_fire` is the next match in this machine's local time, as `barca
+  list` computes it, and slots are read in local time. `skip_reason` is `null` and `live` is
+  `false`. A laptop that never ran `barca serve` shows `failures: 0`, `paused: false` and
+  `late: false`.
 
 ## Finding and reading a failed run
 

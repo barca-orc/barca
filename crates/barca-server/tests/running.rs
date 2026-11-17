@@ -38,6 +38,11 @@ def keyed(k: str) -> str:
 def ticking() -> dict:
     time.sleep(120)
     return {"done": True}
+
+@asset()
+def blocker() -> dict:
+    time.sleep(120)
+    return {"done": True}
 "#;
 
 /// A served project in `dir` whose workers import this checkout's python/ tree.
@@ -271,4 +276,124 @@ async fn a_scheduler_run_shows_as_running_and_clears_when_it_ends() {
     assert_eq!(status, StatusCode::OK, "{body}");
     wait_for(&app, "ticking", "cleared", Value::is_null).await;
     assert!(in_flight(&app).await.is_empty());
+}
+
+/// #958: one definition of where a schedule stands. With one run slot taken, a tick's run
+/// waits in the run queue; `GET /schedule`, `GET /state`, `GET /nodes` (`barca status`) and
+/// the run list say the same last tick, last run and lateness, and waiting is not late.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queued_tick_reads_the_same_on_every_surface() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path(), true);
+    config.resolved.server_max_runs = Some(1);
+    let (app, start_scheduler) = barca_server::app_with_scheduler(config);
+
+    // The only run slot is taken before the scheduler has ever ticked.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/runs",
+        Some(json!({"command": "get", "targets": ["blocker"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let blocker = body["run_id"].as_str().unwrap().to_string();
+    wait_for(&app, "blocker", "ran", |r| r["step"] == "running").await;
+
+    let scheduler = start_scheduler();
+    let is_ticking = |id: &Value| {
+        id.as_str()
+            .is_some_and(|id| id.ends_with("pipeline.py:ticking"))
+    };
+    let job = |schedule: &Value| {
+        schedule
+            .as_array()
+            .and_then(|jobs| jobs.iter().find(|j| is_ticking(&j["id"])))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    // Its tick fires, and its run waits behind the blocker. Then several slots pass.
+    let t0 = Instant::now();
+    loop {
+        let (_, schedule) = send(&app, "GET", "/schedule", None).await;
+        if job(&schedule)["last_status"] == "pending" && !job(&schedule)["late_since"].is_null() {
+            break;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(60),
+            "no tick queued: {schedule}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    scheduler.abort();
+    let _ = scheduler.await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let (_, schedule) = send(&app, "GET", "/schedule", None).await;
+    let (_, state) = send(&app, "GET", "/state", None).await;
+    let (_, nodes) = send(&app, "GET", "/nodes", None).await;
+    let (_, runs) = send(&app, "GET", "/runs", None).await;
+    let entry = job(&schedule);
+    let named = |list: &Value| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "ticking")
+            .cloned()
+            .unwrap()
+    };
+    let row = named(&state);
+    let block = named(&nodes["nodes"])["schedule"].clone();
+    let run = runs["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| is_ticking(&r["schedule_id"]))
+        .cloned()
+        .unwrap_or_else(|| panic!("no scheduled run listed: {runs}"));
+    let rfc = |secs: &Value| Value::from(barca_core::outcome::rfc3339(secs.as_i64().unwrap()));
+
+    // The last tick and its run: the queued run, by the same id and status everywhere.
+    assert_eq!(entry["last_run_id"], run["id"], "{entry} {run}");
+    assert_eq!(entry["last_run"], entry["last_run_id"], "{entry}");
+    assert_eq!(block["last_run_id"], run["id"], "{block}");
+    assert_eq!(run["status"], "pending", "{run}");
+    assert_eq!(entry["last_status"], "pending", "{entry}");
+    assert_eq!(block["last_status"], "pending", "{block}");
+    assert_eq!(
+        rfc(&entry["last_fired"]),
+        run["scheduled_at"],
+        "{entry} {run}"
+    );
+    assert_eq!(block["last_fired"], run["scheduled_at"], "{block}");
+    // Slots have passed since that tick, by the same first missed slot everywhere, and the
+    // schedule is not late for it: its run waits for a run slot.
+    assert_eq!(
+        entry["late_since"].as_i64(),
+        entry["last_fired"].as_i64().map(|t| t + 1),
+        "{entry}"
+    );
+    assert_eq!(row["late_since"], entry["late_since"], "{row}");
+    assert_eq!(block["late_since"], rfc(&entry["late_since"]), "{block}");
+    for (surface, late) in [
+        ("/schedule", &entry["late"]),
+        ("/state", &row["schedule"]["late"]),
+        ("/nodes", &block["late"]),
+    ] {
+        assert_eq!(
+            late,
+            &Value::Bool(false),
+            "{surface}: {entry} {row} {block}"
+        );
+    }
+    // `GET /state` carries the block `GET /nodes` does, field for field.
+    assert_eq!(row["schedule"], block, "{row}");
+    assert_eq!(block["live"], true, "{block}");
+    assert_eq!(row["next_run"], entry["next_fire"], "{row} {entry}");
+
+    for id in [run["id"].as_str().unwrap(), blocker.as_str()] {
+        let (status, body) = send(&app, "DELETE", &format!("/runs/{id}"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    wait_for(&app, "blocker", "cleared", Value::is_null).await;
 }

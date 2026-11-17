@@ -159,7 +159,7 @@ def test_manual_pins_itself_and_a_refresh_lets_the_next_tick_through(tmp_path):
             "a tick that has ended",
             lambda: (j := serve.schedule())["prices"]["last_status"] not in served.LIVE and j,
         )
-        assert jobs["prices"]["last_status"] == "complete", jobs
+        assert jobs["prices"]["last_status"] == "success", jobs
         run = serve.finished(jobs["prices"]["last_run"])
         assert run["status"] == "success", run
         blocked = {

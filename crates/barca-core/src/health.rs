@@ -21,7 +21,7 @@
 use crate::BarcaError;
 use crate::cache_state::CacheState;
 use crate::db::{self, NodeAge};
-use crate::schedule::{Slots, Zone};
+use crate::schedule::Zone;
 use crate::status::{NodeStatus, StatusResult};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -112,7 +112,7 @@ pub enum HealthReason {
     RowsChanged,
     /// `behind`: older than an input, and nothing else says so.
     BehindInput,
-    /// `behind`: its schedule missed a slot ([`schedule_late`]).
+    /// `behind`: its schedule is late ([`crate::schedule_standing::standing`]).
     ScheduleLate,
     /// `behind`: `cache.state` is `stale`.
     Stale,
@@ -262,7 +262,7 @@ pub struct Evidence<'a> {
     pub ages: &'a HashMap<String, NodeAge>,
     /// Pinned assets (`barca pin`): never blocked, and a failure above one does not pass it.
     pub pinned: &'a HashSet<String>,
-    /// Scheduled nodes whose schedule is late ([`late_schedules`]).
+    /// Scheduled nodes whose schedule is late ([`crate::schedule_standing::late_schedules`]).
     pub late: &'a HashSet<String>,
 }
 
@@ -543,7 +543,15 @@ pub async fn attach_from_db(
             .get(id)
             .is_some_and(|p| p.until.is_none_or(|until| until > now.timestamp()))
     };
-    let late = late_schedules(dag, &ages, zone, now, &paused);
+    // Row 6: late is the schedule's standing, the one definition (#958).
+    let jobs = crate::schedule::jobs_from_dag(dag);
+    let ids: Vec<String> = jobs.iter().map(|job| job.id.clone()).collect();
+    let ticks = if Path::new(db_path).exists() {
+        crate::schedule_standing::recorded(db_path, &ids).await?
+    } else {
+        Default::default()
+    };
+    let late = crate::schedule_standing::late_schedules(&jobs, &ticks, zone, now, &paused);
     attach(
         result,
         Evidence {
@@ -553,51 +561,6 @@ pub async fn attach_from_db(
         },
     );
     Ok(())
-}
-
-/// How long past its missed slot a schedule reads as late, unless it fires more often than
-/// every two minutes: then half its interval.
-const LATE_GRACE_SECONDS: i64 = 60;
-
-/// Whether a schedule at `slots` is late as of `now` (unix seconds): it missed a slot
-/// (`late_since`) longer ago than its grace.
-///
-/// SEAM (#958): this is the grace part of the one definition of late. #958 owns that
-/// definition (it adds the schedule's typical queue wait to the grace and serves
-/// `GET /schedule` from it); when it lands, row 6 of the health table reads it here. A paused
-/// schedule is never late: callers clear `late_since` for one ([`late_schedules`]).
-pub fn schedule_late(slots: &Slots, now: i64) -> bool {
-    let Some(since) = slots.late_since else {
-        return false;
-    };
-    let grace = match (slots.prev, slots.next) {
-        (Some(prev), Some(next)) if next - prev < 2 * LATE_GRACE_SECONDS => (next - prev) / 2,
-        _ => LATE_GRACE_SECONDS,
-    };
-    now - since > grace
-}
-
-/// The scheduled nodes of `dag` whose schedule is late as of `now` ([`schedule_late`]), from
-/// each one's last tick in `ages`, with cron evaluated in `zone`.
-pub fn late_schedules(
-    dag: &crate::dag::Dag,
-    ages: &HashMap<String, NodeAge>,
-    zone: &Zone,
-    now: chrono::DateTime<chrono::Utc>,
-    paused: &dyn Fn(&str) -> bool,
-) -> HashSet<String> {
-    crate::schedule::jobs_from_summaries(crate::queries::list_assets_from_dag(dag))
-        .into_iter()
-        .filter(|job| !paused(&job.id))
-        .filter(|job| {
-            let tick = ages.get(&job.id).and_then(|a| a.last_tick);
-            schedule_late(
-                &crate::schedule::slots(&job.cron, zone, now, tick),
-                now.timestamp(),
-            )
-        })
-        .map(|job| job.id)
-        .collect()
 }
 
 #[cfg(test)]
@@ -1091,22 +1054,6 @@ mod tests {
             suspect: 0,
         };
         assert_eq!(many.line(), "7 of 556 assets measured");
-    }
-
-    #[test]
-    fn a_schedule_is_late_once_its_missed_slot_is_older_than_its_grace() {
-        let slots = |prev, next, late_since| Slots {
-            prev: Some(prev),
-            next: Some(next),
-            late_since,
-        };
-        // Hourly: a minute of grace.
-        assert!(!schedule_late(&slots(0, 3600, None), 4000));
-        assert!(!schedule_late(&slots(0, 3600, Some(0)), 60));
-        assert!(schedule_late(&slots(0, 3600, Some(0)), 61));
-        // Every 30 seconds: half the interval.
-        assert!(!schedule_late(&slots(0, 30, Some(0)), 15));
-        assert!(schedule_late(&slots(0, 30, Some(0)), 16));
     }
 
     #[test]

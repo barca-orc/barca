@@ -116,7 +116,8 @@ async fn set(
             None => "resumed".to_string(),
         }
     );
-    let body = schedule_at(state, chrono::Utc::now());
+    let facts = crate::handlers::published_ticks(state).await?;
+    let body = schedule_at(state, chrono::Utc::now(), &facts.ticks);
     let entry = body
         .as_array()
         .into_iter()
