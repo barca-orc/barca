@@ -94,10 +94,11 @@ def test_metadata_tables_come_from_the_server(team):
             "client_run_id": result_a["run_id"],
         }
     ]
-    # The columns are `barca history --json`'s.
+    # The columns are `barca history --json`'s, but `line` (#959): the run in the words of a
+    # list row, computed from these columns, not one of them.
     history = json.loads(barca(team.b, "history", "--json").stdout)["runs"][0]
     code, body, _ = sql(team.b, "select * from barca.runs")
-    assert body["columns"] == list(history) or set(body["columns"]) == set(history)
+    assert set(body["columns"]) == set(history) - {"line"}
     assert body["rows"][0]["run_id"] == history["run_id"]
 
     code, body, err = sql(
