@@ -96,8 +96,81 @@ barca status --json | jq -r '.nodes[] | select(.health != "ok") | [.health, .hea
 barca sql "select health, count(*) from barca.nodes group by all order by 2 desc"
 ```
 
+`root` names the upstream fact that explains a node that is not fresh, as `{"id":
+"failure:pipeline.py:orders", "kind": "failure", "node": "pipeline.py:orders"}`. Today the
+only kind is `failure`: a `failing` node's root is itself, and a node that is `blocked` with
+`health_reason: "upstream_failing"` has the failing node that blocks it (the nearest one
+upstream; with two failing inputs, the first by node id). Every other node has `root: null`,
+including one that is `blocked` by its cache state (`cache_blocked`), which names no node.
+
+```bash
+barca status --json | jq -r '.nodes[] | select(.health == "blocked") | [.id, .root.node // "-"] | @tsv'
+```
+
 Health is experimental ([CLI Contract](/reference/cli-contract/)): later releases add why a node that is not
-fresh is so and when it is expected fresh.
+fresh is so and when it is expected fresh, and more kinds of root.
+
+## The rollup
+
+`barca status --rollup --json` (and the server's `GET /state/rollup`) sums the nodes in scope
+into one tree. Nothing else adds health up: the table of `barca status --rollup`, the web
+UI's health map, bars and failures list all print this document.
+
+```json
+{
+  "as_of": "2026-11-17T16:49:57Z",
+  "entries": [
+    {"id": "root", "kind": "root", "label": "all", "parent": null,
+     "children": ["group:pipeline.py:ingest", "file:pipeline.py"],
+     "nodes": 6, "assets": 4, "running": 0,
+     "health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 3},
+     "asset_health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 1},
+     "data_coverage": {"assets": 4, "measured": 0, "suspect": 0}}
+  ],
+  "roots": [
+    {"id": "failure:pipeline.py:orders", "kind": "failure", "node": "pipeline.py:orders",
+     "detail": "ValueError: 12 rows rejected", "error_group": "ValueError: # rows rejected",
+     "nodes": 3, "assets": 3}
+  ],
+  "data_coverage": {"assets": 4, "measured": 0, "suspect": 0}
+}
+```
+
+`entries` lists the root first, then every entry depth first, a level's children in the order
+of `children`.
+
+| Key of an entry | Meaning |
+|---|---|
+| `id`, `kind` | `root` (id `root`), `group` (the group's id, `group:<file>:<name>`), `file` (`file:<path>`: the nodes of that file that are in no group) or `node` (the node id) |
+| `label` | the group's or node's name, the file's path, `all` for the root |
+| `parent`, `children` | the entry it sits under (`null` for the root) and the entries under it: worst health first, then most assets, then label |
+| `nodes`, `assets` | nodes underneath (1 for a node), and how many of them are assets: tasks and sensors are nodes, not assets |
+| `running` | nodes underneath a run is working on now; 0 without a server |
+| `health`, `asset_health` | how many nodes, and how many assets, are in each health |
+| `data_coverage` | the coverage of "Data signals and coverage", for the assets underneath |
+| `keys` | on a partitioned node only: its keys that `failed`, are `behind` (no cached result, and did not fail) and are `ok` |
+
+Every node has exactly one parent, so every count of an entry is the sum of its children's. A
+node declared in several groups is counted under the first of them by group id; a group with
+no node in scope is not listed.
+
+`roots` lists what holds the nodes that are not fresh, the most nodes first, then by id: each
+`root` the nodes carry (above), with `nodes` and `assets`, how many it holds (a failing node
+and every node it blocks). `detail` is the failure's error in one line (`3 of 8 keys failed`
+for a node whose keys failed with no error of its own) and `error_group` that line with its
+numbers replaced by `#`, so failures that differ only in their numbers share one; it is `null`
+when no error was recorded. `data_coverage` at the top is the root entry's.
+
+```bash
+barca status --rollup --json | jq -r '.entries[] | select(.kind == "group") | [.label, .nodes, .assets, .health.failing] | @tsv'
+barca status --rollup --json | jq -r '.roots[] | [.nodes, .node, .detail] | @tsv'
+```
+
+The rollup is experimental ([CLI Contract](/reference/cli-contract/)). An entry has no `causes`, `asset_causes`,
+`gap_seconds`, `unbounded` or `fresh_by` yet, a root no `causes`, `gap_seconds`, `unbounded`
+or `action`, and the only root kind is `failure`: a node that is `behind`, `undecided` or
+`never_run` is under no root. A scope given as targets is their upstream cones, so a rollup
+of one group also counts what that group reads from outside it.
 
 ## Last check
 
@@ -274,6 +347,7 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "health_reason": "cached",
       "signals": [],
       "measured": true,
+      "root": null,
       "last_check": null,
       "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
@@ -288,9 +362,10 @@ A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-2
 "last_fired": null, "last_status": null, "last_run_id": null, "late": false, "late_since": null,
 "failures": 0, "max_failures": 5, "failing": false,
 "paused": false, "paused_until": null, "skip_reason": null, "live": false}`, and `--state` or
-`--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `signals`, `measured`,
-`last_check` and `data_coverage` are in "Health", "Last check" and "Data signals and coverage"
-above; here `total` is a dict, which has no row count, so one of the two assets is measured.
+`--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `root`, `signals`,
+`measured`, `last_check` and `data_coverage` are in "Health", "Last check" and "Data signals
+and coverage" above; here `total` is a dict, which has no row count, so one of the two assets
+is measured.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column
 order. `--env <name>` reads another environment's state ([The Cache](/reference/cache/)).

@@ -71,6 +71,10 @@ pub struct NodeStatus {
     /// any key's); `null` for a task or sensor. `false` is "not measured", not ok.
     #[serde(default)]
     pub measured: Option<bool>,
+    /// The upstream fact that explains why it is not fresh: today only a failure (`kind`
+    /// `failure`), on the failing node itself and on each node it blocks; `null` otherwise.
+    #[serde(default)]
+    pub root: Option<crate::health::Root>,
     /// What the newest finished tick that had the node as a target did with it, and when
     /// (`barca docs status-fields`, "Last check"); `null` when no retained tick did. When the
     /// node's own state is `unknown`, a check that found it up to date decides its health
@@ -897,6 +901,7 @@ pub(crate) async fn status_from_dag_with_membership(
             health_reason: Default::default(),
             signals: Vec::new(),
             measured: None,
+            root: None,
             last_check: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
@@ -1254,6 +1259,7 @@ mod tests {
             health_reason: Default::default(),
             signals: Vec::new(),
             measured: None,
+            root: None,
             last_check: None,
             partitions: None,
             last_materialization: None,

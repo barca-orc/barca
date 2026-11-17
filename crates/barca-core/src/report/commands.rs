@@ -1320,6 +1320,84 @@ pub fn render_status(
     rendered
 }
 
+/// `barca status --rollup`: the document as JSON, or the tree down to groups and files (a
+/// node's own row is `barca status`), worst first, then what holds the nodes that are not
+/// fresh and how much of the data was measured. Every count names its unit.
+pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutput {
+    use crate::rollup::{EntryKind, RollupEntry};
+    let mut rendered = RenderedOutput::default();
+    if json {
+        line!(
+            rendered,
+            "{}",
+            serde_json::to_string_pretty(rollup).unwrap()
+        );
+        return rendered;
+    }
+    let by_id: HashMap<&str, &RollupEntry> =
+        rollup.entries.iter().map(|e| (e.id.as_str(), e)).collect();
+    let depth = |entry: &RollupEntry| {
+        let mut depth = 0;
+        let mut at = entry.parent.as_deref();
+        while let Some(id) = at {
+            depth += 1;
+            at = by_id.get(id).and_then(|e| e.parent.as_deref());
+        }
+        depth
+    };
+    let mut rows = vec![[
+        "SCOPE".to_string(),
+        "NODES".to_string(),
+        "ASSETS".to_string(),
+        "HEALTH (nodes)".to_string(),
+    ]];
+    for entry in rollup.entries.iter().filter(|e| e.kind != EntryKind::Node) {
+        let mut health = match entry.health.line() {
+            line if line.is_empty() => "-".to_string(),
+            line => line,
+        };
+        if entry.running > 0 {
+            health.push_str(&format!(" · {} running", entry.running));
+        }
+        rows.push([
+            format!("{}{}", "  ".repeat(depth(entry)), entry.label),
+            entry.nodes.to_string(),
+            entry.assets.to_string(),
+            health,
+        ]);
+    }
+    let width = |i: usize| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
+    let (scope, nodes, assets) = (width(0), width(1), width(2));
+    for row in &rows {
+        line!(
+            rendered,
+            "{:<scope$}  {:>nodes$}  {:>assets$}  {}",
+            row[0],
+            row[1],
+            row[2],
+            row[3]
+        );
+    }
+    if !rollup.roots.is_empty() {
+        line!(rendered, "");
+        line!(rendered, "Failing, with what each holds:");
+        for root in &rollup.roots {
+            line!(
+                rendered,
+                "  {}  {} ({})  {}",
+                root.node,
+                plural(root.nodes as u64, "node"),
+                plural(root.assets as u64, "asset"),
+                root.detail
+            );
+        }
+    }
+    line!(rendered, "");
+    line!(rendered, "Data: {}", rollup.data_coverage.line());
+    line!(rendered, "As of {}", rollup.as_of);
+    rendered
+}
+
 pub fn render_list(
     assets: &[AssetSummary],
     total: usize,

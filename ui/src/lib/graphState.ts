@@ -9,6 +9,7 @@
  */
 
 import { lastAttemptFailed, nodeStateDisplay, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { blockerOf } from './healthDisplay'
 import { statusMeta } from './status'
 import { runningGraphState } from './running'
 import type { Tone } from './tone'
@@ -17,7 +18,7 @@ import type { NodeState, StatusKind } from './types'
 
 export type GraphState =
   /** The node's cache state, as `GET /state` reports it. */
-  | { kind: 'cache'; tone: Tone; glyph: Glyph; label: string; hint: string; state: CacheState; lastFailed: boolean; keys?: GraphKeys }
+  | { kind: 'cache'; tone: Tone; glyph: Glyph; label: string; hint: string; state: CacheState; lastFailed: boolean; keys?: GraphKeys; /** The failing node that blocks it, as the server names it (`blockerOf`). */ blockedBy?: string }
   /** A run working on the node now, or the run this page streams; for a group, its parts as above. */
   | { kind: 'run'; tone: Tone; glyph: Glyph; label: string; hint: string; status: StatusKind; parts?: readonly GroupPart[] }
   /**
@@ -57,7 +58,8 @@ export function cacheGraphState(node: NodeState): GraphState {
   const shown = nodeStateDisplay({ state, lastFailed })
   const p = node.partitions
   const keys = p ? { total: p.total, failed: p.failed ?? 0, waiting: Math.max(0, p.missing - (p.failed ?? 0)) } : undefined
-  return { kind: 'cache', tone: shown.tone, glyph: shown.glyph, label: shown.label, hint: node.cache.detail, state, lastFailed, ...(keys ? { keys } : {}) }
+  const blockedBy = blockerOf(node)
+  return { kind: 'cache', tone: shown.tone, glyph: shown.glyph, label: shown.label, hint: node.cache.detail, state, lastFailed, ...(keys ? { keys } : {}), ...(blockedBy ? { blockedBy } : {}) }
 }
 
 /** A run working on the node now (whoever started it) outranks its resting state. */

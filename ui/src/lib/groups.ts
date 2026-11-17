@@ -1,10 +1,9 @@
 /** Organizational metadata, independent of execution. */
-import type { ListNode, NodeState, StatusKind } from './types'
+import type { ListNode, NodeState } from './types'
 import { plural } from './plural'
 import { shortName, type GraphEntry } from './graph'
 import type { GraphState } from './graphState'
-import { healthCounts, healthLabel, healthParts } from './health'
-import type { Health } from './healthDisplay'
+import { healthLabel, healthParts, type ScopeHealth } from './health'
 import { isCheck } from './status'
 import { formatSeconds } from './assetTable'
 
@@ -144,26 +143,25 @@ export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): num
   return b.failed - a.failed || b.stale - a.stale || name
 }
 
+const NO_SCOPE: ScopeHealth = { health: { failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: 0 }, running: 0, nodes: 0 }
+
 /**
- * A group's box: its most severe fact first, from its members' counts (`healthCounts`, ordered
- * by `healthParts`): failed last attempts, then run work, then the state most in need of
- * attention by rank; `parts` carries every part, for a card to show the rest compactly, and the
- * hint names them all. A group with run work and no failure is a run box (it pulses); a failure
- * inside a group that is also running still leads. A group has no state of its own: this
- * summarizes its members in their own words.
+ * A group's box: its most severe fact first, from the group's entry of the rollup (`GET
+ * /state/rollup`, ordered by `healthParts`): failing nodes, then run work, then the health most
+ * in need of attention; `parts` carries every part, for a card to show the rest compactly, and
+ * the hint names them all, with how many nodes they are of. A group with run work and no
+ * failure is a run box (it pulses); a failure inside a group that is also running still leads.
+ * A group has no state of its own: this words its entry, and counts nothing. No entry (the
+ * rollup has none for it, or has not loaded) is an empty box.
  */
-export function groupHealth(
-  ids: string[],
-  states: Map<string, NodeState>,
-  live: Record<string, StatusKind> = {},
-  healthOf?: ReadonlyMap<string, Health>,
-): GraphState {
-  const counts = healthCounts(ids, states, live, healthOf)
-  const hint = healthLabel(counts) || 'No members with a state.'
+export function groupHealth(scope: ScopeHealth | undefined): GraphState {
+  const counts: ScopeHealth = scope ?? NO_SCOPE
+  const label = healthLabel(counts)
+  const hint = label ? `${plural(counts.nodes, 'node')}: ${label}` : 'No members with a state.'
   const parts = healthParts(counts).map(({ glyph, tone, count, word, text }) => ({ glyph, tone, count, word, text }))
   const [first] = parts
   if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint, parts }
-  if (counts.running > 0 && counts.states.failing === 0) {
+  if (counts.running > 0 && counts.health.failing === 0) {
     return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: first.text, hint, parts }
   }
   return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint, parts }

@@ -9,7 +9,8 @@
 import type { Connection } from '@/lib/connection'
 import { served } from '@/lib/testdata/served'
 import type { CacheState } from '@/lib/cacheStateDisplay'
-import { emptyHealth, type Failure, type HealthCounts } from '@/lib/health'
+import type { Failure, ScopeHealth } from '@/lib/health'
+import { counts as healthCountsOf } from '@/lib/testdata/rollup'
 import type { Health } from '@/lib/healthDisplay'
 import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
@@ -649,45 +650,40 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-const counts = (states: Partial<Record<Health, number>>, extra: Partial<Pick<HealthCounts, 'running' | 'pending'>> = {}): HealthCounts => {
-  const all = emptyHealth()
-  Object.assign(all.states, states)
-  Object.assign(all, extra)
-  all.total = Object.values(all.states).reduce((n, c) => n + c, 0) + all.running + all.pending
-  return all
-}
+/** A rollup entry as served: its nodes by health, how many there are, and run work beside them. */
+const scopeOf = (nodes: number, states: Partial<Record<Health, number>>, running = 0): ScopeHealth => ({ health: healthCountsOf(states), nodes, running })
 
 /** A scope in each state the health bar distinguishes, and the mixes that matter. */
-export const healthStates: Record<string, HealthCounts> = {
-  ok: counts({ ok: 504 }),
-  'one failure in thousands': counts({ failing: 1, behind: 12, ok: 2399 }),
-  'failing and blocking': counts({ failing: 3, blocked: 58, behind: 121, ok: 380 }),
-  running: counts({ ok: 460, behind: 4 }, { running: 40 }),
-  'every health': counts({ failing: 2, blocked: 2, suspect: 1, behind: 8, undecided: 6, never_run: 7, ok: 80 }),
-  'not run yet': counts({ never_run: 120, ok: 8 }),
-  checking: counts({}, { pending: 640 }),
-  empty: counts({}),
+export const healthStates: Record<string, ScopeHealth> = {
+  ok: scopeOf(504, { ok: 504 }),
+  'one failure in thousands': scopeOf(2412, { failing: 1, behind: 12, ok: 2399 }),
+  'failing and blocking': scopeOf(562, { failing: 3, blocked: 58, behind: 121, ok: 380 }),
+  running: scopeOf(504, { ok: 500, behind: 4 }, 40),
+  'every health': scopeOf(106, { failing: 2, blocked: 2, suspect: 1, behind: 8, undecided: 6, never_run: 7, ok: 80 }),
+  'not run yet': scopeOf(128, { never_run: 120, ok: 8 }),
+  empty: scopeOf(0, {}),
 }
 
 // ── Failures ──────────────────────────────────────────────────────────────────
 
-const failureOf = (id: string, headline: string, impact: number | null, kind: Failure['kind'] = 'asset'): Failure => ({
+const failureOf = (id: string, headline: string, held: number, kind: Failure['kind'] = 'asset'): Failure => ({
   id: `billing.py:${id}`, name: id, kind, headline, error: `${headline}\n  File "billing.py", line 12`,
-  at: sqlTime(3_600), failingSince: sqlTime(50_400), failures: 3, impact, missingKeys: null,
+  // As the server groups them: the headline with its numbers replaced by `#`.
+  group: headline.replace(/\d[\d,._]*\d|\d/g, '#'),
+  at: sqlTime(3_600), failingSince: sqlTime(50_400), failures: 3, held, heldAssets: held, missingKeys: null,
 })
 
-/** The Failures view's list: causes with several members, a leaf, and a graph still loading. */
+/** The Failures view's list: errors shared by several failures, and one on its own. */
 export const failureLists = {
   'by cause': [
-    failureOf('invoices_00', 'row count fell 64% day over day', 40),
-    failureOf('invoices_01', 'row count fell 12% day over day', 8),
-    failureOf('check__ledger', "KeyError: 'currency'", 0, 'task'),
+    failureOf('invoices_00', 'row count fell 64% day over day', 41),
+    failureOf('invoices_01', 'row count fell 12% day over day', 9),
+    failureOf('check__ledger', "KeyError: 'currency'", 1, 'task'),
   ],
-  'graph loading': [failureOf('invoices_00', 'row count fell 64% day over day', null)],
   // A long error heads its cause wrapped (its count stays in view); rows with the same words do not repeat it.
   'long error, said once': [
-    failureOf('invoices_by_account', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 58),
-    failureOf('invoices_by_region', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 3),
+    failureOf('invoices_by_account', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 59),
+    failureOf('invoices_by_region', 'ValueError: invoice export for acct_000007 has 3 rows with a negative total, 2 rows with a null currency and 1 row dated in the future; the export was rejected by the ledger reconciliation step before it reached the warehouse', 4),
   ],
   nothing: [],
 } satisfies Record<string, Failure[]>

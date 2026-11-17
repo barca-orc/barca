@@ -131,6 +131,7 @@ pub const STATUS_FIELDS: &[&str] = &[
     "health_reason",
     "signals",
     "measured",
+    "root",
     "last_check",
     "partitions",
     "last_materialization",
@@ -307,6 +308,7 @@ mod tests {
             health_reason: Default::default(),
             signals: vec![],
             measured: Some(true),
+            root: Some(barca_core::health::Root::failure("p.py:a")),
             last_check: None,
             partitions: Some(PartitionState {
                 total: 0,

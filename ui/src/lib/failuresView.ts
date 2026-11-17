@@ -1,10 +1,11 @@
 /**
- * The Failures view as a program: failures grouped by cause, and what a row can do about one.
- * The list is exactly what `GET /state` reports failed in scope: nothing is hidden on the client.
+ * The Failures view as a program: the failure roots of the rollup under the error each shares,
+ * and what a row can do about one. The list is exactly the roots `GET /state/rollup` names in
+ * scope, in its order: nothing is hidden, counted or regrouped on the client.
  */
 
 import { match } from 'ts-pattern'
-import { failureGroups, type Failure, type FailureGroup } from './health'
+import type { Failure } from './health'
 import { only, type Next } from './program'
 import type { NodeKind } from './types'
 
@@ -39,7 +40,8 @@ export function updateFailures(model: FailuresModel, msg: FailuresMsg): Next<Fai
 }
 
 export type FailureRow =
-  | { kind: 'cause'; group: FailureGroup }
+  /** A heading: the error the failures under it share, and how many rows follow it. */
+  | { kind: 'cause'; key: string; headline: string; failed: number }
   /**
    * `sameError`: the failure's headline is its cause heading's, word for word, so its row does
    * not repeat it (the heading says it once; the row keeps the copy action and its keys line).
@@ -50,12 +52,26 @@ interface FailureTable {
   rows: FailureRow[]
 }
 
-/** The table's rows, one heading per cause. */
+/**
+ * The table's rows: `list` as served (the failure holding the most nodes first), each under a
+ * heading for the error group the server gave it (`error_group`); a heading stands where its
+ * first failure does. A failure with no group is under a heading of its own.
+ */
 export function failureTable(list: readonly Failure[]): FailureTable {
+  const groups = new Map<string, Failure[]>()
+  for (const f of list) {
+    const key = f.group ?? `node:${f.id}`
+    const members = groups.get(key)
+    if (members) members.push(f)
+    else groups.set(key, [f])
+  }
   return {
-    rows: failureGroups(list).flatMap((group): FailureRow[] => [
-      { kind: 'cause', group },
-      ...group.failures.map((failure): FailureRow => ({ kind: 'failure', failure, sameError: failure.headline === group.headline })),
-    ]),
+    rows: [...groups].flatMap(([key, members]): FailureRow[] => {
+      const headline = members[0]!.headline
+      return [
+        { kind: 'cause', key, headline, failed: members.length },
+        ...members.map((failure): FailureRow => ({ kind: 'failure', failure, sameError: failure.headline === headline })),
+      ]
+    }),
   }
 }

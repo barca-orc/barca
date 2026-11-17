@@ -4,7 +4,6 @@ import { useAssetStates } from './useAssetStates'
 import { useAssets } from './useAssets'
 import { usePausedSet } from './usePauses'
 import { usePinNotes } from './usePins'
-import { blockedBy } from '@/lib/graphView'
 import { inPipeline } from '@/lib/pipeline'
 import { applyFilters, facetCounts, parseFilters, writeFilters, type Filters, type LastRun } from '@/lib/assetFilters'
 import { buildRows, sortRows, type Sort } from '@/lib/assetTable'
@@ -40,14 +39,12 @@ export function useAssetFilter(kind: NodeKind, sort?: Sort) {
   // `?paused=1` (the paused banner's link): only the paused assets.
   const paused = usePausedSet()
   const onlyPaused = params.get('paused') === '1'
-  // Which nodes a failure upstream keeps from running: judged over the whole graph, so a
-  // pipeline's row is blocked by a failure in another one too.
-  // Pinned assets read `pinned` (`GET /pins`), and pass no failure above them on.
+  // Which failing node blocks a row is the server's answer on the row (`root`), judged over
+  // the whole graph. Pinned assets read `pinned` (`GET /pins`), and pass no failure above them on.
   const pins = usePinNotes()
-  const blockers = useMemo(() => blockedBy(data ?? [], graph, pins), [data, graph, pins])
   const rows = useMemo(
-    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, blockers, pins),
-    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused, blockers, pins],
+    () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, pins),
+    [data, dataUpdatedAt, pipeline, kind, onlyPaused, paused, pins],
   )
   // Filters live in the URL with the sort and pipeline, so a filtered view can be reloaded and
   // shared. Every page opens unfiltered: what it lists is what its controls say (failures sort
@@ -61,7 +58,7 @@ export function useAssetFilter(kind: NodeKind, sort?: Sort) {
   // What fails, and how much of the graph waits on it: the failing segment's tooltip.
   // The blocked count is the rows that read `blocked`, so the tooltip and the chip agree.
   const blocked = rows.filter((r) => !r.lastFailed && r.pinned === null && (r.blockedBy || r.state === 'blocked')).length
-  return { kind, states, data, graph, pipeline, paused, onlyPaused, pins, blockers, rows, filters, setFilters, counts, visible, blocked, now }
+  return { kind, states, data, graph, pipeline, paused, onlyPaused, pins, rows, filters, setFilters, counts, visible, blocked, now }
 }
 
 export type AssetFilter = ReturnType<typeof useAssetFilter>

@@ -1,11 +1,9 @@
 /**
  * What the graph view does with the space it has, apart from React Flow: which nodes a fit
- * shows, where the keyboard goes next, and what a never-run consumer waits on.
+ * shows and where the keyboard goes next. Layout only: which node is blocked, and by which
+ * failing node, is the server's answer on each row (`root`, read by `blockerOf`).
  */
 
-import { isFailed } from './health'
-import { memberHealth, type GraphState } from './graphState'
-import type { NodeState } from './types'
 
 /** A node as the view sees it: its box in flow coordinates, and whether it needs attention. */
 export interface ViewNode {
@@ -199,74 +197,4 @@ export function neighborInDirection(nodes: ViewNode[], from: string | null, key:
     if (!best || cost < best.cost) best = { id: n.id, cost }
   }
   return best?.id ?? null
-}
-
-/** What a node waits on: the failed node upstream that kept it from running, and that in a line. */
-export interface WaitsOn { by: string; hint: string }
-
-/**
- * How a node stands in the wait: its last attempt failed, it is waiting to be brought up to
- * date (never run, stale, or unknown below a cutoff), or neither.
- */
-export type WaitStatus = 'failed' | 'waiting' | 'other'
-
-/** A node's wait status from its box: running and unloaded nodes are neither failed nor waiting. */
-export function waitStatus(state: GraphState): WaitStatus {
-  if (isFailed(state)) return 'failed'
-  // `unknown` waits too: a node below a cutoff below a failure cannot be brought up to date.
-  return state.kind === 'cache' && (state.state === 'never_run' || state.state === 'stale' || state.state === 'unknown') ? 'waiting' : 'other'
-}
-
-/**
- * For each waiting node, the failed node upstream that explains it: a direct input whose last
- * attempt failed, or the failure behind an input that is waiting itself. Such a node is
- * `blocked`: it cannot be brought up to date until that failure is fixed.
- */
-export function waitsOn(
-  edges: [source: string, target: string][],
-  status: ReadonlyMap<string, WaitStatus>,
-  name: (id: string) => string,
-): Map<string, WaitsOn> {
-  const inputs = new Map<string, string[]>()
-  for (const [source, target] of edges) inputs.set(target, [...(inputs.get(target) ?? []), source])
-  const cause = new Map<string, string | null>()
-  const causeOf = (id: string, seen: Set<string>): string | null => {
-    if (cause.has(id)) return cause.get(id)!
-    if (seen.has(id)) return null
-    seen.add(id)
-    let found: string | null = null
-    for (const input of inputs.get(id) ?? []) {
-      const s = status.get(input)
-      if (s === 'failed') found = input
-      else if (s === 'waiting') found = causeOf(input, seen)
-      if (found) break
-    }
-    cause.set(id, found)
-    return found
-  }
-  const out = new Map<string, WaitsOn>()
-  for (const [id, s] of status) {
-    if (s !== 'waiting') continue
-    const failed = causeOf(id, new Set())
-    if (failed) out.set(id, { by: failed, hint: `Blocked: waits on ${name(failed)}, whose last attempt failed.` })
-  }
-  return out
-}
-
-/**
- * Each blocked node of `nodes` and the failed node upstream it waits on (by id). A pinned node
- * (`pinned`) is never waiting: runs read its pinned version, so it does not pass a failure
- * above it on to what reads it.
- */
-export function blockedBy(
-  nodes: readonly NodeState[],
-  graph: readonly { id: string; inputs: readonly string[] }[],
-  pinned: { has(id: string): boolean } = new Set<string>(),
-): Map<string, string> {
-  const status = new Map(nodes.map((n): [string, WaitStatus] => {
-    const s = waitStatus(memberHealth(n))
-    return [n.id, s === 'waiting' && pinned.has(n.id) ? 'other' : s]
-  }))
-  const edges = graph.flatMap((g): [string, string][] => g.inputs.map((i) => [i, g.id]))
-  return new Map([...waitsOn(edges, status, (id) => id)].map(([id, w]) => [id, w.by]))
 }

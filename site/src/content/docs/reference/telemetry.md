@@ -76,7 +76,7 @@ barca.run        get daily_revenue        one trace per run; error.message names
   `get daily_revenue,orders`; a run of everything in its files is `get pipeline.py`, and one
   with no file named `get all`. `publish` and `pipeline.py:publish` are the same resource. The
   target as typed stays in `barca.target`. A scheduled tick is one run with several targets, the
-  scheduled node and the `Always` nodes below it ([Scheduling With Cron](/scheduling/)): its resource names
+  scheduled node and the `Always` nodes it brings up to date ([Scheduling With Cron](/scheduling/)): its resource names
   all of them (`get inbox,orders`), its `barca.job` is the scheduled node and its
   `barca.trigger` is `schedule`. It is sent when the run ends, after its steps.
 - **A run's traces share `barca.run_id`.** `@barca.run_id:0179afe0cb58` lists a run's steps

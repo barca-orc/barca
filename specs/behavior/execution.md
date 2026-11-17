@@ -184,7 +184,10 @@ Runs of one `barca serve` share the asset steps they have in flight
 ([#654](https://github.com/barca-orc/barca/issues/654), [`claims.rs`](../../crates/barca-core/src/serve/claims.rs)):
 a step is claimed under its display id (partition key included) and run hash when one of the
 run's workers leases it, and another run that reaches the same step while the claim is held
-waits instead of executing it, then reports it `cached` and records no row of its own. Tasks,
+waits instead of executing it, then reports it `cached` and records no row of its own. A run
+that was already going when the step finished and reaches it afterwards takes that result the
+same way (the last 4096 finished steps are kept for this); a run that starts later looks it up
+in the cache. Tasks,
 sensors and `parallel()` branches are never shared; different run hashes and keys the runs do
 not have in common are independent. A claim ends without a result when its step fails an
 attempt, loses its worker, or its run ends or is cancelled; one waiting run then claims and

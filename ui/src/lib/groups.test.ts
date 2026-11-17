@@ -1,4 +1,5 @@
 import metadata from './testdata/modeling-groups.json'
+import { counts } from './testdata/rollup'
 import { describe, expect, it } from 'vitest'
 import type { GraphEntry } from './graph'
 import {
@@ -80,33 +81,27 @@ describe('organizational groups', () => {
       'group:modeling.py:fold_03',
       'group:modeling.py:cross_validation',
     ]) {
-      expect(groupHealth(groupLeaves(id, tree), states)).toMatchObject({ tone: 'failed', label: '1 failing' })
+      // The group's entry of the rollup, as served: one failing node among its members.
+      expect(groupHealth({ health: counts({ failing: 1, ok: groupLeaves(id, tree).length - 1 }), nodes: groupLeaves(id, tree).length, running: 0 })).toMatchObject({ tone: 'failed', label: '1 failing' })
       const output = memberHealth(states.get(groupOutput(id, tree)))
       expect(output).toMatchObject({ label: 'fresh', tone: 'success' })
       expect(isFailed(output)).toBe(false)
     }
     // A fold with no failure: its checks (which ran and succeeded) and its cached assets are all ok.
-    expect(groupHealth(groupLeaves('group:modeling.py:fold_02', tree), states)).toMatchObject({ tone: 'success', label: expect.stringMatching(/^\d+ ok$/) })
+    expect(groupHealth({ health: counts({ ok: 9 }), nodes: 9, running: 0 })).toMatchObject({ tone: 'success', label: '9 ok' })
     expect(groupPath('group:modeling.py:fold_03__fitting', tree).map((g) => g.name)).toEqual(
       ['Cross-validation', 'Fold 3', 'Model fitting'],
     )
   })
 
-  it('summarizes members by health: checks that ran and cached assets are ok, and a missing state is checking', () => {
-    const ids = groupLeaves('group:modeling.py:final_training', tree)
-    const states = new Map(ids.map((id) => [id, state(id)]))
-    const summary = groupHealth(ids, states)
+  it('words a group\'s rollup entry: its worst health leads, the hint says how many nodes, and no entry is empty', () => {
+    const summary = groupHealth({ health: counts({ ok: 6 }), nodes: 6, running: 0 })
     expect(summary.tone).toBe('success')
-    expect(summary.label).toBe(`${ids.length} ok`)
-    expect(summary.hint).toBe(`${ids.length} ok`)
-    states.delete(ids[0]!)
-    expect(groupHealth(ids, states).hint).toContain('1 checking')
-    states.set(ids[0]!, {
-      ...state(ids[0]!),
-      cache: { state: 'stale', reason: 'changed', detail: 'Changed' },
-      health: 'behind',
-    })
-    expect(groupHealth(ids, states)).toMatchObject({ tone: 'warning', label: '1 behind' })
+    expect(summary.label).toBe('6 ok')
+    // The hint names the unit: these are nodes (assets, tasks and sensors).
+    expect(summary.hint).toBe('6 nodes: 6 ok')
+    expect(groupHealth(undefined)).toMatchObject({ kind: 'group', label: 'empty', glyph: 'pending' })
+    expect(groupHealth({ health: counts({ behind: 1, ok: 5 }), nodes: 6, running: 0 })).toMatchObject({ tone: 'warning', label: '1 behind' })
   })
 
   it('preserves dependencies crossing a collapsed boundary even through a non-output member', () => {

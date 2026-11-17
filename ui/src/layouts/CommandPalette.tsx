@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useRollup } from '@/hooks/useRollup'
 import { useLocation, useNavigate } from 'react-router'
 import { CommandPaletteView } from '@/components/CommandPaletteView'
 import { useAssets } from '@/hooks/useAssets'
 import { useWholeState } from '@/hooks/useAssetStates'
 import { useGroups } from '@/hooks/useGroups'
-import { groupPath, groupTree, leavesByGroup } from '@/lib/groups'
+import { groupPath, groupTree } from '@/lib/groups'
 import { usePartitionKeySearch } from '@/hooks/usePartitionKeys'
 import { useProgram } from '@/hooks/useProgram'
 import { useRuns } from '@/hooks/useRuns'
@@ -43,11 +44,13 @@ export function CommandPalette({ run, onRun, onClose }: CommandPaletteProps) {
   const runs = useRuns(RECENT_RUNS).data?.runs
   // Every node's state, whatever is open: each result's glyph, and what a key query asks.
   const states = useWholeState().data
+  // A group's or file's glyph is its entry of the whole project's rollup.
+  const rollup = useRollup(null)
   const known = useMemo(() => {
     const tree = groupTree(groups ?? [])
     const placeOf = new Map((groups ?? []).map((g) => [g.id, groupPath(tree.parents.get(g.id) ?? null, tree).map((p) => p.name).join(' › ')]))
-    return { byId: new Map((states ?? []).map((n) => [n.id, n])), leavesOf: leavesByGroup(tree), placeOf }
-  }, [states, groups])
+    return { byId: new Map((states ?? []).map((n) => [n.id, n])), entries: rollup.tree.entries, placeOf }
+  }, [states, groups, rollup.tree])
   const index = useMemo(() => paletteIndex(assets ?? [], groups ?? [], runs ?? [], known), [assets, groups, runs, known])
   const canGraph = location.pathname === '/assets' && !new URLSearchParams(location.search).has('view')
   const actions = paletteActions(run && !run.disabled ? run.label : null, canGraph)

@@ -145,6 +145,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule)",
     ),
     (
+        "status --rollup",
+        "new in 0.44.0 (specs/behavior/health.md): the rollup document gains causes, the freshness gap and more root kinds as that specification lands",
+    ),
+    (
         "get --batch",
         "new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use",
     ),

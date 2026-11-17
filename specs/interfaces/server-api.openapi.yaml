@@ -1843,6 +1843,104 @@ paths:
         '405':
           description: Registered path with unsupported method; Allow header identifies supported methods
           headers: *id018
+  /state/rollup:
+    get:
+      summary: The rows of GET /state summed into one tree (root, group, file, node), in nodes and in assets
+      operationId: get_state_rollup
+      description: 'Experimental (specs/behavior/health.md, "Rollup"). Every level is the exact sum
+        of its children, and every node has exactly one parent: a node declared in several groups
+        sits under the first by group id, a node in no group under its source file. It sums the
+        status result GET /state is built from, classified the same way, so a node''s health is
+        the same word in both. causes, asset_causes, gap_seconds, unbounded and fresh_by on an
+        entry, and every root kind but failure, are not served yet.'
+      parameters:
+      - name: targets
+        in: query
+        required: false
+        description: 'Experimental: comma-separated targets, as for GET /state. The rollup covers
+          their upstream cone. Absent or empty (with no files) means every node.'
+        schema:
+          type: string
+      - name: files
+        in: query
+        required: false
+        description: 'Experimental: comma-separated source files, as for GET /state.'
+        schema:
+          type: string
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rollup'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '400':
+          description: Invalid source/target or wrong node kind
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Execution/inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: *id018
+    head:
+      summary: The rollup of GET /state (headers only)
+      operationId: head_state_rollup
+      parameters:
+      - name: targets
+        in: query
+        description: Experimental comma-separated targets, as for GET /state.
+        schema:
+          type: string
+      - name: files
+        in: query
+        description: Experimental comma-separated source files, as for GET /state.
+        schema:
+          type: string
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '400':
+          description: Invalid source/target or wrong node kind
+        '404':
+          description: Unknown target
+        '409':
+          description: Ambiguous target name
+        '500':
+          description: Execution/inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id018
   /state/reset:
     post:
       summary: Start the metadata database over (the old one is moved aside, never deleted)
@@ -4337,6 +4435,177 @@ components:
       - complete
       - failed
       - cancelled
+    NodeRoot:
+      type: object
+      additionalProperties: false
+      description: The upstream fact that explains why a node is not fresh (specs/behavior/health.md,
+        "Root"). Experimental.
+      required: [id, kind, node]
+      properties:
+        id:
+          type: string
+          description: '<kind>:<node id>, e.g. failure:pipeline.py:orders.'
+        kind:
+          type: string
+          enum: [failure]
+          description: Only failure is derived today.
+        node:
+          type: string
+          description: The node the fact is about; for a failure, the failing node.
+    RollupCoverage:
+      type: object
+      additionalProperties: false
+      description: How much of a scope's data was measured.
+      required: [assets, measured, suspect]
+      properties:
+        assets:
+          type: integer
+          minimum: 0
+          description: Assets in scope; tasks and sensors are not counted.
+        measured:
+          type: integer
+          minimum: 0
+          description: Assets whose latest successful result has a recorded row count.
+        suspect:
+          type: integer
+          minimum: 0
+          description: Measured assets with an empty or rows_changed signal.
+    RollupEntry:
+      type: object
+      additionalProperties: false
+      description: One entry of the rollup tree. Every count is the exact sum of its children's.
+      required: [id, kind, label, parent, children, nodes, assets, running, health, asset_health,
+        data_coverage]
+      properties:
+        id:
+          type: string
+          description: root, the group's id (group:FILE:NAME), file:PATH, or the node id.
+        kind:
+          type: string
+          enum: [root, group, file, node]
+        label:
+          type: string
+          description: The group's or node's declared name, the file's path, all for the root.
+        parent:
+          type: [string, 'null']
+          description: The entry it sits under; null for the root.
+        children:
+          type: array
+          items: {type: string}
+          description: Its children's ids, worst health first, then most assets, then label.
+        nodes:
+          type: integer
+          minimum: 0
+          description: Nodes underneath (1 for a node).
+        assets:
+          type: integer
+          minimum: 0
+          description: Assets underneath; tasks and sensors are nodes, not assets.
+        running:
+          type: integer
+          minimum: 0
+          description: Nodes underneath a run is working on now.
+        health:
+          description: Nodes underneath by health.
+          type: object
+          additionalProperties: false
+          required: [failing, blocked, suspect, behind, undecided, never_run, ok]
+          properties:
+            failing: {type: integer, minimum: 0}
+            blocked: {type: integer, minimum: 0}
+            suspect: {type: integer, minimum: 0}
+            behind: {type: integer, minimum: 0}
+            undecided: {type: integer, minimum: 0}
+            never_run: {type: integer, minimum: 0}
+            ok: {type: integer, minimum: 0}
+        asset_health:
+          description: Assets underneath by health.
+          type: object
+          additionalProperties: false
+          required: [failing, blocked, suspect, behind, undecided, never_run, ok]
+          properties:
+            failing: {type: integer, minimum: 0}
+            blocked: {type: integer, minimum: 0}
+            suspect: {type: integer, minimum: 0}
+            behind: {type: integer, minimum: 0}
+            undecided: {type: integer, minimum: 0}
+            never_run: {type: integer, minimum: 0}
+            ok: {type: integer, minimum: 0}
+        data_coverage:
+          $ref: '#/components/schemas/RollupCoverage'
+        keys:
+          type: object
+          additionalProperties: false
+          description: A partitioned node's keys, on a node entry only.
+          required: [failed, behind, ok]
+          properties:
+            failed:
+              type: integer
+              minimum: 0
+              description: Keys whose last attempt failed.
+            behind:
+              type: integer
+              minimum: 0
+              description: Keys without a cached result that did not fail.
+            ok:
+              type: integer
+              minimum: 0
+              description: Keys with a cached result.
+    RollupRoot:
+      type: object
+      additionalProperties: false
+      description: One upstream fact and what it holds. Today only failures; causes, gap_seconds,
+        unbounded and action are not served yet.
+      required: [id, kind, node, detail, error_group, nodes, assets]
+      properties:
+        id:
+          type: string
+          description: '<kind>:<node id>: the root.id of every node it holds.'
+        kind:
+          type: string
+          enum: [failure]
+        node:
+          type: string
+          description: The failing node.
+        detail:
+          type: string
+          description: The failure's error headline as recorded.
+        error_group:
+          type: [string, 'null']
+          description: The headline with its numbers replaced by '#'; failure roots sharing one are
+            shown as one entry. Null when no error was recorded.
+        nodes:
+          type: integer
+          minimum: 1
+          description: Nodes it holds; the failing node and every node it blocks.
+        assets:
+          type: integer
+          minimum: 0
+          description: Of them, assets.
+    Rollup:
+      type: object
+      additionalProperties: false
+      description: GET /state/rollup and barca status --rollup --json. Experimental.
+      required: [as_of, entries, roots, data_coverage]
+      properties:
+        as_of:
+          type: string
+          format: date-time
+          description: When the rows were classified, RFC 3339 UTC. The server answers the start
+            of the current minute, so an unchanged poll within a minute is a 304.
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/RollupEntry'
+          description: Every entry, the root first, then depth first in children order.
+        roots:
+          type: array
+          items:
+            $ref: '#/components/schemas/RollupRoot'
+          description: What holds the nodes that are not fresh, the most nodes first, then by id.
+        data_coverage:
+          $ref: '#/components/schemas/RollupCoverage'
     NodeGroup:
       type: object
       additionalProperties: false
@@ -5152,6 +5421,7 @@ components:
       - health_reason
       - signals
       - measured
+      - root
       - last_check
       - last_materialization
       - shape
@@ -5188,6 +5458,13 @@ components:
           description: Whether the asset's latest successful result has a recorded row count (for a
             partitioned asset, any key's); null for a task or sensor. false is "not measured",
             never ok for data. Experimental.
+        root: &id_root
+          anyOf:
+          - $ref: '#/components/schemas/NodeRoot'
+          - type: 'null'
+          description: The upstream fact that explains why the node is not fresh. Today only a
+            failure, on the failing node itself and on each node it blocks; null otherwise.
+            Experimental.
         last_check: &id_last_check
           type: [object, 'null']
           additionalProperties: false
@@ -5337,6 +5614,7 @@ components:
       - health
       - health_reason
       - measured
+      - root
       - last_check
       - last_materialization
       - shape
@@ -5362,6 +5640,7 @@ components:
         health: *id_health
         health_reason: *id_health_reason
         measured: *id_measured
+        root: *id_root
         last_check: *id_last_check
         partitions: *id050
         last_materialization: *id051

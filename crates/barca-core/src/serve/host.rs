@@ -14,11 +14,20 @@ use crate::run_host::{RunHost, SharedBudget, StepClaim, StepKey};
 pub struct ServeHost {
     capacity: Option<Arc<SharedCapacity>>,
     steps: Arc<SharedSteps>,
+    /// When the run started ([`SharedSteps::now`]): a step another run finishes after this is
+    /// taken from that run.
+    started: u64,
 }
 
 impl ServeHost {
+    /// The host of one run, made as the run starts.
     pub fn new(capacity: Option<Arc<SharedCapacity>>, steps: Arc<SharedSteps>) -> Self {
-        Self { capacity, steps }
+        let started = steps.now();
+        Self {
+            capacity,
+            steps,
+            started,
+        }
     }
 }
 
@@ -73,7 +82,7 @@ impl RunHost for ServeHost {
         true
     }
     fn claim_step(&self, run_id: &str, key: &StepKey) -> StepClaim {
-        match self.steps.claim(run_id, key) {
+        match self.steps.claim(run_id, key, self.started) {
             Claim::Mine => StepClaim::Mine,
             Claim::Theirs { owner, result } => StepClaim::Theirs {
                 owner,

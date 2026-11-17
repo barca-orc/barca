@@ -34,6 +34,7 @@ barca status pipeline.py --fields id,cache      # JSON with only these keys per 
 barca status pipeline.py --json --sample 2      # plus up to 2 sample rows per json/parquet artifact
 barca status pipeline.py --problems             # only the nodes that need attention (below)
 barca status pipeline.py --state stale,never_run   # only nodes in these cache states
+barca status pipeline.py --rollup               # counts by health per group and file ("The rollup" below)
 ```
 
 The examples run on this `pipeline.py`:
@@ -229,6 +230,47 @@ With a server configured, the server answers and the filter is applied here, aft
 machine's `not_in_ledger` results are marked, so `--state unsynced` finds them. `GET
 /nodes?state=stale&problems=1` filters the same way over HTTP.
 
+## The rollup: `--rollup`
+
+`barca status --rollup` prints, instead of the nodes, how they add up: one tree of everything
+in scope, then each group (`barca docs groups`), then, for nodes in no group, each source
+file. Every level is the exact sum of what is under it, and every count names its unit:
+`NODES` counts assets, tasks and sensors, `ASSETS` counts assets only, and the health words
+count nodes. Within a level the worst health comes first. On a project where `orders` (in the
+group `ingest`, with a sensor) failed and blocks two assets below it:
+
+```
+SCOPE          NODES  ASSETS  HEALTH (nodes)
+all                6       4  1 failing · 2 blocked · 3 ok
+  ingest           2       1  1 failing · 1 ok
+  pipeline.py      4       3  2 blocked · 2 ok
+
+Failing, with what each holds:
+  pipeline.py:orders  3 nodes (3 assets)  ValueError: 12 rows rejected
+
+Data: 0 of 4 assets measured
+As of 2026-11-17T16:49:57Z
+```
+
+Under the tree, each failing node is listed with what it holds: itself and every node it
+blocks, so three nodes that need attention here are one thing to fix. `Data` is the scope's
+data coverage and `As of` the instant the nodes were classified at.
+
+```bash
+barca status --rollup                    # the whole project
+barca status total pipeline.py --rollup  # `total` and its upstream cone
+barca status --rollup --json             # the document below (the default when piped)
+barca status --rollup --server           # the configured server's: GET /state/rollup
+```
+
+The JSON document is `{as_of, entries, roots, data_coverage}`; `barca docs status-fields`,
+"The rollup", has every key. It is the document the server's `GET /state/rollup` answers and
+the web UI's health map, bars and failures list draw, so all of them say the same numbers.
+`--rollup` cannot be combined with `--limit`, `--all`, `--fields`, `--sample`, `--state` or
+`--problems`: it always counts every node in scope. It is experimental (`barca docs
+contract`): causes, the freshness gap and roots other than failures are added to the same
+document by later releases. Without a server no run is tracked, so `running` is 0.
+
 ## Schedules
 
 A node with `freshness=Schedule(...)` has `schedule` in JSON (absent on other nodes), and the
@@ -331,6 +373,6 @@ whose remediation is `barca history RUN_ID --local`.
 ## Fields, JSON and fine print
 
 Each node's fields (health, what the last tick found, data signals and coverage, last materialization, artifact shape,
-run timing, what started a run), the JSON document, output limits and what status asks an artifact store are in `barca docs status-fields`.
+run timing, what started a run), the rollup's keys, the JSON document, output limits and what status asks an artifact store are in `barca docs status-fields`.
 
 See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.

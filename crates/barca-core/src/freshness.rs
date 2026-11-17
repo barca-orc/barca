@@ -1,7 +1,8 @@
 //! Freshness at run time (RFC-0008): what `Always` and `Manual` do.
 //!
 //! - A scheduled tick brings its node up to date and then, in the same run, every `Always` node
-//!   reachable from it going downstream through `Always` nodes only ([`followers`]).
+//!   below it and below every unscheduled sensor the run polls ([`tick_targets`],
+//!   [`followers`]).
 //! - `Manual` pins itself: a `Manual` asset or task that a run reads but was not asked for is
 //!   served from its latest successful result, not recomputed ([`walk_with`], [`load_pins`]). One
 //!   that has never been computed blocks what reads it.
@@ -68,27 +69,44 @@ impl RunRules {
     }
 }
 
-/// The nodes a tick of `scheduled` reconciles besides itself: every `Always` node below it, in
-/// dependency order. The walk goes on past a `Manual` node, which is not reconciled (it is
-/// refreshed by hand) but does not wall off what is below it: that is reconciled against the
-/// `Manual` node's current result, so it is recomputed (or fires) once the `Manual` node is
-/// refreshed. A `Schedule` node stops the walk: it is updated on its own ticks. It depends on
-/// the DAG alone, so it is computed when the DAG is loaded.
-pub fn followers(dag: &Dag, scheduled: &str) -> Vec<String> {
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut reached: HashSet<&str> = HashSet::new();
-    let mut queue: VecDeque<&str> = VecDeque::from([scheduled]);
+/// The `Always` nodes below `from`, in dependency order: what a tick brings up to date because
+/// it is below its scheduled node, or below a sensor the tick polls ([`tick_targets`]). The walk
+/// goes on past a `Manual` asset or task, which is not reconciled (it is refreshed by hand) but
+/// does not wall off what is below it: that is reconciled against the `Manual` node's current
+/// result, so it is recomputed (or fires) once the `Manual` node is refreshed. A `Schedule`
+/// node stops the walk: it is updated on its own ticks. So does a `Manual` sensor that is below
+/// `from`: nothing is reached through it (it is a start of its own when the tick polls it). It
+/// depends on the DAG alone.
+pub fn followers(dag: &Dag, from: &str) -> Vec<String> {
+    let mut reached: Vec<&str> = Vec::new();
+    follow(dag, from, &mut HashSet::new(), &mut reached);
+    dag.order_for(reached.iter().copied())
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Push onto `reached` the `Always` nodes below `from` ([`followers`]) that no earlier call
+/// with the same `seen` went through. `seen` are the nodes already looked at going down: what
+/// is below one of them was reached then, by the same rules.
+fn follow<'a>(
+    dag: &'a Dag,
+    from: &'a str,
+    seen: &mut HashSet<&'a str>,
+    reached: &mut Vec<&'a str>,
+) {
+    let mut queue: VecDeque<&str> = VecDeque::from([from]);
     while let Some(id) = queue.pop_front() {
         for down in dag.downstream(id) {
             let Some(node) = dag.get_node(down) else {
                 continue;
             };
-            if down == scheduled || !seen.insert(down) {
+            if down == from || !seen.insert(down) {
                 continue;
             }
             match node.extracted.freshness {
                 Freshness::Always => {
-                    reached.insert(down);
+                    reached.push(down);
                     queue.push_back(down);
                 }
                 Freshness::Manual if node.kind() != NodeKind::Sensor => queue.push_back(down),
@@ -96,40 +114,101 @@ pub fn followers(dag: &Dag, scheduled: &str) -> Vec<String> {
             }
         }
     }
-    dag.order_for(reached.iter().copied())
-        .into_iter()
-        .map(str::to_string)
-        .collect()
 }
 
 /// How the ticks of one schedule reach a node ([`tick_reach`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Reach {
-    /// A target of the tick: the scheduled node, or an `Always` node below it ([`followers`]).
-    /// Every tick brings it up to date.
+    /// A target of the tick ([`tick_targets`]): the scheduled node, an `Always` node below it,
+    /// or an `Always` node below an unscheduled sensor the tick polls. Every tick brings it up
+    /// to date.
     Target,
     /// Not a target, but something a target reads ([`walk_with`] from the targets): a sensor
     /// is polled, an asset is computed when it has no cached result for its current run hash,
-    /// a task fires when it is out of date. What reads it and is not itself a target is not
-    /// touched.
+    /// a task fires when it is out of date. An input that is not a sensor does not carry the
+    /// tick to what else reads it.
     Input,
 }
 
 /// The targets of a tick of `scheduled`, in the order the run names them: the scheduled node,
-/// then its [`followers`]. This is the scheduler's own list (`ScheduledJob::targets`).
+/// then, in dependency order, the `Always` nodes below it and below every unscheduled sensor
+/// the run polls ([`followers`] of each). This is the scheduler's own list
+/// (`ScheduledJob::targets`).
+///
+/// A run polls every sensor in its targets' input cone ([`walk_with`]), whatever the sensor's
+/// freshness, and a poll that returns a new value changes the run hash of everything below the
+/// sensor. So the `Always` nodes below a polled `Manual` or `Always` sensor are targets too
+/// (#978): no tick is started for such a sensor, and without this nothing would ever bring
+/// them up to date. Those targets have inputs of their own, whose sensors are polled and
+/// followed in turn, until the set stops growing. A polled sensor with a `Schedule` of its own
+/// is not followed: what is below it is a target of the sensor's own ticks, so it is out of
+/// date for at most one of the sensor's intervals, and two schedules do not both compute it.
+/// The set is static: it is the same whether or not a sensor's value changed, and an unchanged
+/// value costs cache checks.
+///
+/// The cone here is the DAG's: at run time a pinned asset and a paused node also stop the
+/// upstream walk, so a tick can poll fewer sensors than this follows. Every unscheduled sensor
+/// it does poll is one of these.
 pub fn tick_targets(dag: &Dag, scheduled: &str) -> Vec<String> {
-    std::iter::once(scheduled.to_string())
-        .chain(followers(dag, scheduled))
+    let Some(start) = dag.get_node(scheduled).map(|n| n.id.as_str()) else {
+        return vec![scheduled.to_string()];
+    };
+    // One pass, each node looked at once going down (`seen`) and once going up (`cone`):
+    // `reached` are the targets found, `up` the nodes whose inputs are still to be walked.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut reached: Vec<&str> = Vec::new();
+    let mut cone: HashSet<&str> = HashSet::from([start]);
+    let mut up: Vec<&str> = vec![start];
+    let mut walked = 0;
+    follow(dag, start, &mut seen, &mut reached);
+    loop {
+        // Every target found so far is planned, with its inputs.
+        for &id in &reached[walked..] {
+            if cone.insert(id) {
+                up.push(id);
+            }
+        }
+        walked = reached.len();
+        let Some(id) = up.pop() else {
+            break;
+        };
+        // The upstream walk of a run ([`walk_with`]): a `Manual` asset or task is read as it
+        // is, and what is above it is not planned. (No target is one: the scheduled node has a
+        // `Schedule` and the rest are `Always`.)
+        if pins_itself(dag, id) {
+            continue;
+        }
+        for input in dag.upstream(id) {
+            if !cone.insert(input) {
+                continue;
+            }
+            up.push(input);
+            // Polled by the run. A sensor with a `Schedule` of its own is followed by its own
+            // ticks.
+            if dag.get_node(input).is_some_and(|n| {
+                n.kind() == NodeKind::Sensor
+                    && !matches!(n.extracted.freshness, Freshness::Schedule(_))
+            }) {
+                follow(dag, input, &mut seen, &mut reached);
+            }
+        }
+    }
+    std::iter::once(start)
+        .chain(
+            dag.order_for(reached.iter().copied())
+                .into_iter()
+                .filter(|id| *id != start),
+        )
+        .map(str::to_string)
         .collect()
 }
 
-/// For each node some tick brings up to date, the schedules whose ticks do, and how
-/// ([`Reach`]), sorted by schedule. `scheduled` are the scheduled nodes (the jobs of
-/// [`crate::schedule::jobs_from_dag`]). A node that is not a key has no refresh path: no tick
-/// will ever rebuild it, whatever makes it stale. That includes an `Always` node below a
-/// sensor that is only polled as an input of another schedule's target: the poll records the
-/// sensor's new value, the node's run hash changes, and nothing targets the node (#952). A
-/// `Manual` asset or task is never a key either: a tick reads it as it is.
+/// For each node some tick reaches, the schedules whose ticks do, and how ([`Reach`]), sorted
+/// by schedule. `scheduled` are the scheduled nodes (the jobs of
+/// [`crate::schedule::jobs_from_dag`]). A node that is not a key, or is one only as an
+/// [`Reach::Input`], has no refresh path: no tick brings it up to date. That is a `Manual`
+/// asset or task (a tick reads it as it is), and an `Always` node that is neither below a
+/// scheduled node nor below an unscheduled sensor some tick polls.
 ///
 /// It depends on the DAG alone. At run time a pinned asset (`barca pin`) and a paused node are
 /// also read as they are, and what is above them is not walked.
@@ -146,10 +225,12 @@ pub fn tick_reach<'a>(
         let targets = tick_targets(dag, job);
         let refs: Vec<&str> = targets.iter().map(String::as_str).collect();
         let walk = walk_with(dag, &refs, &CachePolicy::CacheAware, &none, true, &none);
+        let refs: HashSet<&str> = refs.into_iter().collect();
+        let stops: HashSet<&str> = walk.stops.iter().map(String::as_str).collect();
         for id in walk.cone {
-            let how = if refs.contains(&id) {
+            let how = if refs.contains(id) {
                 Reach::Target
-            } else if walk.stops.iter().any(|stop| stop == id) {
+            } else if stops.contains(id) {
                 continue;
             } else {
                 Reach::Input
@@ -217,7 +298,9 @@ pub(crate) fn walk_with<'a>(
     let mut visited: HashSet<&str> = HashSet::new();
     let mut stops: HashSet<&str> = HashSet::new();
     let mut queue: VecDeque<&str> = VecDeque::new();
-    for id in targets {
+    // A tick can name most of the graph as targets: looked up, not scanned, per visited node.
+    let targets: HashSet<&str> = targets.iter().copied().collect();
+    for id in &targets {
         if let Some(node) = dag.get_node(id)
             && visited.insert(node.id.as_str())
         {
@@ -225,9 +308,9 @@ pub(crate) fn walk_with<'a>(
         }
     }
     while let Some(id) = queue.pop_front() {
-        let task_target =
-            targets.contains(&id) && dag.get_node(id).is_some_and(|n| n.kind() == NodeKind::Task);
-        let held = !targets.contains(&id) && paused.contains(id);
+        let target = targets.contains(id);
+        let task_target = target && dag.get_node(id).is_some_and(|n| n.kind() == NodeKind::Task);
+        let held = !target && paused.contains(id);
         if user.contains(id)
             || held
             || (manual && !task_target && pins_itself(dag, id) && !refreshed(policy, id))
@@ -649,10 +732,10 @@ mod tests {
     }
 
     #[test]
-    fn always_nodes_beside_a_sensor_a_tick_only_polls_have_no_refresh_path() {
-        // #952. `fast` ticks; its run polls `feed` because `fast` reads it. `side` and `below`
-        // are `Always` and below `feed`, but no scheduled node is above them: the poll changes
-        // their run hashes and no tick targets them.
+    fn always_nodes_below_a_sensor_a_tick_polls_are_its_targets() {
+        // #978 (was #952). `fast` ticks; its run polls `feed` because `fast` reads it. `side`
+        // and `below` are `Always` and below `feed`: the poll can change their run hashes, so
+        // the tick that polls targets them, whatever the sensor's freshness.
         for sensor in ["manual", "always"] {
             let d = dag(&[
                 node("feed", 's', sensor, &[]),
@@ -661,23 +744,108 @@ mod tests {
                 node("side", 'a', "always", &["feed"]),
                 node("below", 't', "always", &["side"]),
             ]);
-            assert_eq!(names(&tick_targets(&d, &id(&d, "fast"))), ["fast", "after"]);
+            let targets = tick_targets(&d, &id(&d, "fast"));
+            assert_eq!(names(&targets)[0], "fast", "the scheduled node is first");
+            let mut rest = names(&targets[1..]);
+            rest.sort();
+            assert_eq!(rest, ["after", "below", "side"]);
+            let pos = |n: &str| names(&targets).iter().position(|t| *t == n).unwrap();
+            assert!(pos("side") < pos("below"), "dependency order: {targets:?}");
             let r = reach(&d, &["fast"]);
-            assert_eq!(r["fast"], [("fast".to_string(), Reach::Target)]);
-            assert_eq!(r["after"], [("fast".to_string(), Reach::Target)]);
+            for name in ["fast", "after", "side", "below"] {
+                assert_eq!(r[name], [("fast".to_string(), Reach::Target)], "{name}");
+            }
             assert_eq!(r["feed"], [("fast".to_string(), Reach::Input)], "polled");
-            assert!(!r.contains_key("side") && !r.contains_key("below"), "{r:?}");
         }
     }
 
     #[test]
-    fn a_sensor_with_a_slower_schedule_is_an_input_of_the_faster_tick() {
-        // The five-minute tick polls `feed`; only the daily tick of `feed` targets `side`.
+    fn the_walk_from_a_polled_sensor_passes_manual_nodes_and_stops_at_a_schedule() {
+        let d = dag(&[
+            node("feed", 's', "manual", &[]),
+            node("fast", 'a', "*/5 * * * *", &["feed"]),
+            node("model", 'a', "manual", &["feed"]),
+            node("scored", 'a', "always", &["model"]),
+            node("ship", 't', "manual", &["feed"]),
+            node("hourly", 'a', "0 * * * *", &["feed"]),
+            node("after_hourly", 'a', "always", &["hourly"]),
+        ]);
+        // `model` and `ship` are passed, not targeted; `hourly` and what is below it follow
+        // `hourly`'s own ticks.
+        assert_eq!(
+            names(&tick_targets(&d, &id(&d, "fast"))),
+            ["fast", "scored"]
+        );
+        let r = reach(&d, &["fast", "hourly"]);
+        // `hourly` polls `feed` too, so its ticks also bring `scored` up to date.
+        assert_eq!(
+            r["scored"],
+            [
+                ("fast".to_string(), Reach::Target),
+                ("hourly".to_string(), Reach::Target)
+            ]
+        );
+        assert_eq!(r["hourly"], [("hourly".to_string(), Reach::Target)]);
+        assert_eq!(r["after_hourly"], [("hourly".to_string(), Reach::Target)]);
+        assert!(!r.contains_key("model") && !r.contains_key("ship"), "{r:?}");
+        let targets = tick_targets(&d, &id(&d, "hourly"));
+        assert_eq!(names(&targets)[0], "hourly");
+        let mut rest = names(&targets[1..]);
+        rest.sort();
+        assert_eq!(rest, ["after_hourly", "scored"]);
+    }
+
+    #[test]
+    fn a_sensor_polled_for_a_target_below_another_sensor_is_followed_too() {
+        // `side` is a target because `fast` polls `feed`; `side` reads `rates`, so the run
+        // polls `rates` as well, and `other` below it is a target in turn.
+        let d = dag(&[
+            node("feed", 's', "manual", &[]),
+            node("rates", 's', "manual", &[]),
+            node("fast", 'a', "*/5 * * * *", &["feed"]),
+            node("side", 'a', "always", &["feed", "rates"]),
+            node("other", 'a', "always", &["rates"]),
+            node("apart", 's', "manual", &[]),
+            node("alone", 'a', "always", &["apart"]),
+        ]);
+        let targets = tick_targets(&d, &id(&d, "fast"));
+        let mut all = names(&targets);
+        all.sort();
+        assert_eq!(all, ["fast", "other", "side"]);
+        let r = reach(&d, &["fast"]);
+        assert_eq!(r["rates"], [("fast".to_string(), Reach::Input)]);
+        // A sensor no target reads is not polled, and what is below it has no refresh path.
+        assert!(
+            !r.contains_key("apart") && !r.contains_key("alone"),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn an_asset_input_does_not_carry_the_tick_to_what_else_reads_it() {
+        // Only a polled sensor does: an asset input is computed when it has no cached result,
+        // and what else reads it is not a target.
+        let d = dag(&[
+            node("raw", 'a', "always", &[]),
+            node("fast", 'a', "*/5 * * * *", &["raw"]),
+            node("beside", 'a', "always", &["raw"]),
+        ]);
+        assert_eq!(names(&tick_targets(&d, &id(&d, "fast"))), ["fast"]);
+        let r = reach(&d, &["fast"]);
+        assert_eq!(r["raw"], [("fast".to_string(), Reach::Input)]);
+        assert!(!r.contains_key("beside"), "{r:?}");
+    }
+
+    #[test]
+    fn a_node_below_a_sensor_with_a_slower_schedule_follows_the_sensors_own_ticks() {
+        // The five-minute tick polls `feed`, which has a schedule of its own: only the daily
+        // tick of `feed` targets `side`.
         let d = dag(&[
             node("feed", 's', "0 5 * * *", &[]),
             node("fast", 'a', "*/5 * * * *", &["feed"]),
             node("side", 'a', "always", &["feed"]),
         ]);
+        assert_eq!(names(&tick_targets(&d, &id(&d, "fast"))), ["fast"]);
         let r = reach(&d, &["feed", "fast"]);
         assert_eq!(
             r["feed"],

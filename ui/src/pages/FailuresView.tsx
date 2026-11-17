@@ -3,7 +3,7 @@ import { plural } from '@/lib/plural'
 import { Copy, ExternalLink, RotateCw } from 'lucide-react'
 import { Age, ErrorLine, IconButton, MiddleName, StatusGlyph, TableSpacer, Tag } from '@/components'
 import type { FailureRow, FailuresModel, FailuresMsg } from '@/lib/failuresView'
-import { impactLabel, keysLine, streakLabel, type Failure } from '@/lib/health'
+import { keysLine, streakLabel, type Failure } from '@/lib/health'
 import type { Dispatch } from '@/lib/program'
 import { nodeKindLabel } from '@/lib/status'
 
@@ -25,7 +25,7 @@ export interface FailuresViewProps {
   dispatch: Dispatch<FailuresMsg>
 }
 
-/** Every failure in scope under its cause, the cause doing most damage first. */
+/** Every failure in scope under the error it shares, the failure holding the most nodes first. */
 export function FailuresView({ model, rows, window: win, labels, placeOf, selected, nowMs, readOnly, bodyRef, onSelect, dispatch }: FailuresViewProps) {
   return (
     <table className="barca-table barca-group-table barca-failure-table">
@@ -46,7 +46,7 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
           <th>Error</th>
           <th>When</th>
           <th title="The first failed attempt after the last clean run, and how many runs in a row have failed it (not its total runs: its History counts those)">Failing since</th>
-          <th className="num" title="Nodes downstream of it, transitively">Waiting on it</th>
+          <th className="num" title="Nodes it holds: itself and every node it blocks (assets, tasks and sensors)">Nodes held</th>
           <th><span className="barca-sr-only">Actions</span></th>
         </tr>
       </thead>
@@ -56,13 +56,13 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
           const row = rows[index]
           if (!row) return null
           if (row.kind === 'cause') {
-            const { cause, headline, failures, impact } = row.group
+            const { key, headline, failed } = row
             return (
-              <tr key={`cause:${cause}`} ref={win.measure} data-index={index} className="barca-failure-cause">
+              <tr key={`cause:${key}`} ref={win.measure} data-index={index} className="barca-failure-cause">
                 <td colSpan={COLUMNS}>
                   <div className="barca-failure-cause-line">
                     <strong title={headline}>{headline}</strong>
-                    <span>{failures.length.toLocaleString()} failed · {impactLabel(impact)} waiting</span>
+                    <span>{failed.toLocaleString()} failed</span>
                   </div>
                 </td>
               </tr>
@@ -109,7 +109,7 @@ export function FailuresView({ model, rows, window: win, labels, placeOf, select
               </td>
               <td>{f.at ? <Age at={f.at} nowMs={nowMs} /> : '–'}</td>
               <td>{f.failingSince ? <><Age at={f.failingSince} nowMs={nowMs} /><div className="barca-cell-sub">{streakLabel(f.failures)}</div></> : '–'}</td>
-              <td className="num">{impactLabel(f.impact)}</td>
+              <td className="num" title={`${plural(f.held, 'node')}, of which ${plural(f.heldAssets, 'asset')}`}>{f.held.toLocaleString()}</td>
               <td onClick={(event) => event.stopPropagation()}>
                 <FailureActions failure={f} readOnly={readOnly} name={labels.get(f.id) ?? f.name} dispatch={dispatch} />
               </td>

@@ -117,13 +117,16 @@ part. Implemented (experimental): the health words and their derivation (`health
 `health_reason`), `signals` and `measured` on every status node, and `data_coverage`, in
 `barca status --json`, `GET /nodes`, `GET /state` and `barca.nodes`, with their wire shapes in
 the OpenAPI and CLI contract owners and their rules checked in
-`crates/barca-core/src/health.rs`. Not implemented: the cause buckets and roots, the refresh
-path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the freshness gap, the rollup
-(`GET /state/rollup`, `barca status --rollup`), the tick record, the `barca.schedules`,
+`crates/barca-core/src/health.rs`. Not implemented: the cause buckets and every root kind but
+`failure`, the refresh path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the
+freshness gap, the cause and gap fields of the rollup, the `barca.schedules`,
 `barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Also
-implemented: the tick record (#960: the `schedule_ticks` table and its reads), and from it
+implemented: the tick record (#960: the `schedule_ticks` table and its reads), from it
 `last_check` on every status node and the `checked_up_to_date` reason (#964: a node the read
-path cannot decide reads `ok` while the last tick's verdict stands). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
+path cannot decide reads `ok` while the last tick's verdict stands), and the rollup (#955:
+`GET /state/rollup` and `barca status --rollup`, one tree whose every level is the sum of its
+children in nodes and in assets, with failure roots, checked in
+`crates/barca-core/src/rollup.rs`; the web UI renders it and no longer sums). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
 implements it issue by issue, and each PR moves its wire shapes into the OpenAPI and CLI contract
 owners. Until then the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are
 authoritative for the rest.

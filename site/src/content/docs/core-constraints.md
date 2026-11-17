@@ -94,12 +94,14 @@ to read costs nothing. Deleting all of `.barca/` removes the cache and the histo
 **Status.** All three act under `barca serve` (RFC-0008).
 
 - `Schedule("<cron>")` makes `barca serve` start a run on each cron tick. The run's targets are
-  the scheduled node and every `Always` node below it.
-- `Always` nodes are brought up to date at each tick of a scheduled node above them: an asset
+  the scheduled node, every `Always` node below it, and every `Always` node below a sensor
+  without a `Schedule` that the run polls.
+- `Always` nodes are brought up to date at each tick of a scheduled node above them, and at
+  each tick that polls an unscheduled sensor above them: an asset
   when it has no cached result for its current run hash, a task when its inputs changed since
-  its last successful run. The walk down stops at a node with its own `Schedule`. A node with
-  no scheduled node above it is never run by a tick, even when a tick polls a sensor above it
-  as an input of one of its targets.
+  its last successful run. The walk down stops at a node with its own `Schedule`. A node
+  that is neither below a scheduled node nor below an unscheduled sensor some tick polls is
+  never run by a tick.
 - `Manual` assets and tasks pin themselves. A tick never runs one, and `barca get` or
   `barca run` of something below it reads its latest successful result, even when stale, and
   says so on stderr. Only naming it in `--refresh` (or `--refresh-all`) recomputes

@@ -22,7 +22,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, last_check, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
+          [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, root, last_check, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
 
       --sample <N>
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
@@ -32,6 +32,9 @@ Options:
 
       --problems
           Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
+
+      --rollup
+          Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets
 
       --env <ENV>
           Use a separate cache and history for this environment
@@ -66,5 +69,8 @@ Examples:
   barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
   barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
   barca status --problems --server         # what needs attention on the configured server
+  barca status --rollup                    # counts by health per group and file, in nodes and assets, worst first
+  barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
+  barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
 
 More: barca docs status, barca docs agents

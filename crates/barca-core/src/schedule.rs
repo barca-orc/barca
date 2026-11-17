@@ -71,8 +71,10 @@ pub struct ScheduledJob {
     /// Parsed cron (5-field minute-granular, or 6-field seconds-granular),
     /// evaluated in the scheduler's configured timezone.
     pub cron: Cron,
-    /// The `Always` nodes a tick of this job reconciles in the same run
-    /// ([`crate::freshness::followers`]). Empty for a job built from summaries.
+    /// The `Always` nodes a tick of this job reconciles in the same run: those below the
+    /// scheduled node and below every sensor the run polls
+    /// ([`crate::freshness::tick_targets`], without the scheduled node). Empty for a job built
+    /// from summaries.
     pub followers: Vec<String>,
     /// `Schedule(..., max_failures=N)`: consecutive failed ticks before the job is skipped and
     /// reported `failing`.
@@ -142,7 +144,10 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
 pub fn jobs_from_dag(dag: &crate::dag::Dag) -> Vec<ScheduledJob> {
     let mut jobs = jobs_from_summaries(queries::list_assets_from_dag(dag));
     for job in &mut jobs {
-        job.followers = crate::freshness::followers(dag, &job.id);
+        job.followers = crate::freshness::tick_targets(dag, &job.id)
+            .into_iter()
+            .skip(1)
+            .collect();
         if let Some(n) = dag.get_node(&job.id).and_then(|n| n.extracted.max_failures) {
             job.max_failures = n;
         }

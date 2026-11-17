@@ -422,6 +422,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             sample,
             state,
             problems,
+            rollup,
             env,
             ..
         } => {
@@ -431,6 +432,9 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             let (target, files) = split_target_files(args);
             server_files("status", &files, None)?;
             let targets = targets_arg(target.as_deref())?;
+            if rollup {
+                return client::rollup(server, &targets, &files, json, env.as_deref()).await;
+            }
             let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             let opts = StatusOpts {
                 json,
@@ -1027,6 +1031,7 @@ async fn run_cli(
             sample,
             state,
             problems,
+            rollup,
             env,
             ..
         } => {
@@ -1042,6 +1047,11 @@ async fn run_cli(
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
             let targets = targets_arg(target.as_deref())?;
+            if rollup {
+                return commands::rollup_cmd(env.as_deref(), targets, files, json, &python)
+                    .await
+                    .map_err(|e| get_run_error(e, ctx, &hint_files));
+            }
             let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             status_cmd(
                 env.as_deref(),

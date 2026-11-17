@@ -34,3 +34,18 @@ pub(crate) async fn status_cmd(
     ));
     Ok(())
 }
+
+/// `barca status --rollup`: the rollup of the targets' upstream cones (every node without one).
+pub(crate) async fn rollup_cmd(
+    env: Option<&str>,
+    targets: Vec<String>,
+    files: Vec<PathBuf>,
+    json: bool,
+    python: &std::path::Path,
+) -> Result<(), barca_core::BarcaError> {
+    let cfg = barca_core::config::resolve(env)?;
+    let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+    let rollup = barca_core::rollup::rollup(&cfg, &targets, &file_args, python).await?;
+    super::emit(barca_core::report::render_rollup(&rollup, json));
+    Ok(())
+}

@@ -331,7 +331,11 @@ test('the grouped list shows running before the first stream event arrives', asy
     await expect(page.getByRole('complementary', { name: 'summary details' })).toContainText('running')
     // The breadcrumb's root is the open pipeline.
     await page.getByRole('navigation', { name: 'Group breadcrumb' }).getByRole('button', { name: FILE, exact: true }).click()
-    await expect(page.locator(`tr[data-group="${G('cross_validation')}"]`)).toContainText('1 running')
+    // A group's counts are the server's (the rollup's entry), never the page's own tally of the
+    // run it follows: this run has already ended on the server, so the group reads as recorded.
+    const group = page.locator(`tr[data-group="${G('cross_validation')}"]`)
+    await expect(group).toContainText('1 failing')
+    await expect(group).not.toContainText('running')
   } finally {
     release()
   }
@@ -367,4 +371,31 @@ test('mixed groups and nodes keep their columns readable at laptop width', async
     if (cell.name === 'Contents') expect(cell.width).toBeGreaterThanOrEqual(140)
     if (cell.name === 'Duration') expect(cell.width).toBeGreaterThanOrEqual(90)
   }
+})
+
+test('the bar, the map and a group row state the numbers of one rollup response, each with its unit', async ({ page, request }) => {
+  // What `barca status --rollup --json` prints for this scope: the same route, the same document.
+  const response = await request.get(`${process.env.BARCA_E2E_API}/state/rollup?files=${FILE}`)
+  expect(response.ok()).toBe(true)
+  const rollup = await response.json()
+  const root = rollup.entries[0]
+  expect(root.id).toBe('root')
+  // Tasks are nodes, not assets: the two units differ here, which is what an audit found the
+  // map and the bar disagreeing about.
+  expect(root.nodes).toBeGreaterThan(root.assets)
+  const sum = (key: 'nodes' | 'assets') => root.children.reduce((n: number, id: string) => n + rollup.entries.find((e: { id: string }) => e.id === id)[key], 0)
+  expect([sum('nodes'), sum('assets')]).toEqual([root.nodes, root.assets])
+
+  await page.goto(`/ui/#/assets?pipeline=${FILE}`)
+  // The scope's bar counts nodes, and says so.
+  const bar = page.locator('.barca-scope-health .barca-health')
+  await expect(bar).toHaveAttribute('title', new RegExp(`^${root.nodes} nodes: ${root.health.failing} failing`))
+  // The map is sized in assets, and says so; the line beside it gives both.
+  await expect(page.locator('.barca-healthmap-summary')).toContainText(`${root.assets} assets`)
+  await expect(page.locator('.barca-health-overview-sub')).toContainText(`${root.nodes} nodes, ${root.assets} assets`)
+  // A group's row is its entry.
+  const entry = rollup.entries.find((e: { id: string }) => e.id === G('cross_validation'))
+  const row = page.locator(`tr[data-group="${G('cross_validation')}"]`)
+  await expect(row.locator('.barca-health')).toHaveAttribute('title', new RegExp(`^${entry.nodes} nodes: ${entry.health.failing} failing`))
+  await expect(row.locator('.gcol-failed')).toHaveText(String(entry.health.failing))
 })

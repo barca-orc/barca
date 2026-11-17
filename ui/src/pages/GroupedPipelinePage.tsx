@@ -8,7 +8,9 @@ import { focusWindowRow, useTableWindow } from '@/hooks/useTableWindow'
 import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCanvas'
 import { NodePanel } from '@/components/assets/NodePanel'
 import { HealthOverview } from '@/components/assets/HealthOverview'
-import { useHealthTree } from '@/hooks/useHealthTree'
+import { useRollup } from '@/hooks/useRollup'
+import { dataSignalSets } from '@/lib/dataSignals'
+import { nearestInTree, rootsWithin } from '@/lib/rollupView'
 import { useStoredFlag } from '@/hooks/useStoredFlag'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
@@ -42,7 +44,6 @@ import {
 } from '@/lib/groupedPage'
 import { runningCount } from '@/lib/running'
 import { shortName } from '@/lib/graph'
-import { healthCounts } from '@/lib/health'
 import { FailuresView } from './FailuresView'
 import { GroupedTable, GroupPanel, LineagePicker } from './GroupedView'
 import { usePinNotes } from '@/hooks/usePins'
@@ -79,13 +80,13 @@ export function GroupedPipelinePage() {
   const selectedAsset = allAssets.find((a) => a.id === selected) ?? null
   const nodeRun = useNodeRun(selectedAsset)
   const live = nodeRun.statuses
-  // One health per node over the whole project, the page's fresher rows in place: every count
-  // here reads it, and the health map draws it.
-  const projectHealth = useHealthTree(pipeline, states)
-  const healthOf = projectHealth.loaded ? projectHealth.tree.healthOf : undefined
+  // The rollup of the pipeline (`GET /state/rollup`): every count here is an entry of it, and
+  // the health map draws it, so the bar, the group rows, the map and the CLI agree.
+  const rollup = useRollup(pipeline)
+  const rollupTree = rollup.loaded ? rollup.tree : undefined
   const level = useMemo(
-    () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live, healthOf }),
-    [view, query, tree, allAssets, states, stateQuery.isError, live, healthOf],
+    () => groupedLevel({ params: { ...view, query }, tree, allAssets, states, statesFailed: stateQuery.isError, live, rollup: rollupTree }),
+    [view, query, tree, allAssets, states, stateQuery.isError, live, rollupTree],
   )
   const { assets, byId, leaves, sole, scope, entries, tooBig, lineageOf, drawn, visualStates, scopeIds, scopedStates, isHit, pathOf, placeOf } = level
   // Rows never move under the pointer: while it is over the table, states that arrive (a group's
@@ -98,11 +99,12 @@ export function GroupedPipelinePage() {
   const navigate = useNavigate()
 
   const kindOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.kind])), [allAssets])
-  const inputsOf = useMemo(() => new Map(allAssets.map((a) => [a.id, a.inputs])), [allAssets])
-  const scopeHealth = useMemo(() => healthCounts(scopeIds, byId, live, healthOf), [scopeIds, byId, live, healthOf])
-  const graphKnown = !!assetQuery.data
+  // The open scope's entry of the rollup: the group's, or the root's for the page's top level.
+  const scopeEntry = rollup.tree.entries.get(nearestInTree(rollup.tree, scope))
+  const scopeRoots = useMemo(() => rootsWithin(rollup.tree, nearestInTree(rollup.tree, scope)), [rollup.tree, scope])
+  const signals = useMemo(() => dataSignalSets(states), [states])
   const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scopedStates), [scopedStates]))
-  const failureList = useMemo(() => failures(scopedStates, graphKnown ? level.consumers : null, keyErrors), [scopedStates, graphKnown, level.consumers, keyErrors])
+  const failureList = useMemo(() => failures(scopeRoots, byId, keyErrors), [scopeRoots, byId, keyErrors])
   const shownFailures = useMemo(() => visibleFailures(failureList, query), [failureList, query])
 
   const [failuresModel, failuresDispatch] = useProgram(
@@ -143,7 +145,7 @@ export function GroupedPipelinePage() {
   const selectedGroup = tree.groups.get(selected ?? '')
   const selectedNode = byId.get(selected ?? '')
   const selectedLeaves = selectedGroup ? leaves(selectedGroup.id) : []
-  const selectedGroupHealth = groupHealth(selectedLeaves, byId, live, healthOf)
+  const selectedGroupHealth = groupHealth(selectedGroup ? rollupTree?.entries.get(selectedGroup.id) : undefined)
   const groupState = selectedGroup
     ? selectedLeaves.some((id) => !byId.has(id)) && !stateQuery.isError && selectedGroupHealth.kind !== 'run'
       ? PENDING_GRAPH_STATE : selectedGroupHealth
@@ -223,8 +225,8 @@ export function GroupedPipelinePage() {
               {runningHere} running
             </span>
           )}
-          <div className="barca-scope-health" title="Every node in view, by state">
-            {knownRows && <HealthBar counts={scopeHealth} labelLimit={3} width={80} />}
+          <div className="barca-scope-health">
+            {rollup.loaded && scopeEntry && <HealthBar scope={scopeEntry} labelLimit={3} width={80} />}
           </div>
           {scope && level.external.length > 0 && !flat && !graph && show === 'items' && (
             <span className="barca-group-external" title={level.external.map(shortName).join(', ')}>
@@ -276,7 +278,9 @@ export function GroupedPipelinePage() {
       <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       {showMap && mapOpen && !error && !loading && (
         <HealthOverview
-          health={projectHealth}
+          rollup={rollup}
+          byId={byId}
+          signals={signals}
           scope={scope}
           onScope={openGroup}
           onOpen={revealNode}
@@ -364,8 +368,7 @@ export function GroupedPipelinePage() {
                 tree={tree}
                 byId={byId}
                 leaves={leaves}
-                live={live}
-                healthOf={healthOf}
+                rollup={rollupTree}
                 visualStates={visualStates}
                 labels={labels}
                 isHit={isHit}
@@ -389,11 +392,9 @@ export function GroupedPipelinePage() {
               tree={tree}
               byId={byId}
               leaves={selectedLeaves}
-              live={live}
-              healthOf={healthOf}
+              scope={rollupTree?.entries.get(selectedGroup.id)}
               state={groupState}
               statesFailed={stateQuery.isError}
-              inputs={inputsOf}
               nowMs={nowMs}
               onOpen={openGroup}
               onReveal={revealNode}
