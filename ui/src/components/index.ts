@@ -1,5 +1,5 @@
-export { Age, LastSuccess } from './Age'
-export type { AgeProps, LastSuccessProps } from './Age'
+export { Age } from './Age'
+export type { AgeProps } from './Age'
 
 export { Button } from './Button'
 export type { ButtonProps, ButtonVariant, ButtonSize } from './Button'
@@ -57,6 +57,8 @@ export { RunsInProgress } from './RunsInProgress'
 export { TableSpacer } from './TableWindow'
 
 export { HealthBar } from './HealthBar'
+export { CauseBadge } from './CauseBadge'
+export { EstimateCell } from './EstimateCell'
 export type { HealthBarProps } from './HealthBar'
 
 export { MiddleName } from './MiddleName'

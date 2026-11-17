@@ -61,6 +61,11 @@ export interface AssetRow {
   nextRunMs: number | null
   /** The run working on the node now, whoever started it. */
   running: NodeRunning | null
+  /** Why it is not fresh (`cause`), and when it will be: the row's own served fields, for `nodeEstimate`. */
+  cause: NodeState['cause']
+  expected_fresh_at: string | null
+  recheck_at: string | null
+  no_estimate: NodeState['no_estimate']
 }
 
 /** `40 of 3,077 keys failed`, for a node with failed keys. */
@@ -137,6 +142,10 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         last: last
           ? { status: n.partitions?.failed ? 'failed' : last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
           : null,
+        cause: n.cause,
+        expected_fresh_at: n.expected_fresh_at,
+        recheck_at: n.recheck_at,
+        no_estimate: n.no_estimate,
         lastAtMs: last ? parseTime(last.created_at) : null,
         lastSuccessAt: n.last_success_at,
         failingSince: n.failing_since,

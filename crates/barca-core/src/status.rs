@@ -125,6 +125,12 @@ pub struct NodeStatus {
     /// `null` when it has no refresh path or the path has no next tick.
     #[serde(default)]
     pub recheck_at: Option<String>,
+    /// Why a node that is not fresh has no `expected_fresh_at`, in one word (`barca docs
+    /// status-fields`, "Times"): `failing`, `paused`, `scheduler_off`, `no_path`,
+    /// `undecided`, `missed`, `queue_stopped`, `no_scheduler_here` or `not_promised`. `null`
+    /// for a fresh node and one that has an estimate.
+    #[serde(default)]
+    pub no_estimate: Option<crate::health::NoEstimate>,
     /// Per-key cache state of a partitioned node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionState>,
@@ -983,6 +989,7 @@ pub(crate) async fn status_from_dag_with_membership(
             stale_since: None,
             expected_fresh_at: None,
             recheck_at: None,
+            no_estimate: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
@@ -1349,6 +1356,7 @@ mod tests {
             stale_since: None,
             expected_fresh_at: None,
             recheck_at: None,
+            no_estimate: None,
             partitions: None,
             last_materialization: None,
             last_bytes_change: None,

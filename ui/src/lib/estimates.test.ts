@@ -1,0 +1,78 @@
+import { beforeAll, describe, expect, it } from 'vitest'
+import { nodeEstimate, scopeEstimate } from './estimates'
+import { formatAbout, formatEstimate, formatSlot } from './time'
+
+const NOW = Date.parse('2026-11-17T14:57:00Z')
+
+beforeAll(() => {
+  process.env.TZ = 'America/New_York'
+})
+
+const node = (over: Partial<Parameters<typeof nodeEstimate>[0]> = {}) => ({ expected_fresh_at: null, recheck_at: null, no_estimate: null, cause: null, ...over })
+
+describe('an estimate in words', () => {
+  it('rounds an estimated time up to the minute and marks it with ~, never to the second', () => {
+    expect(formatEstimate('2026-11-17T15:00:20Z', 'utc', NOW)).toBe('~15:01')
+    expect(formatEstimate('2026-11-17T15:00:00Z', 'utc', NOW)).toBe('~15:00')
+    expect(formatEstimate('2026-11-17T15:00:20Z', 'local', NOW)).toBe('~10:01')
+    // Not today's: the day is named.
+    expect(formatEstimate('2026-11-18T06:00:05Z', 'utc', NOW)).toBe('~Nov 18 06:01')
+    expect(formatEstimate('soon', 'utc', NOW)).toBe('soon')
+  })
+
+  it("shows a tick's slot exactly: it is not an estimate", () => {
+    expect(formatSlot('2026-11-17T15:00:00Z', 'utc', NOW)).toBe('15:00')
+    expect(formatSlot('2026-11-18T06:00:00Z', 'utc', NOW)).toBe('Nov 18 06:00')
+  })
+
+  it('rounds an estimated length up to a unit it can stand behind', () => {
+    expect([1, 5, 38, 40, 59].map(formatAbout)).toEqual(['<5s', '~5s', '~40s', '~40s', '~60s'])
+    expect([60, 61, 430, 3599].map(formatAbout)).toEqual(['~1m', '~2m', '~8m', '~60m'])
+    expect([3600, 5400, 90000].map(formatAbout)).toEqual(['~1h', '~2h', '~2d'])
+  })
+})
+
+describe('when a node is fresh', () => {
+  it('says fresh only of an estimate', () => {
+    const words = nodeEstimate(node({ cause: 'catching_up', expected_fresh_at: '2026-11-17T15:00:20Z', recheck_at: '2026-11-17T15:00:00Z' }), 'utc', NOW)
+    expect([words.kind, words.text]).toEqual(['fresh', 'fresh ~15:01'])
+  })
+
+  it('says rechecked where the server promises no fresh time, and why in the tooltip', () => {
+    const words = nodeEstimate(node({ cause: 'undecided', recheck_at: '2026-11-17T15:00:00Z', no_estimate: 'undecided' }), 'utc', NOW)
+    expect([words.kind, words.text]).toEqual(['rechecked', 'rechecked 15:00'])
+    expect(words.title).toContain('no estimate: undecided until a run reports')
+    expect(words.text).not.toContain('fresh')
+  })
+
+  it('says why a node has no estimate instead of a blank, in the words the server gives each reason', () => {
+    const why = (no_estimate: NonNullable<Parameters<typeof nodeEstimate>[0]['no_estimate']>, cause: NonNullable<Parameters<typeof nodeEstimate>[0]['cause']>) => nodeEstimate(node({ cause, no_estimate }), 'utc', NOW).text
+    expect(why('no_path', 'no_refresh_path')).toBe('no estimate: no refresh path')
+    expect(why('paused', 'no_refresh_path')).toBe('no estimate: paused')
+    expect(why('scheduler_off', 'no_refresh_path')).toBe('no estimate: no scheduler is firing its schedule')
+    expect(why('failing', 'failing')).toBe('no estimate: until the failure is fixed')
+    expect(why('missed', 'overdue')).toBe('no estimate: ticks missed it')
+    expect(why('no_scheduler_here', 'catching_up')).toBe('no estimate: no scheduler runs here')
+  })
+
+  it('says the reason, not the recheck, where a tick cannot clear it', () => {
+    const failing = nodeEstimate(node({ cause: 'failing', no_estimate: 'failing', recheck_at: '2026-11-17T15:00:00Z' }), 'utc', NOW)
+    expect([failing.kind, failing.text]).toEqual(['none', 'no estimate: until the failure is fixed'])
+    expect(failing.title).toContain('rechecked 15:00')
+  })
+
+  it('says when a fresh node is next rechecked, and nothing when no tick reaches it', () => {
+    expect(nodeEstimate(node({ recheck_at: '2026-11-17T15:00:00Z' }), 'utc', NOW)).toMatchObject({ kind: 'ok', text: 'rechecked 15:00' })
+    expect(nodeEstimate(node(), 'utc', NOW)).toMatchObject({ kind: 'ok', text: '' })
+  })
+})
+
+describe('when a scope is fresh', () => {
+  const scope = (over: Partial<Parameters<typeof scopeEstimate>[0]>) => ({ fresh_by: null, unbounded: 0, not_fresh: 0, ...over })
+  it('reads the entry: all fresh by a time, how many have no estimate, or both', () => {
+    expect(scopeEstimate(scope({}), 'utc', NOW).text).toBe('fresh')
+    expect(scopeEstimate(scope({ not_fresh: 60, fresh_by: '2026-11-17T15:01:10Z' }), 'utc', NOW)).toMatchObject({ kind: 'fresh', text: 'all fresh by ~15:02' })
+    expect(scopeEstimate(scope({ not_fresh: 152, unbounded: 152 }), 'utc', NOW)).toMatchObject({ kind: 'none', text: '152 with no estimate' })
+    expect(scopeEstimate(scope({ not_fresh: 1332, unbounded: 1152, fresh_by: '2026-11-17T15:01:10Z' }), 'utc', NOW).text).toBe('1,152 with no estimate · the rest fresh by ~15:02')
+  })
+})

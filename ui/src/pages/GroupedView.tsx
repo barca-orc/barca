@@ -2,10 +2,12 @@ import { useState, type RefObject } from 'react'
 import { ChevronRight, FolderOpen, X } from 'lucide-react'
 import {
   Button,
+  Age,
+  CauseBadge,
+  EstimateCell,
   HealthBar,
   IconButton,
   KeyValue,
-  LastSuccess,
   MiddleName,
   RunningBadge,
   SearchInput,
@@ -20,8 +22,10 @@ import { shortName, type GraphEntry } from '@/lib/graph'
 import { cacheGraphState, isLive, memberHealth, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { blockerOf } from '@/lib/healthDisplay'
 import { alsoInNote, groupOutput, groupOutputNote, lastRunDuration, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
-import { ageCell, isFailed, scopeAge, type Failure, type ScopeHealth } from '@/lib/health'
-import type { RollupTree } from '@/lib/rollupView'
+import { nodeEstimate, scopeEstimate } from '@/lib/estimates'
+import { isFailed, type Failure } from '@/lib/health'
+import type { RollupEntry, RollupTree } from '@/lib/rollupView'
+import { useTimeZone } from '@/context/timeZone'
 import { isCheck, nodeKindLabel } from '@/lib/status'
 import type { TableWindow } from '@/hooks/useTableWindow'
 import { sourceFile } from '@/lib/pipeline'
@@ -66,11 +70,12 @@ function blockersOf(node: NodeState): string[] {
   return by ? [by] : []
 }
 
-export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates, held = null, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
+export function GroupedTable({ entries, tree, byId, rollup, visualStates, held = null, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
   const hasGroups = entries.some((e) => e.kind === 'group')
   const hasLeaves = entries.some((e) => e.kind !== 'group')
   const columnCount = 3 + (hasGroups ? 3 : 0) + (hasLeaves ? 1 : 0)
-  const counts = (id: string): ScopeHealth | undefined => rollup?.entries.get(id)
+  const counts = (id: string) => rollup?.entries.get(id)
+  const { zone } = useTimeZone()
   return (
     // The name takes what the fixed columns leave; the low-value columns leave first as the
     // table narrows (shell.css), so it never scrolls sideways at a laptop's width.
@@ -85,8 +90,8 @@ export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates
       <thead>
         <tr>
           <th className="barca-group-col-name">Name</th>
-          <th className="barca-group-col-state">State</th>
-          <th title="A node's last success (a partitioned node's newest successful key, any key); a group's oldest member's, and how many members are failing">Last success</th>
+          <th className="barca-group-col-state" title="Why it is not fresh, in the words and colours of the health map; a group's nodes by cause">State</th>
+          <th title="When it is expected to be fresh (an estimate, rounded up), when a tick next rechecks it, or why there is no estimate; a fresh node's last success">Fresh by</th>
           {hasGroups && <th className="gcol-contents">Contents</th>}
           {hasGroups && <th className="num gcol-failed" title="Nodes in the group whose last attempt failed (assets, tasks and sensors)">Failed</th>}
           {hasLeaves && <th className="num gcol-duration" title="The last attempt's">Duration</th>}
@@ -106,11 +111,10 @@ export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates
           const duration = group ? null : lastRunDuration(node)
           // The other groups that declare it: the rollup counts it in this one.
           const alsoIn = alsoInNote(rollup?.entries.get(entry.id)?.also_in, tree)
-          const members = group ? leaves(entry.id) : [entry.id]
-          // A row's time is drawn with the row when its states are already known (loaded for
-          // another scope); only a row with nothing known yet holds its place with a skeleton.
-          const ageKnown = statesLoaded || members.every((id) => byId.has(id))
-          const age = ageCell(scopeAge(members, byId), { group: !!group, partitioned: node?.partitioned ?? false })
+          // When the row is fresh: a group's is its rollup entry's, a node's its own row's.
+          // A row with neither loaded yet holds its place with a skeleton.
+          const scopeEntry = counts(entry.id)
+          const estimate = group ? (scopeEntry ? scopeEstimate(scopeEntry, zone, nowMs) : null) : node ? nodeEstimate(node, zone, nowMs) : null
           return (
             <tr
               key={entry.id}
@@ -152,8 +156,10 @@ export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates
               <td title={running ? undefined : state.hint}>
                 {running ? (
                   <RunningBadge running={running} nowMs={nowMs} />
-                ) : group && state !== PENDING_GRAPH_STATE && !statesFailed && counts(entry.id) ? (
-                  <HealthBar scope={counts(entry.id)!} />
+                ) : group && state !== PENDING_GRAPH_STATE && !statesFailed && scopeEntry ? (
+                  <HealthBar scope={scopeEntry} />
+                ) : node && state.kind === 'cache' ? (
+                  <div className="barca-state-line"><CauseBadge cause={node.cause} /></div>
                 ) : (
                   <div className="barca-state-line">
                     <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} size="sm" />
@@ -161,7 +167,9 @@ export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates
                 )}
               </td>
               <td>
-                <LastSuccess cell={ageKnown ? age : null} nowMs={nowMs} />
+                {estimate && estimate.text === '' && node?.last_success_at
+                  ? <span className="barca-cell-sub" title="Its last success">built <Age at={node.last_success_at} nowMs={nowMs} /></span>
+                  : <EstimateCell words={estimate} />}
               </td>
               {hasGroups && <td className="gcol-contents">{group && entry.summary}</td>}
               {hasGroups && (
@@ -202,7 +210,7 @@ export interface GroupPanelProps {
   byId: ReadonlyMap<string, NodeState>
   leaves: string[]
   /** The group's entry of the rollup (`GET /state/rollup`); none until it has loaded. */
-  scope: ScopeHealth | undefined
+  scope: RollupEntry | undefined
   /** The group's box: its most urgent fact, or Checking… while members load. */
   state: GraphState
   statesFailed: boolean

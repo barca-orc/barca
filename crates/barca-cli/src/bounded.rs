@@ -141,6 +141,7 @@ pub const STATUS_FIELDS: &[&str] = &[
     "stale_since",
     "expected_fresh_at",
     "recheck_at",
+    "no_estimate",
     "partitions",
     "last_materialization",
     "last_bytes_change",
@@ -324,6 +325,7 @@ mod tests {
             stale_since: None,
             expected_fresh_at: None,
             recheck_at: None,
+            no_estimate: None,
             partitions: Some(PartitionState {
                 total: 0,
                 cached: 0,

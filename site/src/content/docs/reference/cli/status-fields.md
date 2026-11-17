@@ -484,6 +484,22 @@ node may be found up to date, be rebuilt, or be left as it is. A node with `rech
 no `expected_fresh_at` is rechecked then, not fresh then, and every surface words it so
 (`fresh ~15:05 UTC` against `rechecked 15:00 UTC`).
 
+**A node with no estimate says why.** `no_estimate` is one word for a node that is not fresh
+and has no `expected_fresh_at`, `null` for a fresh node and one that has an estimate. The
+first that applies:
+
+| `no_estimate` | Shown as "no estimate: ..." | When |
+|---|---|---|
+| `failing` | until the failure is fixed | its cause is `failing` |
+| `paused` | paused | its root is a paused schedule or a paused node |
+| `scheduler_off` | no scheduler is firing its schedule | its root is `scheduler_off` |
+| `no_path` | no refresh path | its root is `no_schedule`, or its cause `no_refresh_path` |
+| `undecided` | undecided until a run reports | its cause is `undecided` |
+| `missed` | ticks missed it | its cause is `overdue` |
+| `queue_stopped` | the run queue is not starting runs | a tick or a run will reach it, and the run queue is paused or draining |
+| `no_scheduler_here` | no scheduler runs here | a tick will reach it, and the answering process runs no scheduler (`barca status` beside a server, a `--read-only` server): it has no next tick to estimate from |
+| `not_promised` | a result above it may come out unchanged | a tick will look at it and may find it up to date or leave it as it is (`recheck_at` only) |
+
 `stale_since` is, for the node itself:
 
 | The node is | `stale_since` |
@@ -676,6 +692,7 @@ is `--key KEY` ([Partitions: Listing keys](/reference/partitions/#listing-keys-b
       "stale_since": null,
       "expected_fresh_at": null,
       "recheck_at": null,
+      "no_estimate": null,
       "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }

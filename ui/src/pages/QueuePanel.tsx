@@ -157,7 +157,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
         )}
         {rows.length > 0 && (
           <table className="barca-table barca-queue-table barca-queue-runs" aria-label="Queued runs">
-            <thead><tr><th>Place</th><th>Run</th><th>Target</th><th>Trigger</th><th>Queued</th><th className="num" title="How long it has run, or waited to start">Elapsed</th></tr></thead>
+            <thead><tr><th>Place</th><th>Run</th><th>Target</th><th>Trigger</th><th>Queued</th><th className="num" title="How long it has run, or waited to start">Elapsed</th><th title="When a waiting run is expected to start: the server's estimate, from the typical run time of the runs ahead of it">Starts</th></tr></thead>
             <tbody>{rows.map(row => (
               <tr key={row.runId} data-state={row.state}>
                 <td>{row.state === 'running'
@@ -168,6 +168,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
                 <td>{row.trigger}{row.scheduleId && <span className="barca-cell-sub"> {row.scheduleId}</span>}</td>
                 <td>{row.queuedAt ? <Age at={row.queuedAt} nowMs={nowMs} /> : '–'}</td>
                 <td className="num" title={row.state === 'running' ? 'Running for' : 'Waiting for'}>{row.elapsed}</td>
+                <td data-starts>{row.starts ?? <span className="barca-cell-sub">–</span>}</td>
               </tr>
             ))}</tbody>
           </table>

@@ -64,8 +64,8 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 |---|---|---|
 | `lib/runStream.ts` | `reduceRunEvent(state, event)` — fold an SSE event stream into UI state | `runStream.test.ts` |
 | `lib/runs.ts` | `runStatus`, `runIsLive`, `triggeredByLabel`, `parseOutcome` — a run's status, trigger and outcome → display | `runs.test.ts` |
-| `lib/queue.ts` | `queueState`, `queueControl`, `queueRows` (running runs first, then the waiting ones, each with its elapsed time), `queueSummary`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list; `queueStatus`, `queueStatusLabel` — the queue in brief that every page shows while runs wait (`components/QueueStatus.tsx`) | `queue.test.ts` |
-| `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next run, last run, pause; `lateness` — a schedule that missed its slot (`late_since` past the grace), "late by 12m" | `schedules.test.ts` |
+| `lib/queue.ts` | `queueState`, `queueControl`, `queueRows` (running runs first, then the waiting ones, each with its elapsed time and, waiting, the server's estimated start: "starts in ~40s"), `queueSummary`, `healthQueueLabel` — `GET /queue` → the Runs page's queue strip and list; `queueStatus`, `queueStatusLabel` — the queue in brief that every page shows while runs wait (`components/QueueStatus.tsx`) | `queue.test.ts` |
+| `lib/schedules.ts` | `scheduleRows(assets, states, now, jobs)` — scheduled nodes with next slot, last tick, pause, and what the server says of the schedule: `late` ("late by 12m"), `queue_bound`, its typical queue wait and run time; late and queue-bound rows first | `schedules.test.ts` |
 | `lib/dataSignals.ts` | `signalLine(signal)` — a data signal of a status row (`empty`, `rows_changed`, `behind_input`) in one line; `dataSignalSets` — the words of the signals and lateness the server reports; `dataCoverage`, `coverageLine` — "7 of 556 measured" from the rows' `measured` | `dataSignals.test.ts` |
 | `lib/causeDisplay.ts` | `causeDisplay`, `CAUSE_ORDER`, `causeParts`, `causeLine` — the word, tone and glyph of the server's `cause`, in the served order; `MapPart`, `mapPartColor`, `mapPartWeight` — the health map's colour and room per cause (and for a fresh node) | `rollupView.test.ts` |
 | `lib/rollupView.ts` | `indexRollup`; `sunburst` — the health map's segments over the rollup: an angle from an entry's served `weight`, colours stacked by its served `weights`; `heldIds` — what a root holds, as ids to light; `freshWithin`, `noEstimate` — a scope's estimate in words | `rollupView.test.ts` |
@@ -82,7 +82,8 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout; `impliedEdges` — in a graph of groups, the edges another path already shows (left out of the layout, drawn for the selection) | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre per connected part (by dependency depth), parts packed in rows, and each edge's route (`routeEdges`: straight through a rank between its boxes, curving only between ranks, so no edge crosses a card; drawn by `routePath` in `components/graph/RoutedEdge.tsx`), no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
 | `lib/pipeline.ts` | pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count, and its state from its sums in the rollup's `files`), `fileShown` (those sums as a glyph and a word, for the sidebar and the table's file header) | `pipeline.test.ts` |
-| `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge`, `ageCell`, `streakLabel` — what is broken in a scope, why, and how late; a failing streak is always "N failed runs in a row", a partitioned node's success is "any key"'s, a group's "oldest member"'s | `health.test.ts` |
+| `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `streakLabel` — what is broken in a scope and why; a failing streak is always "N failed runs in a row" | `health.test.ts` |
+| `lib/estimates.ts` | `nodeEstimate`, `scopeEstimate` — when a row is fresh, in words, from the served times: `fresh ~15:05` (an estimate, rounded up), `rechecked 15:00` (a tick's next look), `no estimate: no refresh path` (the served `no_estimate`); a group's `all fresh by ~15:02` or `152 with no estimate` from its rollup entry | `estimates.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatRelative` (`3h ago`, `in 5m`), `formatInstant` — the one time format, drawn by `Age` (relative, absolute on hover) | `time.test.ts` |
 | `lib/sidebar.ts` | `updateSidebar`, `fileGroups`, `listedPipelines` — the sidebar's collapse and width (dragged, by keyboard, reset), the files it lists and the tree of groups under a file | `sidebar.test.ts` |
 | `lib/documentTitle.ts` | `documentTitle` — the tab's title from the route: what is open, the section, the app | `documentTitle.test.ts` |
@@ -144,8 +145,8 @@ at a time with chips; the messages a click sends are listed under it.
 ## Large projects: what is broken, and why
 
 `lib/health.ts` answers the questions a project of thousands of nodes raises, over `/state` rows
-and the `/assets` graph: a scope's counts by state word (`healthCounts`, drawn by `HealthBar`:
-one segment per cache state present, and the failed last attempts counted beside them), its
+and the `/assets` graph: a scope's nodes by cause (drawn by `HealthBar` from the scope's rollup entry: one segment per
+cause inside it, as wide as its served weight, in the health map's words and colours), its
 failures with their error headline and how many nodes downstream wait on each (`failures`), and
 the failed nodes upstream of a stale one (`failedUpstream`). The grouped page shows the scope's
 health beside its breadcrumb, a health bar per group row, and a Failures view of every failure
@@ -182,7 +183,7 @@ The look of the UI is defined in three places, in this order:
 
 1. **Tokens** (`styles/tokens/`): colors, type scale, spacing, radius, elevation, motion, and
    the light theme. The only place a color or a size is written as a value.
-2. **Primitives** (`components/`): `Button`, `IconButton`, `Age`/`LastSuccess`, `Tag`, `Chip`/`ChipGroup`, `Select`,
+2. **Primitives** (`components/`): `Button`, `IconButton`, `Age`, `EstimateCell`, `CauseBadge`, `Tag`, `Chip`/`ChipGroup`, `Select`,
    `SearchInput`, `StatusGlyph`/`StatusBadge`, `StatusDot` (the connection only), `DagNode`, `HealthBar`, `Skeleton`, `ConnectionBadge`, `ErrorLine`,
    `MiddleName`, and `SidePanel` with `Section` and `KeyValue`. Their CSS is in
    `styles/components.css`, by class and `data-*` attribute (`data-tone`, `data-size`); an inline
