@@ -602,6 +602,7 @@ mod tests {
                 size_bytes: None,
                 cpu_seconds: None,
                 max_rss_bytes: None,
+                sink_seconds: None,
                 error_type: Some("KeyError".into()),
                 error_message: Some(format!("'region' <{}>\nsecond line", "x".repeat(400))),
                 error_traceback: Some("Traceback (most recent call last):\n  secret".into()),

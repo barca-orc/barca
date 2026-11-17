@@ -250,6 +250,11 @@ every database from before 0.29.2 (#629):
   AND status = 'success'`: `barca status` counts a partitioned node's keys whose latest success is
   empty from these rows, a probe each. Opening an older database adds both; the index is empty
   until a result is counted.
+- `materializations.sink_seconds` (REAL, nullable, 0.45, #1004): the seconds a successful step
+  spent writing its `@sink`s, after its own duration (`elapsed_seconds`, which excludes them) was
+  taken. Each sink's own time is `seconds` in that row's `sinks_json`. NULL for a step without
+  sinks, on failed rows and on older rows. Read by `barca history RUN_ID` and `GET /runs/{run_id}`;
+  never part of a cache key. Opening an older database adds it; older binaries ignore it.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
   `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,
   `running`, or `draining` (0.31.0: in flight when the server was told to stop); `spec` is the server's description of the run (JSON: command, targets, nodes,

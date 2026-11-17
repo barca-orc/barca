@@ -66,6 +66,12 @@ max_rss_bytes: number | null,
  */
 rows: number | null,
 /**
+ * Seconds the step spent writing its `@sink`s after its own work (#1004): not part of
+ * `elapsed_seconds`. `null` for a step without sinks, a failed step or a row from an older
+ * barca.
+ */
+sink_seconds: number | null,
+/**
  * A failed step's last lines of output, stdout and stderr in the order they were written,
  * without the traceback barca already shows (at most [`OUTPUT_TAIL_LINES`]; `barca logs
  * RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it

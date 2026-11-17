@@ -25,6 +25,13 @@ def summary() -> dict:
   matching extra (`pip install "barca[s3]"`, `[azure]`, `[gcs]`, or `[remote]`).
 - The format comes from `serializer=` (`json`, `pickle`, `parquet`, `csv`), else the path extension
   (`.json`, `.pkl`/`.pickle`, `.parquet`, `.csv`), else the parent asset's artifact format.
+- **A sink in the artifact's format is a copy of the artifact.** Its bytes are the ones barca
+  wrote for the asset's result, copied (or uploaded) to the sink's path; the result is not
+  encoded a second time. A returned DuckDB relation or Polars LazyFrame runs its query once, and
+  the sink is byte-identical to the artifact. A sink in another format (a `.csv` sink of a
+  parquet artifact, a `.parquet` sink of an asset with `serializer="pickle"`) is encoded from
+  the result, so a returned relation runs again for it. Up to 0.44 every sink encoded the
+  result: a relation ran once more per sink, and an aggregate could come out in another row order.
 - A CSV sink writes a header with no pandas index. CSV readers infer types; see `barca docs types`.
 - A parquet or CSV sink needs a DataFrame, Arrow table or DuckDB relation. Anything else is a sink
   failure: barca never writes pickle bytes under a `.parquet` or `.csv` name.
@@ -54,6 +61,11 @@ def summary() -> dict:
 - For partitioned assets each partition writes its own file with the key inserted before the
   extension: `out.parquet` becomes `out_region_emea.parquet`. For a dataset that tools can read
   as one partitioned table, end the path with `/` (below).
+- Sinks are written inside the step, after its result and before it is reported, so they hold
+  its worker until they are done. Their time is not part of the step's `elapsed_seconds`: it is
+  `sink_seconds` beside it, on `steps[]` of `barca get --json` / `barca run --json` (summed over
+  the keys that ran) and of `barca history RUN_ID --json`, and `seconds` on each sink in the
+  step's record. The web UI's run panel shows it as `+ 9.5s sinks` after the step's time.
 
 ## Cache hits
 
@@ -70,8 +82,10 @@ partitioned asset. When the asset is served from cache:
   [barca] sink exports/scored/: republished 1 cached key of scored
   ```
 
-- The cached artifact is read back as the asset's annotated return type (pandas when it has
-  none), so a sink written this way is written by that type's writer. With an artifact store,
+- A sink in the artifact's format is a copy of the cached artifact's bytes, so it holds what it
+  held when the step ran; the cached value is not read. For a sink in another format or a
+  dataset sink, the cached artifact is read back as the asset's annotated return type (pandas
+  when it has none), so a sink written this way is written by that type's writer. With an artifact store,
   an artifact this machine lacks is fetched first; one that is nowhere is computed again, which
   writes the sink.
 - A sink that cannot be written this way fails the step like a sink that fails when the step

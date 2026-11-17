@@ -541,6 +541,8 @@ pub struct NewMaterialization {
     pub(crate) max_rss_bytes: Option<u64>,
     /// Rows of a tabular result, when its worker counted them.
     pub(crate) rows: Option<u64>,
+    /// Seconds spent writing the step's sinks, outside `elapsed_seconds` (#1004).
+    pub(crate) sink_seconds: Option<f64>,
     /// Digest of the producer-owned serialized bytes.
     pub output_hash: Option<String>,
     pub(crate) observation_hash: Option<String>,
@@ -579,6 +581,7 @@ impl NewMaterialization {
             cpu_seconds: artifact.get("cpu_seconds").and_then(|v| v.as_f64()),
             max_rss_bytes: artifact.get("max_rss_bytes").and_then(|v| v.as_u64()),
             rows: artifact.get("rows").and_then(|v| v.as_u64()),
+            sink_seconds: artifact.get("sink_seconds").and_then(|v| v.as_f64()),
             output_hash: str_of("content_hash").map(str::to_string),
             observation_hash: None,
             components: None,
@@ -608,9 +611,9 @@ impl StepInsert {
     // Turso otherwise intersects the node and run indexes, scanning this run
     // for each partition. Bound deduplication to the node's own history.
     const SQL: &'static str = concat!(
-        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash, rows) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations ",
+        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash, rows, sink_seconds) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations ",
         by_node_run!(),
-        " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, '') WHERE NOT EXISTS (SELECT 1 FROM materializations ",
+        " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''), NULLIF(?17, '') WHERE NOT EXISTS (SELECT 1 FROM materializations ",
         by_node_run!(),
         " WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12)"
     );
@@ -644,6 +647,7 @@ impl StepInsert {
                 opt(row.batch.clone()),
                 opt(row.observation_hash.clone()),
                 opt(row.rows.map(|r| r.to_string())),
+                opt(row.sink_seconds.map(|s| s.to_string())),
             ])
             .await
     }

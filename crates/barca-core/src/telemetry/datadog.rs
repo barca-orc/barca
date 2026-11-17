@@ -299,6 +299,7 @@ impl Dispatch {
             digest: None,
             cpu_seconds: None,
             max_rss_bytes: None,
+            sink_seconds: None,
             error_type: None,
             error_message: None,
             error_traceback: None,
@@ -327,9 +328,11 @@ impl Dispatch {
         let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
         let number = |key: &str| artifact.get(key).and_then(|v| v.as_f64());
         let now = crate::time::unix_nanos(std::time::SystemTime::now()) as u64;
-        // Placed by the worker's clock: the function and writing its result.
+        // Placed by the worker's clock: the function, writing its result and then its sinks
+        // (`finished_at` and `wall_seconds` are taken before the sinks, #1004).
+        let sinks = number("sink_seconds").unwrap_or(0.0).max(0.0);
         let (start, duration) = match (number("finished_at"), number("wall_seconds")) {
-            (Some(finished), Some(wall)) => (ns(finished - wall), ns(wall)),
+            (Some(finished), Some(wall)) => (ns(finished - wall), ns(wall + sinks)),
             _ => {
                 let wall = ns(number("elapsed_seconds").unwrap_or(0.0));
                 (now.saturating_sub(wall), wall)
@@ -345,6 +348,7 @@ impl Dispatch {
             .map(str::to_string);
         step.cpu_seconds = number("cpu_seconds");
         step.max_rss_bytes = artifact.get("max_rss_bytes").and_then(|v| v.as_u64());
+        step.sink_seconds = number("sink_seconds");
         step
     }
 
@@ -447,6 +451,9 @@ fn cost_metrics(metrics: &mut Map<String, Value>, step: &StepReport) {
     }
     if let Some(rss) = step.max_rss_bytes {
         metrics.insert("barca.max_rss_bytes".into(), json!(rss));
+    }
+    if let Some(sinks) = step.sink_seconds {
+        metrics.insert("barca.sink_seconds".into(), json!(sinks));
     }
     if let Some(attempts) = step.attempts {
         metrics.insert("barca.attempts".into(), json!(attempts));

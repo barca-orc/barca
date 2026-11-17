@@ -543,6 +543,10 @@ class TestSinkExecution:
         assert msgs[0]["type"] == "result"
         assert deserialize(Path(sink_path), "json") == {"x": 1}
         outcomes = msgs[0]["artifact"]["sinks"]
+        # How long each sink took, and all of them together, beside the step's own time (#1004).
+        seconds = outcomes[0].pop("seconds")
+        assert isinstance(seconds, float) and seconds >= 0
+        assert msgs[0]["artifact"]["sink_seconds"] >= seconds
         assert outcomes == [
             {"path": sink_path, "status": "ok", "size_bytes": Path(sink_path).stat().st_size}
         ]

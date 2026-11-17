@@ -71,13 +71,21 @@ function StepError({ step, root, summarized }: { step: RunStep; root?: string | 
   return step.error && !summarized.has(step) ? <Traceback error={step.error} root={root} /> : null
 }
 
+/** A step's own time, then the time it spent writing its sinks, which is not part of it. */
+export function StepTimes({ step }: { step: Pick<RunStep, 'elapsed_seconds' | 'sink_seconds'> }) {
+  return <>
+    {step.elapsed_seconds !== null && <span className="barca-run-node-time">{formatSeconds(step.elapsed_seconds)}</span>}
+    {step.sink_seconds !== null && <span className="barca-run-node-time" title="Writing the step's sinks, after its own time">+ {formatSeconds(step.sink_seconds)} sinks</span>}
+  </>
+}
+
 /** A step's row: its name, status, time and buttons, then its error. */
 function StepRow({ step, name, root, summarized }: { step: RunStep; name: string; root?: string | null; summarized: ReadonlySet<RunStep> }) {
   return <div className="barca-run-step">
     <div className="barca-run-node-line">
       <span className="barca-step-name" title={step.node_id}>{name}</span>
       <StatusBadge size="sm" glyph={step.status === 'cached' ? 'cached' : runGlyph(step.status)} label={step.status} />
-      {step.elapsed_seconds !== null && <span className="barca-run-node-time">{formatSeconds(step.elapsed_seconds)}</span>}
+      <StepTimes step={step} />
       <StepButtons stepId={step.node_id} failed={step.status === 'failed'} step={step} />
     </div>
     <StepError step={step} root={root} summarized={summarized} />

@@ -72,6 +72,11 @@ pub struct RunStep {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub rows: Option<i64>,
+    /// Seconds the step spent writing its `@sink`s after its own work (#1004): not part of
+    /// `elapsed_seconds`. `null` for a step without sinks, a failed step or a row from an older
+    /// barca.
+    #[serde(default)]
+    pub sink_seconds: Option<f64>,
     /// A failed step's last lines of output, stdout and stderr in the order they were written,
     /// without the traceback barca already shows (at most [`OUTPUT_TAIL_LINES`]; `barca logs
     /// RUN_ID --step STEP` has every line). `null` for a step that did not fail, `[]` when it
@@ -258,6 +263,7 @@ pub async fn get_run_steps_window(
         "batch_id",
         "error_phase",
         "rows",
+        "sink_seconds",
     ] {
         columns.push(if has_column(&conn, "materializations", name).await? {
             name
@@ -265,8 +271,9 @@ pub async fn get_run_steps_window(
             "NULL"
         });
     }
-    let (attempts, error_type, cpu, rss, batch, phase, counted) = (
+    let (attempts, error_type, cpu, rss, batch, phase, counted, sinks) = (
         columns[0], columns[1], columns[2], columns[3], columns[4], columns[5], columns[6],
+        columns[7],
     );
     let total = match limit {
         None => None,
@@ -293,7 +300,7 @@ pub async fn get_run_steps_window(
         _ => String::new(),
     };
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase}, {counted} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase}, {counted}, {sinks} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &libsql::Row, i: i32| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -336,6 +343,7 @@ pub async fn get_run_steps_window(
             cpu_seconds: row.get::<f64>(11).ok(),
             max_rss_bytes: row.get::<i64>(12).ok().filter(|rss| *rss > 0),
             rows: row.get::<i64>(15).ok(),
+            sink_seconds: row.get::<f64>(16).ok(),
             output_tail: None,
             batch: text(&row, 13),
             error_phase: text(&row, 14),

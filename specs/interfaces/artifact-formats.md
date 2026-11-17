@@ -1,13 +1,15 @@
 # Artifact formats
 
-Status: implemented. Specification version: 4 (the artifact file extension table pinned, #800;
-version 3: sinks republished by cache hits, #662; version 2: dataset sinks and failing sinks,
-0.30.0).
+Status: implemented. Specification version: 5 (a file sink in its artifact's format holds the
+artifact's bytes, and sink time is reported beside the step's, #1005 and #1004; version 4: the
+artifact file extension table pinned, #800; version 3: sinks republished by cache hits, #662;
+version 2: dataset sinks and failing sinks, 0.30.0).
 Scope: choosing CSV artifacts and sinks, dataset sinks, reading them and inspecting cached
 results.
 Conformance: `python/tests/test_artifact_extensions.py`, `crates/barca-model/src/artifact_format.rs`
 (`format_of_agrees_with_the_spec_table`), `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
-`python/tests/test_sink_republish.py`, `crates/barca-db/src/sink_publications.rs`,
+`python/tests/test_sink_republish.py`, `python/tests/test_sink_copies_artifact.py`,
+`crates/barca-db/src/sink_publications.rs`,
 `crates/barca-compile/src/sink_args.rs`, `crates/barca-core/tests/grammar_spec.rs`.
 
 Frames continue to default to Parquet. A literal `serializer="csv"` on an asset,
@@ -53,6 +55,42 @@ extension is not an artifact format: the worker reads it as JSON, `barca sql` re
 
 A dataset sink writes JSON as `.jsonl` files, which are sink files, not artifacts.
 
+## File sinks
+
+Version 5. A file sink (a `@sink` path not ending in `/`) is written in its format: its
+`serializer=`, else the format its path's extension names in the table above, else the artifact's.
+
+- **In the artifact's format, a file sink holds the artifact's bytes.** The worker copies the bytes
+  it wrote for the artifact to the sink's path; it does not encode the step's result again. A
+  returned DuckDB relation or Polars LazyFrame therefore runs once, and the sink is byte-identical
+  to the artifact even when encoding the result twice would not be (an aggregate's row order). This
+  holds for every format (json, pickle, parquet, csv), for each key of a partitioned asset (its
+  `out_<key>.<ext>` copies that key's artifact), for a key of a batched call, and through a sink
+  path that is a symlink (the file it points to is written, the link stays).
+- The bytes copied are this step's: the upload snapshot pinned before the reusable artifact path
+  was published ([artifact-upload-receipts.md](artifact-upload-receipts.md)), else a private hard
+  link to the staged file taken at the same moment and removed before the step is reported. Another
+  run that replaces the artifact path with the same run hash meanwhile cannot change what the sink
+  receives. An artifact the worker wrote to a remote path has neither, and its sinks are encoded.
+- **In another format, a file sink encodes the result**, as before version 5: a `.csv` sink of a
+  parquet artifact, a `.parquet` sink of an asset whose `serializer="pickle"`. A returned relation
+  then runs again for that sink. A value that fell back to pickle cannot be a `.parquet` sink: the
+  sink fails its step. A dataset sink is always written from the result (below).
+- A sink is still written inside its step, after the artifact and before the step is reported; a
+  sink that fails still fails its step with a `SinkError` (phase `sink`).
+- Republishing a cache hit (below) copies the cached artifact's bytes to each file sink in its
+  format without reading the value; the value is read only for a sink in another format or a
+  dataset sink. A republished sink then holds the bytes it held when the step ran.
+
+Sink time is reported beside the step's own time, never inside it: the step's `elapsed_seconds`
+(and the worker's `wall_seconds`) are taken before its sinks are written. The worker reports
+`sink_seconds` (all of the step's sinks) and `seconds` on each sink's outcome
+([worker-protocol.md](worker-protocol.md)); the coordinator records `materializations.sink_seconds`
+([metadata-schema.md](metadata-schema.md)) and the per-sink outcomes in `sinks_json`, and reports
+`steps[].sink_seconds` in `barca get`/`barca run --json` (summed over a node's executed keys) and
+`barca history RUN_ID --json`. A step's `barca.step` span covers its sinks and carries
+`barca.sink_seconds`.
+
 ## Dataset sinks
 
 A `@sink` path ending in `/` is a dataset prefix, written as a Hive-partitioned dataset:
@@ -87,8 +125,9 @@ found current.
 - A cache hit whose run hash differs, or that has no record, is republished: the cached artifact
   is made local (fetched from the artifact store if needed; computed again when it is nowhere,
   which writes the sinks) and `python -m barca._sinks republish` writes each stale sink from it,
-  as the worker writes a sink when the step runs. Parquet and CSV artifacts are read as the
-  step's annotated return type, pandas when it has none. The step does not run and is reported
+  as the worker writes a sink when the step runs: a file sink in the artifact's format is a copy
+  of its bytes (version 5). For any other sink, parquet and CSV artifacts are read as the step's
+  annotated return type, pandas when it has none. The step does not run and is reported
   as cached; stderr gets `[barca] sink <path>: republished ...`.
 - A sink that fails to be republished fails its step: a `SinkError` failure row, exit 1, a
   `step_failed` envelope; its sinks' records are left as they were.

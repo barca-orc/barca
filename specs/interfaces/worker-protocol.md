@@ -154,6 +154,20 @@ additive optional metadata was introduced within version 3 and remains in versio
 slow imports, timeout identity and worker disconnects; protocol tests cover optional
 error metadata.
 
+## Sink time
+
+A successful completion's artifact metadata optionally carries `sink_seconds` (a non-negative
+number): the seconds the worker spent writing the step's `@sink`s, all of them, after it stamped
+`finished_at`, `wall_seconds` and `elapsed_seconds` and before it reported the result. It is not
+part of either duration. Each entry of `sinks` optionally carries `seconds`, that sink's own time.
+Missing means the step declared no sinks (or an older worker). The coordinator records it as
+`materializations.sink_seconds` ([metadata](metadata-schema.md)), extends the step's `barca.step`
+span over it, and reports it on the step in run JSON and history. A file sink in the artifact's
+format is a copy of the artifact's bytes ([artifact formats](artifact-formats.md)), so its time is
+a file copy or upload, not an encode. Both fields are additive optional metadata within version 5.
+Conformance: [sink copies and sink time](../../python/tests/test_sink_copies_artifact.py) and the
+`SinkOutcome` round trip in [protocol tests](../../crates/barca-engine/src/protocol/tests.rs).
+
 ## A worker after a failed step
 
 Error details optionally include `worker_continues: true`: the step raised an exception that

@@ -248,6 +248,22 @@ def serialize_hashed(value: Any, path: "Path | str", fmt: str) -> tuple[int, str
     return size, digest
 
 
+def copy_file(source: "str | Path", dest: "Path | str") -> int:
+    """Install a copy of the local file `source` at `dest` (local path or remote URI) and
+    return its size: what a file sink in its artifact's format writes (#1005).
+
+    Local: copied beside `dest` and renamed over it, so a reader sees the old file or the new
+    one, as `serialize` does. Remote: one upload, an atomic put of one object.
+    """
+    if _storage.is_remote(dest):
+        _storage.put_file(source, str(dest))
+        return os.path.getsize(source)
+    with _staged_write(dest) as tmp:
+        shutil.copyfile(source, tmp)
+        size = tmp.stat().st_size
+    return size
+
+
 def _pin_file(source: "str | Path", snapshot: Path) -> None:
     """Keep atomically published bytes alive; copy only when linking is unavailable."""
     snapshot.unlink(missing_ok=True)

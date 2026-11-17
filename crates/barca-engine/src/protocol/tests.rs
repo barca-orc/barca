@@ -81,6 +81,7 @@ fn test_encode_decode_worker_message() {
             source_observation: None,
             finished_at: None,
             wall_seconds: None,
+            sink_seconds: None,
             frame_type: None,
             batch: None,
             batch_keys: None,
@@ -169,6 +170,7 @@ fn test_artifact_ref_with_sinks_round_trips() {
             source_observation: None,
             finished_at: None,
             wall_seconds: None,
+            sink_seconds: None,
             frame_type: None,
             batch: None,
             batch_keys: None,
@@ -183,6 +185,7 @@ fn test_artifact_ref_with_sinks_round_trips() {
                     error: None,
                     files: None,
                     warning: None,
+                    seconds: Some(0.25),
                 },
                 SinkOutcome {
                     path: "s3://b/x.pkl".to_string(),
@@ -191,6 +194,7 @@ fn test_artifact_ref_with_sinks_round_trips() {
                     error: Some("ImportError: s3fs".to_string()),
                     files: None,
                     warning: None,
+                    seconds: None,
                 },
             ],
         }),
@@ -202,6 +206,7 @@ fn test_artifact_ref_with_sinks_round_trips() {
         WorkerMessage::StepCompleted { artifact, .. } => {
             assert_eq!(artifact.sinks.len(), 2);
             assert_eq!(artifact.sinks[0].status, "ok");
+            assert_eq!(artifact.sinks[0].seconds, Some(0.25));
             assert_eq!(
                 artifact.sinks[1].error.as_deref(),
                 Some("ImportError: s3fs")
@@ -369,6 +374,7 @@ fn test_multiple_messages_on_stream() {
                 source_observation: None,
                 finished_at: None,
                 wall_seconds: None,
+                sink_seconds: None,
                 frame_type: None,
                 batch: None,
                 batch_keys: None,

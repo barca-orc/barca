@@ -236,6 +236,11 @@ CHANGED_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_dry_run_changed", ["get", "total", "pipeline.py", "--dry-run", "--json"], "stdout", 0),
 ]
 PARTITION_RUN_CASE = ("run_partitioned", ["run", "per_key", "pipeline.py", "--json"], "stdout", 0)
+# An asset with a `@sink` (#1004): its step reports `sink_seconds` in the run and in history.
+SINK_CASES: list[tuple[str, list[str], str, int]] = [
+    ("get_sink", ["get", "exported", "pipeline.py", "--json"], "stdout", 0),
+    ("history_sink", ["history", "RUN_ID", "--json"], "stdout", 0),
+]
 ALL_CASES = (
     CASES
     + SETUP_CASES
@@ -243,6 +248,7 @@ ALL_CASES = (
     + [TIMING_CASE, CACHE_CASE]
     + CHANGED_CASES
     + [PARTITION_RUN_CASE]
+    + SINK_CASES
 )
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
@@ -584,6 +590,26 @@ def runs(tmp_path_factory) -> dict:
     assert task_doc["final_output"] == {"k=a": {"key": "a"}, "k=b": {"key": "b"}}
     s = command_schema(task_doc)
     out[case] = (s, render_snapshot(argv, stream, code, s), task_proc)
+
+    sink_case = tmp_path_factory.mktemp("contract_sink")
+    (sink_case / "pipeline.py").write_text(
+        "from barca import asset, sink\n"
+        "@asset()\n@sink('out.json')\ndef exported() -> dict:\n    return {'x': 1}\n"
+    )
+    sink_run = None
+    for case, argv, stream, code in SINK_CASES:
+        if sink_run is not None:
+            argv = [a.replace("RUN_ID", json.loads(sink_run.stdout)["run_id"]) for a in argv]
+        proc = subprocess.run(
+            [binary, *argv], cwd=sink_case, env=env, capture_output=True, text=True, timeout=RUN
+        )
+        assert proc.returncode == code, proc.stderr
+        doc = json.loads(proc.stdout)
+        assert doc["steps"][0]["sink_seconds"] >= 0
+        sink_run = sink_run or proc
+        s = command_schema(doc)
+        shown = next(c[1] for c in SINK_CASES if c[0] == case)
+        out[case] = (s, render_snapshot(shown, stream, code, s), proc)
     return out
 
 

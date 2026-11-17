@@ -120,12 +120,15 @@ What the spans carry:
 | step | `barca.run_hash`, `barca.digest` | the step's run hash; on a step that ran, SHA-256 of the bytes it wrote, the `content_hash` `barca status --json` shows |
 | step | `barca.attempts`, `barca.bytes` | attempts the step took, retries included; the size of its result |
 | step | `barca.cpu_seconds`, `barca.max_rss_bytes` | when the worker measured them |
+| step | `barca.sink_seconds` | on a step that ran and wrote `@sink`s: the time they took, which is the end of the span |
 | step | `error.type`, `error.message`, `error.stack` | on a failure: the exception and its traceback |
 
 Timing:
 
-- A step that ran is placed by its worker's clock: the span covers the function and writing its
-  result. For a step that was retried, that is its last attempt.
+- A step that ran is placed by its worker's clock: the span covers the function, writing its
+  result and then writing its `@sink`s (`barca.sink_seconds`, not part of the step's
+  `elapsed_seconds`), so the worker's `barca.execute` span no longer outlasts it by the sinks'
+  time. For a step that was retried, that is its last attempt.
 - A failed step carries its duration: the span runs from the start of its first attempt to the
   moment it failed for good, so retries and the wait between them are inside it, and a step that
   timed out lasts about its `timeout_seconds`. This is wall time, so it can be longer than the
