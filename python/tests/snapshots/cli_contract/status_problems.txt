@@ -44,6 +44,7 @@ nodes[].partitions.missing : integer
 nodes[].partitions.missing_keys : array
 nodes[].partitions.missing_keys[] : string
 nodes[].partitions.total : integer
+nodes[].refresh_path : null
 nodes[].root : null|object
 nodes[].root.id : string
 nodes[].root.kind : string

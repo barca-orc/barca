@@ -81,6 +81,11 @@ pub struct NodeStatus {
     /// (`health_reason: "checked_up_to_date"`).
     #[serde(default)]
     pub last_check: Option<crate::health::LastCheck>,
+    /// The schedule whose tick brings the node up to date, with its next tick and the ticks
+    /// that already missed the node (`barca docs status-fields`, "Refresh path"); `null` when
+    /// no tick has the node as a target, or the node is paused or pinned.
+    #[serde(default)]
+    pub refresh_path: Option<crate::refresh_path::RefreshPath>,
     /// Per-key cache state of a partitioned node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionState>,
@@ -903,6 +908,7 @@ pub(crate) async fn status_from_dag_with_membership(
             measured: None,
             root: None,
             last_check: None,
+            refresh_path: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
@@ -1261,6 +1267,7 @@ mod tests {
             measured: None,
             root: None,
             last_check: None,
+            refresh_path: None,
             partitions: None,
             last_materialization: None,
             last_bytes_change: None,

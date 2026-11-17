@@ -119,6 +119,10 @@ poll is the only step that runs: `fast` and `side` are cache hits.
   `fast` as well, and the `Always` nodes below the unscheduled ones are its targets in turn. Only a sensor does
   this: an asset that a target reads is computed when it has no cached result, and what else
   reads that asset is not a target.
+- **Each node says which schedule reaches it.** `refresh_path` in `barca status --json`, `GET
+  /state` and `GET /nodes` is this target list read back per node: the schedule whose tick has
+  the node as a target, its next tick, and how many finished ticks did not leave the node
+  fresh; `null` for a node no tick targets (`barca docs status-fields`, "Refresh path").
 - **`Manual` on a sensor** (the default) means no tick is started for it: it is polled only
   when a run needs its value, and each tick that polls it brings the `Always` nodes below it up
   to date. `Always` on a sensor behaves the same way.

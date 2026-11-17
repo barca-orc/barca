@@ -98,7 +98,8 @@ One difference between a request and a tick remains. A node paused with `barca p
 read as it is by scheduled ticks only; `barca get` recomputes it when it reads it. Status
 says what a request would do, so below a stale paused node it says `stale` (as `--dry-run`
 says `run`) while each tick finds the node up to date; what the last tick found is
-`last_check` ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)).
+`last_check` ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)), and which
+schedule's tick will next bring a node up to date is `refresh_path` ("Refresh path").
 
 | state | meaning | `reason` |
 |---|---|---|

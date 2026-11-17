@@ -42,7 +42,9 @@ the scheduled node or from a polled sensor, goes past a `Manual` asset or task, 
 updated, and stops at a node with a `Schedule` of its own, which follows its own ticks. An
 `Always` node that is neither below a scheduled node nor below an unscheduled sensor some tick polls is never
 touched by a tick; it is computed only when a target needs it as an input and it has no cached
-result.
+result. Each node says which it is: `refresh_path` in `barca status --json` names the schedule
+whose tick targets the node and its next tick, and is `null` for a node no tick targets
+([Refresh path](/reference/cli/status-fields/#refresh-path)).
 
 A tick brings each target up to date. It does not force anything to recompute.
 
