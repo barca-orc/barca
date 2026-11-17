@@ -261,6 +261,14 @@ pub struct ReadCache {
     /// The pinned assets last read, and the database state they are of
     /// ([`AppState::cached_pinned`]).
     pinned: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
+    /// The paused nodes last read, and the database state they are of
+    /// ([`AppState::cached_paused_nodes`]).
+    paused_nodes: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
+    /// Which schedules reach each node of the inspected graph as a target
+    /// ([`AppState::cached_paths`]): the scheduler's walk, kept for as long as the graph is.
+    paths: tokio::sync::Mutex<Option<(Arc<Dag>, Arc<barca_core::refresh_path::Paths>)>>,
+    /// How many times that walk ran (tests).
+    pub(crate) paths_walks: std::sync::atomic::AtomicUsize,
     /// The last recorded ticks read, the database state they are of and the schedules they
     /// were read for ([`AppState::cached_ticks`]).
     ticks: tokio::sync::Mutex<Option<KeptScheduleFacts>>,
@@ -652,6 +660,57 @@ impl AppState {
         Ok(pinned)
     }
 
+    /// The ids of the paused nodes (`barca pause`) for the database in state `db`, kept until
+    /// it changes: a tick skips a paused node, so it has no refresh path
+    /// (`barca_core::refresh_path`).
+    pub(crate) async fn cached_paused_nodes(
+        &self,
+        db: &Stamp,
+        db_path: &str,
+    ) -> Result<Pinned, BarcaError> {
+        let mut kept = self.reads.paused_nodes.lock().await;
+        if let Some((stamp, paused)) = kept.as_ref()
+            && stamp == db
+        {
+            return Ok(paused.clone());
+        }
+        let paused: Pinned = Arc::new(
+            barca_core::pauses::list(db_path)
+                .await?
+                .into_iter()
+                .map(|pause| pause.id)
+                .collect(),
+        );
+        *kept = Some((db.clone(), paused.clone()));
+        Ok(paused)
+    }
+
+    /// Which schedules reach each node of `dag` as a target (`barca_core::refresh_path::Paths`,
+    /// the scheduler's own walk). It depends on the graph alone and takes seconds on a graph
+    /// of thousands of nodes and dozens of schedules, so it runs once per loaded graph, off
+    /// the runtime's workers, and never per poll.
+    pub(crate) async fn cached_paths(
+        &self,
+        dag: &Arc<Dag>,
+    ) -> Result<Arc<barca_core::refresh_path::Paths>, BarcaError> {
+        let mut kept = self.reads.paths.lock().await;
+        if let Some((of, paths)) = kept.as_ref()
+            && Arc::ptr_eq(of, dag)
+        {
+            return Ok(paths.clone());
+        }
+        self.reads
+            .paths_walks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let graph = dag.clone();
+        let paths = Arc::new(
+            off_the_workers(move || async move { Ok(barca_core::refresh_path::Paths::of(&graph)) })
+                .await?,
+        );
+        *kept = Some((dag.clone(), paths.clone()));
+        Ok(paths)
+    }
+
     /// What the database in state `db` records of `schedules` (scheduled node ids): their
     /// ticks ([`barca_core::schedule_standing::recorded`]) and failed ticks. `GET /schedule`,
     /// `GET /state` and `GET /nodes` all read where a schedule stands from it. Read once per
@@ -937,6 +996,8 @@ mod tests {
             (1, 1),
             "nothing changed: nothing is parsed or decided again"
         );
+        let walks = |state: &AppState| state.reads.paths_walks.load(Ordering::Relaxed);
+        assert_eq!(walks(&state), 1, "the tick walk runs once per loaded graph");
 
         // The rollup sums the status result the poll computed: none is computed for it.
         let rollup = crate::handlers::rollup(
@@ -958,6 +1019,7 @@ mod tests {
         .unwrap();
         poll(&state).await;
         assert_eq!(loads(&state), (2, 2), "the helper edit is seen at once");
+        assert_eq!(walks(&state), 2, "a new graph is walked again");
 
         // A database write (another process's run) is seen at once.
         std::thread::sleep(SOURCES_SETTLED + Duration::from_millis(100));

@@ -55,7 +55,10 @@ ago, up to date` (or `rebuilt`, `failed`, `not reached`), with the schedule whos
 That is the tick record, shown as it is on a `--read-only` server too. Where barca cannot
 decide a node's state without running it (below a cutoff asset that would run, for example),
 a check that found it up to date makes it `ok` until the next tick is overdue
-([Last check](/reference/cli/status-fields/#last-check)).
+([Last check](/reference/cli/status-fields/#last-check)). Below it the panel names the node's
+refresh path: the schedule whose tick will bring it up to date and when that next fires, with
+`paused`, `not firing` or the ticks that missed it when the server says so, or `no refresh
+path` ([Refresh path](/reference/cli/status-fields/#refresh-path)).
 
 The data signals behind `suspect data` come from row counts barca records for every tabular
 result ([Row counts](/reference/cli/status-fields/#row-counts)); a node's panel lists them under its state.
