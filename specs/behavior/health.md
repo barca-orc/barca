@@ -655,8 +655,11 @@ cut at the row limit below.
   time. Never a process per request.
 - The boundary, each part holding without the others: the helper's in-memory database contains
   the `barca` schema only; external access is disabled (no file, network or extension access)
-  and the configuration locked, so no statement enables it; the statement is checked with
-  DuckDB's parser to be one `SELECT`; it runs in a read-only transaction that is rolled back,
+  and the configuration locked, so no statement enables it; the statement must start as a
+  query does (`SELECT`, `WITH`, `FROM`, `VALUES`, `TABLE`, `SHOW`, `DESCRIBE`, `SUMMARIZE`,
+  `UNPIVOT`) and is then checked with DuckDB's parser to be one `SELECT` (the first check is
+  what refuses `PRAGMA database_list` on DuckDB 1.x, whose parser reads a table-function
+  pragma as a `SELECT`; the route behaves the same on every supported DuckDB, 1.4 to 2.x); it runs in a read-only transaction that is rolled back,
   which refuses a write a `SELECT` carries (DuckDB 2 accepts `WITH x AS (DELETE ... RETURNING
   *) SELECT ...`); the statement runs as it was sent, never inside another; memory is limited
   to 1GB, with nothing spilled to disk, and threads to two, and a query that needs more is a

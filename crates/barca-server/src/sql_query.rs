@@ -1025,7 +1025,21 @@ mod tests {
             format!("COPY (select 1) TO '{written}'"),
             format!("ATTACH '{written}' AS other"),
             format!("EXPORT DATABASE '{written}'"),
+            // DuckDB 1.x parses a table-function pragma as a SELECT (2.x as a PRAGMA).
             "PRAGMA database_list".to_string(),
+            "PRAGMA table_info('barca.runs')".to_string(),
+            "PRAGMA show_tables".to_string(),
+            "PRAGMA version".to_string(),
+            "PRAGMA database_size".to_string(),
+            "PRAGMA storage_info('barca.runs')".to_string(),
+            "/* a query */ PRAGMA database_list".to_string(),
+            "-- a query\nPRAGMA database_list".to_string(),
+            "(PRAGMA database_list)".to_string(),
+            format!("PRAGMA import_database('{}')", dir.path().display()),
+            "PRAGMA copy_database('memory', 'memory')".to_string(),
+            "PRAGMA enable_profiling".to_string(),
+            "CALL duckdb_tables()".to_string(),
+            "PIVOT barca.runs ON status USING count(*)".to_string(),
             "SET enable_external_access = true".to_string(),
             "RESET enable_external_access".to_string(),
             "INSTALL httpfs".to_string(),
@@ -1414,6 +1428,24 @@ mod tests {
         }
         let short = ask(&state, "select ';' as a -- ;").await.unwrap();
         assert_eq!(short.rows, [json!({"a": ";"})]);
+        // Every way a query starts is still one: a comment or a parenthesis first, and the
+        // statements DuckDB reads as a SELECT.
+        for query in [
+            "/* how many */ select count(*) as n from barca.runs",
+            "-- how many\nselect count(*) as n from barca.runs",
+            "/* a /* nested */ comment */ (select count(*) as n from barca.runs)",
+            "with r as (select * from barca.runs) select count(*) as n from r",
+            "from barca.runs select count(*) as n",
+            "values (0)",
+            "table barca.runs",
+            "describe barca.runs",
+            "summarize barca.runs",
+            "show tables",
+        ] {
+            ask(&state, query)
+                .await
+                .unwrap_or_else(|e| panic!("{query}: {e:?}"));
+        }
     }
 
     /// `query_table` and `query` reach a table by a name the text does not show: every table

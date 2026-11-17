@@ -261,6 +261,19 @@ def test_only_one_select_over_barcas_tables_is_answered(project, server, tmp_pat
         f"COPY (select * from barca.runs) TO '{written}'",
         f"EXPORT DATABASE '{written}'",
         "PRAGMA database_list",
+        "PRAGMA table_info('barca.runs')",
+        "PRAGMA show_tables",
+        "PRAGMA version",
+        "PRAGMA database_size",
+        "PRAGMA storage_info('barca.runs')",
+        "/* a query */ PRAGMA database_list",
+        "-- a query\nPRAGMA database_list",
+        "(PRAGMA database_list)",
+        f"PRAGMA import_database('{tmp_path}')",
+        "PRAGMA copy_database('memory', 'memory')",
+        "PRAGMA enable_profiling",
+        "CALL duckdb_tables()",
+        "PIVOT barca.runs ON status USING count(*)",
         "INSTALL httpfs",
         "LOAD httpfs",
         "SET enable_external_access = true",
@@ -473,6 +486,23 @@ def test_a_query_is_run_as_sent_and_reaches_no_table_unloaded(project, server):
         status, body = ask(server, query)
         assert status == 200, (query, body)
         assert (len(body["rows"]), body["total"], body["truncated"]) == (1000, 5000, True)
+    # Every way a query starts is still one: a comment or a parenthesis first, and the
+    # statements DuckDB reads as a SELECT.
+    for query, rows in (
+        ("/* how many */ select count(*) as n from barca.runs", [{"n": 1}]),
+        ("-- how many\nselect count(*) as n from barca.runs", [{"n": 1}]),
+        ("(select count(*) as n from barca.runs)", [{"n": 1}]),
+        ("with r as (select * from barca.runs) select count(*) as n from r", [{"n": 1}]),
+        ("from barca.runs select count(*) as n", [{"n": 1}]),
+        ("values (1)", [{"col0": 1}]),
+        ("table barca.runs", None),
+        ("describe barca.runs", None),
+        ("summarize barca.runs", None),
+        ("show tables", None),
+    ):
+        status, body = ask(server, query)
+        assert status == 200, (query, body)
+        assert rows is None or body["rows"] == rows, (query, body)
     # A table reached by a name the text does not show is loaded like one that is named.
     status, body = ask(server, "select count(*) as n from query_table('barca.' || 'ru' || 'ns')")
     assert (status, body["rows"]) == (200, [{"n": 1}]), body
