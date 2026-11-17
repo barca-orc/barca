@@ -45,7 +45,7 @@ def below(d: dict) -> dict:
 
 @asset(inputs={"base": baseline}, cutoff=True)
 def gate(base: dict) -> dict:
-    return {"k": 1}
+    return {"k": len(base)}
 
 
 @asset(inputs={"g": gate})
