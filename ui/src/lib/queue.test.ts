@@ -30,6 +30,7 @@ function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
     triggered_by: 'api',
     schedule_id: null,
     queued_at: '2026-10-22T10:00:00Z',
+    waiting_for: null,
     ...over,
   }
 }
@@ -125,9 +126,14 @@ describe('queueRows', () => {
       scheduleId: null,
       queuedAt: '2026-10-22T10:00:00Z',
       elapsed: '20m',
+      waitingFor: null,
       href: '/runs?run=r1',
     })
     expect(rows[1]).toMatchObject({ position: '#2', target: 'a.py:x,a.py:y', command: 'run', trigger: 'schedule', scheduleId: 'a.py:x' })
+  })
+  it('says a run queued on a draining server waits for the restart', () => {
+    const rows = queueRows(view({ draining: true, queued: [entry('r1', { waiting_for: 'restart' }), entry('r2', { position: 2 })] }), iso, now)
+    expect(rows.map((r) => r.waitingFor)).toEqual(['after restart', null])
   })
   it('puts an entry without a position last', () => {
     expect(queueRows(view({ queued: [entry('a', { position: null }), entry('b', { position: 1 })] }), iso, now).map((r) => r.position)).toEqual(['#1', '–'])

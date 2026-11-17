@@ -234,6 +234,8 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
             server, "POST", "/runs", 202, {"command": "get", "targets": ["value"], "agent": True}
         )
         run_id = accepted["run_id"]
+        # A server that is not draining: the run waits for no restart (#1011).
+        assert accepted["waiting_for"] is None, accepted
         events = _events(server, run_id)
         cursors = [re.fullmatch(r"([0-9a-f]{32}):([1-9][0-9]*)", cursor) for cursor, _ in events]
         assert all(cursors), events
@@ -249,6 +251,7 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         assert json.loads((tmp_path / pointer["path"]).read_text()) == {"n": 2}
         view, _ = _checked(server, "GET", f"/runs/{run_id}", 200)
         assert view["triggered_by"] == "api" and view["outcome"] == finished["outcome"]
+        assert view["waiting_for"] is None
         status, content_type, raw = _raw(server, "GET", f"/runs/{run_id}/output")
         assert (status, content_type, json.loads(raw)) == (200, "application/json", {"n": 2})
         # `values` (`get -o value`): the server reads the value, as `-o value --json` prints it.

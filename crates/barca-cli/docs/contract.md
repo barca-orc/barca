@@ -775,8 +775,8 @@ later reported as `interrupted` (`barca docs cache`).
 
 `barca serve` is not a run. Every run it accepts is recorded in its run queue before it answers,
 and a restart resumes the queued runs in order under their ids. Stopped by SIGINT or SIGTERM it
-drains: the queue pauses (new runs are still accepted, `202` with `status: pending`, and wait for
-the next start) and it waits for the runs in flight for up to `--drain-timeout` seconds
+drains: the queue pauses (new runs are still accepted, `202` with `status: pending` and
+`waiting_for: "restart"`, and wait for the next start) and it waits for the runs in flight for up to `--drain-timeout` seconds
 (`[server] drain_timeout` in `barca.toml`, default 30). It exits 0 when they all finished, and 0
 when the deadline passed and it put the runs left back in the queue, to start again from the
 beginning after the restart (at least once: `barca docs serve-ops`, "At least once"). A second
@@ -3091,6 +3091,7 @@ placeholders:
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] server <url> (<source>)` | once when a command uses the configured server (`BARCA_SERVER` or `[server] url in barca.toml`, every mode): a local `get`/`run` reads and posts to its ledger, `status`/`history`/`stats` and a bare `--server` are answered by it (`barca docs server-mode`) | experimental |
+| `[barca] run <id> is queued behind a restart (position <n>): the server at <url> is draining and starts no run; it starts when the next server is up` | `get`/`run --server` (every mode), once after `POST /runs`, when the server is draining and the run waits for the next server (`waiting_for: "restart"`; `barca docs server-mode`) | experimental |
 | `[barca] recorded run <id> on the server (run <server id>)` | a run this machine could not post before was accepted by the server's ledger, before the command's own lookup | experimental |
 | `[barca] warning: run <id> was not recorded on the server <url>: <why>; it stays on this machine (unsynced) and ...`, `[barca] warning: run <id> is still not recorded on the server <url>: <why>` | the server refused a run's post (`409`) or could not be reached after the run; the run's result and exit code are unchanged | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |

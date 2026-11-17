@@ -21,7 +21,7 @@ once it has finished, so the answer survives a restart.
 ```bash
 curl -s -X POST localhost:8274/runs -H 'Content-Type: application/json' \
   -d '{"command": "get", "targets": ["customers"]}'
-# {"position":null,"run_id":"81c4f8e97588","status":"running"}
+# {"position":null,"run_id":"81c4f8e97588","status":"running","waiting_for":null}
 
 curl -s localhost:8274/runs/81c4f8e97588           # status, then its outcome when finished
 curl -s localhost:8274/runs/81c4f8e97588/output    # the result's bytes: [0, 1, 2, ...]

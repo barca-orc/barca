@@ -307,8 +307,15 @@ server=True)` reads the value from `GET /runs/{run_id}/output` (an unpartitioned
 With `partition=` it asks for the values instead (`-o value`): the selected keys' values read on
 the server, as JSON (a table as a list of row objects).
 
-A draining server (one that is restarting) accepts a new `--server` run into its run queue;
-the client keeps following it: when the stream breaks it waits up to 60 seconds
+A draining server (one that is restarting) accepts a new `--server` run into its run queue
+and says that the run waits for the next server, not for the runs ahead of it: `POST /runs`,
+`GET /queue` and `GET /runs/{run_id}` carry `waiting_for: "restart"` (`null` otherwise;
+experimental), and the client prints `[barca] run RUN_ID is queued behind a restart (position
+N): the server at URL is draining and starts no run; it starts when the next server is up` on
+stderr, in every mode. The wait lasts the whole drain (until the runs in flight finish, at most
+`[server] drain_timeout`) plus the restart. With no next server the run stays queued in the
+metadata DB and starts whenever a server next starts on it. The client keeps following it:
+when the stream breaks it waits up to 60 seconds
 (`BARCA_SERVER_RECONNECT`) for the server to come back and follows the same run id there, and
 only then exits 3 (`barca docs serve-ops`, "Restarting without losing work"). On servers
 advertising event resume in `/health`, reconnects send the last successfully processed

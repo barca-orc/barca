@@ -472,6 +472,13 @@ impl AppState {
         self.draining.is_cancelled()
     }
 
+    /// `waiting_for` of a run in `status`: `restart` for a queued run while the server drains
+    /// (it starts on the next server, #1011); `None` otherwise.
+    pub fn waiting_for(&self, status: RunStatus) -> Option<barca_core::run_explain::WaitingFor> {
+        (status == RunStatus::Pending && self.is_draining())
+            .then_some(barca_core::run_explain::WaitingFor::Restart)
+    }
+
     /// The error a cancelled run reports: `run cancelled`, plus the reason when the server
     /// cancelled it (`run cancelled: server shutdown`).
     pub fn cancelled_message(&self) -> String {

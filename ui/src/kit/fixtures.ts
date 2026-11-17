@@ -320,6 +320,7 @@ function runView(status: RunViewStatus, overrides: Partial<RunView> = {}): RunVi
     retries: null,
     plan_reasons: null,
     cancellation: null,
+    waiting_for: null,
     explanation: explanation(live
       ? { steps: '1 ok · 1 cached', why: { headline: 'No step decided to run yet.', groups: [], omitted: 0, partial: true }, progress: { done: 2, total: 4, percent: 50, executed: 1, cached: 1, eta_seconds: null, eta: null } }
       : {}),
@@ -470,7 +471,7 @@ export const runDetails: Record<string, Remote<RunView>> = {
 const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => ({
   run_id: `a8ba${String(n).padStart(4, '0')}`, status: 'pending', position: n, command: 'get',
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
-  schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30), ...overrides,
+  schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30), waiting_for: null, ...overrides,
 })
 const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
 const deepQueue: QueueView = {
@@ -484,7 +485,7 @@ export const queueStates: Record<string, { queue: QueueView | undefined; collaps
   collapsed: { queue: deepQueue, collapsed: true },
   'running, nothing waiting': { queue: { ...deepQueue, queued: [] } },
   paused: { queue: { ...deepQueue, paused: true, paused_at: ago(600), running: [] } },
-  draining: { queue: { ...deepQueue, draining: true } },
+  draining: { queue: { ...deepQueue, draining: true, queued: deepQueue.queued.map((q) => ({ ...q, waiting_for: 'restart' as const })) } },
   'waiting for capacity': { queue: { ...deepQueue, queued: deepQueue.queued.slice(0, 2), capacity: { total: 4, source: '--capacity', in_use: 3, runs: [{ run_id: runningEntry.run_id, weight: 3 }], waiting: [{ run_id: 'a8ba0001', node: 'web.py:big_join', weight: 3, waiting_seconds: 42 }] } } },
   'read-only': { queue: deepQueue, readOnly: true },
   unavailable: { queue: undefined, loadError: 'connection refused' },

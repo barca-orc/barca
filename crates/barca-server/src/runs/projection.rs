@@ -65,6 +65,7 @@ pub(crate) async fn view_page(
                 .cancellation
                 .clone()
                 .or_else(|| live.as_ref().and_then(|r| r.cancellation.clone())),
+            waiting_for: None,
             explanation: Default::default(),
             outcome: None,
             error: None,
@@ -100,6 +101,7 @@ pub(crate) async fn view_page(
             retries: None,
             plan_reasons: None,
             cancellation: run.cancellation.clone(),
+            waiting_for: None,
             explanation: Default::default(),
             outcome: None,
             error: None,
@@ -115,6 +117,7 @@ pub(crate) async fn view_page(
         && matches!(run.status, RunStatus::Pending | RunStatus::Running)
     {
         view.status = live_status(run.status).into();
+        view.waiting_for = state.waiting_for(run.status);
     }
     if let Some(outcome) = &outcome {
         view.status = outcome.status().as_str().into();

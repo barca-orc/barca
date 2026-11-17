@@ -68,8 +68,10 @@ describe('runNotice', () => {
   })
 
   it('an accepted run is queued until its record says it runs', () => {
-    expect(runNotice({ ...base, started })).toEqual({ kind: 'queued', target: 'p.py:demand_forecast', runId: '127' })
-    expect(runNotice({ ...base, started, run: runByStatus.pending })).toMatchObject({ kind: 'queued', runId: '127' })
+    expect(runNotice({ ...base, started })).toEqual({ kind: 'queued', target: 'p.py:demand_forecast', runId: '127', restart: false })
+    expect(runNotice({ ...base, started, run: runByStatus.pending })).toMatchObject({ kind: 'queued', runId: '127', restart: false })
+    // Accepted by a draining server: it starts on the next one (#1011).
+    expect(runNotice({ ...base, started, run: { ...runByStatus.pending, waiting_for: 'restart' } })).toMatchObject({ kind: 'queued', restart: true })
     // Another run's record (a stale query) is not this run's.
     expect(runNotice({ ...base, started, run: { ...runByStatus.running, run_id: '9' } })).toMatchObject({ kind: 'queued' })
   })

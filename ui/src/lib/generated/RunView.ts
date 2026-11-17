@@ -7,6 +7,7 @@ import type { RunFailure } from "./RunFailure";
 import type { RunStep } from "./RunStep";
 import type { StepsPage } from "./StepsPage";
 import type { TriggeredBy } from "./TriggeredBy";
+import type { WaitingFor } from "./WaitingFor";
 
 /**
  * One run as `GET /runs/{run_id}` shows it: what started it, where it is, and, once it has
@@ -80,6 +81,11 @@ plan_reasons: PlanReasons | null,
  * Experimental.
  */
 cancellation: Cancellation | null,
+/**
+ * For a run waiting in the queue: what else it waits for, `restart` while the server
+ * drains (it starts on the next server); `null` otherwise. Experimental.
+ */
+waiting_for: WaitingFor | null,
 /**
  * The run in words (#956): its steps grouped by the reason they ran, its retries apart
  * from its attempts, its targets as a list and what became of them, and how far a run in

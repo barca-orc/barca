@@ -67,10 +67,14 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
     if args.dry_run {
         return print_dry_run(server, &answer, &args, &request.files).await;
     }
-    let run_id = serde_json::from_str::<Value>(&answer)
-        .ok()
-        .and_then(|v| v["run_id"].as_str().map(str::to_string))
+    let accepted = serde_json::from_str::<Value>(&answer).unwrap_or_default();
+    let run_id = accepted["run_id"]
+        .as_str()
+        .map(str::to_string)
         .ok_or_else(|| server.unexpected("POST /runs", "no run_id in the answer"))?;
+    if let Some(line) = waiting_line(server, &accepted) {
+        barca_core::errln!("{line}");
+    }
     let outcome = stream(server, &run_id, &args, window).await?;
     let (rendered, error) = outcome
         .render(
@@ -86,6 +90,23 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         Some(envelope) => Err(with_typed_files(envelope, ctx)),
         None => Ok(()),
     }
+}
+
+/// The line a run accepted by a draining server prints (every mode): it waits for the next
+/// server, not for the runs ahead of it (#1011). `None` for any other answer.
+fn waiting_line(server: &Server, accepted: &Value) -> Option<String> {
+    if accepted["waiting_for"].as_str() != Some("restart") {
+        return None;
+    }
+    let place = accepted["position"]
+        .as_u64()
+        .map_or(String::new(), |p| format!(" (position {p})"));
+    Some(format!(
+        "[barca] run {} is queued behind a restart{place}: the server at {} is draining and \
+         starts no run; it starts when the next server is up",
+        accepted["run_id"].as_str().unwrap_or("?"),
+        server.shown_url
+    ))
 }
 
 /// A server's target error (unknown or ambiguous) ends with the `barca list` pointer naming the
