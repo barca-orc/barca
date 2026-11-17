@@ -258,8 +258,17 @@ async fn ensure_db(state: &AppState) -> Result<(), barca_core::BarcaError> {
 /// start it when the queue lets it. A run that cannot be recorded is refused (`500`): it would
 /// not survive a restart.
 pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError> {
+    admit_as(state, spec, db::generate_run_id()).await
+}
+
+/// [`admit`] under a run id the caller allocated ([`db::generate_run_id`]): the scheduler
+/// names the run on its tick record before the run can start.
+pub async fn admit_as(
+    state: &AppState,
+    spec: RunSpec,
+    run_id: String,
+) -> Result<Admitted, ApiError> {
     let channel = state.replay.channel()?;
-    let run_id = db::generate_run_id();
     let accepted_at = now_ts();
     {
         let _admitting = state.queue.admit.lock().await;
@@ -487,9 +496,14 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         "[barca] warning: run {run_id} was interrupted when the server last stopped (it was \
          killed before it finished); it is not started again"
     );
-    if let Ok(None) = db::get_run(&cfg.db_path, run_id).await
-        && let Some(spec) = spec
-    {
+    let unrecorded = matches!(db::get_run(&cfg.db_path, run_id).await, Ok(None));
+    if let Some(spec) = &spec {
+        // The tick that started it ends as the run's row does: `interrupted`, or `error` for
+        // a run that never wrote one.
+        let status = if unrecorded { "error" } else { "interrupted" };
+        crate::runs::record_tick_finished(state, run_id, spec, status, None).await;
+    }
+    if unrecorded && let Some(spec) = spec {
         let outcome = barca_core::outcome::Outcome::ended(
             barca_core::outcome::OutcomeStatus::Error,
             &barca_core::envelope::ErrorEnvelope::from_prose(

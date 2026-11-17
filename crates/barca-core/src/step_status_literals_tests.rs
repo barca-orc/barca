@@ -53,6 +53,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "skipped",
         "a telemetry run status: a serve tick that started no run",
     ),
+    (
+        "db/ticks.rs",
+        "skipped",
+        "a tick action: a due tick held back for a run in flight",
+    ),
 ];
 
 #[test]

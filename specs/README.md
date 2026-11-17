@@ -116,8 +116,9 @@ conformance or performance.
 implemented: the health words and their derivation, the cause buckets and roots, the refresh
 path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the freshness gap, the rollup
 (`GET /state/rollup`, `barca status --rollup`), the tick record, the `barca.schedules`,
-`barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). No field,
-route, flag or table it names exists on `main`; the 0.44.0 series (#974) implements it issue by
+`barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Only the
+tick record is implemented (#960: the `schedule_ticks` table and its reads, which nothing uses
+yet); no other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974) implements it issue by
 issue, and each PR moves its wire shapes into the OpenAPI and CLI contract owners. Until then
 the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are authoritative.
 
