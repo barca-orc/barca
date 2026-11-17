@@ -31,6 +31,7 @@ mod routes;
 mod running;
 mod runs;
 mod scheduler;
+mod sql_query;
 mod state;
 mod telemetry;
 mod ui;

@@ -2,8 +2,9 @@
 //! (`{error, code, kind, remediation, node?, traceback?, artifact_dir?}`, see
 //! `barca docs contract`), and the HTTP status follows its kind: `usage` is 400 (404 for
 //! something that does not exist, 409 for an ambiguous name or a conflict with the state of
-//! a run, 403 on a `--read-only` server), `infra` is 500, and a server that is shutting down
-//! answers 503. A failed step is never an HTTP error: it is a run whose outcome is `failed`.
+//! a run, 403 on a `--read-only` server, 408 for a query cancelled at its time limit), `infra`
+//! is 500, and a server that is shutting down, or a route whose helper process is missing,
+//! answers 503; a route that admits no more requests at once answers 429. A failed step is never an HTTP error: it is a run whose outcome is `failed`.
 
 use axum::Json;
 use axum::http::StatusCode;
@@ -28,6 +29,17 @@ pub enum ApiError {
     Forbidden(String),
     /// The request cannot be served as asked (e.g. `POST /get/{target}` naming a task).
     BadRequest(String),
+    /// The request took longer than the route allows and was cancelled: `408`.
+    Timeout(String),
+    /// A helper process the route needs is not there (it died, or what it runs is not
+    /// installed): `503`. The other routes are not affected.
+    NoHelper(String),
+    /// The route is answering as many requests as it admits at once: `429` with a
+    /// `Retry-After` of this many seconds.
+    Busy {
+        message: String,
+        retry_after: u64,
+    },
     /// The server is draining before it stops and admits no new run: `503` with a
     /// `Retry-After` of this many seconds.
     Unavailable {
@@ -78,6 +90,15 @@ impl ApiError {
             ApiError::Conflict(msg) => usage(StatusCode::CONFLICT, msg),
             ApiError::Forbidden(msg) => usage(StatusCode::FORBIDDEN, msg),
             ApiError::BadRequest(msg) => usage(StatusCode::BAD_REQUEST, msg),
+            ApiError::Timeout(msg) => usage(StatusCode::REQUEST_TIMEOUT, msg),
+            ApiError::Busy { message, .. } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                ErrorEnvelope::from_prose(ErrorKind::Infra, message),
+            ),
+            ApiError::NoHelper(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorEnvelope::from_prose(ErrorKind::Infra, msg),
+            ),
             ApiError::Unavailable { message, .. } => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 ErrorEnvelope::from_prose(ErrorKind::Infra, message),
@@ -109,7 +130,9 @@ impl IntoResponse for ApiError {
         let event_cursor = matches!(&self, ApiError::EventCursor(_));
         // A draining server says when to try again (`Retry-After`, in seconds).
         let retry_after = match &self {
-            ApiError::Unavailable { retry_after, .. } => Some(*retry_after),
+            ApiError::Unavailable { retry_after, .. } | ApiError::Busy { retry_after, .. } => {
+                Some(*retry_after)
+            }
             _ => None,
         };
         let (status, envelope) = self.parts();
@@ -150,6 +173,16 @@ mod tests {
                     retry_after: 30,
                 },
                 503,
+                "infra",
+            ),
+            (ApiError::Timeout("too slow".into()), 408, "usage"),
+            (ApiError::NoHelper("no duckdb".into()), 503, "infra"),
+            (
+                ApiError::Busy {
+                    message: "busy".into(),
+                    retry_after: 1,
+                },
+                429,
                 "infra",
             ),
             (

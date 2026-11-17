@@ -2,7 +2,9 @@
 # artifacts, protocol, storage, hashing, decorators and the CLI's errors. Chosen from a timed
 # full run. scripts/check-fast.sh runs them before a push and CI's merge tier runs them on
 # every merge group (.depot/workflows/ci.yml); the full suite runs on a release. One file
-# name per line, relative to python/tests/.
+# name per line, relative to python/tests/. test_sql_query_route.py is the exception to the
+# two seconds (about 25 s, a real server per test): it holds the boundary of POST /sql/query,
+# which the merge tier must not let through broken.
 test_adaptive_executor.py
 test_artifacts.py
 test_csv_outputs.py
@@ -16,6 +18,7 @@ test_identity.py
 test_input_parameters.py
 test_protocol_handshake.py
 test_runtime.py
+test_sql_query_route.py
 test_static_barca_bindings.py
 test_storage.py
 test_ui_schema.py

@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 barca-core = { path = "../barca-core" }
 axum = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "time", "sync"] }
 dashmap = { workspace = true }
 notify = { workspace = true }
 serde = { workspace = true }

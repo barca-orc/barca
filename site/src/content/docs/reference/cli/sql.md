@@ -112,7 +112,8 @@ barca sql "select node_id, created_at, rows from barca.materializations where ro
 ## With a server
 
 With a server configured (`[server] url` or `BARCA_SERVER`, [Server Mode: a Shared Ledger and --server](/reference/server-mode/)), `barca sql`
-asks the server which result each view reads and runs the query on this machine:
+asks the server which result each view reads and runs the query on this machine (a query over
+barca's tables alone is answered by the server: "Queries the server answers" below):
 
 ```
 $ barca sql "select * from revenue"
@@ -138,12 +139,70 @@ emea    12.0
   `barca status`) is not mixed in: the view is the server's. With no result on the server, the
   error says this machine has one and names `--local`; with an older one, stderr says so.
 - `--local` queries this machine's own records and artifacts, and touches nothing on the server.
-  `--server <url>` resolves against that server for one command; the query still runs here.
+  `--server <url>` resolves against that server for one command; a query over a result view
+  still runs here.
 - An unreachable server exits 3 with remediation `--local`. Nothing falls back to this machine's
   records.
-- The server never runs SQL. DuckDB reads and writes files (`COPY ... TO`, `read_csv('/etc/...')`)
-  and the API is unauthenticated by default, so a query run on the server would be remote file
-  access to it. This is deliberate: every query runs on the machine that typed it.
+- The server never runs SQL over results or files. DuckDB reads and writes files (`COPY ... TO`,
+  `read_csv('/etc/...')`) and the API is unauthenticated by default, so a query over results run
+  on the server would be remote file access to it. This is deliberate: a query that names a
+  result view runs on the machine that typed it.
+
+### Queries the server answers
+
+A query that names only barca's tables (`barca.runs`, `barca.materializations`, `barca.nodes`)
+needs no result and no file, so the server answers it (`POST /sql/query`), and this machine
+needs no DuckDB for it:
+
+```
+$ barca sql --server http://barca.internal:8274 "select status, count(*) as runs from barca.runs group by all"
+[barca] server http://barca.internal:8274 (--server)
+status   runs
+success  412
+failed   3
+```
+
+The web UI asks through the same route. The output is the same document; what differs from a
+query run here:
+
+- The server loads up to 100000 rows of each table, newest first (a query run here reads at
+  most 10000 of each from a server); stderr says when a table has more.
+- A query has 5 seconds, waiting for the server's one query helper and loading the tables
+  included. Past it the query is cancelled and the command exits 2: narrow the query.
+- An answer holds at most 10000 rows and 4MB of them. `--all`, or a `--limit` above that, runs
+  the query here; rows past 4MB are refused with exit 2 (select fewer or narrower columns,
+  or aggregate). A query that needs more than the 1GB of memory the server gives a query is
+  exit 2 too.
+- The server admits four queries at once, one running and three waiting. One more exits 3
+  (`429`): run it again in a moment.
+- A query that calls `query(...)` or `query_table(...)`, which read a table by a name built at
+  run time, has all of barca's tables loaded for it.
+- The query also runs here when files are typed after it (the server's `barca.nodes` is every
+  deployed file's), when it names a result view as well, and, with a configured server (no
+  `--server`), when it names `barca.nodes`, whose `local` and `unsynced` describe this machine.
+- A server from before the route, or one whose Python environment has no DuckDB (`uv add
+  'barca[sql]'` there), does not answer: the query runs here, as it did before.
+
+What the server accepts is one `SELECT` over those tables. Its database holds nothing else and
+has DuckDB's external access switched off, so these are refused with exit 2, whatever the
+server's files and credentials are:
+
+- a result view (`select * from revenue`), or any relation that is not one of barca's tables;
+- a file or a URL: `read_parquet`, `read_csv`, `read_json`, `read_text`, `glob`, a quoted path;
+- any statement that is not a `SELECT`: `COPY`, `ATTACH`, `INSTALL`, `LOAD`, `PRAGMA`, `SET`,
+  `CREATE`, `INSERT`, `UPDATE`, `DELETE`;
+- more than one statement;
+- a write inside a `SELECT` (`with gone as (delete from barca.runs returning *) select ...`):
+  the query runs in a read-only transaction.
+
+The tables are barca's records as every read route shows them. `barca.runs` and
+`barca.materializations` carry the error text of failed steps (`error`, `error_message`,
+`failure`), which holds whatever the pipeline's code put in an exception, and artifact paths:
+whoever may send a query may read those, as with `GET /history` and `GET /runs/{run_id}`. Use
+`--auth token` where that matters. An answer can also show DuckDB's version and platform.
+
+[Server Mode: a Shared Ledger and --server](/reference/server-mode/) ("The server's HTTP API") gives the route's request, answer and status
+codes.
 
 ## Output
 

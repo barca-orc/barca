@@ -625,23 +625,67 @@ the rollup by group, and the top roots.
 
 ### Server query route (#972)
 
+Implemented ([route and helper owner](../../crates/barca-server/src/sql_query.rs),
+[helper](../../python/barca/_sql_server.py), [wire shape](../interfaces/server-api.openapi.yaml)).
+
 `POST /sql/query`, body `{"query": "...", "limit": 1000}`, answers the document `barca sql
---json` prints (`columns`, `rows`, `total`, `truncated`, `hint`).
+--json` prints (`columns`, `rows`, `total`, `truncated`, `hint`), with `notes` when a table was
+cut at the row limit below.
 
 - Only `barca.*` tables exist in the helper's database. A query naming a result view, any
   other relation, or more than one statement, or one that is not a `SELECT` (or `WITH ...
-  SELECT`), is refused with `400` and the usage error envelope.
-- `limit` defaults to 1,000 and is at most 10,000; `truncated` and `total` say what was cut.
-- A query has 5 seconds, waiting included; past it the answer is `408` and the query is
-  cancelled.
+  SELECT`), is refused with `400` and the usage error envelope. So is a SQL error.
+- `limit` defaults to 1,000 and is at most 10,000 (a larger one is lowered to it); `truncated`
+  and `total` say what was cut.
+- An answer holds at most 4MB of encoded rows. The helper fetches rows a few at a time and
+  refuses (`400`) when the first `limit` rows pass that, before reading the rest; the server
+  reads no line of the helper longer than 16MB and replaces a helper that sends one. DuckDB's
+  memory limit bounds its own buffers only: this bounds what Python and the server hold.
+- Four queries are admitted at once: one running, three waiting inside their own 5 seconds.
+  One more is answered `429` with `Retry-After` at once, so no client can make every other
+  wait.
+- A query has 5 seconds, waiting for the helper and loading tables included; past it the answer
+  is `408` (usage envelope) and the query is cancelled: the helper is told to interrupt it and,
+  when it has not stopped a second later, is killed. A table whose load used the time up stays
+  loaded, so the same query sent again has its whole time.
 - The server's auth applies as on every route (project tokens when enabled). It is a read: a
   `--read-only` server serves it.
-- One long-lived DuckDB helper, started on first use, with external access disabled (no file,
-  network or extension access) and a memory limit; Rust hands it rows and refreshes a table
-  when the metadata database state changes. Never a process per request.
+- One long-lived DuckDB helper per server, started on first use, started again when it is found
+  dead, gone with the server (its stdin is the server's end of a pipe). Queries run one at a
+  time. Never a process per request.
+- The boundary, each part holding without the others: the helper's in-memory database contains
+  the `barca` schema only; external access is disabled (no file, network or extension access)
+  and the configuration locked, so no statement enables it; the statement is checked with
+  DuckDB's parser to be one `SELECT`; it runs in a read-only transaction that is rolled back,
+  which refuses a write a `SELECT` carries (DuckDB 2 accepts `WITH x AS (DELETE ... RETURNING
+  *) SELECT ...`); the statement runs as it was sent, never inside another; memory is limited
+  to 1GB, with nothing spilled to disk, and threads to two, and a query that needs more is a
+  `400` that leaves the helper and its tables in place; the helper's working directory and
+  `HOME` are an empty directory of its own (the project is not importable, DuckDB's secret and
+  extension directories are unset) and the server's paths are removed from the error messages
+  it answers; the helper inherits none of the
+  server's environment but what an interpreter needs. Rows reach it as query parameters, never
+  as files.
+- Rust hands the helper the rows of a table when a query names the table and it is not loaded
+  for the current state: the metadata database on disk, and for a table computed from the
+  graph (`barca.nodes`) the inspected graph, the same evidence the read cache keeps status by.
+  `barca.nodes` is the kept status of `GET /nodes`, handed over again at least every 30 seconds
+  (health moves with the clock). A query on an unchanged server reads no database and computes
+  no status. At most 100,000 rows of a table are loaded, newest first; `notes` says when a
+  table has more. A query that calls `query(...)` or `query_table(...)`, which reach a table
+  by a name the text does not show, gets every table. The helper has 60 seconds to take a
+  table; one that has not is replaced.
+- The route exposes the rows of `barca.*` tables to whoever may call it, the error text of
+  failed steps and artifact paths among them, as the other read routes do.
+- A table is one entry in the route's table list (`SOURCES`): its name, the columns `barca sql`
+  gives it, whether it depends on the graph, and a function from the metadata snapshot (and
+  graph) to rows. #965's tables are added there.
 - `barca sql --server` sends a query that names only `barca.*` tables to this route. A query
-  naming result views runs on the client as today. This narrows the manual's "the server never
-  runs SQL" to: the server never runs SQL over results or files.
+  naming result views runs on the client as today, and so does one with files typed after it,
+  with `--all` or a `--limit` above 10,000, with a configured server one naming `barca.nodes`
+  (its `local` and `unsynced` are the client's), and any query when the route answers `404`,
+  `405` or `503`. This narrows the manual's "the server never runs SQL" to: the server never
+  runs SQL over results or files.
 - Overview polling stays on `GET /state` and `GET /state/rollup`; this route serves trends and
   drill-downs.
 
@@ -708,9 +752,10 @@ the rollup by group, and the top roots.
 - When ticks stop (the scheduler is down, the schedule paused or removed), a standing verdict
   expires within one interval plus the last tick's duration and grace, and the node reads
   `undecided` again; `last_check` keeps the record.
-- The query helper is restarted when it dies or exceeds its memory limit; the request in
-  flight answers `503`. Without DuckDB installed the route answers `503` naming the extra;
-  every other route is unaffected.
+- The query helper is restarted when it dies, sends a line longer than 16MB or does not take a
+  table within 60 seconds; the request in flight answers `503`. A query that exceeds DuckDB's
+  memory limit is a `400` and the helper stays. Without DuckDB installed the route answers `503` naming the extra,
+  on every request until it is installed; every other route is unaffected.
 
 ## Acceptance and evidence
 
@@ -719,7 +764,7 @@ today (with the #961 and #962 rows): #954 ([health rules](../../crates/barca-cor
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
-row, the #964 row and the #985 row. The rest do not pass yet.
+row, the #964 row, the #972 row and the #985 row. The rest do not pass yet.
 
 | Scenario | Issue |
 | --- | --- |
@@ -735,7 +780,7 @@ row, the #964 row and the #985 row. The rest do not pass yet.
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
 | `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965 |
-| A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972 |
+| A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972: [the refusals (INV-HEALTH-09), the time limit, a killed helper, no DuckDB, an unchanged server loading nothing](../../crates/barca-server/src/sql_query.rs), [a served project, read-only and behind a token, and the CLI](../../python/tests/test_sql_query_route.py), [the wire shape](../../crates/barca-server/tests/openapi.rs) |
 | One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973 |
 
 Sources the rules are ported from, until each is deleted by its issue (node health and the

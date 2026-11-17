@@ -476,10 +476,42 @@ pub(crate) async fn stats(
     Ok(())
 }
 
-/// `barca sql` with a server: the views resolved from the server's ledger (`GET /sql/views`),
-/// barca's tables from its records (`GET /history`, `GET /materializations`, `GET /nodes`), and
-/// the query run on this machine (the server runs no SQL). The artifacts are read from the
-/// store this project shares with the server, as a local `barca sql` reads them.
+/// The most rows `POST /sql/query` answers (`barca_server`'s `MAX_LIMIT`): a larger `--limit`,
+/// or `--all`, runs on this machine.
+const SERVER_QUERY_ROWS: usize = 10_000;
+
+/// Whether the server answers `query` itself (`POST /sql/query`): it names one of barca's
+/// tables and no result view, no file was typed (the server's `barca.nodes` is every deployed
+/// file's), and the rows fit one answer. With a configured server (no `--server`), a query
+/// over `barca.nodes` runs here: its `local` and `unsynced` describe this machine.
+fn server_runs(
+    server: &Server,
+    query: &str,
+    catalog: &barca_core::sql::Catalog,
+    files: &[String],
+    limit: Option<usize>,
+) -> bool {
+    use barca_core::sql::{names, tables};
+    let barca = [tables::RUNS, tables::MATERIALIZATIONS, tables::NODES];
+    let views = catalog
+        .views
+        .iter()
+        .map(|v| &v.name)
+        .chain(catalog.missing.iter().map(|m| &m.name));
+    barca.iter().any(|t| tables::named(query, t))
+        && !views.into_iter().any(|name| names(query, name))
+        && files.is_empty()
+        && limit.is_some_and(|n| n <= SERVER_QUERY_ROWS)
+        && !(server.implicit && tables::named(query, tables::NODES))
+}
+
+/// `barca sql` with a server. A query that names only barca's tables (`barca.runs`,
+/// `barca.materializations`, `barca.nodes`) is answered by the server (`POST /sql/query`,
+/// [`server_runs`]). Any other runs on this machine: the views resolved from the server's
+/// ledger (`GET /sql/views`), barca's tables from its records (`GET /history`,
+/// `GET /materializations`, `GET /nodes`), the artifacts read from the store this project
+/// shares with the server, as a local `barca sql` reads them. The server never runs SQL over
+/// results or files.
 pub(crate) async fn sql(
     server: &Server,
     query: &str,
@@ -492,6 +524,30 @@ pub(crate) async fn sql(
     let here = |e: BarcaError| CliError::from_barca(e, &Context::default());
     let health = server.health(env).await?;
     let cfg = barca_core::config::resolve(env).map_err(here)?;
+    let files = server.deployed_files(files).await?;
+    let mut path = "/sql/views".to_string();
+    if !files.is_empty() {
+        path.push_str(&format!("?files={}", encode(&files.join(","))));
+    }
+    let body = server.get_json(&path).await?;
+    let catalog: barca_core::sql::Catalog = serde_json::from_value(body)
+        .map_err(|e| server.unexpected("GET /sql/views", &e.to_string()))?;
+
+    if server_runs(server, query, &catalog, &files, limit)
+        && let Some(answer) = server.sql_query(query, limit.unwrap_or_default()).await?
+    {
+        let bad = |e: serde_json::Error| server.unexpected("POST /sql/query", &e.to_string());
+        let result = barca_core::sql::SqlResult {
+            columns: serde_json::from_value(answer["columns"].clone()).map_err(bad)?,
+            rows: serde_json::from_value(answer["rows"].clone()).map_err(bad)?,
+            total: serde_json::from_value(answer["total"].clone()).map_err(bad)?,
+            truncated: answer["truncated"].as_bool().unwrap_or_default(),
+            notes: serde_json::from_value(answer["notes"].clone()).unwrap_or_default(),
+        };
+        crate::commands::emit(barca_core::report::render_sql(result, json));
+        return Ok(());
+    }
+
     let instead = if server.implicit {
         "pass --local to query this machine's own results"
     } else {
@@ -504,14 +560,6 @@ pub(crate) async fn sql(
         instead,
     )
     .map_err(here)?;
-    let files = server.deployed_files(files).await?;
-    let mut path = "/sql/views".to_string();
-    if !files.is_empty() {
-        path.push_str(&format!("?files={}", encode(&files.join(","))));
-    }
-    let body = server.get_json(&path).await?;
-    let catalog: barca_core::sql::Catalog = serde_json::from_value(body)
-        .map_err(|e| server.unexpected("GET /sql/views", &e.to_string()))?;
 
     let pending = if server.implicit {
         pending_posts(&cfg, &server.url).await.map_err(here)?

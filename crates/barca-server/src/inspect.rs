@@ -79,36 +79,45 @@ pub async fn nodes(
     let dag = state.inspect_dag().await?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
+    let sample = query.sample.unwrap_or(0);
+    let mut result = node_status(&state, &dag, &db_state, &snapshot, targets, sample).await?;
+    let disk_cfg = state.config.resolved.clone();
+    result.disk_usage = tokio::task::spawn_blocking(move || barca_core::gc::disk_usage(&disk_cfg))
+        .await
+        .unwrap_or_default();
+    filter.apply(&mut result);
+    let rendered = barca_core::report::render_status(result, true, None, None, root().as_deref());
+    Ok(json_text(StatusCode::OK, stdout_of(rendered)))
+}
+
+/// `barca status` for `targets` (none: every node) over `dag` and the database in state
+/// `db_state`, each scheduled node with its scheduler's view and every node with its health:
+/// the nodes of `GET /nodes` and the rows of `barca.nodes` (`POST /sql/query`).
+pub(crate) async fn node_status(
+    state: &AppState,
+    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    db_state: &crate::read_cache::Stamp,
+    snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
+    targets: Vec<String>,
+    sample: usize,
+) -> Result<barca_core::status::StatusResult, ApiError> {
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let sample = query.sample.unwrap_or(0);
     let python = state.config.python.clone();
     let (graph, names, kept_snapshot) = (dag.clone(), targets.clone(), snapshot.clone());
     // Kept until the sources or the database change ([`crate::read_cache`]); the live schedule
     // state and the filter are applied to each answer.
     let kept = state
-        .cached_status(
-            &dag,
-            &db_state,
-            (targets, sample, true),
-            move || async move {
-                let _snapshot = kept_snapshot;
-                barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true)
-                    .await
-            },
-        )
+        .cached_status(dag, db_state, (targets, sample, true), move || async move {
+            let _snapshot = kept_snapshot;
+            barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true).await
+        })
         .await
-        .map_err(|e| ApiError::run(e, context("status", &state)))?;
+        .map_err(|e| ApiError::run(e, context("status", state)))?;
     let mut result = (*kept).clone();
-    let disk_cfg = state.config.resolved.clone();
-    result.disk_usage = tokio::task::spawn_blocking(move || barca_core::gc::disk_usage(&disk_cfg))
-        .await
-        .unwrap_or_default();
-    crate::handlers::attach_live_schedules(&state, &mut result.nodes, &dag, &snapshot.path).await?;
-    crate::handlers::attach_health(&state, &mut result, &dag, &db_state, &snapshot.path).await?;
-    filter.apply(&mut result);
-    let rendered = barca_core::report::render_status(result, true, None, None, root().as_deref());
-    Ok(json_text(StatusCode::OK, stdout_of(rendered)))
+    crate::handlers::attach_live_schedules(state, &mut result.nodes, dag, &snapshot.path).await?;
+    crate::handlers::attach_health(state, &mut result, dag, db_state, &snapshot.path).await?;
+    Ok(result)
 }
 
 fn context(command: &'static str, state: &AppState) -> Context {
@@ -176,7 +185,8 @@ pub struct SqlViewsQuery {
 
 /// `GET /sql/views?files=a.py,b.py` — which result each `barca sql` view reads in the
 /// server's ledger ([`barca_core::sql::Catalog`]): the client runs the query on its own machine
-/// over those store paths. The server runs no SQL.
+/// over those store paths. The server runs no SQL over results or files
+/// ([`crate::sql_query`] answers queries over barca's own tables).
 pub async fn sql_views(
     State(state): State<AppState>,
     Query(query): Query<SqlViewsQuery>,

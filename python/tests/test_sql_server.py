@@ -4,7 +4,8 @@ Two copies of one project, `a` and `b`, point at one `barca serve` and the plain
 it uses (the ledger suite's `Team`). The server resolves which result each view reads from its
 ledger (`GET /sql/views`) and barca's own tables from its records (`GET /history`,
 `GET /materializations`, `GET /nodes`); the query runs on the laptop, over the store. The server
-runs no SQL.
+runs no SQL over results or files (a query over barca's tables alone it answers itself:
+`test_sql_query_route.py`).
 """
 
 import json
@@ -93,10 +94,11 @@ def test_metadata_tables_come_from_the_server(team):
             "client_run_id": result_a["run_id"],
         }
     ]
-    # The columns are `barca history --json`'s.
+    # The columns are `barca history --json`'s, but `line` (#959): the run in the words of a
+    # list row, computed from these columns, not one of them.
     history = json.loads(barca(team.b, "history", "--json").stdout)["runs"][0]
     code, body, _ = sql(team.b, "select * from barca.runs")
-    assert body["columns"] == list(history) or set(body["columns"]) == set(history)
+    assert set(body["columns"]) == set(history) - {"line"}
     assert body["rows"][0]["run_id"] == history["run_id"]
 
     code, body, err = sql(

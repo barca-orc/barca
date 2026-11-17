@@ -12,6 +12,11 @@
       "cli": "barca status --rollup --json"
     },
     {
+      "method": "POST",
+      "path": "/sql/query",
+      "cli": "barca sql \"select status, count(*) from barca.runs group by all\" --server --json"
+    },
+    {
       "method": "GET",
       "path": "/assets",
       "cli": "barca list --json"

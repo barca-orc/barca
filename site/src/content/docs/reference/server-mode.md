@@ -105,8 +105,9 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
 - `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history`, `stats`, `logs`,
   `sql` and `doctor`. `serve`, `plan`, `docs` and `version` always run on this machine;
   `--server` or `--local` on them is a usage error. `barca list` without `--server` reads this
-  machine's files. `barca sql` always runs its query on this machine: a server only says which
-  results its views read ([barca sql: With a server](/reference/cli/sql/#with-a-server)); the server never runs SQL.
+  machine's files. `barca sql` runs a query over results on this machine: a server only says
+  which results its views read ([barca sql: With a server](/reference/cli/sql/#with-a-server)). The server never runs SQL
+  over results or files; a query over barca's own tables alone it answers itself.
   `doctor` runs its checks here and, with a server (configured, or `--server`), checks the
   server too; `--local` leaves it out ([barca doctor: Checking a server](/reference/cli/doctor/#checking-a-server)).
 
@@ -247,8 +248,10 @@ artifact, so its `local` is `false`.
 
 `barca sql` asks the server which result each view reads (`GET /sql/views`) and reads barca's
 tables (`barca.runs`, `barca.materializations`, `barca.nodes`) from its records, then runs the
-query here over the store; the server never runs SQL ([barca sql: With a server](/reference/cli/sql/#with-a-server)). An
-unsynced result is not mixed into a view: the error or note says so and names `--local`.
+query here over the store; the server never runs SQL over results or files ([barca sql](/reference/cli/sql/),
+"With a server"). A query that names only barca's tables is sent to the server instead (`POST
+/sql/query`, below). An unsynced result is not mixed into a view: the error or note says so and
+names `--local`.
 
 `barca status --problems` (or `--state <states>`) keeps the nodes that need attention, the
 server's failures, stale results and failing or paused schedules among them, plus this
@@ -446,10 +449,55 @@ streams are idle. Auth-off mode rejects token administration.
 | `POST /ledger/lookup` | `{"hashes": [{"node_id", "run_hash"}]}` | `{"results": [{"node_id", "run_hash", "exists", "path", "format", "size_bytes", "digest"}]}`, one per pair, in order; only `exists: false` for a miss |
 | `GET /sql/views?files=a.py` | - | `{"views": [{"name", "node", "kind", "partitioned", "format", "files": [{"path", "partition", "content_hash"}], "stale", "run_hash"}], "missing": [{"name", "node", "command", ...}], "duplicates": [{"name", "ids"}]}`: which result each `barca sql` view reads |
 | `GET /materializations?limit=N&offset=M` | - | `{"materializations": [...], "total", "limit", "offset"}`: step results, newest first (`barca.materializations`); `limit` defaults to 1000, at most 10000 |
+| `POST /sql/query` | `{"query": "select ...", "limit": 1000}` | `{"columns", "rows", "total", "truncated", "hint"?, "notes"?}`: the document `barca sql --json` prints, for one `SELECT` over `barca.runs`, `barca.materializations` and `barca.nodes`; `400` for anything else or rows past 4MB, `408` past 5 seconds, `429` beyond four queries at once, `503` without DuckDB |
 | `POST /ledger/runs` | `{"run": {...}, "steps": [...]}`: the run row and its step rows | `201 {"run_id", "bytes_changed"}`, or `409` with the error envelope naming the node and nothing recorded; `400` on a server with no store, `403` on a `--read-only` one, `503` while it shuts down |
 
 A repeated post of a run the server already recorded (same `run.run_id`) answers `201` with the
 run it recorded.
+
+`POST /sql/query` is the one route on which the server runs SQL, and never over results or
+files. It is a read: a `--read-only` server serves it, and with `--auth token` it needs a token
+like every other route.
+
+- The query is one `SELECT` (DuckDB dialect) over `barca.runs`, `barca.materializations` and
+  `barca.nodes` ([barca sql: barca's own tables](/reference/cli/sql/#barcas-own-tables)). `limit` defaults to 1000 and is at
+  most 10000; `total` counts every row, `truncated` says rows were cut and `hint` what to send.
+  `notes` appears when a table holds more than the 100000 rows the server loads of it.
+  An answer holds at most 4MB of rows: a query whose first `limit` rows are more is refused
+  (`400`) before they are read to the end, so neither the helper nor the server holds them.
+- `400` with the usage envelope for anything else: a result view or another relation, a file or
+  URL (`read_parquet`, `read_csv`, `glob`, a quoted path), a statement that is not a `SELECT`
+  (`COPY`, `ATTACH`, `INSTALL`, `LOAD`, `PRAGMA`, `SET`, any write), a second statement, a write
+  inside a `SELECT`, a SQL error, rows past 4MB, a query that needs more memory than the 1GB
+  DuckDB is given (the helper stays). `408` when the query has not finished within 5 seconds,
+  waiting for the helper and loading tables included: it is cancelled, not left running.
+  `429` with `Retry-After: 1` when four queries are admitted already (one running, three
+  waiting): a client sending slow queries holds four requests, never all of them.
+  `503` when the server's Python environment has no DuckDB (`uv add 'barca[sql]'` there) or the
+  helper stopped under the query; send it again.
+- The boundary: the query runs in a helper process of the server (`python -m
+  barca._sql_server`, one per server, started by the first query, started again if it dies,
+  gone with the server). Its in-memory DuckDB holds barca's tables and nothing else, with
+  external access off (no file, no network, no extension, and no statement turns it back on),
+  a memory limit of 1GB, nothing spilled to disk, and two threads; each query runs in a
+  read-only transaction, as it was sent (never pasted inside another statement). The helper
+  runs in an empty directory of its own that is also its `HOME` (not the project, which it
+  cannot import from, and not the server user's home), with DuckDB's secret and extension
+  directories unset, and is given the server's `PATH`, locale, `PYTHONPATH` and `PYTHONHOME`
+  but no other environment variable (no store credentials, no tokens). The server hands it
+  rows: it never opens `metadata.db`, an artifact or the store. The server's own paths (project
+  root, home, Python environment) are removed from DuckDB's error messages before they are
+  answered.
+- What it does expose: the rows of barca's tables, to whoever may call the route. Those hold
+  the error text of failed steps and runs (whatever the pipeline's code put in an exception)
+  and artifact paths, as `GET /history`, `GET /runs/{run_id}` and `GET /materializations`
+  do; DuckDB's version and platform can be read too. Run the server with `--auth token` where
+  that is not for everyone who can reach it.
+- A table is handed over when a query names it and the metadata database, or for `barca.nodes`
+  the graph, changed since it was (and `barca.nodes` at least every 30 seconds). A query on an
+  unchanged server reads no database and computes no status. A query that calls `query(...)`
+  or `query_table(...)` can reach a table without naming it, so every table is handed over for
+  it. The helper has 60 seconds to take a table; one that has not is replaced.
 
 The inspection routes (`GET /state`, `/nodes`, `/history`, `/stats/{name}` and the others the
 CLI and the web UI read) keep what they computed until the sources or the metadata DB change,

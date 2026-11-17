@@ -390,6 +390,9 @@ pub struct AppState {
     pub scheduler_stopped: Arc<AtomicBool>,
     /// What the read routes keep between requests ([`crate::read_cache`]).
     pub reads: Arc<crate::read_cache::ReadCache>,
+    /// The query helper of `POST /sql/query` ([`crate::sql_query`]): started by the first
+    /// query, killed when the server's state is dropped.
+    pub sql: Arc<crate::sql_query::QueryHelper>,
 }
 
 impl AppState {
@@ -430,6 +433,7 @@ impl AppState {
             metadata_error: Arc::new(RwLock::new(None)),
             scheduler_stopped: Arc::new(AtomicBool::new(false)),
             reads: Arc::default(),
+            sql: Arc::default(),
         }
     }
 }

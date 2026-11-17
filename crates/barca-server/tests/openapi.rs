@@ -1065,6 +1065,37 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     .await;
     assert_eq!(page["materializations"].as_array().unwrap().len(), 1);
     assert_eq!(page["materializations"][0], rows[1]);
+    // The query route: one SELECT over barca's tables, answered as `barca sql --json` prints
+    // it (`503` where the Python these tests run has no DuckDB); anything else is a `400`.
+    let operation = &contract()["paths"]["/sql/query"]["post"];
+    let answer = |status: u16| {
+        operation["responses"][status.to_string()]["content"]["application/json"]["schema"].clone()
+    };
+    let query = json!({
+        "query": "select status, count(*) as n from barca.runs group by all order by status",
+        "limit": 10,
+    });
+    validate(
+        &operation["requestBody"]["content"]["application/json"]["schema"],
+        &query,
+    );
+    let (status, body) = request_json(&router, "POST", "/sql/query", query).await;
+    assert!(matches!(status, 200 | 503), "{status}: {body}");
+    validate(&answer(status), &body);
+    if status == 200 {
+        assert_eq!(body["columns"], json!(["status", "n"]));
+        assert!(body["total"].as_u64().unwrap() >= 1, "{body}");
+        assert_eq!(body["truncated"], false);
+        let view = json!({"query": "select * from second"});
+        let (status, body) = request_json(&router, "POST", "/sql/query", view).await;
+        assert_eq!(status, 400, "{body}");
+        validate(&answer(400), &body);
+        assert_eq!(body["kind"], "usage");
+    }
+    let (status, body) = request_json(&router, "POST", "/sql/query", json!({"query": 1})).await;
+    assert_eq!(status, 400, "{body}");
+    validate(&answer(400), &body);
+    checked(&router, "GET", "/sql/query", "/sql/query", 405).await;
     for url in ["/history", "/list", "/nodes", "/stats/second"] {
         let path = if url.starts_with("/stats") {
             "/stats/{name}"

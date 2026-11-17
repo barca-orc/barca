@@ -230,7 +230,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "sql --server",
-        "new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use",
+        "new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows and 4MB an answer, four queries at once) and its errors may change",
     ),
     (
         "sql --local",

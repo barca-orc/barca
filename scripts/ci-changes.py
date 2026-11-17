@@ -75,6 +75,8 @@ EMULATORS = ALWAYS + [
 DUCKDB1 = ALWAYS + [
     "python/barca/_duckdb.py",
     "python/barca/_sql.py",
+    "python/barca/_sql_server.py",
+    "crates/barca-server/src/sql_query.rs",
     "python/barca/_sinks.py",
     "python/barca/_batch.py",
     "python/barca/_artifacts.py",

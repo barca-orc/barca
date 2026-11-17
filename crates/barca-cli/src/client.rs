@@ -379,6 +379,36 @@ impl Server {
         String::from_utf8(body).map_err(|_| self.unexpected(&what, "the body is not UTF-8"))
     }
 
+    /// `POST /sql/query`: the server runs `query` over barca's own tables. `Ok(None)` when this
+    /// server cannot (one from before the route, `404` or `405`; one whose environment has no
+    /// DuckDB or whose helper just stopped, `503`): the caller runs the query on this machine,
+    /// as it did before the route. A refusal (`400`) and a timeout (`408`) are the server's
+    /// error envelope.
+    pub(crate) async fn sql_query(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Option<Value>, CliError> {
+        let what = "POST /sql/query";
+        let request = self
+            .http
+            .request(reqwest::Method::POST, "/sql/query")?
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(serde_json::json!({"query": query, "limit": limit}).to_string());
+        let response = request.send().await.map_err(|e| self.unreachable(&e))?;
+        let status = response.status();
+        let body = response.bytes().await.map_err(|e| self.unreachable(&e))?;
+        if status.is_success() {
+            return serde_json::from_slice(&body)
+                .map(Some)
+                .map_err(|e| self.unexpected(what, &format!("not JSON: {e}")));
+        }
+        if matches!(status.as_u16(), 404 | 405 | 503) {
+            return Ok(None);
+        }
+        Err(self.refusal(status, &body, what))
+    }
+
     // ─── 3. checks ──────────────────────────────────────────────────────────
 
     /// `GET /health`: the server speaks this API version, and `--env`, when given, is the
