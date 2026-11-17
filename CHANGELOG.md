@@ -26,7 +26,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
   one long-lived helper process whose in-memory DuckDB holds barca's tables only, with file,
   network and extension access switched off, in a read-only transaction, without the server's
   environment variables, so a result view, `read_parquet('/etc/...')`, `COPY ... TO`, `ATTACH`,
-  `INSTALL`, a second statement or a write hidden in a `SELECT` is a `400`. A server whose
+  `INSTALL`, a second statement or a write hidden in a `SELECT` is a `400`. An answer holds at
+  most 4MB of rows (more is a `400`), and four queries are admitted at once (one more is a
+  `429` with `Retry-After`), so a query cannot take the server's memory or the route. A server whose
   Python environment has no DuckDB answers `503` naming `uv add 'barca[sql]'`, and the CLI then
   runs the query itself. `barca docs sql`, "Queries the server answers".
 

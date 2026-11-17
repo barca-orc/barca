@@ -10,7 +10,16 @@
 //! **One helper.** [`QueryHelper`] owns one `python -m barca._sql_server` per server: started
 //! by the first query, started again when it is found dead, killed with the server (its stdin
 //! is a pipe only this process holds, so it also exits when the server is killed outright).
-//! Queries run one at a time; the others wait for it, inside their own time limit.
+//! Queries run one at a time; up to [`MAX_PENDING`] are admitted (one running, the others
+//! waiting inside their own time limit) and a query beyond them is answered `429` at once, so
+//! one client sending slow queries holds a bounded number of requests, not every one.
+//! The helper runs outside the project: its working directory and `HOME` are an empty
+//! directory of its own, removed with it.
+//!
+//! **Size.** The helper refuses a query whose rows pass a few megabytes
+//! (`MAX_ANSWER_BYTES` in the helper), and this side reads no line of it longer than
+//! [`MAX_LINE`]: a longer one is a helper that lost the protocol, and is replaced. DuckDB's
+//! memory limit bounds only its own buffers; these bound what Python and the server hold.
 //!
 //! **Tables.** [`SOURCES`] lists them. A table is handed to the helper when a query names it
 //! and it is not loaded for the current state: the metadata database on disk
@@ -51,25 +60,39 @@ pub const TIMEOUT: Duration = Duration::from_secs(5);
 const CANCEL_GRACE: Duration = Duration::from_secs(1);
 /// How long the helper has to start (the interpreter, importing DuckDB).
 const START_LIMIT: Duration = Duration::from_secs(30);
+/// How long the helper has to take one table's rows. Generous: it holds the helper's lock,
+/// and a helper that has not answered by then is replaced.
+const LOAD_LIMIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 60 });
 /// The most rows of one table the helper holds: the newest ones. More are named in `notes`.
 pub const TABLE_ROWS: usize = 100_000;
+/// The longest line read from the helper: its answer is at most 4MB of rows
+/// (`MAX_ANSWER_BYTES` in `python/barca/_sql_server.py`) and the column names around them.
+const MAX_LINE: usize = 16 * 1024 * 1024;
+/// Queries admitted at once: one running and the rest waiting for the helper. One more is
+/// answered `429`.
+pub const MAX_PENDING: usize = 4;
+/// What a `429` tells the client to wait, in seconds.
+const BUSY_RETRY_AFTER: u64 = 1;
 
 /// The module the helper runs.
 const MODULE: &str = "barca._sql_server";
 
-/// Environment variables the helper inherits. It needs none of the server's credentials: it
-/// reads no store and no file, and what it is not given it cannot leak.
+/// Environment variables the helper inherits, by name: what an interpreter needs to start and
+/// find `barca`. It gets none of the server's credentials (it reads no store and no file, and
+/// what it is not given it cannot leak), and `HOME` is its own empty directory.
 const ENV_KEPT: &[&str] = &[
     "PATH",
-    "HOME",
     "TMPDIR",
     "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
     "TZ",
     "VIRTUAL_ENV",
+    "PYTHONPATH",
+    "PYTHONHOME",
     "LD_LIBRARY_PATH",
     "DYLD_LIBRARY_PATH",
 ];
-const ENV_KEPT_PREFIXES: &[&str] = &["LC_", "PYTHON"];
 
 /// What a table is loaded from.
 pub(crate) struct Inputs {
@@ -207,9 +230,15 @@ struct Process {
     // Killed when dropped.
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
-    answers: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    answers: BufReader<tokio::process::ChildStdout>,
+    /// The line being read: kept here so that a read given up at a deadline loses nothing.
+    partial: Vec<u8>,
     next_id: u64,
     loaded: HashMap<&'static str, Loaded>,
+    /// Server paths that an error message must not carry ([`Process::scrub`]).
+    private: Vec<String>,
+    /// The helper's working directory and `HOME`: empty, removed when the helper is dropped.
+    _home: tempfile::TempDir,
 }
 
 /// Why a request to the helper has no answer.
@@ -239,16 +268,30 @@ impl Lost {
 
 impl Process {
     async fn start(python: &std::path::Path) -> Result<Self, Lost> {
-        let mut cmd = barca_core::helper_proc::python_module(python, MODULE, None);
+        let home = tempfile::Builder::new()
+            .prefix("barca-sql-")
+            .tempdir()
+            .map_err(|e| Lost::Dead(format!("no directory to run it in ({e})")))?;
+        // The interpreter by an absolute path: the helper does not start in the project.
+        let python = match python.components().count() > 1 && python.is_relative() {
+            true => std::env::current_dir()
+                .map(|here| here.join(python))
+                .unwrap_or_else(|_| python.to_path_buf()),
+            false => python.to_path_buf(),
+        };
+        // `-P`: nothing is put in front of `sys.path` (with `-m` that is the working directory).
+        let mut cmd = tokio::process::Command::new(&python);
+        cmd.args(["-P", "-m", MODULE]);
         cmd.env_clear();
         for (name, value) in std::env::vars_os() {
-            let kept = name.to_str().is_some_and(|n| {
-                ENV_KEPT.contains(&n) || ENV_KEPT_PREFIXES.iter().any(|p| n.starts_with(p))
-            });
-            if kept {
+            if name.to_str().is_some_and(|n| ENV_KEPT.contains(&n)) {
                 cmd.env(name, value);
             }
         }
+        // Not the project root (the server's working directory), so nothing in the project is
+        // importable or relative to the helper, and not the server user's home, which DuckDB
+        // looks under for secrets and extensions.
+        cmd.current_dir(home.path()).env("HOME", home.path());
         // The terminal's Ctrl-C is the server's to act on. Stdin is the request channel and
         // the lifeline at once: only this process holds its other end.
         barca_core::helper_proc::shield_from_ctrl_c(&mut cmd);
@@ -263,9 +306,12 @@ impl Process {
         let mut process = Process {
             child,
             stdin,
-            answers: BufReader::new(stdout).lines(),
+            answers: BufReader::new(stdout),
+            partial: Vec::new(),
             next_id: 0,
             loaded: HashMap::new(),
+            private: private_paths(&python, home.path()),
+            _home: home,
         };
         let hello = tokio::time::timeout(START_LIMIT, process.line())
             .await
@@ -304,13 +350,44 @@ impl Process {
             .map_err(|e| Lost::Dead(format!("it does not take requests ({e})")))
     }
 
+    /// The helper's next line, at most [`MAX_LINE`] bytes of it. Cancel-safe: what was read
+    /// of a line stays in `partial`.
     async fn line(&mut self) -> Result<Value, Lost> {
-        match self.answers.next_line().await {
-            Ok(Some(line)) => serde_json::from_str(&line)
-                .map_err(|e| Lost::Dead(format!("it answered something that is not JSON ({e})"))),
-            Ok(None) => Err(Lost::Dead("it exited".into())),
-            Err(e) => Err(Lost::Dead(format!("its answer cannot be read ({e})"))),
+        loop {
+            let read = self.answers.fill_buf().await;
+            let buffer =
+                read.map_err(|e| Lost::Dead(format!("its answer cannot be read ({e})")))?;
+            if buffer.is_empty() {
+                return Err(Lost::Dead("it exited".into()));
+            }
+            let end = buffer.iter().position(|b| *b == b'\n');
+            let taken = end.unwrap_or(buffer.len());
+            self.partial.extend_from_slice(&buffer[..taken]);
+            self.answers.consume(taken + usize::from(end.is_some()));
+            if self.partial.len() > MAX_LINE {
+                return Err(Lost::Dead(format!(
+                    "it answered a line longer than {}MB",
+                    MAX_LINE / (1024 * 1024)
+                )));
+            }
+            if end.is_some() {
+                let line = std::mem::take(&mut self.partial);
+                return serde_json::from_slice(&line).map_err(|e| {
+                    Lost::Dead(format!("it answered something that is not JSON ({e})"))
+                });
+            }
         }
+    }
+
+    /// `message` without the server's own paths (its project root and home, the interpreter's
+    /// environment, the helper's directory): DuckDB names paths in some errors, and an error
+    /// goes to whoever sent the query.
+    fn scrub(&self, message: &str) -> String {
+        let mut out = message.to_string();
+        for path in &self.private {
+            out = out.replace(path.as_str(), "<server>");
+        }
+        out
     }
 
     /// The answer to request `id`.
@@ -338,7 +415,15 @@ impl Process {
             "rows": rows,
         }}))
         .await?;
-        let answer = self.answer(id).await?;
+        let answer = tokio::time::timeout(LOAD_LIMIT, self.answer(id))
+            .await
+            .map_err(|_| {
+                Lost::Dead(format!(
+                    "it did not load barca.{} within {}s",
+                    source.name,
+                    LOAD_LIMIT.as_secs()
+                ))
+            })??;
         if answer["ok"] == true {
             return Ok(());
         }
@@ -350,10 +435,34 @@ impl Process {
     }
 }
 
+/// The server paths an answer must not name, longest first: the project root, the server
+/// user's home, the Python environment and the helper's directory, each also as the
+/// filesystem resolves it (`/var` is `/private/var` on macOS).
+fn private_paths(python: &std::path::Path, helper_home: &std::path::Path) -> Vec<String> {
+    let mut paths: Vec<std::path::PathBuf> = vec![helper_home.to_path_buf()];
+    paths.extend(std::env::current_dir().ok());
+    paths.extend(std::env::var_os("HOME").map(Into::into));
+    paths.extend(std::env::var_os("VIRTUAL_ENV").map(Into::into));
+    // `<environment>/bin/python`: the environment.
+    paths.extend(python.parent().and_then(|bin| bin.parent()).map(Into::into));
+    let resolved: Vec<_> = paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
+    paths.extend(resolved);
+    let mut paths: Vec<String> = paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .filter(|p| p.len() > 1)
+        .collect();
+    paths.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    paths.dedup();
+    paths
+}
+
 /// The server's one query helper ([`AppState::sql`]).
 pub struct QueryHelper {
     /// Held for a whole query: one at a time.
     process: tokio::sync::Mutex<Option<Process>>,
+    /// One permit per admitted query ([`MAX_PENDING`]): the one running and those waiting.
+    pending: tokio::sync::Semaphore,
     /// [`TIMEOUT`] in milliseconds (shorter in tests).
     timeout_ms: AtomicU64,
     /// How many helpers were started and how many tables were handed over (tests).
@@ -365,6 +474,7 @@ impl Default for QueryHelper {
     fn default() -> Self {
         Self {
             process: tokio::sync::Mutex::new(None),
+            pending: tokio::sync::Semaphore::new(MAX_PENDING),
             timeout_ms: AtomicU64::new(TIMEOUT.as_millis() as u64),
             starts: AtomicUsize::new(0),
             loads: AtomicUsize::new(0),
@@ -435,6 +545,16 @@ impl QueryHelper {
         query: &str,
         limit: usize,
     ) -> Result<SqlResult, ApiError> {
+        let Ok(_admitted) = self.pending.try_acquire() else {
+            return Err(ApiError::Busy {
+                message: format!(
+                    "the server is answering {MAX_PENDING} queries already (one at a time, \
+                     the others waiting)\n\
+                     Send the query again in a moment."
+                ),
+                retry_after: BUSY_RETRY_AFTER,
+            });
+        };
         let deadline = Instant::now() + self.timeout();
         let Ok(mut slot) = tokio::time::timeout_at(deadline, self.process.lock()).await else {
             return Err(self.timed_out());
@@ -469,9 +589,14 @@ impl QueryHelper {
         state: &AppState,
         query: &str,
     ) -> Result<Vec<String>, Ended> {
+        // `query('...')` and `query_table(...)` read a table by a name built at run time, which
+        // the text does not show: a query that calls either gets every table.
+        let indirect = ["query", "query_table"]
+            .iter()
+            .any(|function| barca_core::sql::names(query, function));
         let named: Vec<&Source> = SOURCES
             .iter()
-            .filter(|s| tables::named(query, s.name))
+            .filter(|s| indirect || tables::named(query, s.name))
             .collect();
         if named.is_empty() {
             return Ok(Vec::new());
@@ -578,7 +703,7 @@ impl QueryHelper {
                 notes,
             });
         };
-        let message = error["message"].as_str().unwrap_or("SQL error");
+        let message = process.scrub(error["message"].as_str().unwrap_or("SQL error"));
         let first = message.lines().next().unwrap_or("SQL error");
         let only = format!(
             "The server answers one SELECT over barca's tables ({}). It reads no result view \
@@ -591,13 +716,15 @@ impl QueryHelper {
             ))),
             "missing_table" => Ended::Api(ApiError::BadRequest(format!(
                 "no table named '{}' on the server\n{only}",
-                error["table"].as_str().unwrap_or_default()
+                process.scrub(error["table"].as_str().unwrap_or_default())
             ))),
             "interrupted" => Ended::Api(self.timed_out()),
-            "out_of_memory" => Ended::Replace(ApiError::NoHelper(format!(
-                "the query needs more memory than the query helper may use: {first}\n\
-                 Narrow it (a filter, an aggregate over fewer rows) and send it again; the \
-                 server starts a new helper."
+            // The transaction is rolled back and the memory released: the helper and the
+            // tables it holds stay.
+            "out_of_memory" => Ended::Api(ApiError::BadRequest(format!(
+                "the query needs more memory than the server gives a query: {first}\n\
+                 Narrow it (a filter, an aggregate over fewer rows, fewer or narrower columns) \
+                 and send it again."
             ))),
             "internal" => Ended::Replace(Lost::Dead(first.to_string()).into_api()),
             _ => Ended::Api(ApiError::BadRequest(format!("{first}\n{only}"))),
@@ -1027,29 +1154,301 @@ mod tests {
         assert_eq!(state.sql.starts.load(Ordering::Relaxed), 3);
     }
 
-    /// A query that needs more memory than the helper may use fails: nothing is spilled to
-    /// the server's working directory (DuckDB's default is `.tmp/` there).
+    /// A query that needs more memory than DuckDB is given fails as a usage error: nothing is
+    /// spilled to the server's working directory (DuckDB's default is `.tmp/` there), and the
+    /// helper and the tables it holds stay, so nobody can make the server reload them at will.
     #[tokio::test]
-    async fn a_query_that_needs_too_much_memory_is_a_503_and_writes_no_file() {
+    async fn a_query_that_needs_too_much_memory_is_a_400_writes_no_file_and_keeps_the_helper() {
         let dir = tempfile::tempdir().unwrap();
         let state = server(dir.path(), false, false).await;
         if !has_duckdb(&state).await {
             return;
         }
         state.sql.set_timeout(Duration::from_secs(60));
-        let (status, body) = ask(
-            &state,
+        ask(&state, "select count(*) from barca.runs")
+            .await
+            .unwrap();
+        let before = counts(&state);
+        for hungry in [
             "select count(*) from (select distinct i, i * 2 as j from range(200000000) t(i))",
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(status, 503, "{body}");
-        assert!(body["error"].as_str().unwrap().contains("memory"), "{body}");
+            "select string_agg(repeat('x', 1000), '') from range(100000000)",
+        ] {
+            let (status, body) = ask(&state, hungry).await.unwrap_err();
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(body["kind"], "usage");
+            assert!(body["error"].as_str().unwrap().contains("memory"), "{body}");
+        }
         for at in [std::env::current_dir().unwrap(), dir.path().to_path_buf()] {
             assert!(!at.join(".tmp").exists(), "{}", at.display());
         }
+        let runs = ask(&state, "select count(*) as n from barca.runs")
+            .await
+            .unwrap();
+        assert_eq!(runs.rows, [json!({"n": 0})]);
+        assert_eq!(counts(&state), before, "the helper and its tables stayed");
+    }
+
+    /// An answer is a few megabytes at most: wide rows are refused in the helper before they
+    /// are read to the end, so neither it nor the server holds a gigabyte of them.
+    #[tokio::test]
+    async fn rows_past_the_answer_size_are_refused_not_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = server(dir.path(), false, false).await;
+        if !has_duckdb(&state).await {
+            return;
+        }
+        for wide in [
+            "select repeat('x', 100000) as s from range(10000)",
+            "select range(3000) as l from range(10000)",
+        ] {
+            let body = SqlQuery {
+                query: wide.into(),
+                limit: Some(MAX_LIMIT),
+            };
+            let started = std::time::Instant::now();
+            let (status, envelope) = super::query(State(state.clone()), Ok(Json(body)))
+                .await
+                .unwrap_err()
+                .parts();
+            let envelope = envelope.to_json();
+            assert_eq!(status.as_u16(), 400, "{wide}: {envelope}");
+            assert_eq!(envelope["kind"], "usage");
+            let error = envelope["error"].as_str().unwrap();
+            assert!(
+                error.contains("4MB") && error.contains("narrower"),
+                "{error}"
+            );
+            assert!(started.elapsed() < Duration::from_secs(4), "{wide}");
+        }
+        // Under the size, the same rows are answered, and counted to the end.
+        let body = SqlQuery {
+            query: "select repeat('x', 100000) as s from range(10000)".into(),
+            limit: Some(10),
+        };
+        let Json(answer) = super::query(State(state.clone()), Ok(Json(body)))
+            .await
+            .map_err(|e| format!("{e:?}"))
+            .unwrap();
+        assert_eq!((answer.rows.len(), answer.total), (10, 10_000));
+        assert_eq!(state.sql.starts.load(Ordering::Relaxed), 1);
+    }
+
+    /// A stand-in for the helper that runs `script` (Python) instead of the module.
+    fn impostor(dir: &Path, script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let code = dir.join("impostor.py");
+        std::fs::write(&code, script).unwrap();
+        let launcher = dir.join("impostor-python");
+        std::fs::write(
+            &launcher,
+            format!("#!/bin/sh\nexec python3 \"{}\"\n", code.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        launcher
+    }
+
+    /// The server reads no line longer than [`MAX_LINE`] from the helper, whatever the helper
+    /// sends: it stops reading and replaces it.
+    #[tokio::test]
+    async fn a_helper_line_past_the_cap_is_a_dead_helper() {
+        let dir = tempfile::tempdir().unwrap();
+        let python = impostor(
+            dir.path(),
+            "import sys\nprint('{\"ready\": true}', flush=True)\n\
+             chunk = 'x' * (1024 * 1024)\n\
+             for _ in range(4096):\n    sys.stdout.write(chunk)\n",
+        );
+        let started = std::time::Instant::now();
+        let Err(lost) = Process::start(&python).await else {
+            panic!("a helper that sends 4GB on one line was accepted");
+        };
+        let Lost::Dead(why) = lost else {
+            panic!("not a dead helper");
+        };
+        assert!(why.contains("longer than 16MB"), "{why}");
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    /// A helper that does not take a table within its time is replaced: the lock it holds is
+    /// released.
+    #[tokio::test]
+    async fn a_table_load_past_its_time_is_a_dead_helper() {
+        let dir = tempfile::tempdir().unwrap();
+        let python = impostor(
+            dir.path(),
+            "import time\nprint('{\"ready\": true}', flush=True)\ntime.sleep(600)\n",
+        );
+        let started = std::time::Instant::now();
+        let Err(Lost::Dead(why)) = Process::start(&python).await else {
+            panic!("a helper that never loads was accepted");
+        };
+        assert!(why.contains("did not load barca.runs within"), "{why}");
+        assert!(started.elapsed() < LOAD_LIMIT + Duration::from_secs(5));
+    }
+
+    /// One client cannot hold the route for everyone: beyond [`MAX_PENDING`] queries a new
+    /// one is answered at once.
+    #[tokio::test]
+    async fn queries_beyond_the_admitted_ones_are_a_429_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = server(dir.path(), false, false).await;
+        if !has_duckdb(&state).await {
+            return;
+        }
+        state.sql.set_timeout(Duration::from_millis(1500));
+        let slow: Vec<_> = (0..MAX_PENDING)
+            .map(|_| {
+                let state = state.clone();
+                tokio::spawn(async move { ask(&state, RUNAWAY).await })
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let body = SqlQuery {
+                query: "select 1".into(),
+                limit: None,
+            };
+            let response = axum::response::IntoResponse::into_response(
+                super::query(State(state.clone()), Ok(Json(body)))
+                    .await
+                    .unwrap_err(),
+            );
+            assert_eq!(response.status().as_u16(), 429);
+            assert_eq!(response.headers()["retry-after"], "1");
+            assert!(started.elapsed() < Duration::from_millis(200));
+        }
+        for held in slow {
+            assert_eq!(held.await.unwrap().unwrap_err().0, 408);
+        }
+        // They are done: the route admits again.
+        state.sql.set_timeout(TIMEOUT);
         ask(&state, "select 1").await.unwrap();
-        assert_eq!(state.sql.starts.load(Ordering::Relaxed), 2);
+    }
+
+    /// What an answer or an error says about the server: nothing of its home, its project or
+    /// its Python environment.
+    #[tokio::test]
+    async fn no_answer_names_a_directory_of_the_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = server(dir.path(), false, false).await;
+        if !has_duckdb(&state).await {
+            return;
+        }
+        let mut private: Vec<String> = [
+            std::env::var("HOME").ok(),
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string()),
+            Some(std::env::temp_dir().display().to_string()),
+            Some(dir.path().display().to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        private.push(".duckdb".into());
+        for probe in [
+            "select * from duckdb_secrets()",
+            "select * from duckdb_extensions()",
+            "select current_setting('secret_directory') as d",
+            "select current_setting('extension_directory') as d",
+            "select current_setting('home_directory') as d",
+            "select current_setting('temp_directory') as d",
+            "select name, value from duckdb_settings()",
+            "select * from read_csv('secrets.csv')",
+            "select * from read_csv('~/secrets.csv')",
+            "select * from glob('~/*')",
+            "select * from test_all_types()",
+            "select * from duckdb_databases()",
+            "INSTALL httpfs",
+        ] {
+            let said = match ask(&state, probe).await {
+                Ok(answer) => serde_json::to_string(&answer).unwrap(),
+                Err((_, body)) => body.to_string(),
+            };
+            for path in &private {
+                assert!(
+                    !said.contains(path.as_str()),
+                    "{probe} names {path}: {said}"
+                );
+            }
+        }
+        let secrets = ask(&state, "select current_setting('secret_directory') as d")
+            .await
+            .unwrap();
+        assert_eq!(secrets.rows, [json!({"d": ""})]);
+        // The helper's own directory is scrubbed from an error that carries it.
+        let slot = state.sql.process.lock().await;
+        let process = slot.as_ref().unwrap();
+        let home = process._home.path().display().to_string();
+        assert_eq!(
+            process.scrub(&format!("Cannot access directory \"{home}/.duckdb\"")),
+            "Cannot access directory \"<server>/.duckdb\""
+        );
+    }
+
+    /// A query is run as it was sent, never pasted inside another: a comment or a `;` at its
+    /// end changes nothing, also when the rows are cut and counted.
+    #[tokio::test]
+    async fn a_trailing_comment_or_semicolon_does_not_break_a_truncated_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = server(dir.path(), false, false).await;
+        if !has_duckdb(&state).await {
+            return;
+        }
+        for query in [
+            "select * from range(5000) -- c",
+            "select * from range(5000); -- c",
+            "select * from range(5000) /* c */ ;",
+            "select * from range(5000) -- c\n;",
+            "select * from range(5000)\n-- c ) ;",
+        ] {
+            let answer = ask(&state, query)
+                .await
+                .unwrap_or_else(|e| panic!("{query}: {e:?}"));
+            assert_eq!((answer.rows.len(), answer.total), (1000, 5000), "{query}");
+            assert!(answer.truncated);
+        }
+        let short = ask(&state, "select ';' as a -- ;").await.unwrap();
+        assert_eq!(short.rows, [json!({"a": ";"})]);
+    }
+
+    /// `query_table` and `query` reach a table by a name the text does not show: every table
+    /// is loaded for a query that calls one, so it never reads a placeholder or old rows.
+    #[tokio::test]
+    async fn a_table_reached_without_being_named_is_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = server(dir.path(), false, false).await;
+        if !has_duckdb(&state).await {
+            return;
+        }
+        let runs = ask(
+            &state,
+            "select count(*) as n from query_table('barca.' || 'ru' || 'ns')",
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.rows, [json!({"n": 0})]);
+        assert_eq!(state.sql.loads.load(Ordering::Relaxed), SOURCES.len());
+        barca_core::db::create_run(
+            &state.config.resolved.db_path,
+            "run-1",
+            "get",
+            "[]",
+            None,
+            Some(1),
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let runs = ask(
+            &state,
+            "select * from query('select count(*) as n from barca.' || 'ru' || 'ns')",
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.rows, [json!({"n": 1})]);
     }
 
     #[tokio::test]
@@ -1074,7 +1473,8 @@ mod tests {
         assert_eq!(nodes.0.len(), 2);
     }
 
-    /// The helper gets none of the server's credentials.
+    /// The helper gets none of the server's credentials, and no `PYTHON*` variable but the two
+    /// an interpreter may need to find `barca`.
     #[test]
     fn the_helper_keeps_no_credential_of_the_server() {
         for name in [
@@ -1083,11 +1483,16 @@ mod tests {
             "GOOGLE_APPLICATION_CREDENTIALS",
             "BARCA_SERVER_TOKEN",
             "BARCA_STORAGE_OPTIONS",
+            "HOME",
+            "PYTHONSTARTUP",
+            "PYTHONINSPECT",
+            "PYTHONWARNINGS",
+            "PYTHONBREAKPOINT",
         ] {
-            assert!(
-                !ENV_KEPT.contains(&name) && !ENV_KEPT_PREFIXES.iter().any(|p| name.starts_with(p)),
-                "{name}"
-            );
+            assert!(!ENV_KEPT.contains(&name), "{name}");
+        }
+        for name in ["PYTHONPATH", "PYTHONHOME"] {
+            assert!(ENV_KEPT.contains(&name), "{name}");
         }
     }
 }

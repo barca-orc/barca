@@ -15,7 +15,14 @@ one runs, and each of these holds without the others:
 - A read-only transaction, rolled back: DuckDB 2 accepts `WITH x AS (DELETE ... RETURNING *)
   SELECT ...` as a `SELECT`, and the transaction refuses the write.
 - Memory and threads are bounded, and nothing is spilled to disk: a query that needs more
-  memory fails.
+  memory fails, and the helper goes on.
+- The answer is bounded: rows are fetched a few at a time and encoded as they come, and a
+  query whose rows pass `MAX_ANSWER_BYTES` is refused before more are read. DuckDB's memory
+  limit covers its own buffers only; without this the rows would be held again in Python, in
+  the line sent to the server, and in the server.
+- The helper is started outside the project (an empty working directory that is also its
+  `HOME`, `python -P`), with DuckDB's secret and extension directories unset: the project is
+  not importable, and no setting or error names the server's home.
 
 Protocol: one JSON document per line. The helper's first line is `{"ready": true, "duckdb":
 version}` or `{"error": {"kind": "no_duckdb", ...}}` (and it exits). Then, from Rust:
@@ -28,8 +35,8 @@ version}` or `{"error": {"kind": "no_duckdb", ...}}` (and it exits). Then, from 
   {"op": "cancel", "id": n}               (no answer: interrupts request n if it is running)
 
 Either request can answer `{"id": n, "error": {"kind", "message", "table"?}}`, with kind
-`refused` (not one SELECT, or a write), `missing_table`, `sql`, `interrupted` or
-`out_of_memory`.
+`refused` (not one SELECT, a write, or more rows than an answer holds), `missing_table`, `sql`,
+`interrupted` or `out_of_memory`. A message is cut at `MAX_MESSAGE` characters.
 
 Requests are read on the main thread and run on one worker thread, so a `cancel` is seen while
 a query runs. Stdin is also the lifeline (`barca._lifeline`): when the server is gone, however
@@ -54,6 +61,13 @@ MEMORY_LIMIT = "1GB"
 THREADS = 2
 # Rows handed to DuckDB in one statement.
 LOAD_BATCH = 5000
+# The most bytes of encoded rows one answer holds. The server reads no longer line than this
+# and a little (`MAX_LINE` in `sql_query.rs`).
+MAX_ANSWER_BYTES = 4 * 1024 * 1024
+# Rows taken from DuckDB at a time while the answer is counted.
+FETCH_ROWS = 64
+# The most characters of an error message sent to the server (DuckDB quotes the query).
+MAX_MESSAGE = 2000
 
 # Applied in order before the first query. `lock_configuration` comes last: after it no
 # statement changes a setting, these included.
@@ -64,6 +78,11 @@ _LOCKDOWN = (
     "SET temp_directory = ''",
     f"SET memory_limit = '{MEMORY_LIMIT}'",
     f"SET threads = {THREADS}",
+    # No directory of the server's user: persistent secrets and installed extensions live
+    # under `~/.duckdb` by default, and DuckDB names those paths in settings and errors.
+    "SET secret_directory = ''",
+    "SET allow_persistent_secrets = false",
+    "SET extension_directory = '/nonexistent'",
     "SET autoinstall_known_extensions = false",
     "SET autoload_known_extensions = false",
     "SET allow_community_extensions = false",
@@ -72,7 +91,11 @@ _LOCKDOWN = (
     "SET lock_configuration = true",
 )
 # Settings a supported DuckDB may not have; the rest must apply or the helper does not start.
-_OPTIONAL = ("allow_community_extensions", "python_enable_replacements")
+_OPTIONAL = (
+    "allow_community_extensions",
+    "python_enable_replacements",
+    "allow_persistent_secrets",
+)
 
 
 class Refused(Exception):
@@ -161,8 +184,8 @@ class Helper:
 
     # ─── queries ──────────────────────────────────────────────────────────────
 
-    def _select(self, query: str) -> None:
-        """Refuse anything but one SELECT, as DuckDB parses it."""
+    def _select(self, query: str) -> str:
+        """The query as one SELECT, as DuckDB parses it; anything else is refused."""
         duckdb = self.duckdb
         try:
             statements = self.con.extract_statements(query)
@@ -174,40 +197,70 @@ class Helper:
         if kind != duckdb.StatementType.SELECT:
             name = str(kind).rsplit(".", 1)[-1].replace("_STATEMENT", "")
             raise Refused(f"only a SELECT, not a {name} statement")
+        return query
 
-    def query(self, request: int, query: str, limit: int) -> dict:
-        query = query.strip().rstrip(";").strip()
-        self._select(query)
-        if _SHOW_TABLES.match(query):
+    def _drop_result(self) -> None:
+        """Let go of a result that was not read to its end (DuckDB 2 keeps the connection
+        for it until then)."""
+        abort = getattr(self.con, "abort", None)
+        if abort is not None:
+            try:
+                abort()
+            except self.duckdb.Error:
+                pass
+
+    def query(self, request: int, query: str, limit: int) -> str:
+        """The answer to `query`, as the JSON line to send: rows are encoded once."""
+        query = self._select(query.strip())
+        if _SHOW_TABLES.match(query.rstrip(";").strip()):
             query = _ALL_TABLES
         con = self.con
         self._check(request)
         con.execute("BEGIN TRANSACTION READ ONLY")
         try:
-            rel = con.sql(query)
-            if rel is None:
-                raise Refused("the statement returns no rows")
-            columns = list(rel.columns)
-            fetched = rel.limit(limit + 1).fetchall()
-            truncated = len(fetched) > limit
-            if truncated:
-                fetched = fetched[:limit]
+            # The statement as it was sent, never inside another: a wrapper (`SELECT ... FROM
+            # (<query>) LIMIT n`) breaks on a trailing `-- comment` or `;`, and telling those
+            # from the same characters in a string is the parser's job. The limit is where
+            # reading stops; the rows past it are counted without being kept.
+            result = con.execute(query)
+            columns = [d[0] for d in result.description or []]
+            encoded: list[str] = []
+            size = 0
+            total = 0
+            while True:
                 self._check(request)
-                counted = con.sql(f"SELECT count(*) FROM ({query}) AS barca_sql").fetchall()
-                total = counted[0][0] if counted else limit
-            else:
-                total = len(fetched)
+                rows = result.fetchmany(FETCH_ROWS)
+                if not rows:
+                    break
+                total += len(rows)
+                for row in rows[: max(0, limit - len(encoded))]:
+                    line = json.dumps({c: _jsonable(v) for c, v in zip(columns, row, strict=False)})
+                    size += len(line)
+                    if size > MAX_ANSWER_BYTES:
+                        raise Refused(
+                            f"the rows are more than the {MAX_ANSWER_BYTES // (1024 * 1024)}MB "
+                            f"an answer holds (reached at row {len(encoded) + 1}): select "
+                            "fewer or narrower columns, aggregate, or send a smaller limit"
+                        )
+                    encoded.append(line)
         finally:
+            self._drop_result()
             try:
                 con.execute("ROLLBACK")
             except self.duckdb.Error:
                 pass  # an error already ended the transaction
-        rows = [{c: _jsonable(v) for c, v in zip(columns, r, strict=False)} for r in fetched]
-        return {"columns": columns, "rows": rows, "total": total, "truncated": truncated}
+        head = json.dumps({"id": request, "columns": columns})
+        tail = json.dumps({"total": total, "truncated": total > len(encoded)})
+        return f'{head[:-1]}, "rows": [{", ".join(encoded)}], {tail[1:]}'
 
     # ─── one request ──────────────────────────────────────────────────────────
 
-    def answer(self, message: dict) -> dict:
+    def answer(self, message: dict) -> str:
+        """The JSON line that answers `message`."""
+        answer = self._answer(message)
+        return answer if isinstance(answer, str) else json.dumps(answer)
+
+    def _answer(self, message: dict) -> dict | str:
         duckdb = self.duckdb
         request = message["id"]
         with self.lock:
@@ -216,7 +269,7 @@ class Helper:
             if message["op"] == "load":
                 self.load(message["table"])
                 return {"id": request, "ok": True}
-            return {"id": request, **self.query(request, message["query"], message["limit"])}
+            return self.query(request, message["query"], message["limit"])
         except Refused as e:
             return _error(request, "refused", str(e))
         except duckdb.InterruptException as e:
@@ -242,11 +295,11 @@ class Helper:
 
 
 def _error(request: int, kind: str, message: str) -> dict:
-    return {"id": request, "error": {"kind": kind, "message": message}}
+    return {"id": request, "error": {"kind": kind, "message": message[:MAX_MESSAGE]}}
 
 
-def _say(out, document: dict) -> None:
-    out.write(json.dumps(document))
+def _say(out, document: dict | str) -> None:
+    out.write(document if isinstance(document, str) else json.dumps(document))
     out.write("\n")
     out.flush()
 
@@ -278,7 +331,7 @@ def main() -> None:
         while True:
             message = work.get()
             try:
-                answer = helper.answer(message)
+                answer: dict | str = helper.answer(message)
             except Exception as e:  # noqa: BLE001 - the server restarts a helper that says so
                 answer = _error(message.get("id", -1), "internal", f"{type(e).__name__}: {e}")
             _say(out, answer)

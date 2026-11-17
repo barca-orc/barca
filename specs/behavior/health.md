@@ -556,6 +556,13 @@ cut at the row limit below.
   SELECT`), is refused with `400` and the usage error envelope. So is a SQL error.
 - `limit` defaults to 1,000 and is at most 10,000 (a larger one is lowered to it); `truncated`
   and `total` say what was cut.
+- An answer holds at most 4MB of encoded rows. The helper fetches rows a few at a time and
+  refuses (`400`) when the first `limit` rows pass that, before reading the rest; the server
+  reads no line of the helper longer than 16MB and replaces a helper that sends one. DuckDB's
+  memory limit bounds its own buffers only: this bounds what Python and the server hold.
+- Four queries are admitted at once: one running, three waiting inside their own 5 seconds.
+  One more is answered `429` with `Retry-After` at once, so no client can make every other
+  wait.
 - A query has 5 seconds, waiting for the helper and loading tables included; past it the answer
   is `408` (usage envelope) and the query is cancelled: the helper is told to interrupt it and,
   when it has not stopped a second later, is killed. A table whose load used the time up stays
@@ -570,8 +577,12 @@ cut at the row limit below.
   and the configuration locked, so no statement enables it; the statement is checked with
   DuckDB's parser to be one `SELECT`; it runs in a read-only transaction that is rolled back,
   which refuses a write a `SELECT` carries (DuckDB 2 accepts `WITH x AS (DELETE ... RETURNING
-  *) SELECT ...`); memory is limited to 1GB, with nothing spilled to disk, and threads to two;
-  the helper inherits none of the
+  *) SELECT ...`); the statement runs as it was sent, never inside another; memory is limited
+  to 1GB, with nothing spilled to disk, and threads to two, and a query that needs more is a
+  `400` that leaves the helper and its tables in place; the helper's working directory and
+  `HOME` are an empty directory of its own (the project is not importable, DuckDB's secret and
+  extension directories are unset) and the server's paths are removed from the error messages
+  it answers; the helper inherits none of the
   server's environment but what an interpreter needs. Rows reach it as query parameters, never
   as files.
 - Rust hands the helper the rows of a table when a query names the table and it is not loaded
@@ -580,7 +591,11 @@ cut at the row limit below.
   `barca.nodes` is the kept status of `GET /nodes`, handed over again at least every 30 seconds
   (health moves with the clock). A query on an unchanged server reads no database and computes
   no status. At most 100,000 rows of a table are loaded, newest first; `notes` says when a
-  table has more.
+  table has more. A query that calls `query(...)` or `query_table(...)`, which reach a table
+  by a name the text does not show, gets every table. The helper has 60 seconds to take a
+  table; one that has not is replaced.
+- The route exposes the rows of `barca.*` tables to whoever may call it, the error text of
+  failed steps and artifact paths among them, as the other read routes do.
 - A table is one entry in the route's table list (`SOURCES`): its name, the columns `barca sql`
   gives it, whether it depends on the graph, and a function from the metadata snapshot (and
   graph) to rows. #965's tables are added there.
@@ -656,8 +671,9 @@ cut at the row limit below.
 - When ticks stop (the scheduler is down, the schedule paused or removed), a standing verdict
   expires within one interval plus the last tick's duration and grace, and the node reads
   `undecided` again; `last_check` keeps the record.
-- The query helper is restarted when it dies or a query exceeds its memory limit; the request
-  in flight answers `503`. Without DuckDB installed the route answers `503` naming the extra,
+- The query helper is restarted when it dies, sends a line longer than 16MB or does not take a
+  table within 60 seconds; the request in flight answers `503`. A query that exceeds DuckDB's
+  memory limit is a `400` and the helper stays. Without DuckDB installed the route answers `503` naming the extra,
   on every request until it is installed; every other route is unaffected.
 
 ## Acceptance and evidence

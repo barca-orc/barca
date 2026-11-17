@@ -14,6 +14,8 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -309,6 +311,175 @@ def test_only_one_select_over_barcas_tables_is_answered(project, server, tmp_pat
     assert (len(body["rows"]), body["total"], body["truncated"]) == (1000, 20000, True)
     status, body = ask(server, "select * from range(20000)", limit=50000)
     assert (len(body["rows"]), body["total"]) == (10000, 20000)
+
+
+def rss_mb(pid: int) -> int:
+    """The resident memory of `pid` now, in MB."""
+    out = subprocess.run(
+        ["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, check=True
+    )
+    return int(out.stdout) // 1024
+
+
+def raw(server: Serve, body: dict) -> tuple[int, bytes, dict]:
+    """`POST /sql/query`: the status, the undecoded body and the headers."""
+    request = urllib.request.Request(
+        f"{server.url}/sql/query",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, response.read(), dict(response.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+
+
+def test_an_answer_is_a_few_megabytes_at_most_and_memory_stays_bounded(project, server):
+    """Wide rows are refused in the helper before they are read to the end. DuckDB's memory
+    limit covers its own buffers only: without the cap these two queries took the helper and
+    the server past 4GB each."""
+    assert ask(server, "select 1")[0] == 200
+    (helper,) = helpers_of(server)
+    peak = {"server": 0, "helper": 0}
+    done = threading.Event()
+
+    def watch() -> None:
+        while not done.is_set():
+            peak["server"] = max(peak["server"], rss_mb(server.proc.pid))
+            peak["helper"] = max(peak["helper"], rss_mb(helper))
+            time.sleep(0.02)
+
+    watcher = threading.Thread(target=watch)
+    watcher.start()
+    try:
+        for wide in (
+            "select repeat('x', 100000) as s from range(10000)",
+            "select range(3000) as l from range(10000)",
+        ):
+            status, body, _ = raw(server, {"query": wide, "limit": 10000})
+            assert status == 400, (wide, body[:300])
+            assert len(body) < 2000, (wide, len(body))
+            envelope = json.loads(body)
+            assert envelope["kind"] == "usage", envelope
+            assert "4MB" in envelope["error"] and "narrower" in envelope["error"], envelope
+        # Under the cap the same rows are answered: about 1MB of them.
+        status, body, _ = raw(
+            server, {"query": "select repeat('x', 100000) as s from range(10000)", "limit": 10}
+        )
+        assert status == 200 and 1_000_000 < len(body) < 1_100_000, (status, len(body))
+        assert json.loads(body)["total"] == 10000
+        # The largest answer there is: just under the cap.
+        status, body, _ = raw(
+            server, {"query": "select repeat('x', 390) as s from range(10000)", "limit": 10000}
+        )
+        assert status == 200 and len(body) < 5 * 1024 * 1024, (status, len(body))
+        assert len(json.loads(body)["rows"]) == 10000
+    finally:
+        done.set()
+        watcher.join()
+    # DuckDB may use its 1GB; Python and the server hold megabytes on top, not the rows.
+    assert peak["helper"] < 1800, peak
+    assert peak["server"] < 600, peak
+    assert helpers_of(server) == [helper], "the helper was not replaced"
+
+
+def test_a_query_that_needs_too_much_memory_is_a_usage_error_and_the_helper_stays(server):
+    assert ask(server, "select count(*) from barca.runs")[0] == 200
+    (helper,) = helpers_of(server)
+    for _ in range(3):
+        status, body = ask(server, "select string_agg(repeat('x', 1000), '') from range(100000000)")
+        assert status == 400, body
+        assert body["kind"] == "usage" and "memory" in body["error"], body
+    status, body = ask(server, "select count(*) as n from barca.runs")
+    assert (status, body["rows"]) == (200, [{"n": 0}])
+    assert helpers_of(server) == [helper]
+
+
+def test_one_client_cannot_hold_the_route_for_everyone(project, server):
+    """Forty slow queries at once: four are admitted (one running, three waiting) and end 408;
+    the others are answered 429 at once, with when to try again."""
+    assert ask(server, "select 1")[0] == 200
+    answers: list[tuple[int, float, dict]] = []
+
+    def slow() -> None:
+        started = time.monotonic()
+        status, _, headers = raw(server, {"query": RUNAWAY})
+        answers.append((status, time.monotonic() - started, headers))
+
+    threads = [threading.Thread(target=slow) for _ in range(40)]
+    for t in threads:
+        t.start()
+    # While they are held, another client is told at once, not after five seconds.
+    time.sleep(1)
+    started = time.monotonic()
+    status, body = ask(server, "select 1")
+    assert status == 429 and time.monotonic() - started < 1, (status, body)
+    assert body["kind"] == "infra" and "again" in body["remediation"], body
+    code, _, err = cli_sql(project, server, "select count(*) from barca.runs")
+    assert code == 3 and "queries already" in err, err
+    for t in threads:
+        t.join(timeout=60)
+    by_status: dict[int, int] = {}
+    for status, _, _ in answers:
+        by_status[status] = by_status.get(status, 0) + 1
+    assert by_status == {408: 4, 429: 36}, by_status
+    for status, took, headers in answers:
+        if status == 429:
+            assert took < 2 and headers.get("retry-after") == "1", (took, headers)
+    # The route is free again as soon as they end.
+    status, body = ask(server, "select 1 as one")
+    assert (status, body["rows"]) == (200, [{"one": 1}])
+
+
+def test_the_helper_runs_outside_the_project_and_names_no_directory_of_the_server(project, server):
+    # A module in the project root that DuckDB would import by name (`test_all_types()` asks
+    # for `pytz`): the helper does not start in the project, so it is never imported.
+    marker = project / "imported-by-the-helper"
+    (project / "pytz.py").write_text(
+        f"open({str(marker)!r}, 'w').close()\nraise ImportError('not the real pytz')\n"
+    )
+    private = [str(Path.home()), str(project), str(project.resolve()), ".duckdb"]
+    for probe in (
+        "select * from test_all_types()",
+        "select * from duckdb_secrets()",
+        "select * from duckdb_extensions()",
+        "select current_setting('secret_directory') as d",
+        "select current_setting('extension_directory') as d",
+        "select current_setting('home_directory') as d",
+        "select name, value from duckdb_settings()",
+        "select * from read_csv('pipeline.py')",
+        "select * from glob('~/*')",
+        "select getenv('HOME')",
+    ):
+        _, body, _ = raw(server, {"query": probe})
+        for path in private:
+            assert path.encode() not in body, (probe, path, body[:400])
+    assert not marker.exists()
+    assert not (project / ".tmp").exists()
+    status, body = ask(server, "select current_setting('secret_directory') as d")
+    assert (status, body["rows"]) == (200, [{"d": ""}])
+
+
+def test_a_query_is_run_as_sent_and_reaches_no_table_unloaded(project, server):
+    assert finished(server, "report")["status"] == "success"
+    # A trailing comment or `;` on a query whose rows are cut and counted.
+    for query in (
+        "select * from range(5000) -- c",
+        "select * from range(5000); -- c",
+        "select * from range(5000) /* c */ ;",
+    ):
+        status, body = ask(server, query)
+        assert status == 200, (query, body)
+        assert (len(body["rows"]), body["total"], body["truncated"]) == (1000, 5000, True)
+    # A table reached by a name the text does not show is loaded like one that is named.
+    status, body = ask(server, "select count(*) as n from query_table('barca.' || 'ru' || 'ns')")
+    assert (status, body["rows"]) == (200, [{"n": 1}]), body
+    status, body = ask(
+        server, "select * from query('select count(*) as n from barca.' || 'no' || 'des')"
+    )
+    assert (status, body["rows"]) == (200, [{"n": 2}]), body
 
 
 def test_a_query_past_five_seconds_is_a_408_and_stops(project, server):

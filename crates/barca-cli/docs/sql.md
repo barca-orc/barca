@@ -162,7 +162,14 @@ query run here:
   most 10000 of each from a server); stderr says when a table has more.
 - A query has 5 seconds, waiting for the server's one query helper and loading the tables
   included. Past it the query is cancelled and the command exits 2: narrow the query.
-- An answer holds at most 10000 rows. `--all`, or a `--limit` above that, runs the query here.
+- An answer holds at most 10000 rows and 4MB of them. `--all`, or a `--limit` above that, runs
+  the query here; rows past 4MB are refused with exit 2 (select fewer or narrower columns,
+  or aggregate). A query that needs more than the 1GB of memory the server gives a query is
+  exit 2 too.
+- The server admits four queries at once, one running and three waiting. One more exits 3
+  (`429`): run it again in a moment.
+- A query that calls `query(...)` or `query_table(...)`, which read a table by a name built at
+  run time, has all of barca's tables loaded for it.
 - The query also runs here when files are typed after it (the server's `barca.nodes` is every
   deployed file's), when it names a result view as well, and, with a configured server (no
   `--server`), when it names `barca.nodes`, whose `local` and `unsynced` describe this machine.
@@ -180,6 +187,12 @@ server's files and credentials are:
 - more than one statement;
 - a write inside a `SELECT` (`with gone as (delete from barca.runs returning *) select ...`):
   the query runs in a read-only transaction.
+
+The tables are barca's records as every read route shows them. `barca.runs` and
+`barca.materializations` carry the error text of failed steps (`error`, `error_message`,
+`failure`), which holds whatever the pipeline's code put in an exception, and artifact paths:
+whoever may send a query may read those, as with `GET /history` and `GET /runs/{run_id}`. Use
+`--auth token` where that matters. An answer can also show DuckDB's version and platform.
 
 `barca docs server-mode` ("The server's HTTP API") gives the route's request, answer and status
 codes.

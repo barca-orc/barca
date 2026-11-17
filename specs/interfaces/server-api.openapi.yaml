@@ -729,8 +729,11 @@ paths:
         mode requires a token as on every route. The server never runs SQL over results or files:
         the query runs in one long-lived helper process whose in-memory DuckDB holds those tables
         only, with external access disabled (no file, network or extension access) and its
-        configuration locked, in a read-only transaction, under a memory limit; rows are handed to
-        it by the server when the metadata database or the graph changed. A query has 5 seconds,
+        configuration locked, in a read-only transaction, under a memory limit, in an empty
+        directory outside the project and without the server''s credentials; rows are handed to
+        it by the server when the metadata database or the graph changed. An answer holds at most
+        4MB of rows; four queries are admitted at once. The tables carry the error text of failed
+        steps and artifact paths, as the other read routes do. A query has 5 seconds,
         waiting for the helper and loading tables included. barca sql with a server sends a query
         that names only barca''s tables here.'
       requestBody:
@@ -751,13 +754,26 @@ paths:
         '400':
           description: 'Not one SELECT over barca''s tables: a result view or any other relation, a
             file or URL, another statement type, more than one statement, a write inside a SELECT,
-            a SQL error, or a body that is not the request. Usage envelope.'
+            a SQL error, rows of more than 4MB, a query needing more memory than DuckDB is given
+            (1GB; the helper stays), or a body that is not the request. Usage envelope.'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '408':
           description: The query did not finish within 5 seconds and was cancelled. Usage envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Four queries are admitted already (one running, three waiting); this one was
+            not started. Infra envelope.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+              description: Seconds to wait before sending the query again
           content:
             application/json:
               schema:
