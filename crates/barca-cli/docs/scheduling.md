@@ -440,7 +440,14 @@ the pipeline page, the assets list shows a Running badge with the elapsed time (
 done/total for a partitioned node) linking to the run, each pipeline and group counts its
 running nodes, and Runs in the sidebar shows how many runs are in progress. It reads `GET /state`,
 whose `running` field names the run working on each node, every 2 s while anything runs.
-`GET /runs?status=running` lists the runs in flight with the nodes each is working on.
+`GET /runs?status=running` lists the runs in flight with the nodes each is working on
+(`barca history --status running --server`).
+
+The Runs page's strip is `activity` of `GET /runs` (`barca history --activity --server`): the
+runs started in each of the last 24 hours, counted by the server over every recorded run of
+the window, whatever the list has loaded. "Hide schedule runs" asks for
+`GET /runs?triggered_by=manual,api,client`, which leaves a schedule's runs out of the list,
+its count and the strip.
 
 The UI's Runs view shows persisted CLI, scheduled and HTTP runs, plus queued/live server
 runs, with what started each. Select a run to inspect its status, timing, steps, errors and

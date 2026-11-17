@@ -139,7 +139,9 @@ export const api = {
         : `/state/rollup?${new URLSearchParams('group' in scope ? { targets: scope.group } : { files: scope.file })}`,
       { signal },
     ),
-  runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
+  /** The newest runs with the last day's `activity`; `triggeredBy` keeps the runs started that way (`manual,api,client`). */
+  runs: (limit = 100, triggeredBy: string | null = null) =>
+    request<RunList>(`/runs?${new URLSearchParams({ limit: String(limit), ...(triggeredBy ? { triggered_by: triggeredBy } : {}) })}`),
   runDetail: (id: string) => request<RunView>(`/runs/${encodeURIComponent(id)}`),
   /** One page of a run's steps (`?offset=`, failed steps first): `steps_page.next_offset` is the next. */
   runStepsPage: (id: string, offset: number, limit = 1000) =>

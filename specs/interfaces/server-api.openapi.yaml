@@ -587,7 +587,8 @@ paths:
               schema: *id005
       description: Newest first. Without limit, every run, as barca history --json prints without -l.
         The filters combine with AND; total and truncated count the runs they keep, and limit applies
-        after them. An unknown filter value is a 400.
+        after them. An unknown filter value is a 400. When status names running, each listed run
+        in flight carries now, the nodes it is working on.
       parameters: &id010
       - name: limit
         in: query
@@ -2856,14 +2857,21 @@ paths:
               schema: *id003
               description: Methods accepted by this route
         '400':
-          description: Axum query extractor rejects malformed/non-unsigned limits
+          description: Axum query extractor rejects malformed/non-unsigned limits; an unknown
+            triggered_by value is a JSON error
           content:
             text/plain:
               schema: *id003
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       description: Newest first, all pipelines in this local environment. No source filter. Snapshot inspection
         does not create/migrate the database. Limit defaults to 100 and is clamped to 1–1000.
         With status=running, only the runs in flight (pending or running), this server's and the
         CLI runs on the same metadata database whose owner is alive, each with active_steps.
+        With triggered_by, only the runs started that way, and total counts those. Without
+        status=running the body has activity, the runs started in the last 24 hours counted by
+        hour over every recorded run of the window (and of triggered_by), not over the runs listed.
       parameters: &id024
       - name: limit
         in: query
@@ -2880,6 +2888,13 @@ paths:
           enum:
           - running
         description: running lists only the runs in flight; any other value is a 400.
+      - name: triggered_by
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'barca history --triggered-by: comma-separated, any of manual, api, schedule,
+          client. manual,api,client leaves the schedule''s runs out. An unknown value is a 400.'
     head:
       summary: List durable history joined with retained live runs (headers only)
       operationId: head_runs
@@ -6504,8 +6519,13 @@ components:
       type: object
       additionalProperties: false
       description: With status=running only, active_steps as a run's panel lists them. Experimental.
-      required: [running, queued, keys, groups]
+      required: [running, queued, keys, groups, line]
       properties:
+        line:
+          type: string
+          description: The same in one line, as barca history --status running prints it under the
+            run, "executing 3, orders, clean, report", then how many wait and the keys done. The
+            first five executing nodes are named.
         running:
           type: array
           description: The nodes executing, the one furthest from done first.
@@ -6567,6 +6587,87 @@ components:
             $ref: '#/components/schemas/RunSummary'
         total: *id044
         truncated: *id043
+        activity:
+          $ref: '#/components/schemas/RunActivity'
+    RunActivity:
+      type: object
+      additionalProperties: false
+      description: The runs started in the last 24 hours, hour by hour, counted by the database over
+        every recorded run of the window, the activity of barca history --activity --json. Absent
+        with status=running. Experimental.
+      required: [since, until, triggered_by, hours, total, summary]
+      properties:
+        since:
+          type: string
+          description: The window's start, the start of the hour 23 hours before the current one
+            (RFC 3339, UTC).
+        until:
+          type: string
+          description: The window's end, the end of the current hour, which is still filling.
+        triggered_by:
+          type: array
+          description: The triggers counted; empty for every run, also the ones that recorded none.
+          items:
+            $ref: '#/components/schemas/TriggeredBy'
+        hours:
+          type: array
+          description: One entry per hour of UTC, oldest first, the hours without runs included.
+          minItems: 24
+          maxItems: 24
+          items:
+            $ref: '#/components/schemas/ActivityHour'
+        total:
+          $ref: '#/components/schemas/ActivityHour'
+          description: The window as a whole; its at is since.
+        summary:
+          type: string
+          description: The window in one line, "1,440 runs in the last 24 hours" followed by the
+            not successful, the in progress and the counts by trigger that are not zero.
+    ActivityHour:
+      type: object
+      additionalProperties: false
+      description: The runs started in one hour.
+      required: [at, runs, ok, not_successful, in_progress, by_status, by_trigger]
+      properties:
+        at:
+          type: string
+          description: The hour's start, RFC 3339 in UTC. A reader shows it in its own zone.
+        runs: {type: integer, minimum: 0}
+        ok:
+          type: integer
+          minimum: 0
+          description: Of runs, the ones that succeeded.
+        not_successful:
+          type: integer
+          minimum: 0
+          description: Of runs, the ones that failed, errored, were cancelled or interrupted.
+        in_progress:
+          type: integer
+          minimum: 0
+          description: Of runs, the ones still running.
+        by_status:
+          type: object
+          additionalProperties: false
+          required: [success, failed, error, cancelled, interrupted, running]
+          properties:
+            success: {type: integer, minimum: 0}
+            failed: {type: integer, minimum: 0}
+            error: {type: integer, minimum: 0}
+            cancelled: {type: integer, minimum: 0}
+            interrupted: {type: integer, minimum: 0}
+            running: {type: integer, minimum: 0}
+        by_trigger:
+          type: object
+          additionalProperties: false
+          description: By what started the runs; unknown counts runs recorded by a barca that did
+            not record it.
+          required: [schedule, api, manual, client, unknown]
+          properties:
+            schedule: {type: integer, minimum: 0}
+            api: {type: integer, minimum: 0}
+            manual: {type: integer, minimum: 0}
+            client: {type: integer, minimum: 0}
+            unknown: {type: integer, minimum: 0}
     RunStep:
       type: object
       additionalProperties: false
@@ -7802,6 +7903,10 @@ components:
         line:
           $ref: '#/components/schemas/RunLine'
           description: In a list, the run in the words of a list row. Experimental.
+        now:
+          $ref: '#/components/schemas/RunNow'
+          description: With status=running in the filter, on a run in flight, what it is working on
+            now, the now of GET /runs?status=running. Absent otherwise. Experimental.
         retries:
           type: integer
           minimum: 0

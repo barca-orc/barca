@@ -754,6 +754,32 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     let failure = &rows.iter().find(|r| r["id"] == broken.as_str()).unwrap()["first_failure"];
     assert!(failure["node_id"].as_str().unwrap().ends_with(":broken"));
     assert_eq!(failure["error"], "ValueError: expected contract failure");
+    // The activity is counted over the window, whatever `limit` lists (#991).
+    let one = checked(&router, "GET", "/runs?limit=1", "/runs", 200).await;
+    assert_eq!(one["runs"].as_array().unwrap().len(), 1);
+    assert_eq!(one["activity"]["total"]["runs"], runs["total"]);
+    assert_eq!(one["activity"]["hours"].as_array().unwrap().len(), 24);
+    assert_eq!(one["activity"]["hours"][23]["runs"], runs["total"]);
+    assert!(one["activity"]["total"]["not_successful"].as_u64().unwrap() >= 1);
+    // These runs were asked for over HTTP: none is the schedule's.
+    let scheduled = checked(&router, "GET", "/runs?triggered_by=schedule", "/runs", 200).await;
+    assert_eq!(scheduled["total"], 0);
+    assert_eq!(scheduled["activity"]["total"]["runs"], 0);
+    assert_eq!(scheduled["activity"]["triggered_by"], json!(["schedule"]));
+    let others = checked(
+        &router,
+        "GET",
+        "/runs?triggered_by=manual,api,client",
+        "/runs",
+        200,
+    )
+    .await;
+    assert_eq!(others["total"], runs["total"]);
+    assert_eq!(
+        others["activity"]["total"]["by_trigger"]["api"],
+        runs["total"]
+    );
+    checked(&router, "GET", "/runs?triggered_by=cron", "/runs", 400).await;
     let state = checked(&router, "GET", "/state?targets=broken", "/state", 200).await;
     let node = &state.as_array().unwrap()[0];
     assert!(node["last_success_at"].is_null());
@@ -843,6 +869,27 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     let in_flight = checked(&router, "GET", "/runs?status=running", "/runs", 200).await;
     assert_eq!(in_flight["runs"][0]["id"], slow.as_str());
     assert!(in_flight["runs"][0]["active_steps"].is_array());
+    assert!(in_flight["activity"].is_null());
+    let line = in_flight["runs"][0]["now"]["line"].as_str().unwrap();
+    assert_eq!(line, "executing 1: slow");
+    // `barca history --status running` reads the same `now` from /history (#991).
+    let history = checked(&router, "GET", "/history?status=running", "/history", 200).await;
+    let listed = history["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["run_id"] == slow.as_str())
+        .expect("the run in flight is in the history");
+    assert_eq!(listed["now"], in_flight["runs"][0]["now"]);
+    // Not asked for the runs in progress: no `now`.
+    let all = checked(&router, "GET", "/history", "/history", 200).await;
+    assert!(
+        all["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r.get("now").is_none())
+    );
     checked(&router, "GET", "/runs?status=finished", "/runs", 400).await;
     checked(
         &router,

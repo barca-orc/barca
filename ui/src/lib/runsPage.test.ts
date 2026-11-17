@@ -1,20 +1,20 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
-import type { RunSummary } from './types'
-import { activityBarLabel, activityTicks, canLoadMore, failedChipCount, INITIAL_RUNS, runsCountLabel, parseRunFilters, RUNS_MAX, runActivity, stepName, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
+import type { ActivityHour, RunSummary } from './types'
+import { activityBarLabel, activityHourAt, activityTicks, canLoadMore, failedChipCount, INITIAL_RUNS, runsCountLabel, parseRunFilters, RUNS_MAX, runsTriggeredBy, stepName, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
 describe('run filters in the URL', () => {
   it('round-trips, and a default leaves no parameter', () => {
-    const filters = { filter: 'failed' as const, query: 'orders', hour: 3_600_000 }
+    const filters = { filter: 'failed' as const, query: 'orders', hour: 3_600_000, hideSchedule: true }
     const written = writeRunFilters(new URLSearchParams('run=r1'), filters)
-    expect(written.toString()).toBe('run=r1&status=failed&q=orders&hour=3600000')
+    expect(written.toString()).toBe('run=r1&status=failed&q=orders&hour=3600000&schedule=hide')
     expect(parseRunFilters(written)).toEqual(filters)
-    expect(writeRunFilters(written, { filter: 'all', query: '', hour: null }).toString()).toBe('run=r1')
+    expect(writeRunFilters(written, { filter: 'all', query: '', hour: null, hideSchedule: false }).toString()).toBe('run=r1')
   })
   it('ignores what it cannot mean', () => {
-    expect(parseRunFilters(new URLSearchParams('status=x&hour=soon'))).toEqual({ filter: 'all', query: '', hour: null })
+    expect(parseRunFilters(new URLSearchParams('status=x&hour=soon'))).toEqual({ filter: 'all', query: '', hour: null, hideSchedule: false })
   })
 })
 
@@ -37,6 +37,14 @@ describe('runs program', () => {
   it('toggles the hour filter', () => {
     expect(run({ type: 'hour_toggled', at: 3600 }).model.hour).toBe(3600)
     expect(run({ type: 'hour_toggled', at: 3600 }, { type: 'hour_toggled', at: 3600 }).model.hour).toBeNull()
+  })
+
+  it('hides the schedule\'s runs by asking the server for the other triggers', () => {
+    const hidden = run({ type: 'schedule_toggled' })
+    expect(hidden.model.hideSchedule).toBe(true)
+    expect(hidden.effects).toEqual([{ type: 'filters', filters: { filter: 'all', query: '', hour: null, hideSchedule: true } }])
+    expect(runsTriggeredBy(hidden.model)).toBe('manual,api,client')
+    expect(runsTriggeredBy(run({ type: 'schedule_toggled' }, { type: 'schedule_toggled' }).model)).toBeNull()
   })
 
   it('retries the request that failed', () => {
@@ -67,26 +75,25 @@ describe('run list telemetry', () => {
     expect(visibleRuns(runs, { filter: 'all', query: '', hour: hour - 3_600_000 }).map((r) => r.id)).toEqual(['d'])
   })
 
-  it('counts the last day hour by hour, with the median of finished runs', () => {
-    const day = runActivity(runs, NOW)
-    expect(day.hours).toHaveLength(24)
-    expect(day).toMatchObject({ total: 4, failed: 2, medianSeconds: 3, partial: false })
-    expect(day.hours.at(-1)).toMatchObject({ ok: 1, failed: 1, live: 1 })
-    expect(runActivity(runs.slice(0, 2), NOW, 24, true).partial).toBe(true)
-  })
-
-  const failure = { node_id: 'p.py:orders[day=1]', error: 'KeyError: x' }
-
   it('names a step by its short name, with its key', () => {
     expect(stepName('a/p.py:orders[at=12:00]')).toBe('orders[at=12:00]')
   })
 
-  it('labels a bar with what failed first, and ticks the axis', () => {
-    // The bar repeats the row's own line (`line.failure`, worded by the server).
-    const day = runActivity([{ ...run('f', 'failed', 10), first_failure: failure, line: { steps: '', steps_detail: '', failure: 'orders[day=1]: KeyError: x', failure_detail: null } }], NOW)
-    expect(activityBarLabel(day.hours.at(-1)!)).toContain('1 not successful\norders[day=1]: KeyError: x')
-    const ticks = activityTicks(day.hours)
-    expect(ticks.length).toBeGreaterThanOrEqual(3)
+  it('labels a bar with the server\'s counts for its hour, and ticks the axis', () => {
+    // `activity.hours` of `GET /runs`: 24 hours of UTC, counted by the server.
+    const counts = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
+    const triggers = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
+    const start = Date.parse('2026-10-28T13:00:00Z')
+    const hours: ActivityHour[] = Array.from({ length: 24 }, (_, i) => ({
+      at: new Date(start + i * 3_600_000).toISOString().replace('.000Z', 'Z'),
+      runs: 0, ok: 0, not_successful: 0, in_progress: 0, by_status: counts, by_trigger: triggers,
+    }))
+    hours[23] = { ...hours[23]!, runs: 62, ok: 59, not_successful: 2, in_progress: 1 }
+    expect(activityHourAt(hours[23]!)).toBe(Date.parse('2026-10-29T12:00:00Z'))
+    expect(activityBarLabel(hours[23]!, 'utc')).toBe('12:00 UTC: 62 runs, 2 not successful, 1 in progress')
+    expect(activityBarLabel({ ...hours[0]!, runs: 1, ok: 1 }, 'utc')).toBe('13:00 UTC: 1 run')
+    const ticks = activityTicks(hours, 6, 'utc')
+    expect(ticks.map((t) => t.label)).toEqual(['18:00', '00:00', '06:00'])
     expect(ticks.every((t) => t.index < 20)).toBe(true)
   })
 })

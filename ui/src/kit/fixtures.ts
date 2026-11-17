@@ -556,6 +556,7 @@ const rebuildNow: RunNow = {
     { id: 'group:finance', group: 'finance', running: 1, queued: 1 },
     { id: 'group:web', group: 'web', running: 1, queued: 0 },
   ],
+  line: 'executing 2: sessionize, ltv_by_account · 1 queued · 3,120/5,000 keys',
 }
 
 /** The run overview (`RunOverviewView`) in each state it says something different in. */

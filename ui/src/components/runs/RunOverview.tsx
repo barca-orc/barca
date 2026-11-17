@@ -20,7 +20,7 @@ const ACTIVE_SHOWN = 8
 const GROUPS_SHOWN = 5
 
 /** A live run the server has not listed as in flight yet: nothing executing, nothing queued. */
-const NOTHING_NOW: RunNow = { running: [], queued: 0, keys: null, groups: [] }
+const NOTHING_NOW: RunNow = { running: [], queued: 0, keys: null, groups: [], line: '' }
 
 export interface RunOverviewViewProps {
   run: RunView

@@ -53,7 +53,7 @@ mod transport;
 
 pub(crate) use doctor::doctor_checks;
 pub(crate) use inspect::{
-    history, list, pause, queue, resume, rollup, run_detail, sql, stats, status,
+    activity, history, list, pause, queue, resume, rollup, run_detail, sql, stats, status,
 };
 pub(crate) use logs::logs;
 pub(crate) use runs::{RunArgs, run};

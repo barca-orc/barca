@@ -326,6 +326,12 @@ Examples:
   barca history --status failed,interrupted --since 24h   # what went wrong in the last day
   barca history --target clean             # runs whose target or job is clean
   barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
+  barca history --triggered-by manual,api,client   # every run but the schedule's
+  barca history --status running           # runs in progress, each with the nodes it is executing now
+  barca history --status running --json --fields run_id,now   # {running: [...], queued, keys, groups, line} per run
+  barca history --activity                 # the last 24 hours, hour by hour: runs by status and by trigger
+  barca history --activity --json          # {activity: {since, until, hours: [...], total, summary}}
+  barca history --activity --triggered-by manual,api,client --server   # a server's activity without its schedule's runs
   barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
   barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
   barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}
@@ -813,7 +819,7 @@ pub(crate) enum Cli {
         /// One run in detail: its fields, the steps it recorded (the first 1000, failed steps
         /// always; --limit and --all change it), and each failed step's error, traceback and
         /// how its worker ended
-        #[arg(value_name = "RUN_ID", conflicts_with_all = ["reconcile", "fields", "status", "target", "triggered_by", "since"])]
+        #[arg(value_name = "RUN_ID", conflicts_with_all = ["reconcile", "fields", "status", "target", "triggered_by", "since", "activity"])]
         run_id: Option<String>,
         /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
         #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all", "status", "target", "triggered_by", "since"])]
@@ -829,6 +835,10 @@ pub(crate) enum Cli {
         /// Only runs started this way (comma-separated): manual, api, schedule, client
         #[arg(long, value_name = "TRIGGER[,...]")]
         triggered_by: Option<String>,
+        /// Instead of the runs: how many started in each of the last 24 hours (UTC), by status
+        /// and by what started them, counted over every recorded run; takes --triggered-by
+        #[arg(long, conflicts_with_all = ["reconcile", "fields", "status", "target", "since", "limit", "all"])]
+        activity: bool,
         /// Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an
         /// RFC 3339 time or a UTC date (2026-10-22)
         #[arg(long, value_name = "WHEN")]
