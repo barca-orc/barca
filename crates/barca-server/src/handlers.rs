@@ -14,8 +14,7 @@ use serde_json::{Value, json};
 /// `GET /health` — liveness (or `draining`), version, the API version a client checks, the
 /// environment and artifact store this server uses, whether it is read-only, whether it runs
 /// the scheduler (and whether it is still running), why the metadata DB cannot be used if it
-/// cannot, and the cache size against its limit. No core work (a read-only server reads the
-/// recorded queue, one small table).
+/// cannot, and the cache size against its limit. No core work, and no wait on a read.
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     let cfg = &state.config.resolved;
     Json(json!({
@@ -24,7 +23,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         // When this server started: a client that reconnects tells a restart by it.
         "started_at": state.started,
         // The run queue: paused or not, how many runs wait and how many execute.
-        "queue": crate::queue::health(&state).await,
+        "queue": crate::queue::health(&state),
         "version": env!("CARGO_PKG_VERSION"),
         "api_version": barca_core::outcome::API_VERSION,
         "capabilities": { "event_resume": 1 },
