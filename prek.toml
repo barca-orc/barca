@@ -33,6 +33,11 @@ hooks = [
     { id = "ty", name = "ty", language = "python", additional_dependencies = ["ty==0.0.97"], entry = "ty check python/barca/", pass_filenames = false, types = ["python"] },
     { id = "version-sync", name = "version sync", language = "system", entry = "bash scripts/check-version-sync.sh", pass_filenames = false, types_or = ["rust", "python", "toml"] },
     { id = "uv-lock", name = "uv lock check", language = "system", entry = "uv lock --check", pass_filenames = false, types = ["toml"] },
+    # The web UI only renders (#959): every route it calls maps to a CLI command, every module
+    # of ui/src/lib has a kind, and no health or cache-state word is decided in TypeScript. The
+    # table is crates/barca-cli/ui-layering.json (`cargo test -p barca ui_layering` holds it to
+    # the CLI and the server). Stdlib Python, so it runs in every CI tier, UI-only diffs included.
+    { id = "ui-layering", name = "ui layering", language = "system", entry = "python3 scripts/check-ui-layering.py", pass_filenames = false, always_run = true },
     # The tree's venv (`.venv`, or the active VIRTUAL_ENV): profile.py runs .venv/bin/barca.
     { id = "perf-check", name = "perf check", language = "system", entry = "uv run --no-sync python benchmarks/perf/profile.py", pass_filenames = false, stages = ["pre-push"] },
 ]

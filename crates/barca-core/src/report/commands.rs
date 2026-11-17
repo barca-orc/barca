@@ -548,13 +548,19 @@ pub fn history_target(run: &crate::db::RunRecord) -> String {
 }
 
 /// One run of `barca history --json`: the record, plus `failure`'s node and error as the flat
-/// `failed_node` and `error` (#627), so `--fields run_id,failed_node,error` needs no nesting.
+/// `failed_node` and `error` (#627), so `--fields run_id,failed_node,error` needs no nesting,
+/// and `line`, the run in the words of a list row ([`crate::run_list::RunLine`], #959).
 pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
     let mut out = serde_json::to_value(run).unwrap_or(serde_json::Value::Null);
     if let Some(obj) = out.as_object_mut() {
         let failure = run.failure.as_ref();
         obj.insert("failed_node".into(), failure.map(|f| f.node.clone()).into());
         obj.insert("error".into(), failure.map(|f| f.error.clone()).into());
+        obj.insert(
+            "line".into(),
+            serde_json::to_value(crate::run_list::run_line(run.into()))
+                .unwrap_or(serde_json::Value::Null),
+        );
     }
     out
 }
@@ -575,6 +581,7 @@ struct HistoryItem<'a> {
     files: &'a [String],
     finished_at: &'a Option<String>,
     job: &'a Option<String>,
+    line: crate::run_list::RunLine,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_reasons: &'a Option<crate::run_explain::PlanReasons>,
     principal: &'a Option<String>,
@@ -643,6 +650,7 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             files,
             finished_at,
             job,
+            line: crate::run_list::run_line(run.into()),
             plan_reasons,
             principal,
             retries,

@@ -1,51 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import type { CacheStatus, NodeState } from './types'
-import { inPipeline, pipelineSummaries, sourceFile } from './pipeline'
-import { buildRows, fileDisplay, groupByFile } from './assetTable'
-import { served } from './testdata/served'
+import type { NodeState } from './types'
+import { fileShown, inPipeline, pipelineSummaries, sourceFile } from './pipeline'
+import { fileSums } from './testdata/rollup'
+import type { FileRollup } from './generated/FileRollup'
 
-function node(id: string, state: CacheStatus['state'] = 'cached', failed = false): NodeState {
-  return served({
-    id,
-    name: id.split(':').pop()!,
-    kind: 'asset',
-    inputs: [],
-    partitioned: false,
-    cache: { state, reason: 'materialized', detail: '' },
-    last_materialization: failed
-      ? {
-          status: 'failed',
-          created_at: '2026-10-06 10:00:00',
-          elapsed_seconds: null,
-          run_hash: null,
-          artifact: null,
-          format: null,
-          size_bytes: null,
-          rows: null,
-          error: 'boom',
-        }
-      : null,
-    shape: null,
-    env: [],
-    durations: null,
-    next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
-    running: null,
-  })
-}
+type Listed = Pick<NodeState, 'id' | 'kind'>
+const node = (id: string, kind: NodeState['kind'] = 'asset'): Listed => ({ id, kind })
 
 describe('pipelineSummaries', () => {
   const nodes = [
     node('pipeline/p02_reconcile.py:grid'),
     node('pipeline/p01_dims.py:dim_ppg'),
-    node('pipeline/p01_dims.py:dim_item', 'stale'),
-    node('pipeline/p02_reconcile.py:check', 'always_runs', true),
+    node('pipeline/p01_dims.py:dim_item'),
+    node('pipeline/p02_reconcile.py:check'),
     node('other/p01_dims.py:clash'),
   ]
-  const summaries = (states: NodeState[], listed: Pick<NodeState, 'id' | 'kind'>[] = nodes, kind: NodeState['kind'] = 'asset') =>
-    pipelineSummaries(buildRows(states.filter((n) => n.kind === kind), 0), listed, kind)
+  // `files` of `GET /state/rollup`, as the server sums them.
+  const served = (...files: FileRollup[]) => new Map(files.map((f) => [f.file, f]))
+  const files = served(
+    fileSums('other/p01_dims.py', 'ok'),
+    fileSums('pipeline/p01_dims.py', 'behind', { nodes: 2 }),
+    fileSums('pipeline/p02_reconcile.py', 'failing', { nodes: 2 }),
+  )
 
   it('one entry per source file, in file order, with its node count', () => {
-    expect(summaries(nodes).map((p) => [p.file, p.total])).toEqual([
+    expect(pipelineSummaries(files, nodes, 'asset').map((p) => [p.file, p.total])).toEqual([
       ['other/p01_dims.py', 1],
       ['pipeline/p01_dims.py', 2],
       ['pipeline/p02_reconcile.py', 2],
@@ -53,27 +32,23 @@ describe('pipelineSummaries', () => {
   })
 
   it('names are the file name; files are what tell same-named pipelines apart', () => {
-    expect(summaries(nodes).filter((p) => p.name === 'p01_dims.py').map((p) => p.file)).toEqual([
+    expect(pipelineSummaries(files, nodes, 'asset').filter((p) => p.name === 'p01_dims.py').map((p) => p.file)).toEqual([
       'other/p01_dims.py',
       'pipeline/p01_dims.py',
     ])
   })
 
-  it('shows each file as its header in the table does: a failed last attempt first, then the most urgent state', () => {
-    const rows = buildRows(nodes, 0)
-    const byFile = Object.fromEntries(summaries(nodes).map((p) => [p.file, p.shown?.label]))
-    expect(byFile['pipeline/p01_dims.py']).toBe('stale')
-    expect(byFile['pipeline/p02_reconcile.py']).toBe('failing')
-    expect(byFile['other/p01_dims.py']).toBe('fresh')
-    for (const group of groupByFile(rows)) {
-      expect(summaries(nodes).find((p) => p.file === group.file)?.shown).toEqual(fileDisplay(group.rows))
-    }
+  it('shows each file by the word of its sums in the rollup: the server\'s worst health, or its run work', () => {
+    const byFile = Object.fromEntries(pipelineSummaries(files, nodes, 'asset').map((p) => [p.file, p.shown?.label]))
+    expect(byFile).toEqual({ 'other/p01_dims.py': 'ok', 'pipeline/p01_dims.py': 'behind', 'pipeline/p02_reconcile.py': 'failing' })
+    expect(fileShown(fileSums('a.py', 'failing', { running: 2 }))).toEqual({ glyph: 'running', label: '2 running', live: true })
+    expect(fileShown(fileSums('a.py', 'blocked'))).toMatchObject({ glyph: 'blocked', label: 'blocked', live: false })
   })
 
-  it('counts only the nodes of the kind, and keeps a file with none of it at 0', () => {
-    const mixed = [...nodes, { ...node('other/p01_dims.py:ping'), kind: 'task' as const }]
-    expect(summaries(mixed, mixed).find((p) => p.file === 'other/p01_dims.py')?.total).toBe(1)
-    const tasks = summaries(mixed, mixed, 'task')
+  it('counts only the nodes of the kind, and keeps a file with none of it at 0 and without a state', () => {
+    const mixed = [...nodes, node('other/p01_dims.py:ping', 'task')]
+    expect(pipelineSummaries(files, mixed, 'asset').find((p) => p.file === 'other/p01_dims.py')?.total).toBe(1)
+    const tasks = pipelineSummaries(files, mixed, 'task')
     expect(tasks.map((p) => [p.file, p.total])).toEqual([
       ['other/p01_dims.py', 1],
       ['pipeline/p01_dims.py', 0],
@@ -82,20 +57,14 @@ describe('pipelineSummaries', () => {
     expect(tasks.find((p) => p.total === 0)?.shown).toBeNull()
   })
 
-  it('counts metadata before status arrives and keeps other pipelines when only one cone is loaded', () => {
-    const pending = summaries([])
+  it('counts metadata before the rollup arrives, and says no state until it does', () => {
+    const pending = pipelineSummaries(null, nodes, 'asset')
     expect(pending.map((p) => p.total)).toEqual([1, 2, 2])
     expect(pending.every((p) => p.shown === null)).toBe(true)
-    const partial = summaries(nodes.filter((n) => n.id.startsWith('pipeline/p02')))
-    expect(partial.map((p) => p.total)).toEqual([1, 2, 2])
+    // A file the rollup has no sums for (out of its scope) has no state either.
+    const partial = pipelineSummaries(served(fileSums('pipeline/p02_reconcile.py', 'failing')), nodes, 'asset')
     expect(partial.find((p) => p.file === 'pipeline/p02_reconcile.py')?.shown?.label).toBe('failing')
     expect(partial.find((p) => p.file === 'pipeline/p01_dims.py')?.shown).toBeNull()
-  })
-
-  it('knows a file only when every node of it has a state: a part says nothing of the whole', () => {
-    expect(summaries(nodes).every((p) => p.shown !== null)).toBe(true)
-    const part = nodes.filter((n) => n.id !== 'pipeline/p01_dims.py:dim_item')
-    expect(summaries(part).find((p) => p.file === 'pipeline/p01_dims.py')?.shown).toBeNull()
   })
 })
 

@@ -10,8 +10,7 @@
 
 import { blockerOf } from './healthDisplay'
 import { match } from 'ts-pattern'
-import { CACHE_STATES, cacheStateRank, lastAttemptFailed, nodeStateDisplay, shownCacheState, type CacheState } from './cacheStateDisplay'
-import type { Glyph } from './glyph'
+import { CACHE_STATES, cacheStateRank, lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
 import { streakLabel } from './health'
 import { formatAgo, parseTime } from './time'
 import type { CacheStatus, NodeRunning, NodeState } from './types'
@@ -285,16 +284,10 @@ export function assetColumns(rows: readonly Pick<AssetRow, 'typicalSeconds' | 'n
   }
 }
 
-/** A source file's rows, in the table's order, and the row that most needs attention. */
+/** A source file's rows, in the table's order. */
 export interface FileGroup {
   file: string
   rows: AssetRow[]
-  worst: AssetRow
-}
-
-/** The row that most needs attention, whatever order `rows` are in. */
-function worstRow(rows: readonly AssetRow[]): AssetRow {
-  return rows.reduce((a, b) => (compareAttention(b, a) < 0 ? b : a))
 }
 
 /** The rows by file, each file where its first row falls in the sorted table. */
@@ -305,33 +298,7 @@ export function groupByFile(rows: readonly AssetRow[]): FileGroup[] {
     if (list) list.push(r)
     else groups.set(r.file, [r])
   }
-  return [...groups].map(([file, list]) => ({
-    file,
-    rows: list,
-    worst: worstRow(list),
-  }))
-}
-
-/** How a file's rows read as one: a glyph and its word, as its header and the sidebar show it. */
-export interface FileDisplay {
-  glyph: Glyph
-  label: string
-  /** A run is working on some of them: the running glyph turns. */
-  live: boolean
-}
-
-/**
- * A file's one state, for its header in the table and its line in the sidebar (the same
- * function, so the two never disagree): a run working on some of its rows, else the state of
- * the row that most needs attention (`failing`, `pinned`, `blocked`, then the cache state).
- * Null for no rows.
- */
-export function fileDisplay(rows: readonly AssetRow[]): FileDisplay | null {
-  if (rows.length === 0) return null
-  const running = rows.filter((r) => r.running).length
-  if (running > 0) return { glyph: 'running', label: `${running} running`, live: true }
-  const shown = nodeStateDisplay(worstRow(rows))
-  return { glyph: shown.glyph, label: shown.label, live: false }
+  return [...groups].map(([file, list]) => ({ file, rows: list }))
 }
 
 /** One line of the table: a file's header, or a node's row. */

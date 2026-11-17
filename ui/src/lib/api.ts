@@ -21,7 +21,6 @@ import type {
   PartitionKeys,
   NodeState,
   NodeStatus,
-  PlanResult,
   RunHandle,
   RunRequest,
   Health,
@@ -126,7 +125,6 @@ export const api = {
     request<PartitionKeyDetail>(`/assets/${encodeURIComponent(name)}/partitions/key?${new URLSearchParams({ key, sample: String(PREVIEW_ROWS) })}`),
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema?sample=${PREVIEW_ROWS}`),
   project: () => request<{ root: string | null; telemetry?: { datadog_url: string | null } }>('/project'),
-  plan: () => request<PlanResult>('/plan'),
   /** `GET /state` of a group, a source file, or (`null`) every node. */
   state: (scope: StateScope | null, signal?: AbortSignal) =>
     request<NodeState[]>(

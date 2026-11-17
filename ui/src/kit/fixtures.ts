@@ -21,11 +21,10 @@ import type { TokensModel } from '@/lib/tokensPage'
 import { INITIAL_TOKENS } from '@/lib/tokensPage'
 import type {
   DataSignal,
-  ActiveStep,
+  RunNow,
   IssuedToken,
   LastMaterialization,
   LogLine,
-  NodeGroup,
   NodeKind,
   NodeRunning,
   NodeState,
@@ -414,7 +413,10 @@ function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {})
     started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
     steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
     error: view.error, first_failure: null, principal: view.principal, trigger_reason: view.trigger_reason,
-    cancellation: view.cancellation, ...overrides,
+    cancellation: view.cancellation,
+    // `line` as the server words the row; a fixture about a failure states its own.
+    line: { steps: view.explanation.steps, steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: view.error, failure_detail: view.error },
+    ...overrides,
   }
 }
 
@@ -425,9 +427,16 @@ const runList: RunList = {
     summary(runByStatus.failed, '125', {
       triggered_by: 'schedule', error: null, steps_total: 28_404, steps_executed: 21_950, steps_cached: 0,
       first_failure: { node_id: 'pipeline.py:sessionize[day=2026-10-27]', error: "KeyError: 'currency'" },
+      line: {
+        steps: '21,949 ok · 1 failed · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 28,404 nodes planned · stopped at pipeline.py:sessionize[day=2026-10-27]',
+        failure: "sessionize: 1 key failed · KeyError: 'currency'", failure_detail: "pipeline.py:sessionize[day=2026-10-27]: KeyError: 'currency'",
+      },
     }),
     // The same with no failed step on record (a run that died before recording one).
-    summary(runByStatus.failed, '124', { error: null, started_at: ago(7_500) }),
+    summary(runByStatus.failed, '124', {
+      error: null, started_at: ago(7_500),
+      line: { steps: '0 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: 'No failed step recorded: open the run', failure_detail: 'No failed step recorded: open the run' },
+    }),
   ],
   total: 9,
   truncated: false,
@@ -534,19 +543,22 @@ const sensorsWhy: WhyRan = {
   partial: false,
 }
 
-const rebuildActive: ActiveStep[] = [
-  { node_id: 'pipeline.py:sessionize', step: 'running', partitions: { running: 880, done: 3_120, total: 5_000 } },
-  { node_id: 'pipeline.py:ltv_by_account', step: 'running', partitions: null },
-  { node_id: 'pipeline.py:revenue_daily', step: 'queued', partitions: null },
-]
-
-const rebuildGroups: NodeGroup[] = [
-  { id: 'group:web', name: 'web', description: '', members: ['pipeline.py:sessionize'], output: 'pipeline.py:sessionize' },
-  { id: 'group:finance', name: 'finance', description: '', members: ['pipeline.py:ltv_by_account', 'pipeline.py:revenue_daily'], output: 'pipeline.py:revenue_daily' },
-]
+/** `now` of `GET /runs?status=running`, as the server words a rebuild in flight. */
+const rebuildNow: RunNow = {
+  running: [
+    { node_id: 'pipeline.py:sessionize', keys: '3,120 of 5,000 keys', share: 0.624 },
+    { node_id: 'pipeline.py:ltv_by_account', keys: null, share: null },
+  ],
+  queued: 1,
+  keys: { done: 3_120, total: 5_000 },
+  groups: [
+    { id: 'group:finance', group: 'finance', running: 1, queued: 1 },
+    { id: 'group:web', group: 'web', running: 1, queued: 0 },
+  ],
+}
 
 /** The run overview (`RunOverviewView`) in each state it says something different in. */
-export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; groups: NodeGroup[]; nowMs: number }> = {
+export const runOverviews: Record<string, { run: RunView; now: RunNow | null; nowMs: number }> = {
   'full rebuild in flight': {
     run: runView('running', {
       triggered_by: 'api', principal: 'token:ci-bot', trigger_reason: 'backfill after the bucket_ltv fix',
@@ -562,7 +574,7 @@ export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; 
         slowest: [{ node_id: 'pipeline.py:sessionize', seconds: 1_840.5, keys: 3_120 }, { node_id: 'pipeline.py:ltv_by_account', seconds: 212.3, keys: 1 }],
       }),
     }),
-    active: rebuildActive, groups: rebuildGroups, nowMs: NOW_MS,
+    now: rebuildNow, nowMs: NOW_MS,
   },
   'just started': {
     run: runView('running', {
@@ -572,7 +584,7 @@ export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; 
         progress: { done: 0, total: 23_278, percent: 0, executed: 0, cached: 0, eta_seconds: null, eta: null },
       }),
     }),
-    active: [], groups: [], nowMs: NOW_MS,
+    now: null, nowMs: NOW_MS,
   },
   'finished, served mostly from cache': {
     run: runView('success', {
@@ -587,14 +599,14 @@ export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; 
         },
       }),
     }),
-    active: [], groups: [], nowMs: NOW_MS,
+    now: null, nowMs: NOW_MS,
   },
   'sensors and no retries': {
     run: runView('success', {
       steps_total: 29, steps_executed: 29, steps_cached: 0, attempts: 29, retries: 0,
       explanation: explanation({ attempts: '29 steps, no retries', steps: '29 ok · 0 cached', why: sensorsWhy }),
     }),
-    active: [], groups: [], nowMs: NOW_MS,
+    now: null, nowMs: NOW_MS,
   },
   'cancelled before it started': {
     run: runView('cancelled', {
@@ -610,7 +622,7 @@ export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; 
         why: { headline: 'It was cancelled before it decided what to run.', groups: [], omitted: 0, partial: false },
       }),
     }),
-    active: [], groups: [], nowMs: NOW_MS,
+    now: null, nowMs: NOW_MS,
   },
   'cancelled by the server stopping': {
     run: runView('cancelled', {
@@ -620,7 +632,7 @@ export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; 
         cancellation: { headline: 'Cancelled by the server stopping while it ran.', detail: 'Steps that finished before the cancel are cached.', run: null },
       }),
     }),
-    active: [], groups: [], nowMs: NOW_MS,
+    now: null, nowMs: NOW_MS,
   },
 }
 

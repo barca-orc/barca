@@ -77,12 +77,33 @@ development build is several times slower and says little about what users get.
 ```bash
 pnpm --dir ui typecheck && pnpm --dir ui lint && pnpm --dir ui test
 pnpm --dir ui gen:types             # after changing a Rust type the UI uses
+python3 scripts/check-ui-layering.py   # from the repository root: the UI only renders (see below)
 cargo build -p barca && pnpm --dir ui test:e2e   # Playwright: the flat, grouped and token-mode suites,
                                                   # each starting barca serve + vite on its fixture
                                                   # BARCA_BIN=<path> uses another barca binary
 pnpm --dir ui test:e2e:groups       # only the grouped suite (e2e-groups/fixture)
 pnpm --dir ui dev                   # then /ui/#/kit: every component and page view in each state, no server needed
 ```
+
+## The UI only renders
+
+The UI derives nothing: a node's health, what blocks it, a group's counts, a run's words are
+computed in `barca-core` and arrive on the wire, the same JSON the CLI prints. `ui/src/lib`
+holds fetching, generated types, display mapping (an enum value to its word, tone and glyph),
+formatting, layout and page state, and nothing else. `scripts/check-ui-layering.py` (a prek
+hook, run in CI on every pull request) checks it against `crates/barca-cli/ui-layering.json`:
+
+- a new route in `lib/api.ts` needs a line in `routes` with the CLI command that prints the
+  same answer, or an exemption with a reason;
+- a new module in `lib/` needs a line in `modules` with its kind;
+- comparing against a health or cache-state word (`=== 'stale'`), or producing one, outside a
+  display module (`healthDisplay.ts`, `cacheStateDisplay.ts`, `glyph.ts`, ...) fails: compute it
+  in `barca-core` and read the field;
+- test fixtures take their health from `lib/testdata/health-alone.json`, which a Rust test
+  generates (`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`).
+
+The whole rule, what the checks cannot see and how to extend the table:
+[contributing/ui-layering](../site/src/content/docs/contributing/ui-layering.md).
 
 ## Build into barca
 

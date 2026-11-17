@@ -8,6 +8,7 @@ import { isCheck } from './status'
 import { formatSeconds } from './assetTable'
 
 import type { NodeGroup } from './types'
+import type { RollupEntry } from './generated/RollupEntry'
 export type { NodeGroup } from './types'
 
 export interface GroupTree {
@@ -16,12 +17,31 @@ export interface GroupTree {
   parents: Map<string, string>
 }
 
-/** Build an organizational tree from metadata returned by the parser. */
-export function groupTree(metadata: NodeGroup[]): GroupTree {
-  const groups = new Map(metadata.map(g => [g.id, g]))
+/** Where the rollup puts an entry: all a tree needs of `GET /state/rollup`'s entries. */
+export type Placement = ReadonlyMap<string, Pick<RollupEntry, 'parent'>>
+
+/**
+ * The organizational tree of the groups the parser found (`GET /groups`). A node or group
+ * declared in several groups is counted by the rollup under one of them (`barca-core`'s
+ * `rollup`, the entry's `parent`); with `placed` (the rollup's entries) each group lists the
+ * members the rollup counts under it, so a list and its count are the same nodes. The other
+ * groups that declare a member are its entry's `also_in`. Nothing is decided here: without
+ * `placed` (the rollup has not loaded) the tree is the declarations as given.
+ */
+export function groupTree(metadata: NodeGroup[], placed?: Placement): GroupTree {
+  const listed = placed
+    ? metadata.map((g) => ({ ...g, members: g.members.filter((m) => (placed.get(m)?.parent ?? g.id) === g.id) }))
+    : metadata
+  const groups = new Map(listed.map(g => [g.id, g]))
   const parents = new Map<string, string>()
-  for (const g of metadata) for (const member of g.members) parents.set(member, g.id)
-  return { groups, roots: metadata.filter(g => !parents.has(g.id)).map(g => g.id), parents }
+  for (const g of listed) for (const member of g.members) parents.set(member, g.id)
+  return { groups, roots: listed.filter(g => !parents.has(g.id)).map(g => g.id), parents }
+}
+
+/** `also in reports, finance`: the other groups that declare an entry (`also_in`), by name; null for none. */
+export function alsoInNote(alsoIn: readonly string[] | undefined, tree: GroupTree): string | null {
+  if (!alsoIn || alsoIn.length === 0) return null
+  return `also in ${alsoIn.map((id) => tree.groups.get(id)?.name ?? id).join(', ')}`
 }
 
 /**

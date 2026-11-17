@@ -9,6 +9,7 @@ import { GraphCanvas, type GraphCanvasHandle } from '@/components/graph/GraphCan
 import { NodePanel } from '@/components/assets/NodePanel'
 import { HealthOverview } from '@/components/assets/HealthOverview'
 import { useRollup } from '@/hooks/useRollup'
+import { useGroupTree } from '@/hooks/useGroupTree'
 import { dataSignalSets } from '@/lib/dataSignals'
 import { nearestInTree, rootsWithin } from '@/lib/rollupView'
 import { useStoredFlag } from '@/hooks/useStoredFlag'
@@ -24,7 +25,7 @@ import { api, ApiError, metadataUnusable } from '@/lib/api'
 import { INITIAL_FAILURES, failureTable, updateFailures, type FailuresEffect } from '@/lib/failuresView'
 import { PENDING_GRAPH_STATE } from '@/lib/graphState'
 import { failedKeyNodes, failures } from '@/lib/health'
-import { distinctNames, ENTRY_SORTS, groupHealth, groupPath, groupTree } from '@/lib/groups'
+import { distinctNames, ENTRY_SORTS, groupHealth, groupPath } from '@/lib/groups'
 import {
   SORT_LABEL,
   applyChanges,
@@ -68,7 +69,8 @@ export function GroupedPipelinePage() {
   const stateQuery = useAssetStates()
   const writes = useWriteControl()
   const pipeline = params.get('pipeline')
-  const tree = useMemo(() => groupTree((groupsQuery.data ?? []).filter((g) => !pipeline || g.id.startsWith(`group:${pipeline}:`))), [groupsQuery.data, pipeline])
+  // Each group lists the members the rollup counts under it, so the list and its counts agree.
+  const tree = useGroupTree(pipeline)
   const view = useMemo(() => parseGroupedParams(params, tree), [params, tree])
   const { graph, flat, show, selected, sort, dir } = view
   // Typing stays ahead of the list: a one-letter search can match thousands of nodes.

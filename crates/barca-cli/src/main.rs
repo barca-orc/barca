@@ -1116,6 +1116,10 @@ async fn run_cli(
 #[path = "tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "ui_layering_tests.rs"]
+mod ui_layering_tests;
+
 /// `--batch`, parsed (RFC-0013); a usage error naming the accepted forms when it does not parse.
 fn parse_batch(values: &[String]) -> Result<barca_core::batch::BatchOverride, CliError> {
     barca_core::batch::BatchOverride::parse(values)
