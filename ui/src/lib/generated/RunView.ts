@@ -2,6 +2,7 @@
 import type { Cancellation } from "./Cancellation";
 import type { LogEntry } from "./LogEntry";
 import type { PlanReasons } from "./PlanReasons";
+import type { RunExplanation } from "./RunExplanation";
 import type { RunFailure } from "./RunFailure";
 import type { RunStep } from "./RunStep";
 import type { StepsPage } from "./StepsPage";
@@ -79,6 +80,13 @@ plan_reasons: PlanReasons | null,
  * Experimental.
  */
 cancellation: Cancellation | null,
+/**
+ * The run in words (#956): its steps grouped by the reason they ran, its retries apart
+ * from its attempts, its targets as a list and what became of them, and how far a run in
+ * progress is. The same object as `explanation` of `barca history RUN_ID --json`.
+ * Experimental.
+ */
+explanation: RunExplanation,
 /**
  * The run's full result once it finished; `null` while it runs, and for runs not started
  * through `barca serve`.

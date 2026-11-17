@@ -521,59 +521,8 @@ pub fn render_run(
     )
 }
 
-/// How many reasons `barca history RUN_ID` prints; `--json` has them all.
+/// How many reasons of one category `barca history RUN_ID` prints; `--json` has them all.
 const REASON_LINES: usize = 8;
-
-/// The `why:` lines of `barca history RUN_ID` (#925): each reason with its steps and nodes,
-/// most steps first.
-pub fn plan_reason_lines(plan: &crate::run_explain::PlanReasons) -> Vec<String> {
-    let mut out = vec![format!(
-        "why: {} steps of {} nodes were not cache hits",
-        plan.steps, plan.nodes
-    )];
-    for reason in plan.reasons.iter().take(REASON_LINES) {
-        let nodes = if reason.nodes == 1 { "node" } else { "nodes" };
-        let what = match &reason.subject {
-            Some(subject) => format!("{}  {subject}", reason.category.as_str()),
-            None => reason.category.as_str().to_string(),
-        };
-        out.push(format!(
-            "  {:>8} steps  {:>6} {nodes:<5}  {what}",
-            reason.steps, reason.nodes
-        ));
-    }
-    let more = plan.reasons.len().saturating_sub(REASON_LINES) as u64 + plan.omitted;
-    if more > 0 {
-        out.push(format!(
-            "  and {more} more reasons (--json lists {})",
-            plan.reasons.len()
-        ));
-    }
-    out
-}
-
-/// The `cancelled` line of `barca history RUN_ID` (#925).
-pub fn cancellation_line(c: &crate::run_explain::Cancellation) -> String {
-    let mut line = match c.by {
-        crate::run_explain::CancelledBy::Request => "cancelled by a request".to_string(),
-        crate::run_explain::CancelledBy::Shutdown => "cancelled by the server stopping".to_string(),
-    };
-    if let Some(principal) = &c.principal {
-        line.push_str(&format!(" as {principal}"));
-    }
-    if !c.started {
-        line.push_str(" before it started");
-        match (&c.same_as, c.waiting_behind.first()) {
-            (Some(same), _) => line.push_str(&format!(": the same work was running as run {same}")),
-            (None, Some(_)) => line.push_str(&format!(
-                ", waiting behind run {}",
-                c.waiting_behind.join(", ")
-            )),
-            (None, None) => {}
-        }
-    }
-    line
-}
 
 /// Width of the `barca history` TARGET column; longer targets end in `…`.
 const TARGET_WIDTH: usize = 24;
@@ -947,11 +896,18 @@ pub fn render_run_detail(
 ) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
     let hint = run_detail_hint(detail, select);
+    let explanation = crate::run_explanation::explain(
+        (&detail.run).into(),
+        &detail.steps_page.nodes,
+        &detail.steps,
+        crate::time::now_secs_f64(),
+    );
     if json {
         let mut out = serde_json::json!({
             "run": detail.run,
             "steps": detail.steps,
             "steps_page": detail.steps_page,
+            "explanation": explanation,
         });
         if let Some(hint) = &hint {
             out["hint"] = hint.clone().into();
@@ -970,13 +926,8 @@ pub fn render_run_detail(
         r.status,
         secs(r.elapsed_seconds)
     );
-    if let Some(n) = r.attempts {
-        let s = if n == 1 { "" } else { "s" };
-        head.push_str(&format!("  {n} attempt{s}"));
-        if let Some(retries) = r.retries.filter(|n| *n > 0) {
-            let s = if retries == 1 { "y" } else { "ies" };
-            head.push_str(&format!(" ({retries} retr{s})"));
-        }
+    if let Some(attempts) = &explanation.attempts {
+        head.push_str(&format!("  {attempts}"));
     }
     line!(rendered, "{head}");
     let mut when = format!("started {}", crate::report::utc_cell(&r.started_at));
@@ -1003,8 +954,14 @@ pub fn render_run_detail(
     if let Some(reason) = &r.trigger_reason {
         line!(rendered, "reason: {reason}");
     }
-    if let Some(c) = &r.cancellation {
-        line!(rendered, "{}", cancellation_line(c));
+    if let Some(c) = &explanation.cancellation {
+        let detail = c.detail.as_deref().map(|d| format!(" {d}"));
+        line!(
+            rendered,
+            "cancelled: {}{}",
+            c.headline,
+            detail.unwrap_or_default()
+        );
     }
     if let Some(job) = &r.job
         && job != target
@@ -1025,8 +982,12 @@ pub fn render_run_detail(
         counts.push_str(" (cached steps are not listed)");
     }
     line!(rendered, "steps: {counts}");
-    if let Some(plan) = &r.plan_reasons {
-        for line in plan_reason_lines(plan) {
+    for outcome in &explanation.target_outcomes {
+        line!(rendered, "target: {outcome}");
+    }
+    // A run cancelled in the queue decided nothing: its `cancelled:` line says so.
+    if r.cancellation.as_ref().is_none_or(|c| c.started) {
+        for line in crate::run_explanation::why_lines(&explanation.why, REASON_LINES) {
             line!(rendered, "{line}");
         }
     }
@@ -1940,6 +1901,70 @@ mod run_detail_tests {
             "SIGKILL (possibly the OOM killer)"
         );
         assert_eq!(v["run"]["failure"]["node"], "p.py:clean");
+    }
+
+    /// #956: the human form and `--json` carry the same explanation.
+    #[test]
+    fn the_run_explains_itself_in_both_forms() {
+        use crate::run_explain::{PlanReason, PlanReasons, ReasonCategory};
+        let mut d = detail(vec![]);
+        d.run.status = "success".into();
+        d.run.failure = None;
+        d.run.target = Some("daily_report,orders".into());
+        d.run.job = Some("p.py:daily_report,p.py:orders".into());
+        d.run.attempts = Some(29);
+        d.run.retries = Some(0);
+        d.run.steps_executed = 29;
+        d.run.plan_reasons = Some(PlanReasons {
+            nodes: 29,
+            steps: 29,
+            omitted: 0,
+            reasons: vec![
+                PlanReason {
+                    category: ReasonCategory::Sensor,
+                    subject: None,
+                    nodes: 27,
+                    steps: 27,
+                    example: "p.py:poll_inbox".into(),
+                },
+                PlanReason {
+                    category: ReasonCategory::NeverRun,
+                    subject: None,
+                    nodes: 2,
+                    steps: 2,
+                    example: "p.py:orders".into(),
+                },
+            ],
+        });
+        let (stdout, _) = text(&render_run_detail(&d, false, ""));
+        assert!(
+            stdout
+                .starts_with("run r  get daily_report,orders  success  -  29 steps, no retries\n"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains(
+                "why: 29 steps ran: 27 sensors (always run), 2 never run\n  sensors (always run)\n    27 nodes, e.g. poll_inbox\n  never run\n    2 nodes, e.g. orders\n"
+            ),
+            "{stdout}"
+        );
+        let (json, _) = text(&render_run_detail(&d, true, ""));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let e = &v["explanation"];
+        assert_eq!(e["attempts"], "29 steps, no retries");
+        assert_eq!(
+            e["targets"],
+            serde_json::json!(["p.py:daily_report", "p.py:orders"])
+        );
+        assert_eq!(
+            e["why"]["headline"],
+            "29 steps ran: 27 sensors (always run), 2 never run"
+        );
+        assert_eq!(e["why"]["groups"][0]["rows"][0]["counts"], "27 nodes");
+        assert_eq!(e["progress"], serde_json::Value::Null);
+        // The recorded facts stay beside it.
+        assert_eq!(v["run"]["attempts"], 29);
+        assert_eq!(v["run"]["target"], "daily_report,orders");
     }
 
     #[test]

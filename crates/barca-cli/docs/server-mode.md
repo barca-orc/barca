@@ -208,7 +208,10 @@ executed what it did (`run.plan_reasons`: never run, new keys, a failed last att
 code, input or env component changed, a refresh, a missing artifact), who asked for it
 (`principal`, the token of its request) and why (`trigger_reason`, the `reason` its
 `POST /runs` gave), and for a cancelled run who cancelled it and whether it had started
-(`cancellation`; `barca docs contract`, "history"). `GET /runs/{run_id}?offset=N` pages through
+(`cancellation`; `barca docs contract`, "history"). `explanation` says the same in words, as
+`barca history RUN_ID` prints it: the steps grouped by the reason they ran (`why`), the
+retries apart from the first attempts, the targets as a list and what became of each, and for
+a run in progress how far it is and an ETA at the rate so far. `GET /runs/{run_id}?offset=N` pages through
 the steps (`steps_page.next_offset`), and while a run goes it shows its newest 5,000 spooled
 lines in `logs`.
 

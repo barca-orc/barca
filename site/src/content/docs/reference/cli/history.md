@@ -95,30 +95,43 @@ stderr names `barca logs RUN_ID --step STEP --stream stderr`. Cached steps are c
 forms answer from the server; a run only this machine has is an error whose remediation is
 `barca history RUN_ID --local`.
 
-The run also says why it executed what it did: `run.plan_reasons` in JSON, and after the
-`steps:` line a `why:` line with one line per reason (the first eight), each with its steps and
-nodes: `never_run`, `new_keys`, `failed` (the last attempt at these inputs failed),
-`code_changed` / `inputs_changed` / `env_changed` with the component that changed
-(`helper pipelines/common.py:bucket_ltv`), a refresh, a missing artifact, a task or a sensor.
-It is recorded as the run decides each phase, so a run in progress shows the phases decided so
-far. `run.retries` counts the attempts that retried a step. A run started on a server also
-shows who asked for it (`as token:<name>`, `principal`), the `reason:` its request gave, and,
-when cancelled, who cancelled it and whether it had started (`cancellation`). Details:
-[CLI contract](/reference/cli-contract/).
+The run also says why it executed what it did. In JSON, `run.plan_reasons` is the record
+(`never_run`, `new_keys`, `failed` (the last attempt at these inputs failed), `code_changed` /
+`inputs_changed` / `env_changed` with the component that changed
+(`helper pipelines/common.py:bucket_ltv`), a refresh, a missing artifact, a task or a sensor),
+and `explanation` is the same in words: `why` groups the steps by the reason they ran,
+`attempts` counts retries apart from each step's first attempt (`29 steps, no retries`),
+`targets` lists the run's targets, `target_outcomes` says what became of each, and a run in
+progress has `progress` with an ETA at the rate so far. The table prints it: the attempts on
+the first line, and after the `steps:` line a `why:` line, then each reason with the nodes and
+steps that ran for it (the first eight of a reason). A group whose nodes each ran one step is
+counted in nodes, with an example. The reasons are recorded as the run decides each phase, so a
+run in progress shows the phases decided so far. A run started on a server also shows who
+asked for it (`as token:<name>`, `principal`), the `reason:` its request gave, and, when
+cancelled, why (`cancelled: ...`, `cancellation`). `GET /runs/{run_id}` carries the same
+`explanation`, which the web UI renders. Details: [CLI contract](/reference/cli-contract/).
 
 ```
-why: 5492 steps of 469 nodes were not cache hits
-      5000 steps       1 node   new_keys
-        29 steps      29 nodes  code_changed  helper billing.py:_n
+why: 5,492 steps ran: 5,000 new partition keys, 31 code changed, 3 input changed
+  new partition keys
+    5,000 steps of 1 node: invoices_by_account
+  code changed
+    29 nodes: helper billing.py:_n
+    2 nodes: code
+  input changed
+    3 nodes: billing.py:dunning_05
 ```
 
 ```
 $ barca history 836fdca186c8
-run 836fdca186c8  get clean  failed  0.1s  1 attempt
+run 836fdca186c8  get clean  failed  0.1s  1 step, no retries
 started 2026-10-22 22:57:27.000 UTC  finished 2026-10-22 22:57:27.000 UTC
 triggered by api
 files pipeline.py
 steps: 1 executed (1 failed), 1 cached (cached steps are not listed)
+why: 1 step ran: 1 never run
+  never run
+    1 node: clean
 
 STEP               STATUS  ATTEMPTS  TIME  RUN_HASH      ARTIFACT
 pipeline.py:clean  failed  1         -     d64e1b00647e  -

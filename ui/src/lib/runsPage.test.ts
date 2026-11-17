@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
 import type { RunSummary } from './types'
-import { activityBarLabel, activityTicks, canLoadMore, failedChipCount, INITIAL_RUNS, runsCountLabel, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, stepsLabel, runViewSteps, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
+import { activityBarLabel, activityTicks, canLoadMore, failedChipCount, INITIAL_RUNS, runsCountLabel, parseRunFilters, RUNS_MAX, runActivity, runFailureLine, runProgress, runRowError, stepName, stepsLabel, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
@@ -93,11 +93,7 @@ describe('run list telemetry', () => {
     expect(runProgress({ ...run('s', 'success', 1), steps_total: 8, steps_executed: 0, steps_cached: 9236 }))
       .toMatchObject({ steps: `0 ok · ${(9236).toLocaleString()} cached`, stoppedAt: null })
     expect(stepsLabel(2, 1)).toBe('2 ok · 1 cached')
-    expect(runViewSteps({ status: 'cancelled', steps_executed: 1, steps_cached: 0 }, [])).toBe('1 started · 0 cached')
     expect(stepsLabel(8, 0, 1, 2)).toBe('7 ok · 1 failed · 2 skipped · 0 cached')
-    const node = (status: string, failed: number) => ({ node_id: 'a', keys: 1, failed, elapsed_seconds: 0, calls: 0, status })
-    expect(runViewSteps({ steps_executed: 3, steps_cached: 1 }, [node('ran', 1), node('ran', 0), node('skipped', 0)]))
-      .toBe('2 ok · 1 failed · 1 skipped · 1 cached')
   })
 
   it('labels a bar with what failed first, and ticks the axis', () => {

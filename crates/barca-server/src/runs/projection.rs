@@ -65,6 +65,7 @@ pub(crate) async fn view_page(
                 .cancellation
                 .clone()
                 .or_else(|| live.as_ref().and_then(|r| r.cancellation.clone())),
+            explanation: Default::default(),
             outcome: None,
             error: None,
             steps: Vec::new(),
@@ -99,6 +100,7 @@ pub(crate) async fn view_page(
             retries: None,
             plan_reasons: None,
             cancellation: run.cancellation.clone(),
+            explanation: Default::default(),
             outcome: None,
             error: None,
             steps: Vec::new(),
@@ -234,6 +236,12 @@ pub(crate) async fn view_page(
     if view.error.is_none() {
         view.error = view.steps.iter().find_map(|step| step.error.clone());
     }
+    view.explanation = barca_core::run_explanation::explain(
+        (&view).into(),
+        &view.steps_page.nodes,
+        &view.steps,
+        barca_core::time::now_secs_f64(),
+    );
     Ok(view)
 }
 

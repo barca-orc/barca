@@ -8,6 +8,9 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- **A run's explanation is computed once, in Rust, for the CLI and the web UI (#956).** `barca history RUN_ID --json` and `GET /runs/{run_id}` carry `explanation` (experimental): the steps grouped by the reason they ran (`why`), retries counted apart from each step's first attempt, the targets as a list and what became of each, and for a run in progress how far it is with an ETA. `barca history RUN_ID` prints the same words and the web UI renders them instead of deriving its own. Three wordings change with it: a run of 29 steps that retried nothing says `29 steps, no retries` (it said `29 attempts`); `why:` names the reasons (`29 steps ran: 27 sensors (always run), 2 never run`, where it said `29 steps of 29 nodes were not cache hits`) and lists each reason's rows under its label; and a reason whose nodes each ran one step is counted in nodes with an example (`27 nodes, e.g. poll_inbox`), where the UI read as one sensor of 27 steps. The run panel lists a run's targets one to a line. `run.plan_reasons`, `run.attempts`, `run.retries`, `run.cancellation` and `run.target` are unchanged.
 ### Documentation
 
 - **The manual says which nodes a tick leaves out of date (#952).** A tick's targets are the scheduled node and the `Always` nodes below it, and nothing else: a sensor that a target reads is polled as an input and its new value recorded, so `Always` nodes below that sensor with no scheduled node above them go out of date and no tick rebuilds them, however many poll the sensor. This is the rule as designed; `barca docs scheduling` ("A sensor a tick only polls"), the scheduling page and the freshness specification now state it with the remedy (put the schedule on the sensor, or give the node a `Schedule`). `barca_core::freshness::tick_reach` reports, per node, the schedules whose ticks reach it and how, for the refresh path of #961.

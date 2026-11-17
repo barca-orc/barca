@@ -34,7 +34,10 @@ import type {
   RunList,
   RunningStep,
   RunSummary,
+  RunExplanation,
   RunView,
+  ReasonRow,
+  WhyRan,
   RunViewStatus,
   StatusKind,
   TokenMetadata,
@@ -271,6 +274,25 @@ export const resetPhases = {
 
 // ── Runs ──────────────────────────────────────────────────────────────────────
 
+/**
+ * A run's explanation as the server words it (`barca-core`'s `run_explanation`): the kit shows
+ * what the page renders, so these are written out, not derived.
+ */
+function explanation(overrides: Partial<RunExplanation> = {}): RunExplanation {
+  return {
+    targets: ['pipeline.py:orders_clean', 'pipeline.py:revenue_daily'],
+    requested_by: 'client',
+    attempts: null,
+    steps: '3 ok · 1 cached',
+    target_outcomes: [],
+    cancellation: null,
+    why: { headline: 'Every step was served from cache.', groups: [], omitted: 0, partial: false },
+    progress: null,
+    slowest: [],
+    ...overrides,
+  }
+}
+
 function runView(status: RunViewStatus, overrides: Partial<RunView> = {}): RunView {
   const live = status === 'pending' || status === 'running'
   return {
@@ -297,6 +319,9 @@ function runView(status: RunViewStatus, overrides: Partial<RunView> = {}): RunVi
     retries: null,
     plan_reasons: null,
     cancellation: null,
+    explanation: explanation(live
+      ? { steps: '1 ok · 1 cached', why: { headline: 'No step decided to run yet.', groups: [], omitted: 0, partial: true }, progress: { done: 2, total: 4, percent: 50, executed: 1, cached: 1, eta_seconds: null, eta: null } }
+      : {}),
     outcome: null,
     error: null,
     steps: status === 'pending' ? [] : [
@@ -477,6 +502,36 @@ const rebuildReasons: PlanReasons = {
   ],
 }
 
+const reasonRow = (subject: string | null, nodes: number, steps: number, example: string, of: number): ReasonRow => {
+  const counts = steps === nodes ? `${nodes.toLocaleString()} node${nodes === 1 ? '' : 's'}` : `${steps.toLocaleString()} steps of ${nodes.toLocaleString()} node${nodes === 1 ? '' : 's'}`
+  const name = example.slice(example.lastIndexOf(':') + 1)
+  const example_text = nodes > 1 ? `e.g. ${name}` : name
+  return { subject, counts, nodes, steps, share: steps / of, example, example_text, line: subject ? `${counts}: ${subject}` : `${counts}${nodes > 1 ? ',' : ':'} ${example_text}` }
+}
+
+const rebuildWhy: WhyRan = {
+  headline: '23,278 steps decided to run so far: 21,104 code changed, 1,205 new partition keys, 957 input changed, and 1 more reason',
+  groups: [
+    { category: 'code_changed', label: 'code changed', steps: 21_104, rows: [reasonRow('helper pipelines/common.py:bucket_ltv', 412, 21_104, 'pipeline.py:ltv_by_account', 23_278)] },
+    { category: 'new_keys', label: 'new partition keys', steps: 1_205, rows: [reasonRow(null, 2, 1_205, 'pipeline.py:sessionize', 23_278)] },
+    { category: 'inputs_changed', label: 'input changed', steps: 957, rows: [reasonRow('pipeline.py:orders_clean', 40, 957, 'pipeline.py:revenue_daily', 23_278)] },
+    { category: 'never_run', label: 'never run', steps: 12, rows: [reasonRow(null, 12, 12, 'pipeline.py:churn_model', 23_278)] },
+  ],
+  omitted: 3,
+  partial: true,
+}
+
+/** The audit's run: 29 steps, 27 of them sensors, none retried. */
+const sensorsWhy: WhyRan = {
+  headline: '29 steps ran: 27 sensors (always run), 2 never run',
+  groups: [
+    { category: 'sensor', label: 'sensors (always run)', steps: 27, rows: [reasonRow(null, 27, 27, 'pipeline.py:orders_feed', 29)] },
+    { category: 'never_run', label: 'never run', steps: 2, rows: [reasonRow(null, 2, 2, 'pipeline.py:orders_clean', 29)] },
+  ],
+  omitted: 0,
+  partial: false,
+}
+
 const rebuildActive: ActiveStep[] = [
   { node_id: 'pipeline.py:sessionize', step: 'running', partitions: { running: 880, done: 3_120, total: 5_000 } },
   { node_id: 'pipeline.py:ltv_by_account', step: 'running', partitions: null },
@@ -499,17 +554,43 @@ export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; 
         { node_id: 'pipeline.py:sessionize', keys: 3_120, failed: 0, elapsed_seconds: 1_840.5, calls: 0 },
         { node_id: 'pipeline.py:ltv_by_account', keys: 1, failed: 0, elapsed_seconds: 212.3, calls: 0 },
       ] },
+      explanation: explanation({
+        requested_by: 'api · token:ci-bot', attempts: '19,399 steps, 62 retries', steps: '19,399 ok · 0 cached', why: rebuildWhy,
+        progress: { done: 19_399, total: 23_278, percent: 83, executed: 19_399, cached: 0, eta_seconds: 72, eta: 'about 1m left' },
+        slowest: [{ node_id: 'pipeline.py:sessionize', seconds: 1_840.5, keys: 3_120 }, { node_id: 'pipeline.py:ltv_by_account', seconds: 212.3, keys: 1 }],
+      }),
     }),
     active: rebuildActive, groups: rebuildGroups, nowMs: NOW_MS,
   },
   'just started': {
-    run: runView('running', { triggered_by: 'schedule', started_at: ago(4), steps_total: 23_278, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false } }),
+    run: runView('running', {
+      triggered_by: 'schedule', started_at: ago(4), steps_total: 23_278, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false },
+      explanation: explanation({
+        requested_by: 'schedule', steps: '0 ok · 0 cached', why: { headline: 'No step decided to run yet.', groups: [], omitted: 0, partial: true },
+        progress: { done: 0, total: 23_278, percent: 0, executed: 0, cached: 0, eta_seconds: null, eta: null },
+      }),
+    }),
     active: [], groups: [], nowMs: NOW_MS,
   },
   'finished, served mostly from cache': {
     run: runView('success', {
       attempts: 3, retries: 0,
       plan_reasons: { nodes: 2, steps: 3, omitted: 0, reasons: [{ category: 'inputs_changed', subject: 'sensor pipeline.py:orders_feed', nodes: 2, steps: 3, example: 'pipeline.py:orders_clean' }] },
+      explanation: explanation({
+        attempts: '3 steps, no retries',
+        why: {
+          headline: '3 steps ran: 3 input changed',
+          groups: [{ category: 'inputs_changed', label: 'input changed', steps: 3, rows: [reasonRow('sensor pipeline.py:orders_feed', 2, 3, 'pipeline.py:orders_clean', 3)] }],
+          omitted: 0, partial: false,
+        },
+      }),
+    }),
+    active: [], groups: [], nowMs: NOW_MS,
+  },
+  'sensors and no retries': {
+    run: runView('success', {
+      steps_total: 29, steps_executed: 29, steps_cached: 0, attempts: 29, retries: 0,
+      explanation: explanation({ attempts: '29 steps, no retries', steps: '29 ok · 0 cached', why: sensorsWhy }),
     }),
     active: [], groups: [], nowMs: NOW_MS,
   },
@@ -517,11 +598,26 @@ export const runOverviews: Record<string, { run: RunView; active: ActiveStep[]; 
     run: runView('cancelled', {
       triggered_by: 'api', principal: 'token:ops', steps_total: 0, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false },
       cancellation: { by: 'request', principal: 'token:ops', started: false, waiting_behind: ['a7e8f06a4890'], same_as: 'a7e8f06a4890' },
+      explanation: explanation({
+        requested_by: 'api · token:ops', steps: '0 started · 0 cached',
+        cancellation: {
+          headline: 'Not started: the same target was already running as run a7e8f06a4890.',
+          detail: 'Cancelled by token:ops while it waited in the queue; it executed nothing.',
+          run: 'a7e8f06a4890',
+        },
+        why: { headline: 'It was cancelled before it decided what to run.', groups: [], omitted: 0, partial: false },
+      }),
     }),
     active: [], groups: [], nowMs: NOW_MS,
   },
   'cancelled by the server stopping': {
-    run: runView('cancelled', { cancellation: { by: 'shutdown', principal: null, started: true, waiting_behind: [], same_as: null } }),
+    run: runView('cancelled', {
+      cancellation: { by: 'shutdown', principal: null, started: true, waiting_behind: [], same_as: null },
+      explanation: explanation({
+        steps: '3 started · 1 cached',
+        cancellation: { headline: 'Cancelled by the server stopping while it ran.', detail: 'Steps that finished before the cancel are cached.', run: null },
+      }),
+    }),
     active: [], groups: [], nowMs: NOW_MS,
   },
 }

@@ -180,6 +180,11 @@ test('a run of 30,000 log lines and 1,000 keys renders only what is in view', as
     run_id: 'big', status: 'failed', command: 'get', target: null, files: [], triggered_by: 'api', scheduled_at: null, schedule_id: null,
     started_at: started, finished_at: started, elapsed_seconds: 13, steps_total: 7644, steps_executed: 5000, steps_cached: 0,
     job: 'all', attempts: null, client_run_id: null, failure: null, outcome: null, error: 'invoices: 1,250 keys failed',
+    explanation: {
+      targets: [], requested_by: 'api', attempts: null, steps: '3,750 ok · 1,250 failed · 0 cached', target_outcomes: [], cancellation: null,
+      why: { headline: '5,000 steps ran, but this run recorded no reasons (barca records them from 0.43).', groups: [], omitted: 0, partial: false },
+      progress: null, slowest: [],
+    },
     steps: Array.from({ length: 1000 }, (_, i) => step(i)),
     steps_page: { total: 5000, truncated: true, nodes: [{ node_id: 'p.py:invoices', keys: 5000, failed: 1250, elapsed_seconds: 58, calls: 0, status: 'ran' }] },
     logs: Array.from({ length: 30_000 }, (_, seq) => ({ node_id: `p.py:invoices[${key(Math.floor(seq / 6))}]`, seq, line: `line ${seq + 1}`, stream: 'stdout', ts: started })),
