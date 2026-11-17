@@ -228,6 +228,59 @@ barca sql "select name, health, last_check_outcome, last_check_at from barca.nod
 
 `last_check` and `checked_up_to_date` are experimental with the rest of health.
 
+## Refresh path
+
+`refresh_path` is the schedule whose tick brings the node up to date, or `null` when no tick
+ever will:
+
+```json
+{"schedule": "pipeline.py:inbox", "next_tick": "2026-11-17T15:00:00Z",
+ "paused": false, "live": true, "missed_ticks": 0}
+```
+
+A node has a path through a schedule exactly when that schedule's tick has the node as a
+target ([Scheduling With Cron](/scheduling/), "What a tick does"): the scheduled node itself, the `Always`
+nodes below it, and the `Always` nodes below every sensor without a schedule of its own that
+the tick's run polls. It is the scheduler's own list, read back per node. So these have no
+path:
+
+- a `Manual` asset or task: a tick reads it as it is. The `Always` nodes below it still have
+  theirs;
+- an `Always` node with no scheduled node above it and no polled sensor above it;
+- a sensor a tick only polls as an input (it is polled, not targeted);
+- a paused node (`barca pause`), which a tick skips, and a pinned asset (`barca pin`), which a
+  tick reads as its pinned result. What is below either keeps its own path.
+
+| Field | Meaning |
+|---|---|
+| `schedule` | the scheduled node's id. With several schedules reaching the node, the one that fires earliest next; a schedule with no next tick comes last, and ties go to the lower id |
+| `next_tick` | that schedule's next slot (RFC 3339, UTC); the first slot after a timed pause ends; `null` for a pause until resumed and when `live` is false |
+| `paused` | the schedule is paused (`POST /schedule/{id}/pause`). A paused schedule is still the path |
+| `live` | a running scheduler fires the schedule. `false` from `barca status` on a machine with no server, from a `--read-only` or `--no-schedule` server, and for a schedule held after `max_failures` failed ticks (`schedule.failing`) |
+| `missed_ticks` | how many finished ticks of the path's schedules had the node as a target and did not leave it fresh |
+
+`missed_ticks` reads the tick record (`last_check` above): it counts the ticks whose outcome
+for the node was `failed` or `not_reached`, from the newest back to the last tick that found
+the node up to date or rebuilt it, and only those that ended after the node's newest
+successful result (a run nobody scheduled made the earlier ones good). It is `0` for a fresh
+node (`health` `ok` or `suspect`). Each schedule keeps the targets of its newest 20 fired
+ticks, so the count stops there; a tick that was skipped or never fired is not a miss, and a
+database with no tick record counts none.
+
+The table adds the path to the `WHY` of a node that is not fresh: `upstream_stale; next tick
+15:05 UTC by inbox` (the day is named when it is not today), `inbox is paused`, `inbox is not
+firing`, with `, missed 2 ticks` when ticks missed it; and `no refresh path` where nothing
+will refresh it, when a node shown is scheduled or has a path (a project with no schedule
+has none anywhere). A scheduled node's own schedule is in its `SCHEDULE` cell. `barca.nodes`
+has `refresh_schedule`, `next_tick` and `missed_ticks`, all `null` for a node with no path.
+
+```bash
+barca status --json | jq -r '.nodes[] | select(.health != "ok" and .refresh_path == null) | .id'
+barca sql "select name, health, refresh_schedule, next_tick, missed_ticks from barca.nodes where health <> 'ok' order by missed_ticks desc"
+```
+
+`refresh_path` is experimental with the rest of health.
+
 ## Data signals and coverage
 
 `signals` lists what a node's recorded results say about its data, from facts the metadata DB
@@ -348,6 +401,7 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "measured": true,
       "root": null,
       "last_check": null,
+      "refresh_path": null,
       "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
@@ -362,8 +416,8 @@ A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-2
 "failures": 0, "max_failures": 5, "failing": false,
 "paused": false, "paused_until": null, "skip_reason": null, "live": false}`, and `--state` or
 `--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `root`, `signals`,
-`measured`, `last_check` and `data_coverage` are in "Health", "Last check" and "Data signals
-and coverage" above; here `total` is a dict, which has no row count, so one of the two assets
+`measured`, `last_check`, `refresh_path` and `data_coverage` are in "Health", "Last check",
+"Refresh path" and "Data signals and coverage" above; here `total` is a dict, which has no row count, so one of the two assets
 is measured.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column

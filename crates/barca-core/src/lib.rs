@@ -56,6 +56,7 @@ pub mod pins;
 pub(crate) mod plan_reasons;
 pub mod queries;
 mod recover;
+pub mod refresh_path;
 pub mod report;
 pub mod results;
 pub mod rollup;

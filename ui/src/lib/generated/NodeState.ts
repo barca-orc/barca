@@ -10,6 +10,7 @@ import type { LastMaterialization } from "./LastMaterialization";
 import type { LastRun } from "./LastRun";
 import type { NodeRunning } from "./NodeRunning";
 import type { PartitionState } from "./PartitionState";
+import type { RefreshPath } from "./RefreshPath";
 import type { Root } from "./Root";
 import type { ScheduleStatus } from "./ScheduleStatus";
 
@@ -110,6 +111,12 @@ root: Root | null,
  * (`health_reason: "checked_up_to_date"`).
  */
 last_check: LastCheck | null,
+/**
+ * The schedule whose tick brings the node up to date, with its next tick and the ticks
+ * that already missed the node (`barca docs status-fields`, "Refresh path"); `null` when
+ * no tick has the node as a target, or the node is paused or pinned.
+ */
+refresh_path: RefreshPath | null,
 /**
  * Per-key cache state of a partitioned node.
  */

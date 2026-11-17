@@ -368,6 +368,9 @@ pub struct Checks {
     /// The runs of fired ticks still in flight: what they record is not a change since a
     /// check, their own verdict is on its way.
     pub in_flight: HashSet<String>,
+    /// Each node's finished ticks that did not leave it fresh, back to the last one that did
+    /// ([`db::LatestTicks::misses`]): what `refresh_path.missed_ticks` counts.
+    pub misses: HashMap<String, Vec<(String, f64)>>,
 }
 
 /// What classification reads beyond the status rows themselves.
@@ -381,6 +384,9 @@ pub struct Evidence<'a> {
     pub late: &'a HashSet<String>,
     /// What the newest ticks found ([`checks`]).
     pub checks: &'a Checks,
+    /// What a refresh path is read from ([`crate::refresh_path`]): the graph's reach, each
+    /// schedule now, the paused nodes and the pinned assets.
+    pub path: crate::refresh_path::PathEvidence<'a>,
     /// The instant of classification, unix seconds: a check's verdict expires.
     pub now: i64,
 }
@@ -544,7 +550,7 @@ pub fn measured(node: &NodeStatus, ages: &HashMap<String, NodeAge>) -> Option<bo
 
 /// When `created_at` (UTC `YYYY-MM-DD HH:MM:SS`, as materializations record it) was, unix
 /// seconds. A time that cannot be read is the end of time: newer than any check.
-fn recorded_at(created_at: &str) -> i64 {
+pub(crate) fn recorded_at(created_at: &str) -> i64 {
     chrono::NaiveDateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S")
         .map_or(i64::MAX, |at| at.and_utc().timestamp())
 }
@@ -676,8 +682,9 @@ pub fn decide(
     }
 }
 
-/// Fill `health`, `health_reason`, `signals`, `measured`, `root` and `last_check` on every row
-/// of `nodes` (one status result: a scope with its upstream cone, in dependency order).
+/// Fill `health`, `health_reason`, `signals`, `measured`, `root`, `last_check` and
+/// `refresh_path` on every row of `nodes` (one status result: a scope with its upstream cone,
+/// in dependency order).
 pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
     let assets: HashSet<&str> = nodes
         .iter()
@@ -722,6 +729,20 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
                 _ => by.as_deref().map(Root::failure),
             };
             let last_check = check.map(|check| check.last.clone());
+            // A fresh node was missed by no tick; else the misses since its newest success.
+            let missed = match evidence.checks.misses.get(&node.id) {
+                Some(misses) if !health.is_fresh() => crate::refresh_path::missed_ticks(
+                    &node.id,
+                    evidence.path.paths,
+                    misses,
+                    evidence
+                        .ages
+                        .get(&node.id)
+                        .and_then(|age| age.last_success_at.as_deref())
+                        .map(recorded_at),
+                ),
+                _ => 0,
+            };
             (
                 health,
                 reason,
@@ -729,10 +750,11 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
                 measured(node, evidence.ages),
                 root,
                 last_check,
+                crate::refresh_path::refresh_path(&node.id, missed, evidence.path),
             )
         })
         .collect();
-    for (node, (health, reason, signals, measured, root, last_check)) in
+    for (node, (health, reason, signals, measured, root, last_check, refresh_path)) in
         nodes.iter_mut().zip(decided)
     {
         node.health = health;
@@ -741,6 +763,7 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
         node.measured = measured;
         node.root = root;
         node.last_check = last_check;
+        node.refresh_path = refresh_path;
     }
 }
 
@@ -761,36 +784,44 @@ pub async fn attach_from_db(
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
-    let (ages, pinned, pauses, checks) = if Path::new(db_path).exists() {
-        let ages = db::node_ages(db_path).await?;
-        let checks = checks(db_path, dag, &ages, zone).await?;
-        (
-            ages,
-            crate::pins::list(db_path)
-                .await?
-                .into_iter()
-                .map(|pin| pin.node_id)
-                .collect(),
-            db::get_schedule_pauses(db_path).await?,
-            checks,
-        )
-    } else {
-        Default::default()
-    };
+    let jobs = crate::schedule::jobs_from_dag(dag);
+    let ids: Vec<String> = jobs.iter().map(|job| job.id.clone()).collect();
+    let (ages, pinned, paused_nodes, pauses, failures, ticks, checks) =
+        if Path::new(db_path).exists() {
+            let ages = db::node_ages(db_path).await?;
+            let checks = checks(db_path, dag, &ages, zone).await?;
+            (
+                ages,
+                crate::pins::list(db_path)
+                    .await?
+                    .into_iter()
+                    .map(|pin| pin.node_id)
+                    .collect::<HashSet<String>>(),
+                crate::pauses::list(db_path)
+                    .await?
+                    .into_iter()
+                    .map(|pause| pause.id)
+                    .collect::<HashSet<String>>(),
+                db::get_schedule_pauses(db_path).await?,
+                db::get_schedule_failures(db_path).await?,
+                crate::schedule_standing::recorded(db_path, &ids).await?,
+                checks,
+            )
+        } else {
+            Default::default()
+        };
     let paused = |id: &str| {
         pauses
             .get(id)
             .is_some_and(|p| p.until.is_none_or(|until| until > now.timestamp()))
     };
     // Row 6: late is the schedule's standing, the one definition (#958).
-    let jobs = crate::schedule::jobs_from_dag(dag);
-    let ids: Vec<String> = jobs.iter().map(|job| job.id.clone()).collect();
-    let ticks = if Path::new(db_path).exists() {
-        crate::schedule_standing::recorded(db_path, &ids).await?
-    } else {
-        Default::default()
-    };
     let late = crate::schedule_standing::late_schedules(&jobs, &ticks, zone, now, &paused);
+    // The scheduler's walk, once per command (#961); no scheduler runs here, so no schedule
+    // is live.
+    let paths = crate::refresh_path::Paths::of(dag);
+    let schedules =
+        crate::refresh_path::recorded_schedules(&jobs, &ticks, &failures, &pauses, zone, now);
     attach(
         result,
         Evidence {
@@ -798,6 +829,12 @@ pub async fn attach_from_db(
             pinned: &pinned,
             late: &late,
             checks: &checks,
+            path: crate::refresh_path::PathEvidence {
+                paths: &paths,
+                schedules: &schedules,
+                paused: &paused_nodes,
+                pinned: &pinned,
+            },
             now: now.timestamp(),
         },
     );
@@ -818,6 +855,7 @@ pub async fn checks(
     if ticks.outcomes.is_empty() {
         return Ok(Checks::default());
     }
+    let misses = ticks.misses;
     let crons: HashMap<String, _> =
         crate::schedule::jobs_from_summaries(crate::queries::list_assets_from_dag(dag))
             .into_iter()
@@ -884,6 +922,7 @@ pub async fn checks(
         by_node,
         redefined,
         in_flight: ticks.in_flight.into_iter().collect(),
+        misses,
     })
 }
 
@@ -993,6 +1032,7 @@ mod tests {
                 pinned: &pinned,
                 late: &late,
                 checks: &Checks::default(),
+                path: crate::refresh_path::PathEvidence::none(),
                 now: 0,
             },
         );
@@ -1385,6 +1425,7 @@ mod tests {
                 pinned: &pinned,
                 late: &late,
                 checks: &Checks::default(),
+                path: crate::refresh_path::PathEvidence::none(),
                 now: 0,
             },
         );
@@ -1502,6 +1543,7 @@ mod tests {
                 pinned: &pinned,
                 late: &late,
                 checks,
+                path: crate::refresh_path::PathEvidence::none(),
                 now,
             },
         );
@@ -1612,6 +1654,7 @@ mod tests {
                 pinned: &pinned,
                 late: &late,
                 checks: &in_flight,
+                path: crate::refresh_path::PathEvidence::none(),
                 now,
             },
         );
@@ -1680,6 +1723,7 @@ mod tests {
                     pinned: &pinned,
                     late: &late,
                     checks,
+                    path: crate::refresh_path::PathEvidence::none(),
                     now: TICK_ENDED + 180,
                 },
             );

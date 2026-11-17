@@ -118,7 +118,7 @@ part. Implemented (experimental): the health words and their derivation (`health
 `barca status --json`, `GET /nodes`, `GET /state` and `barca.nodes`, with their wire shapes in
 the OpenAPI and CLI contract owners and their rules checked in
 `crates/barca-core/src/health.rs`. Not implemented: the cause buckets and every root kind but
-`failure`, the refresh path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the
+`failure`, `stale_since`, `expected_fresh_at` versus `recheck_at`, the
 freshness gap, the cause and gap fields of the rollup, the `barca.schedules`,
 `barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Also
 implemented: the tick record (#960: the `schedule_ticks` table and its reads), from it
@@ -126,7 +126,9 @@ implemented: the tick record (#960: the `schedule_ticks` table and its reads), f
 path cannot decide reads `ok` while the last tick's verdict stands), and the rollup (#955:
 `GET /state/rollup` and `barca status --rollup`, one tree whose every level is the sum of its
 children in nodes and in assets, with failure roots, checked in
-`crates/barca-core/src/rollup.rs`; the web UI renders it and no longer sums). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
+`crates/barca-core/src/rollup.rs`; the web UI renders it and no longer sums); and the refresh path
+(#961: `refresh_path` on every status node and the `refresh_schedule`, `next_tick` and
+`missed_ticks` columns of `barca.nodes`, in `crates/barca-core/src/refresh_path.rs`). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
 implements it issue by issue, and each PR moves its wire shapes into the OpenAPI and CLI contract
 owners. Until then the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are
 authoritative for the rest.

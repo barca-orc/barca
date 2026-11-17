@@ -13,6 +13,7 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// The table, created by `init_db` and by the additive migration (`schema::ddl::ADDED_TABLES`).
 /// Times are unix seconds: `scheduled_at` whole (the slot), `started_at` and `finished_at`
@@ -481,6 +482,11 @@ pub struct LatestTicks {
     /// For every node some retained tick had as a target: what the newest finished one did
     /// with it, across schedules (newest by when its run ended, then by slot).
     pub outcomes: HashMap<String, NodeTickOutcome>,
+    /// For every node whose newest finished tick did not leave it fresh (`failed` or
+    /// `not_reached`): each such tick, newest first, as `(schedule, when its run ended)`,
+    /// back to the newest tick that found the node up to date or rebuilt it. Bounded like
+    /// `outcomes`, by the retained target lists.
+    pub misses: HashMap<String, Vec<(String, f64)>>,
     /// The runs of fired ticks that have not recorded how they ended: queued or running (or
     /// lost with their server, until its next start ends them).
     pub in_flight: Vec<String>,
@@ -509,6 +515,8 @@ pub async fn latest_ticks(db_path: &str) -> Result<LatestTicks, BarcaError> {
         )
         .await
         .map_err(failed("reading the newest outcomes"))?;
+    // Nodes a tick left fresh: an older miss of one is before that, and not counted.
+    let mut settled: HashSet<String> = HashSet::new();
     while let Some(row) = rows
         .next()
         .await
@@ -524,6 +532,18 @@ pub async fn latest_ticks(db_path: &str) -> Result<LatestTicks, BarcaError> {
             .and_then(|list| serde_json::from_str(&list).ok())
             .unwrap_or_default();
         for (node, outcome) in targets {
+            if !settled.contains(&node) {
+                match outcome {
+                    TickTargetOutcome::Failed | TickTargetOutcome::NotReached => out
+                        .misses
+                        .entry(node.clone())
+                        .or_default()
+                        .push((row.get::<String>(0).unwrap_or_default(), finished_at)),
+                    TickTargetOutcome::Rebuilt | TickTargetOutcome::UpToDate => {
+                        settled.insert(node.clone());
+                    }
+                }
+            }
             // Rows come newest first: the first outcome of a node is its newest.
             if let std::collections::hash_map::Entry::Vacant(slot) = out.outcomes.entry(node) {
                 slot.insert(NodeTickOutcome {
@@ -1016,6 +1036,13 @@ mod tests {
         );
         assert_eq!(got.outcomes.len(), 2);
         assert_eq!(got.in_flight, vec!["run-4".to_string()]);
+        // The ticks that did not leave a node fresh, back to the last one that did: `orders`
+        // failed at 170 and was found up to date at 190; `report` was not reached at 170, after
+        // the tick that rebuilt it.
+        assert_eq!(
+            got.misses,
+            HashMap::from([(report.to_string(), vec![(JOB.to_string(), 170.0)])])
+        );
 
         let (_dir, empty) = fresh().await;
         assert_eq!(latest_ticks(&empty).await.unwrap(), LatestTicks::default());
