@@ -36,6 +36,12 @@ Pauses are rows of the metadata DB (`asset_pauses`), so a restart or a deploy ke
   paused node as a target is refused (exit 2, `400` over HTTP) unless it says it means it:
   `--allow-paused` on the command line, `"allow_paused": true` in the body, a confirmation in the
   web UI. A local `barca get` checks the pauses of this machine's metadata DB.
+- **After `barca resume`**, the next tick that reaches the node decides it as any other node:
+  it is computed when its inputs or code changed while it was paused, and then so are the
+  `Always` nodes below it that the tick reconciles. When nothing changed, nothing is
+  recomputed. A node read while paused is never recorded as proven fresh, and resuming forgets
+  the recorded freshness proofs, so the first run afterwards checks every node against the
+  cache once.
 
 ```bash
 barca get clean pipeline.py --allow-paused   # run it by hand even though it is paused
