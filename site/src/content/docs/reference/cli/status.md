@@ -211,6 +211,20 @@ With a server configured, the server answers and the filter is applied here, aft
 machine's `not_in_ledger` results are marked, so `--state unsynced` finds them. `GET
 /nodes?state=stale&problems=1` filters the same way over HTTP.
 
+## One node's keys: `--keys`, `--grid`, `--key`
+
+A partitioned node is one row with key counts. To see its keys, name it and pass one of
+(experimental; [Partitions: Listing keys](/reference/partitions/#listing-keys-barca-status-node---keys---grid---key)):
+
+```bash
+barca status scored --keys --state failed,blocked   # each key: state, last attempt, rows, error
+barca status scored --grid                          # every key's state, one character each
+barca status scored --key region=apac               # one key: its chain, attempts, what it wrote and read
+```
+
+Each prints the same on this machine and from a server, and `--json` gives the documents the
+web UI's key explorer reads.
+
 ## The rollup: `--rollup`
 
 `barca status --rollup` prints, instead of the nodes, how they add up: one tree of everything
@@ -265,7 +279,7 @@ table adds a SCHEDULE column when a node it shows is scheduled:
 | `last_run_id`, `last_status` | the run that tick started and its status as `barca history` words it (`pending` while it waits in the server's run queue), or `null` |
 | `late`, `late_since` | `late_since` is the first slot after `last_fired` that has passed (RFC 3339, UTC, or `null`); `late` is true when that is further back than the schedule's grace plus its queue wait ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot") |
 | `failures`, `max_failures`, `failing` | consecutive failed ticks, `Schedule(..., max_failures=N)` (default 5), and `failures >= max_failures`: ticks are skipped ([Scheduling With Cron](/scheduling/)) |
-| `paused`, `paused_until` | held back by `POST /schedule/{id}/pause`; `paused_until` is `null` for a pause until resumed |
+| `paused`, `paused_until` | held back by `barca pause --schedule NODE` (`POST /schedule/{id}/pause`); `paused_until` is `null` for a pause until resumed |
 | `skip_reason` | why the last due tick was skipped: `in_flight` or `paused`, or `null` |
 | `live` | `true` when a running scheduler reported this entry |
 

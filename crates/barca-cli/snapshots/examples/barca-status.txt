@@ -28,13 +28,22 @@ Options:
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
 
       --state <STATE>
-          Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node
+          Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh
 
       --problems
           Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
 
       --rollup
           Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets
+
+      --keys
+          Experimental: list the keys of one partitioned target, each with its state
+
+      --grid
+          Experimental: print one partitioned target's keys as a grid of states
+
+      --key <KEY>
+          Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target
 
       --env <ENV>
           Use a separate cache and history for this environment
@@ -72,5 +81,13 @@ Examples:
   barca status --rollup                    # counts by health per group and file, in nodes and assets, worst first
   barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
   barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
+  barca status scored --keys               # every key of a partitioned node: state, last attempt, rows, error
+  barca status scored --keys --state failed,blocked --json   # {id, known, dimensions, counts, errors, keys, total, truncated}
+  barca status scored --keys --limit 20    # the first 20 keys; a note says how many there are
+  barca status scored --grid               # every key's state, one character each, a row per value of the shorter dimensions
+  barca status scored --grid --json        # the whole grid in columns: what GET /assets/{name}/partitions/grid answers
+  barca status scored --key region=apac    # one key: its state along its chain, its attempts, what it wrote and read
+  barca status scored --key day=2026-01-01,region=apac --sample 5 --json   # what GET /assets/{name}/partitions/key answers
+  barca status scored --keys --state failed --server   # the same list from the configured server
 
-More: barca docs status, barca docs agents
+More: barca docs status, barca docs partitions, barca docs agents

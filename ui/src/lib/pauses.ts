@@ -20,6 +20,8 @@ export interface AssetPause {
 export interface Pauses {
   total: number
   paused: AssetPause[]
+  /** Every paused schedule (`barca pause --schedule`); `until` in unix seconds, null until resumed. */
+  schedules?: Array<{ id: string; paused_at: number; until: number | null }>
   added?: string[]
   removed?: string[]
 }

@@ -427,6 +427,72 @@ list the first twenty keys in lexical order, independently of worker chunking.
 
 Failed batched calls automatically retry failed partitions in groups at most half the previous size, down to one partition, even without configured retries. Successful partitions are retained. Single-partition failures use the configured retry budget, counting earlier attempts. This also applies when a worker exits unexpectedly.
 
+## Listing keys: `barca status NODE --keys`, `--grid`, `--key`
+
+`barca status` shows a partitioned node as one row with key counts. Three flags (experimental,
+new in 0.44) show the keys of one partitioned node instead, on this machine or from a server
+(`--server`), with the same output either way. They take exactly one target; a node that is not
+partitioned, or no target, is a usage error (exit 2).
+
+```bash
+barca status margin pipeline.py --keys                        # every key: state, last attempt, rows, size, run, error
+barca status margin pipeline.py --keys --state failed,blocked # only keys in these states
+barca status margin pipeline.py --keys --limit 20 --json      # {id, known, dimensions, counts, errors, keys, total, truncated, hint?}
+barca status margin pipeline.py --grid                        # one character per key
+barca status margin pipeline.py --grid --json                 # every key in columns
+barca status margin pipeline.py --key region=apac             # one key along its chain
+barca status margin pipeline.py --key region=apac --sample 5 --json
+```
+
+A key's state is the dry run's, decided for the node's chain (the partitioned nodes that share
+its dimensions and are linked through their inputs):
+
+| state | grid | meaning |
+|---|---|---|
+| `failed` | `f` | its latest attempt failed; a run computes it again |
+| `blocked` | `b` | it waits on the same key of an input that failed (or that waits too) |
+| `stale` | `s` | it succeeded before, and its code or inputs changed since |
+| `never_run` | `n` | no attempt recorded |
+| `pinned` | `p` | an operator holds it at a chosen version ([barca pin and unpin](/reference/cli/pin/)) |
+| `fresh` | `c` | served from cache: a successful result matches its code and inputs |
+
+- **`--keys`** lists the keys in key order (the last dimension varying fastest; a dimension's
+  values in declared order). Each entry of `keys` has `key`, `state`, and from the key's latest
+  attempt `attempted_at` (RFC 3339), `elapsed_seconds`, `size_bytes`, `rows` (what a successful
+  attempt wrote, where its worker counted them) and `run_id`, all `null` for a key with no
+  attempt; `error` is a failed key's error as it is grouped: its first line with the key's own
+  values replaced by their dimension's name (`no rows for <region>`). `errors` lists those
+  groups, most common first (`[{error, keys}]`), and `counts` every key by state, plus `empty`
+  (keys whose latest successful attempt wrote 0 rows), whatever `--state` selects. `--state`
+  takes key states here (an unknown one is a usage error naming them). The list is bounded like
+  every other: every key in JSON and 100 in a table unless `--limit N` or `--all` says
+  otherwise; `total` counts the keys that match `--state`, `truncated` says whether all are
+  shown, and a truncated table ends with a note on stderr. The full error text and traceback of
+  one key are in `--key`.
+- **`--grid`** prints a summary line, then one row per combination of every dimension but the
+  longest, each a strip of state characters along the longest dimension's values in order (`-`
+  where a combination is not a key). A dimension of more than 100 values wraps, each line
+  starting with the value it begins at. `--limit` bounds the rows of the table (100 by
+  default). `--grid --json` is always the whole grid, as `GET /assets/{name}/partitions/grid`
+  answers it: `dimensions` (`[{name, values}]`), `states` (one character per cell of the
+  dimensions' product in row-major order), `counts`, `chain`, `known`, and per-cell columns
+  `attempted_at` (seconds after `attempted_base`), `elapsed_ms`, `size_bytes`, `rows`, `run`
+  (an index into `runs`) and `error` (cell index to an index into `errors`).
+- **`--key KEY`** shows one key (`region=apac`, or `day=2026-01-01,region=apac` in any order
+  for a compound key): its state, the same key in each node of its chain upstream first, its
+  latest attempts (at most 20, newest first, the newest failure's error in full), what it wrote
+  and what it read: the same key of each input that shares its dimensions, and the latest result
+  of each other input. `--json` is what `GET /assets/{name}/partitions/key` answers: `{id, key,
+  state, chain: [{id, state}], attempts, output, inputs}`, the states as the grid's characters,
+  and each of `output` and `inputs` with `artifact_path`, `format`, `size_bytes` and the
+  artifact's `shape`. `--sample N` (at most 50) adds first rows to each shape. A key the node
+  does not have is a usage error (exit 2).
+- `known` is `false` while the keys are not known: a `partitions_from` source that has not run.
+  The list and the grid are then empty.
+- With a server, `--keys` and `--grid` read `GET /assets/{name}/partitions/grid` and `--key`
+  reads `GET /assets/{name}/partitions/key`; this machine's unposted results are not marked
+  (`barca status` without these flags marks them).
+
 ## Exploring keys in the web UI
 
 `barca serve`'s web UI has a key explorer for a partitioned asset: the asset panel's

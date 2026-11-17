@@ -1,0 +1,37 @@
+# barca status flaky pipeline.py --grid --json  (stdout, exit 0)
+attempted_at : array
+attempted_at[] : integer
+attempted_base : integer
+chain : array
+chain[] : string
+counts : object
+counts.blocked : integer
+counts.empty : integer
+counts.failed : integer
+counts.fresh : integer
+counts.never_run : integer
+counts.pinned : integer
+counts.stale : integer
+dimensions : array
+dimensions[] : object
+dimensions[].name : string
+dimensions[].values : array
+dimensions[].values[] : string
+elapsed_ms : array
+elapsed_ms[] : integer|null
+error : object
+error.<name> : integer
+errors : array
+errors[] : object
+errors[].error : string
+errors[].keys : integer
+id : string
+known : boolean
+rows : <user value>
+run : array
+run[] : integer
+runs : array
+runs[] : string
+size_bytes : array
+size_bytes[] : integer|null
+states : string

@@ -308,16 +308,36 @@ run history was deleted (`barca gc`) has a typical wait of 0 until it runs again
 ## Pausing one schedule
 
 To hold one job back for a maintenance window or a planned manual rebuild, pause it; the rest of
-the schedule keeps firing. The id is the node's full id (percent-encode a `/` in it) or its name:
+the schedule keeps firing. From the CLI (experimental, new in 0.44), name the scheduled node:
+
+```bash
+barca pause --schedule daily_report --server                              # until resumed
+barca pause --schedule daily_report --until 2h --server                   # for two hours from now
+barca pause --schedule daily_report --until 2026-10-21T06:00:00Z --server # until a time (RFC 3339)
+barca resume --schedule daily_report --server
+barca pause --server --json   # what is paused: {total, paused: [...], schedules: [{id, paused_at, until}]}
+```
+
+The same over HTTP; the id is the node's full id (percent-encode a `/` in it) or its name:
 
 ```bash
 curl -X POST http://127.0.0.1:8274/schedule/daily_report/pause                              # until resumed
 curl -X POST 'http://127.0.0.1:8274/schedule/daily_report/pause?until=2026-10-21T06:00:00Z'  # until a time (RFC 3339)
+curl -X POST 'http://127.0.0.1:8274/schedule/daily_report/pause?until=2h'                    # for a duration from now
 curl -X POST http://127.0.0.1:8274/schedule/daily_report/resume
 ```
 
-Each answers the job's `GET /schedule` entry, which reports `paused` and `paused_until` (unix
-epoch seconds, `null` for a pause until resumed). While a job is paused its due ticks are
+`--until` (and `?until=`) takes a duration from now on the server's clock (`45s`, `30m`, `2h`,
+`7d`, `2w`) or an RFC 3339 time; anything else, or a time that is not in the future, is a usage
+error (exit 2, `400`). A name that is not a scheduled node is a usage error too (`404`), and
+the commands need a server, as `barca pause` does (`barca docs incidents`).
+
+Each answers the job's `GET /schedule` entry, which `--json` prints as it is (without `--json`:
+one line, `pipeline.py:daily_report: paused until resumed · cron 0 6 * * * · next fire ...`,
+and a note on stderr). It reports `paused` and `paused_until` (unix
+epoch seconds, `null` for a pause until resumed). `barca pause` with no target lists the paused
+schedules under `schedules` beside the paused nodes, and `barca status --problems` lists a
+paused schedule's node. While a job is paused its due ticks are
 skipped: a line on stderr, `skip_reason: "paused"` in `GET /schedule`, and with telemetry on a
 `barca.run` span with status `skipped` and reason `paused`. A pause ends at `until`, or when the
 job is resumed; the ticks skipped while it was paused are not caught up.

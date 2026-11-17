@@ -178,42 +178,27 @@
     {
       "method": "POST",
       "path": "/schedule/{}/pause",
-      "exempt": {
-        "reason": "no CLI command pauses one schedule",
-        "issue": 989
-      }
+      "cli": "barca pause --schedule NODE --json"
     },
     {
       "method": "POST",
       "path": "/schedule/{}/resume",
-      "exempt": {
-        "reason": "no CLI command resumes one schedule",
-        "issue": 989
-      }
+      "cli": "barca resume --schedule NODE --json"
     },
     {
       "method": "GET",
       "path": "/assets/{}/partitions",
-      "exempt": {
-        "reason": "the CLI prints a node's key counts (`barca status`), not its keys",
-        "issue": 990
-      }
+      "cli": "barca status NODE --keys --json"
     },
     {
       "method": "GET",
       "path": "/assets/{}/partitions/grid",
-      "exempt": {
-        "reason": "the CLI prints a node's key counts (`barca status`), not every key's state",
-        "issue": 990
-      }
+      "cli": "barca status NODE --grid --json"
     },
     {
       "method": "GET",
       "path": "/assets/{}/partitions/key",
-      "exempt": {
-        "reason": "the CLI has no view of one key across its chain",
-        "issue": 990
-      }
+      "cli": "barca status NODE --key KEY --json"
     }
   ],
   "routes_passed_in": [

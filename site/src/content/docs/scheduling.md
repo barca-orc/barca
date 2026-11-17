@@ -402,8 +402,9 @@ client or shell started the run.
   `skipped_for` (in memory only), and telemetry sends a `barca.run` span with status `skipped`.
   A run of another node, even one downstream whose cone includes this one, does not hold the
   tick back.
-- **Pausing one job.** `POST /schedule/{id}/pause` (optionally `?until=<RFC 3339>`) holds one
-  job back and `POST /schedule/{id}/resume` lets it fire again; its ticks meanwhile are skipped
+- **Pausing one job.** `barca pause --schedule <node> --server` (optionally `--until 2h` or
+  `--until <RFC 3339>`), or `POST /schedule/{id}/pause` (`?until=`), holds one job back, and
+  `barca resume --schedule <node> --server` (`POST /schedule/{id}/resume`) lets it fire again; its ticks meanwhile are skipped
   with `skip_reason: "paused"`, and are not caught up. The pause is kept in the metadata DB, so
   a restart does not resume it. See the [server API](/reference/server-api-endpoints/#scheduling).
 - **What started a run.** A scheduled run is recorded with `triggered_by: "schedule"`, the tick

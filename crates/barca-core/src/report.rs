@@ -5,6 +5,7 @@
 //! format step reports and progress lines without emitting them.
 
 mod commands;
+mod keys;
 pub use commands::{
     GetShape, OutputChunk, RenderedOutput, ResultFormat, Returned, Shown, first_multi_failure,
     history_json, history_target, render_explain, render_failed_get, render_failed_run, render_get,
@@ -16,6 +17,7 @@ pub(crate) use commands::{
     render_get_multi_parts, render_multi_parts, render_run_body, returned_from_pointers, run_body,
     run_label,
 };
+pub use keys::{render_partition_grid, render_partition_key, render_partition_keys};
 
 use crate::cache_state::CacheState;
 use crate::step_status::StepStatus;

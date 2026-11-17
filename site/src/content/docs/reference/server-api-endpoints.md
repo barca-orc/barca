@@ -63,8 +63,8 @@ client prints it as it would print the local command's.
 | `GET`  | `/assets/{name}` | One node's `barca list --json` entry with its `barca stats --json` body, the run working on it now, and `failure` when its latest execution failed: the project line that raised (`raised_at`), the failed run hash and the last success to compare it with. |
 | `GET`  | `/assets/{name}/schema` | Selected node and direct inputs as `NodeStatus[]`, with artifact shapes inspected on demand. `?sample=N` adds up to 20 first rows of json/csv/parquet artifacts as `shape.sample`. |
 | `GET`  | `/assets/{name}/partitions` | A partitioned node's keys with a recorded attempt, each with its latest (`?status=failed`, `?q=`, `?limit=`, `?offset=`) and the `rows` it wrote (`null` when not counted), and its failed keys' errors grouped. Experimental. |
-| `GET`  | `/assets/{name}/partitions/grid` | Every key of a partitioned node in one compact body: the dimensions and their values, each key's state (fresh, stale, never run, failed, or blocked behind the same key of a failed input), its latest attempt's time, duration, size, rows (`rows`, `null` where not counted) and run, how many keys last wrote no rows (`counts.empty`), and the failed keys' errors grouped. Decided across the node's chain, the partitioned nodes it shares its keys with. Experimental. |
-| `GET`  | `/assets/{name}/partitions/key?key=` | One key (`?key=day=2026-01-01,region=apac`, `?sample=`): its state in each node of the chain, its latest attempts (each with its `rows`), and the shape and first rows of its result and of what it read (the same key of each input in the chain). `404` for a key the node does not have. Experimental. |
+| `GET`  | `/assets/{name}/partitions/grid` | Every key of a partitioned node in one compact body: the dimensions and their values, each key's state (fresh, stale, never run, failed, or blocked behind the same key of a failed input), its latest attempt's time, duration, size, rows (`rows`, `null` where not counted) and run, how many keys last wrote no rows (`counts.empty`), and the failed keys' errors grouped. Decided across the node's chain, the partitioned nodes it shares its keys with. Experimental. `barca status NODE --grid --json` prints it, and `--keys` lists it key by key. |
+| `GET`  | `/assets/{name}/partitions/key?key=` | One key (`?key=day=2026-01-01,region=apac`, `?sample=`): its state in each node of the chain, its latest attempts (each with its `rows`), and the shape and first rows of its result and of what it read (the same key of each input in the chain). `404` for a key the node does not have. Experimental. `barca status NODE --key KEY --json` prints it. |
 | `GET`  | `/assets/{name}/versions` | The asset's recent successful materializations (one per run hash, newest first, `?limit=N`, default 20) and its pin, as `barca pin <name> --versions --json`. Experimental. |
 | `POST` | `/assets/{name}/pin` | Pin the asset to `{"run_hash": "..."}` (or a unique prefix) or `{"previous": true}`, with an optional `"reason"`, as `barca pin`; `pinned_by` is the request's token name. `403` read-only. Experimental ([Pinning and Rollback](/reference/cli/pin/)). |
 | `POST` | `/assets/{name}/pin/upload` | Pin the asset to the request body (a file's bytes), as `barca pin --from-file`: `?file_name=` (its extension gives the format) or `?format=json\|parquet\|csv\|pickle`, and `?reason=`. At most 256 MiB (`413`); a body that does not load is `400`; `403` read-only. Experimental ([Pinning and Rollback](/reference/cli/pin/)). |
@@ -72,9 +72,9 @@ client prints it as it would print the local command's.
 | `GET`  | `/pins` | Every pinned asset: `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason, run_id, upload}]}`. Experimental. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
 | `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause. |
-| `POST` | `/schedule/{id}/pause` | Hold one schedule back, optionally `?until=<RFC 3339>`. |
-| `POST` | `/schedule/{id}/resume` | Let a paused schedule fire again. |
-| `GET`  | `/pauses` | The paused assets (`barca pause`): `{total, paused: [{id, paused_at, via}]}`. Scheduled ticks skip them (step reason `paused`) until resumed. Experimental. |
+| `POST` | `/schedule/{id}/pause` | Hold one schedule back, optionally `?until=` a duration from now (`2h`) or an RFC 3339 time, as `barca pause --schedule`. |
+| `POST` | `/schedule/{id}/resume` | Let a paused schedule fire again, as `barca resume --schedule`. |
+| `GET`  | `/pauses` | The paused assets (`barca pause`) and the paused schedules: `{total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}`. Scheduled ticks skip them (step reason `paused`) until resumed. Experimental. |
 | `POST` | `/pauses` | Pause `{"target", "downstream"}`: a node, a node and everything below it, or a `file.py`. Answers `added` and every pause; `403` read-only. A `POST /runs` naming a paused node is `400` unless it sends `"allow_paused": true`. |
 | `POST` | `/pauses/resume` | Resume `{"target", "downstream"}` or `{"all": true}`. Answers `removed` and every pause; `403` read-only. |
 | `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at}`; `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
@@ -514,6 +514,7 @@ the job's id in `schedule_id` (`GET /runs/{run_id}`, `barca history --json`).
 ```
 POST /schedule/{id}/pause                       → the job's ScheduleEntry
 POST /schedule/{id}/pause?until=2026-10-21T06:00:00Z
+POST /schedule/{id}/pause?until=2h              (a duration from now: 45s, 30m, 2h, 7d, 2w)
 POST /schedule/{id}/resume                      → the job's ScheduleEntry
 ```
 
@@ -525,7 +526,7 @@ it. The ticks skipped while paused are not caught up. Resuming a job that is not
 nothing.
 
 A pause is kept in the metadata DB (`schedule_state`), so a restart, such as a deploy, does not
-resume it. `until` must be an RFC 3339 time in the future (`400` otherwise); an id that is not a
+resume it. `until` must be a duration from now (`2h`) or an RFC 3339 time in the future (`400` otherwise); an id that is not a
 scheduled node is `404`, a name that matches several `409`, and a read-only server answers `403`.
 When the scheduler has not published the job (`--no-schedule`, or still starting) the answer is
 `{id, paused, paused_until}`.

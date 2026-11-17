@@ -267,16 +267,8 @@ pub async fn partition_grid(
     Path(name): Path<String>,
 ) -> Result<Json<std::sync::Arc<barca_core::partition_grid::PartitionGrid>>, ApiError> {
     let dag = state.loaded_dag().await?;
-    let id = barca_core::targets::find_target_id(&dag, &name)
-        .map_err(|e| ApiError::run(e, context("partitions grid", &state)))?;
-    if dag
-        .get_node(&id)
-        .is_none_or(|n| n.extracted.partitions.is_empty())
-    {
-        return Err(ApiError::BadRequest(format!(
-            "'{name}' is not partitioned: it has no keys"
-        )));
-    }
+    let id = barca_core::partition_grid::partitioned_target(&dag, &name)
+        .map_err(|e| ApiError::run(e, context("status", &state)))?;
     let db = state.db_state();
     if let Some(grid) = state.kept_grid(&dag, &db, &id) {
         return Ok(Json(grid));
@@ -320,13 +312,16 @@ pub async fn partition_key(
         &state.config.python,
         &id,
         &query.key,
-        query.sample.unwrap_or(5).min(50),
+        query
+            .sample
+            .unwrap_or(5)
+            .min(barca_core::partition_grid::KEY_SAMPLE_MAX),
     )
     .await
     .map_err(|e| ApiError::run(e, context("partition key", &state)))?;
-    detail
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("'{name}' has no key '{}'", query.key)))
+    detail.map(Json).ok_or_else(|| {
+        ApiError::NotFound(barca_core::partition_grid::no_such_key(&name, &query.key))
+    })
 }
 
 /// `GET /stats/{name}` — `barca stats --json`.

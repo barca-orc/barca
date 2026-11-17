@@ -423,15 +423,34 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             state,
             problems,
             rollup,
+            keys,
+            grid,
+            key,
             env,
             ..
         } => {
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
-            let filter = status_filter(&state, problems)?;
+            let view = commands::KeysView::of(keys, grid, key, &state, sample)
+                .map_err(|e| usage_error(&e))?;
             let (target, files) = split_target_files(args);
             server_files("status", &files, None)?;
             let targets = targets_arg(target.as_deref())?;
+            if let Some(view) = view {
+                let target = view.target(&targets).map_err(|e| usage_error(&e))?;
+                let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
+                return client::partition_keys(
+                    server,
+                    &target,
+                    &files,
+                    view,
+                    json,
+                    limit,
+                    env.as_deref(),
+                )
+                .await;
+            }
+            let filter = status_filter(&state, problems)?;
             if rollup {
                 return client::rollup(server, &targets, &files, json, env.as_deref()).await;
             }
@@ -597,12 +616,24 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
         Cli::Pause {
             target,
             downstream,
+            schedule,
+            until,
             format,
             env,
             server: flags,
         } => {
             if flags.local {
                 return Err(pauses_need_a_server("pause"));
+            }
+            if let Some(schedule) = schedule {
+                return client::pause_schedule(
+                    server,
+                    &schedule,
+                    Some(until.as_deref()),
+                    is_json(format),
+                    env.as_deref(),
+                )
+                .await;
             }
             client::pause(
                 server,
@@ -616,6 +647,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
         Cli::Resume {
             target,
             downstream,
+            schedule,
             all,
             format,
             env,
@@ -623,6 +655,16 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
         } => {
             if flags.local {
                 return Err(pauses_need_a_server("resume"));
+            }
+            if let Some(schedule) = schedule {
+                return client::pause_schedule(
+                    server,
+                    &schedule,
+                    None,
+                    is_json(format),
+                    env.as_deref(),
+                )
+                .await;
             }
             client::resume(
                 server,
@@ -1032,12 +1074,16 @@ async fn run_cli(
             state,
             problems,
             rollup,
+            keys,
+            grid,
+            key,
             env,
             ..
         } => {
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
-            let filter = status_filter(&state, problems)?;
+            let view = commands::KeysView::of(keys, grid, key, &state, sample)
+                .map_err(|e| usage_error(&e))?;
             let (target, files) = split_target_files(args);
             check_py_files("status", &files, None)?;
             if files.is_empty() {
@@ -1047,6 +1093,22 @@ async fn run_cli(
             }
             let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
             let targets = targets_arg(target.as_deref())?;
+            if let Some(view) = view {
+                let target = view.target(&targets).map_err(|e| usage_error(&e))?;
+                let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
+                return commands::keys_cmd(
+                    env.as_deref(),
+                    &target,
+                    files,
+                    view,
+                    json,
+                    limit,
+                    &python,
+                )
+                .await
+                .map_err(|e| get_run_error(e, ctx, &hint_files));
+            }
+            let filter = status_filter(&state, problems)?;
             if rollup {
                 return commands::rollup_cmd(env.as_deref(), targets, files, json, &python)
                     .await

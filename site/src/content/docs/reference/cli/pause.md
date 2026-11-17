@@ -14,7 +14,7 @@ node and everything below it, or every node of a file. Pauses are experimental (
 barca pause clean --server                 # scheduled runs skip clean until it is resumed
 barca pause clean --downstream --server    # clean and every node below it
 barca pause pipeline.py --server           # every node defined in pipeline.py
-barca pause --server --json                # {total, paused: [{id, paused_at, via}]}
+barca pause --server --json                # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
 barca resume clean --server                # the next tick computes clean again
 barca resume clean --downstream --server   # clean and every node below it
 barca resume --all --server                # every paused node
@@ -54,8 +54,9 @@ barca get clean pipeline.py --allow-paused   # run it by hand even though it is 
 ```
 
 Resuming lets the next tick compute the node again. The ticks it skipped while paused are not
-caught up. A pause is separate from a schedule's pause (`POST /schedule/{id}/pause`, which holds
-back one scheduled job's ticks) and from the run queue's pause (`barca queue pause`, which holds
+caught up. A pause is separate from a schedule's pause (`barca pause --schedule NODE`, `POST
+/schedule/{id}/pause`: it holds back one scheduled job's ticks, [Scheduling With Cron](/scheduling/), "Pausing
+one schedule"; `barca pause` with no target lists both kinds) and from the run queue's pause (`barca queue pause`, which holds
 back every queued run); the web UI's asset panel offers all three in one place.
 
 ## Known limitations

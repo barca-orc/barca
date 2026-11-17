@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::BarcaError;
 use crate::dag::Dag;
@@ -33,10 +33,26 @@ pub mod state {
     pub const BLOCKED: char = 'b';
     /// Not a key: a combination of the dimensions' values the node does not have.
     pub const NONE: char = '-';
+
+    /// Every state a key can be in, most urgent first, with the word the CLI and the web UI
+    /// name it by.
+    pub const NAMED: [(char, &str); 6] = [
+        (FAILED, "failed"),
+        (BLOCKED, "blocked"),
+        (STALE, "stale"),
+        (NEVER_RUN, "never_run"),
+        (PINNED, "pinned"),
+        (FRESH, "fresh"),
+    ];
+
+    /// A state character's word; `None` for [`NONE`].
+    pub fn name(state: char) -> Option<&'static str> {
+        NAMED.iter().find(|(c, _)| *c == state).map(|(_, n)| *n)
+    }
 }
 
 /// One dimension of a node's keys: its name and its values, in order.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct GridDimension {
     pub name: String,
@@ -44,7 +60,7 @@ pub struct GridDimension {
 }
 
 /// How many keys are in each state.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct GridCounts {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -65,12 +81,27 @@ pub struct GridCounts {
     pub empty: usize,
 }
 
+impl GridCounts {
+    /// How many keys are in the state `code` (a [`state`] character).
+    pub fn of(&self, code: char) -> usize {
+        match code {
+            state::FRESH => self.fresh,
+            state::PINNED => self.pinned,
+            state::STALE => self.stale,
+            state::NEVER_RUN => self.never_run,
+            state::FAILED => self.failed,
+            state::BLOCKED => self.blocked,
+            _ => 0,
+        }
+    }
+}
+
 /// Every key of a partitioned node.
 ///
 /// Keys are the cells of the dimensions' product in row-major order, the last dimension
 /// varying fastest: with `day` (2 values) and `region` (3), cell 4 is the second day's second
 /// region. The per-key arrays have one entry per cell.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionGrid {
     pub id: String,
@@ -427,8 +458,254 @@ pub(crate) fn grid_of(dag: &Dag, id: &str, chain: &ChainStates) -> PartitionGrid
     grid
 }
 
-/// One key's state in one node of its chain.
+/// The error of a target that has no keys (`barca status NODE --keys`, the grid route).
+pub fn not_partitioned(name: &str) -> String {
+    format!(
+        "'{name}' is not partitioned: it has no keys\n\
+         barca status {name} shows a node that is not partitioned."
+    )
+}
+
+/// The error of a key the node does not have (`barca status NODE --key`, the key route).
+pub fn no_such_key(name: &str, key: &str) -> String {
+    format!("'{name}' has no key '{key}'\nList its keys: barca status {name} --keys")
+}
+
+/// The partitioned node `name` names in `dag`: its id, or a usage error.
+pub fn partitioned_target(dag: &Dag, name: &str) -> Result<String, BarcaError> {
+    let id = crate::targets::find_target_id(dag, name)?;
+    if dag
+        .get_node(&id)
+        .is_none_or(|n| n.extracted.partitions.is_empty())
+    {
+        return Err(BarcaError::Usage(not_partitioned(name)));
+    }
+    Ok(id)
+}
+
+/// `barca status NODE --keys` / `--grid` on this machine: every key of the node `name` names
+/// in the project's files.
+pub async fn grid_for_target(
+    cfg: &crate::config::ResolvedConfig,
+    name: &str,
+    file_args: &[String],
+    python: &std::path::Path,
+) -> Result<PartitionGrid, BarcaError> {
+    let dag = crate::load::build_dag(file_args, python).await?;
+    let id = partitioned_target(&dag, name)?;
+    partition_grid(cfg, &dag, &id).await
+}
+
+/// `barca status NODE --key KEY` on this machine; `None` when the node has no such key.
+pub async fn key_for_target(
+    cfg: &crate::config::ResolvedConfig,
+    name: &str,
+    file_args: &[String],
+    python: &std::path::Path,
+    key: &str,
+    sample: usize,
+) -> Result<Option<PartitionKeyDetail>, BarcaError> {
+    let dag = crate::load::build_dag(file_args, python).await?;
+    let id = partitioned_target(&dag, name)?;
+    partition_key_detail(cfg, &dag, python, &id, key, sample).await
+}
+
+/// The most sample rows one key's detail reads from each artifact.
+pub const KEY_SAMPLE_MAX: usize = 50;
+
+/// Which keys [`PartitionGrid::key_rows`] lists.
+#[derive(Debug, Clone, Default)]
+pub struct KeyFilter {
+    /// [`state`] characters; empty: every state.
+    pub states: Vec<char>,
+}
+
+impl KeyFilter {
+    /// `--state failed,blocked`: key states by name. An unknown name is an error listing the
+    /// valid ones.
+    pub fn parse(names: &[String]) -> Result<KeyFilter, String> {
+        let mut states = Vec::new();
+        for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+            match state::NAMED.iter().find(|(_, word)| *word == name) {
+                Some((c, _)) => {
+                    if !states.contains(c) {
+                        states.push(*c);
+                    }
+                }
+                None => {
+                    return Err(format!(
+                        "unknown key state '{name}': use {}",
+                        state::NAMED.map(|(_, word)| word).join(", ")
+                    ));
+                }
+            }
+        }
+        Ok(KeyFilter { states })
+    }
+}
+
+/// One key of a grid, decoded: what `barca status NODE --keys` lists.
 #[derive(Debug, Clone, Serialize)]
+pub struct KeyRow {
+    /// `day=2026-01-01,region=apac`.
+    pub key: String,
+    /// `failed`, `blocked`, `stale`, `never_run`, `pinned` or `fresh`.
+    pub state: &'static str,
+    /// The key's latest attempt (RFC 3339); null where it has none.
+    pub attempted_at: Option<String>,
+    pub elapsed_seconds: Option<f64>,
+    pub size_bytes: Option<i64>,
+    /// Rows the latest attempt wrote, where its worker counted them.
+    pub rows: Option<i64>,
+    pub run_id: Option<String>,
+    /// A failed key's error as the grid groups it (an entry of `errors`): the first line,
+    /// with the key's own values replaced by their dimension's name.
+    pub error: Option<String>,
+}
+
+/// One row of the grid as text: a combination of every dimension but the longest, running
+/// through the longest dimension's values in order.
+#[derive(Debug, Clone)]
+pub struct GridBlock {
+    /// `region=apac`; empty for a one-dimension grid.
+    pub label: String,
+    /// The cell of each value of the long dimension, in order.
+    pub cells: Vec<usize>,
+}
+
+impl PartitionGrid {
+    /// How far one step of each dimension moves in the cell index.
+    fn strides(&self) -> Vec<usize> {
+        let mut strides = vec![1usize; self.dimensions.len()];
+        for d in (0..self.dimensions.len().saturating_sub(1)).rev() {
+            strides[d] = strides[d + 1] * self.dimensions[d + 1].values.len();
+        }
+        strides
+    }
+
+    /// The key of `cell` as barca spells it.
+    fn key_of(&self, cell: usize, strides: &[usize]) -> String {
+        self.dimensions
+            .iter()
+            .zip(strides)
+            .map(|(d, stride)| format!("{}={}", d.name, d.values[cell / stride % d.values.len()]))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// How many keys the node has.
+    pub fn keys(&self) -> usize {
+        let c = &self.counts;
+        c.fresh + c.pinned + c.stale + c.never_run + c.failed + c.blocked
+    }
+
+    /// The keys that match `filter`, in key order.
+    pub fn key_rows(&self, filter: &KeyFilter) -> Vec<KeyRow> {
+        let strides = self.strides();
+        self.states
+            .chars()
+            .enumerate()
+            .filter_map(|(cell, c)| {
+                let name = state::name(c)?;
+                if !filter.states.is_empty() && !filter.states.contains(&c) {
+                    return None;
+                }
+                let at = |v: &Vec<Option<i64>>| v.get(cell).copied().flatten();
+                Some(KeyRow {
+                    key: self.key_of(cell, &strides),
+                    state: name,
+                    attempted_at: at(&self.attempted_at)
+                        .map(|offset| crate::outcome::rfc3339(self.attempted_base + offset)),
+                    elapsed_seconds: self
+                        .elapsed_ms
+                        .get(cell)
+                        .copied()
+                        .flatten()
+                        .map(|ms| ms as f64 / 1000.0),
+                    size_bytes: at(&self.size_bytes),
+                    rows: at(&self.rows),
+                    run_id: self
+                        .run
+                        .get(cell)
+                        .copied()
+                        .flatten()
+                        .and_then(|r| self.runs.get(r as usize).cloned()),
+                    error: self
+                        .error
+                        .get(&(cell as u32))
+                        .and_then(|e| self.errors.get(*e as usize))
+                        .map(|group| group.error.clone()),
+                })
+            })
+            .collect()
+    }
+
+    /// The dimension the grid's rows run along: the one with the most values (the first of
+    /// them on a tie).
+    pub fn along(&self) -> usize {
+        let mut along = 0;
+        for (i, d) in self.dimensions.iter().enumerate() {
+            if d.values.len() > self.dimensions[along].values.len() {
+                along = i;
+            }
+        }
+        along
+    }
+
+    /// The grid as rows: one per combination of the other dimensions' values that has a key.
+    pub fn blocks(&self) -> Vec<GridBlock> {
+        if self.dimensions.is_empty() {
+            return Vec::new();
+        }
+        let strides = self.strides();
+        let along = self.along();
+        let others: Vec<usize> = (0..self.dimensions.len()).filter(|d| *d != along).collect();
+        let combos: usize = others
+            .iter()
+            .map(|d| self.dimensions[*d].values.len())
+            .product();
+        let states = self.states.as_bytes();
+        let mut blocks = Vec::new();
+        for combo in 0..combos {
+            // This row's coordinates in the other dimensions, the last varying fastest.
+            let mut rest = combo;
+            let mut fixed: Vec<(usize, usize)> = Vec::new();
+            for d in others.iter().rev() {
+                let n = self.dimensions[*d].values.len();
+                fixed.push((*d, rest % n));
+                rest /= n;
+            }
+            fixed.reverse();
+            let base: usize = fixed.iter().map(|(d, i)| i * strides[*d]).sum();
+            let cells: Vec<usize> = (0..self.dimensions[along].values.len())
+                .map(|i| base + i * strides[along])
+                .collect();
+            if !cells
+                .iter()
+                .any(|c| states.get(*c).is_some_and(|s| *s != state::NONE as u8))
+            {
+                continue;
+            }
+            blocks.push(GridBlock {
+                label: fixed
+                    .iter()
+                    .map(|(d, i)| {
+                        format!(
+                            "{}={}",
+                            self.dimensions[*d].name, self.dimensions[*d].values[*i]
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(","),
+                cells,
+            });
+        }
+        blocks
+    }
+}
+
+/// One key's state in one node of its chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ChainKeyState {
     pub id: String,
@@ -438,7 +715,7 @@ pub struct ChainKeyState {
 
 /// What one key read or wrote: a node's latest successful result for it, and that result's
 /// shape (`barca status --sample`'s), or why there is none.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct KeyArtifact {
     pub id: String,
@@ -456,7 +733,7 @@ pub struct KeyArtifact {
 
 /// `GET /assets/{name}/partitions/key`: one key of a partitioned node; `None` when the node
 /// has no such key.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionKeyDetail {
     pub id: String,
