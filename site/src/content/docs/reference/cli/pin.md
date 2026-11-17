@@ -136,8 +136,11 @@ configured server) act on the server's database.
 - If the pinned row or artifact disappears anyway (a restored database, a file deleted by hand),
   a run that reads the asset stops with exit 2 naming the pin (a scheduled tick reports its
   target `blocked`) until it is unpinned or pinned again.
-- `barca status` reports the asset's cache state for its current definition; a pinned asset
-  reads `cached` with reason `pinned` in `barca get --dry-run`.
+- `barca status` reports the pinned asset's cache state for its current code and inputs
+  (`stale` when they give another result than the pinned one), and what reads it as a run
+  finds it, reading the pin: a node that is up to date against the pin is `cached` and its
+  `detail` names the pinned asset ([barca status: Cache state](/reference/cli/status/#cache-state)). The pinned asset
+  itself reads `cached` with reason `pinned` in `barca get --dry-run`.
 - An uploaded file is written to the local artifact directory of the machine that pins (the
   server's, for `--server` and the UI); with a remote store it is not copied to the store.
 

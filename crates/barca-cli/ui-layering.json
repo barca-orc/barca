@@ -465,14 +465,7 @@
     },
     "runsPage": {
       "kind": "page",
-      "does": "the Runs page's program, filters and the rows of a run's Steps",
-      "derives": [
-        {
-          "what": "`runActivity`: the activity strip buckets the loaded runs by hour and takes their median duration",
-          "reason": "not served yet",
-          "issue": 991
-        }
-      ]
+      "does": "the Runs page's program, filters and the rows of a run's Steps"
     },
     "sidebar": {
       "kind": "page",

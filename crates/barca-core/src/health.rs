@@ -387,6 +387,9 @@ pub struct Evidence<'a> {
     /// What a refresh path is read from ([`crate::refresh_path`]): the graph's reach, each
     /// schedule now, the paused nodes and the pinned assets.
     pub path: crate::refresh_path::PathEvidence<'a>,
+    /// What the times are estimated from ([`crate::estimates`]): typical durations, the runs
+    /// in flight, the run queue, the worker pool, when each source file changed.
+    pub timing: crate::estimates::Timing<'a>,
     /// The instant of classification, unix seconds: a check's verdict expires.
     pub now: i64,
 }
@@ -682,8 +685,9 @@ pub fn decide(
     }
 }
 
-/// Fill `health`, `health_reason`, `signals`, `measured`, `root`, `last_check` and
-/// `refresh_path` on every row of `nodes` (one status result: a scope with its upstream cone,
+/// Fill `health`, `health_reason`, `signals`, `measured`, `root`, `last_check`,
+/// `refresh_path` and the times (`stale_since`, `expected_fresh_at`, `recheck_at`:
+/// [`crate::estimates::times`]) on every row of `nodes` (one status result: a scope with its upstream cone,
 /// in dependency order).
 pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
     let assets: HashSet<&str> = nodes
@@ -765,6 +769,13 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
         node.last_check = last_check;
         node.refresh_path = refresh_path;
     }
+    // The times read what is classified above: one pass over the rows, no read.
+    let times = crate::estimates::times(nodes, evidence);
+    for (node, times) in nodes.iter_mut().zip(times) {
+        node.stale_since = times.stale_since;
+        node.expected_fresh_at = times.expected_fresh_at;
+        node.recheck_at = times.recheck_at;
+    }
 }
 
 /// [`classify`] every row of `result` and count its data coverage, over every node in scope:
@@ -822,6 +833,9 @@ pub async fn attach_from_db(
     let paths = crate::refresh_path::Paths::of(dag);
     let schedules =
         crate::refresh_path::recorded_schedules(&jobs, &ticks, &failures, &pauses, zone, now);
+    // No scheduler and no run queue here: only `stale_since` can be told, from the records
+    // and the source files' modification times.
+    let source_times = crate::estimates::source_times_of(dag);
     attach(
         result,
         Evidence {
@@ -834,6 +848,10 @@ pub async fn attach_from_db(
                 schedules: &schedules,
                 paused: &paused_nodes,
                 pinned: &pinned,
+            },
+            timing: crate::estimates::Timing {
+                source_times: &source_times,
+                ..crate::estimates::Timing::none()
             },
             now: now.timestamp(),
         },
@@ -1033,6 +1051,7 @@ mod tests {
                 late: &late,
                 checks: &Checks::default(),
                 path: crate::refresh_path::PathEvidence::none(),
+                timing: crate::estimates::Timing::none(),
                 now: 0,
             },
         );
@@ -1426,6 +1445,7 @@ mod tests {
                 late: &late,
                 checks: &Checks::default(),
                 path: crate::refresh_path::PathEvidence::none(),
+                timing: crate::estimates::Timing::none(),
                 now: 0,
             },
         );
@@ -1544,6 +1564,7 @@ mod tests {
                 late: &late,
                 checks,
                 path: crate::refresh_path::PathEvidence::none(),
+                timing: crate::estimates::Timing::none(),
                 now,
             },
         );
@@ -1655,6 +1676,7 @@ mod tests {
                 late: &late,
                 checks: &in_flight,
                 path: crate::refresh_path::PathEvidence::none(),
+                timing: crate::estimates::Timing::none(),
                 now,
             },
         );
@@ -1724,6 +1746,7 @@ mod tests {
                     late: &late,
                     checks,
                     path: crate::refresh_path::PathEvidence::none(),
+                    timing: crate::estimates::Timing::none(),
                     now: TICK_ENDED + 180,
                 },
             );

@@ -37,6 +37,8 @@ pub(crate) struct HistoryArgs<'a> {
     pub(crate) fields: Option<&'a [String]>,
     pub(crate) reconcile: Option<&'a str>,
     pub(crate) filter: HistoryFilter,
+    /// The interpreter a run in progress is inspected with (`--status running`).
+    pub(crate) python: &'a std::path::Path,
 }
 
 pub(crate) async fn history_cmd(
@@ -52,12 +54,33 @@ pub(crate) async fn history_cmd(
     } else {
         barca_core::queries::history(&cfg, args.limit, &args.filter).await?
     };
+    // Asked for the runs in progress: each with what it is working on now (#991).
+    let now = if args.filter.statuses.iter().any(|s| s == "running")
+        && runs.iter().any(|r| r.status == "running")
+    {
+        barca_core::queries::history_now(&cfg, &runs, args.python).await
+    } else {
+        Default::default()
+    };
     super::emit(barca_core::report::render_history(
         &runs,
         total,
         args.json,
         args.fields,
+        &barca_core::report::HistoryExtras::now(now),
     ));
+    Ok(())
+}
+
+/// `barca history --activity` on this machine: the runs of the last 24 hours, hour by hour.
+pub(crate) async fn activity_cmd(
+    env: Option<&str>,
+    filter: &HistoryFilter,
+    json: bool,
+) -> Result<(), barca_core::BarcaError> {
+    let cfg = barca_core::config::resolve(env)?;
+    let activity = barca_core::queries::activity(&cfg, &filter.triggered_by).await?;
+    super::emit(barca_core::report::render_activity(&activity, json));
     Ok(())
 }
 

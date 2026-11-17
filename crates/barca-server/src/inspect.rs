@@ -164,7 +164,16 @@ pub async fn history(
     .map_err(ApiError::BadRequest)?;
     let snapshot = snapshot_db(&state).await?;
     let (runs, total) = barca_core::queries::history_at(&snapshot.path, limit, &filter).await?;
-    let rendered = barca_core::report::render_history(&runs, total, true, None);
+    // Asked for the runs in progress: each with what it is working on now (#991).
+    let now = if filter.statuses.iter().any(|s| s == "running")
+        && runs.iter().any(|r| r.status == "running")
+    {
+        crate::runs::in_flight_now(&state, &snapshot).await?
+    } else {
+        Default::default()
+    };
+    let extras = barca_core::report::HistoryExtras::now(now);
+    let rendered = barca_core::report::render_history(&runs, total, true, None, &extras);
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }
 

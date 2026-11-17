@@ -59,6 +59,7 @@ command is experimental with it):
 | `barca history --status` | new in 0.29.3: the history filters' values and matching may change after field use |
 | `barca history --target` | new in 0.29.3: the history filters' values and matching may change after field use |
 | `barca history --triggered-by` | new in 0.29.3: the history filters' values and matching may change after field use |
+| `barca history --activity` | new in 0.44 (#991): the activity's keys, its window and its human table may change after field use |
 | `barca history --since` | new in 0.29.3: the history filters' values and matching may change after field use |
 | `barca list --groups` | Organizational group hierarchy and metadata shape are experimental |
 | `barca plan` | prints the planner's internal phase/stream layout, which changes with scheduling work |
@@ -136,9 +137,10 @@ stability; the row adds the keys and routes that go with it.
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key` | new in 0.42: every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, `barca docs status-fields`, "Row counts"): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
-| Health: `health`, `health_reason`, `root`, `signals`, `measured`, `last_check` and `refresh_path` of each node and `data_coverage` in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), the `health`, `health_reason`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick` and `missed_ticks` columns of `barca.nodes`, the `Health:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox` or `no refresh path` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #964, `barca docs status-fields`, "Health", "Last check" and "Refresh path"): the series that adds causes and expected times (#974) may add reasons, `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
-| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, `barca docs status-fields`, "The rollup"): later releases of the series (#974) add `causes`, `asset_causes`, `gap_seconds`, `unbounded` and `fresh_by` to an entry, `causes`, `gap_seconds`, `unbounded` and `action` to a root, and root kinds other than `failure` |
+| Health: `health`, `health_reason`, `root`, `signals`, `measured`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at` and `recheck_at` of each node and `data_coverage` in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), `typical_queue_wait_seconds`, `typical_run_seconds` and `queue_bound` of a node's `schedule` (and of `GET /schedule`), `started_at`, `estimated_start_at` and `wait_seconds` of a run in `barca queue --json`, the `health`, `health_reason`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at` and `recheck_at` columns of `barca.nodes`, the `Health:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox`, `no refresh path`, `fresh ~15:05 UTC` or `overdue 16h` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #962, #964, `barca docs status-fields`, "Health", "Last check", "Refresh path" and "Times"): how an estimate is computed and rounded may change after field use; the series that adds causes and expected times (#974) may add reasons, `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
+| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, `barca docs status-fields`, "The rollup"): an entry has `unbounded` and `fresh_by` (#962); later releases of the series (#974) add `causes`, `asset_causes` and `gap_seconds` to an entry, `causes`, `gap_seconds`, `unbounded` and `action` to a root, and root kinds other than `failure` |
 | `line` of each run in `barca history --json` and `GET /runs` (`steps`, `steps_detail`, `failure`, `failure_detail`), and `now` of `GET /runs?status=running` | new in 0.44 (#959, `barca docs status`): the words a run list prints, computed once for the CLI and the web UI; their wording may change after field use |
+| `now` of each run in progress in `barca history --status running --json` (and `GET /history?status=running`; `running`, `queued`, `keys`, `groups`, `line`), the `now:` line under its row, and the output of `barca history --activity` (`activity`: `since`, `until`, `triggered_by`, `hours`, `total`, `summary`; also `activity` and `?triggered_by=` of `GET /runs`) | new in 0.44 (#991, `barca docs status`, "Runs in progress and the last day's activity"): what the web UI's Runs page shows, computed once for the CLI and the UI; the keys, the window and the wording may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
 HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `prev_run` and `late_since` (rows of `GET /state`, `barca docs server-mode`, "Data health"; `signals` moved from here onto every status node in 0.44), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
@@ -379,12 +381,13 @@ default, and any aliases.
 | `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted |
 | `--target` | `NAME` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out |
 | `--triggered-by` | `TRIGGER[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started this way (comma-separated): manual, api, schedule, client |
+| `--activity` | - | default `false` | experimental: new in 0.44 (#991): the activity's keys, its window and its human table may change after field use | Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, counted over every recorded run; takes --triggered-by |
 | `--since` | `WHEN` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum recent runs (default: every run in JSON, 10 in a human table); with a RUN_ID, the most steps listed (default 1000) |
 | `--all` | - | default `false` | stable | Show every recorded run (no limit); with a RUN_ID, every step it recorded |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`, `line` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`, `line`, `now` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
@@ -529,7 +532,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `root`, `last_check`, `refresh_path`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `root`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node |
 | `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
@@ -1540,6 +1543,7 @@ fetched) is still exit 3.
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].expected_fresh_at` | null | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -1560,6 +1564,7 @@ fetched) is still exit 3.
 | `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
+| `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
 | `nodes[].root` | null | always |
 | `nodes[].shape` | object | always |
@@ -1568,6 +1573,7 @@ fetched) is still exit 3.
 | `nodes[].shape.rows` | integer | sometimes |
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
+| `nodes[].stale_since` | null | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -1933,6 +1939,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
 | `nodes[].env[]` | string | always |
+| `nodes[].expected_fresh_at` | null | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -1961,6 +1968,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].partitions.missing_keys` | array | always |
 | `nodes[].partitions.missing_keys[]` | string | always |
 | `nodes[].partitions.total` | integer | always |
+| `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
 | `nodes[].root` | null \| object | always |
 | `nodes[].root.id` | string | always |
@@ -1977,6 +1985,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].shape.sample` | `<user value>` | always |
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
+| `nodes[].stale_since` | null \| string | always |
 | `nodes[].undeclared_env` | array | sometimes |
 | `nodes[].undeclared_env[]` | string | always |
 | `root` | string | always |
@@ -2060,6 +2069,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].cache.run_hash` | string | sometimes |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].expected_fresh_at` | null | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -2086,6 +2096,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].partitions.missing_keys` | array | always |
 | `nodes[].partitions.missing_keys[]` | string | always |
 | `nodes[].partitions.total` | integer | always |
+| `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
 | `nodes[].root` | null \| object | always |
 | `nodes[].root.id` | string | always |
@@ -2093,6 +2104,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].root.node` | string | always |
 | `nodes[].shape` | null | always |
 | `nodes[].signals` | array | always |
+| `nodes[].stale_since` | string | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2141,6 +2153,7 @@ partitioned node's entry only:
 | `entries[].data_coverage.assets` | integer | always |
 | `entries[].data_coverage.measured` | integer | always |
 | `entries[].data_coverage.suspect` | integer | always |
+| `entries[].fresh_by` | null | always |
 | `entries[].health` | object | always |
 | `entries[].health.behind` | integer | always |
 | `entries[].health.blocked` | integer | always |
@@ -2159,6 +2172,7 @@ partitioned node's entry only:
 | `entries[].nodes` | integer | always |
 | `entries[].parent` | null \| string | always |
 | `entries[].running` | integer | always |
+| `entries[].unbounded` | integer | always |
 | `files` | array | always |
 | `files[]` | object | always |
 | `files[].asset_health` | object | always |
@@ -2221,6 +2235,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].expected_fresh_at` | null | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -2241,6 +2256,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
+| `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
 | `nodes[].root` | null | always |
 | `nodes[].shape` | null \| object | always |
@@ -2249,6 +2265,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].shape.rows` | integer | sometimes |
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
+| `nodes[].stale_since` | string | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2392,6 +2409,17 @@ duration `30m`/`24h`/`7d`/`2w`, an RFC 3339 time or a UTC date). They combine wi
 value is a usage error (exit 2) naming the valid ones. Against a server they are the query
 parameters `status`, `target`, `triggered_by` and `since` of `GET /history` (a 400 for an
 unknown value).
+
+Experimental (0.44, #991): when `--status` names `running`, a listed run in progress has
+`now`, what it is working on: `running[]` (`node_id`, `keys`, `share`), `queued`, `keys`
+(`{done, total}` or `null`), `groups[]` (`id`, `group`, `running`, `queued`) and `line`; the
+table prints `  now: <line>` under its row. It is absent on every other run and without
+`--status running`, and `--fields now` selects it. `barca history --activity` prints
+`{activity}` instead of `{runs, total, truncated}`: `since`, `until`, `triggered_by`,
+`hours[]` (24 entries: `at`, `runs`, `ok`, `not_successful`, `in_progress`, `by_status`,
+`by_trigger`), `total` (one such entry for the window) and `summary`. It takes
+`--triggered-by` and no other filter, limit or `--fields` (exit 2). Semantics and limits:
+`barca docs status`.
 
 Experimental `barca history RUN_ID` (0.29.3) prints one run as `{run, steps, steps_page,
 hint?}`. `run` is one `runs[]` entry. `steps[]` are the steps the run recorded, in the order it
@@ -2542,6 +2570,57 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema history_filtered -->
+
+`barca history --activity --json` (experimental):
+
+<!-- BEGIN GENERATED schema history_activity -->
+| Key | Type | Present |
+|---|---|---|
+| `activity` | object | always |
+| `activity.hours` | array | always |
+| `activity.hours[]` | object | always |
+| `activity.hours[].at` | string | always |
+| `activity.hours[].by_status` | object | always |
+| `activity.hours[].by_status.cancelled` | integer | always |
+| `activity.hours[].by_status.error` | integer | always |
+| `activity.hours[].by_status.failed` | integer | always |
+| `activity.hours[].by_status.interrupted` | integer | always |
+| `activity.hours[].by_status.running` | integer | always |
+| `activity.hours[].by_status.success` | integer | always |
+| `activity.hours[].by_trigger` | object | always |
+| `activity.hours[].by_trigger.api` | integer | always |
+| `activity.hours[].by_trigger.client` | integer | always |
+| `activity.hours[].by_trigger.manual` | integer | always |
+| `activity.hours[].by_trigger.schedule` | integer | always |
+| `activity.hours[].by_trigger.unknown` | integer | always |
+| `activity.hours[].in_progress` | integer | always |
+| `activity.hours[].not_successful` | integer | always |
+| `activity.hours[].ok` | integer | always |
+| `activity.hours[].runs` | integer | always |
+| `activity.since` | string | always |
+| `activity.summary` | string | always |
+| `activity.total` | object | always |
+| `activity.total.at` | string | always |
+| `activity.total.by_status` | object | always |
+| `activity.total.by_status.cancelled` | integer | always |
+| `activity.total.by_status.error` | integer | always |
+| `activity.total.by_status.failed` | integer | always |
+| `activity.total.by_status.interrupted` | integer | always |
+| `activity.total.by_status.running` | integer | always |
+| `activity.total.by_status.success` | integer | always |
+| `activity.total.by_trigger` | object | always |
+| `activity.total.by_trigger.api` | integer | always |
+| `activity.total.by_trigger.client` | integer | always |
+| `activity.total.by_trigger.manual` | integer | always |
+| `activity.total.by_trigger.schedule` | integer | always |
+| `activity.total.by_trigger.unknown` | integer | always |
+| `activity.total.in_progress` | integer | always |
+| `activity.total.not_successful` | integer | always |
+| `activity.total.ok` | integer | always |
+| `activity.total.runs` | integer | always |
+| `activity.triggered_by` | array | always |
+| `activity.until` | string | always |
+<!-- END GENERATED schema history_activity -->
 
 `barca history RUN_ID --json` (a failed run):
 
@@ -3193,6 +3272,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].expected_fresh_at` | null | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -3217,11 +3297,13 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
+| `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
 | `nodes[].root` | null | always |
 | `nodes[].shape` | object | always |
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
+| `nodes[].stale_since` | null | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |

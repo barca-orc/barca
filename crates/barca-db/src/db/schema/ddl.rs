@@ -163,6 +163,14 @@ pub(crate) const INDEXES: &[&str] = &[
     // A schedule's newest runs (`db::scheduled_runs`): where it stands is read on every poll
     // of `GET /state` and `GET /schedule`, a seek per schedule. Only scheduled runs are in it.
     "CREATE INDEX IF NOT EXISTS idx_runs_schedule ON runs(schedule_id, id) WHERE schedule_id IS NOT NULL",
+    // The activity of the Runs page and `barca history --activity` (`db::run_activity`, #991):
+    // the runs started in the last 24 hours by hour, status and trigger, read on every poll of
+    // `GET /runs`. The index holds the three columns, so the count is a range of it and never
+    // the runs table, whatever the history's length.
+    "CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at, triggered_by, status)",
+    // The run list without the schedule's runs (`GET /runs?triggered_by=`, #991): the newest
+    // manual and API runs among tens of thousands of scheduled ones, and their count.
+    "CREATE INDEX IF NOT EXISTS idx_runs_trigger ON runs(triggered_by, id)",
 ];
 
 /// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.

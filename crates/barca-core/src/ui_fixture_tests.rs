@@ -86,6 +86,7 @@ fn table() -> String {
                         late: &HashSet::new(),
                         checks: &Checks::default(),
                         path: crate::refresh_path::PathEvidence::none(),
+                        timing: crate::estimates::Timing::none(),
                         now: 0,
                     },
                 );

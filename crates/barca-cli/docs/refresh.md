@@ -103,7 +103,9 @@ changes, and once it has a new result they are stale relative to it, also when a
 gives new bytes for the same code and inputs (a reference table that reads external data):
 `barca status` reports them `stale` (reason `changed`), `--dry-run` predicts that they run, and
 the next `barca get` of one of them, or the next tick that reaches them, recomputes them. A
-refresh that gives the same bytes changes nothing below it. When it is stale, stderr says how to
+refresh that gives the same bytes changes nothing below it. Until then `barca status` reports
+the `Manual` node `stale` when its inputs or code moved on, and the nodes below it `cached`,
+each naming it in `detail` as what is held back (`barca docs status`, "Cache state"). When it is stale, stderr says how to
 recompute it:
 
 ```text

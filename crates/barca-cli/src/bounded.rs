@@ -75,6 +75,7 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "trigger_reason",
     "cancellation",
     "line",
+    "now",
 ];
 
 /// Item fields of `steps[]` in `get`/`run` JSON (real and `--dry-run`). Optional fields only
@@ -135,6 +136,9 @@ pub const STATUS_FIELDS: &[&str] = &[
     "root",
     "last_check",
     "refresh_path",
+    "stale_since",
+    "expected_fresh_at",
+    "recheck_at",
     "partitions",
     "last_materialization",
     "last_bytes_change",
@@ -234,10 +238,10 @@ mod tests {
             failure: None,
             ..Default::default()
         };
-        assert_eq!(
-            keys(&barca_core::report::history_json(&run)),
-            set(HISTORY_FIELDS)
-        );
+        // `now` is added to a run in progress listed with `--status running`.
+        let mut item = keys(&barca_core::report::history_json(&run));
+        item.insert("now".to_string());
+        assert_eq!(item, set(HISTORY_FIELDS));
     }
 
     #[test]
@@ -313,6 +317,9 @@ mod tests {
             root: Some(barca_core::health::Root::failure("p.py:a")),
             last_check: None,
             refresh_path: None,
+            stale_since: None,
+            expected_fresh_at: None,
+            recheck_at: None,
             partitions: Some(PartitionState {
                 total: 0,
                 cached: 0,

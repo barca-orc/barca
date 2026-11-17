@@ -224,6 +224,7 @@ fn load(text: &str) -> Result<(RunSpec, f64), String> {
         rules: barca_core::freshness::RunRules {
             pin_manual: stored.pin_manual,
             tick: stored.tick,
+            status: false,
         },
         timeout: stored.timeout,
         kill_requeues: stored.kill_requeues,
@@ -555,6 +556,18 @@ pub struct QueueEntry {
     pub schedule_id: Option<String>,
     /// When the server accepted it.
     pub queued_at: String,
+    /// When it started executing (RFC 3339, UTC); `null` while it waits, and from a
+    /// `--read-only` server (the recorded queue does not say).
+    pub started_at: Option<String>,
+    /// For a waiting run: when it is expected to start (RFC 3339, UTC), an estimate rounded
+    /// up to 5 seconds: when a run slot frees, from the typical run time of the runs ahead
+    /// of it over `max_runs` slots. `null` for a running run, while the queue is paused or
+    /// draining, and from a `--read-only` server.
+    pub estimated_start_at: Option<String>,
+    /// How long it waits for a run slot, whole seconds: from `queued_at` to `started_at` for
+    /// a running run, to `estimated_start_at` for a waiting one. `null` when neither is known.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub wait_seconds: Option<u64>,
 }
 
 /// `GET /queue` (and the answer of pause and resume).
@@ -595,7 +608,107 @@ fn entry(run: &RunState, position: Option<usize>) -> QueueEntry {
         triggered_by: run.trigger.triggered_by,
         schedule_id: run.trigger.schedule_id.clone(),
         queued_at: timestamp(run.started_at),
+        started_at: None,
+        estimated_start_at: None,
+        wait_seconds: None,
     }
+}
+
+/// When the runs of this server's queue started and are expected to start, as of `now` (unix
+/// seconds): what `GET /queue` and every node's `expected_fresh_at` read.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct QueueEstimate {
+    /// Each running run: when it started executing.
+    pub started: std::collections::HashMap<String, i64>,
+    /// Each waiting run: when it is expected to start. Empty while the queue starts nothing.
+    pub starts: std::collections::HashMap<String, i64>,
+    /// When a run that joined now would start, when no run slot is free.
+    pub clear_at: Option<i64>,
+    /// The queue starts runs: neither paused nor draining.
+    pub open: bool,
+}
+
+/// [`QueueEstimate`] over `ticks`, what is recorded of each schedule's ticks: a run's typical
+/// time is its schedule's ([`barca_core::estimates::typical_run_seconds`]).
+pub(crate) fn estimate(
+    state: &AppState,
+    ticks: &std::collections::HashMap<String, barca_core::schedule_standing::Ticks>,
+    now: i64,
+) -> QueueEstimate {
+    use barca_core::estimates::{QueueRun, queue_starts, typical_run_seconds};
+    let open = !state.is_draining() && state.queue.paused_at().is_none();
+    let of = |run: &RunState, started_at: Option<i64>| QueueRun {
+        run_id: run.handle.clone(),
+        started_at,
+        typical_seconds: typical_run_seconds(ticks, run.trigger.schedule_id.as_deref()),
+    };
+    let mut started = std::collections::HashMap::new();
+    let mut runs: Vec<QueueRun> = state
+        .runs
+        .iter()
+        .filter(|r| r.status == RunStatus::Running)
+        .map(|r| {
+            let at = state
+                .events
+                .get(&r.handle)
+                .and_then(|c| c.progress().started)
+                .unwrap_or(r.started_at) as i64;
+            started.insert(r.handle.clone(), at);
+            of(&r, Some(at))
+        })
+        .collect();
+    let running = runs.len();
+    runs.extend(
+        state
+            .queue
+            .waiting_ids()
+            .iter()
+            .filter_map(|id| state.runs.get(id).map(|r| of(&r, None))),
+    );
+    let (starts, clear) = queue_starts(&runs, state.queue.max_runs, now);
+    QueueEstimate {
+        started,
+        starts: if open { starts } else { Default::default() },
+        // With a free slot and nothing waiting, a run that joins starts at once.
+        clear_at: (open && (running >= state.queue.max_runs || runs.len() > running))
+            .then_some(clear)
+            .filter(|at| *at > now),
+        open,
+    }
+}
+
+/// The ticks recorded of each schedule, for [`estimate`]; none when they cannot be read (the
+/// estimates then use no typical run time).
+async fn recorded_ticks(state: &AppState) -> std::sync::Arc<crate::read_cache::ScheduleFacts> {
+    crate::handlers::published_ticks(state)
+        .await
+        .unwrap_or_default()
+}
+
+/// [`view`] with each run's start: `started_at` of a running run, `estimated_start_at` of a
+/// waiting one, and how long each waits ([`estimate`]).
+pub(crate) async fn view_with_starts(state: &AppState) -> QueueView {
+    let mut view = view(state);
+    let facts = recorded_ticks(state).await;
+    let now = chrono::Utc::now().timestamp();
+    let estimate = estimate(state, &facts.ticks, now);
+    let waited = |entry: &QueueEntry, until: i64| {
+        barca_core::time::parse_rfc3339(&entry.queued_at).map(|from| (until - from).max(0) as u64)
+    };
+    for entry in &mut view.running {
+        if let Some(&at) = estimate.started.get(&entry.run_id) {
+            entry.started_at = barca_core::time::rfc3339_secs(at);
+            entry.wait_seconds = waited(entry, at);
+        }
+    }
+    for entry in &mut view.queued {
+        if let Some(&at) = estimate.starts.get(&entry.run_id) {
+            let at = barca_core::estimates::rounded(at, now);
+            entry.estimated_start_at = barca_core::time::rfc3339_secs(at);
+            entry.wait_seconds = waited(entry, at);
+        }
+    }
+    view
 }
 
 /// The queue as this server holds it.
@@ -647,6 +760,9 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             triggered_by: spec.trigger.triggered_by,
             schedule_id: spec.trigger.schedule_id.clone(),
             queued_at: timestamp(accepted_at),
+            started_at: None,
+            estimated_start_at: None,
+            wait_seconds: None,
         };
         if started {
             running.push(item);
@@ -673,7 +789,7 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<QueueView>, ApiEr
     if state.config.read_only {
         return recorded_view(&state).await.map(Json);
     }
-    Ok(Json(view(&state)))
+    Ok(Json(view_with_starts(&state).await))
 }
 
 /// `POST /queue/pause` — hold every queued run back until `POST /queue/resume`; runs in flight
@@ -697,7 +813,7 @@ pub async fn pause(State(state): State<AppState>) -> Result<Json<QueueView>, Api
                 .count()
         );
     }
-    Ok(Json(view(&state)))
+    Ok(Json(view_with_starts(&state).await))
 }
 
 /// `POST /queue/resume` — let queued runs start again, in order. Resuming a queue that is not
@@ -714,7 +830,7 @@ pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, Ap
         );
         dispatch(&state);
     }
-    Ok(Json(view(&state)))
+    Ok(Json(view_with_starts(&state).await))
 }
 
 /// `queue` of `GET /health`: whether the queue is paused and how many runs wait and execute.

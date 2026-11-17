@@ -16,4 +16,21 @@ position: number | null, command: string, target: string | null, triggered_by: T
 /**
  * When the server accepted it.
  */
-queued_at: string, };
+queued_at: string,
+/**
+ * When it started executing (RFC 3339, UTC); `null` while it waits, and from a
+ * `--read-only` server (the recorded queue does not say).
+ */
+started_at: string | null,
+/**
+ * For a waiting run: when it is expected to start (RFC 3339, UTC), an estimate rounded
+ * up to 5 seconds: when a run slot frees, from the typical run time of the runs ahead
+ * of it over `max_runs` slots. `null` for a running run, while the queue is paused or
+ * draining, and from a `--read-only` server.
+ */
+estimated_start_at: string | null,
+/**
+ * How long it waits for a run slot, whole seconds: from `queued_at` to `started_at` for
+ * a running run, to `estimated_start_at` for a waiting one. `null` when neither is known.
+ */
+wait_seconds: number | null, };

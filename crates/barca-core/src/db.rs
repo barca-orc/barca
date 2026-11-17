@@ -20,10 +20,10 @@ pub use barca_db::db::{
 // records about runs it owns.
 pub use barca_db::db::{
     AliveRun, LogEntry, RUN_STEPS_LIMIT, RunRecord, RunStep, RunTotals, StepsPage,
-    alive_running_runs, alive_running_runs_in, attach_trace_ids, count_runs, generate_run_id,
-    get_logs, get_recent_runs, get_run, get_run_outcome, get_run_steps_page, get_run_steps_window,
-    get_run_traced, replace_run_outcome, run_artifact, run_node_summaries, set_cancellation,
-    set_run_outcome,
+    alive_running_runs, alive_running_runs_in, attach_trace_ids, count_runs, count_runs_triggered,
+    generate_run_id, get_logs, get_recent_runs, get_recent_runs_triggered, get_run,
+    get_run_outcome, get_run_steps_page, get_run_steps_window, get_run_traced, replace_run_outcome,
+    run_artifact, run_node_summaries, set_cancellation, set_run_outcome,
 };
 
 // Assets: stats, ages, durations, partitions, step rows, pins and their versions.
@@ -45,9 +45,9 @@ pub use barca_db::db::{
 // and `latest_ticks` (every node at once, what health reads) are the reads.
 pub use barca_db::db::{
     LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
-    TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome,
+    TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, TickTimings,
     components_of_rows, latest_ticks, record_tick, record_tick_finished, record_tick_started,
-    tick_outcomes_for_node, ticks_for_schedule, trim_ticks,
+    tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
 };
 
 // Fixtures for the tests of `barca-cli` and `barca-server`, which write runs without running

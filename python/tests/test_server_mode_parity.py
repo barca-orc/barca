@@ -53,7 +53,11 @@ from .test_cli_contract import AGENT_RUNS, CASES, PIPELINE
 # which these two copies do not: test_sql_server.py compares it with a local `barca sql`.
 SERVER_COMMANDS = {"get", "run", "status", "list", "history", "stats", "logs"}
 # Contract cases that only exist on this machine: `--reconcile` writes local history.
-LOCAL_ONLY = {"history_reconciled"}
+# `history --activity` counts runs, and the two sides do not record the same ones (a server
+# records a request it refuses as a run with status `error`; the CLI records none for a usage
+# error): test_serve_running.py compares it with the server's own `GET /runs` instead, and the
+# table below compares the count that is the same on both sides, the schedule's (none).
+LOCAL_ONLY = {"history_reconciled", "history_activity"}
 
 CONTRACT_TABLE: list[tuple[str, list[str]]] = [
     (case, argv)
@@ -93,6 +97,9 @@ CONTRACT_TABLE += [
     ("history_failed", ["history", "--status", "failed", "--json"]),
     ("history_filters", ["history", "--status", "success", "--target", "total", "--since", "1d"]),
     ("history_no_schedule", ["history", "--triggered-by", "schedule", "--json"]),
+    # #991: the runs in progress (none here) and the last day's activity.
+    ("history_running", ["history", "--status", "running", "--json"]),
+    ("history_activity_schedule", ["history", "--activity", "--triggered-by", "schedule"]),
     ("pretty_history_failed", ["history", "--status", "failed", "--pretty", "-l", "2"]),
     ("history_bad_status", ["history", "--status", "nope", "--json"]),
     ("run_detail_failed", ["history", "FAILED_RUN", "--json"]),
