@@ -177,9 +177,12 @@ export function nearestInTree(tree: HealthTree, id: string | null): string {
   return id && tree.nodes.has(id) ? id : ROOT
 }
 
-/** One segment of the sunburst: a tree node drawn as a ring sector. */
+/** One segment of the sunburst: a tree node, or the members too thin to draw one by one. */
 export interface Arc {
+  /** The tree node's id; for the thin members of a scope, `<scope>::rest`. */
   id: string
+  /** The segment it sits on (or the focus, for the first ring): what a click on `rest` opens. */
+  parent: string
   /** 1 is the innermost ring around the centre (the focus is the centre). */
   depth: number
   /** Where it starts and ends around the circle, as fractions of a turn from 12 o'clock. */
@@ -187,7 +190,8 @@ export interface Arc {
   end: number
   health: Health
   label: string
-  kind: HealthTreeKind
+  /** `rest`: members of `parent` each too thin to draw, as one quiet segment. */
+  kind: HealthTreeKind | 'rest'
   weight: number
   leaves: number
 }
@@ -198,10 +202,11 @@ const HEALTHY_SHARE = 0.15
 /**
  * The segments of the map around `focus`, `rings` deep. A segment's angle is its unhealthy
  * weight plus a small per-node floor, so a scope with nothing wrong is a thin slice and the
- * biggest problem is the biggest slice. Segments thinner than `minTurn` are not drawn (their
- * parent still is).
+ * biggest problem is the biggest slice. Members thinner than `minTurn` are drawn together as one
+ * segment (`rest`, labelled `N smaller`), as a disk map draws its smaller objects, so the ring
+ * stays whole instead of fraying into slivers.
  */
-export function sunburst(tree: HealthTree, focus: string, rings = 3, minTurn = 0.004): Arc[] {
+export function sunburst(tree: HealthTree, focus: string, rings = 3, minTurn = 0.01): Arc[] {
   const center = tree.nodes.get(focus)
   if (!center || center.leaves === 0) return []
   const floor = (Math.max(center.weight, 1) * HEALTHY_SHARE) / center.leaves
@@ -210,14 +215,34 @@ export function sunburst(tree: HealthTree, focus: string, rings = 3, minTurn = 0
   const place = (node: HealthTreeNode, start: number, span: number, depth: number) => {
     if (depth > rings || node.children.length === 0) return
     const total = node.children.reduce((sum, c) => sum + value(tree.nodes.get(c)!), 0)
+    if (total <= 0) return
     let at = start
+    const thin: HealthTreeNode[] = []
     for (const c of node.children) {
       const child = tree.nodes.get(c)!
-      const share = total > 0 ? (value(child) / total) * span : 0
-      if (share >= minTurn)
-        arcs.push({ id: c, depth, start: at, end: at + share, health: child.health, label: child.label, kind: child.kind, weight: child.weight, leaves: child.leaves })
-      if (share >= minTurn) place(child, at, share, depth + 1)
+      const share = (value(child) / total) * span
+      if (share < minTurn) {
+        thin.push(child)
+        continue
+      }
+      arcs.push({ id: c, parent: node.id, depth, start: at, end: at + share, health: child.health, label: child.label, kind: child.kind, weight: child.weight, leaves: child.leaves })
+      place(child, at, share, depth + 1)
       at += share
+    }
+    if (thin.length > 0) {
+      const share = (thin.reduce((sum, n) => sum + value(n), 0) / total) * span
+      arcs.push({
+        id: `${node.id}::rest`,
+        parent: node.id,
+        depth,
+        start: at,
+        end: at + share,
+        health: worstHealth(thin.map((n) => n.health)),
+        label: `${thin.length.toLocaleString()} smaller`,
+        kind: 'rest',
+        weight: thin.reduce((sum, n) => sum + n.weight, 0),
+        leaves: thin.reduce((sum, n) => sum + n.leaves, 0),
+      })
     }
   }
   place(center, 0, 1, 1)
@@ -232,22 +257,26 @@ export function healthSummary(node: Pick<HealthTreeNode, 'counts'>, limit = HEAL
 
 /**
  * An SVG path for a ring sector: from `start` to `end` (fractions of a turn, clockwise from 12
- * o'clock), between radii `r0` and `r1`, centred on (0, 0).
+ * o'clock), between radii `r0` and `r1`, centred on (0, 0). `gap` (px) is taken off each side
+ * as a constant width at every radius, so neighbouring sectors are parted by even, parallel gaps;
+ * a sector thinner than its gaps keeps a hairline.
  */
-export function arcPath(start: number, end: number, r0: number, r1: number): string {
+export function arcPath(start: number, end: number, r0: number, r1: number, gap = 0): string {
   const full = end - start >= 0.9999
-  const a0 = start * 2 * Math.PI
-  const a1 = (full ? start + 0.9999 : end) * 2 * Math.PI
-  const pt = (r: number, a: number) => `${(r * Math.sin(a)).toFixed(2)} ${(-r * Math.cos(a)).toFixed(2)}`
-  const large = a1 - a0 > Math.PI ? 1 : 0
-  const outer = `M ${pt(r1, a0)} A ${r1} ${r1} 0 ${large} 1 ${pt(r1, a1)}`
-  const inner = r0 > 0 ? `L ${pt(r0, a1)} A ${r0} ${r0} 0 ${large} 0 ${pt(r0, a0)}` : 'L 0 0'
+  const turn = 2 * Math.PI
+  const at = (r: number): [number, number] => {
+    if (full) return [start * turn, (start + 0.9999) * turn]
+    const pad = r > 0 ? gap / 2 / r : 0
+    const a0 = start * turn + pad
+    const a1 = end * turn - pad
+    if (a1 > a0) return [a0, a1]
+    const mid = ((start + end) / 2) * turn
+    return [mid - 0.0005, mid + 0.0005]
+  }
+  const pt = (r: number, a: number) => `${(r * Math.sin(a)).toFixed(3)} ${(-r * Math.cos(a)).toFixed(3)}`
+  const [o0, o1] = at(r1)
+  const [i0, i1] = at(r0)
+  const outer = `M ${pt(r1, o0)} A ${r1} ${r1} 0 ${o1 - o0 > Math.PI ? 1 : 0} 1 ${pt(r1, o1)}`
+  const inner = r0 > 0 ? `L ${pt(r0, i1)} A ${r0} ${r0} 0 ${i1 - i0 > Math.PI ? 1 : 0} 0 ${pt(r0, i0)}` : 'L 0 0'
   return `${outer} ${inner} Z`
-}
-
-/** Where a segment's label sits: the middle of its sector, halfway through the ring. */
-export function arcCentroid(start: number, end: number, r0: number, r1: number): { x: number; y: number } {
-  const a = ((start + end) / 2) * 2 * Math.PI
-  const r = (r0 + r1) / 2
-  return { x: r * Math.sin(a), y: -r * Math.cos(a) }
 }

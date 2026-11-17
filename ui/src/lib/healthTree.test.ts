@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { blockedCauses, healthWeight, nodeHealth, worstHealth } from './nodeHealth'
-import { ROOT, buildHealthTree, healthSummary, leafIds, sunburst, treePath } from './healthTree'
+import { ROOT, arcPath, buildHealthTree, healthSummary, leafIds, sunburst, treePath } from './healthTree'
 import type { NodeGroup, NodeState } from './types'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
@@ -98,5 +98,31 @@ describe('health tree', () => {
       expect(child.end).toBeLessThanOrEqual(parent.end + 1e-9)
     }
     expect(sunburst(tree, 'a.py:raw')).toEqual([])
+  })
+
+  it('draws members too thin to show one by one as one segment, so a ring never frays', () => {
+    const many = Array.from({ length: 60 }, (_, i) => node(`m.py:n${String(i).padStart(2, '0')}`, []))
+    const broken = node('m.py:broken', [], { ...failed })
+    const t = buildHealthTree({ states: [broken, ...many], graph: [], groups: [] })
+    const arcs = sunburst(t, 'file:m.py', 1, 0.02)
+    const rest = arcs.find((a) => a.kind === 'rest')!
+    expect(rest).toMatchObject({ id: 'file:m.py::rest', parent: 'file:m.py', label: '60 smaller', leaves: 60, health: 'ok' })
+    // The ring is whole: the segments tile the turn.
+    expect(arcs.reduce((sum, a) => sum + (a.end - a.start), 0)).toBeCloseTo(1)
+    expect(arcs[0]).toMatchObject({ id: 'm.py:broken', parent: 'file:m.py' })
+  })
+})
+
+describe('arc geometry', () => {
+  const angles = (d: string) => [...d.matchAll(/(-?\d+\.\d+) (-?\d+\.\d+)/g)].map((m) => Math.atan2(Number(m[1]), -Number(m[2])))
+  it('parts neighbours by an even gap at every radius', () => {
+    const plain = angles(arcPath(0, 0.25, 50, 100))
+    const gapped = angles(arcPath(0, 0.25, 50, 100, 2))
+    // The outer edge moves in by 1 px at radius 100, the inner by 1 px at radius 50: twice the angle.
+    expect(gapped[0]! - plain[0]!).toBeCloseTo(1 / 100)
+    expect(gapped[3]! - plain[3]!).toBeCloseTo(1 / 50)
+    // A sector thinner than its gaps keeps a hairline instead of turning inside out.
+    expect(() => arcPath(0.1, 0.1001, 50, 100, 4)).not.toThrow()
+    expect(arcPath(0, 1, 50, 100, 2)).toContain('A 100 100 0 1 1')
   })
 })

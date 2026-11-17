@@ -20,8 +20,9 @@ beside its causes, then its groups and nodes, worst first.
   two rings. A slice's size is how much is wrong under it: failed keys of a partitioned asset,
   otherwise nodes; a scope with nothing wrong keeps a thin slice. Its colour is the worst health
   inside, in three: red is failing, yellow needs attention (blocked, suspect data or behind),
-  green is ok, and grey is what barca cannot judge yet (waiting, never run). Click a slice to
-  open it (the whole page follows) and see what is behind a small one, the centre to go up; hide
+  green is ok, and grey is what barca cannot judge yet (waiting, never run). Members too thin to
+  draw one by one are one `N smaller` slice. Point at a slice and the centre names it, with its
+  path, health and size; click it to open it (the whole page follows), the centre to go up; hide
   the map with **Hide health map**.
 - **Causes** list what is wrong once per cause, biggest first: failures that share an error
   (ignoring its numbers) are one entry, with the keys that failed and how many nodes they keep

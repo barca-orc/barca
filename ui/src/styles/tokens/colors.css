@@ -100,6 +100,18 @@
   --state-unsynced: var(--c-teal-400);
   --state-pinned:   var(--c-indigo-400);
   --state-idle:     var(--c-ink-150);   /* never run, unknown, paused, queued, skipped */
+
+  /* The health map's four colours (HealthMap): an even-lightness set in OKLCH, each from a
+     deeper inner tone (-0) to a brighter rim (-1), so the disk reads as one lit surface.
+     Only the map uses them; glyphs keep --state-*. */
+  --map-failing-0:   oklch(0.56 0.19 18);
+  --map-failing-1:   oklch(0.66 0.20 24);
+  --map-attention-0: oklch(0.68 0.14 62);
+  --map-attention-1: oklch(0.79 0.14 74);
+  --map-ok-0:        oklch(0.58 0.11 170);
+  --map-ok-1:        oklch(0.69 0.12 176);
+  --map-unknown-0:   oklch(0.40 0.025 265);
+  --map-unknown-1:   oklch(0.50 0.03 265);
   /* The check or cross cut out of a filled glyph: the page behind it. */
   --glyph-ink:      var(--c-ink-900);
 
