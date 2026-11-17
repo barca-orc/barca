@@ -149,7 +149,7 @@ pub struct Standing {
 
 /// The grace: 60 seconds, or half the interval of a schedule more frequent than every two
 /// minutes (at least one second).
-fn grace_seconds(prev: Option<i64>, next: Option<i64>) -> i64 {
+pub(crate) fn grace_seconds(prev: Option<i64>, next: Option<i64>) -> i64 {
     match (prev, next) {
         (Some(prev), Some(next)) if next > prev => ((next - prev) / 2).clamp(1, 60),
         _ => 60,

@@ -101,7 +101,9 @@ that never happened leave different evidence.
 
 The table is bounded by its writers (per schedule the newest 1,000 ticks, none older than 14
 days, target lists on the newest 20 fired ticks) and is evidence only: no run reads it, and
-freshness decisions never depend on it. `freshness_proofs` is a different table: derived
+freshness decisions never depend on it. Status reads it to say what the last tick found
+(`last_check`), which decides a node's health only where the read path cannot decide its state
+([health](health.md), "Last check"). `freshness_proofs` is a different table: derived
 witnesses for incremental publication, rewritten per generation. Fields, write points, the
 sensor limitation and the reads are in [health](health.md) ("What a tick records"); columns in
 the [metadata schema](../interfaces/metadata-schema.md).

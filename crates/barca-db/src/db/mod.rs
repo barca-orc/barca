@@ -79,9 +79,9 @@ pub use materializations::persist_outputs;
 use materializations::record_definitions;
 pub use materializations::{
     DEFINITION_KEY, StepHistory, SuccessRow, adopt_store_digests, any_key_succeeded,
-    confirmed_object, definition_components, evicted_among, evicted_among_on, key_range,
-    last_success_components, latest_success, latest_success_id, partition_artifacts_for_config,
-    step_histories, touch_read, touch_read_in, touch_read_on,
+    components_of_rows, confirmed_object, definition_components, evicted_among, evicted_among_on,
+    key_range, last_success_components, latest_success, latest_success_id,
+    partition_artifacts_for_config, step_histories, touch_read, touch_read_in, touch_read_on,
 };
 pub use materializations::{max_materialization_id, succeeded_since};
 pub use partition_keys::FailedKeys;
@@ -127,9 +127,10 @@ pub use stats::{AssetRunEntry, AssetStats, get_asset_stats, recent_durations};
 use stats::{IN_LIST_CHUNK, KEY_ROWS, avg_elapsed_on, partitioned_avg_elapsed_on};
 pub(crate) use ticks::CREATE as CREATE_SCHEDULE_TICKS;
 pub use ticks::{
-    NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE, TICKS_WITH_TARGETS,
-    TickCounts, TickDecision, TickRecord, TickTargetOutcome, record_tick, record_tick_finished,
-    record_tick_started, tick_outcomes_for_node, ticks_for_schedule, trim_ticks,
+    LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
+    TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, latest_ticks,
+    record_tick, record_tick_finished, record_tick_started, tick_outcomes_for_node,
+    ticks_for_schedule, trim_ticks,
 };
 
 /// Process-wide serialization of `metadata.db` operations. The server can run

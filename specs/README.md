@@ -121,8 +121,9 @@ the OpenAPI and CLI contract owners and their rules checked in
 path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the freshness gap, the rollup
 (`GET /state/rollup`, `barca status --rollup`), the tick record, the `barca.schedules`,
 `barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Also
-implemented: the tick record (#960: the `schedule_ticks` table and its reads, which nothing uses
-yet). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
+implemented: the tick record (#960: the `schedule_ticks` table and its reads), and from it
+`last_check` on every status node and the `checked_up_to_date` reason (#964: a node the read
+path cannot decide reads `ok` while the last tick's verdict stands). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
 implements it issue by issue, and each PR moves its wire shapes into the OpenAPI and CLI contract
 owners. Until then the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are
 authoritative for the rest.
