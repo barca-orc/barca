@@ -18,6 +18,8 @@ Normalized, because they differ by design (the declared differences, listed in
   and `<n>s`. A step's `import_seconds` is reported only when its import took over a second,
   so whether the key is there at all depends on load: it is dropped from both sides.
 - The hint of `barca history RUN_ID` names the server it read (`--server <url>`): dropped.
+- The command of a rollup root's action (`roots[].action.command`) ends in `--server` when a
+  server answered, so the run joins that server's queue: the suffix is dropped.
 - `disk_usage` measures each host's storage and cache budget, not graph equivalence. Its
   fields and accounting invariants are checked, then host-specific counts are normalized.
 
@@ -185,6 +187,9 @@ def _value(v, roots: list[str], key: str = ""):
     if key == "requested_by" and v in ("manual", "api"):
         # The explanation's wording of `triggered_by`.
         return "<trigger>"
+    if key == "command" and isinstance(v, str):
+        # A root's action names the server when a server answered.
+        return _text(v.removesuffix(" --server"), roots)
     if key in ("size_bytes", "content_hash"):
         # Each copy computes its own bytes: a step whose output is not byte-for-byte the same
         # every time (parquet metadata, timestamps in the data) differs in size and hash.

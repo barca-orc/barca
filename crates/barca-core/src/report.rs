@@ -455,6 +455,15 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
         };
         writeln!(&mut rendered, "Health{listed}: {}", words.join(", ")).unwrap();
     }
+    // How far the scope is from fresh, and why: every node in scope, whatever is listed.
+    if let Some(rollup) = &result.rollup {
+        let as_of = result
+            .as_of
+            .as_deref()
+            .and_then(crate::time::parse_rfc3339)
+            .unwrap_or(now);
+        writeln!(&mut rendered, "Gap: {}", rollup.gap_line(as_of)).unwrap();
+    }
     if result.data_coverage.assets > 0 {
         writeln!(&mut rendered, "Data: {}", result.data_coverage.line()).unwrap();
     }

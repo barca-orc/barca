@@ -22,7 +22,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, root, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
+          [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, cause, root, gap_seconds, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
 
       --sample <N>
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
@@ -34,7 +34,7 @@ Options:
           Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
 
       --rollup
-          Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets
+          Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each
 
       --keys
           Experimental: list the keys of one partitioned target, each with its state
@@ -65,7 +65,7 @@ Examples:
   barca status pipeline.py                 # table in a terminal (JSON when piped): kind, cache state, last run, shape
   barca status total pipeline.py           # only `total` and its upstream cone
   barca status total,orders pipeline.py    # several targets: the union of their cones
-  barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
+  barca status pipeline.py --json          # {target, targets, nodes, summary, as_of, rollup, total, truncated, root}, even in a terminal
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
   barca status scored pipeline.py --json   # partitions.changed: why each missing key will run
@@ -78,8 +78,9 @@ Examples:
   barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
   barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
   barca status --problems --server         # what needs attention on the configured server
-  barca status --rollup                    # counts by health per group and file, in nodes and assets, worst first
+  barca status --rollup                    # counts by health per group and file, then what holds the nodes that are not fresh and what clears each
   barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
+  barca status --json --fields id,health,cause,root,gap_seconds   # why each node is not fresh, and what explains it
   barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
   barca status scored --keys               # every key of a partitioned node: state, last attempt, rows, error
   barca status scored --keys --state failed,blocked --json   # {id, known, dimensions, counts, errors, keys, total, truncated}

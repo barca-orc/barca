@@ -71,9 +71,17 @@ fn serve(rt: &tokio::runtime::Runtime, router: Router) -> String {
 /// `root` replaced so a local and a served copy compare equal.
 fn normalized(out: &Output, roots: &[&Path]) -> (Option<i32>, String, String) {
     let clean = |s: String| {
-        roots.iter().fold(s, |s, root| {
+        let s = roots.iter().fold(s, |s, root| {
             s.replace(&root.display().to_string(), "<root>")
-        })
+        });
+        // `as_of` is the instant each command classified at: two commands, two instants.
+        s.lines()
+            .map(|line| match line.split_once("\"as_of\": \"") {
+                Some((before, _)) => format!("{before}\"as_of\": \"<t>\","),
+                None => line.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     (
         out.status.code(),

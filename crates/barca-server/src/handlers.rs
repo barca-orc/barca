@@ -178,16 +178,18 @@ pub async fn rollup(
     let mut result = (*status).clone();
     let now = chrono::Utc::now();
     let as_of = chrono::DateTime::from_timestamp(now.timestamp() / 60 * 60, 0).unwrap_or(now);
-    attach_health_at(&state, &mut result, &dag, &db_state, &snapshot.path, as_of).await?;
-    let runs = crate::running::in_flight(&state, Some(&snapshot.path)).await;
-    let running = crate::running::by_node(&runs, &result.nodes, &dag)
+    let facts = health_facts(&state, &dag, &db_state, &snapshot.path, as_of).await?;
+    let running = crate::running::by_node(&facts.runs, &result.nodes, &dag)
         .into_keys()
         .collect();
+    barca_core::health::attach(&mut result, facts.evidence(), &running);
     Ok(Json(barca_core::rollup::build(
         &result.nodes,
         &dag.groups,
         &running,
         as_of,
+        facts.evidence(),
+        true,
     )))
 }
 
@@ -441,6 +443,7 @@ pub(crate) struct Timings {
     queue_open: bool,
     workers: usize,
     source_times: crate::read_cache::SourceTimes,
+    max_runs: usize,
 }
 
 impl Timings {
@@ -452,6 +455,7 @@ impl Timings {
             queue_open: self.queue_open,
             workers: self.workers,
             source_times: &self.source_times,
+            max_runs: Some(self.max_runs),
         }
     }
 }
@@ -511,6 +515,7 @@ async fn timings(
         queue_open: queue.open,
         workers,
         source_times: state.cached_source_times(dag),
+        max_runs: state.queue.max_runs,
     }
 }
 
@@ -811,6 +816,59 @@ pub(crate) async fn attach_health_at(
     db_path: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), ApiError> {
+    let facts = health_facts(state, dag, db_state, db_path, now).await?;
+    let running = crate::running::by_node(&facts.runs, &result.nodes, dag)
+        .into_keys()
+        .collect();
+    barca_core::health::attach(result, facts.evidence(), &running);
+    Ok(())
+}
+
+/// What a status result is classified with (`barca_core::health::Evidence`), as this server
+/// holds it as of `now`: the records kept per database state, the graph's reach kept per
+/// graph, each schedule's standing and the runs in flight read per answer.
+pub(crate) struct HealthFacts {
+    ages: std::sync::Arc<std::collections::HashMap<String, db::NodeAge>>,
+    pinned: std::sync::Arc<std::collections::HashSet<String>>,
+    checks: std::sync::Arc<barca_core::health::Checks>,
+    paused: std::sync::Arc<std::collections::HashSet<String>>,
+    paths: std::sync::Arc<barca_core::refresh_path::Paths>,
+    late: std::collections::HashSet<String>,
+    path_schedules: barca_core::refresh_path::PathSchedules,
+    timings: Timings,
+    pub(crate) runs: Vec<crate::running::InFlight>,
+    now: i64,
+}
+
+impl HealthFacts {
+    pub(crate) fn evidence(&self) -> barca_core::health::Evidence<'_> {
+        barca_core::health::Evidence {
+            ages: &self.ages,
+            pinned: &self.pinned,
+            late: &self.late,
+            checks: &self.checks,
+            path: barca_core::refresh_path::PathEvidence {
+                paths: &self.paths,
+                schedules: &self.path_schedules,
+                paused: &self.paused,
+                pinned: &self.pinned,
+            },
+            timing: self.timings.evidence(),
+            now: self.now,
+        }
+    }
+}
+
+/// [`HealthFacts`] as of `now`. Lateness is each schedule's standing ([`live_schedules`]):
+/// read on the server's clock and in its `--timezone`, never for a paused schedule, and the
+/// value `GET /schedule` and the `schedule` block report.
+pub(crate) async fn health_facts(
+    state: &AppState,
+    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    db_state: &crate::read_cache::Stamp,
+    db_path: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<HealthFacts, ApiError> {
     let ages = state.cached_ages(db_state, db_path).await?;
     let pinned = state.cached_pinned(db_state, db_path).await?;
     let checks = state.cached_checks(dag, db_state, db_path, &ages).await?;
@@ -834,24 +892,18 @@ pub(crate) async fn attach_health_at(
         .await?;
     let runs = crate::running::in_flight(state, Some(db_path)).await;
     let timings = timings(state, dag, &durations, &runs, now.timestamp()).await;
-    barca_core::health::attach(
-        result,
-        barca_core::health::Evidence {
-            ages: &ages,
-            pinned: &pinned,
-            late: &late,
-            checks: &checks,
-            path: barca_core::refresh_path::PathEvidence {
-                paths: &paths,
-                schedules: &path_schedules,
-                paused: &paused,
-                pinned: &pinned,
-            },
-            timing: timings.evidence(),
-            now: now.timestamp(),
-        },
-    );
-    Ok(())
+    Ok(HealthFacts {
+        ages,
+        pinned,
+        checks,
+        paused,
+        paths,
+        late,
+        path_schedules,
+        timings,
+        runs,
+        now: now.timestamp(),
+    })
 }
 
 /// The scheduled nodes whose schedule is late, of [`live_schedules`].

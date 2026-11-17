@@ -468,7 +468,7 @@ Examples:
   barca status pipeline.py                 # table in a terminal (JSON when piped): kind, cache state, last run, shape
   barca status total pipeline.py           # only `total` and its upstream cone
   barca status total,orders pipeline.py    # several targets: the union of their cones
-  barca status pipeline.py --json          # {target, targets, nodes, summary, total, truncated, root}, even in a terminal
+  barca status pipeline.py --json          # {target, targets, nodes, summary, as_of, rollup, total, truncated, root}, even in a terminal
   barca status pipeline.py --pretty        # the table, even when piped
   barca status pipeline.py --fields id,cache   # JSON with only these keys per node
   barca status scored pipeline.py --json   # partitions.changed: why each missing key will run
@@ -481,8 +481,9 @@ Examples:
   barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
   barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
   barca status --problems --server         # what needs attention on the configured server
-  barca status --rollup                    # counts by health per group and file, in nodes and assets, worst first
+  barca status --rollup                    # counts by health per group and file, then what holds the nodes that are not fresh and what clears each
   barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
+  barca status --json --fields id,health,cause,root,gap_seconds   # why each node is not fresh, and what explains it
   barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
   barca status scored --keys               # every key of a partitioned node: state, last attempt, rows, error
   barca status scored --keys --state failed,blocked --json   # {id, known, dimensions, counts, errors, keys, total, truncated}
@@ -1195,7 +1196,8 @@ pub(crate) enum Cli {
         #[arg(long)]
         problems: bool,
         /// Experimental: print the rollup instead of the nodes: counts by health per group and
-        /// file, in nodes and in assets
+        /// file, in nodes and in assets, then what holds the nodes that are not fresh (the
+        /// ranked roots) and the action that clears each
         #[arg(long, conflicts_with_all = ["limit", "all", "fields", "sample", "state", "problems"])]
         rollup: bool,
         /// Experimental: list the keys of the one partitioned TARGET instead of the nodes:

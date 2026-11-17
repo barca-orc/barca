@@ -36,6 +36,15 @@ pub struct StatusResult {
     /// those look wrong: `7 of 556 measured`. For every node in scope, like `summary`.
     #[serde(default)]
     pub data_coverage: crate::health::DataCoverage,
+    /// The instant the nodes were classified at (RFC 3339, UTC): what every derived time and
+    /// `gap_seconds` are as of. `null` on a result that was not classified.
+    #[serde(default)]
+    pub as_of: Option<String>,
+    /// The scope summed: the root entry of `barca status --rollup` (counts by health and by
+    /// cause in nodes and in assets, `gap_seconds`, `unbounded`, `fresh_by`), for every node
+    /// in scope, like `summary`. Its `children` are empty here: the tree is the rollup's.
+    #[serde(default)]
+    pub rollup: Option<crate::rollup::RollupEntry>,
     /// `--state` / `--problems`: which nodes `nodes` keeps. Absent without a filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<StatusFilter>,
@@ -71,10 +80,24 @@ pub struct NodeStatus {
     /// any key's); `null` for a task or sensor. `false` is "not measured", not ok.
     #[serde(default)]
     pub measured: Option<bool>,
-    /// The upstream fact that explains why it is not fresh: today only a failure (`kind`
-    /// `failure`), on the failing node itself and on each node it blocks; `null` otherwise.
+    /// Why it is not fresh, in one word: `catching_up`, `queued`, `no_refresh_path`,
+    /// `overdue`, `failing` or `undecided` (`barca docs status-fields`, "Cause"); `null`
+    /// exactly when it is fresh (`health` is `ok` or `suspect`).
+    #[serde(default)]
+    pub cause: Option<crate::health::Cause>,
+    /// The upstream fact that explains why it is not fresh (`barca docs status-fields`,
+    /// "Root"): the sensor whose observation changed, the node whose code changed, the
+    /// failing node, the missing or paused schedule. `null` exactly when it is fresh. Every
+    /// node with the same `root.id` is held by the same thing (`barca status --rollup`).
     #[serde(default)]
     pub root: Option<crate::health::Root>,
+    /// The node's freshness gap, seconds: how long it has been out of date (`stale_since` to
+    /// now) plus how long until it is expected fresh (now to `expected_fresh_at`), read at
+    /// the start of the current minute. 0 for a fresh or undecided node; a term whose time
+    /// is `null` counts 0.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub gap_seconds: i64,
     /// What the newest finished tick that had the node as a target did with it, and when
     /// (`barca docs status-fields`, "Last check"); `null` when no retained tick did. When the
     /// node's own state is `unknown`, a check that found it up to date decides its health
@@ -709,14 +732,8 @@ pub async fn status(
         now,
     )
     .await?;
-    crate::health::attach_from_db(
-        &mut result,
-        &dag,
-        &cfg.db_path,
-        &crate::schedule::Zone::Local,
-        now,
-    )
-    .await?;
+    crate::health::attach_from_db(&mut result, &dag, cfg, &crate::schedule::Zone::Local, now)
+        .await?;
     Ok(result)
 }
 
@@ -737,7 +754,7 @@ pub(crate) async fn status_with_membership(
     crate::health::attach_from_db(
         &mut result,
         &dag,
-        &cfg.db_path,
+        cfg,
         &crate::schedule::Zone::Local,
         chrono::Utc::now(),
     )
@@ -939,7 +956,9 @@ pub(crate) async fn status_from_dag_with_membership(
             health_reason: Default::default(),
             signals: Vec::new(),
             measured: None,
+            cause: None,
             root: None,
+            gap_seconds: 0,
             last_check: None,
             refresh_path: None,
             stale_since: None,
@@ -983,6 +1002,8 @@ pub(crate) async fn status_from_dag_with_membership(
             nodes,
             summary,
             data_coverage: Default::default(),
+            as_of: None,
+            rollup: None,
             filter: None,
         },
         membership,
@@ -1301,7 +1322,9 @@ mod tests {
             health_reason: Default::default(),
             signals: Vec::new(),
             measured: None,
+            cause: None,
             root: None,
+            gap_seconds: 0,
             last_check: None,
             refresh_path: None,
             stale_since: None,
@@ -1648,6 +1671,8 @@ mod tests {
             targets: vec![],
             summary: StatusSummary::of(&nodes),
             data_coverage: Default::default(),
+            as_of: None,
+            rollup: None,
             nodes,
             filter: None,
         };
@@ -1753,6 +1778,8 @@ mod tests {
             targets: vec![],
             summary: StatusSummary::of(&nodes),
             data_coverage: Default::default(),
+            as_of: None,
+            rollup: None,
             nodes,
             filter: None,
         };

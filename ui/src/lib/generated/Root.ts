@@ -10,6 +10,7 @@ export type Root = {
  */
 id: string, kind: RootKind,
 /**
- * The node the fact is about: for a failure, the failing node.
+ * The node the fact is about: the failing node, the sensor whose observation changed,
+ * the node whose code changed, the scheduled node of a paused schedule.
  */
 node: string, };

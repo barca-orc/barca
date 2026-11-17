@@ -150,7 +150,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "status --rollup",
-        "new in 0.44.0 (specs/behavior/health.md): the rollup document gains causes, the freshness gap and more root kinds as that specification lands",
+        "new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use",
     ),
     (
         "status --keys",

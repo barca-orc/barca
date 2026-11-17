@@ -34,6 +34,7 @@
 
 pub mod backup;
 pub mod cache;
+pub mod causes;
 pub(crate) mod changes;
 pub mod commands;
 pub mod db;

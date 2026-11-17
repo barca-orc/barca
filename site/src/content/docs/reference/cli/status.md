@@ -19,14 +19,21 @@ notify  task   always-runs  task          -                                     
 
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
 Health: 1 never run, 2 ok
+Gap: 1 no refresh path (nodes); 1 with no estimate
 Data: 1 of 2 assets measured
 ```
 
 Under the cache counts, `Health` says whether anything needs doing, in the words `failing`,
 `blocked`, `suspect data`, `behind`, `undecided`, `never run` and `ok` (here the task has no
-recorded run), and `Data` says how many assets had their rows counted: `orders` is a frame,
-`total` a dict, which has no row count. Both are in [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health) and
-"Data signals and coverage"; a last line reports the cache's size on disk.
+recorded run). `Gap` says how far the scope is from fresh and why: the nodes that are not
+fresh by cause (`failing`, `overdue`, `no refresh path`, `queued`, `undecided`, `catching
+up`), then how many are expected fresh and within how long, and how many have no estimate
+(here nothing scheduled will ever run the task); `Gap: every node is fresh` when none is
+behind. `Data` says how many assets had their rows counted: `orders` is a frame, `total` a
+dict, which has no row count. They are in [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health), "Cause" and
+"Data signals and coverage"; a last line reports the cache's size on disk. What explains the
+nodes that are not fresh, and the command that clears each, is `barca status --rollup`
+below.
 
 The forms it takes:
 
@@ -223,8 +230,8 @@ ratio         asset  never-run    failed: ZeroDivisionError: division by zero   
 Health (nodes listed): 2 failing, 1 behind
 ```
 
-The `Health` line counts the nodes listed, so it says so under a filter; the `Data` line that
-follows it is for every node in scope, like the counts. `--problems` selects by cache state,
+The `Health` line counts the nodes listed, so it says so under a filter; the `Gap` and `Data`
+lines that follow it are for every node in scope, like the counts. `--problems` selects by cache state,
 last run and schedule as listed above, not by health: a task that never ran is `never run` and
 is not a problem.
 
@@ -258,27 +265,41 @@ web UI's key explorer reads.
 in scope, then each group ([Groups](/reference/groups/)), then, for nodes in no group, each source
 file. Every level is the exact sum of what is under it, and every count names its unit:
 `NODES` counts assets, tasks and sensors, `ASSETS` counts assets only, and the health words
-count nodes. Within a level the worst health comes first. On a project where `orders` (in the
-group `ingest`, with a sensor) failed and blocks two assets below it:
+count nodes. Within a level the worst health comes first. Under the tree it prints the gap
+and then the to-do list: what holds the nodes that are not fresh, and what clears each. On a
+project where `orders` (in the group `ingest`, with a sensor) failed and blocks two assets
+below it:
 
 ```
 SCOPE          NODES  ASSETS  HEALTH (nodes)
-all                6       4  1 failing · 2 blocked · 3 ok
-  ingest           2       1  1 failing · 1 ok
-  pipeline.py      4       3  2 blocked · 2 ok
+all                6       4  1 failing · 2 blocked · 3 ok · 3 with no estimate
+  ingest           2       1  1 failing · 1 ok · 1 with no estimate
+  pipeline.py      4       3  2 blocked · 2 ok · 2 with no estimate
 
-Failing, with what each holds:
-  pipeline.py:orders  3 nodes (3 assets)  ValueError: 12 rows rejected
+Gap: 3 failing (nodes); 3 with no estimate
+
+What holds the 3 nodes that are not fresh, and what clears it:
+1. failure: orders
+     holds 3 nodes (3 assets): 3 failing; 3 with no estimate
+     why:  ValueError: 12 rows rejected
+     do:   fix the failure: barca get orders
 
 Data: 0 of 4 assets measured
 As of 2026-11-17T16:49:57Z
 ```
 
-Under the tree, each failing node is listed with what it holds: itself and every node it
-blocks, so three nodes that need attention here are one thing to fix. With a server, a level
-whose nodes have estimates adds `fresh by ~15:05 UTC` (the latest of them) and `3 with no
-estimate` for the nodes that are not fresh and have none ([barca status: Fields and JSON: Times](/reference/cli/status-fields/#times)). `Data` is the scope's
-data coverage and `As of` the instant the nodes were classified at.
+Each entry of the list is a root: one upstream fact (a failing node, a sensor's new value,
+changed code, a missing or paused schedule, a run queue that is behind) with every node it
+explains, so three nodes that need attention here are one thing to fix. Every node that is not
+fresh is under exactly one root. `holds` counts them by cause and adds their gap (`3h of
+gap`: node-time out of date plus node-time until expected fresh) and how many have no
+estimate; `why` is the fact in a line; `do` is the action that clears it, with the command
+when there is one and the typical compute time of what it holds (`about 7m of compute`).
+Roots whose nodes have no estimate come first, the one holding the most nodes first; then by
+gap. With a server, a level of the tree whose nodes have estimates adds `fresh by ~15:05 UTC`
+(the latest of them). `Data` is the scope's data coverage and `As of` the instant the nodes
+were classified at. The kinds of root and of action are in [barca status: Fields and JSON](/reference/cli/status-fields/),
+"Root" and "The rollup".
 
 ```bash
 barca status --rollup                    # the whole project
@@ -289,7 +310,8 @@ barca status --rollup --server           # the configured server's: GET /state/r
 
 The JSON document is `{as_of, entries, roots, data_coverage}`; [barca status: Fields and JSON](/reference/cli/status-fields/),
 "The rollup", has every key. It is the document the server's `GET /state/rollup` answers and
-the web UI's health map, bars and failures list draw, so all of them say the same numbers.
+the web UI's health map, bars, causes and failures list draw, so all of them say the same
+numbers. `barca status --json` carries its root entry as `rollup`, beside `summary`.
 `--rollup` cannot be combined with `--limit`, `--all`, `--fields`, `--sample`, `--state` or
 `--problems`: it always counts every node in scope. It is experimental (`barca docs
 contract`): causes, the freshness gap and roots other than failures are added to the same

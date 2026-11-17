@@ -91,6 +91,8 @@ pub const NO_REFRESH_PATH: &str = "no refresh path";
 #[derive(Clone, Debug, Default)]
 pub struct Paths {
     targets: HashMap<String, Vec<String>>,
+    /// Nodes declared `freshness=Manual`: refreshed by request only.
+    manual: HashSet<String>,
 }
 
 impl Paths {
@@ -106,8 +108,20 @@ impl Paths {
                     .is_some_and(|n| matches!(n.extracted.freshness, crate::Freshness::Schedule(_)))
             })
             .collect();
+        let manual: HashSet<String> = dag
+            .topo_order()
+            .into_iter()
+            .filter(|id| {
+                dag.get_node(id)
+                    .is_some_and(|n| matches!(n.extracted.freshness, crate::Freshness::Manual))
+            })
+            .map(str::to_string)
+            .collect();
         if scheduled.is_empty() {
-            return Self::default();
+            return Self {
+                targets: HashMap::new(),
+                manual,
+            };
         }
         let targets = tick_reach(dag, scheduled)
             .into_iter()
@@ -120,7 +134,12 @@ impl Paths {
                 (!by.is_empty()).then_some((node, by))
             })
             .collect();
-        Self { targets }
+        Self { targets, manual }
+    }
+
+    /// Whether `node` is declared `freshness=Manual`: no tick computes it, someone runs it.
+    pub fn is_manual(&self, node: &str) -> bool {
+        self.manual.contains(node)
     }
 
     /// The schedules whose ticks have `node` as a target, sorted by id; empty when none does.

@@ -1936,8 +1936,8 @@ paths:
         of its children, and every node has exactly one parent: a node declared in several groups
         sits under the first by group id, a node in no group under its source file. It sums the
         status result GET /state is built from, classified the same way, so a node''s health is
-        the same word in both. causes, asset_causes, gap_seconds, unbounded and fresh_by on an
-        entry, and every root kind but failure, are not served yet.'
+        the same word in both. roots lists what holds the nodes that are not fresh, each with
+        the action that clears it; every node that is not fresh is under exactly one.'
       parameters:
       - name: targets
         in: query
@@ -4586,11 +4586,16 @@ components:
           description: '<kind>:<node id>, e.g. failure:pipeline.py:orders.'
         kind:
           type: string
-          enum: [failure]
-          description: Only failure is derived today.
+          enum: [sensor_value, code, env, input, never_run, no_schedule, schedule_paused,
+            scheduler_off, failure, queue, undecided]
+          description: What the fact is; a change (sensor_value, code, env, input), the top of a
+            never-run or undecided chain, why no tick comes (no_schedule, schedule_paused,
+            scheduler_off), a failure, or a run queue that is behind.
         node:
           type: string
-          description: The node the fact is about; for a failure, the failing node.
+          description: The node the fact is about; the failing node, the sensor whose observation
+            changed, the node whose code changed, the scheduled node, the topmost node no tick
+            reaches.
     RollupCoverage:
       type: object
       additionalProperties: false
@@ -4614,7 +4619,7 @@ components:
       additionalProperties: false
       description: One entry of the rollup tree. Every count is the exact sum of its children's.
       required: [id, kind, label, parent, children, nodes, assets, running, health, asset_health,
-        data_coverage, unbounded, fresh_by, also_in]
+        data_coverage, causes, asset_causes, gap_seconds, unbounded, fresh_by, also_in]
       properties:
         id:
           type: string
@@ -4672,6 +4677,35 @@ components:
             ok: {type: integer, minimum: 0}
         data_coverage:
           $ref: '#/components/schemas/RollupCoverage'
+        causes:
+          description: Nodes underneath that are not fresh, by cause. They add up to the nodes
+            whose health is not ok or suspect.
+          type: object
+          additionalProperties: false
+          required: [catching_up, queued, no_refresh_path, overdue, failing, undecided]
+          properties:
+            catching_up: {type: integer, minimum: 0}
+            queued: {type: integer, minimum: 0}
+            no_refresh_path: {type: integer, minimum: 0}
+            overdue: {type: integer, minimum: 0}
+            failing: {type: integer, minimum: 0}
+            undecided: {type: integer, minimum: 0}
+        asset_causes:
+          description: Assets underneath that are not fresh, by cause.
+          type: object
+          additionalProperties: false
+          required: [catching_up, queued, no_refresh_path, overdue, failing, undecided]
+          properties:
+            catching_up: {type: integer, minimum: 0}
+            queued: {type: integer, minimum: 0}
+            no_refresh_path: {type: integer, minimum: 0}
+            overdue: {type: integer, minimum: 0}
+            failing: {type: integer, minimum: 0}
+            undecided: {type: integer, minimum: 0}
+        gap_seconds:
+          type: integer
+          minimum: 0
+          description: The freshness gap underneath, node-seconds; the sum of the nodes' gap_seconds.
         unbounded:
           type: integer
           minimum: 0
@@ -4709,34 +4743,82 @@ components:
     RollupRoot:
       type: object
       additionalProperties: false
-      description: One upstream fact and what it holds. Today only failures; causes, gap_seconds,
-        unbounded and action are not served yet.
-      required: [id, kind, node, detail, error_group, nodes, assets]
+      description: One upstream fact and what it holds; every node whose root.id is this root's.
+      required: [id, kind, node, detail, error_group, nodes, assets, causes, gap_seconds,
+        unbounded, action]
       properties:
         id:
           type: string
           description: '<kind>:<node id>: the root.id of every node it holds.'
         kind:
           type: string
-          enum: [failure]
+          enum: [sensor_value, code, env, input, never_run, no_schedule, schedule_paused,
+            scheduler_off, failure, queue, undecided]
         node:
           type: string
-          description: The failing node.
+          description: The node the fact is about; the failing node, the sensor whose observation
+            changed, the node whose code changed, the scheduled node of a paused, unfired or
+            queue-bound schedule, the topmost node no tick reaches.
         detail:
           type: string
-          description: The failure's error headline as recorded.
+          description: The fact in a line; a failure's error headline as recorded, what changed,
+            why no tick comes, how long its ticks wait for a run slot and max_runs.
         error_group:
           type: [string, 'null']
-          description: The headline with its numbers replaced by '#'; failure roots sharing one are
-            shown as one entry. Null when no error was recorded.
+          description: A failure's headline with its numbers replaced by '#'; failure roots sharing
+            one are shown as one entry. Null for every other kind and when no error was recorded.
         nodes:
           type: integer
           minimum: 1
-          description: Nodes it holds; the failing node and every node it blocks.
+          description: Nodes it holds.
         assets:
           type: integer
           minimum: 0
           description: Of them, assets.
+        causes:
+          description: The nodes it holds, by cause.
+          type: object
+          additionalProperties: false
+          required: [catching_up, queued, no_refresh_path, overdue, failing, undecided]
+          properties:
+            catching_up: {type: integer, minimum: 0}
+            queued: {type: integer, minimum: 0}
+            no_refresh_path: {type: integer, minimum: 0}
+            overdue: {type: integer, minimum: 0}
+            failing: {type: integer, minimum: 0}
+            undecided: {type: integer, minimum: 0}
+        gap_seconds:
+          type: integer
+          minimum: 0
+          description: The freshness gap it holds, node-seconds; the sum of its nodes' gap_seconds.
+        unbounded:
+          type: integer
+          minimum: 0
+          description: Of its nodes, those with no expected_fresh_at.
+        action:
+          type: object
+          additionalProperties: false
+          description: What clears the root.
+          required: [kind, command, estimated_seconds]
+          properties:
+            kind:
+              type: string
+              enum: [wait, run, add_schedule, resume_schedule, start_server, fix_failure,
+                raise_max_runs]
+              description: wait (a run in flight or the next tick computes what it holds), run
+                (ticks missed what it holds, or no tick computes a Manual or pinned node), add_schedule,
+                resume_schedule (a paused schedule or node), start_server (no scheduler fires the
+                schedule), fix_failure, raise_max_runs (a queue-bound schedule; more run slots or
+                spaced schedules).
+            command:
+              type: [string, 'null']
+              description: The barca command that clears the root, naming --server; null when the
+                action is not a command.
+            estimated_seconds:
+              type: [integer, 'null']
+              minimum: 0
+              description: The typical compute time of the nodes it holds, whole seconds; the sum of
+                their typical step durations. Null when none has a sample.
     RollupFile:
       type: object
       additionalProperties: false
@@ -4805,7 +4887,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RollupRoot'
-          description: What holds the nodes that are not fresh, the most nodes first, then by id.
+          description: What holds the nodes that are not fresh. Roots holding nodes with no
+            expected_fresh_at first, the most nodes held first; then by gap_seconds, nodes and id.
         data_coverage:
           $ref: '#/components/schemas/RollupCoverage'
         files:
@@ -5629,7 +5712,9 @@ components:
       - health_reason
       - signals
       - measured
+      - cause
       - root
+      - gap_seconds
       - last_check
       - refresh_path
       - stale_since
@@ -5670,13 +5755,25 @@ components:
           description: Whether the asset's latest successful result has a recorded row count (for a
             partitioned asset, any key's); null for a task or sensor. false is "not measured",
             never ok for data. Experimental.
+        cause: &id_cause
+          type: [string, 'null']
+          enum: [catching_up, queued, no_refresh_path, overdue, failing, undecided, null]
+          description: Why the node is not fresh (specs/behavior/health.md, "Cause"); null exactly
+            when it is fresh (health ok or suspect). Whether a tick will come is read from this
+            server's scheduler or, on a server that runs none, from the tick record. Experimental.
         root: &id_root
           anyOf:
           - $ref: '#/components/schemas/NodeRoot'
           - type: 'null'
-          description: The upstream fact that explains why the node is not fresh. Today only a
-            failure, on the failing node itself and on each node it blocks; null otherwise.
-            Experimental.
+          description: The upstream fact that explains why the node is not fresh
+            (specs/behavior/health.md, "Root"); null exactly when it is fresh. Nodes with the same
+            id are held by the same thing (GET /state/rollup, roots). Experimental.
+        gap_seconds: &id_gap_seconds
+          type: integer
+          minimum: 0
+          description: The node's freshness gap, seconds; stale_since to now plus now to
+            expected_fresh_at, read at the start of the current minute. 0 for a fresh or undecided
+            node; a term whose time is null counts 0. Experimental.
         last_check: &id_last_check
           type: [object, 'null']
           additionalProperties: false
@@ -5903,7 +6000,9 @@ components:
       - health
       - health_reason
       - measured
+      - cause
       - root
+      - gap_seconds
       - last_check
       - refresh_path
       - stale_since
@@ -5933,7 +6032,9 @@ components:
         health: *id_health
         health_reason: *id_health_reason
         measured: *id_measured
+        cause: *id_cause
         root: *id_root
+        gap_seconds: *id_gap_seconds
         last_check: *id_last_check
         refresh_path: *id_refresh_path
         stale_since: *id_stale_since
@@ -7689,8 +7790,20 @@ components:
       - truncated
       - disk_usage
       - data_coverage
+      - as_of
+      - rollup
       description: barca status --json --all for the server ledger.
       properties:
+        as_of:
+          type: string
+          format: date-time
+          description: The instant the nodes were classified at (RFC 3339, UTC); what every derived
+            time and gap_seconds are as of. Experimental.
+        rollup:
+          $ref: '#/components/schemas/RollupEntry'
+          description: The scope summed; the root entry of GET /state/rollup for the same scope,
+            over every node in scope (a filter does not change it), with children empty.
+            Experimental.
         data_coverage:
           type: object
           additionalProperties: false

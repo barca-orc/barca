@@ -215,23 +215,125 @@ impl DataSignal {
     }
 }
 
-/// What kind of upstream fact a [`Root`] is.
-///
-/// SEAM (#963): only `failure` is derived today. The change, schedule and queue kinds of
-/// `specs/behavior/health.md` ("Root") are added here, and [`classify`] names them.
+/// Why a node is not fresh, in one word (`specs/behavior/health.md`, "Cause"): every node
+/// that is not fresh has exactly one, a fresh node none. Declared in the order the display
+/// lists them: what alarms first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum Cause {
+    /// It failed, a failing node upstream holds it, or its schedule is held after
+    /// `max_failures` failed ticks.
+    Failing,
+    /// Ticks reached it and did not leave it fresh.
+    Overdue,
+    /// Nothing scheduled will refresh it.
+    NoRefreshPath,
+    /// What would refresh it waits for a run slot.
+    Queued,
+    /// The read path cannot decide.
+    Undecided,
+    /// A run is computing it, or the next tick of its refresh path will.
+    CatchingUp,
+}
+
+impl Cause {
+    /// Every cause, in display order: what alarms first, progress last.
+    pub const ALL: [Cause; 6] = [
+        Cause::Failing,
+        Cause::Overdue,
+        Cause::NoRefreshPath,
+        Cause::Queued,
+        Cause::Undecided,
+        Cause::CatchingUp,
+    ];
+
+    /// The value as JSON and `barca.nodes` spell it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Cause::Failing => "failing",
+            Cause::Overdue => "overdue",
+            Cause::NoRefreshPath => "no_refresh_path",
+            Cause::Queued => "queued",
+            Cause::Undecided => "undecided",
+            Cause::CatchingUp => "catching_up",
+        }
+    }
+
+    /// The display word: what the CLI prints and the UI shows.
+    pub fn word(self) -> &'static str {
+        match self {
+            Cause::NoRefreshPath => "no refresh path",
+            Cause::CatchingUp => "catching up",
+            other => other.as_str(),
+        }
+    }
+}
+
+/// What kind of upstream fact a [`Root`] is (`specs/behavior/health.md`, "Root").
+/// [`crate::causes::attribute`] names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum RootKind {
-    /// A failing node: the node itself, or the nearest failing node upstream ([`blocked_by`]).
+    /// A sensor whose observation changed: `node` is the sensor.
+    SensorValue,
+    /// A node whose code changed (the function, a decorator, a helper).
+    Code,
+    /// A node whose declared environment variable changed.
+    Env,
+    /// A result that what reads it has not caught up with: `node` is the input that changed.
+    Input,
+    /// The topmost never-run node of a chain.
+    NeverRun,
+    /// The topmost not-fresh node no tick reaches: where a schedule would have to be added
+    /// (or, for a `Manual` or pinned node, where someone has to run it).
+    NoSchedule,
+    /// A paused schedule (`node` is the scheduled node) or a paused node (`barca pause`).
+    SchedulePaused,
+    /// A schedule no running scheduler fires: `node` is the scheduled node.
+    SchedulerOff,
+    /// A failing node: the node itself, or the nearest failing node upstream ([`blocked_by`]);
+    /// or a schedule held after `max_failures` failed ticks (`node` is the scheduled node).
     Failure,
+    /// A schedule whose ticks wait for a run slot: `node` is the scheduled node.
+    Queue,
+    /// The topmost node the read path cannot decide, with nothing above it that explains it.
+    Undecided,
 }
 
 impl RootKind {
     /// The value as JSON spells it, and the prefix of a root's id.
     pub fn as_str(self) -> &'static str {
         match self {
+            RootKind::SensorValue => "sensor_value",
+            RootKind::Code => "code",
+            RootKind::Env => "env",
+            RootKind::Input => "input",
+            RootKind::NeverRun => "never_run",
+            RootKind::NoSchedule => "no_schedule",
+            RootKind::SchedulePaused => "schedule_paused",
+            RootKind::SchedulerOff => "scheduler_off",
             RootKind::Failure => "failure",
+            RootKind::Queue => "queue",
+            RootKind::Undecided => "undecided",
+        }
+    }
+
+    /// The display word: what the CLI prints and the UI shows before the root's node.
+    pub fn word(self) -> &'static str {
+        match self {
+            RootKind::SensorValue => "sensor value",
+            RootKind::Code => "code change",
+            RootKind::Env => "environment change",
+            RootKind::Input => "input change",
+            RootKind::NeverRun => "never run",
+            RootKind::NoSchedule => "no schedule",
+            RootKind::SchedulePaused => "paused",
+            RootKind::SchedulerOff => "scheduler off",
+            RootKind::Failure => "failure",
+            RootKind::Queue => "run queue",
+            RootKind::Undecided => "undecided",
         }
     }
 }
@@ -243,18 +345,24 @@ pub struct Root {
     /// `<kind>:<node id>`, e.g. `failure:pipeline.py:orders`.
     pub id: String,
     pub kind: RootKind,
-    /// The node the fact is about: for a failure, the failing node.
+    /// The node the fact is about: the failing node, the sensor whose observation changed,
+    /// the node whose code changed, the scheduled node of a paused schedule.
     pub node: String,
 }
 
 impl Root {
-    /// The failure root of `node`: what a failing node and every node it blocks carry.
-    pub fn failure(node: &str) -> Self {
+    /// The root of `kind` at `node`.
+    pub fn of(kind: RootKind, node: &str) -> Self {
         Root {
-            id: format!("{}:{node}", RootKind::Failure.as_str()),
-            kind: RootKind::Failure,
+            id: format!("{}:{node}", kind.as_str()),
+            kind,
             node: node.to_string(),
         }
+    }
+
+    /// The failure root of `node`: what a failing node and every node it blocks carry.
+    pub fn failure(node: &str) -> Self {
+        Self::of(RootKind::Failure, node)
     }
 }
 
@@ -392,6 +500,25 @@ pub struct Evidence<'a> {
     pub timing: crate::estimates::Timing<'a>,
     /// The instant of classification, unix seconds: a check's verdict expires.
     pub now: i64,
+}
+
+impl Evidence<'static> {
+    /// No record, no schedule, no run: what a result classified from its rows alone reads.
+    pub fn none(now: i64) -> Self {
+        static AGES: std::sync::LazyLock<HashMap<String, NodeAge>> =
+            std::sync::LazyLock::new(HashMap::new);
+        static NODES: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
+        static CHECKS: std::sync::LazyLock<Checks> = std::sync::LazyLock::new(Checks::default);
+        Self {
+            ages: &AGES,
+            pinned: &NODES,
+            late: &NODES,
+            checks: &CHECKS,
+            path: crate::refresh_path::PathEvidence::none(),
+            timing: crate::estimates::Timing::none(),
+            now,
+        }
+    }
 }
 
 /// `last_attempt_failed`: its last materialization failed, or (a partitioned node's last
@@ -685,8 +812,8 @@ pub fn decide(
     }
 }
 
-/// Fill `health`, `health_reason`, `signals`, `measured`, `root`, `last_check`,
-/// `refresh_path` and the times (`stale_since`, `expected_fresh_at`, `recheck_at`:
+/// Fill `health`, `health_reason`, `signals`, `measured`, `last_check`, `refresh_path`,
+/// `cause`, `root`, `gap_seconds` ([`crate::causes`]) and the times (`stale_since`, `expected_fresh_at`, `recheck_at`:
 /// [`crate::estimates::times`]) on every row of `nodes` (one status result: a scope with its upstream cone,
 /// in dependency order).
 pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
@@ -727,7 +854,8 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
                 evidence.late.contains(&node.id),
                 checked,
             );
-            // SEAM (#963): the root of every other cause is named here.
+            // The failure root; every other cause's root is named below
+            // ([`crate::causes::attribute`]), once the paths and the times are known.
             let root = match health {
                 Health::Failing => Some(Root::failure(&node.id)),
                 _ => by.as_deref().map(Root::failure),
@@ -776,25 +904,64 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
         node.expected_fresh_at = times.expected_fresh_at;
         node.recheck_at = times.recheck_at;
     }
+    // The cause, the root and the gap read all of the above: one more pass, no read.
+    let attributed = crate::causes::attribute(nodes, evidence);
+    let gap_at = crate::causes::gap_instant(evidence.now);
+    for (node, (cause, root)) in nodes.iter_mut().zip(attributed) {
+        node.cause = cause;
+        node.root = root;
+        node.gap_seconds = crate::causes::gap_seconds(node, gap_at);
+    }
 }
 
-/// [`classify`] every row of `result` and count its data coverage, over every node in scope:
-/// call it before a filter cuts `nodes`.
-pub fn attach(result: &mut StatusResult, evidence: Evidence<'_>) {
+/// [`classify`] every row of `result`, count its data coverage and sum its rollup's root
+/// entry as of `evidence.now`, over every node in scope: call it before a filter cuts
+/// `nodes`. `running`: the nodes a run is working on.
+pub fn attach(result: &mut StatusResult, evidence: Evidence<'_>, running: &HashSet<String>) {
     classify(&mut result.nodes, evidence);
     result.data_coverage = DataCoverage::of(&result.nodes);
+    result.as_of = crate::time::rfc3339_secs(evidence.now);
+    result.rollup = Some(crate::rollup::total(&result.nodes, running));
 }
 
-/// [`attach`] with the evidence the metadata DB at `db_path` holds (none when it does not
-/// exist yet): what `barca status` and `barca sql` read on this machine. Cron is evaluated in
+/// [`attach`] with the evidence the metadata DB of `cfg` holds (none when it does not exist
+/// yet): what `barca status` and `barca sql` read on this machine. Cron is evaluated in
 /// `zone`; a paused schedule is not late.
 pub async fn attach_from_db(
     result: &mut StatusResult,
     dag: &crate::dag::Dag,
-    db_path: &str,
+    cfg: &crate::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
+    from_db(result, dag, cfg, zone, now, false)
+        .await
+        .map(|_| ())
+}
+
+/// [`attach_from_db`], then the rollup of the rows (`barca status --rollup`): no run is
+/// tracked here, so `running` is 0 everywhere.
+pub async fn rollup_from_db(
+    result: &mut StatusResult,
+    dag: &crate::dag::Dag,
+    cfg: &crate::config::ResolvedConfig,
+    zone: &Zone,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<crate::rollup::Rollup, BarcaError> {
+    Ok(from_db(result, dag, cfg, zone, now, true)
+        .await?
+        .expect("the rollup was asked for"))
+}
+
+async fn from_db(
+    result: &mut StatusResult,
+    dag: &crate::dag::Dag,
+    cfg: &crate::config::ResolvedConfig,
+    zone: &Zone,
+    now: chrono::DateTime<chrono::Utc>,
+    rollup: bool,
+) -> Result<Option<crate::rollup::Rollup>, BarcaError> {
+    let db_path = cfg.db_path.as_str();
     let jobs = crate::schedule::jobs_from_dag(dag);
     let ids: Vec<String> = jobs.iter().map(|job| job.id.clone()).collect();
     let (ages, pinned, paused_nodes, pauses, failures, ticks, checks) =
@@ -834,29 +1001,43 @@ pub async fn attach_from_db(
     let schedules =
         crate::refresh_path::recorded_schedules(&jobs, &ticks, &failures, &pauses, zone, now);
     // No scheduler and no run queue here: only `stale_since` can be told, from the records
-    // and the source files' modification times.
+    // and the source files' modification times. The typical durations are read only for the
+    // rollup, whose roots say what clearing them costs.
     let source_times = crate::estimates::source_times_of(dag);
-    attach(
-        result,
-        Evidence {
-            ages: &ages,
+    let durations: HashMap<String, f64> = if rollup && Path::new(db_path).exists() {
+        let ids: Vec<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
+        db::recent_durations(db_path, &ids, 20)
+            .await?
+            .into_iter()
+            .filter(|(_, recent)| !recent.is_empty())
+            .map(|(id, recent)| (id, crate::schedule_standing::median(&recent)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let evidence = Evidence {
+        ages: &ages,
+        pinned: &pinned,
+        late: &late,
+        checks: &checks,
+        path: crate::refresh_path::PathEvidence {
+            paths: &paths,
+            schedules: &schedules,
+            paused: &paused_nodes,
             pinned: &pinned,
-            late: &late,
-            checks: &checks,
-            path: crate::refresh_path::PathEvidence {
-                paths: &paths,
-                schedules: &schedules,
-                paused: &paused_nodes,
-                pinned: &pinned,
-            },
-            timing: crate::estimates::Timing {
-                source_times: &source_times,
-                ..crate::estimates::Timing::none()
-            },
-            now: now.timestamp(),
         },
-    );
-    Ok(())
+        timing: crate::estimates::Timing {
+            durations: &durations,
+            source_times: &source_times,
+            max_runs: cfg.server_max_runs,
+            ..crate::estimates::Timing::none()
+        },
+        now: now.timestamp(),
+    };
+    let running = HashSet::new();
+    attach(result, evidence, &running);
+    Ok(rollup
+        .then(|| crate::rollup::build(&result.nodes, &dag.groups, &running, now, evidence, false)))
 }
 
 /// What the tick record at `db_path` says about the nodes of `dag` ([`Checks`]): two bounded
@@ -1434,6 +1615,8 @@ mod tests {
             ],
             summary: Default::default(),
             data_coverage: Default::default(),
+            as_of: None,
+            rollup: None,
             filter: None,
         };
         let (_, pinned, late) = none();
@@ -1448,6 +1631,7 @@ mod tests {
                 timing: crate::estimates::Timing::none(),
                 now: 0,
             },
+            &HashSet::new(),
         );
         assert_eq!(
             result.data_coverage,

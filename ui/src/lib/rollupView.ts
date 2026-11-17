@@ -35,10 +35,11 @@ export interface RollupTree {
 }
 
 const NO_COUNTS: HealthCounts = { failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: 0 }
+const NO_CAUSES: RollupEntry['causes'] = { catching_up: 0, queued: 0, no_refresh_path: 0, overdue: 0, failing: 0, undecided: 0 }
 
 /** A tree with only an empty root: what a page holds until the rollup has loaded. */
 export const EMPTY_ROLLUP: RollupTree = {
-  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, unbounded: 0, fresh_by: null, also_in: [] }]]),
+  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
   files: new Map(),
   roots: [],
   coverage: { assets: 0, measured: 0, suspect: 0 },

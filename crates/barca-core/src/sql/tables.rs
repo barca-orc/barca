@@ -112,6 +112,11 @@ pub const NODE_COLUMNS: &[(&str, &str)] = &[
     ("health_reason", V),
     ("signals", L),
     ("measured", B),
+    ("cause", V),
+    ("root_id", V),
+    ("root_kind", V),
+    ("root_node", V),
+    ("gap_seconds", I),
     ("last_check_at", V),
     ("last_check_outcome", V),
     ("refresh_schedule", V),
@@ -182,7 +187,7 @@ pub fn nodes(rows: Option<&[NodeStatus]>) -> Table {
 fn node_row(n: &NodeStatus) -> Value {
     let p = n.partitions.as_ref();
     let m = n.last_materialization.as_ref();
-    json!({
+    let mut row = json!({
         "id": n.id,
         "name": n.name,
         "kind": n.kind,
@@ -221,7 +226,19 @@ fn node_row(n: &NodeStatus) -> Value {
         "last_rows": m.and_then(|m| m.rows),
         "last_content_hash": m.and_then(|m| m.content_hash.as_ref()),
         "last_error": m.and_then(|m| m.error.as_ref()),
-    })
+    });
+    // Beside the macro: one more key in it passes its recursion limit.
+    let cause = json!({
+        "cause": n.cause,
+        "root_id": n.root.as_ref().map(|r| &r.id),
+        "root_kind": n.root.as_ref().map(|r| r.kind),
+        "root_node": n.root.as_ref().map(|r| &r.node),
+        "gap_seconds": n.gap_seconds,
+    });
+    if let (Value::Object(row), Value::Object(cause)) = (&mut row, cause) {
+        row.extend(cause);
+    }
+    row
 }
 
 /// Whether the query names table `name` (its name as a word, with or without `barca.`).

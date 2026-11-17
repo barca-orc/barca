@@ -81,7 +81,7 @@ command is experimental with it):
 | `barca get --expires` | new with -o url (signed links to results in a cloud store); the link format is the cloud's |
 | `barca status --sample` | sample rows come from a Python helper whose output may grow |
 | `barca status --problems` | new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) |
-| `barca status --rollup` | new in 0.44.0 (specs/behavior/health.md): the rollup document gains causes, the freshness gap and more root kinds as that specification lands |
+| `barca status --rollup` | new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use |
 | `barca status --keys` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
 | `barca status --grid` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
 | `barca status --key` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
@@ -147,8 +147,8 @@ stability; the row adds the keys and routes that go with it.
 | `barca pause --schedule`, `barca pause --until`, `barca resume --schedule`, their JSON (the schedule's `GET /schedule` entry), `schedules` in `barca pause --json` and `GET /pauses`, and a duration as `?until=` of `POST /schedule/{id}/pause` | new in 0.44 (#989, [Scheduling With Cron](/scheduling/), "Pausing one schedule"): the entry's keys follow `GET /schedule` |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, [barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
-| Health: `health`, `health_reason`, `root`, `signals`, `measured`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at` and `recheck_at` of each node and `data_coverage` in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), `typical_queue_wait_seconds`, `typical_run_seconds` and `queue_bound` of a node's `schedule` (and of `GET /schedule`), `started_at`, `estimated_start_at` and `wait_seconds` of a run in `barca queue --json`, the `health`, `health_reason`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at` and `recheck_at` columns of `barca.nodes`, the `Health:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox`, `no refresh path`, `fresh ~15:05 UTC` or `overdue 16h` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #962, #964, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health), "Last check", "Refresh path" and "Times"): how an estimate is computed and rounded may change after field use; the series that adds causes and expected times (#974) may add reasons, `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
-| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)): an entry has `unbounded` and `fresh_by` (#962); later releases of the series (#974) add `causes`, `asset_causes` and `gap_seconds` to an entry, `causes`, `gap_seconds`, `unbounded` and `action` to a root, and root kinds other than `failure` |
+| Health: `health`, `health_reason`, `cause`, `root`, `gap_seconds`, `signals`, `measured`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at` and `recheck_at` of each node, and `data_coverage`, `as_of` and `rollup` beside `summary`, in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), `typical_queue_wait_seconds`, `typical_run_seconds` and `queue_bound` of a node's `schedule` (and of `GET /schedule`), `started_at`, `estimated_start_at` and `wait_seconds` of a run in `barca queue --json`, the `health`, `health_reason`, `cause`, `root_id`, `root_kind`, `root_node`, `gap_seconds`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at` and `recheck_at` columns of `barca.nodes`, the `Health:`, `Gap:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox`, `no refresh path`, `fresh ~15:05 UTC` or `overdue 16h` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #962, #963, #964, #973, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health), "Cause", "Root", "Last check", "Refresh path" and "Times"): how an estimate is computed and rounded, which fact a root names and the order of the cause rules may change after field use; `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
+| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table and the ranked list `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, #962, #963, #973, [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)): an entry has `causes`, `asset_causes`, `gap_seconds`, `unbounded` and `fresh_by`; a root has `causes`, `gap_seconds`, `unbounded` and `action`. The wording of `detail`, which command an action names and how roots are ranked may change after field use |
 | `line` of each run in `barca history --json` and `GET /runs` (`steps`, `steps_detail`, `failure`, `failure_detail`), and `now` of `GET /runs?status=running` | new in 0.44 (#959, [barca status](/reference/cli/status/)): the words a run list prints, computed once for the CLI and the web UI; their wording may change after field use |
 | `now` of each run in progress in `barca history --status running --json` (and `GET /history?status=running`; `running`, `queued`, `keys`, `groups`, `line`), the `now:` line under its row, and the output of `barca history --activity` (`activity`: `since`, `until`, `triggered_by`, `hours`, `total`, `summary`; also `activity` and `?triggered_by=` of `GET /runs`) | new in 0.44 (#991, [barca status: Runs in progress and the last day's activity](/reference/cli/status/#runs-in-progress-and-the-last-days-activity)): what the web UI's Runs page shows, computed once for the CLI and the UI; the keys, the window and the wording may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
@@ -545,11 +545,11 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `root`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `cause`, `root`, `gap_seconds`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh |
 | `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
-| `--rollup` | - | default `false` | experimental: new in 0.44.0 (specs/behavior/health.md): the rollup document gains causes, the freshness gap and more root kinds as that specification lands | Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets |
+| `--rollup` | - | default `false` | experimental: new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use | Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each |
 | `--keys` | - | default `false` | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: list the keys of one partitioned target, each with its state |
 | `--grid` | - | default `false` | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: print one partitioned target's keys as a grid of states |
 | `--key` | `KEY` | - | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target |
@@ -1540,6 +1540,7 @@ fetched) is still exit 3.
 <!-- BEGIN GENERATED schema status_unsynced -->
 | Key | Type | Present |
 |---|---|---|
+| `as_of` | string | always |
 | `data_coverage` | object | always |
 | `data_coverage.assets` | integer | always |
 | `data_coverage.measured` | integer | always |
@@ -1557,8 +1558,10 @@ fetched) is still exit 3.
 | `nodes[].cache.reason` | string | always |
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
+| `nodes[].cause` | string | always |
 | `nodes[].env` | array | always |
 | `nodes[].expected_fresh_at` | null | always |
+| `nodes[].gap_seconds` | integer | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -1581,7 +1584,10 @@ fetched) is still exit 3.
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
-| `nodes[].root` | null | always |
+| `nodes[].root` | object | always |
+| `nodes[].root.id` | string | always |
+| `nodes[].root.kind` | string | always |
+| `nodes[].root.node` | string | always |
 | `nodes[].shape` | object | always |
 | `nodes[].shape.keys` | array | sometimes |
 | `nodes[].shape.keys[]` | string | always |
@@ -1589,6 +1595,53 @@ fetched) is still exit 3.
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null | always |
+| `rollup` | object | always |
+| `rollup.also_in` | array | always |
+| `rollup.asset_causes` | object | always |
+| `rollup.asset_causes.catching_up` | integer | always |
+| `rollup.asset_causes.failing` | integer | always |
+| `rollup.asset_causes.no_refresh_path` | integer | always |
+| `rollup.asset_causes.overdue` | integer | always |
+| `rollup.asset_causes.queued` | integer | always |
+| `rollup.asset_causes.undecided` | integer | always |
+| `rollup.asset_health` | object | always |
+| `rollup.asset_health.behind` | integer | always |
+| `rollup.asset_health.blocked` | integer | always |
+| `rollup.asset_health.failing` | integer | always |
+| `rollup.asset_health.never_run` | integer | always |
+| `rollup.asset_health.ok` | integer | always |
+| `rollup.asset_health.suspect` | integer | always |
+| `rollup.asset_health.undecided` | integer | always |
+| `rollup.assets` | integer | always |
+| `rollup.causes` | object | always |
+| `rollup.causes.catching_up` | integer | always |
+| `rollup.causes.failing` | integer | always |
+| `rollup.causes.no_refresh_path` | integer | always |
+| `rollup.causes.overdue` | integer | always |
+| `rollup.causes.queued` | integer | always |
+| `rollup.causes.undecided` | integer | always |
+| `rollup.children` | array | always |
+| `rollup.data_coverage` | object | always |
+| `rollup.data_coverage.assets` | integer | always |
+| `rollup.data_coverage.measured` | integer | always |
+| `rollup.data_coverage.suspect` | integer | always |
+| `rollup.fresh_by` | null | always |
+| `rollup.gap_seconds` | integer | always |
+| `rollup.health` | object | always |
+| `rollup.health.behind` | integer | always |
+| `rollup.health.blocked` | integer | always |
+| `rollup.health.failing` | integer | always |
+| `rollup.health.never_run` | integer | always |
+| `rollup.health.ok` | integer | always |
+| `rollup.health.suspect` | integer | always |
+| `rollup.health.undecided` | integer | always |
+| `rollup.id` | string | always |
+| `rollup.kind` | string | always |
+| `rollup.label` | string | always |
+| `rollup.nodes` | integer | always |
+| `rollup.parent` | null | always |
+| `rollup.running` | integer | always |
+| `rollup.unbounded` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -1935,6 +1988,7 @@ counts every node even when `nodes` is truncated.
 <!-- BEGIN GENERATED schema status -->
 | Key | Type | Present |
 |---|---|---|
+| `as_of` | string | always |
 | `data_coverage` | object | always |
 | `data_coverage.assets` | integer | always |
 | `data_coverage.measured` | integer | always |
@@ -1952,9 +2006,11 @@ counts every node even when `nodes` is truncated.
 | `nodes[].cache.reason` | string | always |
 | `nodes[].cache.run_hash` | string | sometimes |
 | `nodes[].cache.state` | string | always |
+| `nodes[].cause` | null \| string | always |
 | `nodes[].env` | array | always |
 | `nodes[].env[]` | string | always |
 | `nodes[].expected_fresh_at` | null | always |
+| `nodes[].gap_seconds` | integer | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -2003,6 +2059,53 @@ counts every node even when `nodes` is truncated.
 | `nodes[].stale_since` | null \| string | always |
 | `nodes[].undeclared_env` | array | sometimes |
 | `nodes[].undeclared_env[]` | string | always |
+| `rollup` | object | always |
+| `rollup.also_in` | array | always |
+| `rollup.asset_causes` | object | always |
+| `rollup.asset_causes.catching_up` | integer | always |
+| `rollup.asset_causes.failing` | integer | always |
+| `rollup.asset_causes.no_refresh_path` | integer | always |
+| `rollup.asset_causes.overdue` | integer | always |
+| `rollup.asset_causes.queued` | integer | always |
+| `rollup.asset_causes.undecided` | integer | always |
+| `rollup.asset_health` | object | always |
+| `rollup.asset_health.behind` | integer | always |
+| `rollup.asset_health.blocked` | integer | always |
+| `rollup.asset_health.failing` | integer | always |
+| `rollup.asset_health.never_run` | integer | always |
+| `rollup.asset_health.ok` | integer | always |
+| `rollup.asset_health.suspect` | integer | always |
+| `rollup.asset_health.undecided` | integer | always |
+| `rollup.assets` | integer | always |
+| `rollup.causes` | object | always |
+| `rollup.causes.catching_up` | integer | always |
+| `rollup.causes.failing` | integer | always |
+| `rollup.causes.no_refresh_path` | integer | always |
+| `rollup.causes.overdue` | integer | always |
+| `rollup.causes.queued` | integer | always |
+| `rollup.causes.undecided` | integer | always |
+| `rollup.children` | array | always |
+| `rollup.data_coverage` | object | always |
+| `rollup.data_coverage.assets` | integer | always |
+| `rollup.data_coverage.measured` | integer | always |
+| `rollup.data_coverage.suspect` | integer | always |
+| `rollup.fresh_by` | null | always |
+| `rollup.gap_seconds` | integer | always |
+| `rollup.health` | object | always |
+| `rollup.health.behind` | integer | always |
+| `rollup.health.blocked` | integer | always |
+| `rollup.health.failing` | integer | always |
+| `rollup.health.never_run` | integer | always |
+| `rollup.health.ok` | integer | always |
+| `rollup.health.suspect` | integer | always |
+| `rollup.health.undecided` | integer | always |
+| `rollup.id` | string | always |
+| `rollup.kind` | string | always |
+| `rollup.label` | string | always |
+| `rollup.nodes` | integer | always |
+| `rollup.parent` | null | always |
+| `rollup.running` | integer | always |
+| `rollup.unbounded` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2065,6 +2168,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 <!-- BEGIN GENERATED schema status_problems -->
 | Key | Type | Present |
 |---|---|---|
+| `as_of` | string | always |
 | `data_coverage` | object | always |
 | `data_coverage.assets` | integer | always |
 | `data_coverage.measured` | integer | always |
@@ -2083,8 +2187,10 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].cache.reason` | string | always |
 | `nodes[].cache.run_hash` | string | sometimes |
 | `nodes[].cache.state` | string | always |
+| `nodes[].cause` | string | always |
 | `nodes[].env` | array | always |
 | `nodes[].expected_fresh_at` | null | always |
+| `nodes[].gap_seconds` | integer | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -2113,13 +2219,60 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].partitions.total` | integer | always |
 | `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
-| `nodes[].root` | null \| object | always |
+| `nodes[].root` | object | always |
 | `nodes[].root.id` | string | always |
 | `nodes[].root.kind` | string | always |
 | `nodes[].root.node` | string | always |
 | `nodes[].shape` | null | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | string | always |
+| `rollup` | object | always |
+| `rollup.also_in` | array | always |
+| `rollup.asset_causes` | object | always |
+| `rollup.asset_causes.catching_up` | integer | always |
+| `rollup.asset_causes.failing` | integer | always |
+| `rollup.asset_causes.no_refresh_path` | integer | always |
+| `rollup.asset_causes.overdue` | integer | always |
+| `rollup.asset_causes.queued` | integer | always |
+| `rollup.asset_causes.undecided` | integer | always |
+| `rollup.asset_health` | object | always |
+| `rollup.asset_health.behind` | integer | always |
+| `rollup.asset_health.blocked` | integer | always |
+| `rollup.asset_health.failing` | integer | always |
+| `rollup.asset_health.never_run` | integer | always |
+| `rollup.asset_health.ok` | integer | always |
+| `rollup.asset_health.suspect` | integer | always |
+| `rollup.asset_health.undecided` | integer | always |
+| `rollup.assets` | integer | always |
+| `rollup.causes` | object | always |
+| `rollup.causes.catching_up` | integer | always |
+| `rollup.causes.failing` | integer | always |
+| `rollup.causes.no_refresh_path` | integer | always |
+| `rollup.causes.overdue` | integer | always |
+| `rollup.causes.queued` | integer | always |
+| `rollup.causes.undecided` | integer | always |
+| `rollup.children` | array | always |
+| `rollup.data_coverage` | object | always |
+| `rollup.data_coverage.assets` | integer | always |
+| `rollup.data_coverage.measured` | integer | always |
+| `rollup.data_coverage.suspect` | integer | always |
+| `rollup.fresh_by` | null | always |
+| `rollup.gap_seconds` | integer | always |
+| `rollup.health` | object | always |
+| `rollup.health.behind` | integer | always |
+| `rollup.health.blocked` | integer | always |
+| `rollup.health.failing` | integer | always |
+| `rollup.health.never_run` | integer | always |
+| `rollup.health.ok` | integer | always |
+| `rollup.health.suspect` | integer | always |
+| `rollup.health.undecided` | integer | always |
+| `rollup.id` | string | always |
+| `rollup.kind` | string | always |
+| `rollup.label` | string | always |
+| `rollup.nodes` | integer | always |
+| `rollup.parent` | null | always |
+| `rollup.running` | integer | always |
+| `rollup.unbounded` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2140,7 +2293,9 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 
 `barca status pipeline.py --rollup --json` (after `broken` failed) prints the rollup instead of
 the nodes (experimental; [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)). `entries[].keys` is on a
-partitioned node's entry only:
+partitioned node's entry only; `roots[].action.estimated_seconds` is an integer when a node
+the root holds has a recorded duration, and `roots[].action.command` a string when a command
+clears the root:
 
 <!-- BEGIN GENERATED schema status_rollup -->
 | Key | Type | Present |
@@ -2153,6 +2308,13 @@ partitioned node's entry only:
 | `entries` | array | always |
 | `entries[]` | object | always |
 | `entries[].also_in` | array | always |
+| `entries[].asset_causes` | object | always |
+| `entries[].asset_causes.catching_up` | integer | always |
+| `entries[].asset_causes.failing` | integer | always |
+| `entries[].asset_causes.no_refresh_path` | integer | always |
+| `entries[].asset_causes.overdue` | integer | always |
+| `entries[].asset_causes.queued` | integer | always |
+| `entries[].asset_causes.undecided` | integer | always |
 | `entries[].asset_health` | object | always |
 | `entries[].asset_health.behind` | integer | always |
 | `entries[].asset_health.blocked` | integer | always |
@@ -2162,6 +2324,13 @@ partitioned node's entry only:
 | `entries[].asset_health.suspect` | integer | always |
 | `entries[].asset_health.undecided` | integer | always |
 | `entries[].assets` | integer | always |
+| `entries[].causes` | object | always |
+| `entries[].causes.catching_up` | integer | always |
+| `entries[].causes.failing` | integer | always |
+| `entries[].causes.no_refresh_path` | integer | always |
+| `entries[].causes.overdue` | integer | always |
+| `entries[].causes.queued` | integer | always |
+| `entries[].causes.undecided` | integer | always |
 | `entries[].children` | array | always |
 | `entries[].children[]` | string | always |
 | `entries[].data_coverage` | object | always |
@@ -2169,6 +2338,7 @@ partitioned node's entry only:
 | `entries[].data_coverage.measured` | integer | always |
 | `entries[].data_coverage.suspect` | integer | always |
 | `entries[].fresh_by` | null | always |
+| `entries[].gap_seconds` | integer | always |
 | `entries[].health` | object | always |
 | `entries[].health.behind` | integer | always |
 | `entries[].health.blocked` | integer | always |
@@ -2213,13 +2383,26 @@ partitioned node's entry only:
 | `files[].worst` | string | always |
 | `roots` | array | always |
 | `roots[]` | object | always |
+| `roots[].action` | object | always |
+| `roots[].action.command` | null \| string | always |
+| `roots[].action.estimated_seconds` | null | always |
+| `roots[].action.kind` | string | always |
 | `roots[].assets` | integer | always |
+| `roots[].causes` | object | always |
+| `roots[].causes.catching_up` | integer | always |
+| `roots[].causes.failing` | integer | always |
+| `roots[].causes.no_refresh_path` | integer | always |
+| `roots[].causes.overdue` | integer | always |
+| `roots[].causes.queued` | integer | always |
+| `roots[].causes.undecided` | integer | always |
 | `roots[].detail` | string | always |
-| `roots[].error_group` | string | always |
+| `roots[].error_group` | null \| string | always |
+| `roots[].gap_seconds` | integer | always |
 | `roots[].id` | string | always |
 | `roots[].kind` | string | always |
 | `roots[].node` | string | always |
 | `roots[].nodes` | integer | always |
+| `roots[].unbounded` | integer | always |
 <!-- END GENERATED schema status_rollup -->
 
 #### One node's keys
@@ -2356,6 +2539,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 <!-- BEGIN GENERATED schema status_changed -->
 | Key | Type | Present |
 |---|---|---|
+| `as_of` | string | always |
 | `data_coverage` | object | always |
 | `data_coverage.assets` | integer | always |
 | `data_coverage.measured` | integer | always |
@@ -2376,8 +2560,10 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].cache.reason` | string | always |
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
+| `nodes[].cause` | string | always |
 | `nodes[].env` | array | always |
 | `nodes[].expected_fresh_at` | null | always |
+| `nodes[].gap_seconds` | integer | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -2400,7 +2586,10 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].recheck_at` | null | always |
 | `nodes[].refresh_path` | null | always |
-| `nodes[].root` | null | always |
+| `nodes[].root` | object | always |
+| `nodes[].root.id` | string | always |
+| `nodes[].root.kind` | string | always |
+| `nodes[].root.node` | string | always |
 | `nodes[].shape` | null \| object | always |
 | `nodes[].shape.keys` | array | sometimes |
 | `nodes[].shape.keys[]` | string | always |
@@ -2408,6 +2597,53 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | string | always |
+| `rollup` | object | always |
+| `rollup.also_in` | array | always |
+| `rollup.asset_causes` | object | always |
+| `rollup.asset_causes.catching_up` | integer | always |
+| `rollup.asset_causes.failing` | integer | always |
+| `rollup.asset_causes.no_refresh_path` | integer | always |
+| `rollup.asset_causes.overdue` | integer | always |
+| `rollup.asset_causes.queued` | integer | always |
+| `rollup.asset_causes.undecided` | integer | always |
+| `rollup.asset_health` | object | always |
+| `rollup.asset_health.behind` | integer | always |
+| `rollup.asset_health.blocked` | integer | always |
+| `rollup.asset_health.failing` | integer | always |
+| `rollup.asset_health.never_run` | integer | always |
+| `rollup.asset_health.ok` | integer | always |
+| `rollup.asset_health.suspect` | integer | always |
+| `rollup.asset_health.undecided` | integer | always |
+| `rollup.assets` | integer | always |
+| `rollup.causes` | object | always |
+| `rollup.causes.catching_up` | integer | always |
+| `rollup.causes.failing` | integer | always |
+| `rollup.causes.no_refresh_path` | integer | always |
+| `rollup.causes.overdue` | integer | always |
+| `rollup.causes.queued` | integer | always |
+| `rollup.causes.undecided` | integer | always |
+| `rollup.children` | array | always |
+| `rollup.data_coverage` | object | always |
+| `rollup.data_coverage.assets` | integer | always |
+| `rollup.data_coverage.measured` | integer | always |
+| `rollup.data_coverage.suspect` | integer | always |
+| `rollup.fresh_by` | null | always |
+| `rollup.gap_seconds` | integer | always |
+| `rollup.health` | object | always |
+| `rollup.health.behind` | integer | always |
+| `rollup.health.blocked` | integer | always |
+| `rollup.health.failing` | integer | always |
+| `rollup.health.never_run` | integer | always |
+| `rollup.health.ok` | integer | always |
+| `rollup.health.suspect` | integer | always |
+| `rollup.health.undecided` | integer | always |
+| `rollup.id` | string | always |
+| `rollup.kind` | string | always |
+| `rollup.label` | string | always |
+| `rollup.nodes` | integer | always |
+| `rollup.parent` | null | always |
+| `rollup.running` | integer | always |
+| `rollup.unbounded` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -3396,6 +3632,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 <!-- BEGIN GENERATED schema status_bytes_changed -->
 | Key | Type | Present |
 |---|---|---|
+| `as_of` | string | always |
 | `data_coverage` | object | always |
 | `data_coverage.assets` | integer | always |
 | `data_coverage.measured` | integer | always |
@@ -3413,8 +3650,10 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].cache.reason` | string | always |
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
+| `nodes[].cause` | null | always |
 | `nodes[].env` | array | always |
 | `nodes[].expected_fresh_at` | null | always |
+| `nodes[].gap_seconds` | integer | always |
 | `nodes[].health` | string | always |
 | `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
@@ -3446,6 +3685,53 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null | always |
+| `rollup` | object | always |
+| `rollup.also_in` | array | always |
+| `rollup.asset_causes` | object | always |
+| `rollup.asset_causes.catching_up` | integer | always |
+| `rollup.asset_causes.failing` | integer | always |
+| `rollup.asset_causes.no_refresh_path` | integer | always |
+| `rollup.asset_causes.overdue` | integer | always |
+| `rollup.asset_causes.queued` | integer | always |
+| `rollup.asset_causes.undecided` | integer | always |
+| `rollup.asset_health` | object | always |
+| `rollup.asset_health.behind` | integer | always |
+| `rollup.asset_health.blocked` | integer | always |
+| `rollup.asset_health.failing` | integer | always |
+| `rollup.asset_health.never_run` | integer | always |
+| `rollup.asset_health.ok` | integer | always |
+| `rollup.asset_health.suspect` | integer | always |
+| `rollup.asset_health.undecided` | integer | always |
+| `rollup.assets` | integer | always |
+| `rollup.causes` | object | always |
+| `rollup.causes.catching_up` | integer | always |
+| `rollup.causes.failing` | integer | always |
+| `rollup.causes.no_refresh_path` | integer | always |
+| `rollup.causes.overdue` | integer | always |
+| `rollup.causes.queued` | integer | always |
+| `rollup.causes.undecided` | integer | always |
+| `rollup.children` | array | always |
+| `rollup.data_coverage` | object | always |
+| `rollup.data_coverage.assets` | integer | always |
+| `rollup.data_coverage.measured` | integer | always |
+| `rollup.data_coverage.suspect` | integer | always |
+| `rollup.fresh_by` | null | always |
+| `rollup.gap_seconds` | integer | always |
+| `rollup.health` | object | always |
+| `rollup.health.behind` | integer | always |
+| `rollup.health.blocked` | integer | always |
+| `rollup.health.failing` | integer | always |
+| `rollup.health.never_run` | integer | always |
+| `rollup.health.ok` | integer | always |
+| `rollup.health.suspect` | integer | always |
+| `rollup.health.undecided` | integer | always |
+| `rollup.id` | string | always |
+| `rollup.kind` | string | always |
+| `rollup.label` | string | always |
+| `rollup.nodes` | integer | always |
+| `rollup.parent` | null | always |
+| `rollup.running` | integer | always |
+| `rollup.unbounded` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |

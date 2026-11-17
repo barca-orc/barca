@@ -11,19 +11,17 @@
 //! Both units are always present: `nodes` and `health` count every node, `assets` and
 //! `asset_health` count assets only (tasks and sensors are nodes, not assets).
 //!
-//! SEAMS for the issues that follow:
+//! The same counts are kept by cause (`causes`, `asset_causes`), with the freshness gap
+//! (`gap_seconds`) and how many nodes have no estimate (`unbounded`); [`Sums::add`] is the one
+//! place a level adds up its children.
 //!
-//! - #961 to #963 add `causes`, `asset_causes`, `gap_seconds`, `unbounded` and `fresh_by` to
-//!   [`RollupEntry`]: a leaf reads them off its row in [`leaf`], and [`Sums::add`] is the one
-//!   place a level adds up its children.
-//! - #963 replaces [`roots`] with the cause-based list: each row's `root`
-//!   ([`crate::health::Root`]) already names what holds it, so the list stays "group the rows
-//!   by `root.id`", with `causes`, `gap_seconds`, `unbounded` and `action` added to
-//!   [`RollupRoot`].
+//! [`roots`] is the to-do list: each row's `root` ([`crate::health::Root`]) names what holds
+//! it, so the list is the rows grouped by `root.id`, each with what it holds and the action
+//! that clears it.
 
 use crate::BarcaError;
 use crate::groups::NodeGroup;
-use crate::health::{DataCoverage, Health, RootKind};
+use crate::health::{Cause, DataCoverage, Evidence, Health, RootKind};
 use crate::status::NodeStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -113,6 +111,66 @@ impl HealthCounts {
     }
 }
 
+/// How many of a scope's nodes (or assets) that are not fresh have each cause. They add up to
+/// the not-fresh nodes: every health but `ok` and `suspect`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CauseCounts {
+    pub catching_up: usize,
+    pub queued: usize,
+    pub no_refresh_path: usize,
+    pub overdue: usize,
+    pub failing: usize,
+    pub undecided: usize,
+}
+
+impl CauseCounts {
+    /// How many have `cause`.
+    pub fn get(&self, cause: Cause) -> usize {
+        match cause {
+            Cause::CatchingUp => self.catching_up,
+            Cause::Queued => self.queued,
+            Cause::NoRefreshPath => self.no_refresh_path,
+            Cause::Overdue => self.overdue,
+            Cause::Failing => self.failing,
+            Cause::Undecided => self.undecided,
+        }
+    }
+
+    fn slot(&mut self, cause: Cause) -> &mut usize {
+        match cause {
+            Cause::CatchingUp => &mut self.catching_up,
+            Cause::Queued => &mut self.queued,
+            Cause::NoRefreshPath => &mut self.no_refresh_path,
+            Cause::Overdue => &mut self.overdue,
+            Cause::Failing => &mut self.failing,
+            Cause::Undecided => &mut self.undecided,
+        }
+    }
+
+    fn add(&mut self, other: &CauseCounts) {
+        for cause in Cause::ALL {
+            *self.slot(cause) += other.get(cause);
+        }
+    }
+
+    /// Every count added up: the nodes (or assets) that are not fresh.
+    pub fn total(&self) -> usize {
+        Cause::ALL.iter().map(|c| self.get(*c)).sum()
+    }
+
+    /// `14 overdue · 152 no refresh path · 180 catching up`: every cause counted, what
+    /// alarms first, in the display words; empty when every node is fresh.
+    pub fn line(&self) -> String {
+        Cause::ALL
+            .into_iter()
+            .filter(|c| self.get(*c) > 0)
+            .map(|c| format!("{} {}", self.get(c), c.word()))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+}
+
 /// A partitioned node's keys, by how they stand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -150,6 +208,16 @@ pub struct RollupEntry {
     pub asset_health: HealthCounts,
     /// How much of the data underneath was measured: `assets` here is `assets` above.
     pub data_coverage: DataCoverage,
+    /// Nodes underneath that are not fresh, by cause.
+    #[serde(default)]
+    pub causes: CauseCounts,
+    /// Assets underneath that are not fresh, by cause.
+    #[serde(default)]
+    pub asset_causes: CauseCounts,
+    /// The freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds`.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub gap_seconds: i64,
     /// Nodes underneath that are not fresh and have no `expected_fresh_at`: nothing known
     /// will leave them fresh (failing, blocked, undecided, missed by a tick, no refresh
     /// path), so `fresh_by` does not speak for them.
@@ -184,11 +252,54 @@ impl RollupEntry {
             health: HealthCounts::default(),
             asset_health: HealthCounts::default(),
             data_coverage: DataCoverage::default(),
+            causes: CauseCounts::default(),
+            asset_causes: CauseCounts::default(),
+            gap_seconds: 0,
             unbounded: 0,
             fresh_by: None,
             keys: None,
             also_in: Vec::new(),
         }
+    }
+}
+
+impl RollupEntry {
+    /// The scope's distance from fresh in a line, as of `now` (unix seconds): `14 overdue ·
+    /// 152 no refresh path · 180 catching up (nodes); about 180 fresh within 5m, 166 with no
+    /// estimate`. `every node is fresh` when none is behind.
+    pub fn gap_line(&self, now: i64) -> String {
+        let behind = self.causes.total();
+        if behind == 0 {
+            return "every node is fresh".to_string();
+        }
+        let mut line = format!("{} (nodes)", self.causes.line());
+        let estimated = behind.saturating_sub(self.unbounded);
+        let within = self
+            .fresh_by
+            .as_deref()
+            .and_then(crate::time::parse_rfc3339)
+            .map(|at| {
+                // Rounded up to the unit shown: an estimate is never said to be sooner.
+                let left = (at - now).max(0);
+                let unit = match left {
+                    s if s < 60 => 1,
+                    s if s < 3600 => 60,
+                    s if s < 86_400 => 3600,
+                    _ => 86_400,
+                };
+                crate::report::span((left + unit - 1) / unit * unit)
+            });
+        let mut said = Vec::new();
+        if let (Some(within), true) = (within, estimated > 0) {
+            said.push(format!("about {estimated} fresh within {within}"));
+        }
+        if self.unbounded > 0 {
+            said.push(format!("{} with no estimate", self.unbounded));
+        }
+        if !said.is_empty() {
+            line.push_str(&format!("; {}", said.join(", ")));
+        }
+        line
     }
 }
 
@@ -207,6 +318,9 @@ impl Sums for RollupEntry {
         self.data_coverage.assets += child.data_coverage.assets;
         self.data_coverage.measured += child.data_coverage.measured;
         self.data_coverage.suspect += child.data_coverage.suspect;
+        self.causes.add(&child.causes);
+        self.asset_causes.add(&child.asset_causes);
+        self.gap_seconds += child.gap_seconds;
         self.unbounded += child.unbounded;
         // The latest estimate underneath. Every one is RFC 3339 UTC to the second, so the
         // later time is the greater string.
@@ -216,25 +330,117 @@ impl Sums for RollupEntry {
     }
 }
 
-/// One upstream fact and what it holds. Today only failures: a failing node with the nodes it
-/// blocks. `causes`, `gap_seconds`, `unbounded` and `action` are absent until #961 to #963.
+/// What clears a root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum ActionKind {
+    /// Nothing to do: a run in flight or the next tick computes what it holds.
+    Wait,
+    /// Run `command`: ticks missed what it holds, or no tick computes it (a `Manual` or
+    /// pinned node).
+    Run,
+    /// Give the node (or one above it) a `Schedule`: nothing scheduled reaches it.
+    AddSchedule,
+    /// Resume the paused schedule (`barca resume --schedule`) or node (`barca resume`).
+    ResumeSchedule,
+    /// Start a server that fires schedules (`barca serve`).
+    StartServer,
+    /// Fix the error, then run `command` to try again.
+    FixFailure,
+    /// Give the server more run slots (`--max-runs`, `[server] max_runs`), or space the
+    /// schedules: its ticks wait for a slot longer than they are apart.
+    RaiseMaxRuns,
+}
+
+impl ActionKind {
+    /// The value as JSON spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ActionKind::Wait => "wait",
+            ActionKind::Run => "run",
+            ActionKind::AddSchedule => "add_schedule",
+            ActionKind::ResumeSchedule => "resume_schedule",
+            ActionKind::StartServer => "start_server",
+            ActionKind::FixFailure => "fix_failure",
+            ActionKind::RaiseMaxRuns => "raise_max_runs",
+        }
+    }
+
+    /// The display word: what the CLI prints and the UI shows.
+    pub fn word(self) -> &'static str {
+        match self {
+            ActionKind::Wait => "wait",
+            ActionKind::Run => "run",
+            ActionKind::AddSchedule => "add a schedule",
+            ActionKind::ResumeSchedule => "resume",
+            ActionKind::StartServer => "start a server",
+            ActionKind::FixFailure => "fix the failure",
+            ActionKind::RaiseMaxRuns => "raise max_runs",
+        }
+    }
+}
+
+impl ActionKind {
+    /// What to do where the action has no command, after the display word.
+    pub fn hint(self) -> Option<&'static str> {
+        match self {
+            ActionKind::AddSchedule => Some("freshness=Schedule(...) on it or on a node above it"),
+            ActionKind::RaiseMaxRuns => Some(
+                "barca serve --max-runs N or [server] max_runs in barca.toml, or space the schedules",
+            ),
+            _ => None,
+        }
+    }
+}
+
+/// What clears a root, and what that costs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RootAction {
+    pub kind: ActionKind,
+    /// The `barca` command that clears the root, when one does; `null` when the action is
+    /// not a command (waiting, a schedule to declare, a server setting).
+    pub command: Option<String>,
+    /// The typical compute time of the nodes the root holds, whole seconds: the sum of
+    /// their typical step durations (a partitioned node once per key without a result; a
+    /// node without samples takes the project's median). `null` when none has a sample.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub estimated_seconds: Option<u64>,
+}
+
+/// One upstream fact and what it holds: every node whose `root.id` is this root's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RollupRoot {
     /// `<kind>:<node id>`: the `root.id` of every row it holds.
     pub id: String,
     pub kind: RootKind,
-    /// The node the fact is about: the failing node.
+    /// The node the fact is about: the failing node, the sensor, the node whose code
+    /// changed, the scheduled node.
     pub node: String,
-    /// The fact in a line: a failure's error headline as recorded.
+    /// The fact in a line: a failure's error headline as recorded, what changed, why no
+    /// tick comes, how long its ticks wait for a run slot.
     pub detail: String,
     /// A failure's error headline with its numbers replaced by `#`: failure roots sharing one
-    /// are shown as one entry. `null` when no error was recorded.
+    /// are shown as one entry. `null` for every other kind and when no error was recorded.
     pub error_group: Option<String>,
-    /// Nodes it holds: the failing node and every node it blocks.
+    /// Nodes it holds.
     pub nodes: usize,
     /// Of them, assets.
     pub assets: usize,
+    /// The nodes it holds, by cause.
+    #[serde(default)]
+    pub causes: CauseCounts,
+    /// The freshness gap it holds, node-seconds: the sum of its nodes' `gap_seconds`.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub gap_seconds: i64,
+    /// Of its nodes, those with no `expected_fresh_at`: their gap grows until someone acts.
+    #[serde(default)]
+    pub unbounded: usize,
+    /// What clears it.
+    pub action: RootAction,
 }
 
 /// One source file's nodes, summed: every node of the file in scope, in whichever group it
@@ -267,7 +473,8 @@ pub struct Rollup {
     pub as_of: String,
     /// Every entry, the root first, then depth first in `children` order.
     pub entries: Vec<RollupEntry>,
-    /// What holds the nodes that are not fresh, the most nodes first, then by id.
+    /// What holds the nodes that are not fresh: roots holding nodes with no estimate first
+    /// (most nodes held first), then by gap held, then nodes held, then id.
     pub roots: Vec<RollupRoot>,
     /// The root entry's data coverage.
     pub data_coverage: DataCoverage,
@@ -290,10 +497,8 @@ fn source_file(id: &str) -> &str {
 
 /// A node's own entry.
 ///
-/// `unbounded` and `fresh_by` are read off the row's times (#962).
-///
-/// SEAM (#963): `causes` and `gap_seconds` are read off the row here
-/// ([`crate::estimates::behind_seconds`], [`crate::estimates::ahead_seconds`]).
+/// `unbounded` and `fresh_by` are read off the row's times (#962), `causes` and
+/// `gap_seconds` off the row's own (#963).
 fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
     let mut entry = RollupEntry::inner(node.id.clone(), EntryKind::Node, node.name.clone());
     let asset = node.kind == "asset";
@@ -305,6 +510,13 @@ fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
         *entry.asset_health.slot(node.health) = 1;
     }
     entry.data_coverage = DataCoverage::of(std::slice::from_ref(node));
+    if let Some(cause) = node.cause {
+        *entry.causes.slot(cause) = 1;
+        if asset {
+            *entry.asset_causes.slot(cause) = 1;
+        }
+    }
+    entry.gap_seconds = node.gap_seconds;
     entry.unbounded = usize::from(!node.health.is_fresh() && node.expected_fresh_at.is_none());
     entry.fresh_by.clone_from(&node.expected_fresh_at);
     entry.keys = node
@@ -387,11 +599,17 @@ fn is_above(parent: &HashMap<String, String>, ancestor: &str, id: &str) -> bool 
 /// rows (a scope with its upstream cone). `groups` are the graph's; a group with no node in
 /// scope is left out. `running` holds the nodes a run is working on. A node (or group)
 /// declared in several groups sits under the first by group id.
+///
+/// `evidence` is what the rows were classified with: the root list reads the schedules, the
+/// typical durations and `max_runs` from it. `server`: a server answers, so a root's command
+/// names `--server`.
 pub fn build(
     nodes: &[NodeStatus],
     groups: &[NodeGroup],
     running: &HashSet<String>,
     as_of: chrono::DateTime<chrono::Utc>,
+    evidence: Evidence<'_>,
+    server: bool,
 ) -> Rollup {
     let mut entries: HashMap<String, RollupEntry> = nodes
         .iter()
@@ -513,43 +731,264 @@ pub fn build(
     Rollup {
         as_of: as_of.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         entries: ordered,
-        roots: roots(nodes),
+        roots: roots(nodes, evidence, server),
         data_coverage,
         files: files(nodes, running),
     }
 }
 
-/// The roots of `nodes`: each `root` the rows name, with how much it holds, the most nodes
-/// first, then by id. Today every root is a failing node holding itself and what it blocks.
-///
-/// SEAM (#963): the cause-based list. Rows already carry `root`; this adds `causes`,
-/// `gap_seconds`, `unbounded` and `action`, and ranks by `gap_seconds` first.
-pub fn roots(nodes: &[NodeStatus]) -> Vec<RollupRoot> {
+/// The root entry of `nodes` alone: every count of the scope, without the tree. What
+/// `barca status --json` carries as `rollup`; `running` as in [`build`].
+pub fn total(nodes: &[NodeStatus], running: &HashSet<String>) -> RollupEntry {
+    let mut root = RollupEntry::inner(ROOT_ID.to_string(), EntryKind::Root, "all".to_string());
+    for node in nodes {
+        root.add(&leaf(node, running.contains(&node.id)));
+    }
+    root
+}
+
+/// A node as a `barca` command names it: its declared name, or its id when another node in
+/// scope has the same name.
+fn target<'a>(node: &'a NodeStatus, names: &HashMap<&str, usize>) -> &'a str {
+    if names.get(node.name.as_str()).copied().unwrap_or(0) > 1 {
+        &node.id
+    } else {
+        &node.name
+    }
+}
+
+/// The roots of `nodes`: each `root` the rows name, with what it holds and what clears it.
+/// Roots holding nodes with no estimate come first, the most nodes held first; then by gap
+/// held, nodes held and id. `evidence` and `server` as in [`build`].
+pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<RollupRoot> {
+    struct Held<'a> {
+        root: RollupRoot,
+        rows: Vec<&'a NodeStatus>,
+    }
     let by_id: HashMap<&str, &NodeStatus> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let mut out: BTreeMap<&str, RollupRoot> = BTreeMap::new();
+    let mut held: BTreeMap<&str, Held<'_>> = BTreeMap::new();
     for node in nodes {
         let Some(root) = &node.root else { continue };
-        let held = out.entry(root.id.as_str()).or_insert_with(|| {
-            let (detail, error_group) = by_id
-                .get(root.node.as_str())
-                .map(|n| failure_detail(n))
-                .unwrap_or_default();
-            RollupRoot {
+        let entry = held.entry(root.id.as_str()).or_insert_with(|| Held {
+            root: RollupRoot {
                 id: root.id.clone(),
                 kind: root.kind,
                 node: root.node.clone(),
-                detail,
-                error_group,
+                detail: String::new(),
+                error_group: None,
                 nodes: 0,
                 assets: 0,
-            }
+                causes: CauseCounts::default(),
+                gap_seconds: 0,
+                unbounded: 0,
+                action: RootAction {
+                    kind: ActionKind::Wait,
+                    command: None,
+                    estimated_seconds: None,
+                },
+            },
+            rows: Vec::new(),
         });
-        held.nodes += 1;
-        held.assets += usize::from(node.kind == "asset");
+        entry.root.nodes += 1;
+        entry.root.assets += usize::from(node.kind == "asset");
+        if let Some(cause) = node.cause {
+            *entry.root.causes.slot(cause) += 1;
+        }
+        entry.root.gap_seconds += node.gap_seconds;
+        entry.root.unbounded += usize::from(node.expected_fresh_at.is_none());
+        entry.rows.push(node);
     }
-    let mut out: Vec<RollupRoot> = out.into_values().collect();
-    out.sort_by(|a, b| b.nodes.cmp(&a.nodes).then_with(|| a.id.cmp(&b.id)));
+    if held.is_empty() {
+        return Vec::new();
+    }
+    let mut names: HashMap<&str, usize> = HashMap::new();
+    for node in nodes {
+        *names.entry(node.name.as_str()).or_default() += 1;
+    }
+    let durations = evidence.timing.durations;
+    let default = crate::estimates::project_median(durations);
+    let via = if server { " --server" } else { "" };
+    let mut out: Vec<RollupRoot> = held
+        .into_values()
+        .map(|Held { mut root, rows }| {
+            let about = by_id.get(root.node.as_str()).copied();
+            let name = about.map_or_else(
+                || crate::targets::short_name(&root.node).to_string(),
+                |n| target(n, &names).to_string(),
+            );
+            let schedule = evidence.path.schedules.get(&root.node);
+            let (detail, error_group) = detail(&root, &name, about, schedule, evidence);
+            root.detail = detail;
+            root.error_group = error_group;
+            // The command that computes everything the root holds: the held nodes nothing
+            // else held reads (a run computes what is above its targets). Tasks are run,
+            // never got.
+            let run = || {
+                let ids: HashSet<&str> = rows.iter().map(|n| n.id.as_str()).collect();
+                let read: HashSet<&str> = rows
+                    .iter()
+                    .flat_map(|n| n.inputs.iter().map(String::as_str))
+                    .filter(|input| ids.contains(input))
+                    .collect();
+                let mut ends: Vec<&NodeStatus> = rows
+                    .iter()
+                    .copied()
+                    .filter(|n| !read.contains(n.id.as_str()))
+                    .collect();
+                let tasks = ends.iter().all(|n| n.kind == "task");
+                if !tasks {
+                    ends.retain(|n| n.kind != "task");
+                }
+                let mut targets: Vec<&str> = ends.iter().map(|n| target(n, &names)).collect();
+                targets.sort_unstable();
+                format!(
+                    "barca {} {}",
+                    if tasks { "run" } else { "get" },
+                    targets.join(",")
+                )
+            };
+            let overdue = root.causes.overdue > 0;
+            let (kind, command) = match root.kind {
+                RootKind::Failure => (
+                    ActionKind::FixFailure,
+                    Some(match about.map(|n| n.kind.as_str()) {
+                        Some("task") => format!("barca run {name}{via}"),
+                        _ => format!("barca get {name}{via}"),
+                    }),
+                ),
+                RootKind::Queue => (
+                    if schedule
+                        .and_then(|s| s.standing.as_ref())
+                        .is_some_and(|st| st.queue_bound)
+                    {
+                        ActionKind::RaiseMaxRuns
+                    } else {
+                        ActionKind::Wait
+                    },
+                    None,
+                ),
+                RootKind::SchedulerOff if root.causes.no_refresh_path > 0 => {
+                    (ActionKind::StartServer, Some("barca serve".to_string()))
+                }
+                // A paused node is resumed by name, a paused schedule by its scheduled node;
+                // both pauses live on the server.
+                RootKind::SchedulePaused => (
+                    ActionKind::ResumeSchedule,
+                    Some(if evidence.path.paused.contains(&root.node) {
+                        format!("barca resume {name} --server")
+                    } else {
+                        format!("barca resume --schedule {name} --server")
+                    }),
+                ),
+                RootKind::NoSchedule if evidence.path.pinned.contains(&root.node) => {
+                    (ActionKind::Run, Some(format!("barca unpin {name}{via}")))
+                }
+                // A run reads a `Manual` node as it is unless it is named in `--refresh`,
+                // which also recomputes what is below it.
+                RootKind::NoSchedule if evidence.path.paths.is_manual(&root.node) => (
+                    ActionKind::Run,
+                    Some(format!("{} --refresh {name}{via}", run())),
+                ),
+                RootKind::NoSchedule => (ActionKind::AddSchedule, None),
+                _ if overdue => (ActionKind::Run, Some(format!("{}{via}", run()))),
+                _ => (ActionKind::Wait, None),
+            };
+            let sampled = rows.iter().any(|n| durations.contains_key(&n.id));
+            root.action = RootAction {
+                kind,
+                command,
+                estimated_seconds: sampled.then(|| {
+                    rows.iter()
+                        .map(|n| crate::estimates::work(n, durations, default))
+                        .sum::<f64>()
+                        .ceil() as u64
+                }),
+            };
+            root
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        (a.unbounded == 0)
+            .cmp(&(b.unbounded == 0))
+            .then_with(|| match a.unbounded {
+                0 => b.gap_seconds.cmp(&a.gap_seconds),
+                _ => b.nodes.cmp(&a.nodes),
+            })
+            .then(b.gap_seconds.cmp(&a.gap_seconds))
+            .then(b.nodes.cmp(&a.nodes))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     out
+}
+
+/// A root's fact in a line, and a failure's error group. `name` is the root's node as a
+/// command names it, `about` its row, `schedule` its schedule when it is a scheduled node.
+fn detail(
+    root: &RollupRoot,
+    name: &str,
+    about: Option<&NodeStatus>,
+    schedule: Option<&crate::refresh_path::PathSchedule>,
+    evidence: Evidence<'_>,
+) -> (String, Option<String>) {
+    use crate::report::span;
+    let standing = schedule.and_then(|s| s.standing.as_ref());
+    let line = match root.kind {
+        RootKind::Failure => {
+            return match about.filter(|n| crate::health::last_attempt_failed(n)) {
+                Some(node) => failure_detail(node),
+                // A schedule held after `max_failures` failed ticks.
+                None => (
+                    format!("{name}'s schedule is held after repeated failed ticks"),
+                    None,
+                ),
+            };
+        }
+        RootKind::SensorValue => format!("{name} observed a new value"),
+        RootKind::Code => format!("the code of {name} changed"),
+        RootKind::Env => format!("an environment variable that {name} declares changed"),
+        RootKind::Input => match about.is_some_and(|n| n.health.is_fresh()) {
+            true => format!("{name} has a newer result than what reads it"),
+            false => format!("{name} is out of date against what it reads"),
+        },
+        RootKind::NeverRun => match about.is_some_and(|n| n.health == Health::NeverRun) {
+            true => format!("{name} has never run"),
+            false => format!("{name} has keys that never ran"),
+        },
+        RootKind::NoSchedule if evidence.path.pinned.contains(&root.node) => {
+            format!("{name} is pinned: every run reads its pinned result")
+        }
+        RootKind::NoSchedule if evidence.path.paths.is_manual(&root.node) => {
+            format!("{name} is Manual: no tick computes it")
+        }
+        RootKind::NoSchedule => format!("no tick reaches {name}"),
+        RootKind::SchedulePaused if evidence.path.paused.contains(&root.node) => {
+            format!("{name} is paused: every tick skips it")
+        }
+        RootKind::SchedulePaused => format!("{name}'s schedule is paused"),
+        RootKind::SchedulerOff => match standing.and_then(|st| st.late_since) {
+            Some(since) => format!(
+                "no scheduler has fired {name}'s schedule for {}",
+                span(evidence.now - since)
+            ),
+            None => format!("no scheduler is firing {name}'s schedule"),
+        },
+        RootKind::Queue => {
+            let slots = match evidence.timing.max_runs {
+                Some(n) => format!("max_runs is {n}"),
+                None => "max_runs limits the runs at once".to_string(),
+            };
+            match standing {
+                Some(st) if st.queue_bound => format!(
+                    "{name}'s ticks wait about {} for a run slot, every {}: {slots}",
+                    span(st.typical_queue_wait_seconds.ceil() as i64),
+                    span(st.interval_seconds.unwrap_or(0)),
+                ),
+                _ => format!("a tick of {name} is waiting for a run slot: {slots}"),
+            }
+        }
+        RootKind::Undecided => format!("barca cannot decide {name} until a run reports"),
+    };
+    (line, None)
 }
 
 /// A failing node's error in a line, and the group it shares with errors that differ only in
@@ -628,16 +1067,14 @@ pub async fn rollup(
     let dag = crate::load::build_dag(file_args, python).await?;
     let mut result =
         crate::status::status_from_dag(cfg, target_names, &dag, python, 0, false).await?;
-    let now = chrono::Utc::now();
-    crate::health::attach_from_db(
+    crate::health::rollup_from_db(
         &mut result,
         &dag,
-        &cfg.db_path,
+        cfg,
         &crate::schedule::Zone::Local,
-        now,
+        chrono::Utc::now(),
     )
-    .await?;
-    Ok(build(&result.nodes, &dag.groups, &HashSet::new(), now))
+    .await
 }
 
 #[cfg(test)]
@@ -772,6 +1209,19 @@ mod tests {
                 assert_eq!(by_id[child.as_str()].parent.as_deref(), Some(e.id.as_str()));
             }
             assert_eq!(e.health.total(), e.nodes, "{}: health counts nodes", e.id);
+            // A cause exactly for the nodes that are not fresh (INV-HEALTH-01).
+            assert_eq!(
+                e.causes.total(),
+                e.nodes - e.health.ok - e.health.suspect,
+                "{}: causes count the nodes that are not fresh",
+                e.id
+            );
+            assert_eq!(
+                e.asset_causes.total(),
+                e.assets - e.asset_health.ok - e.asset_health.suspect,
+                "{}",
+                e.id
+            );
             assert_eq!(e.asset_health.total(), e.assets, "{}", e.id);
             assert_eq!(e.data_coverage.assets, e.assets, "{}", e.id);
             if e.kind == EntryKind::Node {
@@ -790,6 +1240,11 @@ mod tests {
                 e.id
             );
             assert_eq!((sum.health, sum.asset_health), (e.health, e.asset_health));
+            assert_eq!((sum.causes, sum.asset_causes), (e.causes, e.asset_causes));
+            assert_eq!(
+                (sum.gap_seconds, sum.unbounded),
+                (e.gap_seconds, e.unbounded)
+            );
             assert_eq!(sum.data_coverage, e.data_coverage);
         }
         for e in rollup.entries.iter().filter(|e| e.kind != EntryKind::Root) {
@@ -830,7 +1285,17 @@ mod tests {
     fn a_node_declared_in_two_groups_is_counted_once_and_names_the_other() {
         let (nodes, mut groups) = fixture();
         let shared = nodes[0].id.clone();
-        let first = rollup_parent(&build(&nodes, &groups, &HashSet::new(), now()), &shared);
+        let first = rollup_parent(
+            &build(
+                &nodes,
+                &groups,
+                &HashSet::new(),
+                now(),
+                Evidence::none(0),
+                false,
+            ),
+            &shared,
+        );
         groups.push(NodeGroup {
             id: "group:zz.py:extra".into(),
             name: "extra".into(),
@@ -838,7 +1303,14 @@ mod tests {
             members: vec![shared.clone(), "q.py:lookup".to_string()],
             output: shared.clone(),
         });
-        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &nodes,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         assert_sums(&rollup, &nodes);
         let entry = rollup.entries.iter().find(|e| e.id == shared).unwrap();
         assert_eq!(first, "group:p.py:ingest");
@@ -869,7 +1341,7 @@ mod tests {
     fn every_level_is_the_sum_of_its_children_in_both_units() {
         let (nodes, groups) = fixture();
         let running = HashSet::from(["p.py:scored".to_string()]);
-        let rollup = build(&nodes, &groups, &running, now());
+        let rollup = build(&nodes, &groups, &running, now(), Evidence::none(0), false);
         assert_sums(&rollup, &nodes);
         assert_eq!(rollup.as_of, "2026-11-17T14:57:00Z");
 
@@ -953,7 +1425,14 @@ mod tests {
             group("group:p.py:m", &["p.py:a", "group:p.py:inner"]),
             group("group:p.py:inner", &["p.py:b", "group:p.py:m"]),
         ];
-        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &nodes,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         assert_sums(&rollup, &nodes);
         // `inner` sorts first and claims `b` and `m`; `m` claims `a` and cannot claim `inner`,
         // which is above it; `z` is left with `inner` alone.
@@ -985,10 +1464,24 @@ mod tests {
             .filter(|n| ["p.py:inbox", "p.py:orders"].contains(&n.id.as_str()))
             .cloned()
             .collect();
-        let rollup = build(&scoped, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &scoped,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         assert_sums(&rollup, &scoped);
         assert_eq!(rollup.root().children, ["group:p.py:ingest"]);
-        let empty = build(&[], &groups, &HashSet::new(), now());
+        let empty = build(
+            &[],
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         assert_eq!(empty.entries.len(), 1);
         assert_eq!(empty.root().nodes, 0);
         assert_eq!(empty.root().health.worst(), None);
@@ -1009,40 +1502,67 @@ mod tests {
             3,
         ));
         let nodes = classified(nodes);
-        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &nodes,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         assert_sums(&rollup, &nodes);
         // The most nodes first, then by id. `orders` holds itself, `clean` and `scored`.
+        let seen: Vec<_> = rollup
+            .roots
+            .iter()
+            .filter(|r| r.kind == RootKind::Failure)
+            .map(|r| {
+                (
+                    r.id.as_str(),
+                    r.detail.as_str(),
+                    r.error_group.as_deref(),
+                    (r.nodes, r.assets),
+                    r.action.kind,
+                    r.action.command.as_deref(),
+                )
+            })
+            .collect();
         assert_eq!(
-            rollup.roots,
+            seen,
             [
-                RollupRoot {
-                    id: "failure:p.py:orders".into(),
-                    kind: RootKind::Failure,
-                    node: "p.py:orders".into(),
-                    detail: "ValueError: 12 rows rejected".into(),
-                    error_group: Some("ValueError: # rows rejected".into()),
-                    nodes: 3,
-                    assets: 3,
-                },
-                RollupRoot {
-                    id: "failure:q.py:audit".into(),
-                    kind: RootKind::Failure,
-                    node: "q.py:audit".into(),
-                    detail: "ValueError: 7 rows rejected".into(),
-                    error_group: Some("ValueError: # rows rejected".into()),
-                    nodes: 1,
-                    assets: 0,
-                },
-                RollupRoot {
-                    id: "failure:q.py:daily".into(),
-                    kind: RootKind::Failure,
-                    node: "q.py:daily".into(),
-                    detail: "3 of 8 keys failed".into(),
-                    error_group: None,
-                    nodes: 1,
-                    assets: 1,
-                },
+                (
+                    "failure:p.py:orders",
+                    "ValueError: 12 rows rejected",
+                    Some("ValueError: # rows rejected"),
+                    (3, 3),
+                    ActionKind::FixFailure,
+                    Some("barca get orders"),
+                ),
+                (
+                    "failure:q.py:audit",
+                    "ValueError: 7 rows rejected",
+                    Some("ValueError: # rows rejected"),
+                    (1, 0),
+                    ActionKind::FixFailure,
+                    Some("barca run audit"),
+                ),
+                (
+                    "failure:q.py:daily",
+                    "3 of 8 keys failed",
+                    None,
+                    (1, 1),
+                    ActionKind::FixFailure,
+                    Some("barca get daily"),
+                ),
             ]
+        );
+        // A failure has no estimate: every node it holds is unbounded, and its cause failing.
+        assert!(
+            rollup
+                .roots
+                .iter()
+                .filter(|r| r.kind == RootKind::Failure)
+                .all(|r| r.unbounded == r.nodes && r.causes.failing == r.nodes)
         );
         // Each row names the root that holds it, and the roots' nodes are exactly those rows.
         let held: usize = rollup.roots.iter().map(|r| r.nodes).sum();
@@ -1052,7 +1572,15 @@ mod tests {
             Some(Root::failure("p.py:orders"))
         );
         let root = rollup.root();
-        assert_eq!(held, root.health.failing + root.health.blocked);
+        assert_eq!(held, root.causes.total());
+        let failing: usize = rollup
+            .roots
+            .iter()
+            .filter(|r| r.kind == RootKind::Failure)
+            .map(|r| r.nodes)
+            .sum();
+        assert_eq!(failing, root.health.failing + root.health.blocked);
+        assert_eq!(failing, root.causes.failing);
     }
 
     #[test]
@@ -1085,7 +1613,14 @@ mod tests {
     #[test]
     fn the_counts_read_as_one_line_most_severe_first() {
         let (nodes, groups) = fixture();
-        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &nodes,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         assert_eq!(
             rollup.root().health.line(),
             "1 failing · 2 blocked · 3 never run · 1 ok"
@@ -1098,7 +1633,14 @@ mod tests {
     fn fresh_by_is_the_latest_estimate_underneath_and_unbounded_counts_the_rest() {
         let (mut nodes, groups) = fixture();
         // Without estimates every node that is not fresh is unbounded, at every level.
-        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &nodes,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         let not_fresh = nodes.iter().filter(|n| !n.health.is_fresh()).count();
         assert!(not_fresh >= 2, "the fixture has nodes that are not fresh");
         assert_eq!(rollup.root().unbounded, not_fresh);
@@ -1108,7 +1650,14 @@ mod tests {
         for node in nodes.iter_mut().filter(|n| !n.health.is_fresh()).take(2) {
             node.expected_fresh_at = times.next().map(str::to_string);
         }
-        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &nodes,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         assert_eq!(rollup.root().unbounded, not_fresh - 2);
         assert_eq!(
             rollup.root().fresh_by.as_deref(),
@@ -1137,7 +1686,14 @@ mod tests {
     #[test]
     fn the_wire_names_are_the_specified_ones() {
         let (nodes, groups) = fixture();
-        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let rollup = build(
+            &nodes,
+            &groups,
+            &HashSet::new(),
+            now(),
+            Evidence::none(0),
+            false,
+        );
         let json = serde_json::to_value(&rollup).unwrap();
         let keys = |v: &serde_json::Value| -> Vec<String> {
             let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
@@ -1164,11 +1720,14 @@ mod tests {
             keys(&json["entries"][0]),
             [
                 "also_in",
+                "asset_causes",
                 "asset_health",
                 "assets",
+                "causes",
                 "children",
                 "data_coverage",
                 "fresh_by",
+                "gap_seconds",
                 "health",
                 "id",
                 "kind",
@@ -1207,16 +1766,73 @@ mod tests {
         assert_eq!(
             keys(&json["roots"][0]),
             [
+                "action",
                 "assets",
+                "causes",
                 "detail",
                 "error_group",
+                "gap_seconds",
                 "id",
                 "kind",
                 "node",
-                "nodes"
+                "nodes",
+                "unbounded"
             ]
         );
         assert_eq!(json["roots"][0]["kind"], "failure");
+        assert_eq!(
+            json["roots"][0]["action"],
+            serde_json::json!(
+                {"kind": "fix_failure", "command": "barca get orders", "estimated_seconds": null}
+            )
+        );
+        assert_eq!(
+            keys(&json["entries"][0]["causes"]),
+            [
+                "catching_up",
+                "failing",
+                "no_refresh_path",
+                "overdue",
+                "queued",
+                "undecided"
+            ]
+        );
+        assert_eq!(
+            keys(&json["entries"][0]["asset_causes"]),
+            keys(&json["entries"][0]["causes"])
+        );
+        // Every kind and action is spelled as the specification names it.
+        for (kind, name) in [
+            (RootKind::SensorValue, "sensor_value"),
+            (RootKind::Code, "code"),
+            (RootKind::Env, "env"),
+            (RootKind::Input, "input"),
+            (RootKind::NeverRun, "never_run"),
+            (RootKind::NoSchedule, "no_schedule"),
+            (RootKind::SchedulePaused, "schedule_paused"),
+            (RootKind::SchedulerOff, "scheduler_off"),
+            (RootKind::Failure, "failure"),
+            (RootKind::Queue, "queue"),
+            (RootKind::Undecided, "undecided"),
+        ] {
+            assert_eq!(serde_json::json!(kind), name);
+            assert_eq!(kind.as_str(), name);
+        }
+        for (action, name) in [
+            (ActionKind::Wait, "wait"),
+            (ActionKind::Run, "run"),
+            (ActionKind::AddSchedule, "add_schedule"),
+            (ActionKind::ResumeSchedule, "resume_schedule"),
+            (ActionKind::StartServer, "start_server"),
+            (ActionKind::FixFailure, "fix_failure"),
+            (ActionKind::RaiseMaxRuns, "raise_max_runs"),
+        ] {
+            assert_eq!(serde_json::json!(action), name);
+            assert_eq!(action.as_str(), name);
+        }
+        for cause in Cause::ALL {
+            assert_eq!(serde_json::json!(cause), cause.as_str());
+        }
         let back: Rollup = serde_json::from_value(json).unwrap();
         assert_eq!(back, rollup);
     }

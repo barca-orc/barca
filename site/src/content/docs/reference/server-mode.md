@@ -296,6 +296,8 @@ The declared differences:
 - `root`, artifact paths, `artifact_dir` and traceback file names are the server's.
 - `triggered_by` in `barca history --json` is `api` for a run started with `--server` (a
   command typed here records `manual`).
+- The command of a root's action in `barca status --rollup` (`roots[].action.command`) ends
+  in `--server`, so that the run it starts joins the server's queue.
 - The "no .py files" usage error does not occur: the server has its files.
 - A local run in a terminal shows a progress bar. The client prints the lines a bar leaves
   behind (warnings, notes, the end-of-run line) and, with `--agent`, the agent lines.
@@ -545,7 +547,10 @@ described at [Server API Endpoints](/reference/server-api-endpoints/).
 
 Each row of `GET /state` and each node of `GET /nodes` carries what `barca status --json` does:
 `health` and `health_reason` (whether something needs doing about the node, and the rule that
-decided it), `root` (the failing node that explains a failing or blocked one), `signals` (what
+decided it), `cause` (why a node that is not fresh is so: `catching_up`, `queued`,
+`no_refresh_path`, `overdue`, `failing` or `undecided`), `root` (the upstream fact that
+explains it: a failing node, a sensor's new value, changed code, a missing or paused
+schedule, a run queue that is behind) and `gap_seconds` (its freshness gap), `signals` (what
 its recorded results say about its data: `empty`, `rows_changed`, `behind_input`), `measured`
 (whether its rows were counted at all; `null` for a task or sensor), `last_check` (what the
 newest tick that checked the node found, and when; `null` when no retained tick did) and
@@ -554,8 +559,9 @@ that already missed it; `null` when none will), and the times: `stale_since` (si
 out of date), `expected_fresh_at` (when a run is expected to leave it fresh, an estimate) and
 `recheck_at` (when a tick next looks at it, where no fresh time can be promised). They are
 computed in barca from facts the metadata DB holds, never by reading an
-artifact, and are the same on every surface: [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health) and "Data
-signals and coverage", has the tables. `GET /nodes` also has `data_coverage` beside `summary`.
+artifact, and are the same on every surface: [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health), "Cause",
+"Root" and "Data signals and coverage", has the tables. `GET /nodes` also has
+`data_coverage`, `as_of` and `rollup` (the scope summed) beside `summary`.
 
 The server classifies per answer, on its clock and in its `--timezone`, so a schedule that
 misses its slot turns its node `behind` (`health_reason: "schedule_late"`) without a change to
@@ -564,25 +570,37 @@ decide (`unknown`) and that the last tick found up to date is `ok` with `health_
 "checked_up_to_date"`, on a `--read-only` server too: it reads the ticks the scheduling server
 recorded, and the web UI's node panel reads "checked 3m ago, up to date". The check expires
 when the next tick is overdue ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)); the tick record is
-read once per change of the metadata database, not per poll. An empty `signals` on a row with `measured:
+read once per change of the metadata database, not per poll. A `--read-only` server runs no
+scheduler, so its `refresh_path.live` is `false`; for the cause it reads the same tick record:
+a schedule that fired its newest slot proves a scheduler is running, and the node reads
+`catching_up` or `queued` as on the scheduling server instead of `no_refresh_path` with the
+root `scheduler_off` ([barca status: Fields and JSON: Cause](/reference/cli/status-fields/#cause)). It gives no `expected_fresh_at`.
+An empty `signals` on a row with `measured:
 false` says nothing was counted, not that the data is fine; the web UI states the coverage of
 the open scope ("7 of 556 measured") beside its causes.
 
 `GET /state/rollup` (experimental) is those rows summed: one tree of everything in scope, its
 groups, the source files of the nodes in no group, and the nodes, each level the exact sum of
-its children, in nodes (`nodes`, `health`) and in assets (`assets`, `asset_health`), with
-`roots` (each failing node and how many nodes it holds) and the scope's `data_coverage`. It
+its children, in nodes (`nodes`, `health`, `causes`) and in assets (`assets`, `asset_health`,
+`asset_causes`), with `gap_seconds` and `unbounded`, the scope's `data_coverage`, and `roots`:
+what holds the nodes that are not fresh, ranked, each with the nodes it holds by cause, its
+gap and the `action` that clears it (`wait`, `run`, `add_schedule`, `resume_schedule`,
+`start_server`, `fix_failure`, `raise_max_runs`; a `command` that names `--server`, and the
+typical compute time of what it holds). Every node that is not fresh is under one root. It
 takes the scope of `GET /state` (`?targets=`, `?files=`), is the document `barca status
 --rollup --json` prints ([barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)), and is what the web UI's
 health map, health bars, group rows, causes and failures list render, so the map, the bars
 and the CLI state the same numbers. It sums the status result `GET /state` is built from: no
 status is computed for it. Its `as_of` is the start of the current minute on the server's
-clock, so an unchanged poll within a minute is a `304`. Each row's `root` names the failing
-node that blocks it; the web UI reads it instead of walking the graph.
+clock, so an unchanged poll within a minute is a `304`; `gap_seconds` is read at the start
+of the minute on every route for the same reason. Each row's `root` names what holds it; the
+web UI reads it instead of walking the graph.
 
 ```bash
 curl -s localhost:8274/state/rollup | jq '.entries[0] | {nodes, assets, health}'
 curl -s 'localhost:8274/state/rollup?targets=total' | jq -r '.roots[] | [.nodes, .node, .detail] | @tsv'
+curl -s localhost:8274/state/rollup | jq -r '.roots[] | [.nodes, .kind, .node, .action.kind, .action.command // "-"] | @tsv'
+curl -s localhost:8274/state | jq -r '.[] | select(.cause) | [.cause, .root.id, .gap_seconds, .id] | @tsv'
 curl -s localhost:8274/state | jq '.[] | select(.signals != []) | {id, signals}'
 curl -s localhost:8274/state | jq 'map(select(.kind == "asset")) | {assets: length, measured: map(select(.measured)) | length}'
 curl -s localhost:8274/nodes | jq '.data_coverage'
