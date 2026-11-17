@@ -119,7 +119,8 @@ UI's health map, bars and failures list all print this document.
      "nodes": 6, "assets": 4, "running": 0,
      "health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 3},
      "asset_health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 1},
-     "data_coverage": {"assets": 4, "measured": 0, "suspect": 0}, "also_in": []}
+     "data_coverage": {"assets": 4, "measured": 0, "suspect": 0},
+     "unbounded": 3, "fresh_by": null, "also_in": []}
   ],
   "roots": [
     {"id": "failure:pipeline.py:orders", "kind": "failure", "node": "pipeline.py:orders",
@@ -148,6 +149,8 @@ of `children`.
 | `running` | nodes underneath a run is working on now; 0 without a server |
 | `health`, `asset_health` | how many nodes, and how many assets, are in each health |
 | `data_coverage` | the coverage of "Data signals and coverage", for the assets underneath |
+| `unbounded` | nodes underneath that are not fresh and have no `expected_fresh_at` ("Times"): nothing known will leave them fresh |
+| `fresh_by` | the latest `expected_fresh_at` underneath (RFC 3339, UTC): when the nodes that have an estimate are all expected fresh. `null` when none has one. It speaks only for those nodes; `unbounded` counts the rest |
 | `keys` | on a partitioned node only: its keys that `failed`, are `behind` (no cached result, and did not fail) and are `ok` |
 | `also_in` | the other groups that declare this node or group, by id; empty for one declared in at most one group |
 
@@ -173,9 +176,8 @@ barca status --rollup --json | jq -r '.entries[] | select(.kind == "group") | [.
 barca status --rollup --json | jq -r '.roots[] | [.nodes, .node, .detail] | @tsv'
 ```
 
-The rollup is experimental (`barca docs contract`). An entry has no `causes`, `asset_causes`,
-`gap_seconds`, `unbounded` or `fresh_by` yet, a root no `causes`, `gap_seconds`, `unbounded`
-or `action`, and the only root kind is `failure`: a node that is `behind`, `undecided` or
+The rollup is experimental (`barca docs contract`). An entry has no `causes`, `asset_causes`
+or `gap_seconds` yet, a root no `causes`, `gap_seconds`, `unbounded` or `action`, and the only root kind is `failure`: a node that is `behind`, `undecided` or
 `never_run` is under no root. A scope given as targets is their upstream cones, so a rollup
 of one group also counts what that group reads from outside it.
 
@@ -288,6 +290,85 @@ barca sql "select name, health, refresh_schedule, next_tick, missed_ticks from b
 ```
 
 `refresh_path` is experimental with the rest of health.
+
+## Times
+
+Three times say how far a node that is not fresh is from fresh. Each is RFC 3339 UTC or
+`null`, and none is a guess: a time barca cannot tell is `null`.
+
+| Field | Meaning | `null` when |
+|---|---|---|
+| `stale_since` | since when the node has been out of date: the earliest recorded time from which it has been continuously not fresh | the node is fresh (`health` `ok` or `suspect`) or `undecided`; or no record holds the time |
+| `expected_fresh_at` | when the node is expected to be fresh: an estimate, rounded up to 5 seconds | the node is fresh; or no run is known to leave it fresh (below) |
+| `recheck_at` | when a tick next looks at the node: the `next_tick` of its refresh path | it has no refresh path, or the path has no next tick |
+
+**"Fresh" and "rechecked" are different promises.** `expected_fresh_at` is given only where a
+run will compute the node and leave it fresh. `recheck_at` only says a tick will look: the
+node may be found up to date, be rebuilt, or be left as it is. A node with `recheck_at` and
+no `expected_fresh_at` is rechecked then, not fresh then, and every surface words it so
+(`fresh ~15:05 UTC` against `rechecked 15:00 UTC`).
+
+`stale_since` is, for the node itself:
+
+| The node is | `stale_since` |
+|---|---|
+| failing | its first failed attempt since its last clean run |
+| stale because an input changed (`inputs_changed`: a sensor's new observation, an asset's new result) | when the earliest such input result newer than the node's own was written |
+| behind an input (`behind_input`) | when that input's newer result was written |
+| the scheduled node of a late schedule | the first slot no tick fired for (`schedule.late_since`) |
+| stale because its code changed (`code_changed`), or never run | when its source file was last modified, if that is after the node's newest result |
+| stale only because an environment variable changed (`env_changed`), `partial`, `unsynced` | `null`: nothing records when |
+
+and for a node that is out of date because of what is above it (`upstream_stale`, blocked),
+the earliest of its own time and the times of the nodes above it that are not fresh: it has
+been out of date as long as they have. The file's modification time stands for a code change
+because nothing records when barca first saw a definition. It is never before the edit, but
+an unrelated later edit to the same file moves it forward, so the node has been out of date
+for at least that long, possibly longer; a helper in another file that changed is not seen,
+and the time is `null`.
+
+`expected_fresh_at` is the start of the run that will compute the node plus the node's place
+in that run:
+
+- **The run** is the first that applies: a running run that computes the node, counted from
+  its latest progress (its start, or the last step it finished); a run waiting in the run
+  queue that computes it, from its `estimated_start_at` (`GET /queue`); else the next tick of
+  the node's refresh path: the slot, plus the schedule's typical queue wait
+  (`schedule.typical_queue_wait_seconds`), or when the run queue clears if that is later.
+- **The node's place** is the typical duration of each step before it and its own: the median
+  of a node's recent successful runs (the project's median for a node with none; once per
+  key without a result for a partitioned node). A step starts when its inputs are done and a
+  worker is free: steps are taken in the order they become ready, and each also waits for the
+  work taken before it divided over the worker pool. With enough workers that is the longest
+  chain above the node; with one it is the sum. A sensor's poll and a task that runs on every
+  tick count as work.
+- **No estimate** (`null`) for a node that is failing or blocked (the failure is what holds
+  it), `undecided` or in cache state `unknown` (the run may find it up to date), below a node
+  that is not fresh and that the run does not compute (a stale `Manual`, paused or pinned
+  node: the tick reads it as it is), missed by a tick already (`refresh_path.missed_ticks`,
+  unless a run is computing it now), without a refresh path, or while the run queue is paused.
+  `barca status` on a machine with no server estimates nothing: no scheduler fires here.
+
+What it does not model: a run's startup (workers importing the project), steps heavier than
+one unit of capacity, other runs sharing the server's capacity, and retries. On a server with
+one run slot, two schedules ticking every 10 seconds and steps of 0.4 to 3 seconds, the
+estimates were 2 to 4 seconds later than the time each node became fresh, most of it the
+rounding up; the test that measures it holds them to 8 seconds
+(`python/tests/test_estimates.py`).
+
+The table adds the estimate to the `WHY` of a node that is not fresh: `fresh ~15:05 UTC`
+(to the minute, rounded up), or `overdue 16h` for a node ticks have missed (how long it has
+been out of date). A node with only a recheck already names its next tick there. A rollup
+entry carries `fresh_by`, the latest `expected_fresh_at` underneath, and `unbounded`, how
+many nodes underneath are not fresh and have none. `barca.nodes` has `stale_since`,
+`expected_fresh_at` and `recheck_at`.
+
+```bash
+barca status --server --json | jq -r '.nodes[] | select(.expected_fresh_at) | [.name, .stale_since, .expected_fresh_at] | @tsv'
+barca sql "select name, health, stale_since, recheck_at from barca.nodes where health <> 'ok' and expected_fresh_at is null"
+```
+
+The times are experimental with the rest of health.
 
 ## Data signals and coverage
 
@@ -410,6 +491,9 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
       "root": null,
       "last_check": null,
       "refresh_path": null,
+      "stale_since": null,
+      "expected_fresh_at": null,
+      "recheck_at": null,
       "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }
@@ -422,10 +506,13 @@ sort order), named in its `partition` field (for example `k=a`), and `shape` des
 A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-23T06:00:00Z",
 "last_fired": null, "last_status": null, "last_run_id": null, "late": false, "late_since": null,
 "failures": 0, "max_failures": 5, "failing": false,
-"paused": false, "paused_until": null, "skip_reason": null, "live": false}`, and `--state` or
+"paused": false, "paused_until": null, "skip_reason": null, "live": false,
+"typical_queue_wait_seconds": 0, "typical_run_seconds": null, "queue_bound": false}` (the last
+three: how long its ticks' runs typically wait for a run slot and take, in whole seconds, and
+whether the wait exceeds its interval; `barca docs scheduling`), and `--state` or
 `--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `root`, `signals`,
-`measured`, `last_check`, `refresh_path` and `data_coverage` are in "Health", "Last check",
-"Refresh path" and "Data signals and coverage" above; here `total` is a dict, which has no row count, so one of the two assets
+`measured`, `last_check`, `refresh_path`, the three times and `data_coverage` are in "Health",
+"Last check", "Refresh path", "Times" and "Data signals and coverage" above; here `total` is a dict, which has no row count, so one of the two assets
 is measured.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column

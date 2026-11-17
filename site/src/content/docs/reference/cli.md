@@ -77,7 +77,7 @@ you have installed.
 | [`plan`](/reference/cli/plan/) | `barca plan [file.py\|dir/ ...]` | Emit the execution plan as JSON (experimental) |
 | [`doctor`](/reference/cli/doctor/) | `barca doctor [file.py\|dir/ ...] [--json] [--server [URL] \| --local]` | Diagnose project prerequisites (and a server) without running steps |
 | [`logs`](/reference/cli/logs/) | `barca logs [run_id] [--step NAME] [--stream S] [-f] [--json]` | A run's recorded step stdout and stderr (default: the most recent run) |
-| [`history`](/reference/cli/history/) | `barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [-l N \| --all] [--json\|--pretty]` | Show recent runs, or one run's steps and errors |
+| [`history`](/reference/cli/history/) | `barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [--activity] [-l N \| --all] [--json\|--pretty]` | Show recent runs (with `--status running`, what each is executing now), one run's steps and errors, or the last day's activity by hour |
 | [`stats`](/reference/cli/stats/) | `barca stats <target> [file.py\|dir/ ...]` | Show timing/cache stats for an asset |
 | [`pin`](/reference/cli/pin/) | `barca pin [target] [--previous\|--run-hash H\|--from-file F\|--versions]` | Hold an asset at an earlier result or supplied data (experimental) |
 | [`unpin`](/reference/cli/pin/) | `barca unpin <target>` | Release a pinned asset (experimental) |

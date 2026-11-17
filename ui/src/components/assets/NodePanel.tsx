@@ -14,6 +14,7 @@ import { CopyButton, KeyErrors, NodeKeys, PartitionBar } from './NodeKeys'
 import { BlastRadius } from './BlastRadius'
 import { IncidentControls } from './IncidentControls'
 import { LastCheckLine } from './LastCheckLine'
+import { EstimateLine } from './EstimateLine'
 import { RefreshPathLine } from './RefreshPathLine'
 import { usePausedSet } from '@/hooks/usePauses'
 import { usePinNotes } from '@/hooks/usePins'
@@ -194,6 +195,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {node.last_check && <LastCheckLine check={node.last_check} nowMs={nowMs} />}
         {/* Which schedule's tick will bring it up to date, or that none will: the server's answer. */}
         <RefreshPathLine path={node.refresh_path} nowMs={nowMs} />
+        {/* Since when it is out of date and when it is expected fresh, or only rechecked: the server's estimates. */}
+        <EstimateLine staleSince={node.stale_since} expectedFreshAt={node.expected_fresh_at} recheckAt={node.recheck_at} nowMs={nowMs} />
         {node.running && (
           <KeyValue label="now">
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}

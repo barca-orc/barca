@@ -512,7 +512,28 @@ pub async fn set_cancellation(
 
 /// Retrieve recent run records, newest first.
 pub async fn get_recent_runs(db_path: &str, limit: usize) -> Result<Vec<RunRecord>, BarcaError> {
-    read_runs(db_path, None, limit).await
+    read_runs(db_path, None, limit, &[]).await
+}
+
+/// [`get_recent_runs`] of the runs started in one of the ways in `triggers` (every run when
+/// empty): `GET /runs?triggered_by=`, which hides the schedule's runs. The newest `limit` ids
+/// come from `idx_runs_trigger`, so a list of the few manual runs among tens of thousands of
+/// scheduled ones reads those few, not the table.
+pub async fn get_recent_runs_triggered(
+    db_path: &str,
+    limit: usize,
+    triggers: &[barca_model::trigger::TriggeredBy],
+) -> Result<Vec<RunRecord>, BarcaError> {
+    read_runs(db_path, None, limit, triggers).await
+}
+
+/// `triggered_by IN ('api','manual')` for `triggers`: the values are the enum's own names.
+fn trigger_list(triggers: &[barca_model::trigger::TriggeredBy]) -> String {
+    let names: Vec<String> = triggers
+        .iter()
+        .map(|t| format!("'{}'", t.as_str()))
+        .collect();
+    format!("triggered_by IN ({})", names.join(","))
 }
 
 /// Explicit operator reconciliation when a run is known to have stopped but its
@@ -579,7 +600,7 @@ pub async fn reconcile_run(db_path: &str, run_id: &str) -> Result<RunRecord, Bar
 
 /// Read a durable run by id, including the same interrupted-owner diagnosis as history.
 pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, BarcaError> {
-    Ok(read_runs(db_path, Some(run_id), 1)
+    Ok(read_runs(db_path, Some(run_id), 1, &[])
         .await?
         .into_iter()
         .next())
@@ -594,6 +615,7 @@ async fn read_runs(
     db_path: &str,
     run_id: Option<&str>,
     limit: usize,
+    triggers: &[barca_model::trigger::TriggeredBy],
 ) -> Result<Vec<RunRecord>, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
@@ -679,9 +701,24 @@ async fn read_runs(
             "(SELECT COUNT(*) FROM materializations WHERE run_id = runs.run_id AND status = 'failed')",
         )
     };
+    // Started in one of `triggers`: the newest ids from `idx_runs_trigger` (named, as without
+    // statistics the planner walks the table backwards past every scheduled run instead).
+    let only = if triggers.is_empty() || trigger == "NULL, NULL, NULL" {
+        String::new()
+    } else {
+        let index = if has_index(&conn, "idx_runs_trigger").await? {
+            "INDEXED BY idx_runs_trigger"
+        } else {
+            ""
+        };
+        format!(
+            " AND id IN (SELECT id FROM runs {index} WHERE {} ORDER BY id DESC LIMIT ?2)",
+            trigger_list(triggers)
+        )
+    };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries} FROM runs WHERE (?1 = '' OR run_id = ?1) ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -747,6 +784,131 @@ async fn read_runs(
         });
     }
     Ok(records)
+}
+
+/// How many recorded runs were started in one of the ways in `triggers` (every run when
+/// empty), counted in `idx_runs_trigger`.
+pub async fn count_runs_triggered(
+    db_path: &str,
+    triggers: &[barca_model::trigger::TriggeredBy],
+) -> Result<usize, BarcaError> {
+    if triggers.is_empty() {
+        return count_runs(db_path).await;
+    }
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "triggered_by").await? {
+        return Ok(0);
+    }
+    let mut rows = conn
+        .query(
+            &format!("SELECT COUNT(*) FROM runs WHERE {}", trigger_list(triggers)),
+            (),
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to count runs: {e}")))?;
+    let n = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
+        .map(|r| r.get::<i64>(0).unwrap_or(0))
+        .unwrap_or(0);
+    Ok(n.max(0) as usize)
+}
+
+/// Runs started in one hour, by status and by what started them: a row of [`run_activity`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivityRow {
+    /// The hour the runs started in, UTC: `2026-10-22 08`.
+    pub hour: String,
+    /// The runs' status; `interrupted` for a `running` row whose owner is gone, as
+    /// [`get_recent_runs`] reports it.
+    pub status: String,
+    /// What started them; `None` on rows from a barca that did not record it.
+    pub triggered_by: Option<barca_model::trigger::TriggeredBy>,
+    pub runs: usize,
+}
+
+/// The runs started at or after `since` (`YYYY-MM-DD HH:MM:SS`, UTC), counted by the hour they
+/// started in, their status and what started them: the activity of `GET /runs` and
+/// `barca history --activity`.
+///
+/// One grouped query over the runs of the window, answered from `idx_runs_started` alone (the
+/// index holds the three columns): its cost is the number of runs started in the window, not
+/// the number recorded, and it returns at most a row per hour, status and trigger.
+pub async fn run_activity(db_path: &str, since: &str) -> Result<Vec<ActivityRow>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let failed = |e| BarcaError::Db(format!("failed to read run activity: {e}"));
+    let trigger = if has_column(&conn, "runs", "triggered_by").await? {
+        "triggered_by"
+    } else {
+        "NULL"
+    };
+    // `started_at` is `datetime('now')`; a `T` between date and time is read the same.
+    let hour = "replace(substr(started_at, 1, 13), 'T', ' ')";
+    let mut counted: Vec<ActivityRow> = Vec::new();
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT {hour}, status, {trigger}, COUNT(*) FROM runs \
+                 WHERE started_at >= ?1 GROUP BY 1, 2, 3 ORDER BY 1"
+            ),
+            [since],
+        )
+        .await
+        .map_err(failed)?;
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        counted.push(ActivityRow {
+            hour: row.get::<String>(0).unwrap_or_default(),
+            status: row.get::<String>(1).unwrap_or_default(),
+            triggered_by: row
+                .get::<String>(2)
+                .ok()
+                .and_then(|t| barca_model::trigger::TriggeredBy::parse(&t)),
+            runs: row.get::<i64>(3).unwrap_or(0).max(0) as usize,
+        });
+    }
+    drop(rows);
+    // A run whose process died counts as interrupted, as the run list reports it: the few
+    // `running` rows (`idx_runs_status`) whose owner is gone move from one count to the other.
+    for run_id in interrupted_runs(&conn, db_path).await {
+        let mut rows = conn
+            .query(
+                &format!(
+                    "SELECT {hour}, {trigger} FROM runs \
+                     WHERE run_id = ?1 AND status = 'running' AND started_at >= ?2"
+                ),
+                [run_id.as_str(), since],
+            )
+            .await
+            .map_err(failed)?;
+        let Some(row) = rows.next().await.map_err(failed)? else {
+            continue;
+        };
+        let hour = row.get::<String>(0).unwrap_or_default();
+        let triggered_by = row
+            .get::<String>(1)
+            .ok()
+            .and_then(|t| barca_model::trigger::TriggeredBy::parse(&t));
+        let same = |r: &ActivityRow, status: &str| {
+            r.hour == hour && r.triggered_by == triggered_by && r.status == status
+        };
+        if let Some(running) = counted.iter_mut().find(|r| same(r, "running")) {
+            running.runs = running.runs.saturating_sub(1);
+        }
+        match counted.iter_mut().find(|r| same(r, "interrupted")) {
+            Some(interrupted) => interrupted.runs += 1,
+            None => counted.push(ActivityRow {
+                hour,
+                status: "interrupted".into(),
+                triggered_by,
+                runs: 1,
+            }),
+        }
+    }
+    counted.retain(|r| r.runs > 0);
+    Ok(counted)
 }
 
 /// Total number of recorded runs (for `barca history` truncation reporting).
@@ -1015,5 +1177,176 @@ mod tests {
         let failure = run.failure.expect("the run has a failed step");
         assert_eq!(failure.node, "p.py:first");
         assert_eq!(failure.error, "ValueError: first bad");
+    }
+
+    /// Rows of `runs` as an hour of every-minute ticks and a few other runs leave them.
+    async fn seed_runs(path: &str, rows: &[(&str, &str, Option<&str>, &str)]) {
+        let (_db, conn) = open_conn(path).await.unwrap();
+        for (run_id, status, trigger, started_at) in rows {
+            conn.execute(
+                "INSERT INTO runs (run_id, command, files, status, triggered_by, started_at) \
+                 VALUES (?1, 'get', '[]', ?2, NULLIF(?3, ''), ?4)",
+                [*run_id, *status, trigger.unwrap_or_default(), *started_at],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    async fn plan_of(path: &str, sql: &str) -> Vec<String> {
+        let (_db, conn) = open_conn(path).await.unwrap();
+        let mut plan = conn
+            .query(&format!("EXPLAIN QUERY PLAN {sql}"), ())
+            .await
+            .unwrap();
+        let mut details = Vec::new();
+        while let Some(row) = plan.next().await.unwrap() {
+            details.push(row.get::<String>(3).unwrap());
+        }
+        details
+    }
+
+    #[tokio::test]
+    async fn activity_counts_the_runs_of_the_window_by_hour_status_and_trigger() {
+        use barca_model::trigger::TriggeredBy::{Api, Schedule};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        seed_runs(
+            &path,
+            &[
+                // Before the window: its last second.
+                ("old", "success", Some("schedule"), "2026-10-22 07:59:59"),
+                // The window's first second, and the same hour written with a `T`.
+                ("edge", "success", Some("schedule"), "2026-10-22 08:00:00"),
+                ("t", "success", Some("schedule"), "2026-10-22T08:30:00"),
+                ("failed", "failed", Some("schedule"), "2026-10-22 08:59:59"),
+                ("api", "success", Some("api"), "2026-10-22 09:00:00"),
+                // A row from a barca that did not record what started it.
+                ("unknown", "cancelled", None, "2026-10-22 09:10:00"),
+            ],
+        )
+        .await;
+        let row = |hour: &str, status: &str, triggered_by, runs| ActivityRow {
+            hour: hour.into(),
+            status: status.into(),
+            triggered_by,
+            runs,
+        };
+        assert_eq!(
+            run_activity(&path, "2026-10-22 08:00:00").await.unwrap(),
+            vec![
+                row("2026-10-22 08", "failed", Some(Schedule), 1),
+                row("2026-10-22 08", "success", Some(Schedule), 2),
+                row("2026-10-22 09", "cancelled", None, 1),
+                row("2026-10-22 09", "success", Some(Api), 1),
+            ]
+        );
+        // Answered from the index alone: a range of it, never the runs table.
+        let plan = plan_of(
+            &path,
+            "SELECT replace(substr(started_at, 1, 13), 'T', ' '), status, triggered_by, COUNT(*) \
+             FROM runs WHERE started_at >= '2026-10-22 08:00:00' GROUP BY 1, 2, 3 ORDER BY 1",
+        )
+        .await;
+        assert!(
+            plan.iter()
+                .any(|d| d.contains("COVERING INDEX idx_runs_started")),
+            "{plan:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_counts_a_run_whose_process_died_as_interrupted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        let mut child =
+            barca_model::spawn_lock::spawn_std(&mut std::process::Command::new("true")).unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        create_run(&path, "alive", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        create_run(&path, "dead", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        {
+            let (_db, conn) = open_conn(&path).await.unwrap();
+            conn.execute(
+                "UPDATE runs SET pid = ?1, owner = NULL WHERE run_id = 'dead'",
+                [dead_pid as i64],
+            )
+            .await
+            .unwrap();
+        }
+        let mut by_status: Vec<(String, usize)> = run_activity(&path, "2000-01-01 00:00:00")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.status, r.runs))
+            .collect();
+        by_status.sort();
+        assert_eq!(
+            by_status,
+            vec![("interrupted".to_string(), 1), ("running".to_string(), 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_run_list_by_trigger_reads_the_newest_of_those_runs_from_the_index() {
+        use barca_model::trigger::TriggeredBy::{Api, Manual, Schedule};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        let ticks: Vec<String> = (0..40).map(|i| format!("tick{i:02}")).collect();
+        let mut rows: Vec<(&str, &str, Option<&str>, &str)> = vec![
+            ("manual1", "success", Some("manual"), "2026-10-22 08:00:00"),
+            ("legacy", "success", None, "2026-10-22 08:00:01"),
+            ("api1", "failed", Some("api"), "2026-10-22 08:00:02"),
+        ];
+        rows.extend(ticks.iter().map(|id| {
+            (
+                id.as_str(),
+                "success",
+                Some("schedule"),
+                "2026-10-22 09:00:00",
+            )
+        }));
+        rows.push(("manual2", "success", Some("manual"), "2026-10-22 10:00:00"));
+        seed_runs(&path, &rows).await;
+        let ids = |runs: Vec<RunRecord>| runs.into_iter().map(|r| r.run_id).collect::<Vec<_>>();
+        let others = [Manual, Api];
+        assert_eq!(
+            ids(get_recent_runs_triggered(&path, 2, &others).await.unwrap()),
+            vec!["manual2", "api1"]
+        );
+        assert_eq!(
+            ids(get_recent_runs_triggered(&path, 100, &others)
+                .await
+                .unwrap()),
+            vec!["manual2", "api1", "manual1"]
+        );
+        assert_eq!(count_runs_triggered(&path, &others).await.unwrap(), 3);
+        assert_eq!(count_runs_triggered(&path, &[Schedule]).await.unwrap(), 40);
+        // No filter: every run, the one that recorded no trigger included.
+        assert_eq!(count_runs_triggered(&path, &[]).await.unwrap(), 44);
+        assert_eq!(
+            get_recent_runs_triggered(&path, 100, &[])
+                .await
+                .unwrap()
+                .len(),
+            44
+        );
+        let plan = plan_of(
+            &path,
+            &format!("SELECT COUNT(*) FROM runs WHERE {}", trigger_list(&others)),
+        )
+        .await;
+        assert!(
+            plan.iter()
+                .any(|d| d.contains("COVERING INDEX idx_runs_trigger")),
+            "{plan:?}"
+        );
     }
 }

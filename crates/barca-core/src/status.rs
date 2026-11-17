@@ -86,6 +86,22 @@ pub struct NodeStatus {
     /// no tick has the node as a target, or the node is paused or pinned.
     #[serde(default)]
     pub refresh_path: Option<crate::refresh_path::RefreshPath>,
+    /// Since when the node has been out of date (RFC 3339, UTC): the earliest recorded time
+    /// from which it has been continuously not fresh (`barca docs status-fields`, "Times").
+    /// `null` for a fresh or undecided node and where no record holds the time.
+    #[serde(default)]
+    pub stale_since: Option<String>,
+    /// When the node is expected to be fresh (RFC 3339, UTC), an estimate rounded up to 5
+    /// seconds: the start of the run that computes it plus the typical durations of the
+    /// steps before it. `null` for a fresh node and where no run is known to leave it fresh
+    /// (failing, blocked, undecided, missed by a tick, no refresh path).
+    #[serde(default)]
+    pub expected_fresh_at: Option<String>,
+    /// When a tick next looks at the node (RFC 3339, UTC): the next tick of its refresh path.
+    /// A node with this and no `expected_fresh_at` will be rechecked, not necessarily fresh.
+    /// `null` when it has no refresh path or the path has no next tick.
+    #[serde(default)]
+    pub recheck_at: Option<String>,
     /// Per-key cache state of a partitioned node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionState>,
@@ -162,6 +178,20 @@ pub struct ScheduleStatus {
     /// True when a running scheduler reported this (a `barca serve` that fires schedules);
     /// false when it was read from the metadata DB because no scheduler runs here.
     pub live: bool,
+    /// How long its ticks' runs typically wait for a run slot, whole seconds: the median
+    /// queue wait of its newest 20 fired ticks; 0 with none recorded.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub typical_queue_wait_seconds: u64,
+    /// How long its ticks' runs typically take, start to end, whole seconds: the median of
+    /// its newest 20 fired ticks whose run succeeded; `null` with none recorded.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub typical_run_seconds: Option<u64>,
+    /// Its typical queue wait exceeds its interval: its ticks wait for a run slot longer than
+    /// they are apart (`--max-runs`).
+    #[serde(default)]
+    pub queue_bound: bool,
 }
 
 impl ScheduleStatus {
@@ -291,6 +321,9 @@ impl ScheduleStatus {
             paused_until: pause.and_then(|p| p.until).and_then(rfc3339_secs),
             skip_reason: None,
             live: false,
+            typical_queue_wait_seconds: standing.typical_queue_wait_seconds.round() as u64,
+            typical_run_seconds: standing.typical_run_seconds.map(|s| s.round() as u64),
+            queue_bound: standing.queue_bound,
         }
     }
 }
@@ -909,6 +942,9 @@ pub(crate) async fn status_from_dag_with_membership(
             root: None,
             last_check: None,
             refresh_path: None,
+            stale_since: None,
+            expected_fresh_at: None,
+            recheck_at: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
@@ -1268,6 +1304,9 @@ mod tests {
             root: None,
             last_check: None,
             refresh_path: None,
+            stale_since: None,
+            expected_fresh_at: None,
+            recheck_at: None,
             partitions: None,
             last_materialization: None,
             last_bytes_change: None,

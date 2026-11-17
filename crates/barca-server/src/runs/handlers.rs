@@ -4,8 +4,8 @@
 
 use super::lifecycle::{cancelled, finish, start};
 use super::projection::{
-    ActiveStep, RunList, RunsFilter, RunsQuery, live_runs, live_status, live_summary, summary,
-    view, view_page,
+    ActiveStep, RunList, RunSummary, RunsFilter, RunsQuery, live_runs, live_status, live_summary,
+    summary, view, view_page,
 };
 use super::{
     RunSpec, Wording, check_any_asset, check_files, check_target, check_target_as, context,
@@ -590,18 +590,41 @@ pub async fn list(
     Query(query): Query<RunsQuery>,
 ) -> Result<Json<RunList>, ApiError> {
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    // The triggers of `barca history --triggered-by`, with its error for an unknown one.
+    let triggers = barca_core::history_filter::HistoryFilter::parse(
+        None,
+        None,
+        query.triggered_by.as_deref(),
+        None,
+        chrono::Utc::now(),
+    )
+    .map_err(|e| ApiError::BadRequest(e.replace("--triggered-by", "triggered_by")))?
+    .triggered_by;
+    let started_by = |t: Option<barca_core::outcome::TriggeredBy>| {
+        triggers.is_empty() || t.is_some_and(|t| triggers.contains(&t))
+    };
     let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
     if query.status == Some(RunsFilter::Running) {
-        return in_flight_list(&state, &db_state, &snapshot, limit)
-            .await
-            .map(Json);
+        let mut runs: Vec<RunSummary> = in_flight(&state, &db_state, &snapshot)
+            .await?
+            .into_iter()
+            .filter(|run| started_by(run.triggered_by))
+            .collect();
+        let total = runs.len();
+        runs.truncate(limit);
+        return Ok(Json(RunList {
+            truncated: total > runs.len(),
+            runs,
+            total,
+            activity: None,
+        }));
     }
     // Clone after the snapshot: a new live run not yet in the snapshot stays visible.
     let live = live_runs(&state);
     let by_id: HashMap<_, _> = live.iter().map(|r| (r.handle.as_str(), r)).collect();
-    let records = db::get_recent_runs(&snapshot.path, limit).await?;
-    let durable_total = db::count_runs(&snapshot.path).await?;
+    let records = db::get_recent_runs_triggered(&snapshot.path, limit, &triggers).await?;
+    let durable_total = db::count_runs_triggered(&snapshot.path, &triggers).await?;
     let mut runs: Vec<_> = records
         .into_iter()
         .map(|r| {
@@ -611,7 +634,7 @@ pub async fn list(
         .collect();
     let mut extra = 0;
     for run in &live {
-        if runs.iter().any(|r| r.id == run.handle) {
+        if !started_by(Some(run.trigger.triggered_by)) || runs.iter().any(|r| r.id == run.handle) {
             continue;
         }
         // An old live run outside the requested history page must not be counted twice.
@@ -628,21 +651,43 @@ pub async fn list(
     });
     let total = durable_total + extra;
     runs.truncate(limit);
+    // Counted by the database over the window, whatever `limit` lists (#991).
+    let activity =
+        barca_core::queries::activity_at(&snapshot.path, &triggers, chrono::Utc::now()).await?;
     Ok(Json(RunList {
         truncated: total > runs.len(),
         runs,
         total,
+        activity: Some(activity),
     }))
 }
 
-/// `GET /runs?status=running`: the runs in flight, newest first, each with the nodes it is
-/// working on now ([`crate::running`]).
-async fn in_flight_list(
+/// What each run in flight is working on now, by run id (a server run under its handle and
+/// its durable id): `now` of `GET /history?status=running`, the same object as on
+/// `GET /runs?status=running`.
+pub(crate) async fn in_flight_now(
+    state: &AppState,
+    snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
+) -> Result<barca_core::report::HistoryNow, ApiError> {
+    let db_state = state.db_state();
+    let mut out = barca_core::report::HistoryNow::new();
+    for run in in_flight(state, &db_state, snapshot).await? {
+        let Some(now) = run.now else { continue };
+        if let Some(durable) = run.run_id.filter(|id| *id != run.id) {
+            out.insert(durable, now.clone());
+        }
+        out.insert(run.id, now);
+    }
+    Ok(out)
+}
+
+/// The runs in flight, newest first, each with the nodes it is working on now
+/// ([`crate::running`]): `GET /runs?status=running`.
+async fn in_flight(
     state: &AppState,
     db_state: &crate::read_cache::Stamp,
     snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
-    limit: usize,
-) -> Result<RunList, ApiError> {
+) -> Result<Vec<RunSummary>, ApiError> {
     let read_path = snapshot.path.as_str();
     let flights = crate::running::in_flight(state, Some(read_path)).await;
     let mut runs = Vec::with_capacity(flights.len());
@@ -694,11 +739,5 @@ async fn in_flight_list(
             .cmp(&a.started_at)
             .then_with(|| b.id.cmp(&a.id))
     });
-    let total = runs.len();
-    runs.truncate(limit);
-    Ok(RunList {
-        truncated: total > runs.len(),
-        runs,
-        total,
-    })
+    Ok(runs)
 }

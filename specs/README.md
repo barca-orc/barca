@@ -118,7 +118,7 @@ part. Implemented (experimental): the health words and their derivation (`health
 `barca status --json`, `GET /nodes`, `GET /state` and `barca.nodes`, with their wire shapes in
 the OpenAPI and CLI contract owners and their rules checked in
 `crates/barca-core/src/health.rs`. Not implemented: the cause buckets and every root kind but
-`failure`, `stale_since`, `expected_fresh_at` versus `recheck_at`, the
+`failure`, the
 freshness gap, the cause and gap fields of the rollup, the `barca.schedules`,
 `barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Also
 implemented: the tick record (#960: the `schedule_ticks` table and its reads), from it
@@ -128,7 +128,12 @@ path cannot decide reads `ok` while the last tick's verdict stands), and the rol
 children in nodes and in assets, with failure roots, checked in
 `crates/barca-core/src/rollup.rs`; the web UI renders it and no longer sums); and the refresh path
 (#961: `refresh_path` on every status node and the `refresh_schedule`, `next_tick` and
-`missed_ticks` columns of `barca.nodes`, in `crates/barca-core/src/refresh_path.rs`). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
+`missed_ticks` columns of `barca.nodes`, in `crates/barca-core/src/refresh_path.rs`); and the times
+(#962: `stale_since`, `expected_fresh_at` versus `recheck_at` on every status node and in
+`barca.nodes`, `unbounded` and `fresh_by` of a rollup entry, a queued run's
+`estimated_start_at`, a schedule's typical queue wait and run time, in
+`crates/barca-core/src/estimates.rs`, with the estimate's error measured on a real server in
+`python/tests/test_estimates.py`). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
 implements it issue by issue, and each PR moves its wire shapes into the OpenAPI and CLI contract
 owners. Until then the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are
 authoritative for the rest.

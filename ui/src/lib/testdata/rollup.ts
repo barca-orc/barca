@@ -23,7 +23,7 @@ export function nodeEntry(id: string, parent: string, health: Health, over: Part
   const one = counts({ [health]: 1 })
   return {
     id, kind: 'node', label: id.slice(id.lastIndexOf(':') + 1), parent, children: [], nodes: 1, assets: task ? 0 : 1, running: 0,
-    health: one, asset_health: task ? counts() : one, data_coverage: { assets: task ? 0 : 1, measured: 0, suspect: 0 }, also_in: [], ...rest,
+    health: one, asset_health: task ? counts() : one, data_coverage: { assets: task ? 0 : 1, measured: 0, suspect: 0 }, unbounded: 0, fresh_by: null, also_in: [], ...rest,
   }
 }
 
@@ -40,7 +40,7 @@ export function scopeEntry(
   const nodes = h.failing + h.blocked + h.suspect + h.behind + h.undecided + h.never_run + h.ok
   return {
     id, kind, label: kind === 'root' ? 'all' : id.slice(id.indexOf(':') + 1), parent, children, nodes, assets: nodes, running: 0,
-    health: h, asset_health: h, data_coverage: { assets: nodes, measured: 0, suspect: 0 }, also_in: [], ...over,
+    health: h, asset_health: h, data_coverage: { assets: nodes, measured: 0, suspect: 0 }, unbounded: 0, fresh_by: null, also_in: [], ...over,
   }
 }
 

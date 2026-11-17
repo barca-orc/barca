@@ -85,6 +85,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.29.3: the history filters' values and matching may change after field use",
     ),
     (
+        "history --activity",
+        "new in 0.44 (#991): the activity's keys, its window and its human table may change after field use",
+    ),
+    (
         "history --since",
         "new in 0.29.3: the history filters' values and matching may change after field use",
     ),

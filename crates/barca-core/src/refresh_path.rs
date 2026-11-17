@@ -677,6 +677,7 @@ def both(slow, fast): ...
                         paused: &none,
                         pinned: &none,
                     },
+                    timing: crate::estimates::Timing::none(),
                     now: NOW,
                 },
             );

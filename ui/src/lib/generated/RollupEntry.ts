@@ -49,6 +49,17 @@ asset_health: HealthCounts,
  */
 data_coverage: DataCoverage,
 /**
+ * Nodes underneath that are not fresh and have no `expected_fresh_at`: nothing known
+ * will leave them fresh (failing, blocked, undecided, missed by a tick, no refresh
+ * path), so `fresh_by` does not speak for them.
+ */
+unbounded: number,
+/**
+ * The latest `expected_fresh_at` underneath (RFC 3339, UTC): when the nodes that have
+ * an estimate are all expected fresh. `null` when none has one.
+ */
+fresh_by: string | null,
+/**
  * A partitioned node's keys (a node entry only).
  */
 keys?: KeyCounts,

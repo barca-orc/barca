@@ -347,15 +347,26 @@ pub struct ActiveStep {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunList {
     pub runs: Vec<RunSummary>,
+    /// How many runs there are in all; with `?triggered_by=`, how many were started that way.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub total: usize,
     pub truncated: bool,
+    /// The runs started in the last 24 hours, hour by hour, by status and by what started
+    /// them, counted over every recorded run of the window (not the runs listed) and with
+    /// `?triggered_by=` over the runs started that way: `barca history --activity --json`.
+    /// Absent with `?status=running`. Experimental.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub activity: Option<barca_core::run_list::RunActivity>,
 }
 #[derive(Default, Deserialize)]
 pub struct RunsQuery {
     pub limit: Option<usize>,
     /// `running`: only the runs in flight (pending or running), this server's and the CLI's.
     pub status: Option<RunsFilter>,
+    /// Only the runs started this way (comma-separated: `manual`, `api`, `schedule`,
+    /// `client`), as `barca history --triggered-by`: `manual,api,client` hides the schedule's.
+    pub triggered_by: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

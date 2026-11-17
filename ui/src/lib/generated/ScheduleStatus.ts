@@ -70,4 +70,19 @@ skip_reason: string | null,
  * True when a running scheduler reported this (a `barca serve` that fires schedules);
  * false when it was read from the metadata DB because no scheduler runs here.
  */
-live: boolean, };
+live: boolean,
+/**
+ * How long its ticks' runs typically wait for a run slot, whole seconds: the median
+ * queue wait of its newest 20 fired ticks; 0 with none recorded.
+ */
+typical_queue_wait_seconds: number,
+/**
+ * How long its ticks' runs typically take, start to end, whole seconds: the median of
+ * its newest 20 fired ticks whose run succeeded; `null` with none recorded.
+ */
+typical_run_seconds: number | null,
+/**
+ * Its typical queue wait exceeds its interval: its ticks wait for a run slot longer than
+ * they are apart (`--max-runs`).
+ */
+queue_bound: boolean, };

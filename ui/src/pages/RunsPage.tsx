@@ -8,7 +8,7 @@ import { usePageTopbarRun } from '@/hooks/useTopbarRun'
 import { useProgram } from '@/hooks/useProgram'
 import { useRunDetail, useRuns } from '@/hooks/useRuns'
 import { remote } from '@/lib/remote'
-import { INITIAL_RUNS, parseRunFilters, updateRuns, writeRunFilters, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { INITIAL_RUNS, parseRunFilters, runsTriggeredBy, updateRuns, writeRunFilters, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import { PageRunButton } from '@/components'
 import { QueuePanel } from './QueuePanel'
 import { RunsView } from './RunsView'
@@ -42,7 +42,7 @@ export function RunsPage() {
       .exhaustive(),
   )
   const model = { ...program, ...filters }
-  const runs = useRuns(model.limit)
+  const runs = useRuns(model.limit, runsTriggeredBy(model))
   const detail = useRunDetail(selected)
 
   // A running run's start, as the run list has it: the queue counts its time from it.

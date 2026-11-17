@@ -11,9 +11,13 @@ the CLI contract; the tick record ("What a tick records", #960), as the `schedul
 table and its reads; `last_check` with the `checked_up_to_date` reason ("Last check", #964);
 and the rollup ("Rollup", #955): `GET /state/rollup` and `barca status --rollup`, with the
 counts in both units, `keys`, and of `root` and the root list the `failure` kind only, as
-that section's "As implemented" states; and `refresh_path` with its `barca.nodes` columns
-("Refresh path", #961). Everything else below is intent: `cause`, every root
-kind but `failure`, the other times, `gap_seconds`, the cause and gap fields
+that section's "As implemented" states; `refresh_path` with its `barca.nodes` columns
+("Refresh path", #961); and the times ("Times", #962): `stale_since`, `expected_fresh_at` and
+`recheck_at` with their `barca.nodes` columns, `unbounded` and `fresh_by` of a rollup entry,
+`estimated_start_at` and `wait_seconds` of a queue entry, and `typical_queue_wait_seconds`,
+`typical_run_seconds` and `queue_bound` of a schedule, as that section's "As implemented"
+states. Everything else below is intent: `cause`, every root
+kind but `failure`, `gap_seconds`, the cause and gap fields
 of a rollup entry and of a root, `as_of` and `rollup` in `barca status --json`, the new
 tables and the query route do not exist yet.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
@@ -138,9 +142,9 @@ separate fact shown beside its health; it does not change it.
   `late_since`. As implemented, a tick is one whose run was started or queued, so
   `late_since` is the first slot after the newest such tick; the queue wait is the typical
   one or, when longer, the newest tick's own (to now while its run still waits), so a tick
-  waiting for a run slot is not late; and until the tick records of #960 exist, the waits
-  are read from the `runs` rows a schedule started (slot to start), not from
-  `queue_wait_seconds`. Conformance: `a_queued_tick_reads_the_same_on_every_surface`
+  waiting for a run slot is not late; and the waits are the tick record's
+  `queue_wait_seconds` (#962: `db::tick_timings`, one read for every schedule), or, for a
+  schedule whose ticks recorded none, the `runs` rows it started (slot to start). Conformance: `a_queued_tick_reads_the_same_on_every_surface`
   (`crates/barca-server/tests/running.rs`) and the tests of `schedule_standing`.
 - Row 8 gains a row before it (7a, implemented): when the newest finished tick that checked
   the node found it up to date or rebuilt it and nothing the read path can see has changed
@@ -355,6 +359,81 @@ as one entry. Roots are ranked by `gap_seconds`, then `nodes`, then `id`.
   An overdue node has no `expected_fresh_at`: its estimate already failed.
 - A queue entry's `estimated_start_at` is `as_of` plus the typical run time of the runs ahead
   of it, divided over `max_runs` slots.
+
+As implemented (#962), in `crates/barca-core/src/estimates.rs` (`times`, `queue_starts`),
+called by `health::classify` once per status result:
+
+- **`stale_since`**, a node's own time by what made it not fresh: a failure is
+  `failing_since` (the first failed attempt since its last clean run); `inputs_changed` is
+  the earliest `created_at` among its inputs' newest successful results that are newer than
+  its own (a sensor's observation or an asset's result alike); `behind_input` is that input's
+  newer result; the scheduled node of a late schedule is `late_since`; `code_changed` and
+  never-run are the source file's modification time, when that is after the node's newest
+  successful result. A node that is not fresh because of what is above it (`upstream_stale`,
+  blocked) takes the earliest of its own time and those of its not-fresh inputs, so the time
+  is the root's without naming the root (#963 names it). `null`: fresh, undecided,
+  `env_changed` alone, `partial`, `unsynced`, and a code change no file time dates.
+- **Which record holds a code change.** None does: no table records when a definition hash
+  was first seen, and recording it would add a write to a read path (status) or a read to the
+  tick path. The file's modification time is read once per loaded graph (the server reloads
+  the graph on an edit; once per CLI command). Its error is one-sided: it is never before the
+  change, and an unrelated later edit to the same file moves it forward, so `behind_seconds`
+  is a lower bound. A changed helper in another file leaves the node's own file untouched
+  and the time `null`. For `inputs_changed`, an input that changed twice since the node's
+  result dates the staleness from its newest result, also a lower bound.
+- **`recheck_at`** is `refresh_path.next_tick`, for every node whose path has one, fresh or
+  not: the slot itself, exact, without the queue wait. A node that also has
+  `expected_fresh_at` is said to be fresh then; one with `recheck_at` alone, rechecked.
+- **`expected_fresh_at = start + place`**, rounded up to 5 seconds and never before `as_of`.
+  `start` is, first that applies: for a running run that computes the node, its latest
+  progress (when it started executing or its last step finished, not `as_of`: an unchanged
+  poll then answers the same time); for a waiting run, the queue entry's
+  `estimated_start_at`; else `next_tick` plus the schedule's typical queue wait, or when the
+  run queue clears if later. A tick's run computes its schedule's targets; another run its
+  targets and what is above them. `place` models workers, unlike the intent above: steps are
+  taken in the order they become ready on the longest chain of typical durations, and each
+  starts when its inputs are done and the work taken before it, divided over the worker
+  pool, is done. With enough workers that is the longest chain; with one, the sum. Nodes that
+  run on every tick (`always_runs`) count as work. A partitioned node counts its typical
+  duration once per key without a result.
+- **Only `recheck_at`** (INV-HEALTH-05) for a node that is failing or blocked; `undecided`
+  or whose cache state is `unknown` (below a cutoff asset that would run, a sensor with no
+  recorded output: the run may find it up to date or leave it); below a not-fresh node the
+  run does not compute (a stale `Manual`, paused or pinned node, read as it is); missed by a
+  tick (`missed_ticks >= 1`), unless a running run computes it; and while the run queue is
+  paused or draining. Without a live scheduler `next_tick` is `null` and so are both times.
+- **Queue entries** (`GET /queue`): each of `max_runs` slots frees when its run ends (its
+  start plus its typical run time, never before `as_of`), and a waiting run takes the slot
+  that frees first, in queue order. A run's typical time is its schedule's
+  `typical_run_seconds`; for a run no schedule started, or a schedule with no sample, the
+  median of the schedules that have one (0 with none). The extra slot a requested run may
+  take past scheduled work is not modelled. `wait_seconds` is from `queued_at` to
+  `started_at` (a running run) or to `estimated_start_at` (a waiting one), not to `as_of`,
+  so it does not move with the clock. A `--read-only` server gives neither.
+- **Schedules** (`GET /schedule` and the `schedule` block): `typical_queue_wait_seconds` (the
+  median `queue_wait_seconds` of the newest 20 fired ticks, 0 with none), `typical_run_seconds`
+  (the median start-to-end of the newest 20 whose run succeeded, `null` with none), both
+  whole seconds, and `queue_bound` (the typical wait exceeds the interval).
+- **Rollup entries** carry `fresh_by` (the latest `expected_fresh_at` underneath, `null` when
+  none) and `unbounded` (not-fresh nodes underneath with no `expected_fresh_at`).
+- **Entry points for the gap (#963):** `estimates::behind_seconds(node, now)` and
+  `estimates::ahead_seconds(node, now)` read the two times off a classified row.
+- **Clock.** No estimate is a function of `as_of` except through its floor (an estimate that
+  has passed reads `as_of`, rounded up to 5 seconds), so a poll that finds nothing changed
+  and nothing overdue answers the same body.
+- **Cost.** No read is added per node or per poll: typical durations and the schedules'
+  recorded ticks are the reads `GET /state` already keeps per database state, the runs in
+  flight are the server's own, and the estimate is one pass over the rows per schedule or
+  run that has a not-fresh node.
+- **Measured error.** `python/tests/test_estimates.py` runs a real server with one run slot
+  and two schedules ticking every 10 seconds (steps of 0.4 to 3 seconds), edits a node's
+  code three times and compares each estimate, when first given, with when the thing
+  happened. `expected_fresh_at` was 1.8 to 3.9 seconds later than the time the node became
+  fresh (12 estimates a run), and `estimated_start_at` 4.0 seconds later than the start: the
+  rounding up to 5 seconds and whole-second typical times, with a run's startup (not
+  modelled) pulling the other way. The test asserts 8 seconds and 6 seconds. On longer
+  steps the unmodelled parts (startup, retries, capacity weights, other runs sharing the
+  server's capacity) are not bounded by this measurement.
 
 ### The freshness gap
 
@@ -636,7 +715,7 @@ the rollup by group, and the top roots.
 ## Acceptance and evidence
 
 Each issue lands its scenario with the code and replaces the matching source link. Passing
-today (with the #961 row): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+today (with the #961 and #962 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
@@ -651,7 +730,7 @@ row, the #964 row and the #985 row. The rest do not pass yet.
 | Re-adding a derived word in TypeScript fails CI | #959: [the check](../../scripts/check-ui-layering.py) (a prek hook, so every tier; it seeds violations into a small tree on each run and fails if one passes), [its table](../../crates/barca-cli/ui-layering.json) (every route the UI calls with its CLI command, every module of `ui/src/lib` with its kind, the named exemptions), [the table against the CLI and the router](../../crates/barca-cli/src/ui_layering_tests.rs), [the fixtures' health words from `classify`](../../crates/barca-core/src/ui_fixture_tests.rs) |
 | A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
 | A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961: [the shapes, a paused schedule, no live scheduler, paused and pinned nodes, missed ticks](../../crates/barca-core/src/refresh_path.rs) ("membership is the scheduler's own target list"), [the batched misses](../../crates/barca-db/src/db/ticks.rs), [the walk once per graph](../../crates/barca-server/src/read_cache.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a scheduling and a read-only server](../../python/tests/test_refresh_path.py) |
-| Estimates within the stated error on the seeded server simulation; a node below a pending cutoff has `recheck_at` only | #962 |
+| Estimates within the stated error on a real server (one run slot, two schedules); a node below a pending cutoff has `recheck_at` only | #962: [the rules](../../crates/barca-core/src/estimates.rs) (the start, the workers, what is only rechecked, `stale_since` by cause, the queue), [the tick timings in one read](../../crates/barca-db/src/db/ticks.rs), [measured on a server; CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, a read-only server](../../python/tests/test_estimates.py), [the node panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx) |
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963 |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
@@ -692,14 +771,21 @@ the causes list's grouping and the failures list's impact are deleted: their rul
   tick or the expiry.
 - Which nodes a tick reaches when a polled sensor changes below-`Always` assets (#952) is
   unresolved; this document takes the walk's answer and adds no rule of its own.
-- Where the time of a code or environment change is recorded for `stale_since` is #962's
-  decision; until then such nodes may have `stale_since: null` and contribute no backward term.
+- No record holds when a code or environment change was first seen (#962, "Times"): a code
+  change is dated by its file's modification time, a lower bound on how long the node has
+  been out of date, and an environment change has `stale_since: null` and contributes no
+  backward term. Recording the first sighting of a definition hash would need a write on a
+  read path; whether a run or a server's graph load should record it is open.
+- A polled sensor that is not a tick's target is not counted as work in an estimate, and a
+  node whose result a cutoff asset above may leave unchanged is covered only through its own
+  `unknown` state: a node the read path decides `stale` below such an asset is promised fresh.
 - Assets paused with `barca pause` and pinned assets keep the health their cache state gives
   and have no refresh path (#961); whether #963 gives them a root kind of their own, instead
   of `no_schedule`, is its decision.
 - `refresh_path` does not see a schedule that is late or whose server is down from a
   `--read-only` server: `live` there is that process's scheduler, which it does not have.
-- The estimate ignores worker contention and heavy-step capacity; its error is unmeasured.
+- The estimate models the worker pool but not a run's startup, capacity weights, retries or
+  the capacity runs share; its error is measured on short steps only ("Times").
 - A node declared in several groups is placed by group id (#955 keeps the rule: it is the one
   that keeps every level an exact sum). Whether overlapping groups should instead be refused
   at parse time is open.

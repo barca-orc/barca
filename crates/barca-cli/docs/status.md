@@ -92,8 +92,10 @@ One difference between a request and a tick remains. A node paused with `barca p
 read as it is by scheduled ticks only; `barca get` recomputes it when it reads it. Status
 says what a request would do, so below a stale paused node it says `stale` (as `--dry-run`
 says `run`) while each tick finds the node up to date; what the last tick found is
-`last_check` (`barca docs status-fields`, "Last check"), and which
-schedule's tick will next bring a node up to date is `refresh_path` ("Refresh path").
+`last_check` (`barca docs status-fields`, "Last check"), which
+schedule's tick will next bring a node up to date is `refresh_path` ("Refresh path"), and since
+when a node is out of date and when it is expected fresh or only rechecked are `stale_since`,
+`expected_fresh_at` and `recheck_at` ("Times").
 
 | state | meaning | `reason` |
 |---|---|---|
@@ -254,7 +256,9 @@ As of 2026-11-17T16:49:57Z
 ```
 
 Under the tree, each failing node is listed with what it holds: itself and every node it
-blocks, so three nodes that need attention here are one thing to fix. `Data` is the scope's
+blocks, so three nodes that need attention here are one thing to fix. With a server, a level
+whose nodes have estimates adds `fresh by ~15:05 UTC` (the latest of them) and `3 with no
+estimate` for the nodes that are not fresh and have none (`barca docs status-fields`, "Times"). `Data` is the scope's
 data coverage and `As of` the instant the nodes were classified at.
 
 ```bash
@@ -337,6 +341,64 @@ barca history --status failed --target clean --json --fields run_id,started_at,f
 barca history --status failed --json --fields run_id,failed_node,error
 barca history --triggered-by schedule --status failed,interrupted
 ```
+
+### Runs in progress and the last day's activity
+
+When `--status` names `running`, each listed run that is in progress also says what it is
+working on now (experimental): a `now: executing 3: orders, clean, report · 12 queued ·
+240/900 keys` line under its row, and in JSON `now`, the object the web UI's run panel shows:
+`running` (the nodes executing, the one furthest from done first, each with `keys` such as
+`3,120 of 5,000 keys` and its `share` done), `queued` (how many nodes wait), `keys` (`{done,
+total}` over the partitioned nodes in flight, or `null`), `groups` (the same counted by group)
+and `line` (the line above; it names the first five executing nodes).
+
+```bash
+barca history --status running
+barca history --status running --json --fields run_id,now
+```
+
+Where `now` comes from, and what it cannot say:
+
+- Against a server (`barca docs server-mode`), a run the server started is followed through
+  its step events: a node is executing once its function printed a line or its upstream steps
+  finished, and queued before that. A step served from the cache sends no event, so a node
+  whose result was cached reads as executing, and what waits on it as queued, until a later
+  step of the run prints a line or finishes.
+- Without a server, and for a `barca get` or `barca run` in a shell beside a server, the run
+  streams its steps to nobody. barca reads what it recorded: every node of its job that has
+  no result since the run started counts as executing, and `queued` is always 0. A run of
+  named targets counts those targets only, not the upstream nodes it also runs.
+- A run has no `now` when its owner cannot be seen alive from this machine (another host's
+  run), when it was started by a barca older than 0.26 (no recorded job), or when its files no
+  longer parse.
+
+`barca history --activity` prints, instead of the runs, how many started in each of the last
+24 hours (experimental): one line for the window, then a row per hour that had runs, with the
+runs that did not succeed, the ones still running, and the count by trigger.
+
+```bash
+barca history --activity
+barca history --activity --json
+barca history --activity --triggered-by manual,api,client
+```
+
+JSON is `{"activity": {...}}`: `since` and `until` (the window, RFC 3339 UTC: 24 whole hours
+ending with the current one), `hours` (24 entries, oldest first, the empty hours included),
+`total` (the window as a whole) and `summary` (the line the table starts with). An hour has
+`at` (its start), `runs`, `ok`, `not_successful` (failed, error, cancelled or interrupted),
+`in_progress`, `by_status` (`success`, `failed`, `error`, `cancelled`, `interrupted`,
+`running`) and `by_trigger` (`schedule`, `api`, `manual`, `client`, and `unknown` for runs
+recorded before barca stored what started them).
+
+- The counts are over every recorded run of the window, one grouped query answered from an
+  index: they do not depend on `--limit`, and their cost is the runs of the window, not the
+  length of the history.
+- Hours are hours of UTC, also on a server started with `--timezone`: a reader converts `at`.
+  In a zone at a half-hour offset an hour's bar starts at `:30` local time.
+- `--activity` takes `--triggered-by` only (`--status`, `--target`, `--since`, `--limit` and
+  `--fields` are usage errors with it). With it, `activity.triggered_by` lists the triggers
+  counted, and runs that recorded no trigger are left out.
+- A run counts in the hour it started, with the status it has now.
 
 `barca history RUN_ID` shows one run: its own fields (status, target, job, timing, attempts,
 what started it, the schedule tick and `client_run_id` when it has them), then each step it

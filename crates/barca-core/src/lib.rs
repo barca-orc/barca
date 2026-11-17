@@ -39,6 +39,7 @@ pub mod commands;
 pub mod db;
 pub mod diagnostics;
 pub mod envelope;
+pub mod estimates;
 pub(crate) mod execution;
 pub mod freshness;
 pub mod gc;
