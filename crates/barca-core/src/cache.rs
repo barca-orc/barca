@@ -219,6 +219,59 @@ impl Held {
     }
 }
 
+/// A node the status prediction decided on its own, and that a run reads as it is
+/// ([`read_as_held`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReadAsIs {
+    /// Pinned with `barca pin`; otherwise a `Manual` asset or task.
+    pub(crate) pinned: bool,
+    /// The result a run reads is not the one its current code and inputs give.
+    pub(crate) stale: bool,
+}
+
+/// The status prediction ([`crate::freshness::RunRules::status`]), after `step` was decided on
+/// its own: when a run would read the node as it is (an asset pinned with `barca pin`, a
+/// `Manual` asset or task with a successful result), give what reads it the result a run reads
+/// instead of the one the node's current code and inputs predict. `step` is the hashed step
+/// [`decide_step`] returned. `None` for any other node, and for a held node with nothing to
+/// read (never computed, or a pin whose materialization is gone): a run stops there, and the
+/// prediction goes on as if the node were computed.
+pub(crate) async fn read_as_held(
+    dag: &Dag,
+    cache: Option<&CacheReader>,
+    state: &mut DecideState,
+    step: &crate::planner::StreamStep,
+    decision: &Decision,
+    user_pins: &[db::AssetPin],
+) -> Option<ReadAsIs> {
+    if !step.partition_keys.is_empty() || !step.step_id.partition.is_empty() {
+        return None;
+    }
+    let cache = cache?;
+    let base = step.step_id.base_id();
+    let pin = user_pins.iter().find(|p| p.node_id == base);
+    let (run_hash, output) = match pin {
+        Some(pin) => (
+            pin.run_hash.clone(),
+            db::success_at(cache, base, &pin.run_hash).await?,
+        ),
+        None if crate::freshness::pins_itself(dag, base) => {
+            let latest = db::latest_success(cache, base).await?;
+            (latest.run_hash, latest.output)
+        }
+        None => return None,
+    };
+    let display_id = step.step_id.display();
+    let stale = !matches!(decision, Decision::Cached { .. })
+        || step.run_hashes.get(&display_id) != Some(&run_hash);
+    state.run_hashes.insert(display_id.clone(), run_hash);
+    record_output(dag, state, &display_id, output.content_hash.as_ref());
+    Some(ReadAsIs {
+        pinned: pin.is_some(),
+        stale,
+    })
+}
+
 pub(crate) enum Decision {
     Run(RunReason),
     Cached {

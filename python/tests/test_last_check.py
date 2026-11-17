@@ -1,11 +1,12 @@
 """What the last tick found, where the read path cannot decide (#964).
 
-`barca status` and a server's `GET /state` predict what recomputing everything above a node
-would do. Below a cutoff asset they predict would run, the answer depends on bytes only a run
-writes, so the node's state is `unknown`. A tick does run, and reads a `Manual` node above
-the cutoff asset as it is, so tick after tick it finds the node up to date. Every surface
-then says so: `last_check`, and health `ok` with `checked_up_to_date`, until a newer check
-fails or something the read path can see changes.
+`barca status` and a server's `GET /state` predict what a request (`barca get`) would do,
+without running anything. Below a cutoff asset they predict would run, the answer depends on
+bytes only a run writes, so the node's state is `unknown`. A tick does run, and reads a
+paused node above the cutoff asset as it is (a request would recompute it), so tick after
+tick it finds the node up to date. Every surface then says so: `last_check`, and health `ok`
+with `checked_up_to_date`, until a newer check fails or something the read path can see
+changes. (Below a `Manual` or pinned node the read path decides as a tick does, #985.)
 """
 
 import json
@@ -18,7 +19,7 @@ from .helpers import QUICK, barca, wait_until
 PIPELINE = """
 import time
 
-from barca import Manual, Schedule, asset, sensor
+from barca import Schedule, asset, sensor
 
 
 @sensor(freshness=Schedule("*/5 * * * *"))
@@ -26,7 +27,7 @@ def clock() -> float:
     return time.time()
 
 
-@asset(inputs={"now": clock}, freshness=Manual)
+@asset(inputs={"now": clock})
 def baseline(now: float) -> dict:
     return {"day": 1}
 
@@ -90,6 +91,12 @@ def _tick(root: Path, ended: float, report: str, run: str) -> None:
     db.close()
 
 
+def _polled(root: Path) -> None:
+    """What a tick leaves while `baseline` is paused: the sensor polled again, and `baseline`
+    as it was, so a request would recompute it."""
+    _ok(barca(root, "get", "clock", "pipeline.py"))
+
+
 def _verdict(node: dict) -> tuple:
     check = node["last_check"]
     return (
@@ -103,16 +110,16 @@ CHECKED = ("ok", "checked_up_to_date", ("up_to_date", CLOCK))
 
 
 def test_a_node_the_read_path_cannot_decide_reads_as_the_last_tick_found_it(project, serve):
-    _ok(barca(project, "get", "baseline", "pipeline.py", "--refresh", "baseline"))
     _ok(barca(project, "get", "report", "pipeline.py"))
-    # What a tick does: the sensor is polled, `baseline` is read as it is, `window` runs
-    # again and writes the same bytes, and `report` is a cache hit.
+    # What a run does: the sensor is polled, `window` runs again and writes the same bytes,
+    # and `report` is a cache hit.
     steps = {
         s["id"]: s["status"]
         for s in json.loads(_ok(barca(project, "get", "report", "pipeline.py")))["steps"]
     }
     assert steps[REPORT] == "cached", steps
     assert steps["pipeline.py:window"] == "ran", steps
+    _polled(project)
 
     # The read path predicts `baseline` would run, so it cannot decide `report`. With no
     # tick record that is all there is to say.
@@ -191,9 +198,8 @@ def test_a_node_the_read_path_cannot_decide_reads_as_the_last_tick_found_it(proj
 
 
 def test_a_verdict_does_not_outlive_its_schedule(project):
-    _ok(barca(project, "get", "baseline", "pipeline.py", "--refresh", "baseline"))
     _ok(barca(project, "get", "report", "pipeline.py"))
-    _ok(barca(project, "get", "report", "pipeline.py"))
+    _polled(project)
     # Found up to date an hour ago by a schedule that fires every five minutes: the ticks
     # since then are missing, so the verdict no longer decides. The check is still shown.
     # (Rows above it are newer than this tick too; either reason is enough.)
@@ -208,13 +214,16 @@ def test_a_verdict_does_not_outlive_its_schedule(project):
 def test_a_live_tick_decides_and_its_verdict_expires_once_ticks_stop(project, serve):
     source = project / "pipeline.py"
     source.write_text(source.read_text().replace("*/5 * * * *", "*/2 * * * * *"))
-    _ok(barca(project, "get", "baseline", "pipeline.py", "--refresh", "baseline"))
+    _ok(barca(project, "get", "report", "pipeline.py"))
     server = serve()
+    # Ticks read a paused node as it is; a request would recompute it.
+    _ok(barca(project, "pause", "baseline", "--server", server.url, "--json"))
 
     def report() -> dict:
         return next(n for n in server.get("/state") if n["name"] == "report")
 
-    # The scheduler's own ticks: the first computes `report`, the next ones find it up to date.
+    # The scheduler's own ticks: each polls the sensor, reads `baseline` as it is, reruns
+    # `window` and finds `report` up to date.
     wait_until(
         lambda: _verdict(report()) == CHECKED,
         "a tick to find report up to date",

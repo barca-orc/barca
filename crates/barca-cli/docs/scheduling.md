@@ -173,6 +173,10 @@ not fire. `barca get report` prints a note when it reads a `Manual` node that is
 [barca] note: baseline is Manual and stale; barca get baseline pipeline.py --refresh baseline to recompute
 ```
 
+`barca status` reports such a `baseline` as `stale`, and decides `report` against the result
+every run reads: once `report` is up to date against it, it is `cached` and its `detail` names
+`baseline` as what is held back (`barca docs status`, "Cache state").
+
 A `Manual` node that has never been computed cannot be read. `barca get report` is then a usage
 error (exit 2) whose remediation is that command; under a tick, the nodes that read it are
 reported `blocked` in the run (a `skipped` step with reason `blocked`) and the tick is not an

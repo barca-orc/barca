@@ -29,6 +29,11 @@ pub struct RunRules {
     pub pin_manual: bool,
     /// A tick of this scheduled node: every other task fires only when it is out of date.
     pub tick: Option<String>,
+    /// `barca status` and `GET /state` ([`RunRules::status`]): decide every node on its own,
+    /// held ones included, and decide what reads a held node (a `Manual` asset or task, an
+    /// asset pinned with `barca pin`) against the result a run would read: its latest
+    /// successful one, or its pinned one (#985).
+    pub status: bool,
 }
 
 impl RunRules {
@@ -37,6 +42,19 @@ impl RunRules {
         RunRules {
             pin_manual: true,
             tick: None,
+            status: false,
+        }
+    }
+
+    /// `barca status` and `GET /state`: every node is decided, nothing is skipped because a
+    /// run would not walk past a held node, and what is below a held node is decided as
+    /// [`RunRules::request`] decides it. So the held node reads `stale` when its own code or
+    /// inputs moved on, and what reads it reads the state a `get` or a tick would find.
+    pub fn status() -> Self {
+        RunRules {
+            pin_manual: false,
+            tick: None,
+            status: true,
         }
     }
 
@@ -45,6 +63,7 @@ impl RunRules {
         RunRules {
             pin_manual: true,
             tick: Some(scheduled.to_string()),
+            status: false,
         }
     }
 }
@@ -146,7 +165,7 @@ pub fn tick_reach<'a>(
 
 /// Whether `id` pins itself: a `Manual` asset or task. Sensors are polled whenever a run needs
 /// them, whatever their freshness. A partitioned node is not pinned (it is computed as before).
-fn pins_itself(dag: &Dag, id: &str) -> bool {
+pub(crate) fn pins_itself(dag: &Dag, id: &str) -> bool {
     dag.get_node(id).is_some_and(|n| {
         n.extracted.freshness == Freshness::Manual
             && matches!(n.kind(), NodeKind::Asset | NodeKind::Task)

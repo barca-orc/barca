@@ -154,14 +154,14 @@ pub(crate) async fn chain_states(
     id: &str,
 ) -> Result<ChainStates, BarcaError> {
     let chain = chain(dag, id);
-    let (explained, members, will_run) = crate::execution::explain_dag_with_keys(
+    let (explained, members, will_run, _) = crate::execution::explain_dag_with_keys(
         dag,
         cfg,
         &chain,
         crate::cache::CachePolicy::CacheAware,
         "status",
         None,
-        &crate::freshness::RunRules::default(),
+        &crate::freshness::RunRules::status(),
         &[],
     )
     .await?;

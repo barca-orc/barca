@@ -147,18 +147,19 @@ separate fact shown beside its health; it does not change it.
 
 Implemented in `crates/barca-core/src/health.rs` (`checks`, `verdict_stands`).
 
-**Why the read path cannot decide.** `cache.state` predicts what recomputing everything above
-a node would do, without running anything ([inspection](inspection.md)). Where the answer
-depends on what only a run produces, it is `unknown`: below a cutoff asset the prediction
-says would run (`cutoff_pending`: the bytes it will write), a sensor with no recorded output
-(`sensor_output_unknown`), a `partitions_from` source whose output is not available
-(`partitions_unknown`). A run does produce it. A tick's run also follows rules the prediction
-does not: it reads a `Manual` or pinned node as it is (`RunRules::tick`), where the prediction
-recomputes it (`RunRules::default`). So below a `Manual` node that is stale against a sensor
-polled every tick, the prediction says the cutoff asset under it would run, forever, and
-everything below that is `unknown`, forever; each tick reruns the cutoff asset, which writes
-the same bytes, and finds what is below it up to date. The run decided what the read path
-cannot, and the tick record holds its verdict.
+**Why the read path cannot decide.** `cache.state` predicts what a request would do, without
+running anything ([inspection](inspection.md)), by the rules a run follows: a `Manual` or
+pinned node is read as it is ([cache decisions](cache-decisions.md), "The rules the
+prediction follows", #985). Where the answer depends on what only a run produces, it is
+`unknown`: below a cutoff asset the prediction says would run (`cutoff_pending`: the bytes it
+will write), a sensor with no recorded output (`sensor_output_unknown`), a `partitions_from`
+source whose output is not available (`partitions_unknown`). A run does produce it. A tick's
+run also follows one rule a request does not: it reads a node paused with `barca pause` as it
+is (`RunRules::tick`), where a request, and so the prediction, recomputes it. So below a
+paused node that is stale against a sensor polled every tick, the prediction says a cutoff
+asset under it would run, and everything below that is `unknown`, until the node is resumed;
+each tick reruns the cutoff asset, which writes the same bytes, and finds what is below it up
+to date. The run decided what the read path cannot, and the tick record holds its verdict.
 
 `last_check` is `{"at", "outcome", "schedule"}` of the newest finished fired tick that had the
 node as a target, across schedules, newest by when its run ended: `at` is that time,
@@ -187,10 +188,11 @@ The verdict of a last check **stands**, and row 7a applies, when all hold at `as
 A node whose verdict stands raises no `behind_input` signal: the tick read its inputs' newest
 results and found it up to date. Rows 1 to 6 still come first, so a failing, blocked or
 suspect node, or the scheduled node of a late schedule, is not `ok`. A node the read path
-decides (`stale`, `cached`, ...) keeps that answer whatever its last check says: where the
-prediction and the tick disagree on a decided state (a node below a stale `Manual` node reads
-`stale`, `upstream_stale`, though ticks find it up to date), this rule does not apply (an
-open gap below).
+decides (`stale`, `cached`, ...) keeps that answer whatever its last check says. The
+prediction and a tick decide a node below a `Manual` or pinned node alike (#985); they still
+differ below a stale paused node with no cutoff asset in between, which reads `stale`,
+`upstream_stale` (a request would recompute the paused node) while ticks find it up to date,
+and this rule does not apply there (a limit below).
 
 Sensors and tasks: a polled sensor is recorded `rebuilt` whether or not its observation
 changed ("What a tick records"), and a task that fired is `rebuilt`. Their state is
@@ -554,7 +556,7 @@ today: #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve r
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #960 row and the
-#964 row. The rest do not pass yet.
+#964 row and the #985 row. The rest do not pass yet.
 
 | Scenario | Issue |
 | --- | --- |
@@ -568,6 +570,7 @@ the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #960 ro
 | Estimates within the stated error on the seeded server simulation; a node below a pending cutoff has `recheck_at` only | #962 |
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963 |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
+| A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
 | `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965 |
 | A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972 |
 | One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973 |
@@ -589,11 +592,11 @@ data signals are deleted: their rules are `crates/barca-core/src/health.rs`):
   and data coverage per scope, in TypeScript, from the served `health` and `measured`. `root`
   (#963) and the rollup (#955) replace both.
 
-- A node the read path decides differently from a tick is not covered by "Last check": below
-  a stale `Manual` node (not behind a cutoff) the prediction says `stale`, `upstream_stale`,
-  and health `behind`, while every tick finds the node up to date; `barca get --dry-run`
-  already predicts it `cached`. Making status predict with the rules a run follows would
-  change `cache.state` for those nodes and is not decided here.
+- A node below a stale paused node (not behind a cutoff asset) reads `stale`,
+  `upstream_stale`, and health `behind`, while every tick finds it up to date: a tick reads
+  a paused node as it is and a request recomputes it, and status says what a request would
+  do, as `barca get --dry-run` does. "Last check" does not cover it. Whether such a node
+  counts against the freshness gap while the pause lasts is left to the paused root (#961).
 - "Last check" compares the node's own definition and the times of rows above it. An edit
   above the node, and a declared environment variable's new value, are not seen until the next
   tick or the expiry.

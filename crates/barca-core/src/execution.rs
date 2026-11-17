@@ -59,7 +59,7 @@ use bookkeeping::{LedgerContext, RunEvidence, RunResults};
 use finalize::*;
 pub(crate) use phase::note;
 use phase::*;
-pub(crate) use predict::{explain_dag, explain_dag_with_keys, explain_dag_with_membership};
+pub(crate) use predict::{HeldNodes, explain_dag, explain_dag_with_keys};
 use prepare::*;
 use select::*;
 pub(crate) use workers::upload_pending;

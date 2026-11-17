@@ -729,14 +729,17 @@ pub(crate) async fn status_from_dag_with_membership(
     shape: bool,
 ) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
     let t0 = std::time::Instant::now();
-    let (explained, membership) = crate::execution::explain_dag_with_membership(
+    // The rules a run follows (#985): each node is decided on its own, and what reads a
+    // `Manual` or pinned node is decided against the result a run reads, not against a
+    // recompute of it.
+    let (explained, membership, _, held) = crate::execution::explain_dag_with_keys(
         dag,
         cfg,
         target_names,
         CachePolicy::CacheAware,
         "status",
         None,
-        &crate::freshness::RunRules::default(),
+        &crate::freshness::RunRules::status(),
         &[],
     )
     .await?;
@@ -788,6 +791,9 @@ pub(crate) async fn status_from_dag_with_membership(
     let mut states: HashMap<String, CacheState> = HashMap::new();
     // Each blocked node: how many of its keys wait, and on which failed node.
     let mut blocked: HashMap<String, (usize, String)> = HashMap::new();
+    // Each node below a stale held node (a `Manual` or pinned one a run reads as it is): the
+    // nearest such node above it.
+    let mut held_back: HashMap<&str, &str> = HashMap::new();
     for id in ids {
         let Some(node) = dag.get_node(id) else {
             continue;
@@ -819,7 +825,18 @@ pub(crate) async fn status_from_dag_with_membership(
                 changed: p.changed.clone(),
                 empty: empty_keys.get(id).copied().unwrap_or(0),
             });
-        let mut cache = cache_status(report, &inputs, &states, &history);
+        let held_above = inputs.iter().find_map(|up| {
+            let up = up.split('[').next().unwrap_or(up);
+            match held.get_key_value(up) {
+                Some((held_id, read)) if read.stale => Some(held_id.as_str()),
+                _ => held_back.get(up).copied(),
+            }
+        });
+        if let Some(above) = held_above {
+            held_back.insert(id, above);
+        }
+        let held_note = held_above.map(|above| held_note(dag, above, held[above].pinned));
+        let mut cache = cache_status(report, &inputs, &states, &history, &held, held_note);
         local_only(
             &mut cache,
             id,
@@ -1014,6 +1031,8 @@ fn cache_status(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
+    held: &crate::execution::HeldNodes,
+    held_note: Option<String>,
 ) -> CacheStatus {
     let Some(r) = report else {
         return cache(
@@ -1034,7 +1053,10 @@ fn cache_status(
         (a, _) if StepStatus::Cached.is(Some(a)) => cache(
             CacheState::Cached,
             "materialized",
-            "a successful materialization matches this code and these inputs",
+            // Up to date against a held node above as a run reads it: say which one (#985).
+            held_note.unwrap_or_else(|| {
+                "a successful materialization matches this code and these inputs".to_string()
+            }),
         ),
         // The result is recorded, but its artifact is gone and a run would have to read it.
         ("run", Some("artifact_missing")) => cache(
@@ -1060,7 +1082,7 @@ fn cache_status(
                 format!("{cached} of {total} partition keys cached"),
             )
         }
-        _ => not_cached(r, inputs, states, history),
+        _ => not_cached(r, inputs, states, history, held),
     };
     // A consumer of a sensor is predicted from the sensor's last recorded output (#183); keep
     // that caveat from the dry run's detail.
@@ -1086,6 +1108,7 @@ fn not_cached(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
+    held: &crate::execution::HeldNodes,
 ) -> CacheStatus {
     let state = if history.ever_succeeded {
         CacheState::Stale
@@ -1094,16 +1117,18 @@ fn not_cached(
     };
     let upstream_stale = inputs.iter().find(|up| {
         let base = up.split('[').next().unwrap_or(up);
-        states.get(base).is_some_and(|s| {
-            matches!(
-                s,
-                CacheState::Stale
-                    | CacheState::NeverRun
-                    | CacheState::Partial
-                    | CacheState::Blocked
-                    | CacheState::Unknown
-            )
-        })
+        // A held input is read as it is: its own state does not change what this node reads.
+        !held.contains_key(base)
+            && states.get(base).is_some_and(|s| {
+                matches!(
+                    s,
+                    CacheState::Stale
+                        | CacheState::NeverRun
+                        | CacheState::Partial
+                        | CacheState::Blocked
+                        | CacheState::Unknown
+                )
+            })
     });
     // The last attempt at exactly this code and these inputs failed.
     let failed_here = history
@@ -1150,6 +1175,24 @@ fn not_cached(
     c.changed = r.changed.clone();
     c.change_causes = causes(r.changed.as_deref(), false);
     c
+}
+
+/// The `detail` of a cached node below `above`, a stale node a run reads as it is: what it is
+/// up to date against, and how that node is recomputed.
+fn held_note(dag: &crate::dag::Dag, above: &str, pinned: bool) -> String {
+    let name = short_name(above);
+    if pinned {
+        format!(
+            "up to date against '{name}' as it is: '{name}' is pinned, and its current code and \
+             inputs give another result; a run reads the pinned one until `barca unpin {name}`"
+        )
+    } else {
+        format!(
+            "up to date against '{name}' as it is: '{name}' is Manual and stale, and a run reads \
+             its last result without recomputing it; `{}` recomputes it",
+            crate::freshness::refresh_command(dag, above, &[])
+        )
+    }
 }
 
 fn causes(changed: Option<&[String]>, upstream_stale: bool) -> Option<Vec<String>> {
@@ -1279,12 +1322,15 @@ mod tests {
     #[test]
     fn states_and_reasons() {
         let none = HashMap::new();
+        let no_held = crate::execution::HeldNodes::new();
         let h = history(None, false);
         let c = cache_status(
             Some(&report("run", Some("not_materialized"))),
             &[],
             &none,
             &h,
+            &no_held,
+            None,
         );
         assert_eq!(
             (c.state.as_str(), c.reason.as_str()),
@@ -1297,6 +1343,8 @@ mod tests {
             &[],
             &none,
             &h,
+            &no_held,
+            None,
         );
         assert_eq!((c.state.as_str(), c.reason.as_str()), ("stale", "changed"));
 
@@ -1304,13 +1352,15 @@ mod tests {
         let mut changed = report("run", Some("not_materialized"));
         changed.changed = Some(vec!["input p.py:b".into()]);
         changed.run_hash = None;
-        let c = cache_status(Some(&changed), &[], &none, &h);
+        let c = cache_status(Some(&changed), &[], &none, &h, &no_held, None);
         assert_eq!(c.change_causes.unwrap(), ["inputs_changed"]);
         let c = cache_status(
             Some(&changed),
             &["p.py:b".to_string()],
             &HashMap::from([("p.py:b".to_string(), CacheState::Stale)]),
             &h,
+            &no_held,
+            None,
         );
         assert_eq!(c.reason, "upstream_stale");
         assert_eq!(
@@ -1319,7 +1369,7 @@ mod tests {
         );
         let mut failed = history(Some("failed"), true);
         failed.latest.as_mut().unwrap().error_message = Some("boom".into());
-        let c = cache_status(Some(&changed), &[], &none, &failed);
+        let c = cache_status(Some(&changed), &[], &none, &failed, &no_held, None);
         assert_eq!(c.reason, "failed");
         assert_eq!(c.change_causes.unwrap(), ["inputs_changed"]);
         // A node that never succeeded has nothing to compare with.
@@ -1329,7 +1379,7 @@ mod tests {
         // run needs it: that is not "changed" (#252).
         let mut missing = report("run", Some("artifact_missing"));
         missing.detail = Some("the artifact file is missing".into());
-        let c = cache_status(Some(&missing), &[], &none, &h);
+        let c = cache_status(Some(&missing), &[], &none, &h, &no_held, None);
         assert_eq!(
             (c.state.as_str(), c.reason.as_str(), c.detail.as_str()),
             ("stale", "artifact_missing", "the artifact file is missing")
@@ -1341,6 +1391,8 @@ mod tests {
             &["p.py:u".to_string()],
             &up,
             &h,
+            &no_held,
+            None,
         );
         assert_eq!(
             (c.state.as_str(), c.reason.as_str()),
@@ -1353,6 +1405,8 @@ mod tests {
             &[],
             &none,
             &h,
+            &no_held,
+            None,
         );
         assert_eq!(
             (c.state.as_str(), c.reason.as_str()),
@@ -1360,10 +1414,58 @@ mod tests {
         );
         assert!(c.detail.contains("boom"));
 
-        let c = cache_status(Some(&report("run", Some("task"))), &[], &none, &h);
+        let c = cache_status(
+            Some(&report("run", Some("task"))),
+            &[],
+            &none,
+            &h,
+            &no_held,
+            None,
+        );
         assert_eq!(c.state, CacheState::AlwaysRuns);
-        let c = cache_status(Some(&report("cached", None)), &[], &none, &h);
+        let c = cache_status(
+            Some(&report("cached", None)),
+            &[],
+            &none,
+            &h,
+            &no_held,
+            None,
+        );
         assert_eq!(c.state, CacheState::Cached);
+
+        // A held input (a `Manual` or pinned node a run reads as it is) is not what makes a
+        // node stale, whatever its own state (#985): the node reads its current result.
+        let h = history(Some("success"), true);
+        let held: crate::execution::HeldNodes = [(
+            "p.py:u".to_string(),
+            crate::cache::ReadAsIs {
+                pinned: false,
+                stale: true,
+            },
+        )]
+        .into();
+        let c = cache_status(
+            Some(&report("run", Some("not_materialized"))),
+            &["p.py:u".to_string()],
+            &up,
+            &h,
+            &held,
+            None,
+        );
+        assert_eq!((c.state.as_str(), c.reason.as_str()), ("stale", "changed"));
+        // And a cached node below one says what it is up to date against.
+        let c = cache_status(
+            Some(&report("cached", None)),
+            &["p.py:u".to_string()],
+            &up,
+            &h,
+            &held,
+            Some("up to date against 'u' as it is".to_string()),
+        );
+        assert_eq!(
+            (c.state.as_str(), c.reason.as_str(), c.detail.as_str()),
+            ("cached", "materialized", "up to date against 'u' as it is")
+        );
     }
 
     #[test]

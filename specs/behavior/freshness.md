@@ -75,6 +75,10 @@ The canonical run interface (`POST /runs`, also used by `--server`) follows CLI 
 rules. Deprecated trigger routes retain their compatibility behavior, including their older
 Manual treatment; see [scheduling](../../crates/barca-cli/docs/scheduling.md#manual-pins-itself).
 Manual pins itself; it is not an approval gate that prevents other inputs below it updating.
+Status decides by these rules too (#985): a `Manual` or pinned node reads `stale` when its own
+code or inputs moved on, and what is below it has the state a run finds, reading it as it is
+([cache decisions](cache-decisions.md), "The rules the prediction follows"). A paused node is
+held by ticks only, so status says of it what a request would do.
 
 A tick's targets are its scheduled node and that node's followers: the `Always` nodes reached
 going downstream from it, through `Always` nodes and `Manual` assets and tasks (which are passed,

@@ -118,13 +118,14 @@ It is a record, shown whatever its age. Ticks are recorded by a scheduling `barc
 `--read-only` server read the same record. Each schedule keeps the outcomes of its newest 20
 fired ticks, and with several schedules reaching a node the newest tick wins.
 
-**When a check decides health.** `barca status` and `GET /state` predict what recomputing
-everything above a node would do, without running anything. Where the answer depends on what
-only a run produces, the node's state is `unknown` ([barca status: Cache state](/reference/cli/status/#cache-state)): below
-an `@asset(cutoff=True)` that would run, the bytes it will write. A tick does run, and reads a
-`Manual` or pinned node above as it is (the prediction recomputes it), so it can find the node
-up to date every five minutes while its state stays `unknown`. Such a node is `ok` with
-`health_reason: "checked_up_to_date"` when all of this holds:
+**When a check decides health.** `barca status` and `GET /state` predict what a `barca get`
+would do, without running anything. Where the answer depends on what only a run produces, the
+node's state is `unknown` ([barca status: Cache state](/reference/cli/status/#cache-state)): below an `@asset(cutoff=True)`
+that would run, the bytes it will write. A tick does run. It also reads a node paused with
+`barca pause` as it is, where a `get` (and so the prediction) recomputes it, so below a
+paused node it can find a node up to date every five minutes while its state stays `unknown`.
+(A `Manual` or pinned node is read as it is by every run, and by the prediction.) Such a
+node is `ok` with `health_reason: "checked_up_to_date"` when all of this holds:
 
 - its state is `unknown` and no earlier rule applies (it is not failing, blocked, suspect, or
   the scheduled node of a late schedule);

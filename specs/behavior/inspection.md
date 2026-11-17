@@ -28,7 +28,9 @@ required sensor polling can be unknown.
 | Failed attempt | That attempt did not succeed | Earlier results and history ceased to exist |
 
 Status can intentionally expose a stale last successful value; clients must inspect its
-cache/state information. `Manual` can intentionally select a stale pin. Cached freshness
+cache/state information. `Manual` can intentionally select a stale pin: status reports that
+node `stale` and what reads it against the pin, as a run reads it
+([cache decisions](cache-decisions.md), "The rules the prediction follows"). Cached freshness
 proofs avoid checking unused files; required artifacts still go through recovery.
 Digest mismatch, local-only and other remote availability reasons retain their existing
 `unsynced` semantics. There is no implication that freshness, availability and execution

@@ -224,6 +224,7 @@ fn load(text: &str) -> Result<(RunSpec, f64), String> {
         rules: barca_core::freshness::RunRules {
             pin_manual: stored.pin_manual,
             tick: stored.tick,
+            status: false,
         },
         timeout: stored.timeout,
         kill_requeues: stored.kill_requeues,
