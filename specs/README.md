@@ -146,7 +146,10 @@ owners. Until then the current HTTP/CLI contracts and [inspection](behavior/insp
 authoritative for the rest.
 
 [API ideas](proposals/api-ideas.md) are unscheduled, unapproved alternatives. Keep them separate
-from both implemented contracts and accepted design. [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
+from both implemented contracts and accepted design.
+[Computed and published](proposals/computed-and-published.md) is an unapproved draft that
+separates a step being computed from its output being published (store upload, sinks), with
+publication outside step capacity (#951). [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
 investigation; completed implementation plans were deleted and remain in linked PR history.
 They are not current contract owners.
 
