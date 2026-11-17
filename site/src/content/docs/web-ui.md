@@ -44,11 +44,18 @@ the graph, the map) counts the same health per node, so they agree. Each node ha
 | `behind` | Stale, partly computed or out of sync, or a schedule that missed its slot |
 | `undecided` | barca cannot decide yet: a cutoff or sensor upstream has not reported. Expected |
 | `never run` | Nothing recorded |
-| `ok` | Up to date, or a task or sensor whose last run succeeded |
+| `ok` | Up to date, or a task or sensor whose last run succeeded; also a node barca cannot decide by itself that the last tick found up to date |
 
 The words are barca's, not the page's: each node's `health` is computed once by barca and is
 the same in `barca status --json`, the server's API and `barca.nodes` in `barca sql`
 ([Health](/reference/cli/status-fields/#health)); the page only draws it.
+
+A node's panel says what the last tick that checked it found, under its state: `checked 3m
+ago, up to date` (or `rebuilt`, `failed`, `not reached`), with the schedule whose tick it was.
+That is the tick record, shown as it is on a `--read-only` server too. Where barca cannot
+decide a node's state without running it (below a cutoff asset that would run, for example),
+a check that found it up to date makes it `ok` until the next tick is overdue
+([Last check](/reference/cli/status-fields/#last-check)).
 
 The data signals behind `suspect data` come from row counts barca records for every tabular
 result ([Row counts](/reference/cli/status-fields/#row-counts)); a node's panel lists them under its state.

@@ -161,6 +161,8 @@ struct SharedSnapshot {
 /// Every node's age, shared by the polls of one database state.
 type NodeAges = Arc<HashMap<String, barca_core::db::NodeAge>>;
 type Pinned = Arc<std::collections::HashSet<String>>;
+/// What the newest ticks found about every node (`barca_core::health::checks`).
+type Checks = Arc<barca_core::health::Checks>;
 
 /// What the metadata database records of every schedule, shared by the polls of one database
 /// state: its ticks and its failed ticks.
@@ -256,6 +258,9 @@ pub struct ReadCache {
     /// The last recorded ticks read, the database state they are of and the schedules they
     /// were read for ([`AppState::cached_ticks`]).
     ticks: tokio::sync::Mutex<Option<KeptScheduleFacts>>,
+    /// What the newest ticks found, with the graph and the database state it is of
+    /// ([`AppState::cached_checks`]).
+    checks: tokio::sync::Mutex<Option<(StatusKey, Checks)>>,
     /// What node ages are folded from, kept so that a read after a run recorded a few rows
     /// reads those rows only ([`barca_core::db::NodeAgesIndex`]).
     ages_index: Arc<tokio::sync::Mutex<barca_core::db::NodeAgesIndex>>,
@@ -272,6 +277,8 @@ pub struct ReadCache {
     /// How many times a graph was loaded for inspection and a status was computed (tests).
     pub(crate) dag_loads: std::sync::atomic::AtomicUsize,
     pub(crate) status_computes: std::sync::atomic::AtomicUsize,
+    /// How many times the tick record was read ([`AppState::cached_checks`]; tests).
+    pub(crate) checks_reads: std::sync::atomic::AtomicUsize,
 }
 
 impl ReadCache {
@@ -675,6 +682,42 @@ impl AppState {
         Ok(ticks)
     }
 
+    /// What the tick record says about the nodes of `dag` for the database in state `db`
+    /// (`barca_core::health::checks`: two bounded reads for the whole graph), kept until
+    /// either changes, so a poll that finds nothing changed reads nothing. A verdict's expiry
+    /// is a time it carries, compared with the clock on each answer.
+    pub(crate) async fn cached_checks(
+        &self,
+        dag: &Arc<Dag>,
+        db: &Stamp,
+        db_path: &str,
+        ages: &NodeAges,
+    ) -> Result<Checks, BarcaError> {
+        let key = StatusKey {
+            dag: dag.clone(),
+            db: db.clone(),
+        };
+        let mut kept = self.reads.checks.lock().await;
+        if let Some((of, checks)) = kept.as_ref()
+            && of.same(&key)
+        {
+            return Ok(checks.clone());
+        }
+        self.reads
+            .checks_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let zone = crate::scheduler::zone_of(&self.config);
+        let (graph, ages, db_path) = (dag.clone(), ages.clone(), db_path.to_string());
+        let checks = Arc::new(
+            off_the_workers(move || async move {
+                barca_core::health::checks(&db_path, &graph, &ages, &zone).await
+            })
+            .await?,
+        );
+        *kept = Some((key, checks.clone()));
+        Ok(checks)
+    }
+
     /// Typical durations for the database in state `db`, kept like a status result (read
     /// again once older than [`STATUS_MAX_AGE`]). After a change they are read in the
     /// background and waited for up to [`STATUS_WAIT`], as a status result is: reading every
@@ -907,6 +950,85 @@ mod tests {
             .unwrap();
         poll(&state).await;
         assert_eq!(loads(&state), (before.0, before.1 + 1), "{first:?}");
+    }
+
+    /// The tick record is read once per state of the graph and the database, however many
+    /// polls ask (#964): a poll that finds nothing changed reads nothing.
+    #[tokio::test]
+    async fn the_tick_record_is_read_once_until_something_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_in(dir.path());
+        let db = state.config.resolved.db_path.clone();
+        barca_core::db::init_db(&db).await.unwrap();
+        let dag = state.inspect_dag().await.unwrap();
+        let id = dag
+            .topo_order()
+            .into_iter()
+            .find(|id| id.ends_with(":first"))
+            .unwrap()
+            .to_string();
+        let tick = |slot: i64, run: &'static str| {
+            let (db, id) = (db.clone(), id.clone());
+            async move {
+                use barca_core::db::{NewTick, TickDecision, TickTargetOutcome};
+                let new = NewTick {
+                    schedule_id: &id,
+                    scheduled_at: slot,
+                    action: TickDecision::Fired,
+                    skipped_for: None,
+                    run_id: Some(run),
+                };
+                barca_core::db::record_tick(&db, new).await.unwrap();
+                let targets = [(id.clone(), TickTargetOutcome::UpToDate)];
+                barca_core::db::record_tick_finished(
+                    &db,
+                    &id,
+                    slot,
+                    run,
+                    slot as f64 + 2.0,
+                    "success",
+                    &targets,
+                )
+                .await
+                .unwrap();
+            }
+        };
+        let reads = |state: &AppState| state.reads.checks_reads.load(Ordering::Relaxed);
+        let now = chrono::Utc::now().timestamp();
+        tick(now - 120, "run-1").await;
+        std::thread::sleep(SOURCES_SETTLED + Duration::from_millis(100));
+
+        let rows = poll(&state).await;
+        let first = rows.iter().find(|n| n.status.id == id).unwrap();
+        let check = first.status.last_check.as_ref().expect("its last check");
+        assert_eq!(check.schedule, id);
+        assert_eq!(
+            check.outcome,
+            barca_core::db::TickTargetOutcome::UpToDate,
+            "{rows:?}"
+        );
+        let after_first = reads(&state);
+        assert!(after_first >= 1);
+        for _ in 0..3 {
+            poll(&state).await;
+        }
+        assert_eq!(
+            reads(&state),
+            after_first,
+            "nothing changed: nothing is read"
+        );
+
+        // A newer tick is a database write: the next poll reads the record again.
+        tick(now - 60, "run-2").await;
+        std::thread::sleep(SOURCES_SETTLED + Duration::from_millis(100));
+        let rows = poll(&state).await;
+        assert!(reads(&state) > after_first);
+        let first = rows.iter().find(|n| n.status.id == id).unwrap();
+        let at = chrono::DateTime::from_timestamp(now - 58, 0).unwrap();
+        assert_eq!(
+            first.status.last_check.as_ref().unwrap().at,
+            at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        );
     }
 
     #[test]
