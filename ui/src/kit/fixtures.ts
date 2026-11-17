@@ -470,7 +470,8 @@ export const runDetails: Record<string, Remote<RunView>> = {
 const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => ({
   run_id: `a8ba${String(n).padStart(4, '0')}`, status: 'pending', position: n, command: 'get',
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
-  schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30), ...overrides,
+  schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30),
+  started_at: null, estimated_start_at: null, wait_seconds: null, ...overrides,
 })
 const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
 const deepQueue: QueueView = {

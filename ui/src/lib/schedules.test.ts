@@ -169,7 +169,8 @@ describe('lateness', () => {
   const stands = (over: Partial<ScheduleStatus> = {}): ScheduleStatus => ({
     cron: '* * * * *', next_fire: null, last_fired: null, last_status: null, last_run_id: null,
     late: false, late_since: null, failures: 0, max_failures: 5, failing: false, paused: false,
-    paused_until: null, skip_reason: null, live: true, ...over,
+    paused_until: null, skip_reason: null, live: true, typical_queue_wait_seconds: 0,
+    typical_run_seconds: null, queue_bound: false, ...over,
   })
 
   it('words how long ago the missed slot was', () => {

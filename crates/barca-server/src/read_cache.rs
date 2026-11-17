@@ -161,6 +161,9 @@ struct SharedSnapshot {
 /// Every node's age, shared by the polls of one database state.
 type NodeAges = Arc<HashMap<String, barca_core::db::NodeAge>>;
 type Pinned = Arc<std::collections::HashSet<String>>;
+/// When each source file of a graph was last modified, unix seconds, by the file part of a
+/// node id (`barca_core::estimates::source_times_of`).
+pub(crate) type SourceTimes = Arc<HashMap<String, i64>>;
 /// What the newest ticks found about every node (`barca_core::health::checks`).
 type Checks = Arc<barca_core::health::Checks>;
 
@@ -261,6 +264,9 @@ pub struct ReadCache {
     /// Which schedules reach each node of the inspected graph as a target
     /// ([`AppState::cached_paths`]): the scheduler's walk, kept for as long as the graph is.
     paths: tokio::sync::Mutex<Option<(Arc<Dag>, Arc<barca_core::refresh_path::Paths>)>>,
+    /// When each source file of the loaded graph was last modified
+    /// ([`AppState::cached_source_times`]).
+    source_times: Mutex<Option<(Arc<Dag>, SourceTimes)>>,
     /// How many times that walk ran (tests).
     pub(crate) paths_walks: std::sync::atomic::AtomicUsize,
     /// The last recorded ticks read, the database state they are of and the schedules they
@@ -703,6 +709,20 @@ impl AppState {
         );
         *kept = Some((dag.clone(), paths.clone()));
         Ok(paths)
+    }
+
+    /// When each source file of `dag` was last modified (`barca_core::estimates`: what dates
+    /// a code change), read once per loaded graph: an edit loads a new graph.
+    pub(crate) fn cached_source_times(&self, dag: &Arc<Dag>) -> SourceTimes {
+        let mut kept = self.reads.source_times.lock().unwrap();
+        if let Some((of, times)) = kept.as_ref()
+            && Arc::ptr_eq(of, dag)
+        {
+            return times.clone();
+        }
+        let times = Arc::new(barca_core::estimates::source_times_of(dag));
+        *kept = Some((dag.clone(), times.clone()));
+        times
     }
 
     /// What the database in state `db` records of `schedules` (scheduled node ids): their

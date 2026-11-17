@@ -559,6 +559,59 @@ pub async fn latest_ticks(db_path: &str) -> Result<LatestTicks, BarcaError> {
     Ok(out)
 }
 
+/// How long the newest fired ticks of one schedule waited and ran ([`tick_timings`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TickTimings {
+    /// `queue_wait_seconds` of its newest fired ticks whose run started, newest first, at most
+    /// [`TICKS_WITH_TARGETS`].
+    pub queue_waits: Vec<f64>,
+    /// How long the runs of its newest fired ticks that ended `success` took (start to end),
+    /// newest first, at most [`TICKS_WITH_TARGETS`].
+    pub run_seconds: Vec<f64>,
+}
+
+/// [`TickTimings`] of every schedule: one read of the table, which is bounded by its writers
+/// (at most [`TICKS_PER_SCHEDULE`] rows a schedule). What a schedule's typical queue wait and
+/// typical run time are the medians of. A database without the table has none.
+pub async fn tick_timings(db_path: &str) -> Result<HashMap<String, TickTimings>, BarcaError> {
+    let mut out: HashMap<String, TickTimings> = HashMap::new();
+    if fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
+        return Ok(out);
+    }
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_table(&conn).await? {
+        return Ok(out);
+    }
+    let mut rows = conn
+        .query(
+            "SELECT schedule_id, queue_wait_seconds, started_at, finished_at, run_status
+             FROM schedule_ticks WHERE action = 'fired' AND started_at IS NOT NULL
+             ORDER BY schedule_id, scheduled_at DESC",
+            (),
+        )
+        .await
+        .map_err(failed("reading tick timings"))?;
+    let window = TICKS_WITH_TARGETS as usize;
+    while let Some(row) = rows.next().await.map_err(failed("reading tick timings"))? {
+        let timings = out
+            .entry(row.get::<String>(0).unwrap_or_default())
+            .or_default();
+        if timings.queue_waits.len() < window
+            && let Ok(wait) = row.get::<f64>(1)
+        {
+            timings.queue_waits.push(wait.max(0.0));
+        }
+        if timings.run_seconds.len() < window
+            && row.get::<String>(4).is_ok_and(|status| status == "success")
+            && let (Ok(started), Ok(finished)) = (row.get::<f64>(2), row.get::<f64>(3))
+        {
+            timings.run_seconds.push((finished - started).max(0.0));
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -951,6 +1004,45 @@ mod tests {
 
     /// One read answers for every node: its newest finished outcome across schedules, and
     /// the runs of ticks still in flight.
+    #[tokio::test]
+    async fn the_timings_of_every_schedule_are_read_at_once() {
+        let (_dir, db) = fresh().await;
+        assert!(tick_timings(&db).await.unwrap().is_empty());
+        // Three fired ticks: one finished, one failed, one still running; and one that waits.
+        for (slot, run, wait, end) in [
+            (100, "run-1", 4.5, Some(("success", 110.0))),
+            (160, "run-2", 0.0, Some(("failed", 163.0))),
+            (220, "run-3", 2.0, None),
+        ] {
+            record_tick(&db, tick(JOB, slot, TickDecision::Fired, None, Some(run)))
+                .await
+                .unwrap();
+            record_tick_started(&db, JOB, slot, run, slot as f64 + wait, wait)
+                .await
+                .unwrap();
+            if let Some((status, at)) = end {
+                record_tick_finished(&db, JOB, slot, run, at, status, &[])
+                    .await
+                    .unwrap();
+            }
+        }
+        record_tick(
+            &db,
+            tick(JOB, 280, TickDecision::Fired, None, Some("run-4")),
+        )
+        .await
+        .unwrap();
+        record_tick(&db, tick(JOB, 340, TickDecision::Paused, None, None))
+            .await
+            .unwrap();
+        let timings = tick_timings(&db).await.unwrap();
+        assert_eq!(timings.len(), 1);
+        // Newest first; a tick whose run has not started has no wait yet.
+        assert_eq!(timings[JOB].queue_waits, [2.0, 0.0, 4.5]);
+        // Only a run that succeeded says how long a run takes.
+        assert_eq!(timings[JOB].run_seconds, [5.5]);
+    }
+
     #[tokio::test]
     async fn the_newest_outcome_of_every_node_is_read_at_once() {
         let (_dir, db) = fresh().await;

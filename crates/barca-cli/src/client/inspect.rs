@@ -388,13 +388,22 @@ fn render_queue(body: &Value) -> String {
         return out;
     }
     out.push_str(&format!(
-        "\n{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {}\n",
-        "POS", "RUN_ID", "STATUS", "COMMAND", "TARGET", "TRIGGER", "QUEUED_AT"
+        "\n{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {:<25} {}\n",
+        "POS", "RUN_ID", "STATUS", "COMMAND", "TARGET", "TRIGGER", "QUEUED_AT", "START"
     ));
     for run in running.iter().chain(queued.iter()) {
         let target = run["target"].as_str().unwrap_or("(all)");
+        // When it started, or (`~`) when the server estimates it will.
+        let start = match (
+            run["started_at"].as_str(),
+            run["estimated_start_at"].as_str(),
+        ) {
+            (Some(at), _) => at.to_string(),
+            (None, Some(at)) => format!("~{at}"),
+            (None, None) => "-".to_string(),
+        };
         out.push_str(&format!(
-            "{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {}\n",
+            "{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {:<25} {}\n",
             run["position"]
                 .as_u64()
                 .map_or("-".to_string(), |p| p.to_string()),
@@ -404,6 +413,7 @@ fn render_queue(body: &Value) -> String {
             target,
             run["triggered_by"].as_str().unwrap_or(""),
             run["queued_at"].as_str().unwrap_or(""),
+            start,
         ));
     }
     out

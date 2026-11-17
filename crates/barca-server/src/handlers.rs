@@ -292,11 +292,12 @@ async fn state_rows_for_targets(
     let running = crate::running::by_node(&runs, &status.nodes, &dag);
     let now = chrono::Utc::now();
     let schedules = live_schedules(state, &dag, &db_state, &snapshot.path, now).await?;
+    let timings = timings(state, &dag, &durations, &runs, now.timestamp()).await;
     Ok(rows(
         &status.nodes,
         &durations,
         (&ages, &pinned, &checks, &paused, &paths),
-        &schedules,
+        (&schedules, &timings),
         now.timestamp(),
         running,
     ))
@@ -431,6 +432,88 @@ type Records<'a> = (
     &'a barca_core::refresh_path::Paths,
 );
 
+/// What the times of a status result are estimated from (`barca_core::estimates::Timing`), as
+/// this server holds it: gathered once per answer, never per node.
+pub(crate) struct Timings {
+    durations: std::collections::HashMap<String, f64>,
+    runs: Vec<barca_core::estimates::PlannedRun>,
+    queue_clear_at: Option<i64>,
+    queue_open: bool,
+    workers: usize,
+    source_times: crate::read_cache::SourceTimes,
+}
+
+impl Timings {
+    fn evidence(&self) -> barca_core::estimates::Timing<'_> {
+        barca_core::estimates::Timing {
+            durations: &self.durations,
+            runs: &self.runs,
+            queue_clear_at: self.queue_clear_at,
+            queue_open: self.queue_open,
+            workers: self.workers,
+            source_times: &self.source_times,
+        }
+    }
+}
+
+/// [`Timings`] as of `now` (unix seconds): the typical `durations` already read for the
+/// scope, the `runs` in flight with where each is (its latest progress, or its estimated
+/// start in the run queue: [`crate::queue::estimate`]), the worker pool, and when each source
+/// file changed. No read of its own beyond the schedules' recorded ticks, which are kept per
+/// database state.
+async fn timings(
+    state: &AppState,
+    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    durations: &std::collections::HashMap<String, Durations>,
+    runs: &[crate::running::InFlight],
+    now: i64,
+) -> Timings {
+    let facts = published_ticks(state).await.unwrap_or_default();
+    let queue = crate::queue::estimate(state, &facts.ticks, now);
+    let cfg = &state.config.resolved;
+    let workers = barca_core::sizing(
+        cfg.capacity,
+        cfg.pool_size,
+        state
+            .capacity
+            .as_ref()
+            .map(|c| (c.total() as usize, c.source())),
+    )
+    .pool_size;
+    let runs = runs
+        .iter()
+        .map(|run| barca_core::estimates::PlannedRun {
+            run_id: run.run_id.clone(),
+            schedule: run.schedule_id.clone(),
+            // A run's targets and everything above them; every node for a run of everything.
+            nodes: (run.schedule_id.is_none() && !run.nodes.is_empty()).then(|| {
+                let targets: Vec<&str> = run.nodes.iter().map(String::as_str).collect();
+                dag.subgraph_many(&targets)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            }),
+            running: !run.pending,
+            start: if run.pending {
+                queue.starts.get(&run.run_id).copied()
+            } else {
+                run.anchor()
+            },
+        })
+        .collect();
+    Timings {
+        durations: durations
+            .iter()
+            .map(|(id, d)| (id.clone(), d.median_seconds))
+            .collect(),
+        runs,
+        queue_clear_at: queue.clear_at,
+        queue_open: queue.open,
+        workers,
+        source_times: state.cached_source_times(dag),
+    }
+}
+
 /// Each schedule of [`live_schedules`] as a refresh path reads it.
 fn path_schedules(
     schedules: &std::collections::HashMap<String, LiveSchedule>,
@@ -447,7 +530,7 @@ fn rows(
     nodes: &[barca_core::status::NodeStatus],
     durations: &std::collections::HashMap<String, Durations>,
     records: Records<'_>,
-    schedules: &std::collections::HashMap<String, LiveSchedule>,
+    (schedules, timings): (&std::collections::HashMap<String, LiveSchedule>, &Timings),
     now: i64,
     mut running: std::collections::HashMap<String, crate::running::NodeRunning>,
 ) -> Vec<NodeState> {
@@ -471,6 +554,7 @@ fn rows(
                 paused,
                 pinned,
             },
+            timing: timings.evidence(),
             now,
         },
     );
@@ -735,6 +819,21 @@ pub(crate) async fn attach_health_at(
     let schedules = live_schedules(state, dag, db_state, db_path, now).await?;
     let late = late_of(&schedules);
     let path_schedules = path_schedules(&schedules);
+    // The times read what `GET /state` reads: every node's typical duration, kept per
+    // database state, and the runs in flight.
+    let durations = state
+        .cached_durations(dag, db_state, {
+            let (dag, db_path) = (dag.clone(), db_path.to_string());
+            move || async move {
+                let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
+                Ok(durations_from(
+                    db::recent_durations(&db_path, &ids, DURATION_WINDOW).await?,
+                ))
+            }
+        })
+        .await?;
+    let runs = crate::running::in_flight(state, Some(db_path)).await;
+    let timings = timings(state, dag, &durations, &runs, now.timestamp()).await;
     barca_core::health::attach(
         result,
         barca_core::health::Evidence {
@@ -748,6 +847,7 @@ pub(crate) async fn attach_health_at(
                 paused: &paused,
                 pinned: &pinned,
             },
+            timing: timings.evidence(),
             now: now.timestamp(),
         },
     );
@@ -805,6 +905,14 @@ pub(crate) fn schedule_at(
                 "last_status": standing.and_then(|s| s.last_status.clone()),
                 "late": standing.is_some_and(|s| s.late),
                 "late_since": standing.and_then(|s| s.late_since),
+                // How long its ticks' runs typically wait for a run slot and take, whole
+                // seconds, and whether the wait exceeds its interval (#962).
+                "typical_queue_wait_seconds": standing
+                    .map_or(0, |s| s.typical_queue_wait_seconds.round() as u64),
+                "typical_run_seconds": standing
+                    .and_then(|s| s.typical_run_seconds)
+                    .map(|s| s.round() as u64),
+                "queue_bound": standing.is_some_and(|s| s.queue_bound),
                 "last_skipped": j.last_skipped,
                 "skipped_for": j.skipped_for,
                 "skip_reason": j.skip_reason,

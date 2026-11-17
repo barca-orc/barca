@@ -78,6 +78,35 @@ pub(crate) struct InFlight {
     pub pending: bool,
     /// The run's events so far; `None` for a CLI run (no stream reaches this server).
     pub progress: Option<ProgressSnapshot>,
+    /// The scheduled node whose tick started it; `None` for a run someone asked for.
+    pub schedule_id: Option<String>,
+}
+
+impl InFlight {
+    /// When it started executing, unix seconds: its `RunStarted` event; for a CLI run, the
+    /// start its row records. `None` while it waits for a run slot.
+    pub(crate) fn started(&self) -> Option<i64> {
+        if self.pending {
+            return None;
+        }
+        self.progress
+            .as_ref()
+            .and_then(|p| p.started)
+            .map(|at| at as i64)
+            .or_else(|| barca_core::time::parse_rfc3339(&self.started_at))
+    }
+
+    /// Its latest progress, unix seconds: when it started executing, or the last step it
+    /// finished. What it has left is counted from here ([`barca_core::estimates`]).
+    pub(crate) fn anchor(&self) -> Option<i64> {
+        let last = self
+            .progress
+            .as_ref()
+            .and_then(|p| p.last_step)
+            .map(|at| at as i64);
+        self.started()
+            .map(|started| last.map_or(started, |at| at.max(started)))
+    }
 }
 
 /// Every run in flight: this server's (pending or running), then the CLI runs in the
@@ -98,6 +127,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             nodes: r.nodes.clone(),
             pending: r.status == RunStatus::Pending,
             progress: state.events.get(&r.handle).map(|c| c.progress()),
+            schedule_id: r.trigger.schedule_id.clone(),
         })
         .collect();
     let Some(read_path) = read_path else {
@@ -129,6 +159,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             nodes,
             pending: false,
             progress: None,
+            schedule_id: None,
         });
     }
     runs
@@ -143,6 +174,10 @@ pub(crate) struct Progress {
     finished: HashSet<String>,
     /// Partitioned nodes: the keys this run finished with a result.
     keys_done: HashMap<String, HashSet<String>>,
+    /// When the run started executing (its `RunStarted` event), unix seconds.
+    started: Option<f64>,
+    /// When its latest step finished, unix seconds.
+    last_step: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -150,10 +185,15 @@ pub(crate) struct ProgressSnapshot {
     pub touched: HashSet<String>,
     pub finished: HashSet<String>,
     pub keys_done: HashMap<String, usize>,
+    pub started: Option<f64>,
+    pub last_step: Option<f64>,
 }
 impl Progress {
     pub(crate) fn observe(&mut self, event: &RunEvent) {
         match event {
+            RunEvent::RunStarted { .. } => {
+                self.started = Some(barca_core::time::now_secs_f64());
+            }
             RunEvent::Log { node_id, .. } => {
                 self.touched
                     .insert(StepId::parse(node_id).base_id().to_string());
@@ -165,6 +205,7 @@ impl Progress {
                     return;
                 }
                 let base = id.base_id().to_string();
+                self.last_step = Some(barca_core::time::now_secs_f64());
                 self.touched.insert(base.clone());
                 if id.partition.0.is_empty() {
                     self.finished.insert(base);
@@ -184,6 +225,8 @@ impl Progress {
                 .iter()
                 .map(|(node, keys)| (node.clone(), keys.len()))
                 .collect(),
+            started: self.started,
+            last_step: self.last_step,
         }
     }
 }

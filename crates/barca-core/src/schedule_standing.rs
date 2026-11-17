@@ -6,10 +6,10 @@
 //! [`recorded`] ticks, so no two of them can disagree about a schedule; the web UI draws what
 //! they say and derives nothing.
 //!
-//! What a tick is read from today: the run queue (a tick whose run waits for a run slot has no
-//! `runs` row yet) and the `runs` rows a schedule's ticks started. The tick records of #960
-//! replace [`recorded`]'s reads, and [`Ticks::queue_waits`] is where their
-//! `queue_wait_seconds` go; [`standing`] does not change.
+//! What a tick is read from: the run queue (a tick whose run waits for a run slot has no
+//! `runs` row yet), the `runs` rows a schedule's ticks started, and the tick record
+//! (`schedule_ticks`, #960) for how long its runs waited and took ([`Ticks::queue_waits`],
+//! [`Ticks::run_seconds`]; #962).
 
 use crate::schedule::{Zone, next_fire, prev_fire};
 use crate::serve::run_queue::{self, QueueState};
@@ -52,10 +52,14 @@ impl TickRun {
 pub struct Ticks {
     /// The newest tick the scheduler fired, with its run; `None` when none is recorded.
     pub newest: Option<TickRun>,
-    /// Queue waits (slot to run start, seconds) of its newest fired ticks that started, at most
-    /// [`db::SCHEDULED_RUNS_WINDOW`]. Read from `runs` today; #960's tick records put their
-    /// `queue_wait_seconds` here.
+    /// Queue waits (seconds) of its newest fired ticks that started: the tick record's
+    /// `queue_wait_seconds` (from joining the run queue to starting, at most
+    /// [`db::TICKS_WITH_TARGETS`]); for a schedule with no tick record that says, the `runs`
+    /// rows its ticks started (slot to start, at most [`db::SCHEDULED_RUNS_WINDOW`]).
     pub queue_waits: Vec<f64>,
+    /// How long the runs of its newest fired ticks that succeeded took, start to end, seconds
+    /// (the tick record; at most [`db::TICKS_WITH_TARGETS`]).
+    pub run_seconds: Vec<f64>,
 }
 
 /// The ticks recorded in the metadata database at `db_path` for each of `schedules` (scheduled
@@ -79,6 +83,18 @@ pub async fn recorded(
             started_at: r.started_at,
             finished_at: r.finished_at,
         });
+    }
+    // The tick record says how long each tick's run waited in the queue and how long it took:
+    // it outlives the `runs` rows, which are trimmed.
+    for (schedule, timings) in db::tick_timings(db_path).await? {
+        if !schedules.contains(&schedule) {
+            continue;
+        }
+        let ticks = out.entry(schedule).or_default();
+        if !timings.queue_waits.is_empty() {
+            ticks.queue_waits = timings.queue_waits;
+        }
+        ticks.run_seconds = timings.run_seconds;
     }
     // The run queue: a tick that waits for a run slot is only here, and a run that has started
     // is here too until it records how it ended.
@@ -145,6 +161,13 @@ pub struct Standing {
     pub grace_seconds: i64,
     /// The median of [`Ticks::queue_waits`], 0 with none.
     pub typical_queue_wait_seconds: f64,
+    /// The median of [`Ticks::run_seconds`]; `None` with none.
+    pub typical_run_seconds: Option<f64>,
+    /// From the last slot to the next, seconds; `None` when the cron has no such pair.
+    pub interval_seconds: Option<i64>,
+    /// Queue-bound: its typical queue wait exceeds its interval, so its ticks wait for a run
+    /// slot longer than they are apart.
+    pub queue_bound: bool,
 }
 
 /// The grace: 60 seconds, or half the interval of a schedule more frequent than every two
@@ -156,7 +179,7 @@ pub(crate) fn grace_seconds(prev: Option<i64>, next: Option<i64>) -> i64 {
     }
 }
 
-fn median(values: &[f64]) -> f64 {
+pub(crate) fn median(values: &[f64]) -> f64 {
     let mut sorted: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
     if sorted.is_empty() {
         return 0.0;
@@ -198,6 +221,11 @@ pub fn standing(
     let typical_queue_wait_seconds = median(ticks.map_or(&[], |t| &t.queue_waits));
     let own_wait = newest.map_or(0, |run| run.queue_wait(at)) as f64;
     let allowance = grace_seconds as f64 + typical_queue_wait_seconds.max(own_wait);
+    let run_seconds = ticks.map_or(&[][..], |t| &t.run_seconds);
+    let interval_seconds = match (prev_fire, next) {
+        (Some(prev), Some(next)) if next > prev => Some(next - prev),
+        _ => None,
+    };
     Standing {
         prev_fire,
         next_fire: next,
@@ -208,6 +236,10 @@ pub fn standing(
         late: late_since.is_some_and(|since| (at - since) as f64 > allowance),
         grace_seconds,
         typical_queue_wait_seconds,
+        typical_run_seconds: (!run_seconds.is_empty()).then(|| median(run_seconds)),
+        interval_seconds,
+        queue_bound: interval_seconds
+            .is_some_and(|interval| typical_queue_wait_seconds > interval as f64),
     }
 }
 
@@ -250,6 +282,7 @@ mod tests {
                 finished_at: None,
             }),
             queue_waits: Vec::new(),
+            run_seconds: Vec::new(),
         }
     }
 
