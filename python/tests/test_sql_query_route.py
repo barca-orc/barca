@@ -392,8 +392,11 @@ def test_an_answer_is_a_few_megabytes_at_most_and_memory_stays_bounded(project, 
     finally:
         done.set()
         watcher.join()
-    # DuckDB may use its 1GB; Python and the server hold megabytes on top, not the rows.
-    assert peak["helper"] < 1800, peak
+    # The server holds megabytes, not the rows.
+    # DuckDB's own limit is 1GB of buffers; the process around it (the allocator's arenas, the
+    # rows being encoded) adds to that, more on Linux and on DuckDB 1.x: 2.1GB was measured in
+    # CI. Without the cap on an answer the helper reached 3.7GB to 4.1GB on these queries.
+    assert peak["helper"] < 3000, peak
     assert peak["server"] < 600, peak
     assert helpers_of(server) == [helper], "the helper was not replaced"
 
