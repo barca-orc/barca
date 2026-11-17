@@ -41,7 +41,7 @@ pub(crate) async fn explain_dag_with_membership(
     rules: &crate::freshness::RunRules,
     file_args: &[String],
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
-    let (explained, members, _) = explain_dag_with_keys(
+    let (explained, members, _, _) = explain_dag_with_keys(
         dag,
         cfg,
         target_names,
@@ -55,8 +55,12 @@ pub(crate) async fn explain_dag_with_membership(
     Ok((explained, members))
 }
 
-/// [`explain_dag_with_membership`], and the keys of each partitioned node the dry run predicts
-/// would run: every one, where the report previews a few.
+/// The nodes a status prediction decided on their own that a run reads as they are, by id
+/// ([`crate::cache::read_as_held`]). Empty under any other rules.
+pub(crate) type HeldNodes = HashMap<String, crate::cache::ReadAsIs>;
+
+/// [`explain_dag_with_membership`], the keys of each partitioned node the dry run predicts
+/// would run (every one, where the report previews a few), and the [`HeldNodes`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn explain_dag_with_keys(
     dag: &Dag,
@@ -72,6 +76,7 @@ pub(crate) async fn explain_dag_with_keys(
         ExplainResult,
         crate::cache::ExpandedMembership,
         crate::cache::ExpandedMembership,
+        HeldNodes,
     ),
     BarcaError,
 > {
@@ -186,6 +191,7 @@ pub(crate) async fn explain_dag_with_keys(
     let mut cutoff_unknown: HashMap<String, String> = HashMap::new();
     let mut steps: Vec<StepReport> = Vec::new();
     let mut summary = ExplainSummary::default();
+    let mut held = HeldNodes::new();
 
     let user_pins: Vec<db::AssetPin> = match &cache {
         Some(cache) => db::pins_on(cache.conn()).await?.into_values().collect(),
@@ -208,6 +214,7 @@ pub(crate) async fn explain_dag_with_keys(
         steps: &mut steps,
         summary: &mut summary,
         narrowing: narrowing.as_mut(),
+        held: rules.status.then_some(&mut held),
     };
     crate::status::trace_since("dry run: sensor outputs and evictions", t0);
     for (i, phase) in exec_plan.phases.iter().enumerate() {
@@ -292,6 +299,7 @@ pub(crate) async fn explain_dag_with_keys(
         },
         members,
         will_run,
+        held,
     ))
 }
 
@@ -312,6 +320,8 @@ pub(super) struct Prediction<'a> {
     pub(super) steps: &'a mut Vec<StepReport>,
     pub(super) summary: &'a mut ExplainSummary,
     pub(super) narrowing: Option<&'a mut crate::selection::Narrowing>,
+    /// The status prediction: the nodes read as they are, filled as each is decided.
+    pub(super) held: Option<&'a mut HeldNodes>,
 }
 
 pub(super) fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: String) -> StepReport {
@@ -426,8 +436,12 @@ pub(super) async fn predict_steps(
 
         // Sensors this step reads, and whether the dry run knows their output.
         let read_sensors = sensor_inputs(ctx.dag, step);
+        // A node read as it is (a `Manual` or pinned one) is not hashed from its sensors: one
+        // with no recorded output leaves nothing unknown. A run does not even plan the
+        // sensors above a pinned asset.
         let missing_sensor = read_sensors
             .iter()
+            .filter(|_| !ctx.state.pinned.contains_key(base))
             .find(|s| !has_sensor_output(ctx.state, s))
             .map(|s| s.to_string());
         let hash_unknown_dep = step
@@ -445,6 +459,28 @@ pub(super) async fn predict_steps(
         });
 
         let (step, decision) = decide_step(ctx.dag, ctx.policy, ctx.cache, ctx.state, step).await?;
+        // The status prediction: a `Manual` or pinned node is decided on its own, and what
+        // reads it is decided against the result a run reads (#985). So nothing this node's
+        // own prediction cannot tell (a sensor with no output, a cutoff asset that would run)
+        // passes to its readers.
+        let read_as_is = match ctx.held.as_deref_mut() {
+            Some(held) => {
+                let found = crate::cache::read_as_held(
+                    ctx.dag,
+                    ctx.cache,
+                    ctx.state,
+                    &step,
+                    &decision,
+                    ctx.user_pins,
+                )
+                .await;
+                if let Some(found) = found {
+                    held.insert(base.to_string(), found);
+                }
+                found.is_some()
+            }
+            None => false,
+        };
         // Forced to run whatever the cache holds (task, sensor, refresh).
         let forced = matches!(
             &decision,
@@ -457,7 +493,9 @@ pub(super) async fn predict_steps(
             }
         );
         if missing_sensor.is_some() || hash_unknown_dep.is_some() {
-            ctx.hash_unknown.insert(base.to_string());
+            if !read_as_is {
+                ctx.hash_unknown.insert(base.to_string());
+            }
             if !forced {
                 let detail = match (&missing_sensor, &hash_unknown_dep) {
                     (Some(s), _) => format!(
@@ -490,7 +528,9 @@ pub(super) async fn predict_steps(
         // It reads a cutoff asset that would run, or depends on one (#628): whether it runs
         // depends on the bytes that asset writes, which only running it tells.
         if let Some((up, root)) = cutoff_dep {
-            ctx.cutoff_unknown.insert(base.to_string(), root.clone());
+            if !read_as_is {
+                ctx.cutoff_unknown.insert(base.to_string(), root.clone());
+            }
             if !forced {
                 let detail = if up == root {
                     format!(
@@ -518,7 +558,7 @@ pub(super) async fn predict_steps(
             Decision::Partitioned { missing, .. } => !missing.is_empty(),
             Decision::Cached { .. } => false,
         };
-        if runs_any && crate::cache::is_cutoff(ctx.dag, base) {
+        if runs_any && !read_as_is && crate::cache::is_cutoff(ctx.dag, base) {
             ctx.cutoff_unknown
                 .insert(base.to_string(), short_name(base).to_string());
         }
@@ -572,7 +612,13 @@ pub(super) async fn predict_steps(
                 summary.changed = Some(per_key);
             }
         }
-        if !forced && !read_sensors.is_empty() {
+        // (Not for an asset pinned with `barca pin`: its sensors decide nothing about it.)
+        let user_pinned = ctx
+            .state
+            .pinned
+            .get(base)
+            .is_some_and(|pin| pin.user.is_some());
+        if !forced && !read_sensors.is_empty() && !user_pinned {
             let note = read_sensors
                 .iter()
                 .map(|s| {

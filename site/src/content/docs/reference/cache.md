@@ -28,6 +28,9 @@ can be in, incremental runs and environments. Forcing a recompute and `--dry-run
 
 Tasks and sensors are never served from cache: they run every time they are in a run.
 `barca status` says which state each node is in and why, and `--dry-run` shows what would run.
+Both decide by the rules a run follows: a `Manual` or pinned node is read as it is, so what is
+below one is `cached` while it is up to date against that node's current result, and the
+`Manual` node itself reads `stale` once its inputs move on ([barca status: Cache state](/reference/cli/status/#cache-state)).
 
 ## What is cached
 

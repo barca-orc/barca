@@ -111,7 +111,9 @@ pub(super) async fn pin_manual<'a>(
         blocked: Vec::new(),
         paused: HashSet::new(),
     };
-    if targets.is_empty() {
+    // The status prediction plans every node and holds none: what reads a held node is given
+    // the result a run reads as each one is decided (`crate::cache::read_as_held`).
+    if targets.is_empty() || rules.status {
         return Ok(planned);
     }
     // A tick does not compute a paused node (`crate::pauses`): a paused target is skipped.

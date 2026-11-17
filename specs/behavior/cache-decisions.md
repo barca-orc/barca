@@ -42,6 +42,51 @@ client of a newer server still has a state and its `reason` and `detail` still s
 reasons that accompany each state are the manual's (`barca docs status`, "Cache state") and the
 OpenAPI `Cache.reason` enum; a test keeps the code's states and reasons equal to those enums.
 
+### The rules the prediction follows (#985)
+
+A run (`get`, `run`, a scheduled tick) reads a held node as it is and never computes it: a
+`Manual` asset or task that is not named in `--refresh`, and an asset pinned with `barca pin`
+([freshness](freshness.md), "Freshness policy"). The status prediction (`barca status`,
+`GET /state`, `GET /nodes`, `barca.nodes`, a node's partition grid;
+`RunRules::status` in `crates/barca-core/src/freshness.rs`) decides by the same rules:
+
+- **Every node in scope is decided**, the held ones and what is above them included. A run
+  plans nothing above a held node; status still reports those nodes.
+- **A held node is decided on its own**: against its current code and what its inputs would
+  give. It reads `stale` when they moved on, though no run will recompute it: only a person
+  does (`--refresh`, `barca run` for a task, `barca unpin`).
+- **What reads a held node is decided against the result a run reads**: the `Manual` node's
+  latest successful result, or the pinned materialization (its run hash, and its output hash
+  where the node folds its output). So every node below it has the state, and the run hash,
+  that `barca get --dry-run`, a `get` and a tick find. A `cached` node below a held node that
+  is stale keeps `reason: "materialized"` and names that node in `detail` (`up to date against
+  'baseline' as it is: ...`, with the command that recomputes it); the nearest stale held node
+  above is named, through any number of nodes in between. A held input is never the cause of
+  `upstream_stale`.
+- Nothing the held node's own prediction cannot tell passes to its readers: a held node that
+  is `unknown` (a sensor above it has no recorded output, a cutoff asset above it would run)
+  or a held cutoff asset that would run leaves what reads it decided.
+- **A held node with nothing to read** (a `Manual` node never computed, a pin whose
+  materialization is gone) holds nothing: a request stops there with exit 2 and a tick blocks
+  the targets that read it, and status decides what is below as if the node were computed
+  (`never_run`, `stale`).
+
+What still differs between the prediction and a run, by design:
+
+| Case | A request (`get`, `run`, `--dry-run`) | A tick | Status |
+| --- | --- | --- | --- |
+| The held node itself | `cached`, detail `Manual and stale: ...` or reason `pinned` | the same; it is never a target | its own state (`stale` when it moved on) |
+| Nodes above a held node | not planned | not planned | decided |
+| A node paused with `barca pause` | recomputed when it is read; refused as a target without `--allow-paused` | read as it is; skipped as a target | as a request: what is below a stale paused node is `stale`, and the tick's outcome is `last_check` ([health](health.md), "Last check") |
+| A task other than the scheduled one | runs | fires only when it is out of date | `always_runs` |
+| A sensor | polled | polled | `always_runs`; what reads it is predicted from its last recorded output |
+| A partitioned `Manual` node | computed | computed | computed (it is not held) |
+| A pin on one complete partition key | read as pinned | read as pinned | read as pinned |
+
+Conformance: `python/tests/test_status_run_rules.py` (a stale `Manual` node above `Always`
+assets with and without a cutoff asset in between, a pinned asset, a paused node, against
+`--dry-run`, a `get` and ticks of a live scheduler), `status.rs` (`states_and_reasons`).
+
 ## Rules and transitions
 
 Product observation/membership rules are owned by [freshness](freshness.md), run/batch/process

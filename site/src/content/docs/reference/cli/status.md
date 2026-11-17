@@ -68,15 +68,40 @@ document and the fine print are in [barca status: Fields and JSON](/reference/cl
 
 ## Cache state
 
-`cache.state` is the same decision `barca get --dry-run` makes (both call one function), with
-one difference: status predicts a recompute of everything above a node, where `get`, `run` and
-a tick read a `Manual` or pinned node as it is ([Forcing a Recompute](/reference/refresh/)). So below a `Manual` node
-that is stale, status says `stale` or `unknown` where `barca get --dry-run` says `cached`; what
-the last tick found there is `last_check` ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)), which
+`cache.state` is the same decision `barca get --dry-run` makes (both call one function, with
+the rules a run follows), so the two cannot disagree about a node a `get` would plan. In JSON
+the states are snake_case, spelled exactly like the `summary` keys (`never_run`,
+`always_runs`); the table prints them as `never-run` and `always-runs`.
+
+A run reads a `Manual` node, and an asset pinned with `barca pin`, as it is and never
+recomputes it ([Forcing a Recompute](/reference/refresh/), [barca pin and unpin](/reference/cli/pin/)). Status says so in two parts:
+
+- The held node has its own state: `stale` when its code or what its inputs would give moved
+  on. No run will recompute it; `barca get NAME --refresh NAME` (`barca run NAME` for a task,
+  `barca unpin NAME` for a pin) does. `--dry-run` lists the same node as `cached`, with
+  `Manual and stale: ...` in its `detail` or the reason `pinned`: that is the one node the
+  two word differently.
+- Everything below it has the state a run finds, reading the held node as it is. A node that
+  is up to date against it is `cached`, and its `detail` (the WHY column) names the nearest
+  stale held node above and the command that recomputes it: `up to date against 'baseline'
+  as it is: 'baseline' is Manual and stale, and a run reads its last result without
+  recomputing it; ...`. So `barca status`, `barca get --dry-run` and what a scheduled tick
+  records (`last_check`) agree for every node below a `Manual` or pinned node, with or
+  without an `@asset(cutoff=True)` in between. Once the held node is refreshed and has a new
+  result, what reads it is `stale` (`changed`).
+
+Status also lists the nodes above a held node, which a `get` of something below it does not
+plan. A `Manual` node that has never been computed holds nothing: what is below it reads
+`never_run` or `stale`, and a `get` of it exits 2 naming the node.
+
+One difference between a request and a tick remains. A node paused with `barca pause` is
+read as it is by scheduled ticks only; `barca get` recomputes it when it reads it. Status
+says what a request would do, so below a stale paused node it says `stale` (as `--dry-run`
+says `run`) while each tick finds the node up to date; what the last tick found is
+`last_check` ([barca status: Fields and JSON: Last check](/reference/cli/status-fields/#last-check)), which
 schedule's tick will next bring a node up to date is `refresh_path` ("Refresh path"), and since
 when a node is out of date and when it is expected fresh or only rechecked are `stale_since`,
-`expected_fresh_at` and `recheck_at` ("Times"). In JSON the states are snake_case, spelled exactly like the `summary` keys
-(`never_run`, `always_runs`); the table prints them as `never-run` and `always-runs`.
+`expected_fresh_at` and `recheck_at` ("Times").
 
 | state | meaning | `reason` |
 |---|---|---|
