@@ -1,5 +1,6 @@
 /**
- * How a cause is shown: the word, tone, colour and weight of each value. Display only.
+ * How a cause is shown: the word, tone and colour of each value. Display only. What a node
+ * of a cause weighs on the health map is served (`weight` and `weights` of a rollup entry).
  *
  * Why a node is not fresh is decided in `barca-core` (`specs/behavior/health.md`, "Cause") and
  * arrives as `cause` on every row and as counts on every rollup entry (`causes`). Nothing here
@@ -30,23 +31,17 @@ interface CauseDisplay {
   glyph: Glyph
   /** Whether it needs someone: `failing`, `overdue` and `no_refresh_path` do, nothing else. */
   alarm: boolean
-  /**
-   * How much room one node with this cause takes on the health map, against 1 for a fresh
-   * node: a node that needs someone counts 6, one that will be fresh without anyone acting or
-   * that barca cannot decide counts 2. A display scale, like a tone: see `mapWeight`.
-   */
-  weight: number
   /** What the word means, in a line: the legend's and a tooltip's text. */
   meaning: string
 }
 
 const DISPLAY = {
-  failing: { label: 'failing', tone: 'failed', glyph: 'failed', alarm: true, weight: 6, meaning: 'It failed, or a failing node upstream holds it.' },
-  overdue: { label: 'overdue', tone: 'warning', glyph: 'blocked', alarm: true, weight: 6, meaning: 'Ticks reached it and did not leave it fresh.' },
-  no_refresh_path: { label: 'no refresh path', tone: 'warning', glyph: 'stale', alarm: true, weight: 6, meaning: 'Nothing scheduled will ever refresh it.' },
-  queued: { label: 'queued', tone: 'queued', glyph: 'queued', alarm: false, weight: 2, meaning: 'What would refresh it waits for a run slot.' },
-  undecided: { label: 'undecided', tone: 'neutral', glyph: 'unknown', alarm: false, weight: 2, meaning: 'barca cannot decide yet: a cutoff or sensor upstream has not reported.' },
-  catching_up: { label: 'catching up', tone: 'running', glyph: 'always', alarm: false, weight: 2, meaning: 'A run is computing it, or the next tick of its refresh path will.' },
+  failing: { label: 'failing', tone: 'failed', glyph: 'failed', alarm: true, meaning: 'It failed, or a failing node upstream holds it.' },
+  overdue: { label: 'overdue', tone: 'warning', glyph: 'blocked', alarm: true, meaning: 'Ticks reached it and did not leave it fresh.' },
+  no_refresh_path: { label: 'no refresh path', tone: 'warning', glyph: 'stale', alarm: true, meaning: 'Nothing scheduled will ever refresh it.' },
+  queued: { label: 'queued', tone: 'queued', glyph: 'queued', alarm: false, meaning: 'What would refresh it waits for a run slot.' },
+  undecided: { label: 'undecided', tone: 'neutral', glyph: 'unknown', alarm: false, meaning: 'barca cannot decide yet: a cutoff or sensor upstream has not reported.' },
+  catching_up: { label: 'catching up', tone: 'running', glyph: 'always', alarm: false, meaning: 'A run is computing it, or the next tick of its refresh path will.' },
 } satisfies Record<Cause, CauseDisplay>
 
 export function causeDisplay(cause: Cause): CauseDisplay {
@@ -67,11 +62,6 @@ export function mapPartLabel(part: MapPart): string {
 /** What a map colour means, in a line. */
 export function mapPartMeaning(part: MapPart): string {
   return part === 'fresh' ? 'Up to date, or its last run succeeded.' : DISPLAY[part].meaning
-}
-
-/** The room one node of a colour takes on the map: a cause's weight, 1 for a fresh node. */
-export function mapPartWeight(part: MapPart): number {
-  return part === 'fresh' ? 1 : DISPLAY[part].weight
 }
 
 /** The CSS colour of a map part (`--map-*`, tokens/colors.css). */

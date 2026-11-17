@@ -260,6 +260,17 @@ impl Cause {
         }
     }
 
+    /// How far one node with this cause is from fresh, against 1 for a fresh node
+    /// (`specs/behavior/health.md`, "Distance from fresh"): 6 where someone has to act
+    /// (`failing`, `overdue`, `no_refresh_path`), 2 where the node will be fresh without
+    /// anyone acting or barca cannot say (`queued`, `catching_up`, `undecided`).
+    pub fn weight(self) -> usize {
+        match self {
+            Cause::Failing | Cause::Overdue | Cause::NoRefreshPath => 6,
+            Cause::Queued | Cause::Undecided | Cause::CatchingUp => 2,
+        }
+    }
+
     /// The display word: what the CLI prints and the UI shows.
     pub fn word(self) -> &'static str {
         match self {

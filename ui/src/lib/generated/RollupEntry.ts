@@ -5,6 +5,7 @@ import type { EntryKind } from "./EntryKind";
 import type { HealthCounts } from "./HealthCounts";
 import type { HeldBy } from "./HeldBy";
 import type { KeyCounts } from "./KeyCounts";
+import type { Weights } from "./Weights";
 
 /**
  * One entry of the tree. Every count is the exact sum of the entry's children's.
@@ -63,10 +64,21 @@ asset_causes: CauseCounts,
  */
 not_fresh: number,
 /**
+ * The entry's distance from fresh, in weighted nodes: every node underneath counts
+ * [`FRESH_WEIGHT`], and one that is not fresh its cause's weight instead
+ * ([`Cause::weight`]). The exact sum of the children's; what the health map sizes a
+ * segment by.
+ */
+weight: number,
+/**
+ * `weight` by what the nodes are: each cause, and fresh.
+ */
+weights: Weights,
+/**
  * The roots that hold those nodes, each with what it holds underneath this entry, in
- * the order of the root list applied to what is held here (roots holding nodes with no
- * estimate first, the most nodes first; then by gap, nodes and id). Their `nodes` add
- * up to `not_fresh`. Empty on a node entry: a node's root is on its row.
+ * the order of the root list applied to what is held here (the most weight held first,
+ * a failure first among equals; then nodes, gap and id). Their `nodes` add up to
+ * `not_fresh`. Empty on a node entry: a node's root is on its row.
  */
 held_by: Array<HeldBy>,
 /**

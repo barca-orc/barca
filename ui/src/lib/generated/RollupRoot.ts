@@ -47,6 +47,10 @@ gap_seconds: number,
  */
 unbounded: number,
 /**
+ * The weight of the nodes it holds: what `roots` is ranked by ([`CauseCounts::weight`]).
+ */
+weight: number,
+/**
  * What clears it.
  */
 action: RootAction, };

@@ -109,6 +109,7 @@ rollup.held_by[].gap_seconds : integer
 rollup.held_by[].nodes : integer
 rollup.held_by[].root : string
 rollup.held_by[].unbounded : integer
+rollup.held_by[].weight : integer
 rollup.id : string
 rollup.kind : string
 rollup.label : string
@@ -117,6 +118,15 @@ rollup.not_fresh : integer
 rollup.parent : null
 rollup.running : integer
 rollup.unbounded : integer
+rollup.weight : integer
+rollup.weights : object
+rollup.weights.catching_up : integer
+rollup.weights.failing : integer
+rollup.weights.fresh : integer
+rollup.weights.no_refresh_path : integer
+rollup.weights.overdue : integer
+rollup.weights.queued : integer
+rollup.weights.undecided : integer
 root : string
 summary : object
 summary.always_runs : integer

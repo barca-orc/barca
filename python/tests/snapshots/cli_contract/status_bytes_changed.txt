@@ -101,6 +101,15 @@ rollup.not_fresh : integer
 rollup.parent : null
 rollup.running : integer
 rollup.unbounded : integer
+rollup.weight : integer
+rollup.weights : object
+rollup.weights.catching_up : integer
+rollup.weights.failing : integer
+rollup.weights.fresh : integer
+rollup.weights.no_refresh_path : integer
+rollup.weights.overdue : integer
+rollup.weights.queued : integer
+rollup.weights.undecided : integer
 root : string
 summary : object
 summary.always_runs : integer

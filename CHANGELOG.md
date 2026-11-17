@@ -8,6 +8,24 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- **Roots rank by how far what they hold is from fresh, and that distance is served (#1028).**
+  The to-do list put every root holding a node with no estimate first, by node count, so a
+  `never run` root whose action is "wait" outranked a change holding four times as many nodes,
+  and a failing node with what it blocks could sit below the first three. A root now carries
+  `weight`: each node it holds counts 6 when someone has to act (`failing`, `overdue`,
+  `no refresh path`) and 2 when it will be fresh without anyone acting or barca cannot say
+  (`queued`, `catching up`, `undecided`). `roots`, and every entry's `held_by`, are ordered by
+  it, the most first, a failure first among equals, then nodes, gap and id. A rollup entry
+  carries the same measure as `weight` (a fresh node counts 1, so a fully fresh scope weighs
+  its node count) and `weights` (by cause, and fresh); the web UI's health map sizes and
+  colours its segments from those two fields and no longer holds a weight table, so the map,
+  the list and the CLI order things by one rule. `barca status --rollup` prints `Distance from
+  fresh: 1728 (weighted nodes); 698 when every node is fresh` under the gap line and `weight N`
+  on each root; `--json`, `barca status --json` (`rollup`) and `GET /state/rollup` carry the
+  fields (`specs/behavior/health.md`, "Distance from fresh").
+
 ## 0.44.0 (2026-11-17)
 
 ### Breaking

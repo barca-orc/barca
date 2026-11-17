@@ -25,7 +25,8 @@ const entry = (id: string, kind: string, label: string, parent: string | null, c
   ({
     id, kind, label, parent, children, nodes: n, assets: n, running: 0, health: ok(n), asset_health: ok(n), data_coverage: { assets: n, measured: 0, suspect: 0 },
     // Every node is fresh: no cause, no root, no gap.
-    causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [],
+    // Every node is fresh, so each weighs 1 (the served distance from fresh).
+    causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, weight: n, weights: { ...NO_CAUSES, fresh: n }, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [],
   })
 const rollup = {
   as_of: '2026-11-17T14:57:00Z',

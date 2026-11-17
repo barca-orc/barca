@@ -148,7 +148,7 @@ stability; the row adds the keys and routes that go with it.
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, [barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
 | Health: `health`, `health_reason`, `cause`, `root`, `gap_seconds`, `signals`, `measured`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at` and `recheck_at` of each node, and `data_coverage`, `as_of` and `rollup` beside `summary`, in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), `typical_queue_wait_seconds`, `typical_run_seconds` and `queue_bound` of a node's `schedule` (and of `GET /schedule`), `started_at`, `estimated_start_at` and `wait_seconds` of a run in `barca queue --json`, the `health`, `health_reason`, `cause`, `root_id`, `root_kind`, `root_node`, `gap_seconds`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at` and `recheck_at` columns of `barca.nodes`, the `Health:`, `Gap:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox`, `no refresh path`, `fresh ~15:05 UTC` or `overdue 16h` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #962, #963, #964, #973, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health), "Cause", "Root", "Last check", "Refresh path" and "Times"): how an estimate is computed and rounded, which fact a root names and the order of the cause rules may change after field use; `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
-| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table and the ranked list `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, #962, #963, #967, #973, [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)): an entry has `causes`, `asset_causes`, `not_fresh`, `held_by`, `gap_seconds`, `unbounded` and `fresh_by`; a root has `causes`, `gap_seconds`, `unbounded` and `action`. The wording of `detail`, which command an action names and how roots are ranked may change after field use |
+| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table and the ranked list `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, #962, #963, #967, #973, #1028, [barca status: Fields and JSON: The rollup](/reference/cli/status-fields/#the-rollup)): an entry has `causes`, `asset_causes`, `not_fresh`, `weight`, `weights`, `held_by`, `gap_seconds`, `unbounded` and `fresh_by`; a root has `causes`, `gap_seconds`, `unbounded`, `weight` and `action`. Roots are ranked by `weight` (#1028). The wording of `detail`, which command an action names, the weights and how roots are ranked may change after field use |
 | `line` of each run in `barca history --json` and `GET /runs` (`steps`, `steps_detail`, `failure`, `failure_detail`), and `now` of `GET /runs?status=running` | new in 0.44 (#959, [barca status](/reference/cli/status/)): the words a run list prints, computed once for the CLI and the web UI; their wording may change after field use |
 | `now` of each run in progress in `barca history --status running --json` (and `GET /history?status=running`; `running`, `queued`, `keys`, `groups`, `line`), the `now:` line under its row, and the output of `barca history --activity` (`activity`: `since`, `until`, `triggered_by`, `hours`, `total`, `summary`; also `activity` and `?triggered_by=` of `GET /runs`) | new in 0.44 (#991, [barca status: Runs in progress and the last day's activity](/reference/cli/status/#runs-in-progress-and-the-last-days-activity)): what the web UI's Runs page shows, computed once for the CLI and the UI; the keys, the window and the wording may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
@@ -1650,6 +1650,7 @@ fetched) is still exit 3.
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
+| `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
 | `rollup.kind` | string | always |
 | `rollup.label` | string | always |
@@ -1658,6 +1659,15 @@ fetched) is still exit 3.
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
 | `rollup.unbounded` | integer | always |
+| `rollup.weight` | integer | always |
+| `rollup.weights` | object | always |
+| `rollup.weights.catching_up` | integer | always |
+| `rollup.weights.failing` | integer | always |
+| `rollup.weights.fresh` | integer | always |
+| `rollup.weights.no_refresh_path` | integer | always |
+| `rollup.weights.overdue` | integer | always |
+| `rollup.weights.queued` | integer | always |
+| `rollup.weights.undecided` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2133,6 +2143,7 @@ counts every node even when `nodes` is truncated.
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
+| `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
 | `rollup.kind` | string | always |
 | `rollup.label` | string | always |
@@ -2141,6 +2152,15 @@ counts every node even when `nodes` is truncated.
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
 | `rollup.unbounded` | integer | always |
+| `rollup.weight` | integer | always |
+| `rollup.weights` | object | always |
+| `rollup.weights.catching_up` | integer | always |
+| `rollup.weights.failing` | integer | always |
+| `rollup.weights.fresh` | integer | always |
+| `rollup.weights.no_refresh_path` | integer | always |
+| `rollup.weights.overdue` | integer | always |
+| `rollup.weights.queued` | integer | always |
+| `rollup.weights.undecided` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2316,6 +2336,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
+| `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
 | `rollup.kind` | string | always |
 | `rollup.label` | string | always |
@@ -2324,6 +2345,15 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
 | `rollup.unbounded` | integer | always |
+| `rollup.weight` | integer | always |
+| `rollup.weights` | object | always |
+| `rollup.weights.catching_up` | integer | always |
+| `rollup.weights.failing` | integer | always |
+| `rollup.weights.fresh` | integer | always |
+| `rollup.weights.no_refresh_path` | integer | always |
+| `rollup.weights.overdue` | integer | always |
+| `rollup.weights.queued` | integer | always |
+| `rollup.weights.undecided` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2413,6 +2443,7 @@ clears the root:
 | `entries[].held_by[].nodes` | integer | always |
 | `entries[].held_by[].root` | string | always |
 | `entries[].held_by[].unbounded` | integer | always |
+| `entries[].held_by[].weight` | integer | always |
 | `entries[].id` | string | always |
 | `entries[].keys` | object | sometimes |
 | `entries[].keys.behind` | integer | always |
@@ -2425,6 +2456,15 @@ clears the root:
 | `entries[].parent` | null \| string | always |
 | `entries[].running` | integer | always |
 | `entries[].unbounded` | integer | always |
+| `entries[].weight` | integer | always |
+| `entries[].weights` | object | always |
+| `entries[].weights.catching_up` | integer | always |
+| `entries[].weights.failing` | integer | always |
+| `entries[].weights.fresh` | integer | always |
+| `entries[].weights.no_refresh_path` | integer | always |
+| `entries[].weights.overdue` | integer | always |
+| `entries[].weights.queued` | integer | always |
+| `entries[].weights.undecided` | integer | always |
 | `files` | array | always |
 | `files[]` | object | always |
 | `files[].asset_health` | object | always |
@@ -2470,6 +2510,7 @@ clears the root:
 | `roots[].node` | string | always |
 | `roots[].nodes` | integer | always |
 | `roots[].unbounded` | integer | always |
+| `roots[].weight` | integer | always |
 <!-- END GENERATED schema status_rollup -->
 
 #### One node's keys
@@ -2719,6 +2760,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
+| `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
 | `rollup.kind` | string | always |
 | `rollup.label` | string | always |
@@ -2727,6 +2769,15 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
 | `rollup.unbounded` | integer | always |
+| `rollup.weight` | integer | always |
+| `rollup.weights` | object | always |
+| `rollup.weights.catching_up` | integer | always |
+| `rollup.weights.failing` | integer | always |
+| `rollup.weights.fresh` | integer | always |
+| `rollup.weights.no_refresh_path` | integer | always |
+| `rollup.weights.overdue` | integer | always |
+| `rollup.weights.queued` | integer | always |
+| `rollup.weights.undecided` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -3817,6 +3868,15 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
 | `rollup.unbounded` | integer | always |
+| `rollup.weight` | integer | always |
+| `rollup.weights` | object | always |
+| `rollup.weights.catching_up` | integer | always |
+| `rollup.weights.failing` | integer | always |
+| `rollup.weights.fresh` | integer | always |
+| `rollup.weights.no_refresh_path` | integer | always |
+| `rollup.weights.overdue` | integer | always |
+| `rollup.weights.queued` | integer | always |
+| `rollup.weights.undecided` | integer | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |

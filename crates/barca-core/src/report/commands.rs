@@ -1530,6 +1530,13 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
         crate::time::parse_rfc3339(&rollup.as_of).unwrap_or_else(|| chrono::Utc::now().timestamp());
     line!(rendered, "");
     line!(rendered, "Gap: {}", rollup.root().gap_line(as_of));
+    // One number for how far the scope is from fresh, and what a fully fresh scope reads.
+    line!(
+        rendered,
+        "Distance from fresh: {} (weighted nodes); {} when every node is fresh",
+        rollup.root().weight,
+        rollup.root().nodes * crate::rollup::FRESH_WEIGHT
+    );
     if !rollup.roots.is_empty() {
         // The to-do list: what holds the nodes that are not fresh, and what clears each.
         let held = rollup.root().causes.total();
@@ -1578,6 +1585,7 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             if root.unbounded > 0 {
                 holds.push_str(&format!("; {} with no estimate", root.unbounded));
             }
+            holds.push_str(&format!("; weight {}", root.weight));
             line!(rendered, "{pad}{holds}");
             line!(rendered, "{pad}why:  {}", root.detail);
             let cost = root.action.estimated_seconds.map(|s| {
