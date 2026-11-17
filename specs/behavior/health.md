@@ -2,9 +2,11 @@
 
 ## Scope and status
 
-Specification version: 1. Status: approved intent, not yet implemented. Nothing below is on
-`main`: no field, enum value, route, flag or table named here exists until the issue that owns
-it lands (the 0.44.0 series, [#974](https://github.com/barca-orc/barca/issues/974)).
+Specification version: 1. Status: approved intent, implemented in part. Implemented: the tick
+record ("What a tick records", #960), as the `schedule_ticks` table and its two reads; nothing
+reads it yet. Everything else below is not on `main`: no other field, enum value, route, flag
+or table named here exists until the issue that owns it lands (the 0.44.0 series,
+[#974](https://github.com/barca-orc/barca/issues/974)).
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
 health word, its cause bucket and root, its refresh path, when it is expected fresh or
 rechecked, the freshness gap, the rollup tree, what a tick records, the `barca.schedules`,
@@ -310,9 +312,11 @@ targets) and never collides with `GET /health`, which is liveness.
 
 ### What a tick records (#960)
 
-One bounded table in the metadata database, written by the scheduler from values it already
-holds; no read is added to the tick path. `freshness_proofs` is not this table. Logical
-content, one row per due tick of a schedule:
+Implemented. One bounded table in the metadata database, `schedule_ticks`
+([schema](../interfaces/metadata-schema.md), [owner](../../crates/barca-db/src/db/ticks.rs)),
+written by the scheduler and the run recorder of `barca serve` from values they already hold;
+no read is added to the tick path. `freshness_proofs` is not this table. Logical content, one
+row per due tick of a schedule:
 
 | Field | Content |
 | --- | --- |
@@ -320,14 +324,36 @@ content, one row per due tick of a schedule:
 | `action` | `fired`, `paused`, `skipped` (a run of the node in flight) or `failing` (past `max_failures`) |
 | `skipped_for` | the run in flight, for `skipped` |
 | `run_id`, `started_at`, `finished_at`, `run_status` | the run a fired tick started |
-| `queue_wait_seconds` | from the slot to the run's start; `null` until it starts |
+| `queue_wait_seconds` | from the run joining the run queue (`run_queue.queued_at`) to its start; `null` until it starts |
 | per target of a fired tick | `rebuilt`, `up_to_date`, `failed` or `not_reached` |
 
-A polled sensor is `rebuilt` when its observation changed and `up_to_date` otherwise; a task
-that fired is `rebuilt`. `not_reached` covers a target a failure upstream, a cancellation or
-the run's end kept the run from deciding. Retention: per schedule the newest 1,000 ticks and
-none older than 14 days; per-target outcomes for the newest 20 fired ticks of each schedule,
-counts only for older ones. Trimming happens on write.
+Three writes, each one transaction: the decision, when the scheduler makes it (the row names
+the run before the run can start); the run's start, when it leaves the queue; the run's end,
+with the outcomes. A startup catch-up records its decision at the time it is made, the slot
+its run carries. A fired tick whose run could not join the queue has no `run_id`. A run put
+back in the queue by a draining server records its latest start; a run its server was killed
+under ends its tick as its run row ends (`interrupted`, or `error` for a run that never wrote
+one) with every target `not_reached`. A plain CLI run, a run someone asked a server for and a
+`--read-only` server write nothing.
+
+Outcomes come from the run's own step results: a step that executed is `rebuilt` (a task that
+fired, a partitioned node with at least one key computed), a cache hit `up_to_date`, a failed
+step `failed`. `not_reached` covers a target a failure upstream, a cancellation or the run's
+end kept the run from deciding. A partitioned target counts once, by its worst key.
+
+Known limitation: a polled sensor is recorded `rebuilt` whether or not its observation
+changed. The intent is `up_to_date` for an unchanged observation; a run's step results do not
+carry that today, and the writer adds no read to learn it.
+
+Retention: per schedule the newest 1,000 ticks and none older than 14 days; per-target outcomes
+for the newest 20 fired ticks of each schedule, counts only for older ones. Trimming happens on
+write, inside the write's transaction; the ticks of a schedule that no longer fires are trimmed
+by age at scheduler startup and about hourly while ticks are recorded.
+
+Reads (`barca_core::db`): `ticks_for_schedule(db_path, schedule_id, limit)`, newest first, and
+`tick_outcomes_for_node(db_path, node_id, limit)`, what the newest finished fired ticks that
+still hold their target list did with one node, across schedules. Both answer empty for a
+database without the table.
 
 ### Tables (#965)
 
@@ -430,8 +456,8 @@ the rollup by group, and the top roots.
 
 ## Acceptance and evidence
 
-Nothing here is implemented, so nothing below passes yet. Each issue lands its scenario with
-the code and replaces the matching source link.
+Only the #960 row is implemented; nothing else below passes yet. Each issue lands its scenario
+with the code and replaces the matching source link.
 
 | Scenario | Issue |
 | --- | --- |
@@ -440,7 +466,7 @@ the code and replaces the matching source link.
 | A project with 7 of 556 assets counted reads "7 of 556 measured" in status JSON and the UI | #957 |
 | A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late | #958 |
 | Re-adding a derived word in TypeScript fails CI | #959 |
-| A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960 |
+| A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
 | A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961 |
 | Estimates within the stated error on the seeded server simulation; a node below a pending cutoff has `recheck_at` only | #962 |
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963 |

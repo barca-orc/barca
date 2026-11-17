@@ -1296,8 +1296,10 @@ async fn trigger_registers_a_tracked_run_for_asset_and_task() {
     let task = job("f.py:t", NodeKind::Task, "* * * * *");
     // Both kinds must produce a handle that is registered in the runs map,
     // proving each routes into a real run-trigger path (get vs run).
-    let ha = trigger(&st, &asset, 0).await.unwrap();
-    let ht = trigger(&st, &task, 0).await.unwrap();
+    let ha = trigger(&st, &asset, 0, db::generate_run_id())
+        .await
+        .unwrap();
+    let ht = trigger(&st, &task, 0, db::generate_run_id()).await.unwrap();
     assert!(st.runs.contains_key(&ha));
     assert!(st.runs.contains_key(&ht));
     assert_ne!(ha, ht);
@@ -1373,4 +1375,269 @@ async fn describe_schedule_reports_next_fire() {
     // A `*/5` cron always has an upcoming occurrence.
     assert!(infos[0].next_fire.is_some());
     assert!(infos[0].next_fire_local.is_some());
+}
+
+// ─── the tick record (#960) ────────────────────────────────────────────
+
+/// [`app_state`] over an initialized metadata database of its own, which the scheduler and the
+/// runs it starts share, as in a server.
+async fn recording_state() -> (tempfile::TempDir, AppState, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("metadata.db").display().to_string();
+    db::init_db(&path).await.unwrap();
+    (dir, state_at(&path), path)
+}
+
+/// A server on the metadata database at `path`: a second one is the first one restarted.
+fn state_at(path: &str) -> AppState {
+    let st = app_state();
+    let mut config = (*st.config).clone();
+    config.resolved.db_path = path.to_string();
+    AppState::new(config)
+}
+
+async fn ticks(path: &str, job: &ScheduledJob) -> Vec<db::TickRecord> {
+    db::ticks_for_schedule(path, &job.id, 100).await.unwrap()
+}
+
+/// The newest tick of `job` once its run recorded how it ended.
+async fn finished_tick(path: &str, job: &ScheduledJob) -> db::TickRecord {
+    for _ in 0..600 {
+        if let Some(tick) = ticks(path, job).await.into_iter().next()
+            && tick.finished_at.is_some()
+        {
+            return tick;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!(
+        "the tick's run never finished: {:?}",
+        ticks(path, job).await
+    );
+}
+
+#[tokio::test]
+async fn a_fired_paused_skipped_and_failing_tick_each_leave_one_row() {
+    let (_dir, st, path) = recording_state().await;
+    let j = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
+    record_tick(&path, &j, 60, db::TickDecision::Paused, None).await;
+    record_tick(&path, &j, 120, db::TickDecision::Skipped, Some("run-x")).await;
+    record_tick(&path, &j, 180, db::TickDecision::Failing, None).await;
+    let handle = fire(&st, &j, 240, Some(&path)).await.unwrap();
+
+    let done = finished_tick(&path, &j).await;
+    let rows = ticks(&path, &j).await;
+    let seen: Vec<_> = rows
+        .iter()
+        .map(|t| (t.scheduled_at, t.action, t.skipped_for.as_deref()))
+        .collect();
+    use db::TickDecision::*;
+    assert_eq!(
+        seen,
+        vec![
+            (240, Fired, None),
+            (180, Failing, None),
+            (120, Skipped, Some("run-x")),
+            (60, Paused, None),
+        ]
+    );
+    // The fired tick names the run it started, before the run could start.
+    assert_eq!(done.run_id.as_deref(), Some(handle.as_str()));
+    assert!(rows[1..].iter().all(|t| t.run_id.is_none()));
+    // This server's source file does not exist: the run started, failed before any step, and
+    // so reached none of the tick's targets.
+    assert!(done.started_at.is_some() && done.queue_wait_seconds.is_some());
+    assert!(done.finished_at >= done.started_at);
+    assert_eq!(done.run_status.as_deref(), Some("error"));
+    assert_eq!(
+        done.targets,
+        Some(vec![(j.id.clone(), db::TickTargetOutcome::NotReached)])
+    );
+    assert_eq!(done.counts.map(|c| c.not_reached), Some(1));
+}
+
+#[tokio::test]
+async fn catch_up_records_what_it_decided_for_each_missed_tick() {
+    let (_dir, st, path) = recording_state().await;
+    let jobs = [
+        job("f.py:fires", NodeKind::Asset, "0 6 * * *"),
+        job("f.py:paused", NodeKind::Asset, "0 6 * * *"),
+        job("f.py:busy", NodeKind::Asset, "0 6 * * *"),
+        job("f.py:failing", NodeKind::Asset, "0 6 * * *"),
+        job("f.py:not_due", NodeKind::Asset, "0 6 1 1 *"),
+    ];
+    catch_up(&st, &[], &jobs, &Zone::Utc, &utc(2, 5, 0), &path)
+        .await
+        .unwrap();
+    for j in &jobs {
+        assert!(ticks(&path, j).await.is_empty(), "anchoring is not a tick");
+    }
+    let pause = db::SchedulePause {
+        paused_at: utc(2, 5, 30).timestamp(),
+        until: None,
+    };
+    db::set_schedule_pause(&path, "f.py:paused", Some(pause), pause.paused_at)
+        .await
+        .unwrap();
+    let failing = db::ScheduleFailures {
+        failures: jobs[3].max_failures,
+        failed_nodes: vec!["f.py:failing".into()],
+        mark: i64::MAX / 2,
+    };
+    db::set_schedule_failures(&path, "f.py:failing", &failing)
+        .await
+        .unwrap();
+    insert_run(
+        &st,
+        "run-busy",
+        RunStatus::Running,
+        "get",
+        Some("busy"),
+        Some("f.py:busy"),
+        1.0,
+    );
+
+    let back = utc(2, 7, 0);
+    let book = catch_up(&st, &[], &jobs, &Zone::Utc, &back, &path)
+        .await
+        .unwrap();
+    let one = |rows: Vec<db::TickRecord>| {
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].scheduled_at, back.timestamp());
+        rows.into_iter().next().unwrap()
+    };
+    use db::TickDecision::*;
+    let fired = one(ticks(&path, &jobs[0]).await);
+    assert_eq!(fired.action, Fired);
+    assert_eq!(fired.run_id.as_ref(), book.last_handle.get("f.py:fires"));
+    assert_eq!(one(ticks(&path, &jobs[1]).await).action, Paused);
+    let skipped = one(ticks(&path, &jobs[2]).await);
+    assert_eq!(
+        (skipped.action, skipped.skipped_for.as_deref()),
+        (Skipped, Some("run-busy"))
+    );
+    assert_eq!(one(ticks(&path, &jobs[3]).await).action, Failing);
+    assert!(ticks(&path, &jobs[4]).await.is_empty(), "no tick was due");
+}
+
+#[tokio::test]
+async fn queue_wait_runs_from_joining_the_queue_to_the_runs_start() {
+    let (_dir, st, path) = recording_state().await;
+    let j = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
+    // A paused queue: the run joins it and waits.
+    let _ = crate::queue::pause(axum::extract::State(st.clone()))
+        .await
+        .unwrap();
+    let handle = fire(&st, &j, 240, Some(&path)).await.unwrap();
+    let queued_at = st.runs.get(&handle).unwrap().started_at;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let waiting = &ticks(&path, &j).await[0];
+    assert_eq!(waiting.run_id.as_deref(), Some(handle.as_str()));
+    assert_eq!(
+        (waiting.started_at, waiting.queue_wait_seconds),
+        (None, None),
+        "nothing about a start until it starts"
+    );
+
+    let _ = crate::queue::resume(axum::extract::State(st.clone()))
+        .await
+        .unwrap();
+    let done = finished_tick(&path, &j).await;
+    let (started, wait) = (done.started_at.unwrap(), done.queue_wait_seconds.unwrap());
+    assert!((0.3..30.0).contains(&wait), "waited {wait}s");
+    assert!(
+        (started - queued_at - wait).abs() < 1e-6,
+        "the wait is start - queued_at, not start - slot: {started} - {queued_at} != {wait}"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_row() {
+    let (_dir, st, path) = recording_state().await;
+    let queued = job("f.py:queued", NodeKind::Asset, "0 6 * * *");
+    let killed = job("f.py:killed", NodeKind::Asset, "0 6 * * *");
+    let _ = crate::queue::pause(axum::extract::State(st.clone()))
+        .await
+        .unwrap();
+    let q = fire(&st, &queued, 240, Some(&path)).await.unwrap();
+    let k = fire(&st, &killed, 240, Some(&path)).await.unwrap();
+    // `killed`'s run had started when the server was killed: its queue row says `running`.
+    db::record_tick_started(&path, &killed.id, 240, &k, 241.0, 1.0)
+        .await
+        .unwrap();
+    barca_core::serve::run_queue::mark_running(&path, &k)
+        .await
+        .unwrap();
+    drop(st);
+
+    // Between the servers: each row names its run and no end.
+    for (j, run) in [(&queued, &q), (&killed, &k)] {
+        let row = &ticks(&path, j).await[0];
+        assert_eq!(row.action, db::TickDecision::Fired);
+        assert_eq!(row.run_id.as_ref(), Some(run));
+        assert_eq!(
+            (row.finished_at, &row.run_status, &row.targets),
+            (None, &None, &None)
+        );
+    }
+
+    // The next server: the killed run is not started again, and its tick ends with it, no
+    // target reached. The start it recorded stays.
+    let st = state_at(&path);
+    crate::queue::resume_at_startup(&st).await.unwrap();
+    let row = &ticks(&path, &killed).await[0];
+    assert_eq!(row.run_status.as_deref(), Some("error"));
+    assert_eq!(
+        (row.started_at, row.queue_wait_seconds),
+        (Some(241.0), Some(1.0))
+    );
+    assert!(row.finished_at.is_some());
+    assert_eq!(
+        row.targets,
+        Some(vec![(killed.id.clone(), db::TickTargetOutcome::NotReached)])
+    );
+    // The queued run starts under its id when the queue is resumed, and ends on the same row.
+    assert!(ticks(&path, &queued).await[0].started_at.is_none());
+    let _ = crate::queue::resume(axum::extract::State(st.clone()))
+        .await
+        .unwrap();
+    let done = finished_tick(&path, &queued).await;
+    assert_eq!(done.run_id.as_ref(), Some(&q));
+    assert!(done.started_at.is_some() && done.run_status.is_some());
+    assert_eq!(ticks(&path, &queued).await.len(), 1, "one row per tick");
+}
+
+#[tokio::test]
+async fn a_run_nobody_scheduled_writes_no_tick() {
+    let (_dir, st, path) = recording_state().await;
+    let j = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
+    let spec = crate::runs::RunSpec {
+        command: barca_core::outcome::RunCommand::Get,
+        targets: vec![j.id.clone()],
+        nodes: vec![j.id.clone()],
+        files: Vec::new(),
+        policy: barca_core::cache::CachePolicy::CacheAware,
+        trigger: barca_core::outcome::Trigger::api(),
+        values: false,
+        partition: None,
+        batch: Vec::new(),
+        rules: barca_core::freshness::RunRules::default(),
+        timeout: None,
+        kill_requeues: 0,
+    };
+    let handle = crate::runs::start_as(st.clone(), db::generate_run_id(), spec)
+        .await
+        .unwrap();
+    for _ in 0..600 {
+        if st
+            .runs
+            .get(&handle)
+            .is_some_and(|r| r.finished_at.is_some())
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(st.runs.get(&handle).unwrap().finished_at.is_some());
+    assert!(ticks(&path, &j).await.is_empty());
 }

@@ -98,6 +98,33 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
     assert rows.get("tracked") == 2, f"tracked should run once per sensor value: {context}"
     assert rows.get("no_inputs") == 1, f"an asset with nothing changed was recomputed: {context}"
 
+    # The tick record (#960) says the same: each fired tick is one row naming its run, and
+    # what the run did with the scheduled node is `rebuilt` when it computed it and
+    # `up_to_date` when the cache served it.
+    with served.snapshot(tmp_path) as db:
+        ticks = db.execute(
+            "SELECT schedule_id, action, run_id, run_status, started_at, finished_at,"
+            " queue_wait_seconds, rebuilt, up_to_date, failed, not_reached, targets"
+            " FROM schedule_ticks ORDER BY scheduled_at"
+        ).fetchall()
+        runs = {row[0] for row in db.execute("SELECT run_id FROM runs")}
+    context = f"{ticks}\n{err}"
+    assert {t[1] for t in ticks} <= {"fired", "skipped"}, context
+    done = [t for t in ticks if t[1] == "fired" and t[5] is not None]
+    for schedule, _, run_id, status, started, finished, wait, *counts, targets in done:
+        assert run_id in runs and status == "success", context
+        assert wait >= 0 and started <= finished, context
+        listed = json.loads(targets)
+        assert listed[0][0] == schedule, context
+        assert sum(counts) == len(listed), context
+    for node in ("tracked", "no_inputs"):
+        mine = [t for t in done if t[0] == f"pipeline.py:{node}"]
+        assert sum(t[7] for t in mine) == rows[node], f"{node} rebuilt: {context}"
+        assert sum(t[8] for t in mine) >= 1, f"{node} was never found up to date: {context}"
+        assert not any(t[9] or t[10] for t in mine), context
+    skipped = [t for t in ticks if t[1] == "skipped"]
+    assert all(t[2] is None and t[5] is None for t in skipped), context
+
 
 # ─── a CLI run on the same project holds a tick back (#479) ──────────────────
 

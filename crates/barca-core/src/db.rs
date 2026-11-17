@@ -40,6 +40,15 @@ pub use barca_db::db::{
     succeeded_since, upsert_schedule_state,
 };
 
+// The tick record (#960): what each due tick of a schedule decided and how its run ended. The
+// server's scheduler and run recorder write it; `ticks_for_schedule` and
+// `tick_outcomes_for_node` are the reads.
+pub use barca_db::db::{
+    NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE, TICKS_WITH_TARGETS,
+    TickCounts, TickDecision, TickRecord, TickTargetOutcome, record_tick, record_tick_finished,
+    record_tick_started, tick_outcomes_for_node, ticks_for_schedule, trim_ticks,
+};
+
 // Fixtures for the tests of `barca-cli` and `barca-server`, which write runs without running
 // them (a dependency's `cfg(test)` items do not reach its dependents).
 #[doc(hidden)]
