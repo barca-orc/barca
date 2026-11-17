@@ -55,5 +55,6 @@ Examples:
   barca sql "select name, state, reason from barca.nodes where state <> 'cached'"
   barca sql "select * from revenue" --local                # this machine's results, not a configured server's
   barca sql "select * from revenue" --server https://barca.example.com   # views resolved by that server
+  barca sql "select status, count(*) from barca.runs group by all" --server https://barca.example.com   # barca's tables alone: the server answers
 
 More: barca docs sql

@@ -119,9 +119,11 @@ part. Implemented (experimental): the health words and their derivation (`health
 the OpenAPI and CLI contract owners and their rules checked in
 `crates/barca-core/src/health.rs`. Not implemented: the cause buckets and every root kind but
 `failure`, the refresh path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the
-freshness gap, the cause and gap fields of the rollup, the `barca.schedules`,
-`barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). Also
-implemented: the tick record (#960: the `schedule_ticks` table and its reads), from it
+freshness gap, the cause and gap fields of the rollup and the `barca.schedules`,
+`barca.ticks` and `barca.queue` tables. Also
+implemented: the server query route (#972: `POST /sql/query`, one `SELECT` over `barca.*`
+tables in a helper that can read no file, result or network resource, checked in
+`crates/barca-server/src/sql_query.rs` and `python/tests/test_sql_query_route.py`), the tick record (#960: the `schedule_ticks` table and its reads), from it
 `last_check` on every status node and the `checked_up_to_date` reason (#964: a node the read
 path cannot decide reads `ok` while the last tick's verdict stands), and the rollup (#955:
 `GET /state/rollup` and `barca status --rollup`, one tree whose every level is the sum of its

@@ -49,6 +49,7 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
   _sinks.py             ← Dataset sinks: `@sink("exports/scored/")` writes a Hive-partitioned dataset
   _duckdb.py            ← DuckDB connections for steps that take or return relations
   _sql.py               ← `barca sql`: invoked by Rust as `python -m barca._sql`
+  _sql_server.py        ← `POST /sql/query`: the server's one DuckDB helper, `barca.*` tables only, no file access
   _value.py             ← `barca get -o value`: invoked by Rust as `python -m barca._value`
   _inspect.py           ← Artifact shape for `barca status`: `python -m barca._inspect`
   _inspection_cache.py  ← Disposable, bounded inspection evidence (never used by execution)

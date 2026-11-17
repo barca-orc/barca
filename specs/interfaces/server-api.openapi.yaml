@@ -9,7 +9,7 @@ info:
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
     consumes its own one-use local credential. No cookies or CORS credentials are accepted. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
-    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations; the server runs no SQL), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset, and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
+    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations) and its query route over barca''s own tables (POST /sql/query; the server never runs SQL over results or files), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset, and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases retained for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py.'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
@@ -683,8 +683,8 @@ paths:
               schema:
                 type: string
       description: barca sql with a server resolves its views here and runs the query on the client,
-        over the store paths this returns. The server runs no SQL (DuckDB reads and writes files, and
-        token mode requires authentication). Built by the function a local barca sql uses, against a private
+        over the store paths this returns. The server never runs SQL over results or files (DuckDB
+        reads and writes files; POST /sql/query answers queries over barca's own tables only). Built by the function a local barca sql uses, against a private
         snapshot of the metadata DB, so view names, stale results and current partition keys follow the
         same rules.
       parameters:
@@ -719,6 +719,74 @@ paths:
         required: false
         schema:
           type: string
+  /sql/query:
+    post:
+      summary: One SELECT over barca's own tables, run by the server
+      operationId: post_sql_query
+      description: 'Experimental (specs/behavior/health.md, "Server query route"). The query is one
+        SELECT (DuckDB dialect) over barca.runs, barca.materializations and barca.nodes; the answer
+        is the document barca sql --json prints. A read: a read-only server serves it, and token
+        mode requires a token as on every route. The server never runs SQL over results or files:
+        the query runs in one long-lived helper process whose in-memory DuckDB holds those tables
+        only, with external access disabled (no file, network or extension access) and its
+        configuration locked, in a read-only transaction, under a memory limit; rows are handed to
+        it by the server when the metadata database or the graph changed. A query has 5 seconds,
+        waiting for the helper and loading tables included. barca sql with a server sends a query
+        that names only barca''s tables here.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SqlQuery'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: The rows, as barca sql --json prints them
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SqlAnswer'
+        '400':
+          description: 'Not one SELECT over barca''s tables: a result view or any other relation, a
+            file or URL, another statement type, more than one statement, a write inside a SELECT,
+            a SQL error, or a body that is not the request. Usage envelope.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '408':
+          description: The query did not finish within 5 seconds and was cancelled. Usage envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata DB or status error while loading a table
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The server's Python environment has no DuckDB, or the query helper stopped
+            under the query (the next query starts another). Infra envelope; no other route is
+            affected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
   /materializations:
     get:
       summary: Step results, newest first, one page at a time
@@ -7541,6 +7609,57 @@ components:
           $ref: '#/components/schemas/RunPlanReasons'
           description: For one run (barca history RUN_ID) that executed something, why; absent in a
             list. Experimental.
+    SqlQuery:
+      type: object
+      additionalProperties: false
+      required:
+      - query
+      description: The body of POST /sql/query.
+      properties:
+        query:
+          type: string
+          description: One SELECT over barca.runs, barca.materializations and barca.nodes (DuckDB dialect).
+        limit:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          description: Rows to answer; default 1000, at most 10000 (a larger value is lowered to it).
+    SqlAnswer:
+      type: object
+      additionalProperties: false
+      required:
+      - columns
+      - rows
+      - total
+      - truncated
+      description: The answer of POST /sql/query, the document barca sql --json prints.
+      properties:
+        columns:
+          type: array
+          description: Column names, in order.
+          items:
+            type: string
+        rows:
+          type: array
+          description: The first limit rows, one object per row, keyed by column.
+          items:
+            type: object
+        total:
+          type: integer
+          description: How many rows the query returns in all.
+        truncated:
+          type: boolean
+          description: True when rows holds fewer than total.
+        hint:
+          type: string
+          description: What to send to see more; only when truncated.
+        notes:
+          type: array
+          description: What the rows leave out (a table holding more than the 100000 rows the server
+            loads of it); absent when nothing.
+          items:
+            type: string
     SqlCatalog:
       type: object
       additionalProperties: false

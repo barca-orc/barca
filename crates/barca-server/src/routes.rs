@@ -60,6 +60,8 @@ pub fn router(state: AppState) -> Router {
             "/auth/tokens/{id}",
             axum::routing::delete(crate::auth_http::revoke),
         )
+        // A query over barca's own tables (never over results or files), run by the server.
+        .route("/sql/query", post(crate::sql_query::query))
         // The ledger: what a local run on another machine asks and posts (RFC-0007).
         .route("/ledger/lookup", post(ledger::lookup))
         .route("/ledger/runs", post(ledger::post_run))

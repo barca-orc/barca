@@ -107,6 +107,12 @@ impl Stamp {
         Self::of(self.0.iter().map(|(p, _)| p.clone()))
     }
 
+    /// True when the metadata database these paths are has been still long enough for its
+    /// state to be trusted: what was read from it may be kept until the stamp changes.
+    pub(crate) fn db_settled(&self) -> bool {
+        self.settled(SystemTime::now(), DB_SETTLED)
+    }
+
     /// True when no path was modified or changed within `still` before `now`.
     fn settled(&self, now: SystemTime, still: Duration) -> bool {
         self.0.iter().filter_map(|(_, s)| s.as_ref()).all(|s| {

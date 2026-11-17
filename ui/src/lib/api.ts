@@ -6,6 +6,8 @@
    ============================================================ */
 
 import type { Rollup } from './generated/Rollup'
+import type { SqlAnswer } from './generated/SqlAnswer'
+import type { SqlQuery } from './generated/SqlQuery'
 import { connectionToken, redactCredential, serverFetch } from './credentials'
 import type { Pins } from './pins'
 import type { PauseRequest, Pauses } from './pauses'
@@ -141,6 +143,14 @@ export const api = {
         : `/state/rollup?${new URLSearchParams('group' in scope ? { targets: scope.group } : { files: scope.file })}`,
       { signal },
     ),
+  /**
+   * `POST /sql/query`: one `SELECT` over barca's own tables (`barca.runs`,
+   * `barca.materializations`, `barca.nodes`), run by the server. It reads no result and no file:
+   * anything else is a 400. 408 when the query takes more than 5 seconds, 503 when the server's
+   * environment has no DuckDB.
+   */
+  sqlQuery: (body: SqlQuery, signal?: AbortSignal) =>
+    request<SqlAnswer>('/sql/query', { method: 'POST', body: JSON.stringify(body), signal }),
   runs: (limit = 100) => request<RunList>(`/runs?limit=${limit}`),
   runDetail: (id: string) => request<RunView>(`/runs/${encodeURIComponent(id)}`),
   /** One page of a run's steps (`?offset=`, failed steps first): `steps_page.next_offset` is the next. */

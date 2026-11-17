@@ -4,7 +4,8 @@ Two copies of one project, `a` and `b`, point at one `barca serve` and the plain
 it uses (the ledger suite's `Team`). The server resolves which result each view reads from its
 ledger (`GET /sql/views`) and barca's own tables from its records (`GET /history`,
 `GET /materializations`, `GET /nodes`); the query runs on the laptop, over the store. The server
-runs no SQL.
+runs no SQL over results or files (a query over barca's tables alone it answers itself:
+`test_sql_query_route.py`).
 """
 
 import json
