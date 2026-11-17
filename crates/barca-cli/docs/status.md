@@ -305,8 +305,9 @@ barca status --rollup --server           # the configured server's: GET /state/r
 
 The JSON document is `{as_of, entries, roots, data_coverage}`; `barca docs status-fields`,
 "The rollup", has every key. It is the document the server's `GET /state/rollup` answers and
-the web UI's health map, bars, causes and failures list draw, so all of them say the same
-numbers. `barca status --json` carries its root entry as `rollup`, beside `summary`.
+the web UI's health map, bars, to-do list and failures list draw, so all of them say the same
+numbers. Each entry carries the roots that hold its nodes (`held_by`), so a group's to-do list
+is in the document too. `barca status --json` carries its root entry as `rollup`, beside `summary`.
 `--rollup` cannot be combined with `--limit`, `--all`, `--fields`, `--sample`, `--state` or
 `--problems`: it always counts every node in scope. It is experimental (`barca docs
 contract`): causes, the freshness gap and roots other than failures are added to the same

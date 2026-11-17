@@ -3,6 +3,7 @@ import type { CauseCounts } from "./CauseCounts";
 import type { DataCoverage } from "./DataCoverage";
 import type { EntryKind } from "./EntryKind";
 import type { HealthCounts } from "./HealthCounts";
+import type { HeldBy } from "./HeldBy";
 import type { KeyCounts } from "./KeyCounts";
 
 /**
@@ -57,6 +58,17 @@ causes: CauseCounts,
  * Assets underneath that are not fresh, by cause.
  */
 asset_causes: CauseCounts,
+/**
+ * Nodes underneath that are not fresh: the nodes `causes` counts, as one number.
+ */
+not_fresh: number,
+/**
+ * The roots that hold those nodes, each with what it holds underneath this entry, in
+ * the order of the root list applied to what is held here (roots holding nodes with no
+ * estimate first, the most nodes first; then by gap, nodes and id). Their `nodes` add
+ * up to `not_fresh`. Empty on a node entry: a node's root is on its row.
+ */
+held_by: Array<HeldBy>,
 /**
  * The freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds`.
  */

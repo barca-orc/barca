@@ -4619,7 +4619,8 @@ components:
       additionalProperties: false
       description: One entry of the rollup tree. Every count is the exact sum of its children's.
       required: [id, kind, label, parent, children, nodes, assets, running, health, asset_health,
-        data_coverage, causes, asset_causes, gap_seconds, unbounded, fresh_by, also_in]
+        data_coverage, causes, asset_causes, not_fresh, held_by, gap_seconds, unbounded, fresh_by,
+        also_in]
       properties:
         id:
           type: string
@@ -4702,6 +4703,56 @@ components:
             overdue: {type: integer, minimum: 0}
             failing: {type: integer, minimum: 0}
             undecided: {type: integer, minimum: 0}
+        not_fresh:
+          type: integer
+          minimum: 0
+          description: Nodes underneath that are not fresh; what causes counts, as one number.
+        held_by:
+          type: array
+          description: The roots that hold the not-fresh nodes underneath, each with what it holds
+            under this entry, in the order of the root list applied to what is held here. Their
+            nodes add up to not_fresh. Empty on a node entry.
+          items:
+            type: object
+            additionalProperties: false
+            required: [root, nodes, assets, causes, gap_seconds, unbounded, cumulative_nodes]
+            properties:
+              root:
+                type: string
+                description: The root's id; an entry of roots.
+              nodes:
+                type: integer
+                minimum: 1
+                description: Nodes underneath the entry that the root holds.
+              assets:
+                type: integer
+                minimum: 0
+                description: Of them, assets.
+              causes:
+                description: Those nodes, by cause.
+                type: object
+                additionalProperties: false
+                required: [catching_up, queued, no_refresh_path, overdue, failing, undecided]
+                properties:
+                  catching_up: {type: integer, minimum: 0}
+                  queued: {type: integer, minimum: 0}
+                  no_refresh_path: {type: integer, minimum: 0}
+                  overdue: {type: integer, minimum: 0}
+                  failing: {type: integer, minimum: 0}
+                  undecided: {type: integer, minimum: 0}
+              gap_seconds:
+                type: integer
+                minimum: 0
+                description: The freshness gap of those nodes, node-seconds.
+              unbounded:
+                type: integer
+                minimum: 0
+                description: Of those nodes, the ones with no expected_fresh_at.
+              cumulative_nodes:
+                type: integer
+                minimum: 1
+                description: Nodes held by this root and by the roots listed before it; against
+                  not_fresh, how much of the scope the first roots explain.
         gap_seconds:
           type: integer
           minimum: 0

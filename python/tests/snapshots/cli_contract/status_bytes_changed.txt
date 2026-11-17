@@ -92,10 +92,12 @@ rollup.health.never_run : integer
 rollup.health.ok : integer
 rollup.health.suspect : integer
 rollup.health.undecided : integer
+rollup.held_by : array
 rollup.id : string
 rollup.kind : string
 rollup.label : string
 rollup.nodes : integer
+rollup.not_fresh : integer
 rollup.parent : null
 rollup.running : integer
 rollup.unbounded : integer

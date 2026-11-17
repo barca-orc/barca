@@ -213,6 +213,12 @@ UI's health map, bars and failures list all print this document.
      "data_coverage": {"assets": 4, "measured": 0, "suspect": 0},
      "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
      "asset_causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
+     "not_fresh": 3,
+     "held_by": [
+       {"root": "failure:pipeline.py:orders", "nodes": 3, "assets": 3,
+        "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
+        "gap_seconds": 5400, "unbounded": 3, "cumulative_nodes": 3}
+     ],
      "gap_seconds": 5400, "unbounded": 3, "fresh_by": null, "also_in": []}
   ],
   "roots": [
@@ -246,6 +252,8 @@ of `children`.
 | `health`, `asset_health` | how many nodes, and how many assets, are in each health |
 | `data_coverage` | the coverage of "Data signals and coverage", for the assets underneath |
 | `causes`, `asset_causes` | how many nodes, and how many assets, that are not fresh have each cause ("Cause"); they add up to the nodes (assets) whose health is not `ok` or `suspect` |
+| `not_fresh` | nodes underneath that are not fresh: what `causes` counts, as one number |
+| `held_by` | the roots that hold those nodes, each with what it holds underneath this entry: `root` (an id of `roots`), `nodes`, `assets`, `causes`, `gap_seconds`, `unbounded`, and `cumulative_nodes` (the nodes held by this root and the ones listed before it). In the order of `roots`, applied to what is held here; their `nodes` add up to `not_fresh`. Empty on a node entry, whose root is on its row |
 | `gap_seconds` | the freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds` ("Root") |
 | `unbounded` | nodes underneath that are not fresh and have no `expected_fresh_at` ("Times"): nothing known will leave them fresh, so the gap has no forward term for them |
 | `fresh_by` | the latest `expected_fresh_at` underneath (RFC 3339, UTC): when the nodes that have an estimate are all expected fresh. `null` when none has one. It speaks only for those nodes; `unbounded` counts the rest |
@@ -265,6 +273,11 @@ UI's sidebar) reads `files`.
 `roots` is the to-do list: what holds the nodes that are not fresh, and what clears each.
 There is one entry per `root` the nodes carry ("Root"), and every node that is not fresh is
 under exactly one, so the roots' `nodes` add up to the nodes that are not fresh.
+A root's numbers are over every node in scope; what it holds under one group or file is that
+entry's `held_by`, which is the same list cut to the entry, so a group's to-do list is its own
+entry's. `cumulative_nodes` against `not_fresh` says how much the head of a list explains:
+`barca status --rollup` prints "The first 3 hold 392 of them." under the list's heading when
+there are more than three roots.
 
 | Key of a root | Meaning |
 |---|---|
@@ -319,6 +332,7 @@ What holds the 422 nodes that are not fresh, and what clears it:
 barca status --rollup --json | jq -r '.entries[] | select(.kind == "group") | [.label, .nodes, .assets, .health.failing] | @tsv'
 barca status --rollup --json | jq -r '.roots[] | [.nodes, .kind, .node, .action.kind, .action.command // "-"] | @tsv'
 barca status --rollup --json | jq '.entries[0] | {causes, gap_seconds, unbounded, fresh_by}'
+barca status --rollup --json | jq -r '.entries[] | select(.kind == "group") | .label as $g | .held_by[] | [$g, .nodes, .root] | @tsv'
 ```
 
 The rollup is experimental (`barca docs contract`). A scope given as targets is their upstream

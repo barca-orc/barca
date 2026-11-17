@@ -140,3 +140,12 @@ export function formatHour(ms: number, zone: TimeZone): string {
 export function hourOf(ms: number, zone: TimeZone): number {
   return Number(parts(ms, zone, { hour: '2-digit' }).hour)
 }
+
+/** `45s`, `12m`, `3h`, `2d`: a length of time in its largest whole unit, as the CLI prints one. */
+export function formatSpan(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86400) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86400)}d`
+}

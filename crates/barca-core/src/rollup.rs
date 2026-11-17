@@ -183,6 +183,29 @@ pub struct KeyCounts {
     pub ok: usize,
 }
 
+/// What one root holds underneath an entry: the root list cut to a scope, so a surface showing
+/// a group lists the roots that hold its nodes with the numbers they hold there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HeldBy {
+    /// The root's id: an entry of `roots`, which carries its detail and its action.
+    pub root: String,
+    /// Nodes underneath the entry that this root holds.
+    pub nodes: usize,
+    /// Of them, assets.
+    pub assets: usize,
+    /// Those nodes, by cause.
+    pub causes: CauseCounts,
+    /// The freshness gap of those nodes, node-seconds.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub gap_seconds: i64,
+    /// Of those nodes, the ones with no `expected_fresh_at`.
+    pub unbounded: usize,
+    /// Nodes held by this root and by the roots listed before it: against the entry's
+    /// `not_fresh`, how much of the scope the first roots explain.
+    pub cumulative_nodes: usize,
+}
+
 /// One entry of the tree. Every count is the exact sum of the entry's children's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -214,6 +237,15 @@ pub struct RollupEntry {
     /// Assets underneath that are not fresh, by cause.
     #[serde(default)]
     pub asset_causes: CauseCounts,
+    /// Nodes underneath that are not fresh: the nodes `causes` counts, as one number.
+    #[serde(default)]
+    pub not_fresh: usize,
+    /// The roots that hold those nodes, each with what it holds underneath this entry, in
+    /// the order of the root list applied to what is held here (roots holding nodes with no
+    /// estimate first, the most nodes first; then by gap, nodes and id). Their `nodes` add
+    /// up to `not_fresh`. Empty on a node entry: a node's root is on its row.
+    #[serde(default)]
+    pub held_by: Vec<HeldBy>,
     /// The freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds`.
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -254,6 +286,8 @@ impl RollupEntry {
             data_coverage: DataCoverage::default(),
             causes: CauseCounts::default(),
             asset_causes: CauseCounts::default(),
+            not_fresh: 0,
+            held_by: Vec::new(),
             gap_seconds: 0,
             unbounded: 0,
             fresh_by: None,
@@ -320,6 +354,7 @@ impl Sums for RollupEntry {
         self.data_coverage.suspect += child.data_coverage.suspect;
         self.causes.add(&child.causes);
         self.asset_causes.add(&child.asset_causes);
+        self.not_fresh += child.not_fresh;
         self.gap_seconds += child.gap_seconds;
         self.unbounded += child.unbounded;
         // The latest estimate underneath. Every one is RFC 3339 UTC to the second, so the
@@ -516,6 +551,7 @@ fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
             *entry.asset_causes.slot(cause) = 1;
         }
     }
+    entry.not_fresh = usize::from(node.cause.is_some());
     entry.gap_seconds = node.gap_seconds;
     entry.unbounded = usize::from(!node.health.is_fresh() && node.expected_fresh_at.is_none());
     entry.fresh_by.clone_from(&node.expected_fresh_at);
@@ -728,6 +764,25 @@ pub fn build(
     for entry in &mut ordered {
         entry.also_in.retain(|g| kept.contains(g));
     }
+    // What each root holds under every scope: a node that is not fresh is counted under
+    // each entry above it, so a level's roots are the exact sum of its children's.
+    let above: HashMap<String, String> = ordered
+        .iter()
+        .filter_map(|e| Some((e.id.clone(), e.parent.clone()?)))
+        .collect();
+    let mut under: HashMap<&str, Vec<&NodeStatus>> = HashMap::new();
+    for node in nodes.iter().filter(|n| n.root.is_some()) {
+        let mut at = above.get(&node.id);
+        while let Some(id) = at {
+            under.entry(id.as_str()).or_default().push(node);
+            at = above.get(id);
+        }
+    }
+    for entry in &mut ordered {
+        if let Some(rows) = under.remove(entry.id.as_str()) {
+            entry.held_by = held_by(rows);
+        }
+    }
     Rollup {
         as_of: as_of.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         entries: ordered,
@@ -744,7 +799,60 @@ pub fn total(nodes: &[NodeStatus], running: &HashSet<String>) -> RollupEntry {
     for node in nodes {
         root.add(&leaf(node, running.contains(&node.id)));
     }
+    root.held_by = held_by(nodes);
     root
+}
+
+/// The order of a root list, by what each root holds: roots holding nodes with no estimate
+/// first, the most nodes first; then by gap held, nodes held and id.
+fn rank(a: (usize, i64, usize, &str), b: (usize, i64, usize, &str)) -> std::cmp::Ordering {
+    let ((a_unbounded, a_gap, a_nodes, a_id), (b_unbounded, b_gap, b_nodes, b_id)) = (a, b);
+    (a_unbounded == 0)
+        .cmp(&(b_unbounded == 0))
+        .then_with(|| match a_unbounded {
+            0 => b_gap.cmp(&a_gap),
+            _ => b_nodes.cmp(&a_nodes),
+        })
+        .then(b_gap.cmp(&a_gap))
+        .then(b_nodes.cmp(&a_nodes))
+        .then_with(|| a_id.cmp(b_id))
+}
+
+/// What each root holds among `rows` (one scope's nodes), in the root list's order.
+fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
+    let mut held: BTreeMap<&str, HeldBy> = BTreeMap::new();
+    for node in rows {
+        let Some(root) = &node.root else { continue };
+        let entry = held.entry(root.id.as_str()).or_insert_with(|| HeldBy {
+            root: root.id.clone(),
+            nodes: 0,
+            assets: 0,
+            causes: CauseCounts::default(),
+            gap_seconds: 0,
+            unbounded: 0,
+            cumulative_nodes: 0,
+        });
+        entry.nodes += 1;
+        entry.assets += usize::from(node.kind == "asset");
+        if let Some(cause) = node.cause {
+            *entry.causes.slot(cause) += 1;
+        }
+        entry.gap_seconds += node.gap_seconds;
+        entry.unbounded += usize::from(node.expected_fresh_at.is_none());
+    }
+    let mut out: Vec<HeldBy> = held.into_values().collect();
+    out.sort_by(|a, b| {
+        rank(
+            (a.unbounded, a.gap_seconds, a.nodes, &a.root),
+            (b.unbounded, b.gap_seconds, b.nodes, &b.root),
+        )
+    });
+    let mut so_far = 0;
+    for entry in &mut out {
+        so_far += entry.nodes;
+        entry.cumulative_nodes = so_far;
+    }
+    out
 }
 
 /// A node as a `barca` command names it: its declared name, or its id when another node in
@@ -908,15 +1016,10 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
         })
         .collect();
     out.sort_by(|a, b| {
-        (a.unbounded == 0)
-            .cmp(&(b.unbounded == 0))
-            .then_with(|| match a.unbounded {
-                0 => b.gap_seconds.cmp(&a.gap_seconds),
-                _ => b.nodes.cmp(&a.nodes),
-            })
-            .then(b.gap_seconds.cmp(&a.gap_seconds))
-            .then(b.nodes.cmp(&a.nodes))
-            .then_with(|| a.id.cmp(&b.id))
+        rank(
+            (a.unbounded, a.gap_seconds, a.nodes, &a.id),
+            (b.unbounded, b.gap_seconds, b.nodes, &b.id),
+        )
     });
     out
 }
@@ -1224,6 +1327,7 @@ mod tests {
             );
             assert_eq!(e.asset_health.total(), e.assets, "{}", e.id);
             assert_eq!(e.data_coverage.assets, e.assets, "{}", e.id);
+            assert_eq!(e.not_fresh, e.causes.total(), "{}", e.id);
             if e.kind == EntryKind::Node {
                 assert!(e.children.is_empty());
                 assert_eq!(e.nodes, 1);
@@ -1241,6 +1345,57 @@ mod tests {
             );
             assert_eq!((sum.health, sum.asset_health), (e.health, e.asset_health));
             assert_eq!((sum.causes, sum.asset_causes), (e.causes, e.asset_causes));
+            assert_eq!(sum.not_fresh, e.not_fresh, "{}", e.id);
+            // The roots of a scope: what each holds adds up to the scope's not-fresh nodes,
+            // gap and unbounded nodes, and to what its children's roots hold.
+            assert_eq!(
+                e.held_by.iter().map(|h| h.nodes).sum::<usize>(),
+                e.not_fresh,
+                "{}",
+                e.id
+            );
+            assert_eq!(
+                e.held_by.iter().map(|h| h.gap_seconds).sum::<i64>(),
+                e.gap_seconds,
+                "{}",
+                e.id
+            );
+            assert_eq!(
+                e.held_by.iter().map(|h| h.unbounded).sum::<usize>(),
+                e.unbounded,
+                "{}",
+                e.id
+            );
+            assert_eq!(
+                e.held_by.last().map_or(0, |h| h.cumulative_nodes),
+                e.not_fresh,
+                "{}",
+                e.id
+            );
+            let mut below: BTreeMap<&str, usize> = BTreeMap::new();
+            for child in &e.children {
+                let child = by_id[child.as_str()];
+                for h in &child.held_by {
+                    *below.entry(h.root.as_str()).or_default() += h.nodes;
+                }
+                if child.kind == EntryKind::Node {
+                    assert!(
+                        child.held_by.is_empty(),
+                        "{}: a node lists no roots",
+                        child.id
+                    );
+                    let row = nodes.iter().find(|n| n.id == child.id).expect("a row");
+                    if let Some(root) = &row.root {
+                        *below.entry(root.id.as_str()).or_default() += 1;
+                    }
+                }
+            }
+            let here: BTreeMap<&str, usize> = e
+                .held_by
+                .iter()
+                .map(|h| (h.root.as_str(), h.nodes))
+                .collect();
+            assert_eq!(here, below, "{}: its roots are its children's", e.id);
             assert_eq!(
                 (sum.gap_seconds, sum.unbounded),
                 (e.gap_seconds, e.unbounded)
@@ -1511,6 +1666,44 @@ mod tests {
             false,
         );
         assert_sums(&rollup, &nodes);
+        // A scope lists the roots that hold its nodes, wherever the root's own node is
+        // (#967): `orders` fails in `ingest` and holds the two assets of `model`.
+        let held = |id: &str| -> Vec<(String, usize, usize)> {
+            entry(&rollup, id)
+                .held_by
+                .iter()
+                .map(|h| (h.root.clone(), h.nodes, h.cumulative_nodes))
+                .collect()
+        };
+        assert_eq!(
+            held("group:p.py:model"),
+            [("failure:p.py:orders".to_string(), 2, 2)]
+        );
+        assert_eq!(
+            held("group:p.py:ingest"),
+            [
+                ("failure:p.py:orders".to_string(), 1, 1),
+                ("no_schedule:p.py:inbox".to_string(), 1, 2)
+            ]
+        );
+        assert_eq!(entry(&rollup, "group:p.py:model").not_fresh, 2);
+        assert_eq!(
+            entry(&rollup, ROOT_ID).held_by.first().map(|h| h.nodes),
+            rollup.roots.first().map(|r| r.nodes)
+        );
+        // The root entry's list is the root list, in its order.
+        assert_eq!(
+            entry(&rollup, ROOT_ID)
+                .held_by
+                .iter()
+                .map(|h| (h.root.as_str(), h.nodes, h.gap_seconds, h.unbounded))
+                .collect::<Vec<_>>(),
+            rollup
+                .roots
+                .iter()
+                .map(|r| (r.id.as_str(), r.nodes, r.gap_seconds, r.unbounded))
+                .collect::<Vec<_>>()
+        );
         // The most nodes first, then by id. `orders` holds itself, `clean` and `scored`.
         let seen: Vec<_> = rollup
             .roots
@@ -1729,10 +1922,12 @@ mod tests {
                 "fresh_by",
                 "gap_seconds",
                 "health",
+                "held_by",
                 "id",
                 "kind",
                 "label",
                 "nodes",
+                "not_fresh",
                 "parent",
                 "running",
                 "unbounded"

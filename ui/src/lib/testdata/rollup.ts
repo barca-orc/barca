@@ -2,7 +2,8 @@
  * Rollup fixtures written out as `GET /state/rollup` answers them. Nothing here sums: a test
  * or a kit page states each entry's counts, as the server would.
  */
-import type { HealthCounts, Rollup, RollupEntry, RollupRoot } from '../rollupView'
+import type { HealthCounts, HeldBy, Rollup, RollupEntry, RollupRoot } from '../rollupView'
+import type { Cause, CauseCounts } from '../causeDisplay'
 import type { Health } from '../healthDisplay'
 import type { FileRollup } from '../generated/FileRollup'
 
@@ -16,18 +17,29 @@ export function fileSums(file: string, worst: Health, over: Partial<FileRollup> 
 /** No node with a cause: every node fresh, as a fixture that states none says. */
 export const NO_CAUSES: RollupEntry['causes'] = { catching_up: 0, queued: 0, no_refresh_path: 0, overdue: 0, failing: 0, undecided: 0 }
 
+/** Cause counts with the parts given, as an entry states them. */
+export function causeCounts(part: Partial<CauseCounts> = {}): CauseCounts {
+  return { ...NO_CAUSES, ...part }
+}
+
+/** What a root holds under an entry, as `held_by` states it: `cumulative_nodes` is stated, not added up. */
+export function heldBy(root: string, nodes: number, cumulative: number, over: Partial<HeldBy> = {}): HeldBy {
+  return { root, nodes, assets: nodes, causes: NO_CAUSES, gap_seconds: 0, unbounded: 0, cumulative_nodes: cumulative, ...over }
+}
+
 export function counts(part: Partial<HealthCounts> = {}): HealthCounts {
   return { failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: 0, ...part }
 }
 
-/** A node entry: one node in `health`, an asset unless `task`. */
-export function nodeEntry(id: string, parent: string, health: Health, over: Partial<RollupEntry> & { task?: boolean } = {}): RollupEntry {
-  const { task = false, ...rest } = over
+/** A node entry: one node in `health`, an asset unless `task`; not fresh, with `cause`, when one is given. */
+export function nodeEntry(id: string, parent: string, health: Health, over: Partial<RollupEntry> & { task?: boolean; cause?: Cause } = {}): RollupEntry {
+  const { task = false, cause, ...rest } = over
   const one = counts({ [health]: 1 })
+  const why = cause ? causeCounts({ [cause]: 1 }) : NO_CAUSES
   return {
     id, kind: 'node', label: id.slice(id.lastIndexOf(':') + 1), parent, children: [], nodes: 1, assets: task ? 0 : 1, running: 0,
     health: one, asset_health: task ? counts() : one, data_coverage: { assets: task ? 0 : 1, measured: 0, suspect: 0 },
-    causes: NO_CAUSES, asset_causes: NO_CAUSES, gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...rest,
+    causes: why, asset_causes: task ? NO_CAUSES : why, not_fresh: cause ? 1 : 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...rest,
   }
 }
 
@@ -45,7 +57,7 @@ export function scopeEntry(
   return {
     id, kind, label: kind === 'root' ? 'all' : id.slice(id.indexOf(':') + 1), parent, children, nodes, assets: nodes, running: 0,
     health: h, asset_health: h, data_coverage: { assets: nodes, measured: 0, suspect: 0 },
-    causes: NO_CAUSES, asset_causes: NO_CAUSES, gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...over,
+    causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...over,
   }
 }
 

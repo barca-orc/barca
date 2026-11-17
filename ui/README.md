@@ -97,7 +97,7 @@ hook, run in CI on every pull request) checks it against `crates/barca-cli/ui-la
   same answer, or an exemption with a reason;
 - a new module in `lib/` needs a line in `modules` with its kind;
 - comparing against a health or cache-state word (`=== 'stale'`), or producing one, outside a
-  display module (`healthDisplay.ts`, `cacheStateDisplay.ts`, `glyph.ts`, ...) fails: compute it
+  display module (`healthDisplay.ts`, `causeDisplay.ts`, `cacheStateDisplay.ts`, `glyph.ts`, ...) fails: compute it
   in `barca-core` and read the field;
 - test fixtures take their health from `lib/testdata/health-alone.json`, which a Rust test
   generates (`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`).

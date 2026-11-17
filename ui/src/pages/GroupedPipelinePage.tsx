@@ -11,7 +11,7 @@ import { HealthOverview } from '@/components/assets/HealthOverview'
 import { useRollup } from '@/hooks/useRollup'
 import { useGroupTree } from '@/hooks/useGroupTree'
 import { dataSignalSets } from '@/lib/dataSignals'
-import { nearestInTree, rootsWithin } from '@/lib/rollupView'
+import { heldIds, nearestInTree, rootsWithin } from '@/lib/rollupView'
 import { useStoredFlag } from '@/hooks/useStoredFlag'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
@@ -105,6 +105,11 @@ export function GroupedPipelinePage() {
   const scopeEntry = rollup.tree.entries.get(nearestInTree(rollup.tree, scope))
   const scopeRoots = useMemo(() => rootsWithin(rollup.tree, nearestInTree(rollup.tree, scope)), [rollup.tree, scope])
   const signals = useMemo(() => dataSignalSets(states), [states])
+  // The root picked in the to-do list: what it holds is lit on the map and in the table. It is
+  // kept only while the open scope has a node it holds.
+  const [pickedRoot, setPickedRoot] = useState<string | null>(null)
+  const litRoot = pickedRoot !== null && scopeEntry?.held_by.some((h) => h.root === pickedRoot) ? pickedRoot : null
+  const held = useMemo(() => (litRoot === null ? null : heldIds(rollup.tree, states, litRoot)), [rollup.tree, states, litRoot])
   const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(scopedStates), [scopedStates]))
   const failureList = useMemo(() => failures(scopeRoots, byId, keyErrors), [scopeRoots, byId, keyErrors])
   const shownFailures = useMemo(() => visibleFailures(failureList, query), [failureList, query])
@@ -286,7 +291,9 @@ export function GroupedPipelinePage() {
           scope={scope}
           onScope={openGroup}
           onOpen={revealNode}
-          onShowFailures={() => update(modeChanges('failures', scope))}
+          root={litRoot}
+          held={held}
+          onRoot={setPickedRoot}
         />
       )}
       {error ? (
@@ -372,6 +379,7 @@ export function GroupedPipelinePage() {
                 leaves={leaves}
                 rollup={rollupTree}
                 visualStates={visualStates}
+                held={showMap && mapOpen ? held : null}
                 labels={labels}
                 isHit={isHit}
                 pathOf={pathOf}

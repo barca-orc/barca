@@ -1540,6 +1540,19 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             plural(held as u64, "node"),
             if held == 1 { "is" } else { "are" }
         );
+        // How much the head of the list explains, when there is more than a head.
+        if let Some(third) = rollup
+            .root()
+            .held_by
+            .get(2)
+            .filter(|_| rollup.roots.len() > 3)
+        {
+            line!(
+                rendered,
+                "The first 3 hold {} of them.",
+                third.cumulative_nodes
+            );
+        }
         let rank = rollup.roots.len().to_string().len();
         for (at, root) in rollup.roots.iter().enumerate() {
             let pad = " ".repeat(rank + 4);
