@@ -24,6 +24,11 @@ keys[].rows : null
 keys[].run_id : string
 keys[].size_bytes : integer|null
 keys[].state : string
+keys[].values : array
+keys[].values[] : string
 known : boolean
+needs_run : integer
+offset : integer
+selection : string
 total : integer
 truncated : boolean

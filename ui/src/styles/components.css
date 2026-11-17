@@ -454,6 +454,10 @@ a.barca-btn { text-decoration: none; }
 .barca-cause { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-xs); color: var(--text-default); white-space: nowrap; }
 .barca-cause > i { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .barca-cause[data-cause="fresh"] { color: var(--text-muted); }
+/* CauseDot: a cause's colour on the health map (or fresh), where the word is beside it or in the
+   tooltip: a graph card, a group's parts, a line of the sidebar, the legend. As wide as the
+   glyph it stands in for, so names stay aligned. */
+.barca-cause-dot { display: inline-block; flex: none; border-radius: 50%; margin: 0 2px; vertical-align: -1px; }
 /* The cell while its time loads: a text line's box (the skeleton centred in it), so the row is
    the height it will be. */
 .barca-age-loading { display: inline-flex; align-items: center; height: 1lh; vertical-align: top; }

@@ -245,19 +245,26 @@ With a server configured, the server answers and the filter is applied here, aft
 machine's `not_in_ledger` results are marked, so `--state unsynced` finds them. `GET
 /nodes?state=stale&problems=1` filters the same way over HTTP.
 
-## One node's keys: `--keys`, `--grid`, `--key`
+## One node's keys: `--keys`, `--overview`, `--grid`, `--key`
 
 A partitioned node is one row with key counts. To see its keys, name it and pass one of
-(experimental; [Partitions: Listing keys](/reference/partitions/#listing-keys-barca-status-node---keys---grid---key)):
+(experimental; [Partitions: Listing keys](/reference/partitions/#listing-keys-barca-status-node---keys---overview---grid---key)):
 
 ```bash
 barca status scored --keys --state failed,blocked   # each key: state, last attempt, rows, error
+barca status scored --keys --needs-run --value region=apac --range day=2026-01-01..2026-01-31   # filters: all must hold
+barca status scored --keys --state failed --error 0 --match 2026-03 --sort attempted --limit 20 --offset 20
+barca status scored --overview                      # counts, what is wrong and where, the grid's rows
 barca status scored --grid                          # every key's state, one character each
 barca status scored --key region=apac               # one key: its chain, attempts, what it wrote and read
 ```
 
-Each prints the same on this machine and from a server, and `--json` gives the documents the
-web UI's key explorer reads.
+`--keys` takes filters (`--state`, `--needs-run`, `--value DIM=V[,V]`, `--range DIM=FROM..TO`,
+`--error N`, `--match TEXT`), an order (`--sort key|state|attempted|elapsed|size|rows`) and a
+page (`--limit`, `--offset`); its output says how many keys match and the `barca get
+--partition` line that computes them. Each view prints the same on this machine and from a
+server, which filters, orders and pages the keys itself, and `--json` gives the documents the
+web UI's key explorer renders (`--keys` and `--overview`).
 
 ## The rollup: `--rollup`
 

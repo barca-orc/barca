@@ -41,7 +41,7 @@ const rollup = {
   roots: [],
   data_coverage: { assets: 3, measured: 0, suspect: 0 },
   // The same nodes by source file: what the sidebar reads.
-  files: [{ file: 'forecast.py', nodes: 3, assets: 3, running: 0, health: ok(3), asset_health: ok(3), worst: 'ok' }],
+  files: [{ file: 'forecast.py', nodes: 3, assets: 3, running: 0, health: ok(3), asset_health: ok(3), worst: 'ok', causes: NO_CAUSES, fresh: 3 }],
 }
 
 test('an empty pipeline selection renders an empty result; only the sidebar asks for the whole project', async ({ page }) => {
@@ -78,8 +78,9 @@ test('a sidebar dot is the file\'s sums in the rollup: no dot for a file the rol
   await page.route(/\/state\/rollup(?:\?.*)?$/, route => route.fulfill({ json: rollup }))
   await page.goto('/ui/#/assets?pipeline=forecast.py')
   const sidebar = page.locator('.barca-sidebar')
-  // The file's most severe health, in the server's word, and what its count counts.
-  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toHaveAttribute('title', 'forecast.py · 3 assets · ok')
+  // The file in the health map's word (every node fresh: no cause), in the map's colour, and what its count counts.
+  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' })).toHaveAttribute('title', 'forecast.py · 3 assets · fresh')
+  await expect(sidebar.getByRole('button', { name: 'forecast.py 3' }).locator('.barca-cause-dot')).toHaveAttribute('data-cause', 'fresh')
   await expect(sidebar.getByRole('button', { name: 'other.py 1' }).locator('.barca-pipe-nodot')).toHaveCount(1)
 })
 

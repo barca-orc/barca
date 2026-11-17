@@ -74,7 +74,7 @@ fn row(state: CacheState, last: &str, keys_failed: bool) -> NodeStatus {
     node
 }
 
-/// `{"<cache state>|<last attempt>|<keys failed>": {"health": …, "health_reason": …}}`.
+/// `{"<cache state>|<last attempt>|<keys failed>": {"health": …, "health_reason": …, "cause": …}}`.
 fn table() -> String {
     let mut out: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     for state in STATES {
@@ -99,6 +99,7 @@ fn table() -> String {
                     serde_json::json!({
                         "health": nodes[0].health,
                         "health_reason": nodes[0].health_reason,
+                        "cause": nodes[0].cause,
                     }),
                 );
             }

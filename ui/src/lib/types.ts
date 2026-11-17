@@ -7,7 +7,11 @@
    ============================================================ */
 
 export type { NodeGroup } from './generated/NodeGroup'
-export type { PartitionGrid } from './generated/PartitionGrid'
+export type { KeysPage } from './generated/KeysPage'
+export type { KeyRow } from './generated/KeyRow'
+export type { KeysOverview } from './generated/KeysOverview'
+export type { OverviewRow } from './generated/OverviewRow'
+export type { KeyIssue } from './generated/KeyIssue'
 export type { GridDimension } from './generated/GridDimension'
 export type { GridCounts } from './generated/GridCounts'
 export type { PartitionKeyDetail } from './generated/PartitionKeyDetail'

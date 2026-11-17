@@ -1,5 +1,5 @@
 import metadata from './testdata/modeling-groups.json'
-import { counts } from './testdata/rollup'
+import { groupScope } from './testdata/rollup'
 import { describe, expect, it } from 'vitest'
 import type { GraphEntry } from './graph'
 import {
@@ -82,26 +82,32 @@ describe('organizational groups', () => {
       'group:modeling.py:cross_validation',
     ]) {
       // The group's entry of the rollup, as served: one failing node among its members.
-      expect(groupHealth({ health: counts({ failing: 1, ok: groupLeaves(id, tree).length - 1 }), nodes: groupLeaves(id, tree).length, running: 0 })).toMatchObject({ tone: 'failed', label: '1 failing' })
+      expect(groupHealth(groupScope({ failing: 1 }, groupLeaves(id, tree).length - 1))).toMatchObject({ tone: 'failed', label: '1 failing' })
       const output = memberHealth(states.get(groupOutput(id, tree)))
       expect(output).toMatchObject({ label: 'fresh', tone: 'success' })
       expect(isFailed(output)).toBe(false)
     }
     // A fold with no failure: its checks (which ran and succeeded) and its cached assets are all ok.
-    expect(groupHealth({ health: counts({ ok: 9 }), nodes: 9, running: 0 })).toMatchObject({ tone: 'success', label: '9 ok' })
+    expect(groupHealth(groupScope({}, 9))).toMatchObject({ tone: 'success', label: '9 fresh', part: 'fresh' })
     expect(groupPath('group:modeling.py:fold_03__fitting', tree).map((g) => g.name)).toEqual(
       ['Cross-validation', 'Fold 3', 'Model fitting'],
     )
   })
 
-  it('words a group\'s rollup entry: its worst health leads, the hint says how many nodes, and no entry is empty', () => {
-    const summary = groupHealth({ health: counts({ ok: 6 }), nodes: 6, running: 0 })
+  it('words a group\'s rollup entry in the health map\'s words: its first cause leads, the hint says how many nodes, and no entry is empty', () => {
+    const summary = groupHealth(groupScope({}, 6))
     expect(summary.tone).toBe('success')
-    expect(summary.label).toBe('6 ok')
+    expect(summary.label).toBe('6 fresh')
     // The hint names the unit: these are nodes (assets, tasks and sensors).
-    expect(summary.hint).toBe('6 nodes: 6 ok')
+    expect(summary.hint).toBe('6 nodes: 6 fresh')
     expect(groupHealth(undefined)).toMatchObject({ kind: 'group', label: 'empty', glyph: 'pending' })
-    expect(groupHealth({ health: counts({ behind: 1, ok: 5 }), nodes: 6, running: 0 })).toMatchObject({ tone: 'warning', label: '1 behind' })
+    // The causes in the served order, then what is fresh: each part carries the cause its colour is of.
+    const mixed = groupHealth(groupScope({ catching_up: 1, no_refresh_path: 2 }, 3))
+    expect(mixed).toMatchObject({ kind: 'group', tone: 'warning', label: '2 no refresh path', part: 'no_refresh_path' })
+    expect(mixed.kind === 'group' && mixed.parts?.map((p) => [p.part, p.text])).toEqual([
+      ['no_refresh_path', '2 no refresh path'], ['catching_up', '1 catching up'], ['fresh', '3 fresh'],
+    ])
+    expect(mixed.hint).toBe('6 nodes: 2 no refresh path · 1 catching up · 3 fresh')
   })
 
   it('preserves dependencies crossing a collapsed boundary even through a non-output member', () => {

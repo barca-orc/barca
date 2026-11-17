@@ -1397,6 +1397,11 @@
 .barca-keytable-state { display: inline-flex; align-items: center; gap: 6px; }
 .barca-keytable-error { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-muted); }
 .barca-keytable-empty { margin: 12px; }
+/* A column the server can order by: the header is the control, quiet until it is the order. */
+.barca-keytable-sort { all: unset; cursor: pointer; color: inherit; font: inherit; }
+.barca-keytable-sort:hover, .barca-keytable-sort[aria-pressed='true'] { color: var(--text-strong); }
+.barca-keytable-sort:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+.barca-keytable-more { position: absolute; top: 0; left: 0; right: 0; margin: 0; padding: 0 12px; display: flex; align-items: center; }
 
 /* The key's detail: its error first, in a quiet red box; the chain on one line. */
 .barca-keydetail-state { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: var(--text-sm); color: var(--text-muted); }

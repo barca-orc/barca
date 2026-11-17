@@ -490,8 +490,17 @@ Examples:
   barca status --json --fields id,health,cause,root,gap_seconds   # why each node is not fresh, and what explains it
   barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
   barca status scored --keys               # every key of a partitioned node: state, last attempt, rows, error
-  barca status scored --keys --state failed,blocked --json   # {id, known, dimensions, counts, errors, keys, total, truncated}
+  barca status scored --keys --state failed,blocked --json   # {id, known, dimensions, counts, errors, keys, total, truncated, offset, needs_run, selection}
   barca status scored --keys --limit 20    # the first 20 keys; a note says how many there are
+  barca status scored --keys --limit 20 --offset 20   # the next 20
+  barca status scored --keys --needs-run   # only the keys a run computes: failed, blocked, stale, never run
+  barca status scored --keys --value region=apac,emea   # only these values of a dimension; repeat for another
+  barca status scored --keys --range day=2026-01-01..2026-01-31   # a stretch of a dimension, in its order
+  barca status scored --keys --state failed --error 0   # the failed keys of the most common error
+  barca status scored --keys --match 2026-03   # keys that contain the text
+  barca status scored --keys --sort attempted --limit 10   # the 10 keys attempted last
+  barca status scored --overview           # counts, what is wrong and where, and the grid's rows
+  barca status scored --overview --json    # {id, chain, known, dimensions, counts, needs_run, errors, issues, along, rows, ...}
   barca status scored --grid               # every key's state, one character each, a row per value of the shorter dimensions
   barca status scored --grid --json        # the whole grid in columns: what GET /assets/{name}/partitions/grid answers
   barca status scored --key region=apac    # one key: its state along its chain, its attempts, what it wrote and read
@@ -586,9 +595,11 @@ More: barca docs";
     name = "barca",
     about = "Run Python tasks and cache assets, locally or on a server.",
     disable_help_flag = true,
-    arg = clap::Arg::new("help").short('h').long("help").global(true)
+    // Listed last on every command, however many flags it has: without an order of their own
+    // they sort among a command's later flags once it has more than about twenty.
+    arg = clap::Arg::new("help").short('h').long("help").global(true).display_order(900)
         .action(clap::ArgAction::HelpShort).help("Show concise command help"),
-    arg = clap::Arg::new("examples").long("examples").global(true)
+    arg = clap::Arg::new("examples").long("examples").global(true).display_order(901)
         .action(clap::ArgAction::HelpLong).help("Show all command examples without running anything"),
     help_template = ROOT_HELP,
     after_help = TOP_HELP,
@@ -1220,11 +1231,54 @@ pub(crate) enum Cli {
         #[arg(long, conflicts_with_all = ["limit", "all", "fields", "sample", "state", "problems"])]
         rollup: bool,
         /// Experimental: list the keys of the one partitioned TARGET instead of the nodes:
-        /// each key's state, latest attempt, rows and error. --state filters by key state;
-        /// --limit bounds the list (default: every key in JSON, 100 in a table)
-        #[arg(long, conflicts_with_all = ["fields", "sample", "problems", "rollup", "grid", "key"])]
+        /// each key's state, latest attempt, rows and error. --state, --needs-run, --value,
+        /// --range, --error and --match filter (all must hold); --sort orders; --limit and
+        /// --offset page (default: every key in JSON, 100 in a table)
+        #[arg(long, conflicts_with_all = ["fields", "sample", "problems", "rollup", "grid", "key", "overview"])]
         #[arg(help = "Experimental: list the keys of one partitioned target, each with its state", long_help = None)]
         keys: bool,
+        /// Experimental, with --keys: only the keys a run computes (failed, blocked, stale,
+        /// never run)
+        #[arg(long, requires = "keys")]
+        #[arg(help = "Experimental, with --keys: only keys a run computes", long_help = None)]
+        needs_run: bool,
+        /// Experimental, with --keys: only keys whose DIMENSION is one of the values
+        /// (region=apac,emea); repeat for another dimension
+        #[arg(long, value_name = "DIM=VALUE[,VALUE]", requires = "keys")]
+        #[arg(help = "Experimental, with --keys: only keys with these values of a dimension", long_help = None)]
+        value: Vec<String>,
+        /// Experimental, with --keys: only keys whose DIMENSION is between two of its values,
+        /// in the dimension's order, both included (day=2026-01-01..2026-01-31)
+        #[arg(long, value_name = "DIM=FROM..TO", requires = "keys")]
+        #[arg(help = "Experimental, with --keys: only keys in a stretch of a dimension", long_help = None)]
+        range: Option<String>,
+        /// Experimental, with --keys: only the failed keys of one error group, by its number
+        /// in the list of errors (0 is the most common)
+        #[arg(long, value_name = "N", requires = "keys")]
+        #[arg(help = "Experimental, with --keys: only the failed keys of error group N", long_help = None)]
+        error: Option<usize>,
+        /// Experimental, with --keys: only keys that contain TEXT, in any case
+        #[arg(long = "match", value_name = "TEXT", requires = "keys")]
+        #[arg(help = "Experimental, with --keys: only keys that contain TEXT", long_help = None)]
+        text: Option<String>,
+        /// Experimental, with --keys: the order: key (default), state (most urgent first),
+        /// attempted (latest first), elapsed (slowest first), size (largest first), rows (most
+        /// first)
+        #[arg(long, value_name = "ORDER", requires = "keys", value_parser = PossibleValuesParser::new(["key", "state", "attempted", "elapsed", "size", "rows"]))]
+        #[arg(help = "Experimental, with --keys: order by key, state, attempted, elapsed, size or rows", long_help = None)]
+        sort: Option<String>,
+        /// Experimental, with --keys: skip the first N matching keys (the next page after
+        /// --limit N)
+        #[arg(long, value_name = "N", requires = "keys")]
+        #[arg(help = "Experimental, with --keys: skip the first N matching keys", long_help = None)]
+        offset: Option<usize>,
+        /// Experimental: print the keys of the one partitioned TARGET in one picture: the
+        /// counts by state, what is wrong and where (each error of the failed keys, then
+        /// blocked, stale and never-run keys, with the command that lists and the one that
+        /// runs them), and the grid's rows; --limit bounds the rows
+        #[arg(long, conflicts_with_all = ["fields", "sample", "state", "problems", "rollup", "grid", "key"])]
+        #[arg(help = "Experimental: print one partitioned target's keys in one picture: counts, issues, rows", long_help = None)]
+        overview: bool,
         /// Experimental: print every key's state of the one partitioned TARGET as a grid, one
         /// character per key; with --json, the whole grid in columns
         #[arg(long, conflicts_with_all = ["fields", "sample", "state", "problems", "rollup", "key"])]

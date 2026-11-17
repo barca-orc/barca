@@ -6,10 +6,11 @@ test('linear intermediates remain visible with persistent status and deep links'
   await page.route(/\/state(?:\?.*)?$/,route=>route.fulfill({json:assets.map((a,i)=>served({...a,name:a.id.split(':')[1],partitioned:false,cache:{state:i===4?'never_run':'cached',reason:'materialized',detail:'demo'},last_materialization:i===2?{status:'failed',error:'validation failed',created_at:'today',elapsed_seconds:null,run_hash:null,artifact:null,format:null,size_bytes:null}:null,shape:null,env:[],durations:null,next_run:null}))}))
   await page.goto('/ui/#/graph')
   await expect(page.locator('.react-flow__node')).toHaveCount(5)
-  // One state per node, in plain words: a failed last attempt shows as failing instead of the cache word.
+  // One state per node, in the health map's words: a node nothing will refresh reads `no refresh path`, a failed last attempt `failing`.
   const report = page.locator('.react-flow__node').filter({hasText:'report'}).locator('.barca-dag')
-  await expect(report).toHaveAttribute('data-tone','neutral')
-  await expect(report).toContainText('never run')
+  await expect(report).toHaveAttribute('data-tone','warning')
+  await expect(report).toHaveAttribute('data-cause','no_refresh_path')
+  await expect(report).toContainText('no refresh path')
   const validate = page.locator('.react-flow__node').filter({hasText:'validate'}).locator('.barca-dag')
   await expect(validate).toHaveAttribute('data-failed','true')
   await expect(validate).toContainText('failing')

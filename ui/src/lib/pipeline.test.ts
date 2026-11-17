@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { NodeState } from './types'
 import { fileShown, inPipeline, pipelineSummaries, sourceFile } from './pipeline'
-import { fileSums } from './testdata/rollup'
+import { fileSums, causeCounts } from './testdata/rollup'
 import type { FileRollup } from './generated/FileRollup'
 
 type Listed = Pick<NodeState, 'id' | 'kind'>
@@ -38,11 +38,13 @@ describe('pipelineSummaries', () => {
     ])
   })
 
-  it('shows each file by the word of its sums in the rollup: the server\'s worst health, or its run work', () => {
+  it('shows each file in the health map\'s words: the first cause its sums in the rollup have a node of, fresh, or its run work', () => {
     const byFile = Object.fromEntries(pipelineSummaries(files, nodes, 'asset').map((p) => [p.file, p.shown?.label]))
-    expect(byFile).toEqual({ 'other/p01_dims.py': 'ok', 'pipeline/p01_dims.py': 'behind', 'pipeline/p02_reconcile.py': 'failing' })
-    expect(fileShown(fileSums('a.py', 'failing', { running: 2 }))).toEqual({ glyph: 'running', label: '2 running', live: true })
-    expect(fileShown(fileSums('a.py', 'blocked'))).toMatchObject({ glyph: 'blocked', label: 'blocked', live: false })
+    expect(byFile).toEqual({ 'other/p01_dims.py': 'fresh', 'pipeline/p01_dims.py': 'catching up', 'pipeline/p02_reconcile.py': 'failing' })
+    expect(fileShown(fileSums('a.py', 'failing', { running: 2 }))).toEqual({ glyph: 'running', label: '2 running', part: null, live: true })
+    // A file a failure holds reads failing, as the map counts it; the first cause in the served order leads.
+    expect(fileShown(fileSums('a.py', 'blocked'))).toMatchObject({ glyph: 'failed', label: 'failing', part: 'failing', live: false })
+    expect(fileShown(fileSums('a.py', 'behind', { nodes: 5, causes: causeCounts({ catching_up: 3, overdue: 1 }) }))).toMatchObject({ label: 'overdue', part: 'overdue' })
   })
 
   it('counts only the nodes of the kind, and keeps a file with none of it at 0 and without a state', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ScopeHealth } from './health'
-import { counts } from './testdata/rollup'
+import type { GroupScope } from './groups'
+import { groupScope } from './testdata/rollup'
 import type { NodeState } from './types'
 import { INITIAL_PALETTE, isKeyQuery, keyItems, paletteActions, paletteIndex, searchPalette, updatePalette } from './palette'
 import { served } from './testdata/served'
@@ -35,7 +35,7 @@ describe('a result\'s state', () => {
   const states = {
     byId: new Map([['a.py:orders', node('a.py:orders', false)], ['a.py:orders_daily', node('a.py:orders_daily', false)], ['b.py:orders_bad', node('b.py:orders_bad', true)]]),
     // The project's rollup entries: the group's, and the file of the nodes in no group.
-    entries: new Map<string, ScopeHealth>([['group:a.py:raw', { health: counts({ ok: 2 }), nodes: 2, running: 0 }], ['file:b.py', { health: counts({ failing: 1 }), nodes: 1, running: 0 }]]),
+    entries: new Map<string, GroupScope>([['group:a.py:raw', groupScope({}, 2)], ['file:b.py', groupScope({ failing: 1 })]]),
   }
   const withStates = paletteIndex(assets, [{ id: 'group:a.py:raw', name: 'Raw' }], [{ id: 'run-9', target: null, status: 'failed' }], states)
   const of = (key: string) => withStates.find((i) => i.key === key)?.state

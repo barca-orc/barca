@@ -47,6 +47,8 @@ function node(
     durations: null,
     next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
+    // A row states the cause the server gave it; one that states none is fresh.
+    cause: null,
     ...rest,
   })
 }

@@ -21,10 +21,10 @@ interface GraphNodeData {
   glyph?: Glyph
   /** The state's word, or a group's summary. */
   label?: string | null
-  /** Its last attempt failed: shown as a second fact beside the state. */
+  /** The cause (or fresh) its resting state is, drawn in the health map's colour; none for run work or before any state. */
+  part?: import('./causeDisplay').MapPart
+  /** Its last attempt failed: the failures a page lists read it. */
   lastFailed?: boolean
-  /** The failed node upstream (its name) that keeps it from running: it reads `blocked`. */
-  blockedBy?: string
   /** Pinned (`barca pin`): what it is pinned to; it reads `pinned`. */
   pinned?: string
   /** Whether the node pulses: a run is working on it. */

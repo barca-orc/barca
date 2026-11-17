@@ -1,8 +1,9 @@
 import { compactCount } from '@/lib/plural'
 import type { CSSProperties } from 'react'
-import { LAST_ATTEMPT_FAILED } from '@/lib/cacheStateDisplay'
+import type { MapPart } from '@/lib/causeDisplay'
 import { toneGlyph, type Glyph } from '@/lib/glyph'
 import type { Tone } from '@/lib/tone'
+import { CauseDot } from './CauseDot'
 import { StatusGlyph } from './StatusGlyph'
 
 export interface DagNodeProps {
@@ -14,12 +15,12 @@ export interface DagNodeProps {
   tone: Tone
   /** How its state is drawn; by default the tone's plain glyph. */
   glyph?: Glyph
-  /** The word: its cache state as the CLI prints it, or a run's status. */
+  /** The word: its cause as the health map names it (or `fresh`), or a run's status. */
   label?: string | null
-  /** Its last attempt failed: the one state shown, `failing`. */
+  /** At rest: the cause (or fresh) the word is of, drawn as a dot in the health map's colour. */
+  part?: MapPart
+  /** Its last attempt failed. */
   lastFailed?: boolean
-  /** The failed node upstream that keeps it from running: it reads `blocked`. */
-  blockedBy?: string
   /** Pinned (`barca pin`): what it is pinned to; it reads `pinned`. */
   pinned?: string
   /** A run is working on it: the live border, and the running glyph turns. */
@@ -35,21 +36,20 @@ export interface DagNodeProps {
 export const DAG_NODE_WIDTH = 208
 export const DAG_NODE_HEIGHT = 40
 
-/** The glyph a node shows: failing, pinned, blocked, then its state's own. */
-function nodeGlyph({ glyph, tone, lastFailed, blockedBy, pinned }: Pick<DagNodeProps, 'glyph' | 'tone' | 'lastFailed' | 'blockedBy' | 'pinned'>): Glyph {
-  if (lastFailed) return 'failed'
+/** The glyph a node shows: pinned, then its state's own. */
+function nodeGlyph({ glyph, tone, pinned }: Pick<DagNodeProps, 'glyph' | 'tone' | 'pinned'>): Glyph {
   if (pinned !== undefined) return 'pinned'
-  if (blockedBy) return 'blocked'
   return glyph ?? toneGlyph(tone)
 }
 
 /**
  * barca · DagNode
- * One node in a pipeline graph, on one line: its state's glyph and its name, and for a task or
- * a sensor its kind, muted at the end. The state's word is not drawn again under the name: the
- * glyph says it, and the card's tooltip and accessible name carry the word. The card itself
- * stays neutral whatever the state: the glyph is the only colour. `selected` rings it; a live
- * node gets the running ring.
+ * One node in a pipeline graph, on one line: its state's mark and its name, and for a task or
+ * a sensor its kind, muted at the end. At rest the mark is a dot in the colour the health map
+ * gives the node's cause (or fresh); a run working on it draws the run's glyph, a pinned node the
+ * pin. The word is not drawn again under the name: the legend names each colour, and the card's
+ * tooltip and accessible name carry the word. The card itself stays neutral whatever the state:
+ * the mark is the only colour. `selected` rings it; a live node gets the running ring.
  */
 export function DagNode({
   name,
@@ -58,8 +58,8 @@ export function DagNode({
   tone,
   glyph,
   label,
+  part,
   lastFailed = false,
-  blockedBy,
   pinned,
   live = false,
   stateHint,
@@ -68,8 +68,10 @@ export function DagNode({
   style,
   onClick,
 }: DagNodeProps) {
-  const shown = nodeGlyph({ glyph, tone, lastFailed, blockedBy, pinned })
-  const word = lastFailed ? LAST_ATTEMPT_FAILED : label
+  const shown = nodeGlyph({ glyph, tone, pinned })
+  const word = label
+  // A dot in the map's colour at rest; the glyph for run work and a pin.
+  const dot = part !== undefined && !live && pinned === undefined ? part : null
   return (
     <div
       className="barca-dag"
@@ -77,6 +79,7 @@ export function DagNode({
       title={[word, stateHint].filter(Boolean).join(' · ') || undefined}
       data-tone={tone}
       data-glyph={shown}
+      data-cause={dot ?? undefined}
       data-kind={kind}
       data-live={live || undefined}
       data-selected={selected || undefined}
@@ -85,13 +88,13 @@ export function DagNode({
       style={style}
     >
       <div className="barca-dag-body">
-        <StatusGlyph glyph={shown} live={live} size={14} />
+        {dot ? <CauseDot part={dot} size={10} /> : <StatusGlyph glyph={shown} live={live} size={14} />}
         <span className="barca-dag-name">{name}</span>
         {kindLabel && <span className="barca-dag-kind">{kindLabel}</span>}
         {keys && <span className="barca-dag-kind" title={keysTitle(keys)}>{compactCount(keys.total)} keys</span>}
         {/* The state's word, for a screen reader and a search of the page: the glyph shows it. */}
         {word && (
-          <span className="barca-dag-state barca-sr-only" data-failed={lastFailed || undefined} data-blocked={(!lastFailed && blockedBy) || undefined} data-pinned={(!lastFailed && pinned !== undefined) || undefined}>
+          <span className="barca-dag-state barca-sr-only" data-failed={lastFailed || undefined} data-pinned={pinned !== undefined || undefined}>
             {word}
           </span>
         )}

@@ -707,9 +707,11 @@ targets) and never collides with `GET /health`, which is liveness.
   alone, and a surface listing a group's members lists the members counted under it, so a list
   and its count are the same nodes (#959).
 - `files` (beside `entries`) sums the same nodes by source file, `{file, nodes, assets,
-  running, health, asset_health, worst}` per file in scope: the tree has a `file` entry only
-  for the nodes in no group, and a surface that lists files reads these instead of adding
-  entries up (#959).
+  running, health, asset_health, worst, causes, fresh}` per file in scope: the tree has a
+  `file` entry only for the nodes in no group, and a surface that lists files reads these
+  instead of adding entries up (#959). `causes` counts the file's nodes that are not fresh by
+  cause and `fresh` the rest, so a line about a file reads as the health map does: the first
+  cause, in the served order, that the file has a node of, or fresh (#1036).
 - `roots` is the root list above, scoped to the nodes in the response.
 
 As implemented (#955), in `crates/barca-core/src/rollup.rs` (`build`), which the route, the
@@ -1105,11 +1107,18 @@ the causes list's grouping and the failures list's impact are deleted: their rul
   holds, so a schedule no scheduler is firing reads `behind`, `schedule_late`. #958 replaces
   it with the one definition.
 - The web UI no longer attributes a blocked node to its failing node or sums health counts and
-  data coverage: it reads `root` and the rollup. What it still derives: a file's one state in the
-  sidebar; a node panel's count of nodes downstream, a graph walk for navigation; and the
-  key explorer, which decodes the compact key grid (`GET /assets/{id}/partitions/grid`) and
-  filters and bins it in the browser, where `barca-core` holds the same decoding
-  (`partition_grid::key_rows`, `barca status NODE --keys`). The asset list's filter chips
+  data coverage: it reads `root` and the rollup. What it still derives: a node panel's count
+  of nodes downstream, a graph walk for navigation; and the colour of a column of the key
+  explorer's overview, the most urgent state among the served key states the column holds,
+  which depends on how many columns the window has room for. The key explorer decodes,
+  filters, orders and counts nothing: it renders `GET /assets/{id}/partitions/keys` (a page of
+  the keys a query matches, `key_query::keys_page`, `barca status NODE --keys` with the same
+  filters) and `GET /assets/{id}/partitions/overview` (the counts, what is wrong and where,
+  and the grid's rows, `key_query::overview`, `barca status NODE --overview`) (#1036). The
+  graph view's cards, a group's card and a file's or a group's line in the sidebar read as
+  the health map does: a node's served `cause` (or fresh), a group's entry's `causes` and
+  `weights.fresh`, a file's `causes` in the rollup's `files`, each in the cause's word and
+  the map's colour (#1036). The asset list's filter chips
   are the served `cause` with the rollup's `kinds` as their counts, its order the served
   order of the causes, and its key counts `partitions.blocked` and `behind` (#992). The health map's angles
   are the served `weight` (#1028). A node declared in several

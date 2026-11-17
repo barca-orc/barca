@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { FolderOpen, ArrowUpRight } from 'lucide-react'
 import { StatusGlyph } from '@/components'
+import { CauseDot } from '@/components/CauseDot'
 import { compactCount } from '@/lib/plural'
 import { toneGlyph } from '@/lib/glyph'
 import type { GraphNode } from '@/lib/graph'
@@ -8,10 +9,16 @@ import type { GraphNode } from '@/lib/graph'
 /** Past this many, a group card's further parts are left to its tooltip. */
 const PARTS_SHOWN = 3
 
+/** A part's mark: a dot in the health map's colour for a cause or fresh, the glyph for run work. */
+function PartMark({ part }: { part: NonNullable<GraphNode['data']['parts']>[number] }) {
+  return part.part ? <CauseDot part={part.part} /> : <StatusGlyph glyph={part.glyph} live={part.glyph === 'running'} size={12} />
+}
+
 /**
- * A group of nodes in the graph: its name, what it holds, and its health, most severe fact first
- * in words (`2 failing`), then the rest compactly as glyph and count (`◐ 1  ◑ 48`): a failure
- * is never hidden behind run work. The tooltip names every part.
+ * A group of nodes in the graph: its name, what it holds, and where its nodes stand, in the
+ * health map's words and colours: the leading part first in words (`2 failing`), then the rest
+ * compactly as a dot and a count: a failure is never hidden behind run work. The tooltip names
+ * every part.
  */
 export function GroupNode({ data, selected }: NodeProps<GraphNode>) {
   const glyph = data.glyph ?? toneGlyph(data.tone)
@@ -40,12 +47,12 @@ export function GroupNode({ data, selected }: NodeProps<GraphNode>) {
         {lead ? (
           <>
             <span className="barca-group-node-lead">
-              <StatusGlyph glyph={lead.glyph} live={lead.glyph === 'running'} size={12} />
+              <PartMark part={lead} />
               {lead.text}
             </span>
             {rest.slice(0, PARTS_SHOWN).map((part) => (
               <span key={part.glyph + part.word} className="barca-group-node-part" title={part.text} aria-label={part.text}>
-                <StatusGlyph glyph={part.glyph} live={part.glyph === 'running'} size={12} />
+                <PartMark part={part} />
                 {compactCount(part.count)}
               </span>
             ))}

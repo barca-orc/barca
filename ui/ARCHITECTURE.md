@@ -75,13 +75,13 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/cacheStateDisplay.ts` | the one table from `CacheState` to display: each of the CLI's eight words with its tone and rank; `lastAttemptFailed` — the fact shown beside a state; `shownCacheState` — a node that always runs shows its last run (`succeeded`, or `never run`) | `cacheStateDisplay.test.ts` |
 | `lib/status.ts` | `statusMeta` — the run lifecycle's one table (`StatusKind` → tone and word); `freshnessLabel`, `nodeKindLabel` | `status.test.ts` |
 | `lib/tone.ts` | `Tone`, `toneMeta` — the status hues both tables map onto; colour is never the only carrier | — |
-| `lib/graphState.ts` | `graphState(node)` — a node's box: its cache state (word, tone, detail, failed last attempt), the run on it, or no state yet | `graphState.test.ts` |
+| `lib/graphState.ts` | `graphState(node)` — a node's box: at rest its served `cause` in the health map's word (or `fresh`) with the part its colour is of, the run on it, or no state yet | `graphState.test.ts` |
 | `lib/graphView.ts` | `fitViewport`, `fitTarget`, `revealViewport`, `neighborInDirection`, `waitsOn` — the viewport a fit sets (never below the zoom where a card's smallest label is 11px: what fits there around the selected, failed, running node or the start, the rest a pan away), the pan that keeps a selection clear of an opening panel, where the keyboard goes, what a never-run node waits on | `graphView.test.ts` |
 | `lib/groupedPage.ts` | the grouped page's derivation: params, scope, entries, search hits, boxes, URL changes, row navigation, header counts (`scopeCountsLabel`), rows held in place under the pointer (`holdOrder`, `hooks/useHeldOrder.ts`); the graph draws the same entries as the list at every level, All pipelines included | `groupedPage.test.ts` |
 | `lib/knownStates.ts` | `knownStates(current, loaded)` — while a scope's state loads, each node's newest row already loaded (`useKnownStates`): a navigation keeps the last known state, "Checking…" only for a node never loaded | `knownStates.test.ts` |
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout; `impliedEdges` — in a graph of groups, the edges another path already shows (left out of the layout, drawn for the selection) | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre per connected part (by dependency depth), parts packed in rows, and each edge's route (`routeEdges`: straight through a rank between its boxes, curving only between ranks, so no edge crosses a card; drawn by `routePath` in `components/graph/RoutedEdge.tsx`), no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
-| `lib/pipeline.ts` | pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count, and its state from its sums in the rollup's `files`), `fileShown` (those sums as a glyph and a word, for the sidebar and the table's file header) | `pipeline.test.ts` |
+| `lib/pipeline.ts` | pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count, and its state from its sums in the rollup's `files`), `fileShown` (those sums in the health map's words: the first cause the file has a node of, or fresh, for the sidebar and the table's file header) | `pipeline.test.ts` |
 | `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `streakLabel` — what is broken in a scope and why; a failing streak is always "N failed runs in a row" | `health.test.ts` |
 | `lib/estimates.ts` | `nodeEstimate`, `scopeEstimate` — when a row is fresh, in words, from the served times: `fresh ~15:05` (an estimate, rounded up), `rechecked 15:00` (a tick's next look), `no estimate: no refresh path` (the served `no_estimate`); a group's `all fresh by ~15:02` or `152 with no estimate` from its rollup entry | `estimates.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatRelative` (`3h ago`, `in 5m`), `formatInstant` — the one time format, drawn by `Age` (relative, absolute on hover) | `time.test.ts` |
@@ -92,8 +92,9 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/palette.ts` | `paletteIndex`, `searchPalette`, `updatePalette` — the command palette (⌘K): each result with its state, failing first among equal matches | `palette.test.ts` |
 | `lib/runTarget.ts` | `runTarget`, `runButton` — what a page toolbar's Run button acts on and how it says so | `runTarget.test.ts` |
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
-| `lib/partitionGrid.ts` | `gridOf`, `filterCells`, `issueGroups`, `heatmap`, `filterSelection`, `issueSelection` — every key of a partitioned node (`GET /assets/{id}/partitions/grid`) decoded and filtered, its problems grouped with where they are, binned into the overview, and a filter or a problem turned into a run's `partition` | `partitionGrid.test.ts` |
-| `lib/keysPage.ts` | `keysParams`, `keysSearch`, `keysHref` — the key explorer's URL (node, open key, filters) | `keysPage.test.ts` |
+| `lib/partitionGrid.ts` | `heatmap`, `rangeBounds`, `cellKey`, `alongValues` — the geometry of the key explorer's overview over the served rows (`GET /assets/{id}/partitions/overview`): columns that fit, ticks, a zoom window, the key a one-value column stands for. Which keys exist, their states, the problems and what a filter keeps are served | `partitionGrid.test.ts` |
+| `lib/keyStateDisplay.ts` | `keyStateDisplay`, `KEY_STATES`, `keyStateOfCode` — a key state's word, glyph and meaning, the order states are listed in, and the state a character of a served row stands for | `partitionGrid.test.ts` |
+| `lib/keysPage.ts` | `keysParams`, `keysSearch`, `keysHref`, `keysQuery`, `toggleSort` — the key explorer's URL (node, open key, filters, order) and the same filters as the parameters `GET /assets/{id}/partitions/keys` takes | `keysPage.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity`; `runsCountLabel` (a filtered count over the runs loaded says it is partial), `runStepRows` (a run's Steps as rows: a node's keys one row with their count, listed when opened) | `*.test.ts` |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.
@@ -283,15 +284,19 @@ they arrive. The tests do not exercise that (fonts are local and fast).
 - Styling via the barca design-system CSS tokens; components reference `var(--…)`, never
   invented colors.
 
-A group card (`groupHealth`) leads with its most severe fact in words (failing beats running beats
-stale, the order of `healthParts`), the other parts beside it as glyph and count; the graph's
-legend lists every state on its cards, each part of a group card included.
+A group card (`groupHealth`) reads its entry of the rollup in the health map's words: its
+leading part in words (failing, then run work, then each other cause in the served order, then
+fresh), the other parts beside it as a dot in the map's colour and a count; the graph's legend
+lists every cause on its cards, each part of a group card included, with the same dots.
 
-Graph state presentation lives in `src/lib/graphState.ts`. A resting node shows its
-`cache.state` from `/state` as its glyph and the CLI's word; a failed last attempt shows as
-`failing` (the red cross glyph) in its place, and the state stays in the tooltip and the panel. A
-run working on the node overlays that (the running glyph turns, the card gets the running
-ring); completion refreshes it. Selection uses a
+Graph state presentation lives in `src/lib/graphState.ts`. A resting node shows its served
+`cause` from `/state` (or `fresh`) as a dot in the colour the health map gives it
+(`CauseDot`, `lib/causeDisplay.ts`), the word in its tooltip and accessible name: a failed
+last attempt and a node a failure upstream holds both read `failing`, as the map counts them,
+and the held node's hint names the failing node. The sidebar marks a file and a group with
+the same dots (`fileShown` over the file's `causes` in the rollup, `groupHealth` over the
+group's entry). A run working on the node overlays that (the running glyph turns, the card
+gets the running ring); completion refreshes it. A pinned node keeps its pin glyph. Selection uses a
 separate outline. The graph displays every asset and dependency in the selected pipeline. No
 nodes are grouped or collapsed automatically.
 

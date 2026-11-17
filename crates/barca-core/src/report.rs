@@ -18,7 +18,9 @@ pub(crate) use commands::{
     render_get_multi_parts, render_multi_parts, render_run_body, returned_from_pointers, run_body,
     run_label,
 };
-pub use keys::{render_partition_grid, render_partition_key, render_partition_keys};
+pub use keys::{
+    render_partition_grid, render_partition_key, render_partition_keys, render_partition_overview,
+};
 
 use crate::cache_state::CacheState;
 use crate::step_status::StepStatus;

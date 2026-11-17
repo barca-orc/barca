@@ -48,6 +48,7 @@ pub mod health;
 pub mod history_filter;
 pub mod http;
 mod incremental;
+pub mod key_query;
 pub mod ledger;
 mod mismatch;
 pub mod outcome;

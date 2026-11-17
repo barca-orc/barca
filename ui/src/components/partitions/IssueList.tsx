@@ -2,29 +2,29 @@ import { useState } from 'react'
 import { Play } from 'lucide-react'
 import { Button } from '@/components'
 import { StatusGlyph } from '@/components/StatusGlyph'
+import { keyStateDisplay, keyStateOf } from '@/lib/keyStateDisplay'
 import { plural } from '@/lib/plural'
-import { spreadWords, type IssueGroup } from '@/lib/partitionGrid'
+import type { KeyIssue } from '@/lib/types'
 
 export interface IssueListProps {
-  issues: readonly IssueGroup[]
+  /** What is wrong and where, as the server lists it (`issues` of the overview). */
+  issues: readonly KeyIssue[]
   /** The issue whose keys the table shows, if one is. */
-  active: IssueGroup | null
-  onShow: (issue: IssueGroup) => void
-  onRun: ((issue: IssueGroup) => void) | null
+  active: KeyIssue | null
+  onShow: (issue: KeyIssue) => void
+  onRun: ((issue: KeyIssue) => void) | null
   running: boolean
 }
 
 /** How many issues show before "N more". */
 const SHOWN = 4
 
-const GLYPH = { error: 'failed', blocked: 'blocked', stale: 'stale', never_run: 'never_run' } as const
-
 /**
  * barca · IssueList
  * What is wrong with a partitioned asset, one line per problem, most keys first: each error its
  * failed keys raised, then the keys that wait on a failed input, are stale or never ran. Each
  * says where its keys are (`region apac · day 2023-03-01 → 2023-03-20`), the fact a 10,000-key
- * grid makes you hunt for.
+ * grid makes you hunt for. The groups, their order and where each sits are the server's.
  */
 export function IssueList({ issues, active, onShow, onRun, running }: IssueListProps) {
   const [open, setOpen] = useState(false)
@@ -34,21 +34,19 @@ export function IssueList({ issues, active, onShow, onRun, running }: IssueListP
     <section className="barca-issues" aria-label="What needs attention">
       <ul>
         {shown.map((issue) => {
-          const where = issue.spread
-            .map((s) => ({ name: s.name, words: spreadWords(s) }))
-            .filter((w) => w.words !== null)
-          const isActive = active !== null && active.kind === issue.kind && active.error === issue.error
+          const isActive = active !== null && active.state === issue.state && active.error === issue.error
+          const state = keyStateOf(issue.state)
           return (
-            <li key={`${issue.kind}:${issue.error}`} className="barca-issue" data-active={isActive || undefined}>
-              <StatusGlyph glyph={GLYPH[issue.kind]} size={14} />
+            <li key={`${issue.state}:${issue.error}`} className="barca-issue" data-active={isActive || undefined}>
+              <StatusGlyph glyph={state ? keyStateDisplay(state).glyph : 'unknown'} size={14} />
               <div className="barca-issue-what">
                 <div className="barca-issue-head">
-                  <b>{plural(issue.cells.length, 'key')}</b>
-                  <span className={issue.kind === 'error' ? 'barca-issue-error' : 'barca-issue-state'} title={issue.title}>{issue.title}</span>
+                  <b>{plural(issue.keys, 'key')}</b>
+                  <span className={issue.error !== null ? 'barca-issue-error' : 'barca-issue-state'} title={issue.title}>{issue.title}</span>
                 </div>
-                {where.length > 0 && (
+                {issue.places.length > 0 && (
                   <div className="barca-issue-where">
-                    {where.map((w) => <span key={w.name}><span className="barca-issue-dim">{w.name}</span> {w.words}</span>)}
+                    {issue.places.map((p) => <span key={p.dimension}><span className="barca-issue-dim">{p.dimension}</span> {p.words}</span>)}
                   </div>
                 )}
               </div>
@@ -57,7 +55,8 @@ export function IssueList({ issues, active, onShow, onRun, running }: IssueListP
                   {isActive ? 'Showing' : 'Show'}
                 </Button>
                 {onRun && (
-                  <Button size="sm" iconLeft={<Play size={11} />} loading={running} onClick={() => onRun(issue)} title="Compute these keys again">
+                  <Button size="sm" iconLeft={<Play size={11} />} loading={running} disabled={issue.selection === null} onClick={() => onRun(issue)}
+                    title={issue.selection === null ? 'Too many scattered keys to name in one run: show them and narrow the filter' : 'Compute these keys again'}>
                     Run
                   </Button>
                 )}

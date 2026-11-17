@@ -802,9 +802,64 @@ fn schedule_line(job: &Value) -> String {
     )
 }
 
-/// `barca status NODE --keys | --grid | --key KEY` with a server: the node's grid
-/// (`GET /assets/{name}/partitions/grid`) or one key (`.../partitions/key`), printed by the
-/// renderers a local command uses.
+/// The most keys asked of a server at once: `--all`, or a longer `--limit`, reads page after
+/// page (the server lists at most this many, `KEYS_PAGE_MAX`).
+const KEYS_PER_REQUEST: usize = 1000;
+
+/// `GET /assets/{name}/partitions/keys` for `query`, `limit` keys from `offset`.
+fn keys_path(
+    target: &str,
+    query: &barca_core::key_query::KeyQuery,
+    offset: usize,
+    limit: usize,
+) -> String {
+    use barca_core::key_query::KeySort;
+    use barca_core::partition_grid::state;
+    let mut path = format!(
+        "/assets/{}/partitions/keys?limit={limit}&offset={offset}",
+        encode(target)
+    );
+    if !query.states.is_empty() {
+        let names: Vec<&str> = query
+            .states
+            .iter()
+            .filter_map(|c| state::name(*c))
+            .collect();
+        path.push_str(&format!("&state={}", encode(&names.join(","))));
+    }
+    if query.needs_run {
+        path.push_str("&needs_run=1");
+    }
+    for (dimension, values) in &query.values {
+        path.push_str(&format!(
+            "&value={}",
+            encode(&format!("{dimension}={}", values.join(",")))
+        ));
+    }
+    if let Some(range) = &query.range {
+        path.push_str(&format!(
+            "&range={}",
+            encode(&format!("{}={}..{}", range.dimension, range.from, range.to))
+        ));
+    }
+    if let Some(error) = query.error {
+        path.push_str(&format!("&error={error}"));
+    }
+    if !query.text.is_empty() {
+        path.push_str(&format!("&q={}", encode(&query.text)));
+    }
+    if let Some((name, _)) = KeySort::NAMES.iter().find(|(_, s)| *s == query.sort)
+        && query.sort != KeySort::Key
+    {
+        path.push_str(&format!("&sort={name}"));
+    }
+    path
+}
+
+/// `barca status NODE --keys | --overview | --grid | --key KEY` with a server: the page of
+/// keys (`GET /assets/{name}/partitions/keys`), the overview (`.../partitions/overview`), the
+/// grid (`.../partitions/grid`) or one key (`.../partitions/key`), printed by the renderers a
+/// local command uses.
 pub(crate) async fn partition_keys(
     server: &Server,
     target: &str,
@@ -830,18 +885,49 @@ pub(crate) async fn partition_keys(
                 })?;
             barca_core::report::render_partition_key(&detail, json)
         }
-        view => {
+        KeysView::Keys(query) => {
+            // The server lists a bounded page: every key, or more than a page of them, is
+            // read a page at a time and printed as one.
+            let mut page: Option<barca_core::key_query::KeysPage> = None;
+            loop {
+                let have = page.as_ref().map_or(0, |p| p.keys.len());
+                let want = limit.map_or(KEYS_PER_REQUEST, |l| (l - have).min(KEYS_PER_REQUEST));
+                let path = keys_path(target, &query, query.offset + have, want);
+                let next: barca_core::key_query::KeysPage =
+                    serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
+                        server.unexpected("GET /assets/{name}/partitions/keys", &e.to_string())
+                    })?;
+                let more = next.truncated && !next.keys.is_empty();
+                match &mut page {
+                    Some(page) => page.extend(next),
+                    None => page = Some(next),
+                }
+                let have = page.as_ref().map_or(0, |p| p.keys.len());
+                if !more || limit.is_some_and(|l| have >= l) {
+                    break;
+                }
+            }
+            let page = page.expect("the loop reads at least one page");
+            barca_core::report::render_partition_keys(&page, query.filters(), json)
+        }
+        KeysView::Overview => {
+            let mut path = format!("/assets/{}/partitions/overview", encode(target));
+            if let Some(limit) = limit {
+                path.push_str(&format!("?limit={limit}"));
+            }
+            let overview: barca_core::key_query::KeysOverview =
+                serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
+                    server.unexpected("GET /assets/{name}/partitions/overview", &e.to_string())
+                })?;
+            barca_core::report::render_partition_overview(&overview, json)
+        }
+        KeysView::Grid => {
             let path = format!("/assets/{}/partitions/grid", encode(target));
             let grid: barca_core::partition_grid::PartitionGrid =
                 serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
                     server.unexpected("GET /assets/{name}/partitions/grid", &e.to_string())
                 })?;
-            match view {
-                KeysView::Keys(filter) => {
-                    barca_core::report::render_partition_keys(&grid, &filter, limit, json)
-                }
-                _ => barca_core::report::render_partition_grid(&grid, limit, json),
-            }
+            barca_core::report::render_partition_grid(&grid, limit, json)
         }
     };
     crate::commands::emit(rendered);

@@ -21,7 +21,7 @@ import type { ListNode, NodeState } from './types'
 import type { Failure } from './health'
 import { served } from './testdata/served'
 import { ROOT, indexRollup } from './rollupView'
-import { nodeEntry, rollup, scopeEntry } from './testdata/rollup'
+import { nodeEntry, rollup, scopeEntry, causeCounts } from './testdata/rollup'
 
 const tree = groupTree([
   { id: 'group:p.py:outer', name: 'Outer', description: '', members: ['group:p.py:inner', 'p.py:x'], output: 'p.py:x' },
@@ -110,7 +110,7 @@ describe('grouped level', () => {
       // The rollup as served: `y` failing in `inner`, and a run working on `x`.
       rollup: indexRollup(rollup([
         scopeEntry(ROOT, 'root', null, ['group:p.py:outer'], { failing: 1, never_run: 1, ok: 1 }, { running: 1 }),
-        scopeEntry('group:p.py:outer', 'group', ROOT, ['group:p.py:inner', 'p.py:x'], { failing: 1, never_run: 1, ok: 1 }, { running: 1 }),
+        scopeEntry('group:p.py:outer', 'group', ROOT, ['group:p.py:inner', 'p.py:x'], { failing: 1, never_run: 1, ok: 1 }, { running: 1, causes: causeCounts({ failing: 1, no_refresh_path: 1 }) }),
       ])),
     })
     expect(level.visualStates['group:p.py:outer']).toMatchObject({ kind: 'group', label: '1 failing' })
@@ -139,7 +139,7 @@ describe('grouped level', () => {
       rollup: indexRollup(rollup([
         scopeEntry(ROOT, 'root', null, ['group:p.py:outer'], { failing: 1, ok: 2 }),
         scopeEntry('group:p.py:outer', 'group', ROOT, ['group:p.py:inner', 'p.py:x'], { failing: 1, ok: 2 }),
-        scopeEntry('group:p.py:inner', 'group', 'group:p.py:outer', ['p.py:check__y', 'p.py:y'], { failing: 1, ok: 1 }),
+        scopeEntry('group:p.py:inner', 'group', 'group:p.py:outer', ['p.py:check__y', 'p.py:y'], { failing: 1, ok: 1 }, { causes: causeCounts({ failing: 1 }) }),
         nodeEntry('p.py:x', 'group:p.py:outer', 'ok'),
       ])),
     })

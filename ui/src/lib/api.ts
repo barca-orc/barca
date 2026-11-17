@@ -16,7 +16,8 @@ import type {
   NodeGroup,
   ListNode,
   AssetDetail,
-  PartitionGrid,
+  KeysOverview,
+  KeysPage,
   PartitionKeyDetail,
   PartitionKeys,
   NodeState,
@@ -130,8 +131,14 @@ export const api = {
     if (filter.q) params.set('q', filter.q)
     return request<PartitionKeys>(`/assets/${encodeURIComponent(name)}/partitions?${params}`)
   },
-  /** Every key of a partitioned node, with its state and latest attempt. */
-  partitionGrid: (name: string) => request<PartitionGrid>(`/assets/${encodeURIComponent(name)}/partitions/grid`),
+  /**
+   * One page of the keys of a partitioned node that match `query` (the route's own parameters,
+   * `lib/keysPage.ts`): filtered, ordered and counted by the server.
+   */
+  partitionKeysPage: (name: string, query: string, page: { limit: number; offset: number }) =>
+    request<KeysPage>(`/assets/${encodeURIComponent(name)}/partitions/keys?${query}${query ? '&' : ''}limit=${page.limit}&offset=${page.offset}`),
+  /** A partitioned node's keys in one picture: counts, what is wrong and where, and the rows of states. */
+  partitionOverview: (name: string) => request<KeysOverview>(`/assets/${encodeURIComponent(name)}/partitions/overview`),
   /** One key of a partitioned node, across its chain, with what it read and wrote. */
   partitionKey: (name: string, key: string) =>
     request<PartitionKeyDetail>(`/assets/${encodeURIComponent(name)}/partitions/key?${new URLSearchParams({ key, sample: String(PREVIEW_ROWS) })}`),

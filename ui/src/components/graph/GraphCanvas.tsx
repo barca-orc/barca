@@ -21,14 +21,15 @@ import { AssetNode } from './AssetNode'
 import { GroupNode } from './GroupNode'
 import { PortNode } from './PortNode'
 import { RoutedEdge } from './RoutedEdge'
-import { GraphLegend } from './GraphLegend'
-import { BLOCKED_UPSTREAM, PINNED } from '@/lib/cacheStateDisplay'
+import { GraphLegend, type LegendShown } from './GraphLegend'
+import { PINNED } from '@/lib/cacheStateDisplay'
 import { fitViewport, isArrowKey, neighborInDirection, revealViewport, type Inset, type ViewNode } from '@/lib/graphView'
 import { isLive, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
 import { isFailed } from '@/lib/health'
 import { edgeClassName, type LayoutDir, type GraphEdgeData, type GraphNode, type GraphEntry } from '@/lib/graph'
 import { useGraphLayout } from '@/hooks/useGraphLayout'
-import { glyphColor, toneGlyph } from '@/lib/glyph'
+import { glyphColor, toneGlyph, type Glyph } from '@/lib/glyph'
+import { mapPartColor, type MapPart } from '@/lib/causeDisplay'
 
 // Defined once, outside the component — a fresh object each render is a perf bug.
 const nodeTypes: NodeTypes = { asset: AssetNode, nodeGroup: GroupNode, port: PortNode }
@@ -205,26 +206,25 @@ function GraphControls({ dir, onFit, onToggleDir }: { dir: LayoutDir; onFit: () 
 }
 
 /**
- * Every state on the graph's cards, by glyph, with its word: a node's one state (failing,
- * blocked and pinned as it draws them), and every part of a group card, not only the one it
- * leads with. A state not loaded yet is not listed.
+ * Every state on the graph's cards: the causes (and fresh) its nodes rest in and each part of a
+ * group card, not only the one it leads with; and the glyph and word of what is not a cause (run
+ * work, a pin). A state not loaded yet is not listed.
  */
-function legendGlyphs(nodes: readonly GraphNode[]): Map<string, string> {
-  const seen = new Map<string, string[]>()
-  // A glyph can carry two words: a node's state (`stale`) and a group's health (`behind`).
-  const add = (glyph: string, word: string | null | undefined) => {
-    if (!word) return
-    const list = seen.get(glyph) ?? []
-    if (!list.includes(word)) list.push(word)
-    seen.set(glyph, list)
-  }
+function legendShown(nodes: readonly GraphNode[]): LegendShown {
+  const parts = new Set<MapPart>()
+  const glyphs = new Map<Glyph, string>()
   for (const n of nodes) {
     if (n.type === 'port') continue
-    const parts = n.data.parts
-    if (parts) for (const part of parts) add(part.glyph, part.word)
-    else add(n.data.lastFailed ? 'failed' : n.data.glyph ?? toneGlyph(n.data.tone), n.data.label)
+    const group = n.data.parts
+    if (group) {
+      for (const part of group) {
+        if (part.part) parts.add(part.part)
+        else glyphs.set(part.glyph, part.word)
+      }
+    } else if (n.data.part && !n.data.live && n.data.pinned === undefined) parts.add(n.data.part)
+    else if (n.data.glyph && n.data.label) glyphs.set(n.data.glyph, n.data.label.split(' · ')[0]!)
   }
-  return new Map([...seen].map(([glyph, list]) => [glyph, list.join(' / ')]))
+  return { parts, glyphs }
 }
 
 /** The node a key event came from, when it came from one. */
@@ -259,25 +259,25 @@ export function GraphCanvas({
     const names = new Map(base.nodes.map((n) => [n.id, n.data.name]))
     return base.nodes.map((n) => {
       const state = states[n.id] ?? UNKNOWN_GRAPH_STATE
-      // A blocked consumer reads `blocked`, and its hint names the failing node upstream that
-      // keeps it from running: the server's answer on its row (`root`), not a walk done here. A
-      // pinned node is never blocked there, and a node whose state has not arrived says nothing.
+      // A node a failure upstream holds reads `failing`, as the health map counts it, and its
+      // hint names the failing node: the server's answer on its row (`root`), not a walk done
+      // here. A node whose state has not arrived says nothing.
       const by = state.kind === 'cache' ? state.blockedBy : undefined
-      const wait = by ? { by, hint: `Blocked: waits on ${names.get(by) ?? by}, whose last attempt failed.` } : undefined
-      // One state per node: failing > running > pinned > blocked > the cache state.
+      const held = by ? `Held by ${names.get(by) ?? by}, whose last attempt failed.` : undefined
+      // One mark per node: run work, then a pin, then its cause.
       const pin = !isFailed(state) && !isLive(state) && state.kind === 'cache' ? pins.get(n.id) : undefined
       return { ...n, selected: n.id === selected,
         className: shown && n.type !== 'port' && !shown.has(n.id) ? 'is-dimmed' : undefined,
         data: {
           ...n.data,
-          tone: pin !== undefined || wait ? 'warning' : state.tone,
-          glyph: pin !== undefined ? 'pinned' : wait ? 'blocked' : state.glyph,
-          label: pin !== undefined ? PINNED : wait ? BLOCKED_UPSTREAM : state.label,
-          blockedBy: pin === undefined && wait ? names.get(wait.by) ?? wait.by : undefined,
+          tone: pin !== undefined ? 'warning' : state.tone,
+          glyph: pin !== undefined ? 'pinned' : state.glyph,
+          label: pin !== undefined ? PINNED : state.label,
+          part: state.kind === 'cache' || state.kind === 'group' ? state.part : undefined,
           pinned: pin,
           lastFailed: isFailed(state),
           live: isLive(state),
-          stateHint: pin !== undefined ? `Pinned: ${pin}. Runs read this version until it is unpinned.` : wait ? `${state.hint} ${wait.hint}` : state.hint,
+          stateHint: pin !== undefined ? `Pinned: ${pin}. Runs read this version until it is unpinned.` : held ? `${state.hint} ${held}` : state.hint,
           keys: state.kind === 'cache' ? state.keys : undefined,
           parts: state.kind === 'group' || state.kind === 'run' ? state.parts : undefined,
         } }
@@ -285,7 +285,8 @@ export function GraphCanvas({
   }, [base.nodes, selected, states, pins, shown])
 
   const nodeTones = useMemo(() => new Map(nodes.map(n => [n.id, n.data.tone])), [nodes])
-  const nodeGlyphs = useMemo(() => new Map(nodes.map(n => [n.id, n.data.glyph ?? toneGlyph(n.data.tone)])), [nodes])
+  // The minimap's colour of each node: its cause's on the health map at rest, its glyph's otherwise.
+  const nodeColors = useMemo(() => new Map(nodes.map(n => [n.id, n.data.part && !n.data.live && n.data.pinned === undefined ? mapPartColor(n.data.part) : glyphColor(n.data.glyph ?? toneGlyph(n.data.tone))])), [nodes])
   const edges = useMemo(
     () =>
       base.edges.map((e) => {
@@ -307,7 +308,7 @@ export function GraphCanvas({
     [base.edges, selected, hovered, nodeTones, shown],
   )
   // The legend names every state this graph shows: each card's, and each part of a group card.
-  const shownGlyphs = useMemo(() => legendGlyphs(nodes), [nodes])
+  const shownGlyphs = useMemo(() => legendShown(nodes), [nodes])
 
   const onNodeClick = useCallback((_: unknown, n: Node) => {
     if (n.type !== 'port') onSelect(n.id)
@@ -373,7 +374,7 @@ export function GraphCanvas({
         <Panel position="bottom-left">
           <GraphLegend shown={shownGlyphs}>{legend}</GraphLegend>
         </Panel>
-        {minimap && <MiniMap position="top-right" nodeColor={n => glyphColor(nodeGlyphs.get(n.id) ?? 'pending')} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
+        {minimap && <MiniMap position="top-right" nodeColor={n => nodeColors.get(n.id) ?? glyphColor('pending')} pannable zoomable maskColor="var(--graph-mask)" nodeStrokeWidth={0} />}
         <FitController nodes={nodes} layoutKey={`${dir}:${base.nodes.map(n => n.id).join("|")}`} focus={selected} selected={selected} minimap={minimap} handleRef={fitRef} />
       </ReactFlow>
     </ReactFlowProvider>

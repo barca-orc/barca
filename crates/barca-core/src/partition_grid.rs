@@ -513,56 +513,6 @@ pub async fn key_for_target(
 /// The most sample rows one key's detail reads from each artifact.
 pub const KEY_SAMPLE_MAX: usize = 50;
 
-/// Which keys [`PartitionGrid::key_rows`] lists.
-#[derive(Debug, Clone, Default)]
-pub struct KeyFilter {
-    /// [`state`] characters; empty: every state.
-    pub states: Vec<char>,
-}
-
-impl KeyFilter {
-    /// `--state failed,blocked`: key states by name. An unknown name is an error listing the
-    /// valid ones.
-    pub fn parse(names: &[String]) -> Result<KeyFilter, String> {
-        let mut states = Vec::new();
-        for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
-            match state::NAMED.iter().find(|(_, word)| *word == name) {
-                Some((c, _)) => {
-                    if !states.contains(c) {
-                        states.push(*c);
-                    }
-                }
-                None => {
-                    return Err(format!(
-                        "unknown key state '{name}': use {}",
-                        state::NAMED.map(|(_, word)| word).join(", ")
-                    ));
-                }
-            }
-        }
-        Ok(KeyFilter { states })
-    }
-}
-
-/// One key of a grid, decoded: what `barca status NODE --keys` lists.
-#[derive(Debug, Clone, Serialize)]
-pub struct KeyRow {
-    /// `day=2026-01-01,region=apac`.
-    pub key: String,
-    /// `failed`, `blocked`, `stale`, `never_run`, `pinned` or `fresh`.
-    pub state: &'static str,
-    /// The key's latest attempt (RFC 3339); null where it has none.
-    pub attempted_at: Option<String>,
-    pub elapsed_seconds: Option<f64>,
-    pub size_bytes: Option<i64>,
-    /// Rows the latest attempt wrote, where its worker counted them.
-    pub rows: Option<i64>,
-    pub run_id: Option<String>,
-    /// A failed key's error as the grid groups it (an entry of `errors`): the first line,
-    /// with the key's own values replaced by their dimension's name.
-    pub error: Option<String>,
-}
-
 /// One row of the grid as text: a combination of every dimension but the longest, running
 /// through the longest dimension's values in order.
 #[derive(Debug, Clone)]
@@ -575,7 +525,7 @@ pub struct GridBlock {
 
 impl PartitionGrid {
     /// How far one step of each dimension moves in the cell index.
-    fn strides(&self) -> Vec<usize> {
+    pub(crate) fn strides(&self) -> Vec<usize> {
         let mut strides = vec![1usize; self.dimensions.len()];
         for d in (0..self.dimensions.len().saturating_sub(1)).rev() {
             strides[d] = strides[d + 1] * self.dimensions[d + 1].values.len();
@@ -584,7 +534,7 @@ impl PartitionGrid {
     }
 
     /// The key of `cell` as barca spells it.
-    fn key_of(&self, cell: usize, strides: &[usize]) -> String {
+    pub(crate) fn key_of(&self, cell: usize, strides: &[usize]) -> String {
         self.dimensions
             .iter()
             .zip(strides)
@@ -597,47 +547,6 @@ impl PartitionGrid {
     pub fn keys(&self) -> usize {
         let c = &self.counts;
         c.fresh + c.pinned + c.stale + c.never_run + c.failed + c.blocked
-    }
-
-    /// The keys that match `filter`, in key order.
-    pub fn key_rows(&self, filter: &KeyFilter) -> Vec<KeyRow> {
-        let strides = self.strides();
-        self.states
-            .chars()
-            .enumerate()
-            .filter_map(|(cell, c)| {
-                let name = state::name(c)?;
-                if !filter.states.is_empty() && !filter.states.contains(&c) {
-                    return None;
-                }
-                let at = |v: &Vec<Option<i64>>| v.get(cell).copied().flatten();
-                Some(KeyRow {
-                    key: self.key_of(cell, &strides),
-                    state: name,
-                    attempted_at: at(&self.attempted_at)
-                        .map(|offset| crate::outcome::rfc3339(self.attempted_base + offset)),
-                    elapsed_seconds: self
-                        .elapsed_ms
-                        .get(cell)
-                        .copied()
-                        .flatten()
-                        .map(|ms| ms as f64 / 1000.0),
-                    size_bytes: at(&self.size_bytes),
-                    rows: at(&self.rows),
-                    run_id: self
-                        .run
-                        .get(cell)
-                        .copied()
-                        .flatten()
-                        .and_then(|r| self.runs.get(r as usize).cloned()),
-                    error: self
-                        .error
-                        .get(&(cell as u32))
-                        .and_then(|e| self.errors.get(*e as usize))
-                        .map(|group| group.error.clone()),
-                })
-            })
-            .collect()
     }
 
     /// The dimension the grid's rows run along: the one with the most values (the first of
@@ -741,6 +650,9 @@ pub struct PartitionKeyDetail {
     pub key: String,
     /// A [`state`] character.
     pub state: String,
+    /// A run computes this key: it is failed, blocked, stale or never ran.
+    #[serde(default)]
+    pub needs_run: bool,
     /// The same key in each node of the chain, upstream first.
     pub chain: Vec<ChainKeyState>,
     /// The key's latest attempts, newest first (at most 20).
@@ -860,6 +772,7 @@ pub async fn partition_key_detail(
         id: id.to_string(),
         key: suffix.clone(),
         state: own.to_string(),
+        needs_run: crate::key_query::NEEDS_RUN.contains(&own),
         chain: chain
             .chain
             .iter()

@@ -2172,6 +2172,76 @@ def plain() -> dict:
     not_modified(&router, url, "/assets/{name}/partitions/grid").await;
     checked(&router, "HEAD", url, "/assets/{name}/partitions/grid", 200).await;
     checked(&router, "PUT", url, "/assets/{name}/partitions/grid", 405).await;
+    // The same keys a page at a time, filtered and ordered by the server (#1036).
+    let keys = "/assets/{name}/partitions/keys";
+    let page = checked(&router, "GET", "/assets/base/partitions/keys", keys, 200).await;
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["needs_run"], 1);
+    assert_eq!(page["keys"][0]["values"], json!(["a"]));
+    let failed = checked(
+        &router,
+        "GET",
+        "/assets/base/partitions/keys?state=failed&error=0&q=B&sort=attempted&limit=5",
+        keys,
+        200,
+    )
+    .await;
+    assert_eq!(failed["total"], 1);
+    assert_eq!(failed["keys"][0]["key"], "k=b");
+    assert_eq!(failed["keys"][0]["error"], "ValueError: no rows for <k>");
+    assert_eq!(failed["selection"], r#"{"k":["b"]}"#);
+    let paged = checked(
+        &router,
+        "GET",
+        "/assets/base/partitions/keys?value=k=a,c&range=k=a..c&limit=1&offset=1",
+        keys,
+        200,
+    )
+    .await;
+    assert_eq!(paged["total"], 2);
+    assert_eq!(paged["offset"], 1);
+    assert_eq!(paged["truncated"], false);
+    assert_eq!(paged["keys"][0]["key"], "k=c");
+    for bad in [
+        "value=zone=a",
+        "range=k=a..z",
+        "error=7",
+        "state=cached",
+        "sort=newest",
+        "limit=many",
+    ] {
+        let url = format!("/assets/base/partitions/keys?{bad}");
+        checked(&router, "GET", &url, keys, 400).await;
+    }
+    not_modified(&router, "/assets/base/partitions/keys?state=failed", keys).await;
+    checked(&router, "HEAD", "/assets/base/partitions/keys", keys, 200).await;
+    checked(&router, "GET", "/assets/plain/partitions/keys", keys, 400).await;
+    checked(&router, "GET", "/assets/missing/partitions/keys", keys, 404).await;
+    let overview_path = "/assets/{name}/partitions/overview";
+    let url = "/assets/base/partitions/overview";
+    let overview = checked(&router, "GET", url, overview_path, 200).await;
+    assert_eq!(overview["along"], "k");
+    assert_eq!(
+        overview["rows"],
+        json!([{"label": "", "values": [], "states": "cfc"}])
+    );
+    assert_eq!(overview["issues"][0]["state"], "failed");
+    assert_eq!(
+        overview["issues"][0]["places"],
+        json!([{"dimension": "k", "words": "b"}])
+    );
+    assert_eq!(overview["needs_run"], 1);
+    not_modified(&router, url, overview_path).await;
+    checked(&router, "HEAD", url, overview_path, 200).await;
+    checked(&router, "PUT", url, overview_path, 405).await;
+    checked(
+        &router,
+        "GET",
+        "/assets/plain/partitions/overview",
+        overview_path,
+        400,
+    )
+    .await;
     // The same key downstream waits on the failed one.
     let follow = checked(
         &router,

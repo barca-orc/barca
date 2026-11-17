@@ -1,6 +1,6 @@
 import type { FileRollup } from './generated/FileRollup'
 import type { Glyph } from './glyph'
-import { healthDisplay } from './healthDisplay'
+import { leadingPart, mapPartGlyph, mapPartLabel, type MapPart } from './causeDisplay'
 import type { ListNode, NodeKind } from './types'
 
 /**
@@ -32,20 +32,23 @@ export interface Pipeline {
 export interface FileDisplay {
   glyph: Glyph
   label: string
+  /** The cause (or fresh) the word is of, whose colour marks the line; null while a run leads. */
+  part: MapPart | null
   /** A run is working on some of its nodes: the running glyph turns. */
   live: boolean
 }
 
 /**
- * A file's one state, for its header in the table and its line in the sidebar: the words of its
- * sums in the rollup (`files` of `GET /state/rollup`, summed in `barca-core`). A run working on
- * some of its nodes leads; else the most severe health among them (`worst`, the server's).
- * Nothing here counts or ranks.
+ * A file's one state, for its header in the table and its line in the sidebar, in the health
+ * map's words: the words of its sums in the rollup (`files` of `GET /state/rollup`, summed in
+ * `barca-core`). A run working on some of its nodes leads; else the first cause, in the served
+ * order, that the file has a node of (`causes`), or `fresh` when it has none. Nothing here
+ * counts or ranks.
  */
-export function fileShown(sums: Pick<FileRollup, 'running' | 'worst'>): FileDisplay {
-  if (sums.running > 0) return { glyph: 'running', label: `${sums.running.toLocaleString()} running`, live: true }
-  const shown = healthDisplay(sums.worst)
-  return { glyph: shown.glyph, label: shown.label, live: false }
+export function fileShown(sums: Pick<FileRollup, 'running' | 'causes'>): FileDisplay {
+  if (sums.running > 0) return { glyph: 'running', label: `${sums.running.toLocaleString()} running`, part: null, live: true }
+  const part = leadingPart(sums.causes)
+  return { glyph: mapPartGlyph(part), label: mapPartLabel(part), part, live: false }
 }
 
 /** A pipeline (source file) as the sidebar shows it, for the nodes of one kind. */
