@@ -14,12 +14,15 @@ The Assets page opens on the health of what is open (the project, a group or a f
 beside its causes, then its groups and nodes, worst first.
 
 ![The Assets page of a 2,867-node project: a two-ring map coloured by health beside seven causes, the first a ValueError that failed 24 keys and blocks one node, then the groups, each with its failing and behind counts](../../assets/web-ui/health-overview.png)
-*The map's slices are sized by how much is wrong under them and coloured by the worst health inside; the causes list groups 20 failures into 7 errors.*
+*The map's slices are sized by how much is wrong under them and coloured by the worst health inside: red failing, yellow needs attention, green ok; the causes list groups 20 failures into 7 errors.*
 
 - **The map** draws the open scope at its centre and its groups (then their groups or nodes) in
   two rings. A slice's size is how much is wrong under it: failed keys of a partitioned asset,
-  otherwise nodes; a scope with nothing wrong keeps a thin slice. Click a slice to open it (the
-  whole page follows), the centre to go up; hide the map with **Hide health map**.
+  otherwise nodes; a scope with nothing wrong keeps a thin slice. Its colour is the worst health
+  inside, in three: red is failing, yellow needs attention (blocked, suspect data or behind),
+  green is ok, and grey is what barca cannot judge yet (waiting, never run). Click a slice to
+  open it (the whole page follows) and see what is behind a small one, the centre to go up; hide
+  the map with **Hide health map**.
 - **Causes** list what is wrong once per cause, biggest first: failures that share an error
   (ignoring its numbers) are one entry, with the keys that failed and how many nodes they keep
   from running; then output that looks wrong; then what is behind.

@@ -369,13 +369,16 @@ a.barca-btn { text-decoration: none; }
 .barca-healthmap-arc[data-depth="2"] { opacity: 0.85; }
 .barca-healthmap-arc[data-depth="3"] { opacity: 0.7; }
 .barca-healthmap-arc[data-hover], .barca-healthmap-arc:focus-visible { opacity: 1; stroke: var(--text-strong); stroke-width: 1.5; outline: none; }
+/* Three colours, so the map reads at a glance: red is failing, yellow needs attention (blocked,
+   suspect or behind), green is ok; grey is what barca cannot judge yet. The words are in the
+   causes list and the caption. */
 .barca-healthmap [data-health="failing"] { fill: var(--state-failed); }
-.barca-healthmap [data-health="blocked"] { fill: var(--state-blocked); }
-.barca-healthmap [data-health="suspect"] { fill: var(--state-partial); }
-.barca-healthmap [data-health="behind"] { fill: var(--state-stale); }
-.barca-healthmap [data-health="waiting"] { fill: var(--state-idle); fill-opacity: 0.45; }
-.barca-healthmap [data-health="never_run"] { fill: var(--state-idle); fill-opacity: 0.3; }
-.barca-healthmap [data-health="ok"] { fill: var(--state-fresh); fill-opacity: 0.28; }
+.barca-healthmap [data-health="blocked"], .barca-healthmap [data-health="suspect"], .barca-healthmap [data-health="behind"] { fill: var(--state-stale); }
+.barca-healthmap [data-health="waiting"], .barca-healthmap [data-health="never_run"] { fill: var(--state-idle); fill-opacity: 0.4; }
+.barca-healthmap [data-health="ok"] { fill: var(--state-fresh); fill-opacity: 0.6; }
+.barca-healthmap-key { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; margin: 0; padding: 0; list-style: none; font-size: var(--text-xs); color: var(--text-muted); }
+.barca-healthmap-key li { display: inline-flex; align-items: center; gap: 4px; }
+.barca-healthmap-key svg { display: block; width: 8px; height: 8px; }
 .barca-healthmap-center { fill: var(--bg-raised) !important; fill-opacity: 1 !important; stroke: var(--border-default); }
 .barca-healthmap-center[role="button"] { cursor: pointer; }
 .barca-healthmap-center:focus-visible { outline: none; stroke: var(--border-accent); stroke-width: 2; }

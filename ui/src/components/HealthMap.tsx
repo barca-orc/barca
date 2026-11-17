@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { arcCentroid, arcPath, healthSummary, sunburst, treePath, ROOT, type Arc, type HealthTree } from '@/lib/healthTree'
-import { healthDisplay } from '@/lib/nodeHealth'
+import { healthDisplay, type Health } from '@/lib/nodeHealth'
 
 export interface HealthMapProps {
   tree: HealthTree
@@ -16,15 +16,24 @@ export interface HealthMapProps {
 
 const RINGS = 2
 
+/** What the map's colours mean: failing, needs attention, ok, not judged yet. */
+const KEY: readonly (readonly [Health, string])[] = [
+  ['failing', 'failing'],
+  ['behind', 'needs attention'],
+  ['ok', 'ok'],
+  ['waiting', 'not known yet'],
+]
+
 function shorten(label: string, max: number): string {
   return label.length <= max ? label : `${label.slice(0, max - 1)}…`
 }
 
 /**
  * barca · HealthMap
- * The scope as a sunburst: the centre is the scope, each ring one level down. A segment's angle
- * is how much is wrong underneath (unhealthy keys or nodes, with a thin floor so a healthy group
- * stays visible); its colour is the worst health inside. Click a segment to make it the centre,
+ * The scope as a sunburst: the centre is the scope, each ring one level down (groups are the
+ * unit). A segment's angle is how much is wrong underneath (unhealthy keys or nodes, with a thin
+ * floor so a healthy group stays visible); its colour is the worst health inside, in three: red
+ * failing, yellow needs attention, green ok (grey: not known yet). A thin slice is clicked into. Click a segment to make it the centre,
  * a node to open it, the centre to go up. The line under the map names what the pointer is on.
  */
 export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMapProps) {
@@ -84,6 +93,11 @@ export function HealthMap({ tree, focus, onFocus, onOpen, size = 300 }: HealthMa
           return <text key={`l:${a.id}`} className="barca-healthmap-arc-label" x={c.x} y={c.y + 4}>{shorten(a.label, 12)}</text>
         })}
       </svg>
+      <ul className="barca-healthmap-key" aria-label="Colours">
+        {KEY.map(([health, word]) => (
+          <li key={health}><svg viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="4" data-health={health} /></svg>{word}</li>
+        ))}
+      </ul>
       <figcaption className="barca-healthmap-caption">
         {shown && hover ? (
           <>
