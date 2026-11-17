@@ -59,6 +59,14 @@ namespace v3 invalidates old shortcuts once on upgrade. This fixes the sequentia
 in [#657](https://github.com/barca-orc/barca/issues/657); it does not establish observation
 ordering or concurrent-version publication from the approved ownership design.
 
+A node the run reads as it is because of a pin or, under a tick, a pause is never proven
+fresh, and no proof of it is published: what holds it is not part of the proof and can be
+lifted without a new materialization. (A `Manual` asset is never proven fresh either; its
+declaration is part of the proof.) Setting or removing a pin and resuming a paused node also delete the recorded
+proofs. So the run after `barca resume` or `barca unpin` decides the node through the cache,
+against its inputs as they are then
+([#988](https://github.com/barca-orc/barca/issues/988)).
+
 ### Freshness policy
 
 | Context | Meaning |

@@ -58,6 +58,12 @@ pub(crate) struct Incremental {
     pub(crate) cached: HashMap<String, usize>,
     pub(crate) filters: HashMap<String, (String, Arc<HashSet<String>>)>,
     seeded: HashSet<String>,
+    /// Nodes this run reads as they are because of a pin (`barca pin`) or, under a tick, a
+    /// pause. What holds one is outside the proof's signature and can be lifted without a
+    /// new materialization, so a held node is never proven fresh and no proof of it is
+    /// published: the run that follows `barca resume` decides it through the cache, against
+    /// its inputs as they are then (#988).
+    held: HashSet<String>,
 }
 
 impl Incremental {
@@ -67,6 +73,7 @@ impl Incremental {
         cfg: &crate::config::ResolvedConfig,
         policy: &CachePolicy,
         selected: bool,
+        held: HashSet<String>,
     ) -> Result<Option<Self>, BarcaError> {
         if selected || !matches!(policy, CachePolicy::CacheAware) || cfg.ledger.is_some() {
             return Ok(None);
@@ -174,6 +181,7 @@ impl Incremental {
             cached: HashMap::new(),
             filters: HashMap::new(),
             seeded: HashSet::new(),
+            held,
         }))
     }
 
@@ -221,6 +229,7 @@ impl Incremental {
             || n.kind() != NodeKind::Asset
             || matches!(n.extracted.freshness, Freshness::Manual)
             || n.extracted.partitions.len() > 1
+            || self.held.contains(id)
         {
             return Change::All;
         }
@@ -781,7 +790,12 @@ impl Incremental {
         hashes: &HashMap<String, String>,
         cached: &HashSet<String>,
     ) -> Result<(), BarcaError> {
-        if (!materialized && self.next == self.previous)
+        // A held node with a proof on record (from before it was held) is a change to publish.
+        let unpublished = self
+            .held
+            .iter()
+            .any(|id| self.previous.nodes.contains_key(id));
+        if (!materialized && !unpublished && self.next == self.previous)
             || self.next.nodes.len() != self.templates.len()
         {
             return Ok(());
@@ -789,6 +803,8 @@ impl Incremental {
         let cache = crate::cache::CacheReader::for_config(cfg).await?;
         let generation = generation(cache.conn()).await?;
         let mut proofs = self.next.nodes.clone();
+        // A held node's result was read, not decided: its proof is deleted (`discarded`).
+        proofs.retain(|id, _| !self.held.contains(id));
         // A cache hit can select an older successful result. MAX(materialization.id)
         // is then history, not the current result. Keep only these exceptions, bounded
         // per logical node; a larger set falls back to normal cache validation.

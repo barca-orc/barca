@@ -977,6 +977,20 @@ async fn open_run<'a, 'r>(
         request.cfg,
         &request.policy,
         request.partition.is_some(),
+        // What a pin or a pause holds. A `Manual` node holds itself by its declaration,
+        // which its proof's signature covers.
+        prepared
+            .pinned
+            .iter()
+            .filter(|(id, pin)| {
+                pin.user.is_some()
+                    || prepared
+                        .dag
+                        .get_node(id)
+                        .is_some_and(|n| n.extracted.freshness != crate::model::Freshness::Manual)
+            })
+            .map(|(id, _)| id.clone())
+            .collect(),
     )
     .await?;
     state.decide_state.pinned = prepared.pinned.clone();

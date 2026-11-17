@@ -45,7 +45,33 @@ fn incremental_for(phase: &Phase) -> Incremental {
         cached: HashMap::new(),
         filters: HashMap::new(),
         seeded: HashSet::new(),
+        held: HashSet::new(),
     }
+}
+
+/// A node the run holds (paused under a tick, pinned) is never proven fresh, whatever its
+/// proof says: it goes through the cache, which reads it as it is, and so does what reads it.
+/// A proof that survived a hold would call the node fresh after `barca resume`, for inputs
+/// that changed while it was held (#988).
+#[test]
+fn a_held_node_is_not_proven_fresh_and_neither_is_what_reads_it() {
+    let dag = dag_of(
+        "from barca import asset\n\n@asset\ndef a():\n    return 1\n\n@asset(inputs={\"a\": a})\ndef b(a):\n    return a\n\n@asset(inputs={\"b\": b})\ndef c(b):\n    return b\n",
+    );
+    let phase = phase_of(&dag);
+    let mut inc = incremental_for(&phase);
+    inc.held.insert("p.py:b".to_string());
+    let (pruned, reports, _) = inc.prune(&dag, &phase);
+    let cached: Vec<_> = reports.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(cached, ["p.py:a"]);
+    let mut left: Vec<_> = pruned
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .map(|s| s.step_id.base_id().to_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["p.py:b", "p.py:c"]);
 }
 
 /// A node with a recorded proof that the source no longer defines (the plan is stale, or the
