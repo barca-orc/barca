@@ -19,6 +19,7 @@ import {
 } from './groupedPage'
 import type { ListNode, NodeState } from './types'
 import type { Failure } from './health'
+import { served } from './testdata/served'
 
 const tree = groupTree([
   { id: 'group:p.py:outer', name: 'Outer', description: '', members: ['group:p.py:inner', 'p.py:x'], output: 'p.py:x' },
@@ -27,7 +28,7 @@ const tree = groupTree([
 const asset = (id: string, kind: ListNode['kind'] = 'asset', inputs: string[] = []): ListNode =>
   ({ id, kind, freshness: 'always', env: [], file: 'p.py', line: 1, inputs })
 const assets = [asset('p.py:x'), asset('p.py:y'), asset('p.py:check__y', 'task', ['p.py:y']), asset('p.py:loose')]
-const state = (id: string, over: Partial<NodeState> = {}): NodeState => ({
+const state = (id: string, over: Partial<NodeState> = {}): NodeState => served({
   id, name: id.split(':')[1]!, kind: id.includes('check__') ? 'task' : 'asset', inputs: [], partitioned: false,
   cache: { state: id.includes('check__') ? 'always_runs' : 'cached', reason: 'materialized', detail: 'd' },
   last_materialization: null, shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null,

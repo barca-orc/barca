@@ -42,6 +42,7 @@ pub mod envelope;
 pub(crate) mod execution;
 pub mod freshness;
 pub mod gc;
+pub mod health;
 pub mod history_filter;
 pub mod http;
 mod incremental;
@@ -57,6 +58,7 @@ pub mod queries;
 mod recover;
 pub mod report;
 pub mod results;
+pub mod run_explanation;
 pub mod schedule;
 pub mod serve;
 #[cfg(test)]

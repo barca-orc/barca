@@ -9,10 +9,10 @@
 //! A scheduled task reuses cached upstream assets; `POST /run/{task}` does not.
 //!
 //! A tick is one run (RFC-0008): the scheduled node and every `Always` node below it or below
-//! a sensor the run polls ([`barca_core::freshness::tick_targets`]), a `Manual` node read as
-//! it is. A job whose ticks
-//! failed `max_failures` times in a row is skipped and reported `failing` until a node it
-//! failed on (or an input of one, or the scheduled node) succeeds in another run.
+//! an unscheduled sensor the run polls ([`barca_core::freshness::tick_targets`]), a `Manual`
+//! node read as it is. A job whose ticks failed `max_failures` times in a row is skipped and
+//! reported `failing` until a node it failed on (or an input of one, or the scheduled node)
+//! succeeds in another run.
 //!
 //! Semantics: cron is evaluated in the configured timezone (`--timezone`, local
 //! by default). On startup a job fires once if a tick elapsed while the daemon
@@ -117,22 +117,29 @@ fn skip_report(
 }
 
 /// Trigger the run for the tick of a due job at `epoch`: its node and the `Always` nodes below
-/// it and below the sensors the run polls, in one run. Returns the run id: the run joins the queue (`None` when it could not be
-/// recorded there; the error is printed).
+/// it and below the unscheduled sensors the run polls, in one run under `run_id`. Returns the
+/// run id: the run joins the queue (`None` when it could not be recorded there; the error is
+/// printed).
 ///
 /// A tick brings the nodes up to date, it does not force them: sensors upstream are polled,
 /// anything whose inputs changed is recomputed, and an asset whose inputs did not change is
 /// served from cache. The scheduled task itself always runs; a task below it fires only when
 /// it is out of date. The run's command follows the scheduled node's kind: `run` for a task,
 /// `get` for an asset or sensor.
-async fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<String> {
+async fn trigger(
+    state: &AppState,
+    job: &ScheduledJob,
+    epoch: i64,
+    run_id: String,
+) -> Option<String> {
     let command = match job.kind {
         NodeKind::Task => barca_core::outcome::RunCommand::Run,
         NodeKind::Asset | NodeKind::Sensor => barca_core::outcome::RunCommand::Get,
     };
     let targets = job.targets();
-    runs::start(
+    runs::start_as(
         state.clone(),
+        run_id,
         runs::RunSpec {
             command,
             targets: targets.clone(),
@@ -158,6 +165,28 @@ async fn trigger(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<Str
         );
     })
     .ok()
+}
+
+/// Fire `job`'s tick at `epoch`: record the decision, then [`trigger`] the run and name it on
+/// the record. The row is written before the run joins the queue, so the run's start and end
+/// always find it; a run that could not join leaves a fired tick with no run.
+async fn fire(
+    state: &AppState,
+    job: &ScheduledJob,
+    epoch: i64,
+    db_path: Option<&str>,
+) -> Option<String> {
+    let handle = db::generate_run_id();
+    if let Some(dbp) = db_path {
+        record_tick(dbp, job, epoch, db::TickDecision::Fired, Some(&handle)).await;
+    }
+    let started = trigger(state, job, epoch, handle).await;
+    if started.is_none()
+        && let Some(dbp) = db_path
+    {
+        record_tick(dbp, job, epoch, db::TickDecision::Fired, None).await;
+    }
+    started
 }
 
 /// Catch-up at startup, as of `now`: fire once each job whose scheduled tick elapsed while
@@ -211,7 +240,23 @@ async fn catch_up(
                     }
                     if paused_now {
                         record_skip(&mut book, job, None, now.timestamp(), "catch-up run");
+                        record_tick(
+                            db_path,
+                            job,
+                            now.timestamp(),
+                            db::TickDecision::Paused,
+                            None,
+                        )
+                        .await;
                     } else if book.failures(job) >= job.max_failures {
+                        record_tick(
+                            db_path,
+                            job,
+                            now.timestamp(),
+                            db::TickDecision::Failing,
+                            None,
+                        )
+                        .await;
                         barca_core::jsonlog::line(
                             barca_core::jsonlog::Level::Warning,
                             Some(&job.id),
@@ -229,7 +274,17 @@ async fn catch_up(
                             now.timestamp(),
                             "catch-up run",
                         );
-                    } else if let Some(handle) = trigger(state, job, now.timestamp()).await {
+                        record_tick(
+                            db_path,
+                            job,
+                            now.timestamp(),
+                            db::TickDecision::Skipped,
+                            Some(&handle),
+                        )
+                        .await;
+                    } else if let Some(handle) =
+                        fire(state, job, now.timestamp(), Some(db_path)).await
+                    {
                         barca_core::jsonlog::line(
                             barca_core::jsonlog::Level::Info,
                             Some(&job.id),
@@ -248,6 +303,47 @@ async fn catch_up(
         }
     }
     Ok(book)
+}
+
+/// How often the scheduler trims the tick record by age across every schedule
+/// ([`db::trim_ticks`]): the ticks of a schedule that no longer fires.
+const TICK_TRIM_EVERY_SECONDS: i64 = 3600;
+
+/// Record what the scheduler decided for `job`'s tick at `epoch` (#960): values it holds, one
+/// write, no read. Best-effort: a failed write is logged and does not fail the tick.
+async fn record_tick(
+    db_path: &str,
+    job: &ScheduledJob,
+    epoch: i64,
+    action: db::TickDecision,
+    other: Option<&str>,
+) {
+    let (skipped_for, run_id) = match action {
+        db::TickDecision::Skipped => (other, None),
+        db::TickDecision::Fired => (None, other),
+        db::TickDecision::Paused | db::TickDecision::Failing => (None, None),
+    };
+    let tick = db::NewTick {
+        schedule_id: &job.id,
+        scheduled_at: epoch,
+        action,
+        skipped_for,
+        run_id,
+    };
+    if let Err(e) = db::record_tick(db_path, tick).await {
+        barca_core::errln!("[barca] tick record write failed for {}: {e}", job.id);
+    }
+}
+
+/// Trim the tick record by age when the last trim is [`TICK_TRIM_EVERY_SECONDS`] old.
+async fn trim_ticks(db_path: &str, book: &mut Bookkeeping, epoch: i64) {
+    if epoch - book.ticks_trimmed_at < TICK_TRIM_EVERY_SECONDS {
+        return;
+    }
+    book.ticks_trimmed_at = epoch;
+    if let Err(e) = db::trim_ticks(db_path, epoch).await {
+        barca_core::errln!("[barca] tick record trim failed: {e}");
+    }
 }
 
 /// Record that `node_id` fired at `epoch` seconds. Best-effort durability.
@@ -413,6 +509,9 @@ pub async fn run_scheduler(state: AppState) {
         },
         None => Bookkeeping::default(),
     };
+    if let Some(dbp) = &db_path {
+        trim_ticks(dbp, &mut book, zone.now().timestamp()).await;
+    }
     publish_registry(&state, &jobs, &book);
 
     loop {
@@ -464,9 +563,16 @@ pub async fn run_scheduler(state: AppState) {
             match action {
                 TickAction::Paused(job) => {
                     record_skip(&mut book, job, None, epoch, "scheduled run");
+                    if let Some(dbp) = &db_path {
+                        record_tick(dbp, job, epoch, db::TickDecision::Paused, None).await;
+                    }
                 }
                 TickAction::Skip { job, handle } => {
                     record_skip(&mut book, job, Some(&handle), epoch, "scheduled run");
+                    if let Some(dbp) = &db_path {
+                        record_tick(dbp, job, epoch, db::TickDecision::Skipped, Some(&handle))
+                            .await;
+                    }
                 }
                 TickAction::Failing { job, failures } => {
                     barca_core::jsonlog::line(
@@ -478,9 +584,12 @@ pub async fn run_scheduler(state: AppState) {
                             job.id, job.max_failures
                         ),
                     );
+                    if let Some(dbp) = &db_path {
+                        record_tick(dbp, job, epoch, db::TickDecision::Failing, None).await;
+                    }
                 }
                 TickAction::Fire(job) => {
-                    let Some(handle) = trigger(&state, job, epoch).await else {
+                    let Some(handle) = fire(&state, job, epoch, db_path.as_deref()).await else {
                         continue;
                     };
                     barca_core::jsonlog::line(
@@ -499,6 +608,9 @@ pub async fn run_scheduler(state: AppState) {
         }
         if changed {
             publish_registry(&state, &jobs, &book);
+            if let Some(dbp) = &db_path {
+                trim_ticks(dbp, &mut book, epoch).await;
+            }
         }
     }
 }

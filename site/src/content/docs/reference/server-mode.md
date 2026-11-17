@@ -213,7 +213,10 @@ executed what it did (`run.plan_reasons`: never run, new keys, a failed last att
 code, input or env component changed, a refresh, a missing artifact), who asked for it
 (`principal`, the token of its request) and why (`trigger_reason`, the `reason` its
 `POST /runs` gave), and for a cancelled run who cancelled it and whether it had started
-(`cancellation`; [CLI Contract: history](/reference/cli-contract/#history)). `GET /runs/{run_id}?offset=N` pages through
+(`cancellation`; [CLI Contract: history](/reference/cli-contract/#history)). `explanation` says the same in words, as
+`barca history RUN_ID` prints it: the steps grouped by the reason they ran (`why`), the
+retries apart from the first attempts, the targets as a list and what became of each, and for
+a run in progress how far it is and an ETA at the rate so far. `GET /runs/{run_id}?offset=N` pages through
 the steps (`steps_page.next_offset`), and while a run goes it shows its newest 5,000 spooled
 lines in `logs`.
 
@@ -486,24 +489,24 @@ described at [Server API Endpoints](/reference/server-api-endpoints/).
 
 ### Data health
 
-Each row of `GET /state` carries `signals`: what the node's recorded results say about its data,
-computed by the server from facts the metadata DB holds (row counts its workers recorded, when
-each result was written), never by reading an artifact. An empty list means nothing does. Only
-assets have signals, in this order:
+Each row of `GET /state` and each node of `GET /nodes` carries what `barca status --json` does:
+`health` and `health_reason` (whether something needs doing about the node, and the rule that
+decided it), `signals` (what its recorded results say about its data: `empty`, `rows_changed`,
+`behind_input`) and `measured` (whether its rows were counted at all; `null` for a task or
+sensor). They are computed in barca from facts the metadata DB holds, never by reading an
+artifact, and are the same on every surface: [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health) and "Data
+signals and coverage", has the tables. `GET /nodes` also has `data_coverage` beside `summary`.
 
-| `kind` | When | Fields |
-|---|---|---|
-| `empty` | its latest successful result wrote no rows: for a partitioned node, some keys' latest successful results | `empty_keys` of `keys` (the keys whose latest result recorded a count; 1 of 1 without keys), `previous_empty_keys`: how many were empty before its newest run, `null` when no key had a counted result before it |
-| `rows_changed` | a latest successful result's row count differs from the one before it, same node and key, by more than half of it (any rows after an empty result count) | `rows` and `previous_rows` of `key` (`null` without keys), the key that moved the most relative to before; `changed_keys`: how many moved |
-| `behind_input` | its cache state is `unknown` (nothing else says it is behind, typically a `collect()` fan-in below a pending cutoff) and its latest successful result is older than the newest successful result of an asset it reads, from another run | `input` (the input with the newest result), `input_success_at`, `last_success_at` (UTC `YYYY-MM-DD HH:MM:SS`) |
-
-A count no worker recorded ([barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)) raises no signal. A signal
-stays until the next successful result of the node (or key) replaces the one it is about; there
-is no acknowledgement yet. A `stale`, `partial` or `blocked` node gets no `behind_input`: its
-state already says it will run.
+The server classifies per answer, on its clock and in its `--timezone`, so a schedule that
+misses its slot turns its node `behind` (`health_reason: "schedule_late"`) without a change to
+the database, and a paused schedule is never late. An empty `signals` on a row with `measured:
+false` says nothing was counted, not that the data is fine; the web UI states the coverage of
+the open scope ("7 of 556 measured") beside its causes.
 
 ```bash
 curl -s localhost:8274/state | jq '.[] | select(.signals != []) | {id, signals}'
+curl -s localhost:8274/state | jq 'map(select(.kind == "asset")) | {assets: length, measured: map(select(.measured)) | length}'
+curl -s localhost:8274/nodes | jq '.data_coverage'
 ```
 
 A scheduled node's row also has `prev_run`, the cron's most recent fire time at or before now,

@@ -139,10 +139,11 @@ stability; the row adds the keys and routes that go with it.
 | `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 ([barca pin and unpin](/reference/cli/pin/)): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key` | new in 0.42: every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, [barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)): which results are counted (frames, parquet footers) may widen after field use |
-| `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, the `why:`, `reason:` and `cancelled ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
+| `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
+| Health: `health`, `health_reason`, `signals` and `measured` of each node and `data_coverage` in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), the `health`, `health_reason`, `signals` and `measured` columns of `barca.nodes`, the `Health:` and `Data:` lines of the `barca status` table | new in 0.44 (#954, #957, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health)): the series that adds causes and expected times (#974) may add reasons, and `schedule_late` takes its final definition of late from #958 |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
-HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `signals`, `prev_run` and `late_since` (rows of `GET /state`, [Server Mode: a Shared Ledger and --server: Data health](/reference/server-mode/#data-health)), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
+HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `prev_run` and `late_since` (rows of `GET /state`, [Server Mode: a Shared Ledger and --server: Data health](/reference/server-mode/#data-health); `signals` moved from here onto every status node in 0.44), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
 
 ### Accepted exceptions
 
@@ -530,7 +531,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node |
 | `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
@@ -1521,6 +1522,10 @@ fetched) is still exit 3.
 <!-- BEGIN GENERATED schema status_unsynced -->
 | Key | Type | Present |
 |---|---|---|
+| `data_coverage` | object | always |
+| `data_coverage.assets` | integer | always |
+| `data_coverage.measured` | integer | always |
+| `data_coverage.suspect` | integer | always |
 | `disk_usage` | object | always |
 | `disk_usage.backup_bytes` | integer | always |
 | `disk_usage.budget_bytes` | integer | always |
@@ -1535,6 +1540,8 @@ fetched) is still exit 3.
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].health` | string | always |
+| `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
@@ -1549,6 +1556,7 @@ fetched) is still exit 3.
 | `nodes[].last_materialization.run_hash` | string | always |
 | `nodes[].last_materialization.size_bytes` | integer | always |
 | `nodes[].last_materialization.status` | string | always |
+| `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].shape` | object | always |
@@ -1556,6 +1564,7 @@ fetched) is still exit 3.
 | `nodes[].shape.keys[]` | string | always |
 | `nodes[].shape.rows` | integer | sometimes |
 | `nodes[].shape.type` | string | always |
+| `nodes[].signals` | array | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -1893,6 +1902,10 @@ counts every node even when `nodes` is truncated.
 <!-- BEGIN GENERATED schema status -->
 | Key | Type | Present |
 |---|---|---|
+| `data_coverage` | object | always |
+| `data_coverage.assets` | integer | always |
+| `data_coverage.measured` | integer | always |
+| `data_coverage.suspect` | integer | always |
 | `disk_usage` | object | always |
 | `disk_usage.backup_bytes` | integer | always |
 | `disk_usage.budget_bytes` | integer | always |
@@ -1908,6 +1921,8 @@ counts every node even when `nodes` is truncated.
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
 | `nodes[].env[]` | string | always |
+| `nodes[].health` | string | always |
+| `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
@@ -1924,6 +1939,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].last_materialization.run_hash` | string | always |
 | `nodes[].last_materialization.size_bytes` | integer \| null | always |
 | `nodes[].last_materialization.status` | string | always |
+| `nodes[].measured` | boolean \| null | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].partitions` | object | sometimes |
@@ -1942,6 +1958,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].shape.rows` | integer | sometimes |
 | `nodes[].shape.sample` | `<user value>` | always |
 | `nodes[].shape.type` | string | always |
+| `nodes[].signals` | array | always |
 | `nodes[].undeclared_env` | array | sometimes |
 | `nodes[].undeclared_env[]` | string | always |
 | `root` | string | always |
@@ -2005,6 +2022,10 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 <!-- BEGIN GENERATED schema status_problems -->
 | Key | Type | Present |
 |---|---|---|
+| `data_coverage` | object | always |
+| `data_coverage.assets` | integer | always |
+| `data_coverage.measured` | integer | always |
+| `data_coverage.suspect` | integer | always |
 | `disk_usage` | object | always |
 | `disk_usage.backup_bytes` | integer | always |
 | `disk_usage.budget_bytes` | integer | always |
@@ -2020,6 +2041,8 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].cache.run_hash` | string | sometimes |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].health` | string | always |
+| `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
@@ -2034,6 +2057,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].last_materialization.run_hash` | string | always |
 | `nodes[].last_materialization.size_bytes` | null | always |
 | `nodes[].last_materialization.status` | string | always |
+| `nodes[].measured` | boolean \| null | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].partitions` | object | sometimes |
@@ -2043,6 +2067,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].partitions.missing_keys[]` | string | always |
 | `nodes[].partitions.total` | integer | always |
 | `nodes[].shape` | null | always |
+| `nodes[].signals` | array | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2066,6 +2091,10 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 <!-- BEGIN GENERATED schema status_changed -->
 | Key | Type | Present |
 |---|---|---|
+| `data_coverage` | object | always |
+| `data_coverage.assets` | integer | always |
+| `data_coverage.measured` | integer | always |
+| `data_coverage.suspect` | integer | always |
 | `disk_usage` | object | always |
 | `disk_usage.backup_bytes` | integer | always |
 | `disk_usage.budget_bytes` | integer | always |
@@ -2083,6 +2112,8 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].health` | string | always |
+| `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
@@ -2097,6 +2128,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].last_materialization.run_hash` | string | always |
 | `nodes[].last_materialization.size_bytes` | integer | always |
 | `nodes[].last_materialization.status` | string | always |
+| `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].shape` | null \| object | always |
@@ -2104,6 +2136,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].shape.keys[]` | string | always |
 | `nodes[].shape.rows` | integer | sometimes |
 | `nodes[].shape.type` | string | always |
+| `nodes[].signals` | array | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |
@@ -2279,8 +2312,29 @@ changed since the last success; `subject` is the component as `barca status` wor
 and `evicted` (a valid result whose file is gone), `task` and `sensor` (they always run) and
 `not_examined` (no cache hit, not looked up: a server's ledger answered the lookup, or more than
 10,000 keys of one node ran in one phase). `example` is the first node executed for the reason.
-The table prints the first eight reasons after the `steps:` line as `why: N steps of M nodes
-were not cache hits`, then one line per reason; `reason:` and `cancelled ...` lines follow
+`explanation` (experimental, #956) is the run in words, derived from those recorded facts by
+the same code that answers `GET /runs/{run_id}` (its `explanation`), so the table, the JSON
+and the web UI say the same: `targets` (a list: the job's node ids, else the targets as given;
+empty for a run of every asset; `run.target` stays the string as given), `requested_by`
+(`api · token:ci-bot`), `attempts` (`29 steps, no retries`, `19,399 steps, 62 retries`:
+retries are counted apart from each step's first attempt; `null` before an attempt is
+recorded), `steps` (`7 ok · 1 failed · 2 skipped · 0 cached`), `target_outcomes` (one line per
+target when the server rebuilt the run's plan, otherwise empty), `cancellation` (`{headline,
+detail, run}` or `null`), `why`, `progress` (`{done, total, percent, executed, cached,
+eta_seconds, eta}` for a run in progress, otherwise `null`) and `slowest` (at most five
+`{node_id, seconds, keys}`). `why` is `{headline, groups, omitted, partial}`: the run's steps
+grouped by the reason they ran, most steps first. `headline` names the largest three
+(`29 steps ran: 27 sensors (always run), 2 never run`), or says what there is to say when
+there are no groups (`Every step was served from cache.`). Each of `groups[]` is `{category,
+label, steps, rows}`; each of `rows[]` is `{subject, counts, nodes, steps, share, example,
+example_text, line}`, where `counts` names what was counted (`27 nodes` when each node ran one
+step, else `5,000 steps of 1 node`) and `line` is the row in one line (`27 nodes, e.g.
+poll_inbox`). A step with several changed components counts under each, so a group's `steps`
+is capped at the run's and groups can add up to more. The words of `explanation` may change;
+`run.plan_reasons`, `run.attempts`, `run.retries` and `run.cancellation` are the facts to
+parse. The table prints `explanation.attempts` on its first line, and after the `steps:` line
+a `target:` line per target outcome and `why:` with the headline, then each group's label and
+under it its rows (the first eight); `reason:` and `cancelled: ...` lines follow
 `triggered by`. `hint`, present when a step
 failed, is the `barca logs RUN_ID --step STEP --stream stderr` command for the first failed
 step, with the `--server`, `--local` and `--env` this command was given. An unknown run id is
@@ -2367,6 +2421,39 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 <!-- BEGIN GENERATED schema history_run -->
 | Key | Type | Present |
 |---|---|---|
+| `explanation` | object | always |
+| `explanation.attempts` | string | always |
+| `explanation.cancellation` | null | always |
+| `explanation.progress` | null | always |
+| `explanation.requested_by` | string | always |
+| `explanation.slowest` | array | always |
+| `explanation.slowest[]` | object | always |
+| `explanation.slowest[].keys` | integer | always |
+| `explanation.slowest[].node_id` | string | always |
+| `explanation.slowest[].seconds` | number | always |
+| `explanation.steps` | string | always |
+| `explanation.target_outcomes` | array | always |
+| `explanation.targets` | array | always |
+| `explanation.targets[]` | string | always |
+| `explanation.why` | object | always |
+| `explanation.why.groups` | array | always |
+| `explanation.why.groups[]` | object | always |
+| `explanation.why.groups[].category` | string | always |
+| `explanation.why.groups[].label` | string | always |
+| `explanation.why.groups[].rows` | array | always |
+| `explanation.why.groups[].rows[]` | object | always |
+| `explanation.why.groups[].rows[].counts` | string | always |
+| `explanation.why.groups[].rows[].example` | string | always |
+| `explanation.why.groups[].rows[].example_text` | string | always |
+| `explanation.why.groups[].rows[].line` | string | always |
+| `explanation.why.groups[].rows[].nodes` | integer | always |
+| `explanation.why.groups[].rows[].share` | number | always |
+| `explanation.why.groups[].rows[].steps` | integer | always |
+| `explanation.why.groups[].rows[].subject` | null | always |
+| `explanation.why.groups[].steps` | integer | always |
+| `explanation.why.headline` | string | always |
+| `explanation.why.omitted` | integer | always |
+| `explanation.why.partial` | boolean | always |
 | `hint` | string | always |
 | `run` | object | always |
 | `run.attempts` | integer | always |
@@ -2956,6 +3043,10 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 <!-- BEGIN GENERATED schema status_bytes_changed -->
 | Key | Type | Present |
 |---|---|---|
+| `data_coverage` | object | always |
+| `data_coverage.assets` | integer | always |
+| `data_coverage.measured` | integer | always |
+| `data_coverage.suspect` | integer | always |
 | `disk_usage` | object | always |
 | `disk_usage.backup_bytes` | integer | always |
 | `disk_usage.budget_bytes` | integer | always |
@@ -2970,6 +3061,8 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].cache.run_hash` | string | always |
 | `nodes[].cache.state` | string | always |
 | `nodes[].env` | array | always |
+| `nodes[].health` | string | always |
+| `nodes[].health_reason` | string | always |
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].kind` | string | always |
@@ -2988,10 +3081,12 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].last_materialization.run_hash` | string | always |
 | `nodes[].last_materialization.size_bytes` | integer | always |
 | `nodes[].last_materialization.status` | string | always |
+| `nodes[].measured` | boolean | always |
 | `nodes[].name` | string | always |
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].shape` | object | always |
 | `nodes[].shape.type` | string | always |
+| `nodes[].signals` | array | always |
 | `root` | string | always |
 | `summary` | object | always |
 | `summary.always_runs` | integer | always |

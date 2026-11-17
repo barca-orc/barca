@@ -253,6 +253,22 @@ every database from before 0.29.2 (#629):
   in the queue once, counted in `spec.kill_requeues`, and interrupted the next time. Older
   binaries read `draining` as `queued`. Only `barca serve` writes it; readers of a database without it find the
   queue empty, and older binaries ignore it.
+- `schedule_ticks (schedule_id, scheduled_at, action, skipped_for, run_id, started_at,
+  finished_at, run_status, queue_wait_seconds, rebuilt, up_to_date, failed, not_reached,
+  targets)` (0.44.0, #960, [health](../behavior/health.md), "What a tick records"), primary key
+  `(schedule_id, scheduled_at)`, `WITHOUT ROWID`: what the scheduler of `barca serve` decided
+  for each due tick of a scheduled node. `scheduled_at` is the slot (INTEGER unix seconds);
+  `action` is `fired`, `paused`, `skipped` or `failing`; `skipped_for` the run in flight of a
+  skipped tick; `run_id` the run a fired tick started. The run adds `started_at` and
+  `finished_at` (REAL unix seconds), `queue_wait_seconds` (REAL, from `run_queue.queued_at` to
+  its start), `run_status` (as `runs.status`) and, at its end, how many of the tick's targets
+  were `rebuilt`, `up_to_date`, `failed` and `not_reached` (INTEGER) with `targets`, a JSON
+  array of `[node id, outcome]`. Every column after `action` is NULL until its event. The
+  writers bound it: per schedule the newest 1,000 rows and none older than 14 days, and
+  `targets` only on the newest 20 fired rows of a schedule (NULL on older ones, whose counts
+  stay). It has no index beyond its key. It is evidence, never read by a run: a database
+  without it has no ticks, a plain CLI run and a `--read-only` server never write it, and
+  older binaries ignore it.
 - `server_state (key, value)` (0.29.4), primary key `key`: settings `barca serve` keeps across
   restarts. `queue_paused_at` (unix seconds) is present while the run queue is paused.
 - `sink_publications (node_id, sink, run_hash, host, run_id, published_at)` (0.34.0, #662),

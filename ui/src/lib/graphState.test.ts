@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { graphState } from './graphState'
 import { CACHE_STATES, cacheStateLabel } from './cacheStateDisplay'
 import type { NodeState } from './types'
-const state = (cache: NodeState['cache']['state'], last: 'failed' | 'success' | null = 'success'): NodeState => ({ id: 'a', name: 'a', kind: 'asset', inputs: [], partitioned: false, cache: { state: cache, reason: 'no_record', detail: 'reason' }, last_materialization: last ? { status: last, created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: last === 'failed' ? 'boom' : null } : null, shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, prev_run: null, late_since: null, signals: [] })
+import { served } from './testdata/served'
+const state = (cache: NodeState['cache']['state'], last: 'failed' | 'success' | null = 'success'): NodeState => served({ id: 'a', name: 'a', kind: 'asset', inputs: [], partitioned: false, cache: { state: cache, reason: 'no_record', detail: 'reason' }, last_materialization: last ? { status: last, created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: last === 'failed' ? 'boom' : null } : null, shape: null, env: [], durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null, prev_run: null, late_since: null, signals: [] })
 describe('graph state', () => {
   it.each(CACHE_STATES)('%s is shown in plain words, with the server\'s detail', (cache) => {
     expect(graphState(state(cache))).toMatchObject({ kind: 'cache', state: cache, label: cacheStateLabel(cache), hint: 'reason', lastFailed: false })

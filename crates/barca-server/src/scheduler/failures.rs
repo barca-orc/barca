@@ -25,6 +25,8 @@ pub(super) struct Bookkeeping {
     pub(super) failures: HashMap<String, db::ScheduleFailures>,
     /// Handles of tick runs whose outcome has been counted.
     pub(super) counted: HashSet<String>,
+    /// When the tick record was last trimmed by age (unix seconds); 0 before the first trim.
+    pub(super) ticks_trimmed_at: i64,
 }
 
 impl Bookkeeping {

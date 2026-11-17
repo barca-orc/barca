@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { served } from './testdata/served'
 import type { CacheStatus, NodeState } from './types'
 import { buildRows } from './assetTable'
 import { nodeStateDisplay } from './cacheStateDisplay'
@@ -20,7 +21,7 @@ function node(
   over: Partial<NodeState> & { state?: CacheStatus['state']; lastAt?: string; failed?: boolean } = {},
 ): NodeState {
   const { state = 'cached', lastAt, failed = false, ...rest } = over
-  return {
+  return served({
     id,
     name: id.split(':').pop()!,
     kind: 'asset',
@@ -46,7 +47,7 @@ function node(
     next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0,
     running: null,
     ...rest,
-  }
+  })
 }
 
 const rows = buildRows(

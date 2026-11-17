@@ -2,9 +2,15 @@
 
 ## Scope and status
 
-Specification version: 1. Status: approved intent, not yet implemented. Nothing below is on
-`main`: no field, enum value, route, flag or table named here exists until the issue that owns
-it lands (the 0.44.0 series, [#974](https://github.com/barca-orc/barca/issues/974)).
+Specification version: 1. Status: approved intent, implemented in part. The 0.44.0 series
+([#974](https://github.com/barca-orc/barca/issues/974)) lands it issue by issue; a field, enum
+value, route, flag or table named here exists only once the issue that owns it has landed.
+Implemented: "Health from existing state" (#954); of "Node fields and where they appear",
+`health`, `health_reason`, `signals`, `measured` and `data_coverage` (#957), experimental in
+the CLI contract; and the tick record ("What a tick records", #960), as the `schedule_ticks`
+table and its two reads, which nothing reads yet. Everything else below is intent: `cause`,
+`root`, `refresh_path`, the times, `gap_seconds`, `as_of`, the rollup, the new tables and the
+query route do not exist yet, and the `checked_up_to_date` reason is not among the values served.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
 health word, its cause bucket and root, its refresh path, when it is expected fresh or
 rechecked, the freshness gap, the rollup tree, what a tick records, the `barca.schedules`,
@@ -77,7 +83,8 @@ happens at one instant, `as_of`, carried by every response that holds a derived 
 
 ### Health from existing state (#954)
 
-Ported from `ui/src/lib/nodeHealth.ts` without change of meaning. Inputs: the node's
+Implemented in `crates/barca-core/src/health.rs` (`classify`), ported from the web UI's
+TypeScript without change of meaning. Inputs: the node's
 `NodeStatus`, the graph, the node's data signals, and whether its schedule is late.
 
 `last_attempt_failed` is `last_materialization.status == "failed"` or `partitions.failed > 0`.
@@ -87,7 +94,9 @@ an input whose last attempt failed is the answer; an input that is itself neithe
 `cached` nor `always_runs` passes the question to its own inputs. Only a node that is neither
 failing, `cached` nor `always_runs` can be blocked. A pinned asset (`barca pin`) is never
 blocked and stops the walk. This walk passes through `unknown` nodes, so a node waiting on a
-cutoff below a failure is blocked by the failure.
+cutoff below a failure is blocked by the failure. As implemented, "declared order" is the
+order of the node's `inputs` in `NodeStatus`, which is sorted by node id: two failing inputs
+answer with the first by id.
 
 The first matching row decides `health`; `health_reason` (string enum) names the row.
 
@@ -268,7 +277,11 @@ All are fields of `NodeStatus`, so one struct serves every surface.
 
 `measured` is whether the asset's latest successful result has a recorded row count (for a
 partitioned asset, any current key). An unmeasured asset raises no signal and is never `ok`
-for data: it is "not measured".
+for data: it is "not measured". As implemented, a partitioned asset is measured when the latest
+successful result of any key recorded a count, a key no longer in the key set included (the
+per-key row facts of the metadata database do not know the current key set). `data_coverage`
+counts assets only; `suspect` is the measured assets with an `empty` or `rows_changed` signal,
+whatever their `health` (a failing asset whose last good result was empty is still counted).
 
 `barca status --json` adds, beside `summary`: `as_of`; `rollup`, the root entry of the tree
 below; and `data_coverage`: `{"assets": 556, "measured": 7, "suspect": 0}`. Without a server,
@@ -312,9 +325,11 @@ targets) and never collides with `GET /health`, which is liveness.
 
 ### What a tick records (#960)
 
-One bounded table in the metadata database, written by the scheduler from values it already
-holds; no read is added to the tick path. `freshness_proofs` is not this table. Logical
-content, one row per due tick of a schedule:
+Implemented. One bounded table in the metadata database, `schedule_ticks`
+([schema](../interfaces/metadata-schema.md), [owner](../../crates/barca-db/src/db/ticks.rs)),
+written by the scheduler and the run recorder of `barca serve` from values they already hold;
+no read is added to the tick path. `freshness_proofs` is not this table. Logical content, one
+row per due tick of a schedule:
 
 | Field | Content |
 | --- | --- |
@@ -322,14 +337,36 @@ content, one row per due tick of a schedule:
 | `action` | `fired`, `paused`, `skipped` (a run of the node in flight) or `failing` (past `max_failures`) |
 | `skipped_for` | the run in flight, for `skipped` |
 | `run_id`, `started_at`, `finished_at`, `run_status` | the run a fired tick started |
-| `queue_wait_seconds` | from the slot to the run's start; `null` until it starts |
+| `queue_wait_seconds` | from the run joining the run queue (`run_queue.queued_at`) to its start; `null` until it starts |
 | per target of a fired tick | `rebuilt`, `up_to_date`, `failed` or `not_reached` |
 
-A polled sensor is `rebuilt` when its observation changed and `up_to_date` otherwise; a task
-that fired is `rebuilt`. `not_reached` covers a target a failure upstream, a cancellation or
-the run's end kept the run from deciding. Retention: per schedule the newest 1,000 ticks and
-none older than 14 days; per-target outcomes for the newest 20 fired ticks of each schedule,
-counts only for older ones. Trimming happens on write.
+Three writes, each one transaction: the decision, when the scheduler makes it (the row names
+the run before the run can start); the run's start, when it leaves the queue; the run's end,
+with the outcomes. A startup catch-up records its decision at the time it is made, the slot
+its run carries. A fired tick whose run could not join the queue has no `run_id`. A run put
+back in the queue by a draining server records its latest start; a run its server was killed
+under ends its tick as its run row ends (`interrupted`, or `error` for a run that never wrote
+one) with every target `not_reached`. A plain CLI run, a run someone asked a server for and a
+`--read-only` server write nothing.
+
+Outcomes come from the run's own step results: a step that executed is `rebuilt` (a task that
+fired, a partitioned node with at least one key computed), a cache hit `up_to_date`, a failed
+step `failed`. `not_reached` covers a target a failure upstream, a cancellation or the run's
+end kept the run from deciding. A partitioned target counts once, by its worst key.
+
+Known limitation: a polled sensor is recorded `rebuilt` whether or not its observation
+changed. The intent is `up_to_date` for an unchanged observation; a run's step results do not
+carry that today, and the writer adds no read to learn it.
+
+Retention: per schedule the newest 1,000 ticks and none older than 14 days; per-target outcomes
+for the newest 20 fired ticks of each schedule, counts only for older ones. Trimming happens on
+write, inside the write's transaction; the ticks of a schedule that no longer fires are trimmed
+by age at scheduler startup and about hourly while ticks are recorded.
+
+Reads (`barca_core::db`): `ticks_for_schedule(db_path, schedule_id, limit)`, newest first, and
+`tick_outcomes_for_node(db_path, node_id, limit)`, what the newest finished fired ticks that
+still hold their target list did with one node, across schedules. Both answer empty for a
+database without the table.
 
 ### Tables (#965)
 
@@ -432,8 +469,12 @@ the rollup by group, and the top roots.
 
 ## Acceptance and evidence
 
-Nothing here is implemented, so nothing below passes yet. Each issue lands its scenario with
-the code and replaces the matching source link.
+Each issue lands its scenario with the code and replaces the matching source link. Passing
+today: #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
+test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
+the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)) and the #960 row. The rest
+do not pass yet.
 
 | Scenario | Issue |
 | --- | --- |
@@ -442,7 +483,7 @@ the code and replaces the matching source link.
 | A project with 7 of 556 assets counted reads "7 of 556 measured" in status JSON and the UI | #957 |
 | A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late | #958 |
 | Re-adding a derived word in TypeScript fails CI | #959 |
-| A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960 |
+| A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
 | A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961 |
 | Estimates within the stated error on the seeded server simulation; a node below a pending cutoff has `recheck_at` only | #962 |
 | On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963 |
@@ -451,13 +492,22 @@ the code and replaces the matching source link.
 | A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972 |
 | One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973 |
 
-Sources the rules are ported from, until each is deleted by its issue:
-[node health](../../ui/src/lib/nodeHealth.ts), [health tree](../../ui/src/lib/healthTree.ts),
-[causes](../../ui/src/lib/causes.ts), [data signals](../../crates/barca-server/src/signals.rs),
+Sources the rules are ported from, until each is deleted by its issue (node health and the
+data signals are deleted: their rules are `crates/barca-core/src/health.rs`):
+[health tree](../../ui/src/lib/healthTree.ts), [causes](../../ui/src/lib/causes.ts),
 [tick targets](../../crates/barca-core/src/freshness.rs),
 [status](../../crates/barca-core/src/status.rs), [tables](../../crates/barca-core/src/sql/tables.rs).
 
 ## Open questions and gaps
+
+- Row 6 reads a provisional late (`health::schedule_late`): the grace alone, without the
+  typical queue wait, evaluated wherever status is classified. On a machine without a server
+  that is this machine's clock and time zone against the last tick the metadata database
+  holds, so a schedule no scheduler is firing reads `behind`, `schedule_late`. #958 replaces
+  it with the one definition.
+- The web UI still attributes each blocked node to its failing node, and sums health counts
+  and data coverage per scope, in TypeScript, from the served `health` and `measured`. `root`
+  (#963) and the rollup (#955) replace both.
 
 - Which nodes a tick reaches when a polled sensor changes below-`Always` assets (#952) is
   unresolved; this document takes the walk's answer and adds no rule of its own.

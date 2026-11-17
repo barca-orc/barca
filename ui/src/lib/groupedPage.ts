@@ -21,7 +21,7 @@ import {
   type EntrySort,
   type GroupTree,
 } from './groups'
-import type { Health } from './nodeHealth'
+import type { Health } from './healthDisplay'
 import { consumersOf, healthCounts, isFailed, needsAttention, scopeAge, type Failure } from './health'
 import { GRAPH_LIMIT, lineage } from './lineage'
 import { inPipeline, pipelineName, sourceFile } from './pipeline'

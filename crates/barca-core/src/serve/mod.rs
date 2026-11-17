@@ -7,6 +7,7 @@ pub mod capacity;
 pub mod claims;
 mod host;
 pub mod run_queue;
+pub mod ticks;
 
 pub use crate::config::AuthMode;
 pub use host::ServeHost;

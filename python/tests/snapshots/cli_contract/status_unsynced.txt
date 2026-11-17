@@ -1,4 +1,8 @@
 # barca status pipeline.py --json  (stdout, exit 0)
+data_coverage : object
+data_coverage.assets : integer
+data_coverage.measured : integer
+data_coverage.suspect : integer
 disk_usage : object
 disk_usage.backup_bytes : integer
 disk_usage.budget_bytes : integer
@@ -13,6 +17,8 @@ nodes[].cache.reason : string
 nodes[].cache.run_hash : string
 nodes[].cache.state : string
 nodes[].env : array
+nodes[].health : string
+nodes[].health_reason : string
 nodes[].id : string
 nodes[].inputs : array
 nodes[].inputs[] : string
@@ -27,6 +33,7 @@ nodes[].last_materialization.rows : null
 nodes[].last_materialization.run_hash : string
 nodes[].last_materialization.size_bytes : integer
 nodes[].last_materialization.status : string
+nodes[].measured : boolean
 nodes[].name : string
 nodes[].partitioned : boolean
 nodes[].shape : object
@@ -34,6 +41,7 @@ nodes[].shape.keys : array  (optional)
 nodes[].shape.keys[] : string
 nodes[].shape.rows : integer  (optional)
 nodes[].shape.type : string
+nodes[].signals : array
 root : string
 summary : object
 summary.always_runs : integer

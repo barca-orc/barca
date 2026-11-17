@@ -383,6 +383,26 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
         s.always_runs
     )
     .unwrap();
+    // Health beside the cache states: the words of the nodes listed, most severe first, and
+    // how much of the scope's data was measured (never "no suspect data" alone).
+    let words: Vec<String> = crate::health::Health::ALL
+        .iter()
+        .filter_map(|h| {
+            let n = result.nodes.iter().filter(|node| node.health == *h).count();
+            (n > 0).then(|| format!("{n} {}", h.word()))
+        })
+        .collect();
+    if !words.is_empty() {
+        let listed = if filter.is_some() {
+            " (nodes listed)"
+        } else {
+            ""
+        };
+        writeln!(&mut rendered, "Health{listed}: {}", words.join(", ")).unwrap();
+    }
+    if result.data_coverage.assets > 0 {
+        writeln!(&mut rendered, "Data: {}", result.data_coverage.line()).unwrap();
+    }
     let usage = &result.disk_usage;
     let bytes = |n: Option<u64>| {
         n.map(crate::gc::size::human)

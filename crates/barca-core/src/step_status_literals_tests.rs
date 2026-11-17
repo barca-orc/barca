@@ -17,6 +17,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "*",
         "the cache-state vocabulary shares three spellings",
     ),
+    (
+        "health.rs",
+        "*",
+        "the health vocabulary shares three spellings (`blocked`, `partial`, `cached`)",
+    ),
     ("parse.rs", "partial", "Python's functools.partial"),
     (
         "io_loop.rs",
@@ -44,9 +49,19 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the verb of the multi-target summary line",
     ),
     (
+        "run_explanation.rs",
+        "ran",
+        "the verb of a run's `why` headline",
+    ),
+    (
         "telemetry/datadog.rs",
         "skipped",
         "a telemetry run status: a serve tick that started no run",
+    ),
+    (
+        "db/ticks.rs",
+        "skipped",
+        "a tick action: a due tick held back for a run in flight",
     ),
 ];
 

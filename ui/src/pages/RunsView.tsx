@@ -19,7 +19,7 @@ import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
 import { outcomeResult, parseOutcome, runGlyph, runIsLive, runLabel, triggeredByLabel } from '@/lib/runs'
 import { statusGlyph } from '@/lib/status'
-import { NO_STEPS_OPEN, activityBarLabel, activityTicks, canLoadMore, failedChipCount, hourLabel, runActivity, runFailed, runFailureLine, runNodeOutcome, runNodeTime, runProgress, runRowError, runStepRows, runTargetLines, runViewSteps, runsCountLabel, stepName, toggleStepsOpen, visibleRuns, type RunActivity, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
+import { NO_STEPS_OPEN, activityBarLabel, activityTicks, canLoadMore, failedChipCount, hourLabel, runActivity, runFailed, runFailureLine, runNodeOutcome, runNodeTime, runProgress, runRowError, runStepRows, runsCountLabel, stepName, toggleStepsOpen, visibleRuns, type RunActivity, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { RunList, RunNodeSummary, RunStep, RunView } from '@/lib/types'
 
 /** A step's recorded error: its headline in words, the frames below it in mono, paths short and wrapping at `/`. */
@@ -278,13 +278,16 @@ function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: Run
   </div>
 }
 
+/** How many of a run's targets its panel lists by name. */
+const TARGETS_SHOWN = 12
+
 function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: RunView; eventGap: boolean; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void }) {
   const [logStep, setLogStep] = useState<string | null>(null)
   const outcome = parseOutcome(data.outcome)
   const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
   const result = outcomeResult(outcome)
   const nodes = data.steps_page?.nodes ?? []
-  const targets = runTargetLines(data, nodes)
+  const { targets, target_outcomes: outcomes, steps: stepsLine } = data.explanation
   const summarized = useMemo(() => new Set<RunStep>(failedSteps(data).slice(0, SUMMARY_STEPS)), [data])
   const logLines = useMemo(() => data.logs.map(log => ({ nodeId: log.node_id, text: log.line, stream: log.stream, ts: log.ts })), [data.logs])
   return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
@@ -297,14 +300,21 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
         {!summarized.size && !runSummaryError(data) && <Fact label="Status"><StatusBadge size="sm" glyph={runGlyph(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} /></Fact>}
         <Fact label="Trigger">{triggeredByLabel(data.triggered_by)}</Fact>
         <Fact label="Command"><code>{data.command}</code></Fact>
-        <Fact label="Target" wide>{data.target ?? 'all assets'}</Fact>
+        <Fact label={targets.length > 1 ? `Targets (${targets.length.toLocaleString()})` : 'Target'} wide>
+          {targets.length === 0
+            ? 'all assets'
+            : <ul className="barca-run-targets">
+                {targets.slice(0, TARGETS_SHOWN).map((id) => <li key={id} title={id}>{shortName(id)}</li>)}
+                {targets.length > TARGETS_SHOWN && <li className="barca-muted">and {(targets.length - TARGETS_SHOWN).toLocaleString()} more</li>}
+              </ul>}
+        </Fact>
         <Fact label="Started"><Age at={data.started_at} /></Fact>
         <Fact label="Finished"><Age at={data.finished_at} /></Fact>
         <Fact label="Duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</Fact>
-        <Fact label="Steps">{runViewSteps(data, nodes)}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</Fact>
+        <Fact label="Steps">{stepsLine}{data.steps_total !== null && <span className="barca-cell-sub"> · {plural(data.steps_total, 'node')} planned</span>}</Fact>
       </dl>
       {/* What became of the target: unless the one line would repeat the summary's failure. */}
-      {!(summarized.size > 0 && targets.length === 1) && targets.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
+      {!(summarized.size > 0 && outcomes.length === 1) && outcomes.map((line) => <p key={line} className="barca-run-target-line">{line}</p>)}
       {/* The error itself is in the summary above, once. */}
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>

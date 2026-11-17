@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { useAssets } from './useAssets'
 import { useGroups } from './useGroups'
-import { usePinNotes } from './usePins'
 import { useWholeState } from './useAssetStates'
 import { dataSignalSets, type DataSignalSets } from '@/lib/dataSignals'
 import { buildHealthTree, type HealthTree } from '@/lib/healthTree'
@@ -26,7 +25,6 @@ export function useHealthTree(pipeline: string | null, fresher: readonly NodeSta
   const whole = useWholeState()
   const assets = useAssets()
   const groups = useGroups()
-  const pins = usePinNotes()
   const states = useMemo(() => {
     const byId = new Map((whole.data ?? []).map((s) => [s.id, s]))
     for (const s of fresher) byId.set(s.id, s)
@@ -39,8 +37,8 @@ export function useHealthTree(pipeline: string | null, fresher: readonly NodeSta
   )
   const signals = useMemo(() => dataSignalSets(states), [states])
   const tree = useMemo(
-    () => buildHealthTree({ states, graph, groups: groupList, pinned: pins, suspect: new Set(signals.suspect.keys()), late: new Set(signals.behind.keys()) }),
-    [states, graph, groupList, pins, signals],
+    () => buildHealthTree({ states, graph, groups: groupList }),
+    [states, graph, groupList],
   )
   return { tree, states, signals, loaded: !!whole.data }
 }

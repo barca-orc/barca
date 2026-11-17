@@ -39,15 +39,23 @@ the graph, the map) counts the same health per node, so they agree. Each node ha
 | Health | What it means |
 |---|---|
 | `failing` | Its own last attempt failed: a root cause |
-| `blocked` | A failing node upstream keeps it from running; it names that node |
+| `blocked` | Something upstream keeps it from being brought up to date: a failing node, which it names |
 | `suspect data` | Its last run succeeded, but the output looks wrong: it wrote 0 rows (a partitioned asset: some keys did), its row count changed by more than half, or it is older than an input |
 | `behind` | Stale, partly computed or out of sync, or a schedule that missed its slot |
-| `waiting` | barca cannot decide yet: a cutoff or sensor upstream has not reported. Expected |
+| `undecided` | barca cannot decide yet: a cutoff or sensor upstream has not reported. Expected |
 | `never run` | Nothing recorded |
 | `ok` | Up to date, or a task or sensor whose last run succeeded |
 
+The words are barca's, not the page's: each node's `health` is computed once by barca and is
+the same in `barca status --json`, the server's API and `barca.nodes` in `barca sql`
+([Health](/reference/cli/status-fields/#health)); the page only draws it.
+
 The data signals behind `suspect data` come from row counts barca records for every tabular
 result ([Row counts](/reference/cli/status-fields/#row-counts)); a node's panel lists them under its state.
+A signal can only be raised for a result whose rows were counted, so the causes of a scope end
+with its coverage, for example `Data: 7 of 556 measured`: an asset that was not measured is
+not measured, never fine
+([Data signals and coverage](/reference/cli/status-fields/#data-signals-and-coverage)).
 
 ## Finding your way
 

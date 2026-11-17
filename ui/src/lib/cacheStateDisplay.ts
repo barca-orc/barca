@@ -53,8 +53,8 @@ const DISPLAY = {
   partial: { word: 'partial', label: 'partial', tone: 'warning', glyph: 'partial' },
   unsynced: { word: 'unsynced', label: 'unsynced', tone: 'warning', glyph: 'unsynced' },
   // `unknown` is the CLI's word: barca cannot say yet, because a cutoff or sensor upstream has
-  // not decided. Expected, so the UI says what the node is doing: waiting.
-  unknown: { word: 'unknown', label: 'waiting', tone: 'neutral', glyph: 'unknown' },
+  // not decided. The one word for it on every surface is `undecided` (the health word).
+  unknown: { word: 'unknown', label: 'undecided', tone: 'neutral', glyph: 'unknown' },
   never_run: { word: 'never_run', label: 'never run', tone: 'neutral', glyph: 'never_run' },
   always_runs: { word: 'always_runs', label: 'succeeded', tone: 'success', glyph: 'fresh' },
   cached: { word: 'cached', label: 'fresh', tone: 'success', glyph: 'fresh' },
@@ -145,6 +145,6 @@ export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean;
  * materialization's status, or (a partitioned node's last materialization is one key) failed
  * keys. A fact beside `cache.state`, never a replacement for it.
  */
-export function lastAttemptFailed(node: Pick<NodeState, 'last_materialization' | 'partitions'>): boolean {
-  return node.last_materialization?.status === 'failed' || (node.partitions?.failed ?? 0) > 0
+export function lastAttemptFailed(node: Pick<NodeState, 'health'>): boolean {
+  return node.health === 'failing'
 }

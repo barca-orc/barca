@@ -108,6 +108,23 @@ set closed under both steps. Nothing else is touched.
 A changed `collect()` consumer needs all applicable inputs. Explicit partition selection does
 not promise a partial collect over selected keys.
 
+### The tick record
+
+What a tick decided is recorded, not only what it computed (#960). The scheduler of
+`barca serve` writes one row of `schedule_ticks` per due tick of a schedule: `fired`, `paused`,
+`skipped` (a run of the node in flight, named) or `failing`. The run a fired tick started adds
+its start, its wait in the run queue and, at its end, its status and what it did with each of
+the tick's targets: `rebuilt` (the step executed), `up_to_date` (a cache hit, which writes no
+materialization), `failed` or `not_reached`. So a tick that found everything fresh and a tick
+that never happened leave different evidence.
+
+The table is bounded by its writers (per schedule the newest 1,000 ticks, none older than 14
+days, target lists on the newest 20 fired ticks) and is evidence only: no run reads it, and
+freshness decisions never depend on it. `freshness_proofs` is a different table: derived
+witnesses for incremental publication, rewritten per generation. Fields, write points, the
+sensor limitation and the reads are in [health](health.md) ("What a tick records"); columns in
+the [metadata schema](../interfaces/metadata-schema.md).
+
 ## Invariants
 
 - **INV-OBS-01:** An explicit changed signal can invalidate a consumer without different data bytes.

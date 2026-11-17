@@ -3,6 +3,8 @@ import type { BytesChange } from "./BytesChange";
 import type { CacheStatus } from "./CacheStatus";
 import type { DataSignal } from "./DataSignal";
 import type { Durations } from "./Durations";
+import type { Health } from "./Health";
+import type { HealthReason } from "./HealthReason";
 import type { LastMaterialization } from "./LastMaterialization";
 import type { LastRun } from "./LastRun";
 import type { NodeRunning } from "./NodeRunning";
@@ -33,11 +35,6 @@ prev_run: number | null,
  * when no scheduled run is recorded.
  */
 late_since: number | null,
-/**
- * What its recorded results say about its data (`empty`, `rows_changed`,
- * `behind_input`); empty when nothing does.
- */
-signals: Array<DataSignal>,
 /**
  * The run working on this node now, whoever started it (`null` when none is).
  */
@@ -77,6 +74,26 @@ kind: "asset" | "task" | "sensor",
  * Upstream node ids (direct inputs and `collect(...)` inputs), sorted.
  */
 inputs: Array<string>, partitioned: boolean, cache: CacheStatus,
+/**
+ * Whether something needs doing about it, in one word, most severe first: `failing`,
+ * `blocked`, `suspect`, `behind`, `undecided`, `never_run`, `ok` (`barca docs
+ * status-fields`, "Health"). Beside `cache.state`, never in place of it.
+ */
+health: Health,
+/**
+ * Which rule decided `health`.
+ */
+health_reason: HealthReason,
+/**
+ * What its recorded results say about its data (`empty`, `rows_changed`,
+ * `behind_input`); empty when nothing does, which for an unmeasured asset says nothing.
+ */
+signals: Array<DataSignal>,
+/**
+ * Whether its latest successful result has a recorded row count (for a partitioned asset,
+ * any key's); `null` for a task or sensor. `false` is "not measured", not ok.
+ */
+measured: boolean | null,
 /**
  * Per-key cache state of a partitioned node.
  */

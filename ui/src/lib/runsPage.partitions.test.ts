@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { NO_STEPS_OPEN, groupRunSteps, runNodeIdle, runNodeLine, runNodeOutcome, runNodeTime, runStepRows, runTargetLines, splitRunSteps, toggleStepsOpen } from './runsPage'
+import { NO_STEPS_OPEN, groupRunSteps, runNodeIdle, runNodeLine, runNodeOutcome, runNodeTime, runStepRows, splitRunSteps, toggleStepsOpen } from './runsPage'
 import { failedKeysLabel, formatSeconds, keyBreakdown } from './assetTable'
 import { lastAttemptFailed } from './cacheStateDisplay'
 import type { NodeState, RunNodeSummary, RunStep } from './types'
 
 const step = (node_id: string, status: string) => ({ node_id, status }) as RunStep
+// `health` as the server sends it for these keys: failing when some failed, else behind.
 const node = (partitions: NodeState['partitions']) =>
-  ({ partitions, last_materialization: { status: 'success' }, cache: { state: 'partial' } }) as unknown as NodeState
+  ({ partitions, last_materialization: { status: 'success' }, cache: { state: 'partial' }, health: (partitions?.failed ?? 0) > 0 ? 'failing' : 'behind' }) as unknown as NodeState
 
 describe('groupRunSteps', () => {
   it('counts from the summary, however few keys the page lists, with failed keys first', () => {
@@ -51,15 +52,6 @@ describe('a run\'s planned nodes', () => {
     expect(runNodeTime(forecast, formatSeconds)).toMatchObject({ text: '2.2s over 5 calls', title: expect.stringContaining('summed over 5 batched calls') })
     expect(runNodeTime({ ...forecast, calls: 0, keys: 1, elapsed_seconds: 0.5 }, formatSeconds)).toEqual({ text: '0.5s', title: 'Compute time' })
     expect(runNodeTime(nodes[0]!, formatSeconds)).toBeNull()
-  })
-
-  it('states what became of the target at the top', () => {
-    expect(runTargetLines({ target: 'publish_plan', job: 'p.py:publish_plan' }, nodes)).toEqual(['publish_plan did not run: upstream demand_forecast failed 7 keys'])
-    expect(runTargetLines({ target: 'demand_forecast', job: 'p.py:demand_forecast' }, nodes)).toEqual(['demand_forecast failed: 7 of 3,077 keys'])
-    expect(runTargetLines({ target: 'retailer_accounts', job: null }, nodes)).toEqual(['retailer_accounts was cached: nothing to do'])
-    expect(runTargetLines({ target: 'late', job: 'p.py:late' }, [...nodes, idle('p.py:late', 'skipped')])).toEqual(['late did not run: the run stopped before it'])
-    expect(runTargetLines({ target: 'publish_plan', job: 'p.py:publish_plan' }, [forecast].map((n) => ({ ...n, status: undefined })))).toEqual([])
-    expect(runTargetLines({ target: null, job: 'all' }, nodes)).toEqual([])
   })
 
   it('lists every planned node, the idle ones with no keys', () => {

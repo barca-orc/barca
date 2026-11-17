@@ -188,7 +188,7 @@ Conformance: [status](../../crates/barca-core/src/status.rs),
 [inspection evidence](../../python/tests/test_inspection_cache.py), the
 [real CLI payload-read regression](../../python/tests/test_store_inspection_cost.py),
 [recorded row counts and signals](../../python/tests/test_row_counts.py), the
-[signal rules](../../crates/barca-server/src/signals.rs), the
+[signal rules](../../crates/barca-core/src/health.rs), the
 [per-key row facts](../../crates/barca-db/src/db/history.rs) and
 [schedule slots](../../crates/barca-core/src/schedule.rs).
 

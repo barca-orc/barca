@@ -12,7 +12,15 @@ total   asset  cached       materialized  success 2026-10-02 11:56:43 UTC 0.00s 
 notify  task   always-runs  task          -                                      -                total
 
 2 cached, 0 stale, 0 never run, 0 partial, 0 unknown, 1 always run
+Health: 1 never run, 2 ok
+Data: 1 of 2 assets measured
 ```
+
+Under the cache counts, `Health` says whether anything needs doing, in the words `failing`,
+`blocked`, `suspect data`, `behind`, `undecided`, `never run` and `ok` (here the task has no
+recorded run), and `Data` says how many assets had their rows counted: `orders` is a frame,
+`total` a dict, which has no row count. Both are in `barca docs status-fields`, "Health" and
+"Data signals and coverage"; a last line reports the cache's size on disk.
 
 The forms it takes:
 
@@ -175,7 +183,13 @@ ratio         asset  never-run    failed: ZeroDivisionError: division by zero   
 3 of 4 nodes match --problems; the counts below are for every node
 
 1 cached, 1 stale, 1 never run, 0 partial, 0 unknown, 1 always run
+Health (nodes listed): 2 failing, 1 behind
 ```
+
+The `Health` line counts the nodes listed, so it says so under a filter; the `Data` line that
+follows it is for every node in scope, like the counts. `--problems` selects by cache state,
+last run and schedule as listed above, not by health: a task that never ran is `never run` and
+is not a problem.
 
 A node whose last run failed shows the first line of its error in WHY: `failed:
 ZeroDivisionError: division by zero` for reason `failed`, `last run failed: ...` for a task or
@@ -284,7 +298,7 @@ whose remediation is `barca history RUN_ID --local`.
 
 ## Fields, JSON and fine print
 
-Each node's fields (last materialization, artifact shape, run timing, what started a run), the
-JSON document, output limits and what status asks an artifact store are in `barca docs status-fields`.
+Each node's fields (health, data signals and coverage, last materialization, artifact shape,
+run timing, what started a run), the JSON document, output limits and what status asks an artifact store are in `barca docs status-fields`.
 
 See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.
