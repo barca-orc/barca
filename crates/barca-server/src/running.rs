@@ -11,7 +11,10 @@
 //! The engine emits `step_finished` but no `step_started`, so which nodes of a server run are
 //! executing is derived: a node is `running` once its function has printed a line or every
 //! upstream node in the run has finished, and `queued` before that (and while the run waits
-//! for a run slot). A partitioned node's keys come from the cache state the same request
+//! for a run slot). A step served from cache is announced only when the run ends (it may yet
+//! be computed again, if its artifact turns out lost), so a node the cache state calls
+//! `cached` that the run has not touched counts as done already, unless the run was asked to
+//! refresh: it is not what the run is executing, and its dependants do not wait for it. A partitioned node's keys come from the cache state the same request
 //! reads (`done`: keys with a result, `total`: every key) and from the run's own step events.
 
 use crate::state::{AppState, RunStatus};
@@ -80,6 +83,8 @@ pub(crate) struct InFlight {
     pub progress: Option<ProgressSnapshot>,
     /// The scheduled node whose tick started it; `None` for a run someone asked for.
     pub schedule_id: Option<String>,
+    /// It computes again what is cached (`RunState::refreshes`).
+    pub refreshes: bool,
 }
 
 impl InFlight {
@@ -128,6 +133,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             pending: r.status == RunStatus::Pending,
             progress: state.events.get(&r.handle).map(|c| c.progress()),
             schedule_id: r.trigger.schedule_id.clone(),
+            refreshes: r.refreshes,
         })
         .collect();
     let Some(read_path) = read_path else {
@@ -160,6 +166,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             pending: false,
             progress: None,
             schedule_id: None,
+            refreshes: false,
         });
     }
     runs
@@ -296,6 +303,14 @@ pub(crate) fn by_node(
             let Some(n) = by_id.get(id) else {
                 return true;
             };
+            // Served from cache: nothing reports it until the run ends.
+            if !run.refreshes
+                && !run.pending
+                && n.cache.state == barca_core::cache_state::CacheState::Cached
+                && progress.is_some_and(|p| !p.touched.contains(id))
+            {
+                return true;
+            }
             match &progress {
                 // A partitioned step reports each key it runs, not the keys served from cache:
                 // it is finished once its downstream steps have started, once this run has

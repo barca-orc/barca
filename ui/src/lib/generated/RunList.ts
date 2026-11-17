@@ -4,13 +4,15 @@ import type { RunSummary } from "./RunSummary";
 
 export type RunList = { runs: Array<RunSummary>,
 /**
- * How many runs there are in all; with `?triggered_by=`, how many were started that way.
+ * How many runs there are in all; with a filter (`status`, `triggered_by`,
+ * `not_triggered_by`, `since`, `until`, `search`), how many it keeps.
  */
 total: number, truncated: boolean,
 /**
  * The runs started in the last 24 hours, hour by hour, by status and by what started
- * them, counted over every recorded run of the window (not the runs listed) and with
- * `?triggered_by=` over the runs started that way: `barca history --activity --json`.
- * Absent with `?status=running`. Experimental.
+ * them, with each hour's median time and what most of its unsuccessful runs say went
+ * wrong. Counted over every recorded run of the window (not the runs listed) that the
+ * filters keep, whatever `since` and `until` say: `barca history --activity --json`.
+ * Experimental.
  */
 activity?: RunActivity, };

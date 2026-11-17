@@ -196,15 +196,19 @@ remediation `this run is on this machine: barca logs RUN_ID --local`, and `barca
 run id adds `[barca] note: this machine has a newer run <id> (...); barca logs --local reads it`
 on stderr when this machine's newest run is newer than the server's.
 
-`barca history`'s filters (`--status`, `--target`, `--triggered-by`, `--since`) are applied by
-the server (`GET /history?status=...&target=...&triggered_by=...&since=...`; a relative
-`--since` counts back from the server's clock). With `--status running` the server adds `now`
-to each run in flight, the nodes it is executing and how many wait, the same object as on
-`GET /runs?status=running` (`barca docs status`, "Runs in progress and the last day's
-activity"). `barca history --activity` reads `activity` of `GET /runs`: the runs started in
-the last 24 hours counted by hour, status and trigger over every run the server recorded in
-the window, which the web UI's Runs page draws as its strip; `--triggered-by manual,api,client`
-(`GET /runs?triggered_by=manual,api,client`, the page's "Hide schedule runs") leaves a
+`barca history`'s filters (`--status`, `--target`, `--triggered-by`, `--not-triggered-by`,
+`--since`, `--until`, `--search`) are applied by the server
+(`GET /history?status=...&target=...&triggered_by=...&not_triggered_by=...&since=...&until=...&search=...`;
+a relative `--since` or `--until` counts back from the server's clock). With `--status running`
+the server adds `now` to each run in flight, the nodes it is executing and how many wait, the
+same object as on `GET /runs?status=running` (`barca docs status`, "Runs in progress and the
+last day's activity"). `barca history --activity` reads `activity` of `GET /runs`: the runs
+started in the last 24 hours counted by hour, status and trigger over every run the server
+recorded in the window, which the web UI's Runs page draws as its strip.
+`GET /runs` takes the same filters as query parameters (all but `target`), and its `runs`,
+`total` and `activity` are of the runs they keep; its runs in progress come first, whatever
+`limit` lists. `--not-triggered-by schedule`
+(`GET /runs?not_triggered_by=schedule`, the page's "Hide schedule runs") leaves a
 schedule's runs out of the list, its `total` and the activity. `barca history RUN_ID` reads
 `GET /runs/{run_id}`: the run, its steps with their attempts, run hashes, artifacts, errors and
 tracebacks (at most 1000 steps unless `--limit N` or `--all` asks for more; `steps_page` says how

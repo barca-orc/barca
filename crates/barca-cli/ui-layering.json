@@ -261,7 +261,7 @@
     },
     "runs": {
       "kind": "display",
-      "does": "a run's status, trigger and outcome as word, tone and glyph"
+      "does": "a run's status, trigger and outcome, and a run's step and node, as word, tone and glyph"
     },
     "graphState": {
       "kind": "display",
@@ -447,7 +447,7 @@
     },
     "runsPage": {
       "kind": "page",
-      "does": "the Runs page's program, filters and the rows of a run's Steps"
+      "does": "the Runs page's program, the query its filters are on the server, and the rows of a run's Steps"
     },
     "sidebar": {
       "kind": "page",
@@ -544,20 +544,6 @@
           "stale"
         ],
         "reason": "groups a node's keys by the state the server gave each key (the grid's own codes); no state is decided"
-      },
-      {
-        "file": "lib/runsPage.ts",
-        "words": [
-          "cached"
-        ],
-        "reason": "a run step's status (`RunNodeSummary.status`), not a cache state"
-      },
-      {
-        "file": "pages/RunsView.tsx",
-        "words": [
-          "cached"
-        ],
-        "reason": "a run step's status, not a cache state"
       },
       {
         "file": "lib/health.ts",

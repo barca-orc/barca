@@ -4,8 +4,8 @@
 
 use super::lifecycle::{cancelled, finish, start};
 use super::projection::{
-    ActiveStep, RunList, RunSummary, RunsFilter, RunsQuery, live_runs, live_status, live_summary,
-    summary, view, view_page,
+    ActiveStep, RunList, RunSummary, RunsQuery, live_runs, live_status, live_summary, summary,
+    view, view_page,
 };
 use super::{
     RunSpec, Wording, check_any_asset, check_files, check_target, check_target_as, context,
@@ -584,32 +584,32 @@ pub async fn output(
     Ok(([(axum::http::header::CONTENT_TYPE, content_type)], bytes).into_response())
 }
 
-/// `GET /runs` — durable run history joined with this server's live runs, newest first.
+/// `GET /runs` — durable run history joined with this server's live runs: the runs in
+/// progress first, whatever `limit` lists (#941), then the newest. The filters are the
+/// database's ([`RunsQuery`]): `total` counts the runs they keep.
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<RunsQuery>,
 ) -> Result<Json<RunList>, ApiError> {
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
-    // The triggers of `barca history --triggered-by`, with its error for an unknown one.
-    let triggers = barca_core::history_filter::HistoryFilter::parse(
-        None,
-        None,
-        query.triggered_by.as_deref(),
-        None,
-        chrono::Utc::now(),
-    )
-    .map_err(|e| ApiError::BadRequest(e.replace("--triggered-by", "triggered_by")))?
-    .triggered_by;
-    let started_by = |t: Option<barca_core::outcome::TriggeredBy>| {
-        triggers.is_empty() || t.is_some_and(|t| triggers.contains(&t))
-    };
+    let filter = query.filter().map_err(ApiError::BadRequest)?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
-    if query.status == Some(RunsFilter::Running) {
+    // Counted by the database over the window, whatever `limit` lists (#991).
+    let activity =
+        barca_core::queries::activity_at(&snapshot.path, &filter, chrono::Utc::now()).await?;
+    if filter.statuses == ["running"] {
         let mut runs: Vec<RunSummary> = in_flight(&state, &db_state, &snapshot)
             .await?
             .into_iter()
-            .filter(|run| started_by(run.triggered_by))
+            .filter(|run| {
+                filter.keeps_unrecorded(
+                    "running",
+                    run.triggered_by,
+                    &run.started_at,
+                    &searched(run),
+                )
+            })
             .collect();
         let total = runs.len();
         runs.truncate(limit);
@@ -617,14 +617,15 @@ pub async fn list(
             truncated: total > runs.len(),
             runs,
             total,
-            activity: None,
+            activity: Some(activity),
         }));
     }
     // Clone after the snapshot: a new live run not yet in the snapshot stays visible.
     let live = live_runs(&state);
     let by_id: HashMap<_, _> = live.iter().map(|r| (r.handle.as_str(), r)).collect();
-    let records = db::get_recent_runs_triggered(&snapshot.path, limit, &triggers).await?;
-    let durable_total = db::count_runs_triggered(&snapshot.path, &triggers).await?;
+    let kept = filter.run_filter();
+    let records = db::get_runs_filtered(&snapshot.path, limit, &kept).await?;
+    let durable_total = db::count_runs_filtered(&snapshot.path, &kept).await?;
     let mut runs: Vec<_> = records
         .into_iter()
         .map(|r| {
@@ -634,32 +635,74 @@ pub async fn list(
         .collect();
     let mut extra = 0;
     for run in &live {
-        if !started_by(Some(run.trigger.triggered_by)) || runs.iter().any(|r| r.id == run.handle) {
+        if runs.iter().any(|r| r.id == run.handle) {
             continue;
         }
-        // An old live run outside the requested history page must not be counted twice.
-        if db::get_run(&snapshot.path, &run.handle).await?.is_some() {
-            continue;
+        let in_progress = matches!(run.status, RunStatus::Pending | RunStatus::Running);
+        match db::get_run(&snapshot.path, &run.handle).await? {
+            // An older run than the page holds: listed while it is in progress (#941), and
+            // already counted.
+            Some(mut record) => {
+                record.status = "running".into();
+                if in_progress && filter.matches(&record) {
+                    runs.push(summary(record, Some(run)));
+                }
+            }
+            None => {
+                let row = live_summary(run, &state.config.files);
+                if filter.keeps_unrecorded(
+                    &row.status,
+                    row.triggered_by,
+                    &row.started_at,
+                    &searched(&row),
+                ) {
+                    runs.push(row);
+                    extra += 1;
+                }
+            }
         }
-        runs.push(live_summary(run, &state.config.files));
-        extra += 1;
     }
+    // A CLI run on the same `.barca/` whose owner is alive, older than the page holds.
+    for alive in db::alive_running_runs_in(&snapshot.path, &state.config.resolved.db_path).await {
+        if runs.iter().any(|r| r.id == alive.run_id) {
+            continue;
+        }
+        if let Some(mut record) = db::get_run(&snapshot.path, &alive.run_id).await? {
+            record.status = "running".into();
+            if filter.matches(&record) {
+                runs.push(summary(record, None));
+            }
+        }
+    }
+    let live_first = |run: &RunSummary| !matches!(run.status.as_str(), "pending" | "running");
+    // Stable: runs started in the same second stay as the database listed them, the one
+    // recorded last first (a run id says nothing of the order).
     runs.sort_by(|a, b| {
-        b.started_at
-            .cmp(&a.started_at)
-            .then_with(|| b.id.cmp(&a.id))
+        live_first(a)
+            .cmp(&live_first(b))
+            .then_with(|| b.started_at.cmp(&a.started_at))
     });
     let total = durable_total + extra;
-    runs.truncate(limit);
-    // Counted by the database over the window, whatever `limit` lists (#991).
-    let activity =
-        barca_core::queries::activity_at(&snapshot.path, &triggers, chrono::Utc::now()).await?;
+    let in_progress = runs.iter().filter(|r| !live_first(r)).count();
+    runs.truncate(limit.max(in_progress));
     Ok(Json(RunList {
         truncated: total > runs.len(),
         runs,
         total,
         activity: Some(activity),
     }))
+}
+
+/// What a search looks in for a run the database is not asked about: its ids and target.
+fn searched(run: &RunSummary) -> Vec<&str> {
+    [
+        Some(run.id.as_str()),
+        run.run_id.as_deref(),
+        run.target.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// What each run in flight is working on now, by run id (a server run under its handle and

@@ -1,20 +1,33 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
-import type { ActivityHour, RunSummary } from './types'
-import { activityBarLabel, activityHourAt, activityTicks, canLoadMore, failedChipCount, INITIAL_RUNS, runsCountLabel, parseRunFilters, RUNS_MAX, runsTriggeredBy, stepName, updateRuns, visibleRuns, writeRunFilters, type RunsMsg } from './runsPage'
+import type { ActivityHour } from './types'
+import { activityBarLabel, activityHourAt, activityTicks, canLoadMore, everyRun, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runsCommand, runsNarrowed, runsQuery, stepName, updateRuns, windowLabel, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
+const HOUR = { since: '2026-10-29T12:00:00Z', until: '2026-10-29T13:00:00Z' }
+
 describe('run filters in the URL', () => {
   it('round-trips, and a default leaves no parameter', () => {
-    const filters = { filter: 'failed' as const, query: 'orders', hour: 3_600_000, hideSchedule: true }
+    const filters = { filter: 'failed' as const, query: 'orders', window: HOUR, hideSchedule: false }
     const written = writeRunFilters(new URLSearchParams('run=r1'), filters)
-    expect(written.toString()).toBe('run=r1&status=failed&q=orders&hour=3600000&schedule=hide')
+    expect(written.toString()).toBe('run=r1&status=failed&q=orders&since=2026-10-29T12%3A00%3A00Z&until=2026-10-29T13%3A00%3A00Z&schedule=show')
     expect(parseRunFilters(written)).toEqual(filters)
-    expect(writeRunFilters(written, { filter: 'all', query: '', hour: null, hideSchedule: false }).toString()).toBe('run=r1')
+    expect(writeRunFilters(written, { filter: 'all', query: '', window: null, hideSchedule: true }).toString()).toBe('run=r1')
   })
-  it('ignores what it cannot mean', () => {
-    expect(parseRunFilters(new URLSearchParams('status=x&hour=soon'))).toEqual({ filter: 'all', query: '', hour: null, hideSchedule: false })
+  it('ignores what it cannot mean, and hides the schedule\'s runs unless told', () => {
+    expect(parseRunFilters(new URLSearchParams('status=x&since=soon&until=later'))).toEqual({ filter: 'all', query: '', window: null, hideSchedule: true })
+    // Half a window is none.
+    expect(parseRunFilters(new URLSearchParams('since=2026-10-29T12:00:00Z')).window).toBeNull()
+  })
+  it('takes this browser\'s last choice for the schedule\'s runs when the URL is silent', () => {
+    expect(parseRunFilters(new URLSearchParams(''), false).hideSchedule).toBe(false)
+    expect(parseRunFilters(new URLSearchParams('schedule=hide'), false).hideSchedule).toBe(true)
+    expect(parseRunFilters(new URLSearchParams('schedule=show'), true).hideSchedule).toBe(false)
+    // Shown is always written, so a link opens the view it was copied from.
+    const shown = { filter: 'all' as const, query: '', window: null, hideSchedule: false }
+    expect(writeRunFilters(new URLSearchParams(''), shown).toString()).toBe('schedule=show')
+    expect(writeRunFilters(new URLSearchParams('schedule=show'), { ...shown, hideSchedule: true }).toString()).toBe('')
   })
 })
 
@@ -35,16 +48,25 @@ describe('runs program', () => {
   })
 
   it('toggles the hour filter', () => {
-    expect(run({ type: 'hour_toggled', at: 3600 }).model.hour).toBe(3600)
-    expect(run({ type: 'hour_toggled', at: 3600 }, { type: 'hour_toggled', at: 3600 }).model.hour).toBeNull()
+    expect(run({ type: 'hour_toggled', window: HOUR }).model.window).toEqual(HOUR)
+    expect(run({ type: 'hour_toggled', window: HOUR }, { type: 'hour_toggled', window: HOUR }).model.window).toBeNull()
   })
 
-  it('hides the schedule\'s runs by asking the server for the other triggers', () => {
-    const hidden = run({ type: 'schedule_toggled' })
-    expect(hidden.model.hideSchedule).toBe(true)
-    expect(hidden.effects).toEqual([{ type: 'filters', filters: { filter: 'all', query: '', hour: null, hideSchedule: true } }])
-    expect(runsTriggeredBy(hidden.model)).toBe('manual,api,client')
-    expect(runsTriggeredBy(run({ type: 'schedule_toggled' }, { type: 'schedule_toggled' }).model)).toBeNull()
+  it('hides the schedule\'s runs by default, and shows them when asked', () => {
+    expect(INITIAL_RUNS.hideSchedule).toBe(true)
+    const shown = run({ type: 'schedule_toggled' })
+    expect(shown.model.hideSchedule).toBe(false)
+    // Only what changed is written: another filter changed in the same frame is not undone.
+    expect(shown.effects).toEqual([{ type: 'filters', change: { hideSchedule: false } }])
+    // The hidden failures: the schedule's runs, the ones that did not succeed.
+    const failures = run({ type: 'schedule_failures_shown' }).model
+    expect([failures.hideSchedule, failures.filter]).toEqual([false, 'failed'])
+  })
+
+  it('clears what narrows the list and leaves the schedule choice', () => {
+    const cleared = run({ type: 'filter_changed', filter: 'live' }, { type: 'query_changed', value: 'orders' }, { type: 'hour_toggled', window: HOUR }, { type: 'filters_cleared' }).model
+    expect(runsNarrowed(cleared)).toBe(false)
+    expect(cleared.hideSchedule).toBe(true)
   })
 
   it('retries the request that failed', () => {
@@ -52,71 +74,46 @@ describe('runs program', () => {
   })
 })
 
+describe('the filters are the server\'s', () => {
+  it('asks GET /runs for what the model shows, by the names of barca history\'s flags', () => {
+    expect(runsQuery(INITIAL_RUNS)).toEqual({ limit: 100, status: null, not_triggered_by: 'schedule', since: null, until: null, search: null })
+    const model = { ...INITIAL_RUNS, filter: 'failed' as const, query: ' orders ', window: HOUR, hideSchedule: false }
+    expect(runsQuery(model)).toEqual({ limit: 100, status: 'not_successful', not_triggered_by: null, since: HOUR.since, until: HOUR.until, search: 'orders' })
+    expect(runsQuery({ ...INITIAL_RUNS, filter: 'live' }).status).toBe('running')
+    expect(everyRun(25)).toEqual({ limit: 25, status: null, not_triggered_by: null, since: null, until: null, search: null })
+  })
+
+  it('says the same in a terminal', () => {
+    expect(runsCommand(INITIAL_RUNS)).toBe('barca history --not-triggered-by schedule')
+    expect(runsCommand({ ...INITIAL_RUNS, filter: 'failed', query: 'daily report', window: HOUR, hideSchedule: false }))
+      .toBe('barca history --status not_successful --since 2026-10-29T12:00:00Z --until 2026-10-29T13:00:00Z --search "daily report"')
+  })
+})
+
 describe('run list telemetry', () => {
-  const run = (id: string, status: string, minutesAgo: number, elapsed: number | null = 2) => ({
-    id, handle: null, run_id: id, command: 'get', files: [], target: `t_${id}`, status, triggered_by: null,
-    scheduled_at: null, schedule_id: null, started_at: new Date(NOW - minutesAgo * 60_000).toISOString(),
-    finished_at: null, elapsed_seconds: elapsed, steps_total: null, steps_executed: 0, steps_cached: 0, error: null, first_failure: null,
-    principal: null, trigger_reason: null, cancellation: null,
-    line: { steps: '0 ok · 0 cached', steps_detail: '', failure: null, failure_detail: null },
-  })
-  const NOW = Date.parse('2026-10-29T12:30:00Z')
-  const runs = [run('a', 'success', 5, 1), run('b', 'failed', 10, 3), run('c', 'running', 1, null), run('d', 'cancelled', 90, 5), run('e', 'success', 60 * 30)]
-
-  it('filters by outcome and by target', () => {
-    expect(visibleRuns(runs, { filter: 'failed', query: '', hour: null }).map((r) => r.id)).toEqual(['b', 'd'])
-    expect(visibleRuns(runs, { filter: 'live', query: '', hour: null }).map((r) => r.id)).toEqual(['c'])
-    expect(visibleRuns(runs, { filter: 'all', query: 't_A', hour: null }).map((r) => r.id)).toEqual(['a'])
-  })
-
-  it('filters to one hour of the strip', () => {
-    const hour = Date.parse('2026-10-29T12:00:00Z')
-    expect(visibleRuns(runs, { filter: 'all', query: '', hour }).map((r) => r.id)).toEqual(['a', 'b', 'c'])
-    expect(visibleRuns(runs, { filter: 'all', query: '', hour: hour - 3_600_000 }).map((r) => r.id)).toEqual(['d'])
-  })
-
   it('names a step by its short name, with its key', () => {
     expect(stepName('a/p.py:orders[at=12:00]')).toBe('orders[at=12:00]')
   })
 
-  it('labels a bar with the server\'s counts for its hour, and ticks the axis', () => {
+  it('labels a bar with what the server says of its hour, and ticks the axis', () => {
     // `activity.hours` of `GET /runs`: 24 hours of UTC, counted by the server.
     const counts = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
     const triggers = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
     const start = Date.parse('2026-10-28T13:00:00Z')
+    const stamp = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z')
     const hours: ActivityHour[] = Array.from({ length: 24 }, (_, i) => ({
-      at: new Date(start + i * 3_600_000).toISOString().replace('.000Z', 'Z'),
-      runs: 0, ok: 0, not_successful: 0, in_progress: 0, by_status: counts, by_trigger: triggers,
+      at: stamp(start + i * 3_600_000), until: stamp(start + (i + 1) * 3_600_000),
+      runs: 0, ok: 0, not_successful: 0, in_progress: 0, by_status: counts, by_trigger: triggers, median_seconds: null, failure: null,
     }))
-    hours[23] = { ...hours[23]!, runs: 62, ok: 59, not_successful: 2, in_progress: 1 }
+    hours[23] = { ...hours[23]!, runs: 62, ok: 59, not_successful: 2, in_progress: 1, median_seconds: 1.25, failure: { text: "orders: KeyError: 'region'", runs: 2 } }
     expect(activityHourAt(hours[23]!)).toBe(Date.parse('2026-10-29T12:00:00Z'))
-    expect(activityBarLabel(hours[23]!, 'utc')).toBe('12:00 UTC: 62 runs, 2 not successful, 1 in progress')
+    expect(activityBarLabel(hours[23]!, 'utc')).toBe("12:00 UTC: 62 runs, 2 not successful, 1 in progress · median 1.3s · orders: KeyError: 'region'")
+    // A failure most, not all, of the hour's unsuccessful runs share says of how many.
+    expect(activityBarLabel({ ...hours[23]!, not_successful: 5, failure: { text: 'cancelled', runs: 3 } }, 'utc')).toContain('· cancelled (3 of 5)')
     expect(activityBarLabel({ ...hours[0]!, runs: 1, ok: 1 }, 'utc')).toBe('13:00 UTC: 1 run')
+    expect(windowLabel({ since: hours[23]!.at, until: hours[23]!.until }, 'utc')).toBe('12:00–13:00 UTC')
     const ticks = activityTicks(hours, 6, 'utc')
     expect(ticks.map((t) => t.label)).toEqual(['18:00', '00:00', '06:00'])
     expect(ticks.every((t) => t.index < 20)).toBe(true)
-  })
-})
-
-describe('the header count', () => {
-  const r = (status: string) => ({ status }) as RunSummary
-  const loaded = [...Array.from({ length: 21 }, () => r('failed')), ...Array.from({ length: 79 }, () => r('success'))]
-  const partial = { runs: loaded, total: 37_955, truncated: true }
-  const all = { filter: 'all' as const, query: '', hour: null }
-  it('is every run the server has while nothing narrows the list', () => {
-    expect(runsCountLabel(partial, 100, all).text).toBe('37,955')
-  })
-  it('says a count over the latest runs loaded is partial', () => {
-    expect(runsCountLabel(partial, 21, { ...all, filter: 'failed' }).text).toBe('21 not successful in the latest 100')
-    expect(runsCountLabel(partial, 1, { ...all, filter: 'live' }).text).toBe('1 in progress in the latest 100')
-    expect(runsCountLabel(partial, 3, { ...all, query: 'orders' }).text).toBe('3 matching in the latest 100')
-    expect(runsCountLabel(partial, 21, { ...all, filter: 'failed' }).title).toContain('Load more')
-  })
-  it('is a share of all runs when all of them are loaded', () => {
-    expect(runsCountLabel({ runs: loaded, total: 100, truncated: false }, 21, { ...all, filter: 'failed' }).text).toBe('21 of 100')
-  })
-  it('the Not successful chip says what it counted over when the list is partial', () => {
-    expect(failedChipCount(partial)).toEqual({ count: 21, title: '21 not successful in the latest 100 runs loaded' })
-    expect(failedChipCount({ runs: loaded, truncated: false })).toEqual({ count: 21, title: undefined })
   })
 })

@@ -171,6 +171,10 @@ pub(crate) const INDEXES: &[&str] = &[
     // The run list without the schedule's runs (`GET /runs?triggered_by=`, #991): the newest
     // manual and API runs among tens of thousands of scheduled ones, and their count.
     "CREATE INDEX IF NOT EXISTS idx_runs_trigger ON runs(triggered_by, id)",
+    // A text search of the run list (`GET /runs?search=`, `barca history --search`, #969): the
+    // three columns it reads, so the scan of every run is of this index and never of the
+    // table, whose rows hold each run's stored outcome.
+    "CREATE INDEX IF NOT EXISTS idx_runs_search ON runs(target, job, run_id)",
 ];
 
 /// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.

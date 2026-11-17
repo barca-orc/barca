@@ -1152,6 +1152,16 @@
 .barca-activity-title { color: var(--text-default); font-weight: 500; }
 .barca-activity-summary { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .barca-activity-failed { color: var(--text-default); }
+.barca-activity-zone { color: var(--text-faint); font-weight: 400; }
+/* What hiding the schedule's runs left out of the last day, under the chart: one quiet line with the way back. */
+.barca-runs-hidden {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; padding: 6px 12px;
+  font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-inset);
+}
+.barca-runs-hidden .barca-run-link { font: inherit; color: var(--text-default); }
+.barca-runs-hidden .barca-btn { margin-left: auto; }
+.barca-view-body > .barca-runs-hidden { margin-left: 12px; margin-right: 12px; }
 .barca-activity-chart { position: relative; }
 .barca-activity-bars { display: flex; align-items: flex-end; gap: 4px; height: 56px; }
 .barca-activity-bar { flex: 1; height: 100%; min-width: 0; padding: 0; border: 0; border-radius: 2px 2px 0 0; background: none; display: flex; align-items: flex-end; cursor: pointer; }

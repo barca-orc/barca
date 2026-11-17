@@ -111,61 +111,141 @@ test.describe('run history', () => {
   })
 })
 
-test('a failed run names its first failed step, a bar filters to its hour, and schedule runs hide', async ({ page }) => {
-  const started = new Date(Date.now() - 5 * 60_000).toISOString()
-  const earlier = new Date(Date.now() - 3 * 3_600_000).toISOString()
-  const row = { handle: null, command: 'get', files: [], target: null, triggered_by: null, scheduled_at: null, schedule_id: null, finished_at: null, elapsed_seconds: 1, steps_cached: 0, error: null }
-  // The strip is the server's `activity`: 24 hours of UTC counted over every run of the window,
-  // here 62 runs of which the list holds two.
-  const counts = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
-  const triggers = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
-  const thisHour = Math.floor(Date.now() / 3_600_000) * 3_600_000
-  const startedHour = Math.floor(Date.parse(started) / 3_600_000) * 3_600_000
-  const activityOf = (schedule: number) => {
-    const hours = Array.from({ length: 24 }, (_, i) => {
-      const at = thisHour - (23 - i) * 3_600_000
-      const failed = at === startedHour ? 1 : 0
-      const ok = at === startedHour ? schedule : 0
-      return { at: new Date(at).toISOString().replace('.000Z', 'Z'), runs: ok + failed, ok, not_successful: failed, in_progress: 0,
-        by_status: { ...counts, success: ok, failed }, by_trigger: { ...triggers, schedule: ok, manual: failed } }
-    })
-    const total = { ...hours[0]!, runs: schedule + 1, ok: schedule, not_successful: 1 }
-    return { since: hours[0]!.at, until: new Date(thisHour + 3_600_000).toISOString(), triggered_by: schedule ? [] : ['manual', 'api', 'client'], hours, total,
-      summary: `${schedule + 1} runs in the last 24 hours · 1 not successful` }
-  }
-  const asked: string[] = []
-  await page.route(/\/runs(\?.*)?$/, (route) => {
-    const hidden = new URL(route.request().url()).searchParams.get('triggered_by')
-    asked.push(hidden ?? '')
-    const runs = [
-      { ...row, id: 'r2', run_id: 'r2', status: 'failed', triggered_by: 'manual', started_at: started, steps_total: 28404, steps_executed: 21950, first_failure: { node_id: 'p.py:orders', error: "KeyError: 'currency'" },
-        // The row's words are the server's (`line`).
-        line: { steps: '21,950 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 28,404 nodes planned · stopped at p.py:orders', failure: "stopped at orders · KeyError: 'currency'", failure_detail: "p.py:orders: KeyError: 'currency'" } },
-      { ...row, id: 'r1', run_id: 'r1', status: 'success', triggered_by: 'schedule', started_at: earlier, steps_total: 1, steps_executed: 1, first_failure: null, line: { steps: '1 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 1 node planned', failure: null, failure_detail: null } },
-    ].filter((run) => !hidden || hidden.split(',').includes(run.triggered_by))
-    return route.fulfill({ json: { runs, total: hidden ? 1 : 62, truncated: !hidden, activity: activityOf(hidden ? 0 : 61) } })
+// The page's filters are the server's (#969): each is a query of `GET /runs`, and the list, its
+// count and the strip are what comes back. The route here answers as the server does for three
+// runs among 61 schedule ticks, so the test can read what the page asked for.
+test('the default view hides schedule runs, and every filter asks the server', async ({ page }) => {
+  const HOUR = 3_600_000
+  const thisHour = Math.floor(Date.now() / HOUR) * HOUR
+  const stamp = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z')
+  const row = { handle: null, command: 'get', files: [], scheduled_at: null, schedule_id: null, finished_at: null, elapsed_seconds: 1, steps_cached: 0, error: null, first_failure: null }
+  const line = (steps: string, failure: string | null = null) => ({ steps, steps_detail: 'Steps are keys: a partitioned node counts one per key', failure, failure_detail: failure })
+  const all = [
+    { ...row, id: 'r2', run_id: 'r2', target: 'orders', status: 'failed', triggered_by: 'manual', started_at: stamp(thisHour - HOUR + 60_000), steps_total: 2, steps_executed: 1, line: line('0 ok · 1 failed · 0 cached', "stopped at orders · KeyError: 'currency'") },
+    // Recorded before barca stored what started a run: never hidden with the schedule's.
+    { ...row, id: 'r0', run_id: 'r0', target: 'legacy_report', status: 'success', triggered_by: null, started_at: stamp(thisHour - 2 * HOUR + 60_000), steps_total: 1, steps_executed: 1, line: line('1 ok · 0 cached') },
+    { ...row, id: 'r1', run_id: 'r1', target: 'poll_inbox', status: 'success', triggered_by: 'schedule', started_at: stamp(thisHour - 3 * HOUR + 60_000), steps_total: 1, steps_executed: 1, line: line('1 ok · 0 cached') },
+  ]
+  const none = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
+  const nobody = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
+  const entry = (at: number, runs: number, bad: number, schedule: number) => ({
+    at: stamp(at), until: stamp(at + HOUR), runs, ok: runs - bad, not_successful: bad, in_progress: 0,
+    by_status: { ...none, success: runs - bad, failed: bad }, by_trigger: { ...nobody, schedule, manual: runs - schedule },
+    median_seconds: runs ? 1.5 : null, failure: bad ? { text: "orders: KeyError: 'currency'", runs: bad } : null,
   })
+  const asked: URLSearchParams[] = []
+  await page.route(/\/runs(\?.*)?$/, (route) => {
+    const query = new URL(route.request().url()).searchParams
+    asked.push(query)
+    const hide = query.get('not_triggered_by') === 'schedule'
+    const [since, until, search] = [query.get('since'), query.get('until'), query.get('search')]
+    const tickHour = thisHour - HOUR
+    const within = (at: number) => (!since || at >= Date.parse(since)) && (!until || at < Date.parse(until))
+    // Every filter but the window, which the activity ignores (it is always the last day).
+    const keeps = (run: typeof all[number]) =>
+      !(hide && run.triggered_by === 'schedule') &&
+      (query.get('status') !== 'not_successful' || run.status === 'failed') &&
+      (!search || `${run.id} ${run.target}`.includes(search))
+    const counted = all.filter(keeps)
+    const runs = counted.filter((run) => within(Date.parse(run.started_at)))
+    // The ticks are counted, not listed: 61 in the hour of `r2`, while the schedule's runs show.
+    const ticks = hide || search || query.get('status') ? 0 : 61
+    const hours = Array.from({ length: 24 }, (_, i) => {
+      const at = thisHour - (23 - i) * HOUR
+      const mine = counted.filter((run) => Date.parse(run.started_at) >= at && Date.parse(run.started_at) < at + HOUR)
+      const extra = at === tickHour ? ticks : 0
+      return entry(at, mine.length + extra, mine.filter((run) => run.status === 'failed').length, extra + mine.filter((run) => run.triggered_by === 'schedule').length)
+    })
+    const listed = runs.length + (within(tickHour) ? ticks : 0)
+    const sum = (pick: (h: typeof hours[number]) => number) => hours.reduce((n, h) => n + pick(h), 0)
+    const total = { ...entry(thisHour - 23 * HOUR, sum((h) => h.runs), sum((h) => h.not_successful), sum((h) => h.by_trigger.schedule)), until: stamp(thisHour + HOUR) }
+    return route.fulfill({ json: {
+      runs, total: listed, truncated: listed > runs.length,
+      activity: {
+        since: total.at, until: total.until, triggered_by: [], not_triggered_by: hide ? ['schedule'] : [], statuses: [], search: search ?? null,
+        hours, total, excluded: hide ? { ...entry(thisHour - 23 * HOUR, 62, 3, 62), until: total.until } : null,
+        summary: `${total.runs} runs in the last 24 hours`,
+      },
+    } })
+  })
+  const last = () => asked[asked.length - 1]!
   await page.goto('/ui/#/runs')
   const failed = page.getByRole('row', { name: /r2/ })
+  // The default: without the schedule's runs, by exclusion, so the run with no trigger stays.
   await expect(failed).toContainText("stopped at orders · KeyError: 'currency'")
-  await expect(failed).toContainText('21,950 ok · 0 cached')
-  await expect(failed).toContainText('stopped at orders')
-  await expect(failed).toContainText('5m ago')
+  await expect(page.getByRole('row', { name: /r0/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
+  expect(last().get('not_triggered_by')).toBe('schedule')
+  expect(asked.every((query) => query.get('triggered_by') === null)).toBe(true)
+  await expect(page.getByRole('button', { name: 'Hide schedule runs' })).toHaveAttribute('aria-pressed', 'true')
+  // What that hid is said, with its failures, as the server counted it.
+  const hidden = page.locator('.barca-runs-hidden')
+  await expect(hidden).toContainText('62 schedule runs in the last 24 hours are hidden')
+  await expect(hidden).toContainText('3 not successful')
+  // The strip is the server's window, the zone it is shown in stated, the count the server's.
+  await expect(page.locator('.barca-activity-title')).toContainText(/Last 24 hours by hour, \S+/)
+  await expect(page.locator('.barca-activity-summary')).toContainText('2 runs · 1 not successful · median 1.5s')
   await expect(page.locator('.barca-activity-now')).toHaveText('now')
-  // Counted over the window, not the two runs loaded.
-  await expect(page.locator('.barca-activity-summary')).toContainText('62 runs · 1 not successful')
-  await page.getByRole('button', { name: /62 runs, 1 not successful/ }).click()
-  await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
+  await expect(page.locator('.barca-count')).toHaveText(/^2/)
+
+  // A bar's tooltip is the server's hour: counts, median and leading failure. It asks for the hour.
+  const bar = page.getByRole('button', { name: /1 run, 1 not successful · median 1\.5s · orders: KeyError: 'currency'/ })
+  await bar.click()
+  await expect(page.getByRole('row', { name: /r0/ })).toHaveCount(0)
   await expect(failed).toBeVisible()
-  // Back to every hour, then without the schedule's runs: the server filters the list and the strip.
-  await page.getByRole('button', { name: /62 runs, 1 not successful/ }).click()
+  expect(last().get('since')).toBe(stamp(thisHour - HOUR))
+  expect(last().get('until')).toBe(stamp(thisHour))
+  await expect(page).toHaveURL(/since=.*until=/)
+  await expect(page.locator('.barca-count')).toHaveText(/^1/)
+  await bar.click()
+  await expect(page.getByRole('row', { name: /r0/ })).toBeVisible()
+
+  // Shown again: every run, counted over the history (64), and the choice is in the URL.
+  await hidden.getByRole('button', { name: 'Show schedule runs' }).click()
   await expect(page.getByRole('row', { name: /r1/ })).toBeVisible()
-  await page.getByRole('button', { name: 'Hide schedule runs' }).click()
+  await expect(page).toHaveURL(/schedule=show/)
+  expect(last().get('not_triggered_by')).toBeNull()
+  await expect(page.locator('.barca-count')).toHaveText(/^64/)
+  await expect(hidden).toHaveCount(0)
+  await expect(page.locator('.barca-run-more')).toContainText('Showing 3 runs of 64')
+
+  // The status chip and the search are the server's too.
+  await page.getByRole('button', { name: 'Not successful', exact: true }).click()
   await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
-  await expect(failed).toBeVisible()
-  await expect(page.locator('.barca-activity-summary')).toContainText('1 run · 1 not successful · schedule runs hidden')
-  await expect(page).toHaveURL(/schedule=hide/)
-  expect(asked).toContain('manual,api,client')
+  expect(last().get('status')).toBe('not_successful')
+  await expect(page.locator('.barca-count')).toHaveText(/^1/)
+  await page.getByRole('button', { name: 'All', exact: true }).click()
+  await page.getByRole('textbox', { name: /Search every run/ }).fill('legacy')
+  await expect(page.getByRole('row', { name: /r0/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /r2/ })).toHaveCount(0)
+  expect(last().get('search')).toBe('legacy')
+  await page.getByRole('textbox', { name: /Search every run/ }).fill('no_such_run')
+  await expect(page.getByText('No run matches.')).toBeVisible()
+  await page.getByRole('button', { name: 'Clear filters' }).click()
+  await expect(page.getByRole('row', { name: /r1/ })).toBeVisible()
+})
+
+// The same against the real server: a status, a search and the schedule toggle each change
+// what `GET /runs` is asked, and the rows are its answer.
+test('a status chip and the search list the runs the server keeps', async ({ page, request }) => {
+  const bad = await finishedRun(request, 'history_failure')
+  const good = await finishedRun(request, 'say_hello')
+  await page.goto('/ui/#/runs')
+  await expect(page.getByRole('button', { name: good.id, exact: true })).toBeVisible()
+  const asks = (name: string, value: string) => page.waitForResponse((response) => new URL(response.url()).searchParams.get(name) === value && response.url().includes('/runs?'))
+  const failedOnly = asks('status', 'not_successful')
+  await page.getByRole('button', { name: 'Not successful', exact: true }).click()
+  const answer = await (await failedOnly).json()
+  await expect(page.getByRole('button', { name: bad.id, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: good.id, exact: true })).toHaveCount(0)
+  // The header's count is the server's, of every run the filter keeps.
+  await expect(page.locator('.barca-count')).toHaveText(new RegExp(`^${answer.total.toLocaleString()}`))
+  await page.getByRole('button', { name: 'All', exact: true }).click()
+  const searched = asks('search', good.id)
+  await page.getByRole('textbox', { name: /Search every run/ }).fill(good.id)
+  expect((await (await searched).json()).total).toBe(1)
+  await expect(page.locator('.barca-run-table tbody tr')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: good.id, exact: true })).toBeVisible()
 })
 
 // A deep queue (the fixture's runs finish too fast to make one): the running run is listed first,

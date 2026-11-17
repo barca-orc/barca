@@ -141,10 +141,17 @@ pub struct HistoryQuery {
     pub triggered_by: Option<String>,
     /// `--since`: a duration back from now on this server's clock, or a time.
     pub since: Option<String>,
+    /// `--not-triggered-by`: comma-separated triggers to leave out.
+    pub not_triggered_by: Option<String>,
+    /// `--until`: a duration back from now on this server's clock, or a time.
+    pub until: Option<String>,
+    /// `--search`: text in a run's id, target or job.
+    pub search: Option<String>,
 }
 
-/// `GET /history?limit=N&all=1&status=..&target=..&triggered_by=..&since=..` — `barca history
-/// --json` with the same filters. A filter value barca does not accept is a 400.
+/// `GET /history?limit=N&all=1&status=..&target=..&triggered_by=..&not_triggered_by=..
+/// &since=..&until=..&search=..` — `barca history --json` with the same filters. A filter
+/// value barca does not accept is a 400.
 pub async fn history(
     State(state): State<AppState>,
     Query(query): Query<HistoryQuery>,
@@ -155,10 +162,15 @@ pub async fn history(
         .is_some_and(|v| !matches!(v, "" | "0" | "false"));
     let limit = if all { None } else { query.limit };
     let filter = barca_core::history_filter::HistoryFilter::parse(
-        query.status.as_deref(),
-        query.target.as_deref(),
-        query.triggered_by.as_deref(),
-        query.since.as_deref(),
+        barca_core::history_filter::HistoryFlags {
+            status: query.status.as_deref(),
+            target: query.target.as_deref(),
+            triggered_by: query.triggered_by.as_deref(),
+            not_triggered_by: query.not_triggered_by.as_deref(),
+            since: query.since.as_deref(),
+            until: query.until.as_deref(),
+            search: query.search.as_deref(),
+        },
         chrono::Utc::now(),
     )
     .map_err(ApiError::BadRequest)?;

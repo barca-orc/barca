@@ -1,34 +1,42 @@
 /**
  * The Runs page as a program (`lib/program.ts`). The selected run and the filters live in the
- * URL (`?run=`, `?status=`, `?q=`, `?hour=`, `?schedule=hide`), so changing one is an effect (a
- * navigation), and the page reads it back as input.
+ * URL (`?run=`, `?status=`, `?q=`, `?since=`/`?until=`, `?schedule=`), so changing one is an
+ * effect (a navigation), and the page reads it back as input. Every filter is the server's: the
+ * model becomes the query of `GET /runs` (`runsQuery`), and the list, its count and the
+ * activity come back filtered. Nothing here filters or counts runs.
  * Pure; `pages/RunsPage.tsx` runs it and `pages/RunsView.tsx` renders it.
  */
 
 import { match } from 'ts-pattern'
+import { formatSeconds } from './assetTable'
 import { shortName } from './graph'
+import type { RunsQuery } from './api'
 import { only, type Next } from './program'
-import { parseRunStatus, runIsLive } from './runs'
+import { parseRunStatus, runIsLive, runNodeIdle } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
-import type { ActivityHour, RunList, RunNodeSummary, RunStep, RunSummary, StatusKind } from './types'
+import type { ActivityHour, RunNodeSummary, RunStep } from './types'
 
 const RUNS_PAGE_SIZE = 100
 export const RUNS_MAX = 1000
 
-const HOUR = 3_600_000
-
 /** Which runs the list shows. */
 export type RunFilter = 'all' | 'failed' | 'live'
+
+/** The runs started in a window: an hour of the activity, as the server names it (`at`, `until`). */
+export interface RunWindow {
+  since: string
+  until: string
+}
 
 export interface RunsModel {
   /** How many runs the list asks for. */
   limit: number
   filter: RunFilter
-  /** Narrows the list to runs whose target or id contains it. */
+  /** Narrows the list to runs whose run id, target or job contains it. */
   query: string
-  /** Narrows the list to the runs started in this hour (its start, ms since epoch). */
-  hour: number | null
-  /** Leaves the schedule's runs out of the list and the activity: the server filters them. */
+  /** Narrows the list to the runs started in one hour of the activity. */
+  window: RunWindow | null
+  /** Leaves the schedule's runs out of the list and the activity. */
   hideSchedule: boolean
 }
 
@@ -43,62 +51,114 @@ export type RunsMsg =
   | { type: 'filter_changed'; filter: RunFilter }
   | { type: 'query_changed'; value: string }
   /** A bar of the activity strip: the same one again clears the filter. */
-  | { type: 'hour_toggled'; at: number }
+  | { type: 'hour_toggled'; window: RunWindow }
   /** The "Hide schedule runs" control. */
   | { type: 'schedule_toggled' }
+  /** The hidden schedule runs that did not succeed: shows them, and only them. */
+  | { type: 'schedule_failures_shown' }
+  /** Back to the default view. */
+  | { type: 'filters_cleared' }
 
 type RunsEffect =
   /** Set `?run=` (`null` removes it); `replace` keeps the history entry. */
   | { type: 'navigate'; run: string | null; replace: boolean }
-  /** Write the filters to the URL, replacing the history entry. */
-  | { type: 'filters'; filters: RunFilters }
+  /**
+   * Write what changed of the filters to the URL, replacing the history entry. Only the
+   * change: two messages before the page reads the URL back must not undo one another.
+   */
+  | { type: 'filters'; change: Partial<RunFilters> }
   | { type: 'refetch_list' }
   | { type: 'refetch_detail' }
 
 /** The part of the model the URL owns. */
-type RunFilters = Pick<RunsModel, 'filter' | 'query' | 'hour' | 'hideSchedule'>
-
-export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', query: '', hour: null, hideSchedule: false }
+export type RunFilters = Pick<RunsModel, 'filter' | 'query' | 'window' | 'hideSchedule'>
 
 /**
- * `triggered_by` of `GET /runs` for the list: every trigger but the schedule's when its runs
- * are hidden (`barca history --triggered-by manual,api,client`), else no filter.
+ * The default view hides the schedule's runs: on a server whose history is mostly ticks, a
+ * person's own runs are what the page is opened for, and what was hidden is said beside the
+ * list with its failures (`activity.excluded`).
  */
-export function runsTriggeredBy(model: Pick<RunsModel, 'hideSchedule'>): string | null {
-  return model.hideSchedule ? 'manual,api,client' : null
+export const HIDE_SCHEDULE_BY_DEFAULT = true
+
+export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', query: '', window: null, hideSchedule: HIDE_SCHEDULE_BY_DEFAULT }
+
+/** The newest `limit` runs, unfiltered: what `GET /runs` answers without a filter. */
+export function everyRun(limit: number): RunsQuery {
+  return { limit, status: null, not_triggered_by: null, since: null, until: null, search: null }
 }
 
-/** The filters a URL names; anything it cannot mean is the default. */
-export function parseRunFilters(params: URLSearchParams): RunFilters {
-  const status = params.get('status')
-  const hour = Number(params.get('hour'))
+/** What the page asks the server for: the model's filters as `GET /runs` names them. */
+export function runsQuery(model: RunsModel): RunsQuery {
   return {
-    filter: status === 'failed' || status === 'live' ? status : 'all',
-    query: params.get('q') ?? '',
-    hour: params.get('hour') !== null && Number.isFinite(hour) ? hour : null,
-    hideSchedule: params.get('schedule') === 'hide',
+    limit: model.limit,
+    status: match(model.filter)
+      .with('failed', () => 'not_successful' as const)
+      .with('live', () => 'running' as const)
+      .with('all', () => null)
+      .exhaustive(),
+    not_triggered_by: model.hideSchedule ? 'schedule' : null,
+    since: model.window?.since ?? null,
+    until: model.window?.until ?? null,
+    search: model.query.trim() || null,
   }
 }
 
-/** `params` with `filters` written; a default leaves its parameter out. */
-export function writeRunFilters(params: URLSearchParams, { filter, query, hour, hideSchedule }: RunFilters): URLSearchParams {
+/** `barca history` with the same filters: what the page shows, in a terminal. */
+export function runsCommand(model: RunsModel): string {
+  const q = runsQuery(model)
+  const flags = [
+    q.status && `--status ${q.status}`,
+    q.not_triggered_by && `--not-triggered-by ${q.not_triggered_by}`,
+    q.since && `--since ${q.since}`,
+    q.until && `--until ${q.until}`,
+    q.search && `--search ${/^[\w.:=-]+$/.test(q.search) ? q.search : JSON.stringify(q.search)}`,
+  ].filter(Boolean)
+  return ['barca history', ...flags].join(' ')
+}
+
+/**
+ * The filters a URL names; anything it cannot mean is the default. `hideSchedule` is this
+ * browser's last choice (`HIDE_SCHEDULE_BY_DEFAULT` before it made one), unless the URL says.
+ */
+export function parseRunFilters(params: URLSearchParams, hideSchedule = HIDE_SCHEDULE_BY_DEFAULT): RunFilters {
+  const status = params.get('status')
+  const since = params.get('since')
+  const until = params.get('until')
+  const schedule = params.get('schedule')
+  return {
+    filter: status === 'failed' || status === 'live' ? status : 'all',
+    query: params.get('q') ?? '',
+    window: since && until && parseTime(since) !== null && parseTime(until) !== null ? { since, until } : null,
+    hideSchedule: schedule === 'show' ? false : schedule === 'hide' ? true : hideSchedule,
+  }
+}
+
+/**
+ * `params` with `filters` written; a default leaves its parameter out. Showing the schedule's
+ * runs is always written (`schedule=show`), so a link opens the view it was copied from.
+ */
+export function writeRunFilters(params: URLSearchParams, { filter, query, window, hideSchedule }: RunFilters): URLSearchParams {
   const next = new URLSearchParams(params)
   const put = (key: string, value: string | null) => (value ? next.set(key, value) : next.delete(key))
   put('status', filter === 'all' ? null : filter)
   put('q', query || null)
-  put('hour', hour === null ? null : String(hour))
-  put('schedule', hideSchedule ? 'hide' : null)
+  put('since', window?.since ?? null)
+  put('until', window?.until ?? null)
+  put('schedule', hideSchedule === HIDE_SCHEDULE_BY_DEFAULT ? null : 'show')
   return next
 }
 
-const withFilters = (model: RunsModel, change: Partial<RunFilters>): Next<RunsModel, RunsEffect> => {
-  const next = { ...model, ...change }
-  return [next, [{ type: 'filters', filters: { filter: next.filter, query: next.query, hour: next.hour, hideSchedule: next.hideSchedule } }]]
-}
+const withFilters = (model: RunsModel, change: Partial<RunFilters>): Next<RunsModel, RunsEffect> =>
+  [{ ...model, ...change }, [{ type: 'filters', change }]]
 
 /** Whether "Load more" can ask for more runs. */
 export function canLoadMore(model: RunsModel): boolean {
   return model.limit < RUNS_MAX
+}
+
+/** Whether the list is narrowed by a status, a search or an hour (the schedule's runs apart). */
+export function runsNarrowed(model: Pick<RunsModel, 'filter' | 'query' | 'window'>): boolean {
+  return model.filter !== 'all' || model.query.trim() !== '' || model.window !== null
 }
 
 export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, RunsEffect> {
@@ -111,8 +171,10 @@ export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, Runs
     .with({ type: 'load_more' }, () => only({ ...model, limit: Math.min(model.limit + RUNS_PAGE_SIZE, RUNS_MAX) }))
     .with({ type: 'filter_changed' }, ({ filter }) => withFilters(model, { filter }))
     .with({ type: 'query_changed' }, ({ value }) => withFilters(model, { query: value }))
-    .with({ type: 'hour_toggled' }, ({ at }) => withFilters(model, { hour: model.hour === at ? null : at }))
+    .with({ type: 'hour_toggled' }, ({ window }) => withFilters(model, { window: model.window?.since === window.since ? null : window }))
     .with({ type: 'schedule_toggled' }, () => withFilters(model, { hideSchedule: !model.hideSchedule }))
+    .with({ type: 'schedule_failures_shown' }, () => withFilters(model, { hideSchedule: false, filter: 'failed' }))
+    .with({ type: 'filters_cleared' }, () => withFilters(model, { filter: 'all', query: '', window: null }))
     .with({ type: 'retry_list' }, () => [model, [{ type: 'refetch_list' }]])
     .with({ type: 'retry_detail' }, () => [model, [{ type: 'refetch_detail' }]])
     .exhaustive()
@@ -122,59 +184,6 @@ export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, Runs
 export function runFailed(status: string): boolean {
   const known = parseRunStatus(status)
   return known !== null && known !== 'success' && !runIsLive(status)
-}
-
-/** The runs the list shows for `model`'s filter and query. */
-export function visibleRuns(runs: readonly RunSummary[], model: Pick<RunsModel, 'filter' | 'query' | 'hour'>): RunSummary[] {
-  const needle = model.query.trim().toLowerCase()
-  return runs.filter((run) =>
-    (model.filter === 'all' || (model.filter === 'failed' ? runFailed(run.status) : runIsLive(run.status))) &&
-    (!needle || `${run.id} ${run.target ?? 'all assets'}`.toLowerCase().includes(needle)) &&
-    (model.hour === null || inHour(run, model.hour)),
-  )
-}
-
-/** Whether the list is narrowed by a filter, a search or an hour. */
-function narrowed(model: Pick<RunsModel, 'filter' | 'query' | 'hour'>): boolean {
-  return model.filter !== 'all' || model.query.trim() !== '' || model.hour !== null
-}
-
-/**
- * The Runs header's count. Unnarrowed, every run the server has (`37,955`). Narrowed, the count
- * is over the runs loaded, so when those are not every run it says so
- * (`21 not successful in the latest 100`) rather than reading as a share of all history
- * (`GET /runs` counts only all runs; a filtered count would need the server to count it).
- */
-export function runsCountLabel(
-  list: Pick<RunList, 'runs' | 'total' | 'truncated'>,
-  shown: number,
-  model: Pick<RunsModel, 'filter' | 'query' | 'hour'>,
-): { text: string; title: string } {
-  const loaded = list.runs.length
-  const runs = (n: number) => `${n.toLocaleString()} run${n === 1 ? '' : 's'}`
-  if (!narrowed(model)) return { text: list.total.toLocaleString(), title: runs(list.total) }
-  if (!list.truncated) return { text: `${shown.toLocaleString()} of ${list.total.toLocaleString()}`, title: `${shown.toLocaleString()} of ${runs(list.total)}` }
-  const word = match(model.filter)
-    .with('failed', () => 'not successful')
-    .with('live', () => 'in progress')
-    .with('all', () => 'matching')
-    .exhaustive()
-  return {
-    text: `${shown.toLocaleString()} ${word} in the latest ${loaded.toLocaleString()}`,
-    title: `Counted over the latest ${runs(loaded)} loaded, of ${list.total.toLocaleString()} in all; Load more counts further back`,
-  }
-}
-
-/** The "Not successful" chip's count, and what it is counted over. */
-export function failedChipCount(list: Pick<RunList, 'runs' | 'truncated'>): { count: number; title: string | undefined } {
-  const count = list.runs.filter((r) => runFailed(r.status)).length
-  const n = list.runs.length
-  return { count, title: list.truncated ? `${count.toLocaleString()} not successful in the latest ${n.toLocaleString()} run${n === 1 ? '' : 's'} loaded` : undefined }
-}
-
-function inHour(run: RunSummary, at: number): boolean {
-  const started = parseTime(run.started_at)
-  return started !== null && started >= at && started < at + HOUR
 }
 
 /** A step's short name, with its partition key: `pipeline.py:a[day=1]` → `a[day=1]`. */
@@ -206,31 +215,6 @@ export function groupRunSteps(steps: readonly RunStep[], nodes: readonly RunNode
     summary,
     steps: (byNode.get(summary.node_id) ?? []).slice().sort((a, b) => Number(b.status === 'failed') - Number(a.status === 'failed')),
   }))
-}
-
-/** `3,077 keys · 40 failed · 7 calls`. */
-export function runNodeLine(n: RunNodeSummary): string {
-  const parts = [`${n.keys.toLocaleString()} key${n.keys === 1 ? '' : 's'}`]
-  if (n.failed) parts.push(`${n.failed.toLocaleString()} failed`)
-  if (n.calls) parts.push(`${n.calls.toLocaleString()} call${n.calls === 1 ? '' : 's'}`)
-  return parts.join(' · ')
-}
-
-/** Whether the node recorded no step this run: it was cached, or skipped. */
-export function runNodeIdle(n: RunNodeSummary): boolean {
-  return n.status === 'cached' || n.status === 'skipped'
-}
-
-/**
- * A node's badge and line: `3,077 keys · 7 failed · 5 calls` for a node that ran, `cached`, or
- * `skipped` with why (`upstream demand_forecast failed`, or the run stopped before it).
- */
-export function runNodeOutcome(n: RunNodeSummary): { kind: StatusKind; label: string; detail: string | null } {
-  if (n.status === 'cached') return { kind: 'skipped', label: 'cached', detail: null }
-  if (n.status === 'skipped') {
-    return { kind: 'skipped', label: 'skipped', detail: n.blocked_by ? `upstream ${shortName(n.blocked_by)} failed` : 'the run stopped before it' }
-  }
-  return { kind: n.failed ? 'failed' : 'success', label: runNodeLine(n), detail: null }
 }
 
 /**
@@ -339,13 +323,25 @@ export function hourLabel(at: number, zone: TimeZone = 'local'): string {
   return formatHour(at, zone)
 }
 
-/** A bar's tooltip: the hour (zone named) and its runs, as the server counted them. */
+/** `14:00–15:00 UTC`: a window of the activity, in the reader's chosen time zone. */
+export function windowLabel(window: RunWindow, zone: TimeZone = 'local'): string {
+  const since = parseTime(window.since) ?? 0
+  return `${hourLabel(since, zone)}–${hourLabel(parseTime(window.until) ?? since, zone)} ${zoneName(zone, since)}`
+}
+
+/**
+ * A bar's tooltip, every figure the server's: the hour (zone named), its runs by outcome, the
+ * median time of the ones that finished, and what most of the unsuccessful ones say went wrong.
+ */
 export function activityBarLabel(h: ActivityHour, zone: TimeZone = 'local'): string {
   const at = activityHourAt(h)
-  const parts = [`${hourLabel(at, zone)} ${zoneName(zone, at)}: ${h.runs} run${h.runs === 1 ? '' : 's'}`]
-  if (h.not_successful) parts.push(`${h.not_successful} not successful`)
-  if (h.in_progress) parts.push(`${h.in_progress} in progress`)
-  return parts.join(', ')
+  const counts = [`${hourLabel(at, zone)} ${zoneName(zone, at)}: ${h.runs.toLocaleString()} run${h.runs === 1 ? '' : 's'}`]
+  if (h.not_successful) counts.push(`${h.not_successful.toLocaleString()} not successful`)
+  if (h.in_progress) counts.push(`${h.in_progress.toLocaleString()} in progress`)
+  const parts = [counts.join(', ')]
+  if (h.median_seconds !== null) parts.push(`median ${formatSeconds(h.median_seconds)}`)
+  if (h.failure) parts.push(h.failure.runs === h.not_successful ? h.failure.text : `${h.failure.text} (${h.failure.runs.toLocaleString()} of ${h.not_successful.toLocaleString()})`)
+  return parts.join(' · ')
 }
 
 /**

@@ -6,6 +6,7 @@ owner, is what `GET /state` and `GET /runs?status=running` report. A killed CLI 
 
 import json
 import os
+import re
 import signal
 import subprocess
 import urllib.request
@@ -224,23 +225,21 @@ def _post(port: int, path: str, body: dict) -> dict:
 def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli(tmp_path):
     """#991: a run the server started, followed by its events; and `--activity`."""
     _project(tmp_path)
-    # A node of its own for the first run: `upstream` then runs in the second, which reports
-    # it (a step served from the cache reports nothing, and would read as still executing).
-    with (tmp_path / "pipeline.py").open("a") as source:
-        source.write("\n\n@asset()\ndef apart() -> int:\n    return 2\n")
     serve = _serve(tmp_path)
     port = serve.port
     server = ["--server", f"http://127.0.0.1:{port}"]
     try:
-        # A finished run first, then one that waits in its slow step.
-        done = _post(port, "/runs", {"command": "get", "targets": ["apart"]})["run_id"]
+        # A finished run first, then one that waits in its slow step. The first computed
+        # `upstream`, which the second serves from cache: a cached step reports nothing until
+        # the run ends, and does not read as executing (#969).
+        done = _post(port, "/runs", {"command": "get", "targets": ["upstream"]})["run_id"]
         wait_until(
             lambda: _get(port, f"/runs/{done}")["status"] == "success", "the first run to finish"
         )
         slow = _post(port, "/runs", {"command": "get", "targets": ["slow"]})["run_id"]
         wait_until(lambda: (tmp_path / "cli.started").exists(), "the slow step to start")
 
-        # Followed by its events: `upstream` finished, `slow` is executing.
+        # `upstream` is cached, `slow` is executing.
         def listed():
             runs = _in_flight(tmp_path, *server)
             executing = [n["node_id"] for n in runs[0]["now"]["running"]] if runs else []
@@ -264,7 +263,13 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
         assert (total["runs"], total["ok"], total["in_progress"]) == (2, 1, 1), total
         assert total["by_trigger"]["api"] == 2, total
         assert activity["hours"][-1]["runs"] == 2, "both started in the current hour"
-        assert activity["summary"] == "2 runs in the last 24 hours · 1 in progress · 2 api"
+        assert re.fullmatch(
+            r"2 runs in the last 24 hours · 1 in progress · median \d+\.\ds · 2 api",
+            activity["summary"],
+        ), activity["summary"]
+        # The hour's median is of its one finished run; nothing went wrong in it.
+        assert total["median_seconds"] == _get(port, f"/runs/{done}")["elapsed_seconds"]
+        assert total["failure"] is None and activity["excluded"] is None, activity
         # The same database read without the server gives the same counts.
         local = json.loads(_history(tmp_path, "--activity", "--json", "--local").stdout)
         assert local["activity"]["total"] == total
@@ -281,16 +286,47 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
         assert (scheduled["runs"], scheduled["total"]) == ([], 0), scheduled
         assert scheduled["activity"]["total"]["runs"] == 0
         assert scheduled["activity"]["summary"] == "0 runs in the last 24 hours"
-        # The activity takes no other filter.
-        refused = _history(tmp_path, "--activity", "--status", "failed", *server)
+        # Left out, not kept: the same two runs, and what the exclusion left out is said.
+        hidden = json.loads(
+            _history(
+                tmp_path, "--activity", "--not-triggered-by", "schedule", "--json", *server
+            ).stdout
+        )["activity"]
+        assert hidden["total"]["runs"] == 2 and hidden["excluded"]["runs"] == 0, hidden
+        assert hidden == _get(port, "/runs?limit=1&not_triggered_by=schedule")["activity"]
+        # By status and by text: the run in progress, counted by the server.
+        live = json.loads(
+            _history(
+                tmp_path, "--activity", "--status", "running", "--search", "SLOW", "--json", *server
+            ).stdout
+        )["activity"]
+        assert (live["total"]["runs"], live["statuses"], live["search"]) == (1, ["running"], "SLOW")
+        # The window is the activity's own: a filter on when a run started is refused.
+        refused = _history(tmp_path, "--activity", "--since", "1h", *server)
         assert refused.returncode == 2, refused.stderr
+
+        # A run in progress leads the list whatever `limit` lists (#941): two runs finish
+        # after `slow` started, and a page of one still has it.
+        newer = ""
+        for _ in range(2):
+            newer = _post(port, "/runs", {"command": "get", "targets": ["upstream"]})["run_id"]
+            wait_until(
+                lambda run=newer: _get(port, f"/runs/{run}")["status"] == "success",
+                "a newer run to finish",
+            )
+        page = _get(port, "/runs?limit=1")
+        assert [r["id"] for r in page["runs"]] == [slow], page["runs"]
+        assert (page["total"], page["truncated"]) == (4, True), page
+        assert [r["id"] for r in _get(port, "/runs?limit=2")["runs"]] == [slow, newer]
+        only = _get(port, "/runs?limit=1&status=success")
+        assert [r["id"] for r in only["runs"]] == [newer] and only["total"] == 3, only
 
         (tmp_path / "release").write_text("")
         wait_until(lambda: _get(port, f"/runs/{slow}")["status"] == "success", "the run to finish")
         assert _in_flight(tmp_path, *server) == []
         after = json.loads(_history(tmp_path, "--activity", "--json", *server).stdout)
         assert after["activity"]["total"]["in_progress"] == 0
-        assert after["activity"]["total"]["ok"] == 2
+        assert after["activity"]["total"]["ok"] == 4
     finally:
         (tmp_path / "release").write_text("")
         _stop_server(serve)

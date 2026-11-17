@@ -352,12 +352,28 @@ The SCHEDULE cell is `<cron>; failing 2/2`, `<cron>; paused` (or `paused until <
 `truncated` count the runs they keep:
 
 - `--status success,failed,...`: any of `success`, `failed`, `cancelled`, `error`, `running`,
-  `interrupted`.
+  `interrupted`. `not_successful` is every one of a run that ended without succeeding
+  (`failed`, `error`, `cancelled`, `interrupted`).
 - `--target NAME`: runs whose target (as typed) or job (resolved node ids) is that node, by
   function name or node id. A run of every node (`all`) is left out.
 - `--triggered-by manual,api,schedule,client`.
+- `--not-triggered-by schedule` (experimental): without the runs started that way. Unlike
+  `--triggered-by manual,api,client`, it keeps the runs recorded before barca stored what
+  started a run.
+- `--search TEXT` (experimental): runs whose run id, target or job contains the text, whatever
+  its case. Unlike `--target` it matches part of a name, and a run of every node whose id
+  holds the text.
 - `--since WHEN`: started at or after a duration back from now (`30m`, `24h`, `7d`, `2w`), an
   RFC 3339 time or a UTC date (`2026-10-22`).
+- `--until WHEN` (experimental): started before a time, written as `--since` is. With
+  `--since`, a window: `--since 2026-10-22T08:00:00Z --until 2026-10-22T09:00:00Z` is the runs
+  started in that hour.
+
+The database keeps the runs, each filter from an index of its own, so the cost is the runs
+kept and not the runs recorded: on a history of 500,000 runs, a status, a trigger or a window
+answers in a few milliseconds. `--search` reads every run's id, target and job from one index
+(about a tenth of a second there), and `--target` reads the runs whose target or job holds the
+node's name and checks each.
 
 A failed run's row ends with its first failed step and the first line of its error, and JSON
 carries it as `failure: {node, error}` and again as the flat `failed_node` and `error` (`null`
@@ -377,6 +393,8 @@ barca history --status failed --since 24h
 barca history --status failed --target clean --json --fields run_id,started_at,failure
 barca history --status failed --json --fields run_id,failed_node,error
 barca history --triggered-by schedule --status failed,interrupted
+barca history --status not_successful --not-triggered-by schedule
+barca history --search daily_report --since 7d
 ```
 
 ### Runs in progress and the last day's activity
@@ -398,9 +416,12 @@ Where `now` comes from, and what it cannot say:
 
 - Against a server (`barca docs server-mode`), a run the server started is followed through
   its step events: a node is executing once its function printed a line or its upstream steps
-  finished, and queued before that. A step served from the cache sends no event, so a node
-  whose result was cached reads as executing, and what waits on it as queued, until a later
-  step of the run prints a line or finishes.
+  finished, and queued before that. A step served from the cache sends no event until the run
+  ends, so a node whose result is cached and that the run has not touched counts as done: it
+  is not listed as executing, and what depends on it does not wait for it. A run asked to
+  refresh (`--refresh`, `--refresh-all`) computes cached nodes again, so there they count as
+  any other. The cache state is read as the request is answered: a node that stops being
+  cached while the run goes (an input of it changed) shows from the next poll.
 - Without a server, and for a `barca get` or `barca run` in a shell beside a server, the run
   streams its steps to nobody. barca reads what it recorded: every node of its job that has
   no result since the run started counts as executing, and `queued` is always 0. A run of
@@ -411,30 +432,42 @@ Where `now` comes from, and what it cannot say:
 
 `barca history --activity` prints, instead of the runs, how many started in each of the last
 24 hours (experimental): one line for the window, then a row per hour that had runs, with the
-runs that did not succeed, the ones still running, and the count by trigger.
+runs that did not succeed, the ones still running, the count by trigger, the median time of
+the hour's finished runs and what most of its unsuccessful runs say went wrong.
 
 ```bash
 barca history --activity
 barca history --activity --json
-barca history --activity --triggered-by manual,api,client
+barca history --activity --not-triggered-by schedule
+barca history --activity --status not_successful --search daily_report
 ```
 
 JSON is `{"activity": {...}}`: `since` and `until` (the window, RFC 3339 UTC: 24 whole hours
 ending with the current one), `hours` (24 entries, oldest first, the empty hours included),
 `total` (the window as a whole) and `summary` (the line the table starts with). An hour has
-`at` (its start), `runs`, `ok`, `not_successful` (failed, error, cancelled or interrupted),
-`in_progress`, `by_status` (`success`, `failed`, `error`, `cancelled`, `interrupted`,
-`running`) and `by_trigger` (`schedule`, `api`, `manual`, `client`, and `unknown` for runs
-recorded before barca stored what started them).
+`at` (its start) and `until` (its end: `--since AT --until UNTIL` lists its runs), `runs`,
+`ok`, `not_successful` (failed, error, cancelled or interrupted), `in_progress`, `by_status`
+(`success`, `failed`, `error`, `cancelled`, `interrupted`, `running`), `by_trigger`
+(`schedule`, `api`, `manual`, `client`, and `unknown` for runs recorded before barca stored
+what started them), `median_seconds` (the median time of its finished runs; `null` when none
+finished) and `failure` (`{text, runs}`: what most of its unsuccessful runs say went wrong,
+`orders: KeyError: 'region'` for a failed step with a partitioned node's keys under its name,
+or how they ended when no step failed, such as `cancelled`; the latest on a tie; `null` when
+none ended that way).
 
-- The counts are over every recorded run of the window, one grouped query answered from an
-  index: they do not depend on `--limit`, and their cost is the runs of the window, not the
-  length of the history.
+- The counts are over every recorded run of the window, read from an index: they do not
+  depend on `--limit`, and their cost is the runs of the window, not the length of the
+  history. The times read the window's finished runs and the failures its unsuccessful ones.
 - Hours are hours of UTC, also on a server started with `--timezone`: a reader converts `at`.
   In a zone at a half-hour offset an hour's bar starts at `:30` local time.
-- `--activity` takes `--triggered-by` only (`--status`, `--target`, `--since`, `--limit` and
-  `--fields` are usage errors with it). With it, `activity.triggered_by` lists the triggers
-  counted, and runs that recorded no trigger are left out.
+- `--activity` takes `--status`, `--triggered-by`, `--not-triggered-by` and `--search`, and
+  counts the runs they keep; the answer says them back (`statuses`, `triggered_by`,
+  `not_triggered_by`, `search`). `--target`, `--since`, `--until`, `--limit` and `--fields` are
+  usage errors with it: the window is always the last 24 hours.
+- With `--triggered-by`, runs that recorded no trigger are left out. With `--not-triggered-by`
+  they are counted, and `excluded` is the window's runs the flag left out (an hour's keys over
+  the whole window; `null` without the flag), so what is hidden is said: the table prints
+  `left out: 1,438 schedule runs, 3 not successful`.
 - A run counts in the hour it started, with the status it has now.
 
 `barca history RUN_ID` shows one run: its own fields (status, target, job, timing, attempts,

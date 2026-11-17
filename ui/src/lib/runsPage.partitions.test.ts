@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { NO_STEPS_OPEN, groupRunSteps, runNodeIdle, runNodeLine, runNodeOutcome, runNodeTime, runStepRows, splitRunSteps, toggleStepsOpen } from './runsPage'
+import { runNodeIdle, runNodeLine, runNodeOutcome } from './runs'
+import { NO_STEPS_OPEN, groupRunSteps, runNodeTime, runStepRows, splitRunSteps, toggleStepsOpen } from './runsPage'
 import { failedKeysLabel, formatSeconds, keyBreakdown } from './assetTable'
 import { lastAttemptFailed } from './cacheStateDisplay'
 import type { NodeState, RunNodeSummary, RunStep } from './types'

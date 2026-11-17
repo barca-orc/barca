@@ -94,6 +94,7 @@ fn insert_run(
             target: target.map(str::to_string),
             nodes: node.map(str::to_string).into_iter().collect(),
             trigger: barca_core::outcome::Trigger::api(),
+            refreshes: false,
             files: Vec::new(),
             status,
             result: None,

@@ -20,6 +20,8 @@ import type { ResetPhase } from '@/components/ResetDatabase'
 import type { TokensModel } from '@/lib/tokensPage'
 import { INITIAL_TOKENS } from '@/lib/tokensPage'
 import type {
+  ActivityHour,
+  RunActivity,
   DataSignal,
   RunNow,
   IssuedToken,
@@ -420,6 +422,32 @@ function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {})
   }
 }
 
+/** `activity` of `GET /runs` as a server of every-minute ticks answers it with the schedule's runs hidden. */
+const runActivity: RunActivity = (() => {
+  const start = NOW_MS - 23 * 3_600_000
+  const stamp = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z')
+  const none = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
+  const nobody = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
+  const hour = (i: number, runs: number, bad: number, live = 0): ActivityHour => ({
+    at: stamp(start + i * 3_600_000), until: stamp(start + (i + 1) * 3_600_000),
+    runs, ok: runs - bad - live, not_successful: bad, in_progress: live,
+    by_status: { ...none, success: runs - bad - live, failed: bad, running: live }, by_trigger: { ...nobody, api: runs },
+    median_seconds: runs - live > 0 ? 42 + i : null,
+    failure: bad > 0 ? { text: "sessionize: KeyError: 'currency'", runs: bad } : null,
+  })
+  const hours = Array.from({ length: 24 }, (_, i) => hour(i, i % 5 === 0 ? 2 : i === 23 ? 3 : 0, i === 20 ? 2 : 0, i === 23 ? 1 : 0))
+  const sum = (pick: (h: ActivityHour) => number) => hours.reduce((n, h) => n + pick(h), 0)
+  const total: ActivityHour = {
+    ...hour(0, sum((h) => h.runs), sum((h) => h.not_successful), 1), until: stamp(start + 24 * 3_600_000), median_seconds: 51,
+  }
+  return {
+    since: total.at, until: total.until, triggered_by: [], not_triggered_by: ['schedule'], statuses: [], search: null,
+    hours, total,
+    excluded: { ...hour(0, 1438, 3), until: total.until, by_trigger: { ...nobody, schedule: 1438 }, median_seconds: 1.2, failure: { text: "poll_inbox: TimeoutError: timed out", runs: 3 } },
+    summary: `${total.runs} runs in the last 24 hours · ${total.not_successful} not successful · 1 in progress · median 51.0s · ${total.runs} api`,
+  }
+})()
+
 const runList: RunList = {
   runs: [
     ...Object.values(runByStatus).map((view, i) => summary(view, String(133 - i), { triggered_by: i % 3 === 0 ? 'schedule' : i % 3 === 1 ? 'client' : null })),
@@ -440,6 +468,7 @@ const runList: RunList = {
   ],
   total: 9,
   truncated: false,
+  activity: runActivity,
 }
 
 /** The run list in each state the Runs page shows. */
@@ -452,8 +481,17 @@ export const runLists = {
   'refresh failed': ready(runList, 'connection refused'),
 } satisfies Record<string, Remote<RunList>>
 
-/** The latest 100 of 37,955 runs: a filter counts over those, and says so. */
-export const partialRunList: Remote<RunList> = ready({ ...runList, total: 37_955, truncated: true })
+/** An hour of the activity, as a bar names it. */
+export const runHour = { since: runActivity.hours[20]!.at, until: runActivity.hours[20]!.until }
+
+/** Every run, the schedule's included: 37,955 of them, nothing left out. */
+export const everyRunList: Remote<RunList> = ready({
+  ...runList, total: 37_955, truncated: true,
+  activity: { ...runActivity, not_triggered_by: [], excluded: null },
+})
+
+/** A filter that keeps nothing. */
+export const noMatchRunList: Remote<RunList> = ready({ ...runList, runs: [], total: 0, truncated: false })
 
 /** The run panel in each state: its request's, then each run status. */
 export const runDetails: Record<string, Remote<RunView>> = {

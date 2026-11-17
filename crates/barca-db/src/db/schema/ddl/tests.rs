@@ -170,6 +170,7 @@ async fn a_format_1_database_from_0_24_3_gains_everything_added_since() {
             "DROP TABLE schedule_failures",
             "DROP TABLE sink_publications",
             "DROP INDEX idx_runs_job",
+            "DROP INDEX idx_runs_search",
             "DROP INDEX idx_mat_path",
             "DROP INDEX idx_mat_changed",
             "DROP INDEX idx_mat_attempts",
@@ -265,7 +266,12 @@ async fn a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_r
         // As a 0.24 release left it: format 1 without the columns added since.
         let (_db, conn) = raw(&path).await;
         // The indexes on `schedule_id` and `triggered_by` are newer than the columns they read.
-        for index in ["idx_runs_schedule", "idx_runs_started", "idx_runs_trigger"] {
+        for index in [
+            "idx_runs_schedule",
+            "idx_runs_started",
+            "idx_runs_trigger",
+            "idx_runs_search",
+        ] {
             conn.execute(&format!("DROP INDEX {index}"), ())
                 .await
                 .unwrap();

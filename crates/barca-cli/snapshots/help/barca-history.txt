@@ -7,11 +7,14 @@ Arguments:
 
 Options:
       --reconcile <RUN_ID>            After verifying a run stopped, record it as interrupted; refuses a proven live owner
-      --status <STATUS[,...]>         Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted
+      --status <STATUS[,...]>         Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted; not_successful is every one but success and running
       --target <NAME>                 Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out
       --triggered-by <TRIGGER[,...]>  Only runs started this way (comma-separated): manual, api, schedule, client
-      --activity                      Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, counted over every recorded run; takes --triggered-by
+      --not-triggered-by <T[,...]>    Without the runs started this way (comma-separated): schedule hides the cron ticks and keeps the runs that recorded no trigger
+      --search <TEXT>                 Only runs whose run id, target or job contains this text, whatever its case
+      --activity                      Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, with each hour's median time and leading failure, counted over every recorded run; takes --status, --triggered-by, --not-triggered-by, --search
       --since <WHEN>                  Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22)
+      --until <WHEN>                  Only runs started before this, written as --since is: with it, a window
   -l, --limit <LIMIT>                 Maximum recent runs (default: every run in JSON, 10 in a human table); with a RUN_ID, the most steps listed (default 1000)
       --all                           Show every recorded run (no limit); with a RUN_ID, every step it recorded
       --json                          Emit JSON on stdout (the default when stdout is not a terminal)

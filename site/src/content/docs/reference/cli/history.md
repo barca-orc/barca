@@ -16,7 +16,7 @@ The change is local to the selected environment's metadata database.
 ## Usage
 
 ```txt wrap
-barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--since WHEN] [--activity] [-l N | --all] [--json|--pretty]
+barca history [RUN_ID] [--status S] [--target NAME] [--triggered-by T] [--not-triggered-by T] [--search TEXT] [--since WHEN] [--until WHEN] [--activity] [-l N | --all] [--json|--pretty]
 barca history --reconcile RUN_ID
 ```
 
@@ -69,9 +69,15 @@ The final write still records completed results not saved during execution.
 
 Filters combine with AND, and `--limit`, `total` and `truncated` count the runs they keep:
 `--status` (comma-separated: `success`, `failed`, `cancelled`, `error`, `running`,
-`interrupted`), `--target NAME` (the run's target or job is that node; runs of every node are
-left out), `--triggered-by` (comma-separated: `manual`, `api`, `schedule`, `client`) and
-`--since` (`30m`, `24h`, `7d`, `2w`, an RFC 3339 time or a UTC date). A failed run's row ends
+`interrupted`; `not_successful` is every one but `success` and `running`), `--target NAME`
+(the run's target or job is that node; runs of every node are left out), `--triggered-by`
+(comma-separated: `manual`, `api`, `schedule`, `client`), `--not-triggered-by` (the same
+values, left out: `schedule` hides the cron ticks and keeps the runs recorded before barca
+stored what started a run), `--search TEXT` (the run id, target or job contains the text,
+whatever its case), `--since` (`30m`, `24h`, `7d`, `2w`, an RFC 3339 time or a UTC date) and
+`--until` (started before a time, written the same way; with `--since`, a window). The
+database keeps the runs, each filter from an index, so a filter costs the runs it keeps and
+not the runs recorded. A failed run's row ends
 with its first failed step and the first line of its error; JSON runs carry it as
 `failure: {node, error}` and as the flat `failed_node` and `error` (`null` otherwise), so
 `--fields run_id,failed_node,error` needs no nesting.
@@ -79,6 +85,8 @@ with its first failed step and the first line of its error; JSON runs carry it a
 ```bash
 barca history --status failed --since 24h
 barca history --target clean --triggered-by schedule --json
+barca history --status not_successful --not-triggered-by schedule
+barca history --search daily_report --since 7d
 barca history 836fdca186c8          # one run in detail
 barca history 836fdca186c8 --json   # {run, steps: [...], hint?}
 ```
@@ -94,16 +102,19 @@ no result since the run started counts as executing and `queued` is 0, and a run
 cannot be seen alive from this machine has no `now`.
 
 `barca history --activity` prints, instead of the runs, how many started in each of the last
-24 hours (experimental), by status and by what started them, counted over every recorded run
-of the window whatever `--limit` would list. JSON is `{"activity": {since, until,
-triggered_by, hours, total, summary}}`; hours are hours of UTC. It takes `--triggered-by`
-only: `--triggered-by manual,api,client` leaves a schedule's runs out.
+24 hours (experimental), by status and by what started them, with each hour's median time and
+what most of its unsuccessful runs say went wrong, counted over every recorded run of the
+window whatever `--limit` would list. JSON is `{"activity": {since, until, triggered_by,
+not_triggered_by, statuses, search, hours, total, excluded, summary}}`; hours are hours of
+UTC. It takes `--status`, `--triggered-by`, `--not-triggered-by` and `--search`:
+`--not-triggered-by schedule` leaves a schedule's runs out and says in `excluded` how many
+that was.
 
 ```bash
 barca history --status running
 barca history --status running --json --fields run_id,now
 barca history --activity
-barca history --activity --triggered-by manual,api,client --json
+barca history --activity --not-triggered-by schedule --json
 ```
 
 The full key list and the limits are in [status](/reference/cli/status/), "Runs in progress

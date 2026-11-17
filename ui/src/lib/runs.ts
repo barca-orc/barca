@@ -3,7 +3,8 @@ import { statusGlyph, statusTone } from './status'
 import type { Glyph } from './glyph'
 import { formatAbsolute, type TimeZone } from './time'
 import type { Tone } from './tone'
-import type { ErrorEnvelope, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
+import { shortName } from './graph'
+import type { ErrorEnvelope, RunNodeSummary, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
 const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
   'pending', 'running', 'success', 'failed', 'cancelled', 'error', 'interrupted',
@@ -44,6 +45,36 @@ export function runTone(status: string): Tone {
 /** The glyph of a run's status. */
 export function runGlyph(status: string): Glyph {
   return statusGlyph(runStatus(status))
+}
+
+/** A recorded step's glyph: `cached` is a step's own status, beside the run lifecycle's. */
+export function stepGlyph(status: string): Glyph {
+  return status === 'cached' ? 'cached' : runGlyph(status)
+}
+
+/** `3,077 keys · 40 failed · 7 calls`. */
+export function runNodeLine(n: RunNodeSummary): string {
+  const parts = [`${n.keys.toLocaleString()} key${n.keys === 1 ? '' : 's'}`]
+  if (n.failed) parts.push(`${n.failed.toLocaleString()} failed`)
+  if (n.calls) parts.push(`${n.calls.toLocaleString()} call${n.calls === 1 ? '' : 's'}`)
+  return parts.join(' · ')
+}
+
+/** Whether the node recorded no step this run: it was cached, or skipped. */
+export function runNodeIdle(n: RunNodeSummary): boolean {
+  return n.status === 'cached' || n.status === 'skipped'
+}
+
+/**
+ * A node's badge and line: `3,077 keys · 7 failed · 5 calls` for a node that ran, `cached`, or
+ * `skipped` with why (`upstream demand_forecast failed`, or the run stopped before it).
+ */
+export function runNodeOutcome(n: RunNodeSummary): { kind: StatusKind; label: string; detail: string | null } {
+  if (n.status === 'cached') return { kind: 'skipped', label: 'cached', detail: null }
+  if (n.status === 'skipped') {
+    return { kind: 'skipped', label: 'skipped', detail: n.blocked_by ? `upstream ${shortName(n.blocked_by)} failed` : 'the run stopped before it' }
+  }
+  return { kind: n.failed ? 'failed' : 'success', label: runNodeLine(n), detail: null }
 }
 
 export function runLabel(status: string): string {
