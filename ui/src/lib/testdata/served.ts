@@ -17,7 +17,7 @@ import type { HealthReason } from '../generated/HealthReason'
 import type { NodeState } from '../types'
 import table from './health-alone.json'
 
-type Classified = 'health' | 'health_reason' | 'measured' | 'root' | 'last_check' | 'refresh_path'
+type Classified = 'health' | 'health_reason' | 'measured' | 'root' | 'last_check' | 'refresh_path' | 'stale_since' | 'expected_fresh_at' | 'recheck_at'
 export type Unserved = Omit<NodeState, Classified> & Partial<Pick<NodeState, Classified>>
 
 const ALONE = table as Record<string, { health: Health; health_reason: HealthReason }>
@@ -36,7 +36,7 @@ export function served(row: Unserved): NodeState {
   const [health, reason] = alone(row)
   // A failing node is its own root; a fixture about a node blocked by another states its `root`.
   const root = row.root ?? ((row.health ?? health) === 'failing' ? { id: `failure:${row.id}`, kind: 'failure' as const, node: row.id } : null)
-  return { ...row, root, health: row.health ?? health, health_reason: row.health_reason ?? (row.health ? REASON[row.health] : reason), measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null, refresh_path: row.refresh_path ?? null }
+  return { ...row, root, health: row.health ?? health, health_reason: row.health_reason ?? (row.health ? REASON[row.health] : reason), measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null, refresh_path: row.refresh_path ?? null, stale_since: row.stale_since ?? null, expected_fresh_at: row.expected_fresh_at ?? null, recheck_at: row.recheck_at ?? null }
 }
 
 /** The reason a fixture that states a health without one gets: a default of the fixtures, not a rule. */

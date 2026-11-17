@@ -203,9 +203,40 @@ pub(crate) async fn history(
     let runs: Vec<barca_core::db::RunRecord> =
         serde_json::from_value(body["runs"].clone()).map_err(bad)?;
     let total = body["total"].as_u64().map_or(runs.len(), |t| t as usize);
+    // The server's own words for each run: its `line`, and with `--status running` what a
+    // run in progress is working on (`now`).
+    let extras = barca_core::report::HistoryExtras::of_server_runs(&body["runs"]);
     crate::commands::emit(barca_core::report::render_history(
-        &runs, total, json, fields,
+        &runs, total, json, fields, &extras,
     ));
+    Ok(())
+}
+
+/// `barca history --activity --server`: `activity` of `GET /runs`, counted by the server over
+/// the runs of the last 24 hours (with `--triggered-by`, over the runs started that way).
+pub(crate) async fn activity(
+    server: &Server,
+    filter: &barca_core::history_filter::HistoryFilter,
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let mut path = "/runs?limit=1".to_string();
+    for (key, value) in filter.query_pairs() {
+        if key == "triggered_by" {
+            path.push_str(&format!("&{key}={}", encode(&value)));
+        }
+    }
+    let body = server.get_json(&path).await?;
+    let Some(activity) = body.get("activity").filter(|a| !a.is_null()) else {
+        return Err(server.unexpected(
+            "GET /runs",
+            "the server sent no `activity`: it runs a barca older than 0.44",
+        ));
+    };
+    let activity: barca_core::run_list::RunActivity = serde_json::from_value(activity.clone())
+        .map_err(|e| server.unexpected("GET /runs", &e.to_string()))?;
+    crate::commands::emit(barca_core::report::render_activity(&activity, json));
     Ok(())
 }
 
@@ -388,13 +419,22 @@ fn render_queue(body: &Value) -> String {
         return out;
     }
     out.push_str(&format!(
-        "\n{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {}\n",
-        "POS", "RUN_ID", "STATUS", "COMMAND", "TARGET", "TRIGGER", "QUEUED_AT"
+        "\n{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {:<25} {}\n",
+        "POS", "RUN_ID", "STATUS", "COMMAND", "TARGET", "TRIGGER", "QUEUED_AT", "START"
     ));
     for run in running.iter().chain(queued.iter()) {
         let target = run["target"].as_str().unwrap_or("(all)");
+        // When it started, or (`~`) when the server estimates it will.
+        let start = match (
+            run["started_at"].as_str(),
+            run["estimated_start_at"].as_str(),
+        ) {
+            (Some(at), _) => at.to_string(),
+            (None, Some(at)) => format!("~{at}"),
+            (None, None) => "-".to_string(),
+        };
         out.push_str(&format!(
-            "{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {}\n",
+            "{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {:<25} {}\n",
             run["position"]
                 .as_u64()
                 .map_or("-".to_string(), |p| p.to_string()),
@@ -404,6 +444,7 @@ fn render_queue(body: &Value) -> String {
             target,
             run["triggered_by"].as_str().unwrap_or(""),
             run["queued_at"].as_str().unwrap_or(""),
+            start,
         ));
     }
     out

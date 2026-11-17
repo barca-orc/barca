@@ -1,7 +1,7 @@
 /**
  * The Runs page as a program (`lib/program.ts`). The selected run and the filters live in the
- * URL (`?run=`, `?status=`, `?q=`, `?hour=`), so changing one is an effect (a navigation), and
- * the page reads it back as input.
+ * URL (`?run=`, `?status=`, `?q=`, `?hour=`, `?schedule=hide`), so changing one is an effect (a
+ * navigation), and the page reads it back as input.
  * Pure; `pages/RunsPage.tsx` runs it and `pages/RunsView.tsx` renders it.
  */
 
@@ -10,7 +10,7 @@ import { shortName } from './graph'
 import { only, type Next } from './program'
 import { parseRunStatus, runIsLive } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
-import type { RunList, RunNodeSummary, RunStep, RunSummary, StatusKind } from './types'
+import type { ActivityHour, RunList, RunNodeSummary, RunStep, RunSummary, StatusKind } from './types'
 
 const RUNS_PAGE_SIZE = 100
 export const RUNS_MAX = 1000
@@ -28,6 +28,8 @@ export interface RunsModel {
   query: string
   /** Narrows the list to the runs started in this hour (its start, ms since epoch). */
   hour: number | null
+  /** Leaves the schedule's runs out of the list and the activity: the server filters them. */
+  hideSchedule: boolean
 }
 
 export type RunsMsg =
@@ -42,6 +44,8 @@ export type RunsMsg =
   | { type: 'query_changed'; value: string }
   /** A bar of the activity strip: the same one again clears the filter. */
   | { type: 'hour_toggled'; at: number }
+  /** The "Hide schedule runs" control. */
+  | { type: 'schedule_toggled' }
 
 type RunsEffect =
   /** Set `?run=` (`null` removes it); `replace` keeps the history entry. */
@@ -52,9 +56,17 @@ type RunsEffect =
   | { type: 'refetch_detail' }
 
 /** The part of the model the URL owns. */
-type RunFilters = Pick<RunsModel, 'filter' | 'query' | 'hour'>
+type RunFilters = Pick<RunsModel, 'filter' | 'query' | 'hour' | 'hideSchedule'>
 
-export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', query: '', hour: null }
+export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', query: '', hour: null, hideSchedule: false }
+
+/**
+ * `triggered_by` of `GET /runs` for the list: every trigger but the schedule's when its runs
+ * are hidden (`barca history --triggered-by manual,api,client`), else no filter.
+ */
+export function runsTriggeredBy(model: Pick<RunsModel, 'hideSchedule'>): string | null {
+  return model.hideSchedule ? 'manual,api,client' : null
+}
 
 /** The filters a URL names; anything it cannot mean is the default. */
 export function parseRunFilters(params: URLSearchParams): RunFilters {
@@ -64,22 +76,24 @@ export function parseRunFilters(params: URLSearchParams): RunFilters {
     filter: status === 'failed' || status === 'live' ? status : 'all',
     query: params.get('q') ?? '',
     hour: params.get('hour') !== null && Number.isFinite(hour) ? hour : null,
+    hideSchedule: params.get('schedule') === 'hide',
   }
 }
 
 /** `params` with `filters` written; a default leaves its parameter out. */
-export function writeRunFilters(params: URLSearchParams, { filter, query, hour }: RunFilters): URLSearchParams {
+export function writeRunFilters(params: URLSearchParams, { filter, query, hour, hideSchedule }: RunFilters): URLSearchParams {
   const next = new URLSearchParams(params)
   const put = (key: string, value: string | null) => (value ? next.set(key, value) : next.delete(key))
   put('status', filter === 'all' ? null : filter)
   put('q', query || null)
   put('hour', hour === null ? null : String(hour))
+  put('schedule', hideSchedule ? 'hide' : null)
   return next
 }
 
 const withFilters = (model: RunsModel, change: Partial<RunFilters>): Next<RunsModel, RunsEffect> => {
   const next = { ...model, ...change }
-  return [next, [{ type: 'filters', filters: { filter: next.filter, query: next.query, hour: next.hour } }]]
+  return [next, [{ type: 'filters', filters: { filter: next.filter, query: next.query, hour: next.hour, hideSchedule: next.hideSchedule } }]]
 }
 
 /** Whether "Load more" can ask for more runs. */
@@ -98,6 +112,7 @@ export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, Runs
     .with({ type: 'filter_changed' }, ({ filter }) => withFilters(model, { filter }))
     .with({ type: 'query_changed' }, ({ value }) => withFilters(model, { query: value }))
     .with({ type: 'hour_toggled' }, ({ at }) => withFilters(model, { hour: model.hour === at ? null : at }))
+    .with({ type: 'schedule_toggled' }, () => withFilters(model, { hideSchedule: !model.hideSchedule }))
     .with({ type: 'retry_list' }, () => [model, [{ type: 'refetch_list' }]])
     .with({ type: 'retry_detail' }, () => [model, [{ type: 'refetch_detail' }]])
     .exhaustive()
@@ -314,58 +329,9 @@ export function runStepRows(steps: readonly RunStep[], nodes: readonly RunNodeSu
   return rows
 }
 
-/** One hour of the activity strip. */
-interface ActivityHour {
-  /** Start of the hour, ms since epoch. */
-  at: number
-  ok: number
-  failed: number
-  live: number
-  /** What went wrong in the newest failed run of the hour, as its row says it (`line.failure`). */
-  failure: string | null
-}
-
-/** What the loaded runs say about the last day. */
-export interface RunActivity {
-  hours: ActivityHour[]
-  total: number
-  failed: number
-  /** Median wall time of the finished runs, seconds; null with none. */
-  medianSeconds: number | null
-  /** The oldest loaded run is newer than the window: the counts cover only what was loaded. */
-  partial: boolean
-}
-
-/** Runs started in the `hours` before `nowMs`, hour by hour, oldest first. */
-export function runActivity(runs: readonly RunSummary[], nowMs: number, hours = 24, truncated = false): RunActivity {
-  const end = Math.floor(nowMs / HOUR) * HOUR + HOUR
-  const start = end - hours * HOUR
-  const buckets: ActivityHour[] = Array.from({ length: hours }, (_, i) => ({ at: start + i * HOUR, ok: 0, failed: 0, live: 0, failure: null }))
-  const durations: number[] = []
-  let oldest = Infinity
-  for (const run of runs) {
-    const at = parseTime(run.started_at)
-    if (at === null) continue
-    oldest = Math.min(oldest, at)
-    if (at < start || at >= end) continue
-    const bucket = buckets[Math.floor((at - start) / HOUR)]!
-    if (runIsLive(run.status)) bucket.live += 1
-    else if (runFailed(run.status)) {
-      bucket.failed += 1
-      bucket.failure ??= run.line.failure
-    }
-    else bucket.ok += 1
-    if (run.elapsed_seconds !== null && !runIsLive(run.status)) durations.push(run.elapsed_seconds)
-  }
-  durations.sort((a, b) => a - b)
-  const total = buckets.reduce((n, b) => n + b.ok + b.failed + b.live, 0)
-  return {
-    hours: buckets,
-    total,
-    failed: buckets.reduce((n, b) => n + b.failed, 0),
-    medianSeconds: durations.length ? durations[Math.floor((durations.length - 1) / 2)]! : null,
-    partial: truncated && oldest > start,
-  }
+/** The start of an hour of the server's activity (`activity.hours[].at`), ms since epoch. */
+export function activityHourAt(h: Pick<ActivityHour, 'at'>): number {
+  return parseTime(h.at) ?? 0
 }
 
 /** `14:00`, in the reader's chosen time zone. */
@@ -373,14 +339,13 @@ export function hourLabel(at: number, zone: TimeZone = 'local'): string {
   return formatHour(at, zone)
 }
 
-/** A bar's tooltip: the hour (zone named), its runs, and what failed first. */
+/** A bar's tooltip: the hour (zone named) and its runs, as the server counted them. */
 export function activityBarLabel(h: ActivityHour, zone: TimeZone = 'local'): string {
-  const n = h.ok + h.failed + h.live
-  const parts = [`${hourLabel(h.at, zone)} ${zoneName(zone, h.at)}: ${n} run${n === 1 ? '' : 's'}`]
-  if (h.failed) parts.push(`${h.failed} not successful`)
-  if (h.live) parts.push(`${h.live} in progress`)
-  const failure = h.failure ? `\n${h.failure}` : ''
-  return parts.join(', ') + failure
+  const at = activityHourAt(h)
+  const parts = [`${hourLabel(at, zone)} ${zoneName(zone, at)}: ${h.runs} run${h.runs === 1 ? '' : 's'}`]
+  if (h.not_successful) parts.push(`${h.not_successful} not successful`)
+  if (h.in_progress) parts.push(`${h.in_progress} in progress`)
+  return parts.join(', ')
 }
 
 /**
@@ -388,7 +353,8 @@ export function activityBarLabel(h: ActivityHour, zone: TimeZone = 'local'): str
  * None in the last four hours, where `now` is: beside a side panel the chart is narrow.
  */
 export function activityTicks(hours: readonly ActivityHour[], every = 6, zone: TimeZone = 'local'): { index: number; label: string }[] {
-  return hours.flatMap((h, index) =>
-    hourOf(h.at, zone) % every === 0 && index < hours.length - 4 ? [{ index, label: hourLabel(h.at, zone) }] : [],
-  )
+  return hours.flatMap((h, index) => {
+    const at = activityHourAt(h)
+    return hourOf(at, zone) % every === 0 && index < hours.length - 4 ? [{ index, label: hourLabel(at, zone) }] : []
+  })
 }

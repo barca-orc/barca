@@ -131,6 +131,74 @@ pub async fn history_at(
     Ok((runs, total))
 }
 
+/// The runs started in the last 24 hours, hour by hour, in this environment
+/// ([`crate::run_list::RunActivity`]): `barca history --activity`.
+pub async fn activity(
+    cfg: &crate::config::ResolvedConfig,
+    triggers: &[crate::outcome::TriggeredBy],
+) -> Result<crate::run_list::RunActivity, BarcaError> {
+    open_metadata(cfg).await?;
+    activity_at(&cfg.db_path, triggers, chrono::Utc::now()).await
+}
+
+/// [`activity`] of the database at `db_path`, at `now`: one grouped query over the runs of
+/// the window ([`db::run_activity`]).
+pub async fn activity_at(
+    db_path: &str,
+    triggers: &[crate::outcome::TriggeredBy],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<crate::run_list::RunActivity, BarcaError> {
+    let since = crate::run_list::activity_since(now)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let counts = db::run_activity(db_path, &since).await?;
+    Ok(crate::run_list::run_activity(&counts, triggers, now))
+}
+
+/// What each run of `runs` that is in progress on this machine is working on now, by run id
+/// ([`crate::run_list::RunNow`]): `now` of `barca history --status running` without a server.
+///
+/// A run in another process streams its steps to nobody, so this reads what it recorded: the
+/// nodes of its job that have no result since it started count as executing
+/// ([`crate::run_list::unfollowed_run_now`]), and none as queued. A run whose owner cannot be
+/// seen alive from here, one that recorded no job, and one whose files no longer parse have
+/// no entry.
+pub async fn history_now(
+    cfg: &crate::config::ResolvedConfig,
+    runs: &[db::RunRecord],
+    python: &std::path::Path,
+) -> std::collections::HashMap<String, crate::run_list::RunNow> {
+    let mut out = std::collections::HashMap::new();
+    for alive in db::alive_running_runs(&cfg.db_path).await {
+        let Some(run) = runs.iter().find(|r| r.run_id == alive.run_id) else {
+            continue;
+        };
+        let targets: Vec<String> = match alive.job.as_str() {
+            "" => continue,
+            "all" => Vec::new(),
+            ids => ids.split(',').map(str::to_string).collect(),
+        };
+        let Ok(dag) = crate::load::build_dag(&run.files, python).await else {
+            continue;
+        };
+        let Ok(status) = crate::status::status_from_dag(cfg, &[], &dag, python, 0, false).await
+        else {
+            continue;
+        };
+        out.insert(
+            alive.run_id,
+            crate::run_list::unfollowed_run_now(
+                &alive.command,
+                &targets,
+                &run.started_at,
+                &status.nodes,
+                &dag.groups,
+            ),
+        );
+    }
+    out
+}
+
 /// One run and the steps it recorded, for `barca history RUN_ID`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunDetail {

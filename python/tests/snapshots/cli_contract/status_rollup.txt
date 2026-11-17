@@ -22,6 +22,7 @@ entries[].data_coverage : object
 entries[].data_coverage.assets : integer
 entries[].data_coverage.measured : integer
 entries[].data_coverage.suspect : integer
+entries[].fresh_by : null
 entries[].health : object
 entries[].health.behind : integer
 entries[].health.blocked : integer
@@ -40,6 +41,7 @@ entries[].label : string
 entries[].nodes : integer
 entries[].parent : null|string
 entries[].running : integer
+entries[].unbounded : integer
 files : array
 files[] : object
 files[].asset_health : object

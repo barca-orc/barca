@@ -67,6 +67,25 @@ last_check: LastCheck | null,
  */
 refresh_path: RefreshPath | null,
 /**
+ * Since when the node has been out of date (RFC 3339, UTC): the earliest recorded time
+ * from which it has been continuously not fresh (`barca docs status-fields`, "Times").
+ * `null` for a fresh or undecided node and where no record holds the time.
+ */
+stale_since: string | null,
+/**
+ * When the node is expected to be fresh (RFC 3339, UTC), an estimate rounded up to 5
+ * seconds: the start of the run that computes it plus the typical durations of the
+ * steps before it. `null` for a fresh node and where no run is known to leave it fresh
+ * (failing, blocked, undecided, missed by a tick, no refresh path).
+ */
+expected_fresh_at: string | null,
+/**
+ * When a tick next looks at the node (RFC 3339, UTC): the next tick of its refresh path.
+ * A node with this and no `expected_fresh_at` will be rechecked, not necessarily fresh.
+ * `null` when it has no refresh path or the path has no next tick.
+ */
+recheck_at: string | null,
+/**
  * Per-key cache state of a partitioned node.
  */
 partitions?: PartitionState | null,

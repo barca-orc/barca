@@ -234,6 +234,13 @@ every database from before 0.29.2 (#629):
   then its keys' range). With `idx_mat_run` alone that read every row of the run once per node.
   Opening an older database builds it, under half a second for 470k rows; older binaries ignore
   it.
+- `idx_runs_started (started_at, triggered_by, status)` and `idx_runs_trigger (triggered_by, id)`
+  (0.44.0, #991, full indexes on `runs`). The first answers the activity of `GET /runs` and
+  `barca history --activity` (the runs started in the last 24 hours, counted by hour, status and
+  trigger) as one range of the index, never the table: its cost is the runs of the window, not
+  the history's length. The second answers `GET /runs?triggered_by=` (the run list without the
+  schedule's runs) and its count. Opening an older database builds them, well under a second
+  for 100k runs; older binaries ignore them.
 - `materializations.rows` (INTEGER, nullable, 0.43, #925): the rows a successful tabular result
   holds, as its worker counted them (an in-memory frame's length, or the row count in a written
   parquet file's footer). NULL when not counted, on failed rows, on older rows and on rows a

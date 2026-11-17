@@ -30,6 +30,9 @@ function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
     triggered_by: 'api',
     schedule_id: null,
     queued_at: '2026-10-22T10:00:00Z',
+    started_at: null,
+    estimated_start_at: null,
+    wait_seconds: null,
     ...over,
   }
 }

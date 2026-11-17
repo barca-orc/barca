@@ -154,6 +154,7 @@ CASES: list[tuple[str, list[str], str, int]] = [
         "stdout",
         0,
     ),
+    ("history_activity", ["history", "--activity", "--json"], "stdout", 0),
     ("stats", ["stats", "total", "pipeline.py", "--json"], "stdout", 0),
     ("doctor", ["doctor", "pipeline.py", "--json"], "stdout", 0),
     # A dry run deletes nothing, so the cases after it see the same project. A moved-aside

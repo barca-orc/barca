@@ -23,4 +23,10 @@ keys: KeysDone | null,
  * The groups of the nodes in flight, busiest first; empty without groups. A node is
  * counted under the group the rollup puts it in ([`crate::rollup::node_groups`]).
  */
-groups: Array<GroupActivity>, };
+groups: Array<GroupActivity>,
+/**
+ * The same in one line, as `barca history --status running` prints it under the run:
+ * `executing 3: orders, clean, report · 12 queued · 240/900 keys`. The first
+ * [`NOW_NAMES`] nodes are named, by their short names.
+ */
+line: string, };

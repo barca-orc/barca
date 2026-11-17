@@ -5,10 +5,12 @@ import { runIsLive, runsPollInterval } from '@/lib/runs'
 import { recovering } from './polling'
 import type { RunList, RunView } from '@/lib/types'
 
-export function useRuns(limit: number) {
+export function useRuns(limit: number, triggeredBy: string | null = null) {
   return useQuery({
-    queryKey: ['runs', 'list', limit],
-    queryFn: () => api.runs(limit),
+    queryKey: ['runs', 'list', limit, triggeredBy],
+    queryFn: () => api.runs(limit, triggeredBy),
+    // Changing the filter keeps the list on screen until the filtered one arrives.
+    placeholderData: (previous) => previous,
     // Fast while a listed run is live; a run started elsewhere shows within the idle interval.
     refetchInterval: recovering<RunList>((q) => runsPollInterval(q.state.data?.runs)),
     retry: false,

@@ -7,10 +7,11 @@
 mod commands;
 mod keys;
 pub use commands::{
-    GetShape, OutputChunk, RenderedOutput, ResultFormat, Returned, Shown, first_multi_failure,
-    history_json, history_target, render_explain, render_failed_get, render_failed_run, render_get,
-    render_get_multi, render_history, render_list, render_multi, render_plan, render_rollup,
-    render_run, render_run_detail, render_sql, render_stats, render_status,
+    GetShape, HistoryExtras, HistoryNow, OutputChunk, RenderedOutput, ResultFormat, Returned,
+    Shown, first_multi_failure, history_json, history_target, render_activity, render_explain,
+    render_failed_get, render_failed_run, render_get, render_get_multi, render_history,
+    render_list, render_multi, render_plan, render_rollup, render_run, render_run_detail,
+    render_sql, render_stats, render_status,
 };
 pub(crate) use commands::{
     failed_run_body, multi_json, multi_parts, render_failed_get_returned, render_get_body,
@@ -215,6 +216,16 @@ pub(crate) fn ago(seconds: i64) -> String {
     }
 }
 
+/// A length of time in the largest whole unit: `45s`, `3m`, `16h`, `6d`.
+pub(crate) fn span(seconds: i64) -> String {
+    match seconds.max(0) {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
 pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> String {
     use std::fmt::Write;
     let mut rendered = String::new();
@@ -284,6 +295,15 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
                 Some(path) => format!("{why}; {}", path.line(now)),
                 None if has_paths => format!("{why}; {}", crate::refresh_path::NO_REFRESH_PATH),
                 None => why,
+            };
+            // When: `fresh ~15:05 UTC` (an estimate), `overdue 16h`, or `rechecked 15:05 UTC`
+            // where a tick can only look again (#962). The path's line already names the
+            // next tick, so a recheck at that tick is not said twice.
+            let why = match crate::estimates::line(n, now) {
+                Some(when) if !when.starts_with("rechecked") || n.schedule.is_some() => {
+                    format!("{why}; {when}")
+                }
+                _ => why,
             };
             let last = n
                 .last_materialization

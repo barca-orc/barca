@@ -19,6 +19,9 @@ Options:
       --triggered-by <TRIGGER[,...]>
           Only runs started this way (comma-separated): manual, api, schedule, client
 
+      --activity
+          Instead of the runs: how many started in each of the last 24 hours (UTC), by status and by what started them, counted over every recorded run; takes --triggered-by
+
       --since <WHEN>
           Only runs started at or after this: a duration back from now (30m, 24h, 7d, 2w), an RFC 3339 time or a UTC date (2026-10-22)
 
@@ -37,7 +40,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure, failed_node, error, principal, trigger_reason, cancellation, line]
+          [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure, failed_node, error, principal, trigger_reason, cancellation, line, now]
 
       --env <ENV>
           Use a separate cache and history for this environment
@@ -71,6 +74,12 @@ Examples:
   barca history --status failed,interrupted --since 24h   # what went wrong in the last day
   barca history --target clean             # runs whose target or job is clean
   barca history --triggered-by schedule    # runs started by a cron tick (manual, api, schedule, client)
+  barca history --triggered-by manual,api,client   # every run but the schedule's
+  barca history --status running           # runs in progress, each with the nodes it is executing now
+  barca history --status running --json --fields run_id,now   # {running: [...], queued, keys, groups, line} per run
+  barca history --activity                 # the last 24 hours, hour by hour: runs by status and by trigger
+  barca history --activity --json          # {activity: {since, until, hours: [...], total, summary}}
+  barca history --activity --triggered-by manual,api,client --server   # a server's activity without its schedule's runs
   barca history --since 2026-10-22T08:00:00Z --json   # runs started at or after a time
   barca history 7f30b3e9       # one run: its steps, attempts, artifacts, errors and tracebacks
   barca history 7f30b3e9 --json   # {run, steps: [...], steps_page: {total, truncated}, hint?}

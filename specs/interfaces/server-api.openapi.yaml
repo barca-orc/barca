@@ -587,7 +587,8 @@ paths:
               schema: *id005
       description: Newest first. Without limit, every run, as barca history --json prints without -l.
         The filters combine with AND; total and truncated count the runs they keep, and limit applies
-        after them. An unknown filter value is a 400.
+        after them. An unknown filter value is a 400. When status names running, each listed run
+        in flight carries now, the nodes it is working on.
       parameters: &id010
       - name: limit
         in: query
@@ -2857,14 +2858,21 @@ paths:
               schema: *id003
               description: Methods accepted by this route
         '400':
-          description: Axum query extractor rejects malformed/non-unsigned limits
+          description: Axum query extractor rejects malformed/non-unsigned limits; an unknown
+            triggered_by value is a JSON error
           content:
             text/plain:
               schema: *id003
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       description: Newest first, all pipelines in this local environment. No source filter. Snapshot inspection
         does not create/migrate the database. Limit defaults to 100 and is clamped to 1–1000.
         With status=running, only the runs in flight (pending or running), this server's and the
         CLI runs on the same metadata database whose owner is alive, each with active_steps.
+        With triggered_by, only the runs started that way, and total counts those. Without
+        status=running the body has activity, the runs started in the last 24 hours counted by
+        hour over every recorded run of the window (and of triggered_by), not over the runs listed.
       parameters: &id024
       - name: limit
         in: query
@@ -2881,6 +2889,13 @@ paths:
           enum:
           - running
         description: running lists only the runs in flight; any other value is a 400.
+      - name: triggered_by
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'barca history --triggered-by: comma-separated, any of manual, api, schedule,
+          client. manual,api,client leaves the schedule''s runs out. An unknown value is a 400.'
     head:
       summary: List durable history joined with retained live runs (headers only)
       operationId: head_runs
@@ -4236,6 +4251,9 @@ components:
       - triggered_by
       - schedule_id
       - queued_at
+      - started_at
+      - estimated_start_at
+      - wait_seconds
       properties:
         run_id:
           type: string
@@ -4267,6 +4285,26 @@ components:
         queued_at:
           type: string
           description: When the server accepted it, RFC 3339 UTC.
+        started_at:
+          type: [string, 'null']
+          format: date-time
+          description: When it started executing (RFC 3339, UTC); null while it waits, and from a
+            --read-only server (the recorded queue does not say). Experimental.
+        estimated_start_at:
+          type: [string, 'null']
+          format: date-time
+          description: For a waiting run, when it is expected to start (RFC 3339, UTC), an estimate
+            rounded up to 5 seconds (specs/behavior/health.md, "Times"). Each of max_runs slots
+            frees when its run ends (its start plus the typical run time of its schedule's ticks,
+            never before now); a waiting run takes the slot that frees first, in queue order. null
+            for a running run, while the queue is paused or draining, and from a --read-only
+            server. Experimental.
+        wait_seconds:
+          type: [integer, 'null']
+          minimum: 0
+          description: How long it waits for a run slot, whole seconds, from queued_at to started_at
+            for a running run and to estimated_start_at for a waiting one; null when neither is
+            known. Experimental.
     PauseRequest:
       type: object
       additionalProperties: false
@@ -4492,7 +4530,7 @@ components:
       additionalProperties: false
       description: One entry of the rollup tree. Every count is the exact sum of its children's.
       required: [id, kind, label, parent, children, nodes, assets, running, health, asset_health,
-        data_coverage, also_in]
+        data_coverage, unbounded, fresh_by, also_in]
       properties:
         id:
           type: string
@@ -4550,6 +4588,16 @@ components:
             ok: {type: integer, minimum: 0}
         data_coverage:
           $ref: '#/components/schemas/RollupCoverage'
+        unbounded:
+          type: integer
+          minimum: 0
+          description: Nodes underneath that are not fresh and have no expected_fresh_at (failing,
+            blocked, undecided, missed by a tick, no refresh path); fresh_by does not speak for them.
+        fresh_by:
+          type: [string, 'null']
+          format: date-time
+          description: The latest expected_fresh_at underneath (RFC 3339, UTC); null when no node
+            underneath has one.
         keys:
           type: object
           additionalProperties: false
@@ -5500,6 +5548,9 @@ components:
       - root
       - last_check
       - refresh_path
+      - stale_since
+      - expected_fresh_at
+      - recheck_at
       - last_materialization
       - shape
       - env
@@ -5599,6 +5650,30 @@ components:
                 from the newest to the last one that found it up to date or rebuilt it, and only
                 those that ended after its newest successful result. 0 for a fresh node. Bounded
                 by the tick record (the newest 20 fired ticks of each schedule keep their targets).
+        stale_since: &id_stale_since
+          type: [string, 'null']
+          format: date-time
+          description: Since when the node has been out of date (RFC 3339, UTC), the earliest
+            recorded time from which it has been continuously not fresh (specs/behavior/health.md,
+            "Times"); null for a fresh or undecided node and where no record holds the time (a
+            changed environment variable, a new partition key, a missing copy). Experimental.
+        expected_fresh_at: &id_expected_fresh_at
+          type: [string, 'null']
+          format: date-time
+          description: When the node is expected to be fresh (RFC 3339, UTC), an estimate rounded up
+            to 5 seconds; the start of the run that computes it (a running run's latest progress, a
+            waiting run's estimated start, else the next tick of its refresh path plus the
+            schedule's typical queue wait) plus the typical durations of the steps before it. null
+            for a fresh node and where no run is known to leave it fresh (failing, blocked,
+            undecided, below a node no tick refreshes, missed by a tick, no refresh path, no
+            scheduler here). Experimental.
+        recheck_at: &id_recheck_at
+          type: [string, 'null']
+          format: date-time
+          description: When a tick next looks at the node (RFC 3339, UTC), the next tick of its
+            refresh path; a node with this and no expected_fresh_at will be rechecked, not
+            necessarily fresh. null when it has no refresh path or the path has no next tick.
+            Experimental.
         kind: &id047
           type: string
           enum:
@@ -5648,6 +5723,9 @@ components:
       - paused_until
       - skip_reason
       - live
+      - typical_queue_wait_seconds
+      - typical_run_seconds
+      - queue_bound
       properties:
         cron:
           type: string
@@ -5702,6 +5780,21 @@ components:
         live:
           type: boolean
           description: true when a running scheduler reported it; false when read from the metadata DB.
+        typical_queue_wait_seconds: &id_typical_wait
+          type: integer
+          minimum: 0
+          description: How long its ticks' runs typically wait for a run slot, whole seconds; the
+            median queue wait of its newest 20 fired ticks (the tick record), 0 with none.
+            Experimental.
+        typical_run_seconds: &id_typical_run
+          type: [integer, 'null']
+          minimum: 0
+          description: How long its ticks' runs typically take from start to end, whole seconds; the
+            median of its newest 20 fired ticks whose run succeeded, null with none. Experimental.
+        queue_bound: &id_queue_bound
+          type: boolean
+          description: Its typical queue wait exceeds its interval, so its ticks wait for a run slot
+            longer than they are apart. Experimental.
     Durations:
       type: object
       additionalProperties: false
@@ -5729,6 +5822,9 @@ components:
       - root
       - last_check
       - refresh_path
+      - stale_since
+      - expected_fresh_at
+      - recheck_at
       - last_materialization
       - shape
       - env
@@ -5756,6 +5852,9 @@ components:
         root: *id_root
         last_check: *id_last_check
         refresh_path: *id_refresh_path
+        stale_since: *id_stale_since
+        expected_fresh_at: *id_expected_fresh_at
+        recheck_at: *id_recheck_at
         partitions: *id050
         last_materialization: *id051
         shape: *id052
@@ -6135,9 +6234,15 @@ components:
       - failures
       - max_failures
       - failing
+      - typical_queue_wait_seconds
+      - typical_run_seconds
+      - queue_bound
       properties:
         id: *id003
         cron: *id003
+        typical_queue_wait_seconds: *id_typical_wait
+        typical_run_seconds: *id_typical_run
+        queue_bound: *id_queue_bound
         kind:
           type: string
           enum:
@@ -6431,8 +6536,13 @@ components:
       type: object
       additionalProperties: false
       description: With status=running only, active_steps as a run's panel lists them. Experimental.
-      required: [running, queued, keys, groups]
+      required: [running, queued, keys, groups, line]
       properties:
+        line:
+          type: string
+          description: The same in one line, as barca history --status running prints it under the
+            run, "executing 3, orders, clean, report", then how many wait and the keys done. The
+            first five executing nodes are named.
         running:
           type: array
           description: The nodes executing, the one furthest from done first.
@@ -6494,6 +6604,87 @@ components:
             $ref: '#/components/schemas/RunSummary'
         total: *id044
         truncated: *id043
+        activity:
+          $ref: '#/components/schemas/RunActivity'
+    RunActivity:
+      type: object
+      additionalProperties: false
+      description: The runs started in the last 24 hours, hour by hour, counted by the database over
+        every recorded run of the window, the activity of barca history --activity --json. Absent
+        with status=running. Experimental.
+      required: [since, until, triggered_by, hours, total, summary]
+      properties:
+        since:
+          type: string
+          description: The window's start, the start of the hour 23 hours before the current one
+            (RFC 3339, UTC).
+        until:
+          type: string
+          description: The window's end, the end of the current hour, which is still filling.
+        triggered_by:
+          type: array
+          description: The triggers counted; empty for every run, also the ones that recorded none.
+          items:
+            $ref: '#/components/schemas/TriggeredBy'
+        hours:
+          type: array
+          description: One entry per hour of UTC, oldest first, the hours without runs included.
+          minItems: 24
+          maxItems: 24
+          items:
+            $ref: '#/components/schemas/ActivityHour'
+        total:
+          $ref: '#/components/schemas/ActivityHour'
+          description: The window as a whole; its at is since.
+        summary:
+          type: string
+          description: The window in one line, "1,440 runs in the last 24 hours" followed by the
+            not successful, the in progress and the counts by trigger that are not zero.
+    ActivityHour:
+      type: object
+      additionalProperties: false
+      description: The runs started in one hour.
+      required: [at, runs, ok, not_successful, in_progress, by_status, by_trigger]
+      properties:
+        at:
+          type: string
+          description: The hour's start, RFC 3339 in UTC. A reader shows it in its own zone.
+        runs: {type: integer, minimum: 0}
+        ok:
+          type: integer
+          minimum: 0
+          description: Of runs, the ones that succeeded.
+        not_successful:
+          type: integer
+          minimum: 0
+          description: Of runs, the ones that failed, errored, were cancelled or interrupted.
+        in_progress:
+          type: integer
+          minimum: 0
+          description: Of runs, the ones still running.
+        by_status:
+          type: object
+          additionalProperties: false
+          required: [success, failed, error, cancelled, interrupted, running]
+          properties:
+            success: {type: integer, minimum: 0}
+            failed: {type: integer, minimum: 0}
+            error: {type: integer, minimum: 0}
+            cancelled: {type: integer, minimum: 0}
+            interrupted: {type: integer, minimum: 0}
+            running: {type: integer, minimum: 0}
+        by_trigger:
+          type: object
+          additionalProperties: false
+          description: By what started the runs; unknown counts runs recorded by a barca that did
+            not record it.
+          required: [schedule, api, manual, client, unknown]
+          properties:
+            schedule: {type: integer, minimum: 0}
+            api: {type: integer, minimum: 0}
+            manual: {type: integer, minimum: 0}
+            client: {type: integer, minimum: 0}
+            unknown: {type: integer, minimum: 0}
     RunStep:
       type: object
       additionalProperties: false
@@ -7729,6 +7920,10 @@ components:
         line:
           $ref: '#/components/schemas/RunLine'
           description: In a list, the run in the words of a list row. Experimental.
+        now:
+          $ref: '#/components/schemas/RunNow'
+          description: With status=running in the filter, on a run in flight, what it is working on
+            now, the now of GET /runs?status=running. Absent otherwise. Experimental.
         retries:
           type: integer
           minimum: 0

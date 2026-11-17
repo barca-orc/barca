@@ -150,6 +150,15 @@ pub struct RollupEntry {
     pub asset_health: HealthCounts,
     /// How much of the data underneath was measured: `assets` here is `assets` above.
     pub data_coverage: DataCoverage,
+    /// Nodes underneath that are not fresh and have no `expected_fresh_at`: nothing known
+    /// will leave them fresh (failing, blocked, undecided, missed by a tick, no refresh
+    /// path), so `fresh_by` does not speak for them.
+    #[serde(default)]
+    pub unbounded: usize,
+    /// The latest `expected_fresh_at` underneath (RFC 3339, UTC): when the nodes that have
+    /// an estimate are all expected fresh. `null` when none has one.
+    #[serde(default)]
+    pub fresh_by: Option<String>,
     /// A partitioned node's keys (a node entry only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
@@ -175,6 +184,8 @@ impl RollupEntry {
             health: HealthCounts::default(),
             asset_health: HealthCounts::default(),
             data_coverage: DataCoverage::default(),
+            unbounded: 0,
+            fresh_by: None,
             keys: None,
             also_in: Vec::new(),
         }
@@ -196,6 +207,12 @@ impl Sums for RollupEntry {
         self.data_coverage.assets += child.data_coverage.assets;
         self.data_coverage.measured += child.data_coverage.measured;
         self.data_coverage.suspect += child.data_coverage.suspect;
+        self.unbounded += child.unbounded;
+        // The latest estimate underneath. Every one is RFC 3339 UTC to the second, so the
+        // later time is the greater string.
+        if child.fresh_by > self.fresh_by {
+            self.fresh_by.clone_from(&child.fresh_by);
+        }
     }
 }
 
@@ -273,8 +290,10 @@ fn source_file(id: &str) -> &str {
 
 /// A node's own entry.
 ///
-/// SEAM (#961 to #963): `causes`, `gap_seconds`, `unbounded` and `fresh_by` are read off the
-/// row here.
+/// `unbounded` and `fresh_by` are read off the row's times (#962).
+///
+/// SEAM (#963): `causes` and `gap_seconds` are read off the row here
+/// ([`crate::estimates::behind_seconds`], [`crate::estimates::ahead_seconds`]).
 fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
     let mut entry = RollupEntry::inner(node.id.clone(), EntryKind::Node, node.name.clone());
     let asset = node.kind == "asset";
@@ -286,6 +305,8 @@ fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
         *entry.asset_health.slot(node.health) = 1;
     }
     entry.data_coverage = DataCoverage::of(std::slice::from_ref(node));
+    entry.unbounded = usize::from(!node.health.is_fresh() && node.expected_fresh_at.is_none());
+    entry.fresh_by.clone_from(&node.expected_fresh_at);
     entry.keys = node
         .partitions
         .as_ref()
@@ -689,6 +710,7 @@ mod tests {
                 late: &HashSet::new(),
                 checks: &Checks::default(),
                 path: crate::refresh_path::PathEvidence::none(),
+                timing: crate::estimates::Timing::none(),
                 now: 0,
             },
         );
@@ -1073,6 +1095,46 @@ mod tests {
     }
 
     #[test]
+    fn fresh_by_is_the_latest_estimate_underneath_and_unbounded_counts_the_rest() {
+        let (mut nodes, groups) = fixture();
+        // Without estimates every node that is not fresh is unbounded, at every level.
+        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        let not_fresh = nodes.iter().filter(|n| !n.health.is_fresh()).count();
+        assert!(not_fresh >= 2, "the fixture has nodes that are not fresh");
+        assert_eq!(rollup.root().unbounded, not_fresh);
+        assert_eq!(rollup.root().fresh_by, None);
+        // Two of them get an estimate: the root carries the later one, and counts them out.
+        let mut times = ["2026-11-17T15:00:20Z", "2026-11-17T15:04:05Z"].into_iter();
+        for node in nodes.iter_mut().filter(|n| !n.health.is_fresh()).take(2) {
+            node.expected_fresh_at = times.next().map(str::to_string);
+        }
+        let rollup = build(&nodes, &groups, &HashSet::new(), now());
+        assert_eq!(rollup.root().unbounded, not_fresh - 2);
+        assert_eq!(
+            rollup.root().fresh_by.as_deref(),
+            Some("2026-11-17T15:04:05Z")
+        );
+        // Every level is the sum, and the latest, of its children.
+        let by_id: HashMap<&str, &RollupEntry> =
+            rollup.entries.iter().map(|e| (e.id.as_str(), e)).collect();
+        for entry in rollup.entries.iter().filter(|e| !e.children.is_empty()) {
+            let children = entry.children.iter().map(|id| by_id[id.as_str()]);
+            assert_eq!(
+                entry.unbounded,
+                children.clone().map(|c| c.unbounded).sum::<usize>(),
+                "{}",
+                entry.id
+            );
+            assert_eq!(
+                entry.fresh_by,
+                children.filter_map(|c| c.fresh_by.clone()).max(),
+                "{}",
+                entry.id
+            );
+        }
+    }
+
+    #[test]
     fn the_wire_names_are_the_specified_ones() {
         let (nodes, groups) = fixture();
         let rollup = build(&nodes, &groups, &HashSet::new(), now());
@@ -1106,13 +1168,15 @@ mod tests {
                 "assets",
                 "children",
                 "data_coverage",
+                "fresh_by",
                 "health",
                 "id",
                 "kind",
                 "label",
                 "nodes",
                 "parent",
-                "running"
+                "running",
+                "unbounded"
             ]
         );
         assert_eq!(json["entries"][0]["parent"], serde_json::Value::Null);

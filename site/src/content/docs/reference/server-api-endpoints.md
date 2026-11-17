@@ -27,7 +27,7 @@ return the corresponding headers without a body.
 | `DELETE` | `/runs/{run_id}` | Cancel a pending or running run; the run records who cancelled it and whether it had started (`cancellation`). |
 | `GET`  | `/runs/{run_id}/output` | The final artifact's bytes of a successful single-target run. |
 | `GET`  | `/runs/{run_id}/logs` | What the run's steps wrote (stdout and stderr), so far while it runs: `{run_id, status, logs}`. `?step=` and `?stream=stdout\|stderr` filter as `barca logs` does. |
-| `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs. |
+| `GET`  | `/runs?limit=100` | Recent durable runs, joined with queued and live server runs, and `activity`: the runs started in each of the last 24 hours (UTC), by status and by trigger, counted over every recorded run of the window (`barca history --activity --json`). `?triggered_by=manual,api,client` keeps the runs started that way (here: all but a schedule's) in the list, `total` and `activity`. `?status=running` lists the runs in flight, each with `active_steps` and `now` (the nodes executing, how many wait, keys done, the same by group and in one `line`), without `activity`. |
 | `GET`  | `/logs/{run_id}` | A run's captured output lines, persisted after it finishes. |
 
 <a id="the-ledger"></a>**The ledger.** What a local `barca get` on another machine talks to ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)).
@@ -44,7 +44,7 @@ client prints it as it would print the local command's.
 |--------|------|---------|
 | `GET`  | `/list` | `barca list --json --all` |
 | `GET`  | `/nodes?targets=a,b&sample=N` | `barca status --json --all`, for the server's ledger |
-| `GET`  | `/history?limit=N&all=1` | `barca history --json` (`-l N`, `--all`) |
+| `GET`  | `/history?limit=N&all=1` | `barca history --json` (`-l N`, `--all`); with `status=running`, each run in flight carries `now` as on `GET /runs?status=running` |
 | `GET`  | `/stats/{name}` | `barca stats --json` |
 | `GET`  | `/sql/views?files=a.py,b.py` | Which result each `barca sql` view reads in the ledger: `{"views": [{name, node, kind, partitioned, format, files: [{path, partition, content_hash}], stale, run_hash}], "missing": [{name, node, kind, partitioned, command, keys_unknown?}], "duplicates": [{name, ids}]}`, by the function a local `barca sql` uses. The client runs the query; the server runs no SQL. |
 | `GET`  | `/materializations?limit=N&offset=M` | Step results, newest first: `{"materializations": [{node_id, partition, run_id, run_hash, status, created_at, elapsed_seconds, cpu_seconds, max_rss_bytes, attempts, format, size_bytes, artifact, content_hash, error_type, error_message, rows}], total, limit, offset}` (`rows`: a tabular result's row count, `null` when not counted); `limit` defaults to 1000, at most 10000. `barca sql`'s `barca.materializations`. |
@@ -55,7 +55,7 @@ client prints it as it would print the local command's.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/state` | Every node: its `barca status` entry (with `health`, `last_check`, what the last tick that checked it found, and `refresh_path`, the schedule whose tick will refresh it) plus typical durations, next run and the run working on it now. |
+| `GET`  | `/state` | Every node: its `barca status` entry (with `health`, `last_check`, what the last tick that checked it found, `refresh_path`, the schedule whose tick will refresh it, and `stale_since`, `expected_fresh_at` and `recheck_at`, since when it is out of date and when it is expected fresh or only rechecked) plus typical durations, next run and the run working on it now. |
 | `GET`  | `/state/rollup` | Experimental: the rows of `/state` summed into one tree (root, groups, files, nodes), each level the exact sum of its children, in nodes and in assets, with the failing nodes and what each holds. What `barca status --rollup --json` prints and the web UI's health map, bars and failures list render. Same scope as `/state` (`?targets=`, `?files=`). |
 | `POST` | `/state/reset` | Start the metadata database over, as `barca state reset`: it moves aside to `metadata.db.reset-<UTC>`, nothing is deleted. See [Resetting the database](#resetting-the-database). |
 | `GET`  | `/groups` | Organizational groups as `[{id, name, description, members, output}]`; separate from execution edges. |
@@ -71,13 +71,13 @@ client prints it as it would print the local command's.
 | `DELETE` | `/assets/{name}/pin` | Remove the asset's pin, as `barca unpin`. `403` read-only. Experimental. |
 | `GET`  | `/pins` | Every pinned asset: `{pins: [{node_id, run_hash, pinned_at, pinned_by, reason, run_id, upload}]}`. Experimental. |
 | `GET`  | `/plan` | Execution plan (phases and streams) as JSON. |
-| `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause. |
+| `GET`  | `/schedule` | Scheduled jobs with next fire time, last run, last skipped tick and pause, and how long each schedule's ticks typically wait for a run slot and run (`typical_queue_wait_seconds`, `typical_run_seconds`, `queue_bound` when the wait exceeds the interval). |
 | `POST` | `/schedule/{id}/pause` | Hold one schedule back, optionally `?until=` a duration from now (`2h`) or an RFC 3339 time, as `barca pause --schedule`. |
 | `POST` | `/schedule/{id}/resume` | Let a paused schedule fire again, as `barca resume --schedule`. |
 | `GET`  | `/pauses` | The paused assets (`barca pause`) and the paused schedules: `{total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}`. Scheduled ticks skip them (step reason `paused`) until resumed. Experimental. |
 | `POST` | `/pauses` | Pause `{"target", "downstream"}`: a node, a node and everything below it, or a `file.py`. Answers `added` and every pause; `403` read-only. A `POST /runs` naming a paused node is `400` unless it sends `"allow_paused": true`. |
 | `POST` | `/pauses/resume` | Resume `{"target", "downstream"}` or `{"all": true}`. Answers `removed` and every pause; `403` read-only. |
-| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at}`; `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
+| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at, started_at, estimated_start_at, wait_seconds}` (`estimated_start_at`: when a run slot is expected to free for a waiting run, an estimate); `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
 | `POST` | `/queue/pause` | Hold every queued run back until resumed; runs in flight go on. Kept across restarts. Answers the queue; `403` read-only. |
 | `POST` | `/queue/resume` | Let queued runs start again, in order. Answers the queue; `403` read-only. |
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
