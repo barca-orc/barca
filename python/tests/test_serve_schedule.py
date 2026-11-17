@@ -118,9 +118,12 @@ def test_a_tick_recomputes_only_what_changed_on_the_input_side(tmp_path):
         assert listed[0][0] == schedule, context
         assert sum(counts) == len(listed), context
     for node in ("tracked", "no_inputs"):
+        # What each tick did with its scheduled node, the first of its targets (the tick of
+        # `tracked` polls `version`, so `feed` below that sensor is a target of it too, #978).
         mine = [t for t in done if t[0] == f"pipeline.py:{node}"]
-        assert sum(t[7] for t in mine) == rows[node], f"{node} rebuilt: {context}"
-        assert sum(t[8] for t in mine) >= 1, f"{node} was never found up to date: {context}"
+        own = [json.loads(t[11])[0][1] for t in mine]
+        assert own.count("rebuilt") == rows[node], f"{node} rebuilt: {context}"
+        assert own.count("up_to_date") >= 1, f"{node} was never found up to date: {context}"
         assert not any(t[9] or t[10] for t in mine), context
     skipped = [t for t in ticks if t[1] == "skipped"]
     assert all(t[2] is None and t[5] is None for t in skipped), context

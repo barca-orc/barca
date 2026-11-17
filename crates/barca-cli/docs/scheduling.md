@@ -14,7 +14,7 @@ Freshness says when each node is updated. Under `barca serve` (RFC-0008):
 | Freshness | Meaning |
 |---|---|
 | `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
-| `Always` (default for assets/tasks) | Brought up to date at each tick of a scheduled node above it, in that tick's run. |
+| `Always` (default for assets/tasks) | Brought up to date at each tick of a scheduled node above it, and at each tick that polls an unscheduled sensor above it, in that tick's run. |
 | `Manual` (default for sensors) | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. A sensor is the exception: every run that needs its value polls it, whatever its freshness. |
 
 ```python
@@ -63,18 +63,20 @@ def heartbeat() -> None:
 ### What a tick does
 
 A tick of a scheduled node is one run with several targets: the scheduled node, then every
-`Always` node below it. The walk down from the scheduled node goes past a `Manual` node (which
-is not updated) and stops at a node with a `Schedule` of its own (which follows its own ticks).
-Nodes with no scheduled node above them are never touched by a tick. A tick brings each target
-up to date; it does not force it:
+`Always` node below it and every `Always` node below an unscheduled sensor (one with no
+`Schedule` of its own) that the run polls ("A sensor a tick polls", below). The walk down, from the scheduled node or from a polled sensor,
+goes past a `Manual` asset or task (which is not updated) and stops at a node with a `Schedule`
+of its own (which follows its own ticks). An `Always` node that is neither below a scheduled
+node nor below an unscheduled sensor some tick polls is never touched by a tick. A tick brings each target up to
+date; it does not force it:
 
 - The scheduled node: a **sensor** is polled; an **asset** and its cone are checked, each asset
   running only if there is no cached result for its current code and inputs (`barca docs cache`);
   a **task** runs.
-- An `Always` **asset** below it is up to date when it has a cached result for its current run
-  hash; otherwise it is computed. A sensor that returns to an earlier value brings back the
-  result computed then.
-- An `Always` **task** below it fires when its last successful run used other versions of its
+- An `Always` **asset** among the targets is up to date when it has a cached result for its
+  current run hash; otherwise it is computed. A sensor that returns to an earlier value brings
+  back the result computed then.
+- An `Always` **task** among the targets fires when its last successful run used other versions of its
   inputs than the current ones (other code, another result of an asset it reads, another value
   of a sensor it reads), when a task it reads has run successfully since, or when it has never
   run. Otherwise it is up to date and does not run.
@@ -84,12 +86,13 @@ nothing else runs. When it returns a new one, the same run computes `orders` onc
 `hourly_summary` and `send_report`. Upstream inputs that no scheduled node is above (a plain
 asset a target reads) are computed as part of the run when they have no cached result.
 
-### A sensor a tick only polls
+### A sensor a tick polls
 
-"Below it" means below the scheduled node, not below everything the tick's run touches. A
-sensor that a target reads is polled by the run as an input, whatever its own freshness
-(`Always`, `Manual`, or a slower `Schedule`), and its new value is recorded. That makes every
-node below the sensor out of date, and the tick rebuilds only the ones that are its targets:
+A run polls every sensor its targets read, whatever the sensor's own freshness (`Always`,
+`Manual`, or a `Schedule` of its own), and records the value. A new value changes the run hash
+of every node below the sensor. No tick is ever started for a `Manual` or `Always` sensor, so
+the tick that polls one brings those nodes up to date too: the `Always` nodes below a polled
+sensor that has no `Schedule` are targets of the tick, like the ones below the scheduled node.
 
 ```python
 @sensor()
@@ -98,18 +101,50 @@ def feed() -> str: ...
 @asset(inputs={"v": feed}, freshness=Schedule("*/5 * * * *"))
 def fast(v: str) -> str: ...
 
-@asset(inputs={"v": feed})        # Always, but no scheduled node above it
+@asset(inputs={"v": feed})        # Always, below a sensor the tick of `fast` polls
 def side(v: str) -> str: ...
 ```
 
-Every five minutes the tick of `fast` polls `feed`. When `feed` returns a new value `fast` is
-recomputed and `side` is not: `barca status` shows it out of date after that tick and after
-every later one, until a `barca get side` (or a run that reads it) computes it. No tick ever
-will. To have ticks keep `side` up to date, put the schedule on the sensor
-(`@sensor(freshness=Schedule("*/5 * * * *"))`: `fast` and `side` are then both below it, and
-`fast` needs no schedule of its own), or give `side` a `Schedule`. When the sensor has a slower
-schedule of its own, `side` is rebuilt at the sensor's ticks only, so it can be out of date for
-up to one of the sensor's intervals after a faster tick saw the change.
+Every five minutes the tick of `fast` polls `feed`; its targets are `fast` and `side`. When
+`feed` returns a new value both are recomputed in that run. When it returns the same value the
+poll is the only step that runs: `fast` and `side` are cache hits.
+
+- **The targets are fixed by the graph**, not by whether the value changed: `GET /runs/{run_id}`
+  lists `side` as a target of every tick of `fast`, and an unchanged value costs a cache check.
+- **The walk from a polled sensor follows the rules above.** It passes a `Manual` asset or task
+  without updating it and stops at a node with a `Schedule` of its own. To keep a node below a
+  polled sensor on a slower rhythm than the ticks that poll the sensor, give that node its own
+  `Schedule`.
+- **It repeats.** `side` is a target, so the sensors `side` reads are polled by the tick of
+  `fast` as well, and the `Always` nodes below the unscheduled ones are its targets in turn. Only a sensor does
+  this: an asset that a target reads is computed when it has no cached result, and what else
+  reads that asset is not a target.
+- **`Manual` on a sensor** (the default) means no tick is started for it: it is polled only
+  when a run needs its value, and each tick that polls it brings the `Always` nodes below it up
+  to date. `Always` on a sensor behaves the same way.
+- **A sensor with a `Schedule` of its own is the exception.** Its ticks bring the `Always`
+  nodes below it up to date, and a tick of another node that reads it polls it without
+  targeting them. So when the sensor's schedule is slower than a tick that reads it, a node
+  below the sensor can be out of date for up to one of the sensor's intervals after the faster
+  tick saw the change; and two schedules on the same cron, one on the sensor and one on a node
+  that reads it, do not both compute what is below the sensor.
+- **An `Always` task below a polled sensor** fires under the task rule above: when the version
+  of something it reads changed since its last successful run, not at every tick.
+- **Paused and pinned nodes are left alone**, as for any target: a paused node is a skipped
+  step (`barca docs incidents`) and a pinned asset is read as its pinned result
+  (`barca docs pins`).
+- **Two schedules can have the same target** (both poll the same unscheduled sensor, or one
+  node is below two scheduled nodes). When their ticks do not overlap, the second finds
+  a cached result and a task that is up to date. When they fire in the same second, a shared
+  asset is still computed once (the second run waits for the first, or takes the result it just
+  finished), but each run fires a shared task: a task is never shared between runs. Put one
+  schedule on the sensor, or give the task a `Schedule` of its own, when a task must fire once
+  per change.
+- A failure of any target counts as a failed tick of the schedule ("Failures and
+  `max_failures`").
+
+`barca get` and `barca run` are unchanged: a request computes its target and what the target
+reads, never what is beside it.
 
 The cache is keyed by the sensor's value, not by time. A sensor that returns to a value it had
 before (a row count, a status flag) brings back the result computed for that value. Return
@@ -118,8 +153,8 @@ scheduled asset that fetches data in its own body, with no sensor upstream, has 
 input side that can change: it is computed once and then served from cache on every tick, until
 its code or a declared `env=` variable changes or it is named in `--refresh`.
 
-With `--watch`, an edit to an `Always` node changes its run hash; the next tick of a scheduled
-node above it recomputes it. Nothing happens between ticks.
+With `--watch`, an edit to an `Always` node changes its run hash; the next tick that targets it
+recomputes it. Nothing happens between ticks.
 
 A tick's run is recorded with `triggered_by: "schedule"`, the tick it was started for
 (`scheduled_at`) and the schedule (`schedule_id`, the scheduled node's id), in
@@ -222,8 +257,10 @@ in flight, `last_skipped`, `skip_reason: "in_flight"` and `skipped_for` in `GET 
 `skipped` (`barca docs telemetry`).
 The next tick after the run ends fires as usual. Only a run of the node itself counts: a run of
 a node downstream of it does not hold the tick back, though it computes the same upstream cone.
-Two scheduled nodes that share an upstream run separately, and if their ticks coincide both may
-compute it: schedule the sensor once and let the `Always` nodes below it follow instead.
+Two scheduled nodes that share an upstream, or a target below an unscheduled sensor both poll, run
+separately. If their ticks coincide, an asset they share is computed by one run and taken by
+the other, a task they share fires in both, and the sensor is polled by both: schedule the
+sensor once and let the `Always` nodes below it follow instead.
 
 ```text
 [barca] scheduled run pipeline.py:orders skipped — run 1b942bb33182 of the same node still in flight

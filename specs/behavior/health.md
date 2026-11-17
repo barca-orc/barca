@@ -217,10 +217,12 @@ which the next tick recomputes), and a new value of a declared environment varia
  "paused": false, "live": true, "missed_ticks": 0}
 ```
 
-- The walk is the scheduler's own target walk (`freshness::followers` with `RunRules::tick`),
-  called from both places, never a second copy. Which nodes a tick reaches, including the
-  case #952 investigates and a target's unscheduled upstream cone, is that walk's answer and
-  is specified in [freshness](freshness.md) and the scheduling manual, not here.
+- The walk is the scheduler's own target walk (`freshness::tick_targets`, read through
+  `freshness::tick_reach`), called from both places, never a second copy. A node's refresh
+  path is a schedule that reaches it as a `Target`: its scheduled node, a scheduled node above
+  it, or a schedule whose run polls an unscheduled sensor above it (#978). A node reached only as an
+  `Input` has none. Which nodes a tick reaches is that walk's answer and is specified in
+  [freshness](freshness.md) and the scheduling manual, not here.
 - A scheduled node's refresh path is its own schedule. When several schedules reach a node,
   the one with the earliest `next_tick` is reported; ties break by `schedule` id.
 - `next_tick` is the schedule's next slot; the first slot after `paused_until` for a timed
@@ -278,7 +280,7 @@ The list of roots (in the rollup, below) carries what each holds and what clears
 
 ```json
 {"id": "no_schedule:pipeline.py:orders", "kind": "no_schedule", "node": "pipeline.py:orders",
- "detail": "no scheduled node above orders", "error_group": null,
+ "detail": "no tick reaches orders", "error_group": null,
  "nodes": 152, "assets": 140, "causes": {"no_refresh_path": 152}, "gap_seconds": 8208000,
  "unbounded": 152,
  "action": {"kind": "add_schedule", "command": null, "estimated_seconds": 420}}
