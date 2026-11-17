@@ -112,6 +112,15 @@ experimental), as its "Acceptance and evidence" states. [The TLA+ models](models
 abstraction of the approved ownership/order rules. Model checking is not a proof of Rust
 conformance or performance.
 
+[Health, causes and the freshness gap](behavior/health.md) is approved intent, not yet
+implemented: the health words and their derivation, the cause buckets and roots, the refresh
+path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the freshness gap, the rollup
+(`GET /state/rollup`, `barca status --rollup`), the tick record, the `barca.schedules`,
+`barca.ticks` and `barca.queue` tables and the server query route (`POST /sql/query`). No field,
+route, flag or table it names exists on `main`; the 0.44.0 series (#974) implements it issue by
+issue, and each PR moves its wire shapes into the OpenAPI and CLI contract owners. Until then
+the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are authoritative.
+
 [API ideas](proposals/api-ideas.md) are unscheduled, unapproved alternatives. Keep them separate
 from both implemented contracts and accepted design. [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
 investigation; completed implementation plans were deleted and remain in linked PR history.

@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Documentation
+
+- **Health, causes and the freshness gap are specified (#953).** `specs/behavior/health.md` (approved intent, not yet implemented) fixes what the 0.44.0 series builds: the health words and how each follows from a node's state, one cause for every node that is not fresh (catching up, queued, no refresh path, overdue, failing, undecided) with the upstream change or missing schedule behind it, the refresh path, `stale_since`, `expected_fresh_at` versus `recheck_at`, the freshness gap, the rollup (`GET /state/rollup`, `barca status --rollup`), what a tick records, the `barca.schedules`, `barca.ticks` and `barca.queue` tables and a read-only `POST /sql/query` over `barca.*` tables. DIRECTION.md's UI decision is amended: health words are barca vocabulary defined once in Rust and shown by the CLI and the UI alike, in four layers (records, classification, aggregation, presentation).
+
 ## 0.43.1 (2026-11-17)
 
 ### Bug Fixes
