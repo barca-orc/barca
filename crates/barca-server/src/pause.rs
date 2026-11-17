@@ -40,34 +40,24 @@ pub(crate) fn active(state: &AppState, node_id: &str, now: i64) -> Option<Schedu
 
 #[derive(Default, Deserialize)]
 pub struct PauseQuery {
-    /// RFC 3339; absent: until resumed.
+    /// A duration from now (`2h`) or an RFC 3339 time; absent: until resumed.
     pub until: Option<String>,
 }
 
-/// `POST /schedule/{id}/pause` — hold one scheduled job back, until `?until=<RFC 3339>` or
-/// until it is resumed. Answers the job's `GET /schedule` entry.
+/// `POST /schedule/{id}/pause` — hold one scheduled job back, until `?until=` (a duration from
+/// now such as `2h`, or an RFC 3339 time) or until it is resumed. Answers the job's `GET /schedule` entry.
 pub async fn pause(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<PauseQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let now = chrono::Utc::now().timestamp();
-    let until = match &query.until {
-        None => None,
-        Some(text) => {
-            let at = chrono::DateTime::parse_from_rfc3339(text).map_err(|e| {
-                ApiError::BadRequest(format!(
-                    "until '{text}' is not an RFC 3339 time: {e}\nUse a time such as 2026-10-21T06:00:00Z."
-                ))
-            })?;
-            if at.timestamp() <= now {
-                return Err(ApiError::BadRequest(format!(
-                    "until '{text}' is not in the future\nGive a later time, or leave `until` out to pause until resumed."
-                )));
-            }
-            Some(at.timestamp())
-        }
-    };
+    let until = query
+        .until
+        .as_deref()
+        .map(|text| barca_core::pauses::parse_until(text, chrono::Utc::now()))
+        .transpose()
+        .map_err(ApiError::BadRequest)?;
     set(
         &state,
         &id,

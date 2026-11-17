@@ -22,6 +22,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "*",
         "the health vocabulary shares three spellings (`blocked`, `partial`, `cached`)",
     ),
+    (
+        "partition_grid.rs",
+        "blocked",
+        "the key-state vocabulary shares one spelling",
+    ),
     ("parse.rs", "partial", "Python's functools.partial"),
     (
         "io_loop.rs",

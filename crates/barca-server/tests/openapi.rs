@@ -1451,6 +1451,27 @@ async fn schedule_pause_and_resume_match_contract() {
         200,
     )
     .await;
+    // A duration from now is a time too (`barca pause --schedule daily --until 2h`), and
+    // `GET /pauses` lists the paused schedule beside the paused nodes.
+    let timed = checked(
+        &router,
+        "POST",
+        "/schedule/daily/pause?until=2h",
+        "/schedule/{id}/pause",
+        200,
+    )
+    .await;
+    let until = timed["paused_until"].as_i64().unwrap();
+    let now = chrono::Utc::now().timestamp();
+    assert!((7190..=7210).contains(&(until - now)), "{timed}");
+    let pauses = checked(&router, "GET", "/pauses", "/pauses", 200).await;
+    assert_eq!(pauses["schedules"][0]["until"], until, "{pauses}");
+    assert!(
+        pauses["schedules"][0]["id"]
+            .as_str()
+            .unwrap()
+            .ends_with(":daily")
+    );
     checked(
         &router,
         "POST",

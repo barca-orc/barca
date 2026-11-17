@@ -104,6 +104,18 @@ CONTRACT_TABLE += [
     ("history_bad_status", ["history", "--status", "nope", "--json"]),
     ("run_detail_failed", ["history", "FAILED_RUN", "--json"]),
     ("pretty_run_detail", ["history", "FAILED_RUN", "--pretty"]),
+    # One partitioned node's keys (#990): the list, a state filter, the grid, one key, and the
+    # usage errors, as tables (the JSON forms are contract cases).
+    ("pretty_status_keys", ["status", "flaky", "pipeline.py", "--keys", "--pretty"]),
+    ("status_keys_failed", ["status", "flaky", "pipeline.py", "--keys", "--state", "failed"]),
+    ("status_keys_limit", ["status", "per_key", "pipeline.py", "--keys", "--limit", "1"]),
+    ("pretty_status_grid", ["status", "flaky", "pipeline.py", "--grid", "--pretty"]),
+    ("pretty_status_key", ["status", "flaky", "pipeline.py", "--key", "k=bad", "--pretty"]),
+    ("status_key_sample", ["status", "per_key", "pipeline.py", "--key", "k=a", "--sample", "1"]),
+    ("status_keys_unpartitioned", ["status", "total", "pipeline.py", "--keys", "--json"]),
+    ("status_key_missing", ["status", "flaky", "pipeline.py", "--key", "k=nope", "--json"]),
+    ("status_keys_bad_state", ["status", "flaky", "pipeline.py", "--keys", "--state", "cached"]),
+    ("status_keys_no_target", ["status", "pipeline.py", "--grid", "--json"]),
 ]
 
 PLANNING_TABLE: list[tuple[str, list[str]]] = [
@@ -157,6 +169,11 @@ def _value(v, roots: list[str], key: str = ""):
     if key == "explanation" and isinstance(v, dict) and isinstance(v.get("steps"), str):
         # Skipped nodes are in the per-node summary only the server has (see `steps_page`).
         v = {**v, "steps": re.sub(r" · [\d,]+ skipped", "", v["steps"])}
+    if key in ("attempted_at", "elapsed_ms", "size_bytes") and isinstance(v, list):
+        # The per-key columns of `status --grid --json`: times and sizes, as elsewhere.
+        return [None if x is None else f"<{key}>" for x in v]
+    if key == "attempted_base":
+        return "<t>"
     if isinstance(v, dict) and v.get("partitioned") is True:
         v = {**v, "last_materialization": "<key>", "shape": "<key>"}
     if isinstance(v, dict):

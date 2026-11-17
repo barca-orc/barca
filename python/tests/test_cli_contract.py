@@ -167,6 +167,11 @@ CASES: list[tuple[str, list[str], str, int]] = [
     ("history_reconciled", ["history", "--reconcile", "orphan-run", "--json"], "stdout", 0),
     # Last, so no other case sees the failed run.
     ("get_partition_failed", ["get", "flaky", "pipeline.py", "--json"], "stdout", 1),
+    # The keys of one partitioned node (#990), read after `flaky` ran: one key succeeded and
+    # one failed.
+    ("status_keys", ["status", "flaky", "pipeline.py", "--keys", "--json"], "stdout", 0),
+    ("status_grid", ["status", "flaky", "pipeline.py", "--grid", "--json"], "stdout", 0),
+    ("status_key", ["status", "flaky", "pipeline.py", "--key", "k=ok", "--json"], "stdout", 0),
 ]
 
 # Cases that need a setup of their own, run after CASES: (case, stream, expected exit code).
@@ -255,7 +260,8 @@ USER_VALUES = {
     "rows",
 }
 # Objects keyed by user-chosen names (targets, environment variables): keys become `<name>`.
-NAME_MAPS = {"steps[].env", "targets"}
+# `error` of `status --grid`: a failed cell's index to its error group.
+NAME_MAPS = {"steps[].env", "targets", "error"}
 # A partitioned target's `final_output`: an object keyed by partition key (`k=a`), each an
 # artifact pointer or a value. Keys become `<key>`.
 PARTITION_MAPS = {"final_output", "targets.<name>.final_output"}

@@ -7,6 +7,9 @@ Arguments:
           Node or file.py to resume
 
 Options:
+      --schedule <NODE>
+          Resume the schedule of this scheduled node instead of nodes
+
       --downstream
           Also resume every node downstream of the target
 
@@ -38,6 +41,8 @@ Examples:
   barca resume clean --server               # the next tick computes clean again
   barca resume clean --downstream --server  # clean and everything below it
   barca resume pipeline.py --server         # every node of the file
-  barca resume --all --server --json        # {removed, total, paused}
+  barca resume --all --server --json        # {removed, total, paused, schedules}
+  barca resume --schedule nightly --server  # the schedule fires again from its next tick
+  barca resume --schedule nightly --server --json   # the schedule's entry: {id, cron, paused: false, next_fire, ...}
 
 More: barca docs incidents

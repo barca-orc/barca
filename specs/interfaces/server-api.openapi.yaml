@@ -2138,7 +2138,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
-          description: Every paused node, by id
+          description: Every paused node, by id, and every paused schedule
           content:
             application/json:
               schema:
@@ -2303,7 +2303,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/PauseResult'
         '400':
-          description: until is not an RFC 3339 time in the future
+          description: until is neither a duration nor an RFC 3339 time, or is not in the future
           content:
             application/json:
               schema:
@@ -2357,7 +2357,8 @@ paths:
         in: query
         required: false
         schema: *id005
-        description: 'RFC 3339; absent: until resumed.'
+        description: 'A duration from now on the server''s clock (45s, 30m, 2h, 7d, 2w) or an RFC 3339
+          time; absent: until resumed.'
   /schedule/{id}/resume:
     post:
       summary: Resume one schedule
@@ -4320,7 +4321,7 @@ components:
     Pauses:
       type: object
       additionalProperties: false
-      required: [total, paused]
+      required: [total, paused, schedules]
       properties:
         total:
           type: integer
@@ -4347,6 +4348,22 @@ components:
               via:
                 type: string
                 description: The target the pause named (the node, the node a downstream pause started from, or a file)
+        schedules:
+          type: array
+          description: Every paused schedule (POST /schedule/{id}/pause), by id; a timed pause
+            whose until has passed is left out.
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, paused_at, until]
+            properties:
+              id: {type: string}
+              paused_at:
+                type: integer
+                description: Unix seconds
+              until:
+                type: [integer, 'null']
+                description: Unix seconds at which the pause ends by itself; null until resumed
     Queue:
       type: object
       additionalProperties: false

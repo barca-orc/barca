@@ -113,6 +113,73 @@ pub async fn list(db_path: &str) -> Result<Vec<crate::db::AssetPause>, BarcaErro
     crate::db::get_asset_pauses(db_path).await
 }
 
+/// One paused schedule (`barca pause --schedule`, `POST /schedule/{id}/pause`): since when,
+/// and until when (unix seconds; `None`: until it is resumed).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PausedSchedule {
+    pub id: String,
+    pub paused_at: i64,
+    pub until: Option<i64>,
+}
+
+/// Every schedule paused at `now` (unix seconds) in the metadata DB at `db_path`, by id. A
+/// pause whose `until` has passed is over and is left out.
+pub async fn paused_schedules(db_path: &str, now: i64) -> Result<Vec<PausedSchedule>, BarcaError> {
+    if std::fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
+        return Ok(Vec::new());
+    }
+    let mut paused: Vec<PausedSchedule> = crate::db::get_schedule_pauses(db_path)
+        .await?
+        .into_iter()
+        .filter(|(_, pause)| pause.until.is_none_or(|until| until > now))
+        .map(|(id, pause)| PausedSchedule {
+            id,
+            paused_at: pause.paused_at,
+            until: pause.until,
+        })
+        .collect();
+    paused.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(paused)
+}
+
+/// When a timed pause ends (`barca pause --schedule NODE --until`, `?until=`), in unix
+/// seconds: a duration from `now` (`45s`, `30m`, `2h`, `7d`, `2w`) or an RFC 3339 time
+/// (`2026-10-21T06:00:00Z`). A time that is not after `now` is an error.
+pub fn parse_until(text: &str, now: chrono::DateTime<chrono::Utc>) -> Result<i64, String> {
+    let t = text.trim();
+    let duration = t.char_indices().last().and_then(|(i, c)| {
+        let scale: i64 = match c.to_ascii_lowercase() {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            'd' => 86_400,
+            'w' => 7 * 86_400,
+            _ => return None,
+        };
+        (i > 0 && t[..i].bytes().all(|b| b.is_ascii_digit()))
+            .then(|| t[..i].parse::<i64>().ok()?.checked_mul(scale))
+            .flatten()
+    });
+    let at = match duration {
+        Some(seconds) => now.timestamp().saturating_add(seconds),
+        None => chrono::DateTime::parse_from_rfc3339(t)
+            .map_err(|_| {
+                format!(
+                    "until '{text}' is neither a duration nor an RFC 3339 time
+                     Use a duration from now such as 2h or 7d, or a time such as 2026-10-21T06:00:00Z."
+                )
+            })?
+            .timestamp(),
+    };
+    if at <= now.timestamp() {
+        return Err(format!(
+            "until '{text}' is not in the future
+             Give a later time, or leave `until` out to pause until resumed."
+        ));
+    }
+    Ok(at)
+}
+
 /// Pause `ids` (the [`scope`] of `via`, the target as given) at `now` (unix seconds), creating
 /// the metadata DB when there is none.
 pub async fn pause(

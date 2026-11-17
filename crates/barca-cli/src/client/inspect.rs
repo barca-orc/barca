@@ -636,6 +636,135 @@ pub(crate) async fn pause(
     Ok(())
 }
 
+/// `barca pause --schedule NODE [--until WHEN]` (`pause`: `Some(until)`) or `barca resume
+/// --schedule NODE` (`None`): `POST /schedule/{id}/pause` or `.../resume`, and the schedule's
+/// entry as the route answers it, as JSON or one line.
+pub(crate) async fn pause_schedule(
+    server: &Server,
+    schedule: &str,
+    pause: Option<Option<&str>>,
+    json: bool,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    server.health(env).await?;
+    let path = match pause {
+        Some(Some(until)) => format!(
+            "/schedule/{}/pause?until={}",
+            encode(schedule),
+            encode(until)
+        ),
+        Some(None) => format!("/schedule/{}/pause", encode(schedule)),
+        None => format!("/schedule/{}/resume", encode(schedule)),
+    };
+    let text = server.post_json(&path, &json!({})).await?;
+    let body: Value = serde_json::from_str(&text)
+        .map_err(|e| server.unexpected(&format!("POST {path}"), &format!("not JSON: {e}")))?;
+    let id = body["id"].as_str().unwrap_or(schedule);
+    match pause {
+        Some(_) => barca_core::errln!(
+            "[barca] schedule {id} paused on {}: its ticks do not fire until {}",
+            server.shown_url,
+            match body["paused_until"].as_i64() {
+                Some(until) => format!(
+                    "{} (or `barca resume --schedule {schedule}`)",
+                    barca_core::outcome::rfc3339(until)
+                ),
+                None => format!("`barca resume --schedule {schedule}`"),
+            }
+        ),
+        None => barca_core::errln!(
+            "[barca] schedule {id} resumed on {}: it fires again from its next tick",
+            server.shown_url
+        ),
+    }
+    if json {
+        barca_core::outln!(
+            "{}",
+            serde_json::to_string_pretty(&body).expect("a JSON value prints")
+        );
+    } else {
+        barca_core::term::stdout_str(&schedule_line(&body));
+    }
+    Ok(())
+}
+
+/// One schedule's entry in a line: `p.py:nightly: paused until resumed · cron 0 2 * * * · next
+/// fire 2026-10-21T02:00:00Z`.
+fn schedule_line(job: &Value) -> String {
+    let mut parts = vec![
+        match (job["paused"].as_bool(), job["paused_until"].as_i64()) {
+            (Some(true), Some(until)) => {
+                format!("paused until {}", barca_core::outcome::rfc3339(until))
+            }
+            (Some(true), None) => "paused until resumed".to_string(),
+            _ => "not paused".to_string(),
+        },
+    ];
+    if let Some(cron) = job["cron"].as_str() {
+        parts.push(format!("cron {cron}"));
+    }
+    match &job["next_fire"] {
+        Value::Number(at) => {
+            if let Some(at) = at.as_i64() {
+                parts.push(format!("next fire {}", barca_core::outcome::rfc3339(at)));
+            }
+        }
+        Value::String(at) => parts.push(format!("next fire {at}")),
+        _ => {}
+    }
+    format!(
+        "{}: {}\n",
+        job["id"].as_str().unwrap_or("?"),
+        parts.join(" · ")
+    )
+}
+
+/// `barca status NODE --keys | --grid | --key KEY` with a server: the node's grid
+/// (`GET /assets/{name}/partitions/grid`) or one key (`.../partitions/key`), printed by the
+/// renderers a local command uses.
+pub(crate) async fn partition_keys(
+    server: &Server,
+    target: &str,
+    files: &[PathBuf],
+    view: crate::commands::KeysView,
+    json: bool,
+    limit: Option<usize>,
+    env: Option<&str>,
+) -> Result<(), CliError> {
+    use crate::commands::KeysView;
+    server.health(env).await?;
+    server.deployed_files(files).await?;
+    let rendered = match view {
+        KeysView::Key { key, sample } => {
+            let path = format!(
+                "/assets/{}/partitions/key?key={}&sample={sample}",
+                encode(target),
+                encode(&key)
+            );
+            let detail: barca_core::partition_grid::PartitionKeyDetail =
+                serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
+                    server.unexpected("GET /assets/{name}/partitions/key", &e.to_string())
+                })?;
+            barca_core::report::render_partition_key(&detail, json)
+        }
+        view => {
+            let path = format!("/assets/{}/partitions/grid", encode(target));
+            let grid: barca_core::partition_grid::PartitionGrid =
+                serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
+                    server.unexpected("GET /assets/{name}/partitions/grid", &e.to_string())
+                })?;
+            match view {
+                KeysView::Keys(filter) => {
+                    barca_core::report::render_partition_keys(&grid, &filter, limit, json)
+                }
+                _ => barca_core::report::render_partition_grid(&grid, limit, json),
+            }
+        }
+    };
+    crate::commands::emit(rendered);
+    Ok(())
+}
+
 /// `barca resume TARGET [--downstream]` or `barca resume --all`: `POST /pauses/resume`.
 pub(crate) async fn resume(
     server: &Server,
@@ -684,6 +813,29 @@ fn print_pauses(body: &Value, json: bool) {
                     .map(barca_core::outcome::rfc3339)
                     .unwrap_or_default(),
                 p["via"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    let schedules = body["schedules"].as_array().cloned().unwrap_or_default();
+    if !schedules.is_empty() {
+        out.push_str(&format!(
+            "\n{} schedule(s) paused\n\n{:<40} {:<22} {}\n",
+            schedules.len(),
+            "SCHEDULE",
+            "PAUSED_AT",
+            "UNTIL"
+        ));
+        for s in &schedules {
+            out.push_str(&format!(
+                "{:<40} {:<22} {}\n",
+                s["id"].as_str().unwrap_or("?"),
+                s["paused_at"]
+                    .as_i64()
+                    .map(barca_core::outcome::rfc3339)
+                    .unwrap_or_default(),
+                s["until"]
+                    .as_i64()
+                    .map_or("resumed".to_string(), barca_core::outcome::rfc3339)
             ));
         }
     }
