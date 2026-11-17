@@ -295,7 +295,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             )}
           </KeyValue>
         )}
-        {node.partitions && <PartitionBar partitions={node.partitions} waiting={node.cache.state === 'blocked'} />}
+        {node.partitions && <PartitionBar partitions={node.partitions} />}
         {definition && definition.line > 0 && source !== null && (
           <KeyValue label="defined at">
             <span className="barca-source-path">

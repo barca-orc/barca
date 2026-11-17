@@ -697,7 +697,12 @@ targets) and never collides with `GET /health`, which is liveness.
   count assets. Both units are always present and every display names the one it shows.
 - `fresh_by` is the latest `expected_fresh_at` underneath, `null` when none is estimated. It
   speaks only for the nodes that have one; `unbounded` and `causes.undecided` say the rest.
-- A node entry adds `keys` for a partitioned node: `{"failed", "behind", "ok"}`.
+- A node entry adds `keys` for a partitioned node: `{"failed", "behind", "ok", "cause"}`;
+  `cause` is the node's own, why the keys that are behind are not fresh (#992).
+- `kinds` (beside `entries`, and on each entry of `files`) counts the same nodes by kind:
+  `asset`, `task` and `sensor`, each `{nodes, fresh, causes}`, with `fresh` and the causes
+  adding up to `nodes`. A surface that lists one kind (the web UI's Assets, Tasks and Sensors
+  pages) reads its filter counts there (#992; `rollup::KindRollup`).
 - `also_in` lists the other groups that declare an entry, by id: it is counted under `parent`
   alone, and a surface listing a group's members lists the members counted under it, so a list
   and its count are the same nodes (#959).
@@ -1057,7 +1062,7 @@ cut at the row limit below.
 ## Acceptance and evidence
 
 Each issue lands its scenario with the code and replaces the matching source link. Passing
-today (with the #961, #962, #963, #966, #967, #968, #973 and #1028 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+today (with the #961, #962, #963, #966, #967, #968, #973, #992 and #1028 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
@@ -1077,6 +1082,7 @@ row, the #964 row, the #965 row, the #972 row and the #985 row. The rest do not 
 | A group with 13% of its nodes overdue is drawn 13 parts overdue by weight, not solid; grey has one word; the map and the bars state nodes | #966: [the weight, the stacked colours, a fresh group kept, the keys ring](../../ui/src/lib/rollupView.test.ts), [the centre in the terms of the gap and the one word for grey](../../ui/src/components/CausesList.test.tsx), [the map against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
 | With a failing node that blocks 20 added to the audit shape, the first three roots hold at least 75% of the not-fresh nodes and the failure is among them; `barca status --rollup --json` carries the weight; no weight table in TypeScript | #1028: [the order and the weights, and the weight in INV-HEALTH-03 on every fixture](../../crates/barca-core/src/rollup.rs), [the audit shape with a failure (719 nodes, 443 not fresh: 152, 180 and the failure's 21 are 353), and the #963 shape under the new order (392 of 422 still)](../../crates/barca-core/src/causes.rs), [the CLI contract snapshot](../../python/tests/snapshots/cli_contract/status_rollup.txt), [the map's angles from the served weight](../../ui/src/lib/rollupView.test.ts), [the guard's table: `rollupView` lays out the served weight, `causeDisplay` holds none](../../crates/barca-cli/ui-layering.json) |
 | A node with no estimate says why on every surface; a group row says when it is fresh from its entry; a schedule is late only by the server's word | #968: [the reason, and an estimate or a reason on every not-fresh node](../../crates/barca-core/src/causes.rs), [the words and the rounding](../../ui/src/lib/estimates.test.ts), [the panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx), [the bar in the map's vocabulary](../../ui/src/components/HealthBar.test.tsx), [late, queue-bound and the typical wait](../../ui/src/lib/schedules.test.ts), [a queue entry's start](../../ui/src/lib/queue.test.ts), [a served project's panel, rows and bar](../../ui/e2e-groups/groups.spec.ts), [the Schedules page over the server's words](../../ui/e2e/estimates.spec.ts), [CLI, `GET /state`, `barca.nodes`](../../python/tests/test_estimates.py) |
+| The assets table's chips, row order and key words come from served fields; no #992 exemption is left in the guard's table | #992: [`kinds` and `keys.cause` on every fixture](../../crates/barca-core/src/rollup.rs), [the blocked keys as counts, CLI and server](../../python/tests/test_batched_partitions.py), [chips by served cause, unfiltered counts from the rollup](../../ui/src/lib/assetFilters.test.ts), [the served order](../../ui/src/lib/assetTable.test.ts), [the key bar from the counts](../../ui/src/components/assets/NodeKeys.test.tsx), [a served page: chip counts against the rollup, a chip lists its cause](../../ui/e2e/estimates.spec.ts), [the table](../../crates/barca-cli/ui-layering.json) |
 | Every not-fresh node of a scope is under one root of its list; "more" holds the rest; a root's command can be copied | #967: [a scope's roots, their order and running total, and their sums on every fixture](../../crates/barca-core/src/rollup.rs), [the audit shape's list and the line the CLI prints](../../crates/barca-core/src/causes.rs), [the list's join and words](../../ui/src/lib/causesView.test.ts), [the list rendered](../../ui/src/components/CausesList.test.tsx), [a served project: every root listed once, more in place, a picked root lit, its node opened](../../ui/e2e-groups/groups.spec.ts) |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
@@ -1100,8 +1106,12 @@ the causes list's grouping and the failures list's impact are deleted: their rul
   it with the one definition.
 - The web UI no longer attributes a blocked node to its failing node or sums health counts and
   data coverage: it reads `root` and the rollup. What it still derives: a file's one state in the
-  sidebar and the asset list's filter counts, which read rows, not the rollup; and a node
-  panel's count of nodes downstream, a graph walk for navigation. The health map's angles
+  sidebar; a node panel's count of nodes downstream, a graph walk for navigation; and the
+  key explorer, which decodes the compact key grid (`GET /assets/{id}/partitions/grid`) and
+  filters and bins it in the browser, where `barca-core` holds the same decoding
+  (`partition_grid::key_rows`, `barca status NODE --keys`). The asset list's filter chips
+  are the served `cause` with the rollup's `kinds` as their counts, its order the served
+  order of the causes, and its key counts `partitions.blocked` and `behind` (#992). The health map's angles
   are the served `weight` (#1028). A node declared in several
   groups is listed in each of them by the UI but counted in one by the rollup, so such a
   group's row lists more members than its bar counts.

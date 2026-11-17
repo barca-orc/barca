@@ -235,6 +235,61 @@ pub struct KeyCounts {
     pub behind: usize,
     /// Keys with a cached result.
     pub ok: usize,
+    /// Why the keys that are `behind` are not fresh: the node's own cause. `null` when the
+    /// node is fresh. A surface colours the band of those keys by it.
+    #[serde(default)]
+    pub cause: Option<Cause>,
+}
+
+/// The nodes of one kind in a scope, by where they stand: what a list of one kind (the web
+/// UI's Assets, Tasks and Sensors pages) counts its filter chips with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct KindCounts {
+    /// Nodes of the kind.
+    pub nodes: usize,
+    /// Of them, fresh: no cause (`ok` and `suspect`).
+    pub fresh: usize,
+    /// Of them, not fresh, by cause. With `fresh` they add up to `nodes`.
+    pub causes: CauseCounts,
+}
+
+impl KindCounts {
+    fn count(&mut self, node: &NodeStatus) {
+        self.nodes += 1;
+        match node.cause {
+            Some(cause) => *self.causes.slot(cause) += 1,
+            None => self.fresh += 1,
+        }
+    }
+}
+
+/// A scope's nodes by kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct KindRollup {
+    pub asset: KindCounts,
+    pub task: KindCounts,
+    pub sensor: KindCounts,
+}
+
+impl KindRollup {
+    fn count(&mut self, node: &NodeStatus) {
+        match node.kind.as_str() {
+            "asset" => self.asset.count(node),
+            "task" => self.task.count(node),
+            _ => self.sensor.count(node),
+        }
+    }
+
+    /// The counts of every node of `nodes`.
+    pub fn of<'a>(nodes: impl IntoIterator<Item = &'a NodeStatus>) -> Self {
+        let mut out = KindRollup::default();
+        for node in nodes {
+            out.count(node);
+        }
+        out
+    }
 }
 
 /// What one root holds underneath an entry: the root list cut to a scope, so a surface showing
@@ -579,6 +634,9 @@ pub struct FileRollup {
     pub asset_health: HealthCounts,
     /// The most severe health among its nodes: the one word a line about the file shows.
     pub worst: Health,
+    /// Its nodes by kind: how many of each are fresh and how many have each cause.
+    #[serde(default)]
+    pub kinds: KindRollup,
 }
 
 /// `GET /state/rollup` and `barca status --rollup --json`.
@@ -597,6 +655,10 @@ pub struct Rollup {
     /// Each source file in scope with its nodes summed, by file path.
     #[serde(default)]
     pub files: Vec<FileRollup>,
+    /// Every node in scope by kind (asset, task, sensor): how many of each are fresh and how
+    /// many have each cause. What a list of one kind counts its filters with.
+    #[serde(default)]
+    pub kinds: KindRollup,
 }
 
 impl Rollup {
@@ -645,6 +707,7 @@ fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
             failed: p.failed,
             behind: p.total.saturating_sub(p.cached).saturating_sub(p.failed),
             ok: p.cached,
+            cause: node.cause,
         });
     entry
 }
@@ -679,7 +742,9 @@ fn files(nodes: &[NodeStatus], running: &HashSet<String>) -> Vec<FileRollup> {
             health: HealthCounts::default(),
             asset_health: HealthCounts::default(),
             worst: Health::Ok,
+            kinds: KindRollup::default(),
         });
+        sums.kinds.count(node);
         sums.nodes += 1;
         sums.running += usize::from(running.contains(&node.id));
         *sums.health.slot(node.health) += 1;
@@ -871,6 +936,7 @@ pub fn build(
         roots: roots(nodes, evidence, server),
         data_coverage,
         files: files(nodes, running),
+        kinds: KindRollup::of(nodes),
     }
 }
 
@@ -1671,9 +1737,38 @@ mod tests {
             Some(KeyCounts {
                 failed: 0,
                 behind: 4,
-                ok: 6
+                ok: 6,
+                // Why its keys are behind: the failure upstream that blocks the node.
+                cause: Some(Cause::Failing),
             })
         );
+        // The same nodes by kind (#992): what a list of one kind counts its filters with.
+        let kinds = rollup.kinds;
+        assert_eq!(
+            (kinds.asset.nodes, kinds.task.nodes, kinds.sensor.nodes),
+            (4, 2, 1)
+        );
+        assert_eq!((kinds.asset.fresh, kinds.asset.causes.failing), (1, 3));
+        // A sensor that never ran is not fresh: it has a cause like any node.
+        assert_eq!(kinds.sensor.fresh + kinds.sensor.causes.total(), 1);
+        for kind in [kinds.asset, kinds.task, kinds.sensor] {
+            assert_eq!(kind.fresh + kind.causes.total(), kind.nodes);
+        }
+        assert_eq!(
+            kinds.asset.nodes + kinds.task.nodes + kinds.sensor.nodes,
+            rollup.root().nodes
+        );
+        // A file's are its own nodes', whichever group they sit in.
+        let by_file: HashMap<&str, &FileRollup> =
+            rollup.files.iter().map(|f| (f.file.as_str(), f)).collect();
+        assert_eq!(
+            (
+                by_file["p.py"].kinds.asset.nodes,
+                by_file["q.py"].kinds.asset.nodes
+            ),
+            (3, 1)
+        );
+        assert_eq!(by_file["q.py"].kinds.task.nodes, 1);
         assert_eq!(scored.parent.as_deref(), Some("group:p.py:model"));
         assert_eq!(entry(&rollup, "p.py:clean").keys, None);
         // The root comes first, then depth first in display order.
@@ -2024,7 +2119,14 @@ mod tests {
         };
         assert_eq!(
             keys(&json),
-            ["as_of", "data_coverage", "entries", "files", "roots"]
+            [
+                "as_of",
+                "data_coverage",
+                "entries",
+                "files",
+                "kinds",
+                "roots"
+            ]
         );
         assert_eq!(
             keys(&json["files"][0]),
@@ -2033,6 +2135,7 @@ mod tests {
                 "assets",
                 "file",
                 "health",
+                "kinds",
                 "nodes",
                 "running",
                 "worst"
@@ -2086,7 +2189,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             scored["keys"],
-            serde_json::json!({"failed": 0, "behind": 4, "ok": 6})
+            serde_json::json!({"failed": 0, "behind": 4, "ok": 6, "cause": "failing"})
         );
         assert_eq!(scored["kind"], "node");
         assert_eq!(

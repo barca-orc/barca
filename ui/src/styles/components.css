@@ -448,6 +448,8 @@ a.barca-btn { text-decoration: none; }
 /* EstimateCell: a time is plain; a row with no estimate is a step quieter. */
 .barca-estimate { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .barca-estimate[data-estimate="none"], .barca-estimate[data-estimate="ok"] { color: var(--text-muted); }
+/* A state chip's dot: the map's colour of its part. */
+.barca-chip-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 /* CauseBadge: the map's colour as a dot, then the map's word. */
 .barca-cause { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-xs); color: var(--text-default); white-space: nowrap; }
 .barca-cause > i { flex: none; width: 8px; height: 8px; border-radius: 50%; }

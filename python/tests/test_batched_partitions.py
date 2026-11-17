@@ -488,6 +488,14 @@ def test_a_failed_key_blocks_only_its_own_key_down_the_chain_and_a_fan_in_whole(
     assert nodes["orders"]["cache"]["state"] == "blocked"
     assert "scored" in nodes["orders"]["cache"]["detail"]
     assert nodes["scored"]["partitions"]["failed"] == 2
+    # The same counts as fields (#992): how many keys are blocked and on which node, and how
+    # many a run computes. `failed`, `blocked` and `behind` add up to `missing`.
+    promo = nodes["promo"]["partitions"]
+    assert (promo["blocked"], promo["blocked_on"], promo["behind"]) == (2, "pipeline.py:scored", 0)
+    assert promo["missing"] == promo.get("failed", 0) + promo["blocked"] + promo["behind"]
+    scored = nodes["scored"]["partitions"]
+    assert "blocked" not in scored and "blocked_on" not in scored
+    assert scored["missing"] == scored["failed"] + scored["behind"]
     assert nodes["summary"]["cache"]["state"] == "never_run"
     assert status["summary"]["blocked"] == 2
     only = json.loads(run(keys5, "status", "pipeline.py", "--state", "blocked", "--json").stdout)

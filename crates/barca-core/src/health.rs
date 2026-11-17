@@ -1300,6 +1300,9 @@ mod tests {
             failed_keys: Vec::new(),
             changed: None,
             empty: 0,
+            blocked: 0,
+            blocked_on: None,
+            behind: missing - failed,
         });
         n
     }

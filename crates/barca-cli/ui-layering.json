@@ -328,19 +328,7 @@
     },
     "assetTable": {
       "kind": "layout",
-      "does": "the flat assets table: rows from served rows, sort, file headers",
-      "derives": [
-        {
-          "what": "`compareAttention`: the default row order (failing, pinned, blocked, then cache state)",
-          "reason": "the table sorts by cache-state rank, not the server's health order",
-          "issue": 992
-        },
-        {
-          "what": "`blockedKeys`: \"N keys wait on X\" read out of a state's `detail` text",
-          "reason": "the count is not served as a field",
-          "issue": 992
-        }
-      ]
+      "does": "the flat assets table: rows from served rows, the served order of the causes, sort, file headers"
     },
     "graph": {
       "kind": "layout",
@@ -383,14 +371,7 @@
     },
     "assetFilters": {
       "kind": "page",
-      "does": "the assets table's filters in the URL and the chips' counts",
-      "derives": [
-        {
-          "what": "`facetCounts`, `matchesStates`: which chip a row falls under, and how many rows each chip would show",
-          "reason": "the chips count the rows on screen under the other filters and a text search; their vocabulary is still the cache state",
-          "issue": 992
-        }
-      ]
+      "does": "the assets table's filters in the URL; a row falls under its served cause, an unfiltered chip's count is the rollup's (`kinds`), a filtered one counts the rows listed"
     },
     "connection": {
       "kind": "page",
@@ -495,45 +476,11 @@
         "reason": "a Glyph name, as in DagNode"
       },
       {
-        "file": "components/assets/NodeKeys.tsx",
-        "words": [
-          "blocked"
-        ],
-        "reason": "the key bar's word for keys that wait",
-        "issue": 992
-      },
-      {
         "file": "components/assets/NodePanel.tsx",
         "words": [
-          "blocked",
           "cached"
         ],
-        "reason": "`cached` is the tag of the panel's own shown-key union, not a cache state; `blocked` picks the key bar's word",
-        "issue": 992
-      },
-      {
-        "file": "pages/AssetsPage.tsx",
-        "words": [
-          "blocked"
-        ],
-        "reason": "shows \"N keys blocked\" read from a state's detail text",
-        "issue": 992
-      },
-      {
-        "file": "hooks/useAssetFilter.ts",
-        "words": [
-          "blocked"
-        ],
-        "reason": "the blocked chip's count",
-        "issue": 992
-      },
-      {
-        "file": "lib/assetFilters.ts",
-        "words": [
-          "blocked"
-        ],
-        "reason": "which chip a row falls under",
-        "issue": 992
+        "reason": "the tag of the panel's own shown-key union, not a cache state"
       },
       {
         "file": "lib/partitionGrid.ts",

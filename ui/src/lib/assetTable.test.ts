@@ -93,23 +93,27 @@ describe('rows carry the state as the server says it', () => {
 })
 
 describe('buildRows', () => {
-  it("sorts a failed last attempt first, then the state's rank, then name", () => {
+  it('sorts by the served cause, what alarms first, fresh rows last, then name', () => {
     const rows = buildRows(
       [
         node({ id: 'p.py:zeta' }),
         node({ id: 'p.py:alpha' }),
-        node({ id: 'p.py:new_one', cache: cache('never_run', 'no_record') }),
+        node({ id: 'p.py:new_one', cache: cache('never_run', 'no_record'), cause: 'no_refresh_path' }),
         node({
           id: 'p.py:broken',
           kind: 'task',
           cache: cache('always_runs', 'task'),
           last_materialization: failedAttempt,
+          cause: 'failing',
         }),
-        node({ id: 'p.py:edited', cache: cache('stale', 'changed') }),
+        node({ id: 'p.py:edited', cache: cache('stale', 'changed'), cause: 'catching_up' }),
+        // The cache state ranks nothing: a stale row the server says a tick missed comes
+        // before a never-run one nothing refreshes.
+        node({ id: 'p.py:missed', cache: cache('stale', 'changed'), cause: 'overdue' }),
       ],
       NOW,
     )
-    expect(rows.map((r) => r.name)).toEqual(['broken', 'edited', 'new_one', 'alpha', 'zeta'])
+    expect(rows.map((r) => r.name)).toEqual(['broken', 'missed', 'new_one', 'edited', 'alpha', 'zeta'])
   })
 
   it('describes state, last attempt, timing and schedule', () => {
@@ -163,7 +167,7 @@ describe('buildRows', () => {
             id: 'p.py:promo_plan',
             partitioned: true,
             cache: { state: 'blocked', reason: 'upstream_failed', detail: '39 keys wait on upstream' },
-            partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [] },
+            partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [], blocked: 39, blocked_on: 'p.py:demand_forecast', behind: 0 },
           }),
         ],
         NOW,
@@ -179,7 +183,7 @@ describe('buildRows', () => {
           id: 'p.py:fetch',
           partitioned: true,
           cache: cache('partial', 'partitions_missing'),
-          partitions: { total: 5, cached: 3, missing: 2, missing_keys: ['k=d', 'k=e'] },
+          partitions: { total: 5, cached: 3, missing: 2, missing_keys: ['k=d', 'k=e'], behind: 2 },
         }),
         node({ id: 'p.py:new', cache: cache('never_run', 'no_record') }),
       ],
@@ -226,7 +230,7 @@ describe('typical time', () => {
       id: 'p.py:forecast',
       partitioned: true,
       durations: { median_seconds: 0.0007, p95_seconds: 0.0009, samples: 20 },
-      partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7 },
+      partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7, behind: 0 },
     })
     expect(typicalSeconds(n)).toBeCloseTo(2.154, 3)
     expect(typicalLabel(n)).toBe('~2.2s / run')
@@ -295,10 +299,11 @@ describe('sorting', () => {
         late_since: null,
         signals: [],
       }),
-      node({ id: 'p.py:never', cache: cache('never_run', 'no_record') }),
+      node({ id: 'p.py:never', cache: cache('never_run', 'no_record'), cause: 'no_refresh_path' }),
       node({
         id: 'p.py:edited',
         cache: cache('stale', 'changed'),
+        cause: 'catching_up',
         durations: { median_seconds: 3, p95_seconds: 4, samples: 2 },
         next_run: Date.parse('2026-10-02T13:00:00Z') / 1000,
         prev_run: null,
@@ -310,9 +315,10 @@ describe('sorting', () => {
   )
   const names = (sort: Sort) => sortRows(rows, sort).map((r) => r.name)
 
-  it('defaults to what needs attention, most urgent first', () => {
+  it('defaults to the served order of the causes, what alarms first', () => {
     expect(DEFAULT_SORT).toEqual({ key: 'state', dir: 'asc' })
-    expect(names(DEFAULT_SORT)).toEqual(['edited', 'never', 'fast', 'slow'])
+    // No refresh path alarms; catching up needs no one; the fresh rows are last, by name.
+    expect(names(DEFAULT_SORT)).toEqual(['never', 'edited', 'fast', 'slow'])
   })
 
   it('sorts by name either way', () => {
@@ -385,10 +391,16 @@ describe('one line a row', () => {
   })
 })
 
-describe('blockedKeys', () => {
-  it('reads how many keys wait on which input from the state detail', async () => {
-    const { blockedKeys } = await import('./assetTable')
-    expect(blockedKeys("83 of 83 missing keys wait on 'account_scores': the same keys of it failed")).toEqual({ count: 83, upstream: 'account_scores' })
-    expect(blockedKeys('Code or upstream outputs changed')).toBeNull()
+describe('keys that wait', () => {
+  it("carries how many keys wait on which input as the row's partitions count them, never read out of a sentence", () => {
+    const [row] = buildRows([node({
+      id: 'p.py:promo_plan', partitioned: true,
+      // The detail says another number on purpose: nothing parses it.
+      cache: { state: 'blocked', reason: 'upstream_failed', detail: "1 of 1 missing keys wait on 'other': the same keys of it failed" },
+      partitions: { total: 3077, cached: 2994, missing: 83, missing_keys: [], blocked: 83, blocked_on: 'p.py:account_scores', behind: 0 },
+    })], NOW)
+    expect(row!.keys).toEqual({ failed: 0, total: 3077, blocked: 83, blockedOn: 'p.py:account_scores' })
+    const [plain] = buildRows([node({ id: 'p.py:x', partitioned: true, partitions: { total: 5, cached: 3, missing: 2, missing_keys: [], behind: 2 } })], NOW)
+    expect(plain!.keys).toEqual({ failed: 0, total: 5, blocked: 0, blockedOn: null })
   })
 })

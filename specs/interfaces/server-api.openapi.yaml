@@ -4799,8 +4799,13 @@ components:
           type: object
           additionalProperties: false
           description: A partitioned node's keys, on a node entry only.
-          required: [failed, behind, ok]
+          required: [failed, behind, ok, cause]
           properties:
+            cause:
+              type: [string, 'null']
+              enum: [catching_up, queued, no_refresh_path, overdue, failing, undecided, null]
+              description: Why the keys that are behind are not fresh; the node's own cause. Null
+                when the node is fresh.
             failed:
               type: integer
               minimum: 0
@@ -4908,7 +4913,7 @@ components:
       type: object
       additionalProperties: false
       description: One source file's nodes in scope, summed, in whichever group each sits.
-      required: [file, nodes, assets, running, health, asset_health, worst]
+      required: [file, nodes, assets, running, health, asset_health, worst, kinds]
       properties:
         file:
           type: string
@@ -4951,11 +4956,47 @@ components:
           type: string
           enum: [failing, blocked, suspect, behind, undecided, never_run, ok]
           description: The most severe health among its nodes.
+        kinds:
+          $ref: '#/components/schemas/RollupKinds'
+    RollupKinds:
+      type: object
+      additionalProperties: false
+      description: A scope's nodes by kind; how many of each kind are fresh and how many have each
+        cause. What a list of one kind counts its filters with.
+      required: [asset, task, sensor]
+      properties:
+        asset: &id_kind_counts
+          type: object
+          additionalProperties: false
+          required: [nodes, fresh, causes]
+          properties:
+            nodes:
+              type: integer
+              minimum: 0
+              description: Nodes of the kind.
+            fresh:
+              type: integer
+              minimum: 0
+              description: Of them, fresh (no cause). With causes they add up to nodes.
+            causes:
+              description: Of them, not fresh, by cause.
+              type: object
+              additionalProperties: false
+              required: [catching_up, queued, no_refresh_path, overdue, failing, undecided]
+              properties:
+                catching_up: {type: integer, minimum: 0}
+                queued: {type: integer, minimum: 0}
+                no_refresh_path: {type: integer, minimum: 0}
+                overdue: {type: integer, minimum: 0}
+                failing: {type: integer, minimum: 0}
+                undecided: {type: integer, minimum: 0}
+        task: *id_kind_counts
+        sensor: *id_kind_counts
     Rollup:
       type: object
       additionalProperties: false
       description: GET /state/rollup and barca status --rollup --json. Experimental.
-      required: [as_of, entries, roots, data_coverage, files]
+      required: [as_of, entries, roots, data_coverage, files, kinds]
       properties:
         as_of:
           type: string
@@ -4982,6 +5023,8 @@ components:
             $ref: '#/components/schemas/RollupFile'
           description: Each source file in scope with its nodes summed, by file path. The tree has
             a file entry only for the nodes of a file that are in no group.
+        kinds:
+          $ref: '#/components/schemas/RollupKinds'
     NodeGroup:
       type: object
       additionalProperties: false
@@ -5497,6 +5540,19 @@ components:
           minimum: 1
           description: Keys whose latest successful result wrote no rows (a recorded count of 0). Absent
             when none did.
+        blocked:
+          type: integer
+          minimum: 1
+          description: How many of missing wait on the same keys of an input, which failed; a run
+            skips them. Absent when none does.
+        blocked_on:
+          type: string
+          description: The node whose failed keys they wait on, by id. Absent when no key is blocked.
+        behind:
+          type: integer
+          minimum: 0
+          description: How many of missing neither failed nor are blocked (stale, or never run); a
+            run computes them. failed, blocked and behind add up to missing.
     PartitionKeys:
       type: object
       additionalProperties: false

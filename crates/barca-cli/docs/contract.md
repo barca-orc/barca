@@ -142,7 +142,7 @@ stability; the row adds the keys and routes that go with it.
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, `barca docs status-fields`, "Row counts"): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
 | Health: `health`, `health_reason`, `cause`, `root`, `gap_seconds`, `signals`, `measured`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at` and `no_estimate` of each node, and `data_coverage`, `as_of` and `rollup` beside `summary`, in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), `typical_queue_wait_seconds`, `typical_run_seconds` and `queue_bound` of a node's `schedule` (and of `GET /schedule`), `started_at`, `estimated_start_at` and `wait_seconds` of a run in `barca queue --json`, the `health`, `health_reason`, `cause`, `root_id`, `root_kind`, `root_node`, `gap_seconds`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at`, `recheck_at` and `no_estimate` columns of `barca.nodes`, the `Health:`, `Gap:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox`, `no refresh path`, `fresh ~15:05 UTC` or `overdue 16h` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #962, #963, #964, #968, #973, `barca docs status-fields`, "Health", "Cause", "Root", "Last check", "Refresh path" and "Times"): how an estimate is computed and rounded, which fact a root names and the order of the cause rules may change after field use; `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
-| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table and the ranked list `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, #962, #963, #967, #973, #1028, `barca docs status-fields`, "The rollup"): an entry has `causes`, `asset_causes`, `not_fresh`, `weight`, `weights`, `held_by`, `gap_seconds`, `unbounded` and `fresh_by`; a root has `causes`, `gap_seconds`, `unbounded`, `weight` and `action`. Roots are ranked by `weight` (#1028). The wording of `detail`, which command an action names, the weights and how roots are ranked may change after field use |
+| The rollup: the JSON of `barca status --rollup` and `GET /state/rollup` (`as_of`, `entries`, `roots`, `data_coverage`, `files`), the table and the ranked list `barca status --rollup` prints, and `root` on each status node | new in 0.44 (#955, #962, #963, #967, #973, #1028, `barca docs status-fields`, "The rollup"): an entry has `causes`, `asset_causes`, `not_fresh`, `weight`, `weights`, `held_by`, `gap_seconds`, `unbounded` and `fresh_by`, and `keys.cause` on a partitioned node; the document and each file have `kinds` (#992); a root has `causes`, `gap_seconds`, `unbounded`, `weight` and `action`. Roots are ranked by `weight` (#1028). The wording of `detail`, which command an action names, the weights and how roots are ranked may change after field use |
 | `line` of each run in `barca history --json` and `GET /runs` (`steps`, `steps_detail`, `failure`, `failure_detail`), and `now` of `GET /runs?status=running` | new in 0.44 (#959, `barca docs status`): the words a run list prints, computed once for the CLI and the web UI; their wording may change after field use |
 | `now` of each run in progress in `barca history --status running --json` (and `GET /history?status=running`; `running`, `queued`, `keys`, `groups`, `line`), the `now:` line under its row, and the output of `barca history --activity` (`activity`: `since`, `until`, `triggered_by`, `hours`, `total`, `summary`; also `activity` and `?triggered_by=` of `GET /runs`) | new in 0.44 (#991, `barca docs status`, "Runs in progress and the last day's activity"): what the web UI's Runs page shows, computed once for the CLI and the UI; the keys, the window and the wording may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
@@ -2060,6 +2060,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].no_estimate` | null \| string | always |
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].partitions` | object | sometimes |
+| `nodes[].partitions.behind` | integer | always |
 | `nodes[].partitions.cached` | integer | always |
 | `nodes[].partitions.missing` | integer | always |
 | `nodes[].partitions.missing_keys` | array | always |
@@ -2265,6 +2266,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].no_estimate` | string | always |
 | `nodes[].partitioned` | boolean | always |
 | `nodes[].partitions` | object | sometimes |
+| `nodes[].partitions.behind` | integer | always |
 | `nodes[].partitions.cached` | integer | always |
 | `nodes[].partitions.missing` | integer | always |
 | `nodes[].partitions.missing_keys` | array | always |
@@ -2445,6 +2447,7 @@ clears the root:
 | `entries[].id` | string | always |
 | `entries[].keys` | object | sometimes |
 | `entries[].keys.behind` | integer | always |
+| `entries[].keys.cause` | null \| string | always |
 | `entries[].keys.failed` | integer | always |
 | `entries[].keys.ok` | integer | always |
 | `entries[].kind` | string | always |
@@ -2483,9 +2486,71 @@ clears the root:
 | `files[].health.ok` | integer | always |
 | `files[].health.suspect` | integer | always |
 | `files[].health.undecided` | integer | always |
+| `files[].kinds` | object | always |
+| `files[].kinds.asset` | object | always |
+| `files[].kinds.asset.causes` | object | always |
+| `files[].kinds.asset.causes.catching_up` | integer | always |
+| `files[].kinds.asset.causes.failing` | integer | always |
+| `files[].kinds.asset.causes.no_refresh_path` | integer | always |
+| `files[].kinds.asset.causes.overdue` | integer | always |
+| `files[].kinds.asset.causes.queued` | integer | always |
+| `files[].kinds.asset.causes.undecided` | integer | always |
+| `files[].kinds.asset.fresh` | integer | always |
+| `files[].kinds.asset.nodes` | integer | always |
+| `files[].kinds.sensor` | object | always |
+| `files[].kinds.sensor.causes` | object | always |
+| `files[].kinds.sensor.causes.catching_up` | integer | always |
+| `files[].kinds.sensor.causes.failing` | integer | always |
+| `files[].kinds.sensor.causes.no_refresh_path` | integer | always |
+| `files[].kinds.sensor.causes.overdue` | integer | always |
+| `files[].kinds.sensor.causes.queued` | integer | always |
+| `files[].kinds.sensor.causes.undecided` | integer | always |
+| `files[].kinds.sensor.fresh` | integer | always |
+| `files[].kinds.sensor.nodes` | integer | always |
+| `files[].kinds.task` | object | always |
+| `files[].kinds.task.causes` | object | always |
+| `files[].kinds.task.causes.catching_up` | integer | always |
+| `files[].kinds.task.causes.failing` | integer | always |
+| `files[].kinds.task.causes.no_refresh_path` | integer | always |
+| `files[].kinds.task.causes.overdue` | integer | always |
+| `files[].kinds.task.causes.queued` | integer | always |
+| `files[].kinds.task.causes.undecided` | integer | always |
+| `files[].kinds.task.fresh` | integer | always |
+| `files[].kinds.task.nodes` | integer | always |
 | `files[].nodes` | integer | always |
 | `files[].running` | integer | always |
 | `files[].worst` | string | always |
+| `kinds` | object | always |
+| `kinds.asset` | object | always |
+| `kinds.asset.causes` | object | always |
+| `kinds.asset.causes.catching_up` | integer | always |
+| `kinds.asset.causes.failing` | integer | always |
+| `kinds.asset.causes.no_refresh_path` | integer | always |
+| `kinds.asset.causes.overdue` | integer | always |
+| `kinds.asset.causes.queued` | integer | always |
+| `kinds.asset.causes.undecided` | integer | always |
+| `kinds.asset.fresh` | integer | always |
+| `kinds.asset.nodes` | integer | always |
+| `kinds.sensor` | object | always |
+| `kinds.sensor.causes` | object | always |
+| `kinds.sensor.causes.catching_up` | integer | always |
+| `kinds.sensor.causes.failing` | integer | always |
+| `kinds.sensor.causes.no_refresh_path` | integer | always |
+| `kinds.sensor.causes.overdue` | integer | always |
+| `kinds.sensor.causes.queued` | integer | always |
+| `kinds.sensor.causes.undecided` | integer | always |
+| `kinds.sensor.fresh` | integer | always |
+| `kinds.sensor.nodes` | integer | always |
+| `kinds.task` | object | always |
+| `kinds.task.causes` | object | always |
+| `kinds.task.causes.catching_up` | integer | always |
+| `kinds.task.causes.failing` | integer | always |
+| `kinds.task.causes.no_refresh_path` | integer | always |
+| `kinds.task.causes.overdue` | integer | always |
+| `kinds.task.causes.queued` | integer | always |
+| `kinds.task.causes.undecided` | integer | always |
+| `kinds.task.fresh` | integer | always |
+| `kinds.task.nodes` | integer | always |
 | `roots` | array | always |
 | `roots[]` | object | always |
 | `roots[].action` | object | always |

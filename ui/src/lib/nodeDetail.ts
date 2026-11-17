@@ -196,17 +196,34 @@ export function runPace(run: Pick<RunNodeSummary, 'calls' | 'keys' | 'elapsed_se
 interface BarSegments {
   cached: number
   failed: number
-  stale: number
+  blocked: number
+  behind: number
+}
+
+/** A partitioned node's keys as its row counts them (`partitions`): the bar's parts, none worked out here. */
+export interface KeyParts {
+  cached: number
+  failed: number
+  /** Keys that wait on the failed keys of an input. */
+  blocked: number
+  /** Keys that are stale or never ran: a run computes them. */
+  behind: number
+  total: number
+}
+
+/** The parts of a key bar, read off a row's `partitions`. */
+export function keyParts(p: Pick<PartitionState, 'total' | 'cached' | 'failed' | 'blocked' | 'behind'>): KeyParts {
+  return { cached: p.cached, failed: p.failed ?? 0, blocked: p.blocked ?? 0, behind: p.behind, total: p.total }
 }
 
 /**
  * The widths (percent) of a key bar's parts. A part that exists is at least `minPct` wide, taken
  * from the widest part: 7 failed keys of 3,077 are 0.2%, which a 300px bar never shows.
  */
-export function barSegments({ cached, failed, stale, total }: { cached: number; failed: number; stale: number; total: number }, minPct = 2): BarSegments {
-  if (total <= 0) return { cached: 0, failed: 0, stale: 0 }
-  const out: BarSegments = { cached: (cached / total) * 100, failed: (failed / total) * 100, stale: (stale / total) * 100 }
-  const keys = ['cached', 'failed', 'stale'] as const
+export function barSegments({ cached, failed, blocked, behind, total }: KeyParts, minPct = 2): BarSegments {
+  if (total <= 0) return { cached: 0, failed: 0, blocked: 0, behind: 0 }
+  const out: BarSegments = { cached: (cached / total) * 100, failed: (failed / total) * 100, blocked: (blocked / total) * 100, behind: (behind / total) * 100 }
+  const keys = ['cached', 'failed', 'blocked', 'behind'] as const
   for (const k of keys) {
     if (out[k] > 0 && out[k] < minPct) {
       const widest = keys.reduce((a, b) => (out[a] >= out[b] ? a : b))

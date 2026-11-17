@@ -102,6 +102,16 @@ def _held(rollup: dict, nodes: list[dict]) -> None:
     weights = [r["weight"] for r in rollup["roots"]]
     assert weights == sorted(weights, reverse=True)
     assert [h["root"] for h in total["held_by"]] == [r["id"] for r in rollup["roots"]]
+    # The same nodes by kind (#992): fresh and each cause, as a list of one kind counts them.
+    for kind, counted in rollup["kinds"].items():
+        of_kind = [n for n in nodes if n["kind"] == kind]
+        assert counted["nodes"] == len(of_kind), kind
+        assert counted["fresh"] == sum(1 for n in of_kind if n["cause"] is None), kind
+        for cause, count in counted["causes"].items():
+            assert count == sum(1 for n in of_kind if n["cause"] == cause), (kind, cause)
+    assert {f["file"] for f in rollup["files"]} == {n["id"].rsplit(":", 1)[0] for n in nodes}
+    for file in rollup["files"]:
+        assert sum(k["nodes"] for k in file["kinds"].values()) == file["nodes"], file["file"]
     for root in rollup["roots"]:
         causes = root["causes"]
         acted = causes["failing"] + causes["overdue"] + causes["no_refresh_path"]

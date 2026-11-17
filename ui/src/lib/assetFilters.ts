@@ -4,12 +4,15 @@
  * Every filter narrows the rows (they combine with AND; a multi-select group
  * matches any of its picks). Chip counts are faceted: each group's counts
  * apply every *other* active filter, so a count is always what clicking that
- * chip would show.
+ * chip would show. The state chips are the health map's parts: a row falls under
+ * its served `cause` (or `fresh`), and with no other filter their counts are the
+ * rollup's own.
  */
 
 import { match } from 'ts-pattern'
 import { filterRows, type AssetRow } from './assetTable'
-import { CACHE_STATES, type CacheState } from './cacheStateDisplay'
+import { MAP_PARTS, mapPartOf, type MapPart } from './causeDisplay'
+import type { KindCounts } from './generated/KindCounts'
 import type { NodeState } from './types'
 
 export type Kind = NodeState['kind']
@@ -20,13 +23,12 @@ export const LAST_RUNS: readonly LastRun[] = ['any', 'hour', 'day', 'week_plus',
 
 export interface Filters {
   query: string
-  /** Empty = any state. The CLI's words (`cache.state`). */
-  states: CacheState[]
-  /** Only nodes whose last attempt failed: a fact beside the state, so a filter of its own. */
-  failed: boolean
-  /** Only nodes a failure upstream keeps from running (`blocked`): derived, so a filter of its own. */
-  blocked: boolean
-  /** Only pinned nodes (`barca pin`): they read `pinned`, so a filter of its own. */
+  /**
+   * Empty = any. The health map's parts: a cause (`failing`, `overdue`, `no_refresh_path`,
+   * `queued`, `undecided`, `catching_up`) or `fresh`. A row falls under its served `cause`.
+   */
+  states: MapPart[]
+  /** Only pinned nodes (`barca pin`): a fact beside the cause, so a filter of its own. */
   pinned: boolean
   /** Empty = any kind. */
   kinds: Kind[]
@@ -40,8 +42,6 @@ export interface Filters {
 export const EMPTY_FILTERS: Filters = {
   query: '',
   states: [],
-  failed: false,
-  blocked: false,
   pinned: false,
   kinds: [],
   lastRun: 'any',
@@ -53,8 +53,6 @@ export function isFiltered(f: Filters): boolean {
   return (
     f.query.trim() !== '' ||
     f.states.length > 0 ||
-    f.failed ||
-    f.blocked ||
     f.pinned ||
     f.kinds.length > 0 ||
     f.lastRun !== 'any' ||
@@ -77,23 +75,11 @@ function matchesLastRun(row: AssetRow, lastRun: LastRun, nowMs: number): boolean
     .exhaustive()
 }
 
-type Group = 'states' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
+type Group = 'states' | 'pinned' | 'kinds' | 'lastRun' | 'scheduled' | 'partitioned'
 
-/**
- * Blocked, whichever way it is known: a failure upstream the client found (`blockedBy`), or the
- * server's `blocked` state (keys that wait on the same keys of a failed input). One word, one chip.
- */
-function isBlocked(r: Pick<AssetRow, 'blockedBy' | 'state'>): boolean {
-  return r.blockedBy !== null || r.state === 'blocked'
-}
-
-/**
- * The state filter, as a group, by the one state each row shows: `failing` (a failed last
- * attempt), `blocked` (a failure upstream keeps it from running) or else its cache state, so a chip's count is the rows it shows.
- */
+/** The state filter: the row's own served cause (or fresh) is one of the parts picked. */
 function matchesStates(r: AssetRow, f: Filters): boolean {
-  if (f.states.length === 0 && !f.failed && !f.blocked && !f.pinned) return true
-  return r.lastFailed ? f.failed : r.pinned !== null ? f.pinned : isBlocked(r) ? f.blocked : f.states.includes(r.state)
+  return f.states.length === 0 || f.states.includes(mapPartOf(r.cause))
 }
 
 /** Rows passing every filter except those of `skip` (for faceted counts). */
@@ -101,6 +87,7 @@ function filterExcept(rows: AssetRow[], f: Filters, nowMs: number, skip?: Group)
   return filterRows(rows, f.query).filter(
     (r) =>
       (skip === 'states' || matchesStates(r, f)) &&
+      (skip === 'pinned' || !f.pinned || r.pinned !== null) &&
       (skip === 'kinds' || f.kinds.length === 0 || f.kinds.includes(r.kind)) &&
       (skip === 'lastRun' || matchesLastRun(r, f.lastRun, nowMs)) &&
       (skip === 'scheduled' || !f.scheduled || r.nextRunMs !== null) &&
@@ -113,11 +100,8 @@ export function applyFilters(rows: AssetRow[], f: Filters, nowMs: number): Asset
 }
 
 interface FacetCounts {
-  states: Record<CacheState, number>
-  /** Rows whose last attempt failed. */
-  failed: number
-  /** Rows a failure upstream keeps from running. */
-  blocked: number
+  /** Rows by the health map's part: each cause, and fresh. */
+  states: Record<MapPart, number>
   /** Pinned rows. */
   pinned: number
   kinds: Record<Kind, number>
@@ -126,17 +110,27 @@ interface FacetCounts {
   partitioned: number
 }
 
-export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number): FacetCounts {
-  const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
-  let failed = 0
-  let blocked = 0
-  let pinned = 0
-  for (const r of filterExcept(rows, f, nowMs, 'states')) {
-    if (r.lastFailed) failed += 1
-    else if (r.pinned !== null) pinned += 1
-    else if (isBlocked(r)) blocked += 1
-    else states[r.state] += 1
+/** Whether any filter but the state chips narrows the rows: a search, a kind, a time, a toggle. */
+function narrowed(f: Filters): boolean {
+  return isFiltered({ ...f, states: [] })
+}
+
+/**
+ * The chips' counts. `served` is the page's kind in the rollup (`kinds` of `GET /state/rollup`,
+ * or of the open file): with it, and no filter but the state chips, a chip's count is the
+ * server's own (`fresh`, `causes`), the number `barca status --rollup --json` prints. Under a
+ * search or another filter a count is the rows on screen that carry that cause: a count of
+ * what is listed, by a field each row was served with. Nothing here decides which chip a row
+ * falls under.
+ */
+export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number, served: KindCounts | null = null): FacetCounts {
+  const states = Object.fromEntries(MAP_PARTS.map((p) => [p, 0])) as Record<MapPart, number>
+  if (served && !narrowed(f)) {
+    for (const part of MAP_PARTS) states[part] = part === 'fresh' ? served.fresh : served.causes[part]
+  } else {
+    for (const r of filterExcept(rows, f, nowMs, 'states')) states[mapPartOf(r.cause)] += 1
   }
+  const pinned = filterExcept(rows, f, nowMs, 'pinned').filter((r) => r.pinned !== null).length
 
   const kinds = { asset: 0, task: 0, sensor: 0 } as Record<Kind, number>
   for (const r of filterExcept(rows, f, nowMs, 'kinds')) kinds[r.kind] += 1
@@ -148,8 +142,6 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number): FacetC
 
   return {
     states,
-    failed,
-    blocked,
     pinned,
     kinds,
     lastRun,
@@ -163,6 +155,9 @@ export function facetCounts(rows: AssetRow[], f: Filters, nowMs: number): FacetC
 
 const PARAMS = ['q', 'state', 'failed', 'blocked', 'pinned', 'kind', 'ran', 'scheduled', 'partitioned'] as const
 
+/** `state=` values of links made before the chips spoke of causes, and the part each now means. */
+const OLD_STATES: Readonly<Record<string, MapPart>> = { cached: 'fresh' }
+
 function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] {
   if (!raw) return []
   return raw.split(',').filter((v): v is T => (allowed as readonly string[]).includes(v))
@@ -170,16 +165,18 @@ function list<T extends string>(raw: string | null, allowed: readonly T[]): T[] 
 
 /**
  * The filters a URL names; one that names none filters nothing, on every page (what the page
- * shows is what its controls say). `state=` carries the CLI's words; `failed=1` asks for nodes
- * whose last attempt failed, `blocked=1` for those a failure upstream keeps from running.
+ * shows is what its controls say). `state=` carries the health map's parts (the server's cause
+ * words, and `fresh`). An older link's `failed=1` or `blocked=1` reads `state=failing`: both
+ * are the `failing` cause now.
  */
 export function parseFilters(p: URLSearchParams): Filters {
   const ran = p.get('ran')
   return {
     query: p.get('q') ?? '',
-    states: list(p.get('state'), CACHE_STATES),
-    failed: p.get('failed') === '1',
-    blocked: p.get('blocked') === '1',
+    states: [...new Set<MapPart>([
+      ...list((p.get('state') ?? '').split(',').map((s) => OLD_STATES[s] ?? s).join(','), MAP_PARTS),
+      ...(p.get('failed') === '1' || p.get('blocked') === '1' ? (['failing'] as const) : []),
+    ])],
     pinned: p.get('pinned') === '1',
     kinds: list(p.get('kind'), KINDS),
     lastRun: LAST_RUNS.find((l) => l === ran) ?? 'any',
@@ -194,8 +191,6 @@ export function writeFilters(params: URLSearchParams, f: Filters): URLSearchPara
   for (const k of PARAMS) p.delete(k)
   if (f.query.trim()) p.set('q', f.query)
   if (f.states.length) p.set('state', f.states.join(','))
-  if (f.failed) p.set('failed', '1')
-  if (f.blocked) p.set('blocked', '1')
   if (f.pinned) p.set('pinned', '1')
   if (f.kinds.length) p.set('kind', f.kinds.join(','))
   if (f.lastRun !== 'any') p.set('ran', f.lastRun)
