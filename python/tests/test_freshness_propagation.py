@@ -1,7 +1,7 @@
 """Freshness propagation (RFC-0008), end to end.
 
 Under `barca serve` a tick of a scheduled node brings that node and every `Always` node below
-it up to date in one run. `Manual` pins itself: it is never recomputed by a tick or by a
+it, or below a sensor the tick polls, up to date in one run. `Manual` pins itself: it is never recomputed by a tick or by a
 request for something below it, which reads its current result. A failed node retries at every
 tick, up to `Schedule(..., max_failures=N)`. `barca get` reads a stale `Manual` upstream as it
 is, with a note, and refuses (exit 2) when it has never been computed.
@@ -537,12 +537,12 @@ def test_a_tick_below_a_refreshed_manual_node_reads_its_new_result(tmp_path):
     assert _value(tmp_path, "priced", "pipeline.py") == 120.0
 
 
-# ─── a tick polls a sensor it reads, and targets nothing beside it (#952) ────
+# ─── a tick rebuilds what is below every sensor it polls (#978) ──────────────
 
 POLLED = """
 from pathlib import Path
 
-from barca import asset, sensor, Always, Manual, Schedule
+from barca import asset, sensor, task, Always, Manual, Schedule
 
 
 @sensor(freshness=Manual)
@@ -568,13 +568,36 @@ def side(v: str) -> str:
 @asset(inputs={"v": side})
 def below(v: str) -> str:
     return v
+
+
+@task(inputs={"v": side})
+def tell(v: str) -> None:
+    with open("told.log", "a") as f:
+        f.write(v + "\\n")
 """
 
+# A second schedule that polls the same sensor: both ticks target `side`, `below` and `tell`.
+# The two never fire in the same second, so their runs do not overlap.
+TWICE = (
+    POLLED.replace('Schedule("* * * * * *")', 'Schedule("*/4 * * * * *")')
+    + """
 
-def _polled(tmp_path, freshness: str):
-    """`side` and `below` are `Always` and below `feed`, with no scheduled node above them."""
+@asset(inputs={"v": feed}, freshness=Schedule("2-58/4 * * * * *"))
+def also(v: str) -> str:
+    return v
+"""
+)
+
+
+def _names(ids) -> set[str]:
+    return {i.rsplit(":", 1)[1] for i in ids}
+
+
+def _polled(tmp_path, freshness: str, source: str = POLLED, also: tuple[str, ...] = ()):
+    """`side`, `below` and `tell` are `Always` and below `feed`, which the tick of `fast` only
+    polls: no scheduled node is above them."""
     (tmp_path / "pipeline.py").write_text(
-        POLLED.replace("@sensor(freshness=Manual)", f"@sensor(freshness={freshness})")
+        source.replace("@sensor(freshness=Manual)", f"@sensor(freshness={freshness})")
     )
     _write(tmp_path, "feed.txt", "a")
     assert _barca(tmp_path, "get", "below", "pipeline.py").returncode == 0
@@ -582,33 +605,97 @@ def _polled(tmp_path, freshness: str):
     with Serve(tmp_path) as serve:
         serve.wait("the first tick", lambda: serve.rows().get("fast", 0) >= 1)
         _write(tmp_path, "feed.txt", "b")
-        # The tick of `fast` polls `feed`, sees the new value and rebuilds its own targets.
-        serve.wait("the new value", lambda: serve.rows().get("after", 0) >= 2)
+        # The tick of `fast` polls `feed`, sees the new value and rebuilds what is below it.
+        serve.wait(
+            "the new value",
+            lambda: all(serve.rows().get(name, 0) >= 2 for name in ("below", *also)),
+        )
         rows = serve.settle()
+        # Ticks go on after the change: one that found the sensor unchanged.
+        serve.wait("a tick after the change", lambda: serve.rows().get("feed", 0) > rows["feed"])
         run = serve.finished(serve.schedule()["fast"]["last_run"])
-    targets = {t.rsplit(":", 1)[1] for t in run["outcome"]["targets"]}
-    steps = {step["id"].rsplit(":", 1)[1] for step in run["outcome"]["steps"]}
-    return rows, targets, steps
+    return rows, run["outcome"]
 
 
-def test_a_tick_leaves_always_nodes_beside_a_sensor_it_only_polls(tmp_path):
+def test_a_tick_rebuilds_the_always_nodes_below_a_sensor_it_polls(tmp_path):
     for n, freshness in enumerate(("Manual", "Always")):
         root = tmp_path / str(n)
         root.mkdir()
-        rows, targets, steps = _polled(root, freshness)
-        # The sensor is an input of the tick's run, not a target, and `side` is in neither.
-        assert targets == {"fast", "after"}, targets
-        assert steps == {"feed", "fast", "after"}, steps
-        assert rows.get("fast") == 2 and rows.get("after") == 2, rows
-        # No tick rebuilt them, however many polled the sensor that made them stale.
+        rows, outcome = _polled(root, freshness)
+        # The sensor is an input of the tick's run; what is below it is a target.
+        assert _names(outcome["targets"]) == {"fast", "after", "side", "below", "tell"}
+        assert _names(s["id"] for s in outcome["steps"]) == {
+            "feed",
+            "fast",
+            "after",
+            "side",
+            "below",
+            "tell",
+        }
+        # Once per value, however many ticks polled the sensor since.
+        for name in ("fast", "after", "side", "below"):
+            assert rows.get(name) == 2, (name, rows)
+        assert _status(root)["side"]["state"] == "cached", _status(root)
+        # An `Always` task below the sensor fires when its input's version changed, not at
+        # every tick.
+        assert _lines(root / "told.log") == ["a", "b"]
+        # A tick that finds the sensor unchanged executes the poll and nothing else.
+        assert outcome["steps_executed"] == 1, outcome
+        ran = {s["id"].rsplit(":", 1)[1] for s in outcome["steps"] if s["status"] != "cached"}
+        assert ran == {"feed"}, outcome["steps"]
+
+
+def test_what_is_below_a_sensor_with_its_own_schedule_follows_the_sensors_ticks_only(tmp_path):
+    # Both tick every second and the tick of `fast` polls `feed`, but `side`, `below` and `tell`
+    # are targets of the sensor's own ticks only: nothing is computed or fired twice.
+    rows, outcome = _polled(tmp_path, 'Schedule("* * * * * *")')
+    assert _names(outcome["targets"]) == {"fast", "after"}
+    assert _names(s["id"] for s in outcome["steps"]) == {"feed", "fast", "after"}
+    for name in ("fast", "after", "side", "below"):
+        assert rows.get(name) == 2, (name, rows)
+    assert _lines(tmp_path / "told.log") == ["a", "b"]
+
+
+def test_two_schedules_that_reach_the_same_node_compute_it_once_when_their_ticks_do_not_overlap(
+    tmp_path,
+):
+    rows, outcome = _polled(tmp_path, "Manual", TWICE, also=("fast", "also"))
+    assert {"side", "below", "tell"} <= _names(outcome["targets"])
+    # `fast` and `also` both target `side`, `below` and `tell`. The tick that sees the new value
+    # first computes them; the other finds the results and a task that is up to date. (Ticks in
+    # the same second run together: an asset step in flight is shared, a task is not.)
+    for name in ("fast", "also", "after", "side", "below"):
+        assert rows.get(name) == 2, (name, rows)
+    assert _lines(tmp_path / "told.log") == ["a", "b"]
+
+
+def test_a_paused_or_pinned_node_below_a_polled_sensor_is_left_alone(tmp_path):
+    (tmp_path / "pipeline.py").write_text(POLLED)
+    _write(tmp_path, "feed.txt", "a")
+    assert _barca(tmp_path, "get", "below", "pipeline.py").returncode == 0
+    with Serve(tmp_path) as serve:
+        serve.wait("the first tick", lambda: serve.rows().get("fast", 0) >= 1)
+        paused = _barca(tmp_path, "pause", "side", "--server", serve.url)
+        assert paused.returncode == 0, paused.stderr
+        _write(tmp_path, "feed.txt", "b")
+        serve.wait("the second value", lambda: serve.rows().get("after", 0) >= 2)
+        rows = serve.settle()
+        # The tick skips the paused target and reads it as it is for what is below it.
         assert rows.get("side") == 1 and rows.get("below") == 1, rows
-        assert _status(root)["side"]["state"] != "cached", _status(root)
-        # A request does.
-        assert _barca(root, "get", "below", "pipeline.py").returncode == 0
-        assert _rows(root).get("side") == 2 and _rows(root).get("below") == 2
-        assert _status(root)["side"]["state"] == "cached"
+        run = serve.finished(serve.schedule()["fast"]["last_run"])
+        skipped = [s for s in run["outcome"]["steps"] if s.get("reason") == "paused"]
+        assert _names(s["id"] for s in skipped) == {"side"}, run["outcome"]["steps"]
 
+        # Resumed: a target again, rebuilt at the tick that sees the next value.
+        resumed = _barca(tmp_path, "resume", "side", "--server", serve.url)
+        assert resumed.returncode == 0, resumed.stderr
+        _write(tmp_path, "feed.txt", "c")
+        serve.wait("the third value", lambda: serve.rows().get("below", 0) >= 2)
 
-def test_a_schedule_on_the_sensor_gives_what_is_below_it_a_tick(tmp_path):
-    rows, _targets, _steps = _polled(tmp_path, 'Schedule("* * * * * *")')
-    assert rows.get("side") == 2 and rows.get("below") == 2, rows
+        # Pinned (`barca pin`): read as its pinned result by every run, ticks included.
+        pinned = _barca(tmp_path, "pin", "side", "--previous")
+        assert pinned.returncode == 0, pinned.stderr
+        _write(tmp_path, "feed.txt", "d")
+        serve.wait("the fourth value", lambda: serve.rows().get("after", 0) >= 4)
+        rows = serve.settle()
+        assert rows.get("side") == 2 and rows.get("below") == 2, rows

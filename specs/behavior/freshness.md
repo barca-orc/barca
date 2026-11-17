@@ -64,11 +64,11 @@ ordering or concurrent-version publication from the approved ownership design.
 | Context | Meaning |
 | --- | --- |
 | Explicit `get` / `run` | Resolve the requested dependency cone; reuse matching asset results; run requested tasks and required sensors |
-| Scheduled tick | Reconcile its node and reachable `Always` nodes; stop propagation at a separate schedule |
+| Scheduled tick | Reconcile its node, the `Always` nodes below it and the `Always` nodes below every unscheduled sensor its run polls; stop propagation at a separate schedule |
 | `Manual` asset/task | Pin its existing successful result unless explicitly refreshed; a never-produced pin blocks readers |
 | Asset pinned with `barca pin` (0.41.0) | Read as its pinned materialization by every run and route, deprecated triggers included, even when targeted or refreshed; never computed until unpinned; consumers hash its pinned run hash; a pin whose result is gone blocks readers (exit 2, `blocked` under a tick). Unpartitioned assets only. Conformance: `python/tests/test_pins.py`, `freshness.rs` walk tests, `crates/barca-server/tests/openapi.rs` |
-| Sensor | Poll whenever required by a run, regardless of its declared freshness |
-| Node with no scheduled node above it | No tick targets it. It is computed by a tick only as an input of a target (an asset with no cached result, a sensor polled); otherwise by a request |
+| Sensor | Poll whenever required by a run, regardless of its declared freshness. With a `Schedule`, its own ticks target the `Always` nodes below it; without one, every tick that polls it does |
+| `Always` node neither below a scheduled node nor below an unscheduled sensor some tick polls | No tick targets it. It is computed by a tick only as an input of a target (an asset with no cached result); otherwise by a request |
 | Partitioned `Manual` | Current limitation: follows ordinary computation rather than pinning |
 
 The canonical run interface (`POST /runs`, also used by `--server`) follows CLI freshness
@@ -76,16 +76,35 @@ rules. Deprecated trigger routes retain their compatibility behavior, including 
 Manual treatment; see [scheduling](../../crates/barca-cli/docs/scheduling.md#manual-pins-itself).
 Manual pins itself; it is not an approval gate that prevents other inputs below it updating.
 
-A tick's targets are its scheduled node and that node's followers: the `Always` nodes reached
-going downstream from it, through `Always` nodes and `Manual` assets and tasks (which are passed,
-not targeted), not past a node with a `Schedule` or a `Manual` sensor. The run also plans the
-targets' inputs: the upstream cone of the targets, not past a `Manual` asset or task, a pinned
-asset or a paused node, which are read as they are. A sensor in that cone is polled and its
-observation recorded; an asset in it is computed when it has no cached result. Nothing else is
-touched. So a poll can advance a sensor's observation while `Always` nodes below that sensor,
-not below the scheduled node, stay out of date through every tick (#952): they have no refresh
-path. `barca_core::freshness::tick_reach` is the one statement of which schedules reach a
-node and how (`Target` or `Input`); a node it does not list is rebuilt by no tick.
+A tick's targets are its scheduled node, that node's followers, and the followers of every
+sensor without a `Schedule` that the run polls (#978). The followers of a node are the `Always` nodes reached going
+downstream from it, through `Always` nodes and `Manual` assets and tasks (which are passed, not
+targeted), not past a node with a `Schedule` or a `Manual` sensor. The run plans the targets'
+inputs: the upstream cone of the targets, not past a `Manual` asset or task, a pinned asset or
+a paused node, which are read as they are. A sensor in that cone is polled and its observation
+recorded, whatever its freshness; an asset in it is computed when it has no cached result. The
+polled sensors' followers are targets with cones of their own, so the target set is the least
+set closed under both steps. Nothing else is touched.
+
+- The set is static: it depends on the graph alone, not on whether a poll returned a new
+  value. A tick whose polled sensors are unchanged executes the polls and nothing else.
+- Only a sensor carries a tick to what is beside a target. An asset input does not.
+- A polled sensor with a `Schedule` of its own is not followed: its followers are targets of
+  its own ticks only, so they are out of date for at most one of its intervals after another
+  tick polled it, and a schedule on the sensor and one on a node that reads it never both
+  target them. A node with a `Schedule` of its own is targeted by its own ticks only.
+- An `Always` task among the targets fires under the task rule (its inputs' versions changed,
+  or a task it reads ran since); the scheduled task itself always runs.
+- A paused target is skipped and a pinned target is read as its pinned result. The static set
+  is computed without them: at run time they also stop the upstream walk, so a tick can poll
+  fewer sensors than the static set follows, never an unscheduled one it does not.
+- A node targeted by two schedules is computed once when their runs do not overlap (the second
+  finds the result). Runs in flight together share an asset step while it is leased; a task is
+  never shared, so both runs fire it. Current limitation.
+
+`barca_core::freshness::tick_targets` is the scheduler's target list and
+`barca_core::freshness::tick_reach` the one statement of which schedules reach a node and how
+(`Target` or `Input`); a node with no `Target` entry is brought up to date by no tick.
 A changed `collect()` consumer needs all applicable inputs. Explicit partition selection does
 not promise a partial collect over selected keys.
 
@@ -134,10 +153,14 @@ existing unpartitioned return-to-an-earlier-value coverage alone does not
 prove the partitioned invariant.
 
 Conformance: [freshness rules](../../crates/barca-core/src/freshness.rs)
-(`always_nodes_beside_a_sensor_a_tick_only_polls_have_no_refresh_path`),
+(`always_nodes_below_a_sensor_a_tick_polls_are_its_targets`,
+`a_sensor_polled_for_a_target_below_another_sensor_is_followed_too`,
+`a_node_below_a_sensor_with_a_slower_schedule_follows_the_sensors_own_ticks`),
 [scheduled execution](../../python/tests/test_serve_schedule.py),
 [tick reach](../../python/tests/test_freshness_propagation.py)
-(`test_a_tick_leaves_always_nodes_beside_a_sensor_it_only_polls`),
+(`test_a_tick_rebuilds_the_always_nodes_below_a_sensor_it_polls`,
+`test_two_schedules_that_reach_the_same_node_compute_it_once_when_their_ticks_do_not_overlap`,
+`test_a_paused_or_pinned_node_below_a_polled_sensor_is_left_alone`),
 [early cutoff](../../python/tests/test_asset_cutoff.py),
 [selection](../../python/tests/test_partition_selection.py).
 

@@ -37,27 +37,33 @@ barca serve job.py
 ## What a tick does
 
 A tick of a scheduled node is one run with several targets: the scheduled node, then every
-`Always` node below it. The walk down from the scheduled node goes past a `Manual` node, which
-is not updated, and stops at a node with a `Schedule` of its own, which follows its own ticks.
-Nodes with no scheduled node above them are never touched by a tick; they are computed only when
-a target needs them as an input and they have no cached result.
+`Always` node below it and every `Always` node below an unscheduled sensor the run polls. The walk down, from
+the scheduled node or from a polled sensor, goes past a `Manual` asset or task, which is not
+updated, and stops at a node with a `Schedule` of its own, which follows its own ticks. An
+`Always` node that is neither below a scheduled node nor below an unscheduled sensor some tick polls is never
+touched by a tick; it is computed only when a target needs it as an input and it has no cached
+result.
 
 A tick brings each target up to date. It does not force anything to recompute.
 
-"Below it" means below the scheduled node, not below everything the run touches. A sensor that
-a target reads is polled as an input, whatever its own freshness, and its new value is
-recorded; `Always` nodes below that sensor that are not below the scheduled node become out of
-date and no tick rebuilds them. Put the schedule on the sensor, or give those nodes a
-`Schedule`, to have ticks keep them up to date (`barca docs scheduling`, "A sensor a tick only
-polls").
+A run polls every sensor its targets read, whatever the sensor's own freshness, and records
+the value. A new value changes the run hash of everything below that sensor. No tick is ever
+started for a `Manual` or `Always` sensor, so the `Always` nodes below one are targets of every
+tick that polls it: a change a tick has seen is carried down by that tick. The targets are
+fixed by the graph, so when the sensor returns the same value they are cache hits and the poll
+is the only step that runs. The sensors those targets read are polled and followed in the same
+way. A sensor with a `Schedule` of its own is the exception: the nodes below it are targets of
+its own ticks only, so they can be out of date for up to one of its intervals after a faster
+tick polled it. To keep a node below a polled sensor on a slower rhythm, give that node its own
+`Schedule` (`barca docs scheduling`, "A sensor a tick polls").
 
 | Node in the tick | On each tick |
 |---|---|
 | the scheduled sensor | The sensor is polled and its value is recorded. |
 | the scheduled asset | Sensors upstream of it are polled. Each asset upstream of it, and the asset itself, runs only if there is no cached result for its current code and inputs. |
 | the scheduled task | The task runs. Its upstream sensors and assets are handled as above. |
-| an `Always` asset below | Computed if it has no cached result for its current run hash; otherwise up to date. |
-| an `Always` task below | Runs if its last successful run used other versions of its inputs (other code, another result of an asset it reads, another value of a sensor it reads), if a task it reads has run successfully since, or if it has never run. Otherwise it does not run. |
+| an `Always` asset below it, or below an unscheduled sensor the run polls | Computed if it has no cached result for its current run hash; otherwise up to date. |
+| an `Always` task below it, or below an unscheduled sensor the run polls | Runs if its last successful run used other versions of its inputs (other code, another result of an asset it reads, another value of a sensor it reads), if a task it reads has run successfully since, or if it has never run. Otherwise it does not run. |
 
 So a schedule on a sensor is enough to keep everything below it current: when the sensor returns
 the same value nothing else runs, and when it returns a new one the same run computes the assets
@@ -85,7 +91,7 @@ node follows the schedules above it.
 | Freshness | Meaning |
 |---|---|
 | `Schedule("<cron>")` | Fires on a cron schedule while `barca serve` is running. |
-| `Always` | Brought up to date at each tick of a scheduled node above it, in that tick's run. |
+| `Always` | Brought up to date at each tick of a scheduled node above it, and at each tick that polls an unscheduled sensor above it, in that tick's run. |
 | `Manual` | Refreshed by hand only: never by a tick, and never by a request for something below it, which reads its current result. A sensor is the exception: every run that needs its value polls it, whatever its freshness. |
 
 ```python
@@ -241,8 +247,10 @@ publishing {'rows': 3}
 ### Two scheduled nodes that share an upstream
 
 Each scheduled node gets its own run. Two scheduled nodes that are due at the same tick and
-share an upstream run separately, and both may compute the shared upstream; the sensor also
-runs twice, so the two runs can see different data
+share an upstream, or a target below an unscheduled sensor both poll, run separately, and both may compute
+it (an asset step still running is shared between the server's runs; a task is not, so a task
+below a sensor both poll fires in both runs); the sensor also runs twice, so the two runs can
+see different data
 ([issue #80](https://github.com/barca-orc/barca/issues/80)). Schedule the sensor once instead
 and leave the nodes below it `Always`: one tick then updates all of them in one run.
 

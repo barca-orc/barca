@@ -211,9 +211,9 @@ def daily_report() -> dict:
 shows it (the `freshness` key in its JSON). Freshness is not part of the definition hash.
 
 - `Schedule("<cron>")`: `barca serve` starts a run on each cron tick (see [Schedule](#schedule)).
-- `Always`: brought up to date at each tick of a scheduled node above it, in that tick's run.
-  A node with no scheduled node above it is never run by a tick, even when a tick polls a
-  sensor above it as an input of one of its targets.
+- `Always`: brought up to date at each tick of a scheduled node above it, and at each tick
+  that polls an unscheduled sensor above it, in that tick's run. A node that is neither below
+  a scheduled node nor below an unscheduled sensor some tick polls is never run by a tick.
 - `Manual`: refreshed by hand only. A tick never runs it, and `barca get` or `barca run` of
   something below it reads its latest successful result, even when stale, with a note on
   stderr. Only `--refresh <name>` or `--refresh-all` recomputes it, also when it is the
@@ -445,7 +445,9 @@ last recorded value and say so in `detail`; before the sensor has ever run, its 
 **Freshness.** The default is `Manual`. A sensor is never pinned: it is polled whenever a run
 needs it, whatever its freshness. `Schedule("<cron>")` makes `barca serve` poll it on that cron;
 the same tick brings up to date the `Always` assets and tasks below it, so when its value
-changes they are recomputed or fired in that run. `@sensor(freshness=Always)` is accepted
+changes they are recomputed or fired in that run. `Manual` on a sensor means that no tick is
+started for it: every tick that polls it, because one of its targets reads it, brings the
+`Always` assets and tasks below it up to date instead. `@sensor(freshness=Always)` is accepted
 without an error.
 
 See [Sensors and External Observations](/examples/sensors/) for

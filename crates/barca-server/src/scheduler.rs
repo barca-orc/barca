@@ -8,8 +8,9 @@
 //! runs are bounded the same way and land in the `runs` history table for free.
 //! A scheduled task reuses cached upstream assets; `POST /run/{task}` does not.
 //!
-//! A tick is one run (RFC-0008): the scheduled node and every `Always` node below it
-//! ([`barca_core::freshness::followers`]), a `Manual` node read as it is. A job whose ticks
+//! A tick is one run (RFC-0008): the scheduled node and every `Always` node below it or below
+//! a sensor the run polls ([`barca_core::freshness::tick_targets`]), a `Manual` node read as
+//! it is. A job whose ticks
 //! failed `max_failures` times in a row is skipped and reported `failing` until a node it
 //! failed on (or an input of one, or the scheduled node) succeeds in another run.
 //!
@@ -116,7 +117,7 @@ fn skip_report(
 }
 
 /// Trigger the run for the tick of a due job at `epoch`: its node and the `Always` nodes below
-/// it, in one run. Returns the run id: the run joins the queue (`None` when it could not be
+/// it and below the sensors the run polls, in one run. Returns the run id: the run joins the queue (`None` when it could not be
 /// recorded there; the error is printed).
 ///
 /// A tick brings the nodes up to date, it does not force them: sensors upstream are polled,

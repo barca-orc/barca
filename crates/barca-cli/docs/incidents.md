@@ -26,7 +26,7 @@ every node of that file. A `--read-only` server refuses both with `403`.
 Pauses are rows of the metadata DB (`asset_pauses`), so a restart or a deploy keeps them.
 
 - **A scheduled tick** does not compute a paused node. When the tick's scheduled node, or one of
-  the `Always` nodes below it that the tick reconciles, is paused, its step is `skipped` with
+  the other `Always` nodes the tick reconciles (`barca docs scheduling`), is paused, its step is `skipped` with
   reason `paused` and a detail naming the command that resumes it. A paused node upstream of a
   node the tick computes is read as it is, like a `Manual` node: its last result is used, and
   it is not recomputed. When a paused node upstream has never been computed, the node that reads
