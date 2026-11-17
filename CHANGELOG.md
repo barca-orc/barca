@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.43.0 (2026-11-17)
+
 ### Features
 
 - **The web UI shows what is wrong, and where (#925).** The Assets page opens on a health map of the open scope (project, group or file) beside its causes. The map's slices are sized by how much is wrong under them (failed keys of a partitioned asset, otherwise nodes) and coloured by the worst health inside (red failing, yellow needs attention, green ok); clicking one opens it, and the whole page follows. Causes list what is wrong once per cause, biggest first: failures that share an error are one entry, with their failed keys and the nodes they keep from running. Every count for a scope (the page header, group rows and panels, group cards on the graph, the map) now counts one health per node, so they agree: `failing`, `blocked`, `suspect data`, `behind`, `waiting`, `never run` or `ok`. A node keeps its precise state; `unknown` reads `waiting`, and a node waiting on a cutoff below a failure reads `blocked`.
