@@ -37,7 +37,8 @@ Together they fail when:
   served fields), `layout` (positions, rows, trees, geometry) or `page` (a page's URL, model and
   program). Only a fetch module talks to the server.
 - **A word of barca's vocabulary is decided in TypeScript.** The words are the values of
-  `Health`, `HealthReason` and `CacheState`, read from the generated types. Outside a display
+  `Health`, `HealthReason`, `CacheState`, `Cause`, `RootKind` and `ActionKind`, read from the
+  generated types (less the words too common to mean one: `vocabulary.ambiguous`). Outside a display
   module, a comparison against one (`===`, `!==`, `case`, `.with(`, `.includes(`) or a branch
   that yields one (`return 'blocked'`, `? 'failing'`) fails.
 - **The app imports fixtures.** `lib/testdata` and `kit` are for tests and the kit page.

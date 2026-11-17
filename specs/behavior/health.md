@@ -9,17 +9,19 @@ Implemented: "Health from existing state" (#954); of "Node fields and where they
 `health`, `health_reason`, `signals`, `measured` and `data_coverage` (#957), experimental in
 the CLI contract; the tick record ("What a tick records", #960), as the `schedule_ticks`
 table and its reads; `last_check` with the `checked_up_to_date` reason ("Last check", #964);
-and the rollup ("Rollup", #955): `GET /state/rollup` and `barca status --rollup`, with the
-counts in both units, `keys`, and of `root` and the root list the `failure` kind only, as
-that section's "As implemented" states; `refresh_path` with its `barca.nodes` columns
-("Refresh path", #961); and the times ("Times", #962): `stale_since`, `expected_fresh_at` and
+the rollup ("Rollup", #955): `GET /state/rollup` and `barca status --rollup`, with the
+counts in both units and `keys`; `refresh_path` with its `barca.nodes` columns
+("Refresh path", #961); the times ("Times", #962): `stale_since`, `expected_fresh_at` and
 `recheck_at` with their `barca.nodes` columns, `unbounded` and `fresh_by` of a rollup entry,
 `estimated_start_at` and `wait_seconds` of a queue entry, and `typical_queue_wait_seconds`,
 `typical_run_seconds` and `queue_bound` of a schedule, as that section's "As implemented"
-states. Everything else below is intent: `cause`, every root
-kind but `failure`, `gap_seconds`, the cause and gap fields
-of a rollup entry and of a root, `as_of` and `rollup` in `barca status --json`, the new
-tables and the query route do not exist yet.
+states; and the cause, the root and the gap ("Cause", "Root", "The freshness gap"; #963,
+#973): `cause`, `root` with every kind, `gap_seconds` and their `barca.nodes` columns,
+`causes`, `asset_causes` and `gap_seconds` of a rollup entry, the root list with `causes`,
+`gap_seconds`, `unbounded` and `action`, and `as_of` and `rollup` in `barca status --json`,
+as those sections' "As implemented" state; and the server query route ("Server query
+route", #972). Everything else below is intent: the new tables (`barca.schedules`,
+`barca.ticks`, `barca.queue`) do not exist yet.
 Scope: how far a project is from a fresh DAG, why, and what closes the distance: a node's
 health word, its cause bucket and root, its refresh path, when it is expected fresh or
 rechecked, the freshness gap, the rollup tree, what a tick records, the `barca.schedules`,
@@ -276,6 +278,7 @@ evidence)` answers the path's schedule with its `PathSchedule` (`next_tick`, `pa
 
 ### Cause (#963, #973)
 
+Implemented in `crates/barca-core/src/causes.rs` (`attribute`), called by `health::classify`.
 Every node that is not fresh gets exactly one cause: the first matching row.
 
 | # | Condition | `cause` |
@@ -284,15 +287,48 @@ Every node that is not fresh gets exactly one cause: the first matching row.
 | 2 | `health` is `undecided` | `undecided` |
 | 3 | a running run plans the node | `catching_up` |
 | 4 | `refresh_path.missed_ticks >= 1` | `overdue` |
-| 5 | a run that plans the node waits in the run queue (`run_queue` state `queued`, run status `pending`); or its refresh path's schedule is queue-bound | `queued` |
-| 6 | `refresh_path` is `null`, or its `next_tick` is `null` | `no_refresh_path` |
+| 5 | a run that plans the node waits in the run queue (`run_queue` state `queued`, run status `pending`); or a tick of its refresh path's schedule will come (row 6) and that schedule is queue-bound or its newest tick's run is `pending` | `queued` |
+| 6 | no tick of a refresh path will come: `refresh_path` is `null`, or its schedule does not fire (below) | `no_refresh_path` |
 | 7 | otherwise | `catching_up` |
 
 A schedule is **queue-bound** when its typical queue wait exceeds its interval.
 
+The order where rows overlap, and why: a failure outranks everything (nothing else clears the
+node); `undecided` comes before the rows that promise something, because barca cannot say the
+node needs a run at all; a running run (3) outranks a miss (4), since the miss is being made
+good now; a miss (4) outranks the queue (5) and the missing path (6), because a tick already
+reached the node and running it by hand is the most direct action; the queue (5) is read only
+for a schedule that will fire, so a paused or unfired schedule is `no_refresh_path`, not
+`queued`.
+
+As implemented:
+
+- **A run plans a node** as in "Times": a tick's run its schedule's targets (never a paused
+  or pinned node, which has no path), another run its targets and what is above them, a run of
+  everything every node. The runs in flight are the server's; `barca status` on a machine
+  without a server and a `--read-only` server know none, and read a waiting tick from the
+  schedule's standing (`last_status` is `pending`).
+- **Whether a schedule fires.** It does when it has a `next_tick` (this process's scheduler
+  fires it, or it is paused until a time). Otherwise, when it is not paused and not held as
+  `failing`: when a scheduler is seen firing and the schedule is not `late`. A scheduler is
+  **seen firing** when any schedule is `live`, or the tick record shows it: a schedule that is
+  not paused has a fired tick and is not late (its newest slot fired, within the grace and the
+  queue wait). So `refresh_path.live` stays what the answering process fires, and the cause
+  does not call every schedule unfired merely because a `--read-only` server, or `barca
+  status` beside a server, runs no scheduler. Where that proof is missing (no tick record, or
+  the newest tick is far behind its slots) the cause is `no_refresh_path`. `expected_fresh_at`
+  is still given only by a process that runs the scheduler.
+- `blocked` by the cache state alone (`cache_blocked`, no `blocked_by` node) is not row 1: it
+  takes the first of rows 2 to 7 that applies.
+
+Conformance: `the_first_matching_row_of_the_cause_table_decides` and
+`the_tick_record_says_whether_a_scheduler_is_firing_where_none_runs_here`
+(`crates/barca-core/src/causes.rs`).
+
 ### Root (#963)
 
-Every node with a cause has one `root`: the upstream fact that explains it.
+Implemented in `crates/barca-core/src/causes.rs` (`attribute`, `origin`). Every node with a
+cause has one `root`: the upstream fact that explains it.
 
 ```json
 {"id": "sensor_value:pipeline.py:inbox", "kind": "sensor_value", "node": "pipeline.py:inbox"}
@@ -300,39 +336,122 @@ Every node with a cause has one `root`: the upstream fact that explains it.
 
 | `kind` | Cause it explains | `node` | Clearing `action.kind` |
 | --- | --- | --- | --- |
-| `sensor_value` | catching up, overdue, queued | the sensor whose observation changed | `wait`, or `run` when overdue |
-| `code` | same | the node whose code changed (`code_changed`) | same |
-| `env` | same | the node whose declared environment variable changed (`env_changed`) | same |
-| `input` | same | the node whose input changed (`inputs_changed`) with no changed node above it | same |
-| `never_run` | same | the topmost never-run node of the chain | same |
-| `no_schedule` | no refresh path | the topmost not-fresh node with no refresh path | `add_schedule` |
-| `schedule_paused` | no refresh path | the paused scheduled node | `resume_schedule` |
-| `scheduler_off` | no refresh path | the scheduled node, when no scheduler is live | `start_server` |
-| `failure` | failing | the failing node (`blocked_by`, or itself) | `fix_failure` |
-| `queue` | queued | the queue-bound scheduled node | `raise_max_runs` |
-| `undecided` | undecided | the topmost undecided node of the chain | `wait` |
+| `sensor_value` | catching up, overdue, undecided, queued by a requested run | the sensor whose observation changed | `wait`, or `run` when a node it holds is overdue |
+| `code` | same | the node whose code changed | same |
+| `env` | same | the node whose declared environment variable changed | same |
+| `input` | same | the fresh node whose result is newer than what a node below it read; or the topmost node that is out of date with no evidence of why | same |
+| `never_run` | same | the topmost never-run node of the chain (or a node with keys that never ran, `partial`) | same |
+| `undecided` | undecided | the topmost undecided node of the chain, with nothing above it that explains it | `wait` |
+| `no_schedule` | no refresh path; undecided where no tick comes | the topmost not-fresh node no tick reaches | `add_schedule`; `run` for a `Manual` or pinned node |
+| `schedule_paused` | same | the paused scheduled node; or a paused node (`barca pause`) | `resume_schedule` |
+| `scheduler_off` | same | the scheduled node, when no scheduler fires it | `start_server` (`wait` when its nodes are catching up) |
+| `failure` | failing | the failing node (`blocked_by`, or itself); or the scheduled node of a schedule held past `max_failures` | `fix_failure` |
+| `queue` | queued | the scheduled node whose ticks wait for a run slot | `raise_max_runs` when queue-bound, else `wait` |
 
-Attribution walks upstream from the node through inputs that are not fresh and stops at the
-first node whose own evidence explains it (`cache.change_causes` other than `upstream_stale`,
-a changed observation, a failure). "Topmost" and every tie break by dependency order, then
-node id, so attribution is deterministic. A `queue` root wins over a change root for a node
-whose cause is `queued`.
+The root of a node, by its cause:
+
+- **`failing`:** the failure root `health::classify` names (itself, or `blocked_by`). A node
+  whose only failure is its path's held schedule roots at `failure:<scheduled node>`.
+- **`queued`:** `queue:<schedule>` when the schedule's wait is why (its path's schedule is
+  queue-bound or has a waiting tick, or a waiting tick's run plans the node): a `queue` root
+  wins over a change root. A node queued only by a requested run keeps its change root.
+- **`no_refresh_path`,** and **`undecided` where no tick of its path will come** (only a run
+  decides the node, so what holds it is the missing tick, not the change above it): with a
+  path, `schedule_paused:<schedule>` or `scheduler_off:<schedule>`; without one, a paused
+  node is its own root (`schedule_paused:<node>`), and any other node takes the root of its
+  first input that has no path and is rooted `no_schedule` or `schedule_paused`, else
+  `no_schedule:<node>`. So the root is the topmost node of the chain that nothing refreshes.
+- **Everything else:** the walk. Attribution walks upstream from the node through inputs that
+  are not fresh and stops at the first node whose own evidence explains it, read from
+  `cache.changed` (what changed in its run hash since its last successful result): its own
+  definition first (`code`, a decorator, a helper that is not a node's function: `code`), then
+  `env NAME` (`env`), then what it reads (`sensor ID`, `input ID`, and `helper ID` naming a
+  node in scope, which is how a reader's hash records an upstream function): that input is
+  the root when it is fresh (`sensor_value` for a sensor, `input` for anything else), and
+  passes the question to its own root when it is not. A `behind_input` signal names its input
+  the same way. A node with none of that takes the root of its first not-fresh input in
+  dependency order. A chain with no evidence ends at its topmost node: `never_run`
+  (`partial` too), `undecided`, `scheduler_off` for the scheduled node of a late schedule,
+  else `input`. A failure is never inherited by a node that is not blocked by it.
+
+**Paused nodes and pinned assets** (decided here, as "Open questions" asked): a paused node
+has no path and is skipped by every tick, so it is its own root, kind `schedule_paused`,
+cleared by `barca resume`; a pinned asset is read as its pinned result, so it roots at
+`no_schedule:<itself>`, cleared by `barca unpin`. A stale `Manual` node roots at
+`no_schedule:<itself>`: no tick computes it, and its action is a run naming it in
+`--refresh`. What is below any of them and has a path is decided against what they hold
+(#985) and attributed on its own.
+
+"Topmost" and every tie break by dependency order (the order of the status rows), then node
+id, so attribution is deterministic.
 
 The list of roots (in the rollup, below) carries what each holds and what clears it:
 
 ```json
 {"id": "no_schedule:pipeline.py:orders", "kind": "no_schedule", "node": "pipeline.py:orders",
  "detail": "no tick reaches orders", "error_group": null,
- "nodes": 152, "assets": 140, "causes": {"no_refresh_path": 152}, "gap_seconds": 8208000,
- "unbounded": 152,
+ "nodes": 152, "assets": 140,
+ "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 152, "overdue": 0, "failing": 0, "undecided": 0},
+ "gap_seconds": 8208000, "unbounded": 152,
  "action": {"kind": "add_schedule", "command": null, "estimated_seconds": 420}}
 ```
 
-`action.command` is a runnable `barca` command when one exists (`barca get orders --server`
-for `run`), else `null`. `action.estimated_seconds` is the typical compute time of the nodes
-held (the duration rule below), `null` when no node has samples. `error_group` is a failure
-root's error headline with its numbers replaced by `#`; failure roots sharing one are shown
-as one entry. Roots are ranked by `gap_seconds`, then `nodes`, then `id`.
+As implemented (`crates/barca-core/src/rollup.rs`, `roots`):
+
+- `action.command` is a runnable `barca` command when one clears the root, else `null`:
+
+  | `action.kind` | When | `command` |
+  | --- | --- | --- |
+  | `wait` | a change root with no overdue node; an `undecided` root; a `queue` root that is not queue-bound; a `scheduler_off` root whose nodes are not `no_refresh_path` | `null` |
+  | `run` | a change root holding an overdue node | `barca get <ends>`: the held nodes no other held node reads, by name, comma-separated (`barca run` when they are all tasks; tasks are left out otherwise) |
+  | `run` | a `Manual` `no_schedule` root | the same with `--refresh <root node>`: a run reads a `Manual` node as it is unless it is named there, and `--refresh` recomputes what is below it |
+  | `run` | a pinned `no_schedule` root | `barca unpin <node>` |
+  | `add_schedule` | any other `no_schedule` root | `null` |
+  | `resume_schedule` | a paused node | `barca resume <node> --server` |
+  | `resume_schedule` | a paused schedule | `barca resume --schedule <scheduled node> --server` |
+  | `start_server` | a `scheduler_off` root holding `no_refresh_path` nodes | `barca serve` |
+  | `fix_failure` | a `failure` root | `barca get <node>` (`barca run` for a task): the retry, once the error is fixed |
+  | `raise_max_runs` | a queue-bound `queue` root | `null`; `detail` names the wait, the interval and `max_runs` |
+
+  A node is named by its declared name, or by its id when two nodes in scope share the name.
+  A command ends in `--server` when a server answers (`GET /state/rollup`).
+- `action.estimated_seconds` is the typical compute time of the nodes held: the sum of their
+  typical step durations (the duration rule of "Times": the median of a node's recent
+  successful runs, once per key without a result; the project's median for a node without
+  samples), whole seconds, `null` when no held node has a sample. It is work, not wall time.
+- `detail` is the fact in a line: a failure's error headline; `inbox observed a new value`;
+  `the code of orders changed`; `no tick reaches ledger`; `reviewed is Manual: no tick
+  computes it`; `inbox's schedule is paused`; `no scheduler has fired inbox's schedule for
+  57m`; `pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1` (#973).
+  `max_runs` is the server's own; `barca status` without a server names the number only when
+  `barca.toml` sets `[server] max_runs`.
+- `error_group` is a failure root's error headline with its numbers replaced by `#`; failure
+  roots sharing one are shown as one entry. `null` for every other kind.
+- Ranking: roots holding nodes with no `expected_fresh_at` (`unbounded > 0`) first, by
+  `nodes`; then by `gap_seconds`, then `nodes`, then `id`. A gap that grows until someone acts
+  outranks one with an end, whatever its size today; this replaces the intent's plain
+  `gap_seconds` order, under which a root with no recorded `stale_since` ranked last.
+
+Conformance: `a_root_is_the_change_the_walk_up_stops_at`,
+`a_node_nothing_refreshes_roots_where_a_schedule_is_missing_paused_or_not_fired`,
+`ticks_that_missed_what_a_root_holds_make_its_action_a_run` and
+`on_the_audit_shape_three_roots_hold_nine_in_ten_of_what_is_not_fresh`
+(`crates/barca-core/src/causes.rs`); `python/tests/test_causes.py` runs the commands of a
+`run` and a `resume_schedule` action and sees their roots clear.
+
+### Ticks waiting on a run slot (#973)
+
+Nothing new is recorded: the tick record's `queue_wait_seconds` is the evidence. A node on a
+refresh path whose schedule will fire and is queue-bound, or whose newest tick's run waits for
+a run slot now, has cause `queued` and root `queue:<scheduled node>`; the root's `detail`
+states the typical wait, the interval and `max_runs`, and its action is `raise_max_runs`
+(more run slots, or schedules spaced so their runs do not overlap) for a queue-bound schedule
+and `wait` for one that is only waiting now. What a run costs outside its steps is measured
+in [#951](https://github.com/barca-orc/barca/issues/951) and not repeated here. Conformance:
+`ticks_that_wait_longer_than_they_are_apart_name_the_queue`
+(`crates/barca-core/src/causes.rs`) and, on a real server with one run slot and two
+overlapping schedules, `test_ticks_waiting_on_one_run_slot_name_the_queue_as_the_cause`
+(`python/tests/test_causes.py`), which also reads the same cause from a `--read-only` server.
 
 ### Times (#962, #964)
 
@@ -450,6 +569,12 @@ partitioned node counts once. A not-fresh node with no `expected_fresh_at` is **
 its gap grows until someone acts, and every sum states how many such nodes it holds
 (`unbounded`) instead of pretending a forward term.
 
+As implemented (#963; `causes::gap_seconds`): `gap_seconds` is on every node, a whole number
+of seconds, read at the start of `as_of`'s minute on every surface, so an answer does not
+change with every second of the clock (an unchanged poll within a minute is still a `304`).
+A term whose time is `null` counts 0, so a node with no recorded `stale_since` and no
+estimate has gap 0 and is counted by `unbounded`.
+
 ### Node fields and where they appear
 
 All are fields of `NodeStatus`, so one struct serves every surface.
@@ -480,7 +605,11 @@ whatever their `health` (a failing asset whose last good result was empty is sti
 `barca status --json` adds, beside `summary`: `as_of`; `rollup`, the root entry of the tree
 below; and `data_coverage`: `{"assets": 556, "measured": 7, "suspect": 0}`. Without a server,
 `refresh_path.live` is false, `next_tick` and the times are `null`, and a scheduled chain's cause is
-`no_refresh_path` with root kind `scheduler_off`.
+`no_refresh_path` with root kind `scheduler_off`, unless the tick record shows a scheduler
+firing ("Cause"). As implemented (#963): `rollup` is `rollup::total`, the same sums as the
+root entry of `GET /state/rollup` for the scope with `children` empty (the tree is the
+rollup's own document), over every node in scope whatever a filter or a limit cuts from
+`nodes`; `GET /nodes` carries both too.
 
 ### Rollup (#955)
 
@@ -531,9 +660,9 @@ CLI and the web UI all read:
   `nodes`, `assets`, `running`, `health`, `asset_health`, and `keys` on a partitioned node.
   An entry also carries `data_coverage` (`{"assets", "measured", "suspect"}` for the assets
   underneath), which this section did not name: it is what lets a surface state the coverage
-  of a group without adding it up, and it sums like every other count. Absent, not `null`,
-  until their issues land: `causes`, `asset_causes`, `gap_seconds`, `unbounded`, `fresh_by`
-  (#961 to #963).
+  of a group without adding it up, and it sums like every other count. `unbounded` and
+  `fresh_by` (#962), `causes`, `asset_causes` and `gap_seconds` (#963) are read off each row
+  and summed in the one place a level adds up its children (`Sums::add`).
 - A group entry's id is the group's own id, which already reads `group:<file>:<name>`
   (`GET /groups`); it is not prefixed again. A file entry holds the nodes of that file that
   are in no group, so a file whose nodes are all grouped has no entry. A group with no node
@@ -545,22 +674,22 @@ CLI and the web UI all read:
   then most assets, then label, then id.
 - `running` counts the nodes a run is working on (`running` of `GET /state`). `barca status
   --rollup` on a machine without a server tracks no run and answers 0.
-- `root` on a node (`NodeStatus.root`) and `roots` hold the `failure` kind only: a `failing`
-  node's root is itself, and a node `blocked` by a failing node (`blocked_by`) has that node.
-  Every other node, a `cache_blocked` one included, has `root: null` and is under no root, so
-  INV-HEALTH-04 holds for failures only. A root carries `id`, `kind`, `node`, `detail` (the
-  error headline as recorded: its first line, or the last line of a bare traceback; `N of M
-  keys failed` for a node whose keys failed with no error of its own), `error_group` (`null`
-  when no error was recorded), `nodes` and `assets`. Absent until #961 to #963: `causes`,
-  `gap_seconds`, `unbounded`, `action`. Roots are ranked by `nodes`, then `id`.
+- `root` on a node (`NodeStatus.root`) and `roots` are those of "Root": every node that is
+  not fresh carries a root and is under exactly one entry of `roots` (INV-HEALTH-04), so the
+  roots' `nodes`, `gap_seconds` and `unbounded` add up to the root entry's not-fresh nodes,
+  gap and unbounded nodes. A failure root's `detail` is the error headline as recorded (its
+  first line, or the last line of a bare traceback; `N of M keys failed` for a node whose
+  keys failed with no error of its own).
 - The scope is that of `GET /state`: targets stand for their upstream cones, so the rollup of
   one group or file also counts what it reads from outside it.
 - The server sums the status result `GET /state` is built from (no status is computed for the
   rollup) and classifies per answer. Its `as_of` is the start of the current minute, the
   instant lateness is read at, so an unchanged poll within a minute answers `304`; the CLI's
   is the instant of the command.
-- `barca status --json` does not carry `as_of` or `rollup` yet ("Node fields and where they
-  appear"); the rollup is its own document.
+- `barca status --json` carries `as_of` and `rollup`, the root entry's sums ("Node fields and
+  where they appear"); the tree and the roots are the rollup's own document.
+- `barca status --rollup` prints, under the tree, the gap line and the ranked roots, each
+  with what it holds, why, and the action with its command and compute time.
 
 ### What a tick records (#960)
 
@@ -717,7 +846,8 @@ cut at the row limit below.
   children, and every node is under exactly one parent.
 
 - **INV-HEALTH-04:** Every node with a cause is held by exactly one root, and the roots' `nodes`
-  add up to the not-fresh nodes in scope.
+  add up to the not-fresh nodes in scope; so do their `gap_seconds` and `unbounded` to the
+  scope's.
 
 - **INV-HEALTH-05:** `expected_fresh_at` is never given where a result upstream may come out
   unchanged or a tick already missed the node; `recheck_at` is given instead.
@@ -748,7 +878,11 @@ cut at the row limit below.
 - A `--read-only` server classifies from the shared metadata: it reads the ticks the
   scheduling server wrote (`last_check`, `missed_ticks` and row 7a work there as on the
   scheduling server). It runs no scheduler, so its `refresh_path.live` is false and its
-  `next_tick` is `null`: it cannot tell whether the scheduling server is up.
+  `next_tick` is `null`. For the cause it reads whether a scheduler is firing from the same
+  ticks ("Cause"): a schedule that fired its newest slot proves one is, so its nodes read
+  `catching_up` or `queued`, not `no_refresh_path`; when the scheduling server stops, its
+  schedules fall behind their slots within their grace and the cause turns to
+  `no_refresh_path` with root `scheduler_off`.
 - When ticks stop (the scheduler is down, the schedule paused or removed), a standing verdict
   expires within one interval plus the last tick's duration and grace, and the node reads
   `undecided` again; `last_check` keeps the record.
@@ -760,7 +894,7 @@ cut at the row limit below.
 ## Acceptance and evidence
 
 Each issue lands its scenario with the code and replaces the matching source link. Passing
-today (with the #961 and #962 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+today (with the #961, #962, #963 and #973 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
@@ -776,12 +910,12 @@ row, the #964 row, the #972 row and the #985 row. The rest do not pass yet.
 | A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
 | A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961: [the shapes, a paused schedule, no live scheduler, paused and pinned nodes, missed ticks](../../crates/barca-core/src/refresh_path.rs) ("membership is the scheduler's own target list"), [the batched misses](../../crates/barca-db/src/db/ticks.rs), [the walk once per graph](../../crates/barca-server/src/read_cache.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a scheduling and a read-only server](../../python/tests/test_refresh_path.py) |
 | Estimates within the stated error on a real server (one run slot, two schedules); a node below a pending cutoff has `recheck_at` only | #962: [the rules](../../crates/barca-core/src/estimates.rs) (the start, the workers, what is only rechecked, `stale_since` by cause, the queue), [the tick timings in one read](../../crates/barca-db/src/db/ticks.rs), [measured on a server; CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, a read-only server](../../python/tests/test_estimates.py), [the node panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx) |
-| On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963 |
+| On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963: [the cause rows, the walk, the roots where nothing refreshes, the audit shape (698 nodes, 422 not fresh, five roots, the top three hold 392)](../../crates/barca-core/src/causes.rs), [the root list, its actions and INV-HEALTH-03 with causes and the gap](../../crates/barca-core/src/rollup.rs), [the routes against each other](../../crates/barca-server/tests/openapi.rs), [CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, the commands of two actions run](../../python/tests/test_causes.py), [the causes list over the served roots](../../ui/src/lib/causesView.test.ts) |
 | An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
 | `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965 |
 | A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972: [the refusals (INV-HEALTH-09), the time limit, a killed helper, no DuckDB, an unchanged server loading nothing](../../crates/barca-server/src/sql_query.rs), [a served project, read-only and behind a token, and the CLI](../../python/tests/test_sql_query_route.py), [the wire shape](../../crates/barca-server/tests/openapi.rs) |
-| One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973 |
+| One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973: [the rule](../../crates/barca-core/src/causes.rs) ("ticks that wait longer than they are apart name the queue"), [a real server with one slot, and a read-only server beside it](../../python/tests/test_causes.py) |
 
 Sources the rules are ported from, until each is deleted by its issue (node health and the
 data signals are deleted: their rules are `crates/barca-core/src/health.rs`; the health tree,
@@ -825,10 +959,23 @@ the causes list's grouping and the failures list's impact are deleted: their rul
   node whose result a cutoff asset above may leave unchanged is covered only through its own
   `unknown` state: a node the read path decides `stale` below such an asset is promised fresh.
 - Assets paused with `barca pause` and pinned assets keep the health their cache state gives
-  and have no refresh path (#961); whether #963 gives them a root kind of their own, instead
-  of `no_schedule`, is its decision.
-- `refresh_path` does not see a schedule that is late or whose server is down from a
-  `--read-only` server: `live` there is that process's scheduler, which it does not have.
+  and have no refresh path (#961). #963 roots a paused node at itself (`schedule_paused`) and
+  a pinned asset at itself (`no_schedule`), without a kind of their own ("Root").
+- `refresh_path.live` on a `--read-only` server is that process's scheduler, which it does
+  not have; the cause reads the tick record instead ("Cause"). That proof is per project, not
+  per schedule: a scheduling server that serves only some of the project's files leaves the
+  other schedules reading as fired until their first slot passes unfired and they turn late;
+  a schedule that never fired is not late, so it reads as fired for as long as any other
+  schedule proves a scheduler.
+- The undecided rule comes before the running one, so an undecided node a running run is
+  about to decide reads `undecided`, not `catching_up`, until the run records it.
+- An `input` root is read from the components a result recorded (0.29.0 on); for an older
+  result the root is the node itself. Two inputs that changed name the first in the order of
+  `cache.changed`.
+- A `run` action's command lists every held node nothing else held reads; a wide fan-out
+  makes it long. A selector for "everything below a node" does not exist on `barca get`.
+- The gap of a node whose staleness has no recorded time (an environment change, a new key)
+  is 0 until it has an estimate; such nodes are counted by `unbounded`, not by the gap.
 - The estimate models the worker pool but not a run's startup, capacity weights, retries or
   the capacity runs share; its error is measured on short steps only ("Times").
 - A node declared in several groups is placed by group id (#955 keeps the rule: it is the one

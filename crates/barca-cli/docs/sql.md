@@ -76,13 +76,15 @@ barca's own records are tables in a `barca` schema, so they never clash with a v
 |---|---|---|
 | `barca.runs` | run | the keys of `barca history --json` runs: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure` (a struct of `node` and `error`, null when no step failed), `principal`, `trigger_reason`, `cancellation` (a struct of `by`, `principal`, `started`, `waiting_behind`, `same_as`, null unless a server cancelled the run) |
 | `barca.materializations` | step result (successful or failed; cache hits are not results) | `node_id` (with `[key]` for a partition), `partition`, `run_id`, `run_hash`, `status`, `created_at`, `elapsed_seconds`, `cpu_seconds`, `max_rss_bytes`, `attempts`, `format`, `size_bytes`, `artifact`, `content_hash`, `error_type`, `error_message`, `rows` (rows of a tabular result, null when not counted) |
-| `barca.nodes` | node | `barca status --json`, flattened: `id`, `name`, `kind`, `partitioned`, `inputs`, `env`, `state`, `reason`, `detail`, `health`, `health_reason`, `signals` (the kinds, a list), `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at`, `recheck_at`, `run_hash`, `artifact`, `local`, `partitions_total`, `partitions_cached`, `partitions_missing`, `partitions_empty`, and `last_status`, `last_created_at`, `last_elapsed_seconds`, `last_run_hash`, `last_artifact`, `last_format`, `last_size_bytes`, `last_rows`, `last_content_hash`, `last_error` from `last_materialization` |
+| `barca.nodes` | node | `barca status --json`, flattened: `id`, `name`, `kind`, `partitioned`, `inputs`, `env`, `state`, `reason`, `detail`, `health`, `health_reason`, `signals` (the kinds, a list), `measured`, `cause`, `root_id`, `root_kind`, `root_node`, `gap_seconds`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at`, `recheck_at`, `run_hash`, `artifact`, `local`, `partitions_total`, `partitions_cached`, `partitions_missing`, `partitions_empty`, and `last_status`, `last_created_at`, `last_elapsed_seconds`, `last_run_hash`, `last_artifact`, `last_format`, `last_size_bytes`, `last_rows`, `last_content_hash`, `last_error` from `last_materialization` |
 
 ```bash
 barca sql "select target, status, elapsed_seconds from barca.runs where status = 'failed' order by started_at desc limit 10"
 barca sql "select node_id, avg(elapsed_seconds) as secs from barca.materializations group by 1 order by 2 desc"
 barca sql "select name, state, reason from barca.nodes where state <> 'cached'"
 barca sql "select health, health_reason, count(*) as nodes from barca.nodes group by all order by nodes desc"
+barca sql "select root_kind, root_node, count(*) as held, sum(gap_seconds) as gap from barca.nodes where root_id is not null group by all order by held desc"
+barca sql "select sum(gap_seconds) as gap, count(*) filter (where cause is not null and expected_fresh_at is null) as unbounded from barca.nodes"
 barca sql "select r.target, m.node_id, m.size_bytes from barca.runs r join barca.materializations m using (run_id)"
 barca sql "select node_id, created_at, rows from barca.materializations where rows = 0 order by created_at desc"
 ```
@@ -100,7 +102,10 @@ barca sql "select node_id, created_at, rows from barca.materializations where ro
   `null` for a node no retained tick checked. `refresh_schedule`, `next_tick` (RFC 3339, UTC)
   and `missed_ticks` are `refresh_path` ("Refresh path"), all `null` for a node no tick will
   refresh. `stale_since`, `expected_fresh_at` and `recheck_at` (RFC 3339, UTC) are the node's
-  times ("Times"); without a server only `stale_since` is ever set.
+  times ("Times"); without a server only `stale_since` is ever set. `cause` is why a node
+  is not fresh, `root_id`, `root_kind` and `root_node` its `root` (what explains it), all
+  `null` for a fresh node, and `gap_seconds` its freshness gap, 0 for a fresh or undecided
+  node ("Cause", "Root"): grouping by `root_id` is the root list of `barca status --rollup`.
 - The tables are a read-only copy for the query: writing to them changes nothing.
 
 ## With a server

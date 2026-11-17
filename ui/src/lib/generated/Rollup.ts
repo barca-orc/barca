@@ -17,7 +17,8 @@ as_of: string,
  */
 entries: Array<RollupEntry>,
 /**
- * What holds the nodes that are not fresh, the most nodes first, then by id.
+ * What holds the nodes that are not fresh: roots holding nodes with no estimate first
+ * (most nodes held first), then by gap held, then nodes held, then id.
  */
 roots: Array<RollupRoot>,
 /**

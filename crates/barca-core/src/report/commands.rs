@@ -1525,17 +1525,64 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             row[3]
         );
     }
+    // "Within" is from the instant the rows were classified, not from when this prints.
+    let as_of =
+        crate::time::parse_rfc3339(&rollup.as_of).unwrap_or_else(|| chrono::Utc::now().timestamp());
+    line!(rendered, "");
+    line!(rendered, "Gap: {}", rollup.root().gap_line(as_of));
     if !rollup.roots.is_empty() {
+        // The to-do list: what holds the nodes that are not fresh, and what clears each.
+        let held = rollup.root().causes.total();
         line!(rendered, "");
-        line!(rendered, "Failing, with what each holds:");
-        for root in &rollup.roots {
+        line!(
+            rendered,
+            "What holds the {} that {} not fresh, and what clears it:",
+            plural(held as u64, "node"),
+            if held == 1 { "is" } else { "are" }
+        );
+        let rank = rollup.roots.len().to_string().len();
+        for (at, root) in rollup.roots.iter().enumerate() {
+            let pad = " ".repeat(rank + 4);
             line!(
                 rendered,
-                "  {}  {} ({})  {}",
-                root.node,
+                "{:>rank$}. {}: {}",
+                at + 1,
+                root.kind.word(),
+                crate::targets::short_name(&root.node)
+            );
+            let mut holds = format!(
+                "holds {} ({}): {}",
                 plural(root.nodes as u64, "node"),
                 plural(root.assets as u64, "asset"),
-                root.detail
+                root.causes.line()
+            );
+            if root.gap_seconds > 0 {
+                holds.push_str(&format!(
+                    "; {} of gap",
+                    crate::report::span(root.gap_seconds)
+                ));
+            }
+            if root.unbounded > 0 {
+                holds.push_str(&format!("; {} with no estimate", root.unbounded));
+            }
+            line!(rendered, "{pad}{holds}");
+            line!(rendered, "{pad}why:  {}", root.detail);
+            let cost = root.action.estimated_seconds.map(|s| {
+                format!(
+                    " (about {} of compute)",
+                    crate::report::span(s.max(1) as i64)
+                )
+            });
+            line!(
+                rendered,
+                "{pad}do:   {}{}{}",
+                root.action.kind.word(),
+                match (&root.action.command, root.action.kind.hint()) {
+                    (Some(command), _) => format!(": {command}"),
+                    (None, Some(hint)) => format!(": {hint}"),
+                    (None, None) => String::new(),
+                },
+                cost.unwrap_or_default()
             );
         }
     }

@@ -44,7 +44,7 @@ export function HealthOverview({ rollup, byId, signals, scope, onScope, onOpen, 
   const failing = useMemo(() => roots.flatMap((r) => byId.get(r.node) ?? []), [roots, byId])
   const keyErrors = usePartitionErrors(useMemo(() => failedKeyNodes(failing), [failing]))
   const list = useMemo(
-    () => causes({ failures: failures(roots, byId, keyErrors), suspect: signals.suspect, behind: signals.behind, within }),
+    () => causes({ failures: failures(roots, byId, keyErrors), roots, suspect: signals.suspect, behind: signals.behind, within }),
     [roots, byId, keyErrors, signals, within],
   )
 

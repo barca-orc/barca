@@ -122,7 +122,10 @@ poll is the only step that runs: `fast` and `side` are cache hits.
 - **Each node says which schedule reaches it.** `refresh_path` in `barca status --json`, `GET
   /state` and `GET /nodes` is this target list read back per node: the schedule whose tick has
   the node as a target, its next tick, and how many finished ticks did not leave the node
-  fresh; `null` for a node no tick targets (`barca docs status-fields`, "Refresh path").
+  fresh; `null` for a node no tick targets (`barca docs status-fields`, "Refresh path"). A
+  node that is not fresh also says why (`cause`) and what explains it (`root`): a chain no
+  schedule reaches reads `no_refresh_path` with the root `no_schedule` at its topmost node,
+  which is where a `Schedule` would have to go.
 - **`Manual` on a sensor** (the default) means no tick is started for it: it is polled only
   when a run needs its value, and each tick that polls it brings the `Always` nodes below it up
   to date. `Always` on a sensor behaves the same way.
@@ -309,6 +312,38 @@ how long the run waits for a slot, to its start or to that estimate. And every n
 not fresh has `expected_fresh_at` or only `recheck_at` in `barca status --json`, `GET /state`
 and `GET /nodes`: the next tick that reaches it, the wait ahead of that tick's run, and the
 typical durations of the steps before the node (`barca docs status-fields`, "Times").
+
+### When ticks wait for a run slot
+
+A server runs at most `--max-runs` runs at once (`[server] max_runs`; `barca docs
+server-mode`), and a tick's run waits in the run queue for a slot. When schedules overlap
+(one run slot, two schedules whose runs together take longer than they are apart), a schedule
+keeps firing on time while its nodes are brought up to date late, and nothing about the
+schedule itself is wrong. Status says so: a node that is not fresh, on a refresh path whose
+schedule is queue-bound or whose newest tick is waiting for a slot now, has `cause: "queued"`
+and the root `{"kind": "queue", "node": "<the scheduled node>"}` (`barca docs status-fields`,
+"Cause" and "Root"). The root in `barca status --rollup` names the wait and the setting:
+
+```text
+1. run queue: pulse
+     holds 6 nodes (6 assets): 6 queued; 20m of gap
+     why:  pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1
+     do:   raise max_runs: barca serve --max-runs N or [server] max_runs in barca.toml, or space the schedules
+```
+
+The action is `raise_max_runs` for a queue-bound schedule and `wait` for one whose tick is
+only waiting now. The two fixes: more run slots, when the machine has the capacity for runs
+side by side; or schedules spaced so their runs do not overlap (`*/5` and `2-59/5` instead of
+two `*/5`), or slower ones. Nothing new is recorded for this: the wait is the tick record's
+`queue_wait_seconds`. `max_runs` is named with its number by a server, and by `barca status`
+on a machine whose `barca.toml` sets it. What a run costs outside its steps (startup, the
+dry run, bookkeeping), which is part of why short runs overlap, is measured in
+https://github.com/barca-orc/barca/issues/951.
+
+```bash
+barca status --server --json | jq -r '.nodes[] | select(.cause == "queued") | [.name, .root.node] | @tsv'
+barca status --rollup --server --json | jq '.roots[] | select(.kind == "queue") | {node, detail, action}'
+```
 
 The web UI's Schedules page shows a late schedule as `late by 12m`, late ones first, instead of
 a countdown to a next slot it will not keep, and the Assets page lists it among the causes with

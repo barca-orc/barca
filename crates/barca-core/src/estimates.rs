@@ -58,6 +58,10 @@ pub struct Timing<'a> {
     pub workers: usize,
     /// When each source file was last modified, unix seconds, by the file part of a node id.
     pub source_times: &'a HashMap<String, i64>,
+    /// How many runs the server executes at once (`--max-runs`, `[server] max_runs`), where
+    /// the answering process knows: what a `queue` root names. `None` when it does not (no
+    /// server here and none configured: the default is one per core of the serving machine).
+    pub max_runs: Option<usize>,
 }
 
 impl Timing<'static> {
@@ -74,6 +78,7 @@ impl Timing<'static> {
             queue_open: true,
             workers: 1,
             source_times: &TIMES,
+            max_runs: None,
         }
     }
 }
@@ -131,14 +136,14 @@ pub fn rounded(at: i64, now: i64) -> i64 {
 }
 
 /// The median of the typical durations: what a node without samples takes. 0 with none.
-fn project_median(durations: &HashMap<String, f64>) -> f64 {
+pub(crate) fn project_median(durations: &HashMap<String, f64>) -> f64 {
     let values: Vec<f64> = durations.values().copied().collect();
     crate::schedule_standing::median(&values)
 }
 
 /// How long a run takes to compute `node`, seconds: its typical duration, once per key that
 /// has no result for a partitioned node.
-fn work(node: &NodeStatus, durations: &HashMap<String, f64>, default: f64) -> f64 {
+pub(crate) fn work(node: &NodeStatus, durations: &HashMap<String, f64>, default: f64) -> f64 {
     let one = durations.get(&node.id).copied().unwrap_or(default).max(0.0);
     let keys = node
         .partitions
@@ -805,6 +810,7 @@ def loose(): ...
                         queue_clear_at: self.queue_clear_at,
                         queue_open: self.queue_open,
                         workers: self.workers,
+                        max_runs: None,
                         source_times: &self.source_times,
                     },
                     now: NOW,

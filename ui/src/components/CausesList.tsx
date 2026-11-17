@@ -1,7 +1,7 @@
 import { match } from 'ts-pattern'
 import { Age } from './Age'
 import { StatusGlyph } from './StatusGlyph'
-import { causeImpact, type Cause } from '@/lib/causesView'
+import { causeImpact, heldImpact, type Cause } from '@/lib/causesView'
 
 export interface CausesListProps {
   causes: readonly Cause[]
@@ -54,6 +54,19 @@ export function CausesList({ causes, name, onOpen, limit = 6, onShowAll, nowMs }
               </li>
             )
           })
+          .with({ kind: 'held' }, (c) => (
+            <li key={`h:${c.what}:${c.node}`} className="barca-cause" data-kind="held">
+              <StatusGlyph glyph="stale" />
+              <button type="button" className="barca-cause-body" onClick={() => onOpen(c.node)}>
+                <span className="barca-cause-headline" title={c.detail}>{c.detail}</span>
+                <span className="barca-cause-meta">
+                  <span className="barca-cause-name">{c.what}: {name(c.node)}</span>
+                  {' · '}{heldImpact(c)}
+                  {' · '}{c.action}{c.command && <>: <code>{c.command}</code></>}
+                </span>
+              </button>
+            </li>
+          ))
           .with({ kind: 'suspect' }, (c) => (
             <li key={`s:${c.node}`} className="barca-cause" data-kind="suspect">
               <StatusGlyph glyph="partial" />

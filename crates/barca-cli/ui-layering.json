@@ -469,12 +469,16 @@
     "types": [
       "Health",
       "HealthReason",
-      "CacheState"
+      "CacheState",
+      "Cause",
+      "RootKind",
+      "ActionKind"
     ],
     "ambiguous": [
       "ok",
       "unknown",
-      "empty"
+      "empty",
+      "run"
     ],
     "display_components": [
       "components/StatusGlyph.tsx"
@@ -545,13 +549,6 @@
         "issue": 992
       },
       {
-        "file": "lib/health.ts",
-        "words": [
-          "failing"
-        ],
-        "reason": "the order of a health bar's segments: failures, then run work, then the rest in the served order; nothing is decided about a node"
-      },
-      {
         "file": "lib/partitionGrid.ts",
         "words": [
           "blocked",
@@ -573,6 +570,42 @@
           "cached"
         ],
         "reason": "a run step's status, not a cache state"
+      },
+      {
+        "file": "lib/health.ts",
+        "words": [
+          "failing",
+          "failure"
+        ],
+        "reason": "`failing`: the order of a health bar's segments: failures, then run work, then the rest in the served order; nothing is decided about a node. `failure`: picks the failure roots the server lists for the failures list, which shows each failure's error"
+      },
+      {
+        "file": "pages/GroupedPipelinePage.tsx",
+        "words": [
+          "failure"
+        ],
+        "reason": "the tag of the failures table's own row union (a failure row or a heading), not a root kind"
+      },
+      {
+        "file": "lib/runFeedback.ts",
+        "words": [
+          "queued"
+        ],
+        "reason": "a run step's status in the event stream, not a cause"
+      },
+      {
+        "file": "lib/running.ts",
+        "words": [
+          "queued"
+        ],
+        "reason": "a run step's live status, not a cause"
+      },
+      {
+        "file": "lib/schedules.ts",
+        "words": [
+          "queued"
+        ],
+        "reason": "the page's word for a tick's run that waits (`pending`), a run status, not a cause"
       }
     ]
   }

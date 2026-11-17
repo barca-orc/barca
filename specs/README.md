@@ -117,9 +117,7 @@ part. Implemented (experimental): the health words and their derivation (`health
 `health_reason`), `signals` and `measured` on every status node, and `data_coverage`, in
 `barca status --json`, `GET /nodes`, `GET /state` and `barca.nodes`, with their wire shapes in
 the OpenAPI and CLI contract owners and their rules checked in
-`crates/barca-core/src/health.rs`. Not implemented: the cause buckets and every root kind but
-`failure`, the
-freshness gap, the cause and gap fields of the rollup and the `barca.schedules`,
+`crates/barca-core/src/health.rs`. Not implemented: the `barca.schedules`,
 `barca.ticks` and `barca.queue` tables. Also
 implemented: the server query route (#972: `POST /sql/query`, one `SELECT` over `barca.*`
 tables in a helper that can read no file, result or network resource, checked in
@@ -136,7 +134,13 @@ children in nodes and in assets, with failure roots, checked in
 `barca.nodes`, `unbounded` and `fresh_by` of a rollup entry, a queued run's
 `estimated_start_at`, a schedule's typical queue wait and run time, in
 `crates/barca-core/src/estimates.rs`, with the estimate's error measured on a real server in
-`python/tests/test_estimates.py`). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
+`python/tests/test_estimates.py`); and the cause, the root and the gap (#963, #973: `cause`,
+`root` of every kind and `gap_seconds` on every status node and in `barca.nodes`, the cause
+and gap sums of a rollup entry, the ranked root list with the action that clears each, `as_of`
+and `rollup` in `barca status --json`, and the run queue named as the cause where a
+schedule's ticks wait for a run slot, in `crates/barca-core/src/causes.rs` and
+`crates/barca-core/src/rollup.rs`, with the audit-shaped fixture and a real one-slot server
+in `python/tests/test_causes.py`). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
 implements it issue by issue, and each PR moves its wire shapes into the OpenAPI and CLI contract
 owners. Until then the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are
 authoritative for the rest.

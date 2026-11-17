@@ -90,19 +90,110 @@ barca status --json | jq -r '.nodes[] | select(.health != "ok") | [.health, .hea
 barca sql "select health, count(*) from barca.nodes group by all order by 2 desc"
 ```
 
-`root` names the upstream fact that explains a node that is not fresh, as `{"id":
-"failure:pipeline.py:orders", "kind": "failure", "node": "pipeline.py:orders"}`. Today the
-only kind is `failure`: a `failing` node's root is itself, and a node that is `blocked` with
-`health_reason: "upstream_failing"` has the failing node that blocks it (the nearest one
-upstream; with two failing inputs, the first by node id). Every other node has `root: null`,
-including one that is `blocked` by its cache state (`cache_blocked`), which names no node.
+Health says nothing of whether a `behind` or `never_run` node is a problem: its `cause` does
+("Cause" below), and its `root` names what explains it ("Root").
+
+Health is experimental (`barca docs contract`).
+
+## Cause
+
+Every node that is not fresh has a `cause`: one word for why. A node is fresh when its
+`health` is `ok` or `suspect` (suspect is about data, not freshness), and then `cause` is
+`null`. The first row that applies decides:
+
+| # | When | `cause` | Printed as |
+|---|---|---|---|
+| 1 | it is `failing`; or `blocked` by a failing node upstream; or its refresh path's schedule is held after `max_failures` failed ticks | `failing` | failing |
+| 2 | its `health` is `undecided` | `undecided` | undecided |
+| 3 | a running run computes it | `catching_up` | catching up |
+| 4 | finished ticks had it as a target and did not leave it fresh (`refresh_path.missed_ticks` is 1 or more) | `overdue` | overdue |
+| 5 | a run that computes it waits for a run slot; or a tick of its refresh path will come and that schedule's ticks wait: its newest tick is waiting now, or its typical wait exceeds its interval (`schedule.queue_bound`) | `queued` | queued |
+| 6 | no tick will reach it: it has no refresh path, or its path's schedule is paused until resumed or fired by no scheduler | `no_refresh_path` | no refresh path |
+| 7 | otherwise: the next tick of its refresh path will compute it | `catching_up` | catching up |
+
+`catching_up` and `queued` are progress. `overdue`, `no_refresh_path` and `failing` are what
+to look at. A cause is never a guess: where barca cannot tell, the word is `undecided` or
+`no_refresh_path`.
+
+**Whether a scheduler is firing.** Row 6 asks whether a tick will come. `refresh_path.live`
+says whether the answering process fires the schedule, which a `--read-only` server and
+`barca status` beside a server never do. For the cause, the tick record also counts
+(`schedule_ticks`, "Last check"): when a schedule that is not paused fired its newest slot (it
+has a tick and is not late), a scheduler is running somewhere, and every schedule that is not
+paused, held as failing or late counts as fired. So a read-only server says `catching_up`
+where the scheduling server would, with `refresh_path.live` still `false` and no
+`expected_fresh_at` (it cannot estimate another process's queue). With no tick on record, or
+only old ones, the cause is `no_refresh_path`.
+
+The table of `barca status` sums the causes of every node in scope under the health words:
+`Gap: 14 overdue · 152 no refresh path · 180 catching up (nodes); about 180 fresh within 5m,
+166 with no estimate` (or `Gap: every node is fresh`). `barca.nodes` has `cause`.
 
 ```bash
-barca status --json | jq -r '.nodes[] | select(.health == "blocked") | [.id, .root.node // "-"] | @tsv'
+barca status --json | jq -r '.nodes[] | select(.cause) | [.cause, .health, .id] | @tsv'
+barca sql "select cause, count(*) from barca.nodes where cause is not null group by all order by 2 desc"
 ```
 
-Health is experimental (`barca docs contract`): later releases add why a node that is not
-fresh is so and when it is expected fresh, and more kinds of root.
+## Root
+
+Every node with a cause has a `root`: the upstream fact that explains it, as `{"id":
+"code:pipeline.py:orders", "kind": "code", "node": "pipeline.py:orders"}`. The id is
+`<kind>:<node id>`; nodes with the same `root.id` are held by the same thing, so a few roots
+usually explain hundreds of nodes (`barca status --rollup` lists them, "The rollup" below).
+
+| `kind` | Printed as | `node` | Explains |
+|---|---|---|---|
+| `sensor_value` | sensor value | the sensor whose observation is newer than what a node below it read | catching up, overdue, undecided, queued |
+| `code` | code change | the node whose code changed (its function, a decorator, a helper) | same |
+| `env` | environment change | the node whose declared environment variable changed | same |
+| `input` | input change | the fresh node whose result is newer than what a node below it read; or a node out of date with nothing above it or on it that says why | same |
+| `never_run` | never run | the topmost never-run node of the chain (a partitioned node with keys that never ran) | same |
+| `undecided` | undecided | the topmost node barca cannot decide, with nothing above it that explains it | undecided |
+| `no_schedule` | no schedule | the topmost not-fresh node no tick reaches: where a schedule would have to be added, or a `Manual` or pinned node | no refresh path |
+| `schedule_paused` | paused | the scheduled node of a paused schedule; or a paused node (`barca pause`) | no refresh path |
+| `scheduler_off` | scheduler off | the scheduled node of a schedule no scheduler fires | no refresh path |
+| `failure` | failure | the failing node: the node itself, or the nearest one upstream that blocks it; or the scheduled node of a schedule held after `max_failures` failed ticks | failing |
+| `queue` | run queue | the scheduled node whose ticks wait for a run slot | queued |
+
+How a root is found:
+
+- **Failing:** itself, or the failing node that blocks it (the nearest upstream; with two
+  failing inputs, the first by node id).
+- **Queued** by a schedule's wait: that schedule (`queue`). A node queued only because a run
+  someone asked for is waiting keeps the change as its root.
+- **No refresh path:** its path's schedule when it has one (`schedule_paused` or
+  `scheduler_off`); a paused node is its own root (`schedule_paused`); otherwise the topmost
+  node of the chain of not-fresh nodes that no tick reaches (`no_schedule`). A stale `Manual`
+  node and a pinned asset (`barca docs pins`) are such a top: what is below them and has a
+  path is brought up to date against what they hold.
+- **Undecided** where no tick will come: as for no refresh path. Only a run decides the node,
+  so what holds it is the missing tick, not the change above it.
+- **Everything else** (catching up, overdue, undecided with a tick coming): barca walks up
+  from the node through its inputs that are not fresh and stops at the first node whose own
+  evidence explains it. That is `cache.changed`, what changed in the node's run hash: `code`,
+  a decorator or a helper is `code`; `env NAME` is `env`; `sensor ID` or `input ID` names an
+  input, which is the root when it is fresh (`sensor_value` for a sensor, `input` for an
+  asset) and passes the question up when it is not. A node out of date only because of what
+  is above it takes the root of its first not-fresh input in dependency order. A chain with
+  no such evidence ends at its topmost node: `never_run`, `undecided`, or `input`.
+
+When a node changed in several ways, its own definition wins: `code`, then `env`, then what
+it reads. `barca.nodes` has `root_id`, `root_kind` and `root_node`.
+
+```bash
+barca status --json | jq -r '.nodes[] | select(.root) | [.root.kind, .root.node, .id] | @tsv'
+barca sql "select root_kind, root_node, count(*) as held, sum(gap_seconds) as gap from barca.nodes where root_id is not null group by all order by held desc"
+```
+
+`gap_seconds` is the node's freshness gap: how long it has been out of date (`stale_since` to
+now) plus how long until it is expected fresh (now to `expected_fresh_at`), in whole seconds
+("Times"). A time that is `null` counts 0, and a fresh or `undecided` node has 0. It is read
+at the start of the current minute, so it does not change with every second of the clock. A
+project's gap is the sum over its nodes, in node-seconds; a node with no `expected_fresh_at`
+has no forward term, which is why every sum also says how many such nodes it holds
+(`unbounded`).
+
+Cause, root and the gap are experimental with the rest of health.
 
 ## The rollup
 
@@ -120,12 +211,17 @@ UI's health map, bars and failures list all print this document.
      "health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 3},
      "asset_health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 1},
      "data_coverage": {"assets": 4, "measured": 0, "suspect": 0},
-     "unbounded": 3, "fresh_by": null, "also_in": []}
+     "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
+     "asset_causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
+     "gap_seconds": 5400, "unbounded": 3, "fresh_by": null, "also_in": []}
   ],
   "roots": [
     {"id": "failure:pipeline.py:orders", "kind": "failure", "node": "pipeline.py:orders",
      "detail": "ValueError: 12 rows rejected", "error_group": "ValueError: # rows rejected",
-     "nodes": 3, "assets": 3}
+     "nodes": 3, "assets": 3,
+     "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0},
+     "gap_seconds": 5400, "unbounded": 3,
+     "action": {"kind": "fix_failure", "command": "barca get orders", "estimated_seconds": 42}}
   ],
   "data_coverage": {"assets": 4, "measured": 0, "suspect": 0},
   "files": [
@@ -149,7 +245,9 @@ of `children`.
 | `running` | nodes underneath a run is working on now; 0 without a server |
 | `health`, `asset_health` | how many nodes, and how many assets, are in each health |
 | `data_coverage` | the coverage of "Data signals and coverage", for the assets underneath |
-| `unbounded` | nodes underneath that are not fresh and have no `expected_fresh_at` ("Times"): nothing known will leave them fresh |
+| `causes`, `asset_causes` | how many nodes, and how many assets, that are not fresh have each cause ("Cause"); they add up to the nodes (assets) whose health is not `ok` or `suspect` |
+| `gap_seconds` | the freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds` ("Root") |
+| `unbounded` | nodes underneath that are not fresh and have no `expected_fresh_at` ("Times"): nothing known will leave them fresh, so the gap has no forward term for them |
 | `fresh_by` | the latest `expected_fresh_at` underneath (RFC 3339, UTC): when the nodes that have an estimate are all expected fresh. `null` when none has one. It speaks only for those nodes; `unbounded` counts the rest |
 | `keys` | on a partitioned node only: its keys that `failed`, are `behind` (no cached result, and did not fail) and are `ok` |
 | `also_in` | the other groups that declare this node or group, by id; empty for one declared in at most one group |
@@ -164,22 +262,71 @@ in whichever group each sits, and `worst`, the most severe health among them. Th
 `file` entry only for the nodes of a file that are in no group, so a list of files (the web
 UI's sidebar) reads `files`.
 
-`roots` lists what holds the nodes that are not fresh, the most nodes first, then by id: each
-`root` the nodes carry (above), with `nodes` and `assets`, how many it holds (a failing node
-and every node it blocks). `detail` is the failure's error in one line (`3 of 8 keys failed`
-for a node whose keys failed with no error of its own) and `error_group` that line with its
-numbers replaced by `#`, so failures that differ only in their numbers share one; it is `null`
-when no error was recorded. `data_coverage` at the top is the root entry's.
+`roots` is the to-do list: what holds the nodes that are not fresh, and what clears each.
+There is one entry per `root` the nodes carry ("Root"), and every node that is not fresh is
+under exactly one, so the roots' `nodes` add up to the nodes that are not fresh.
+
+| Key of a root | Meaning |
+|---|---|
+| `id`, `kind`, `node` | the `root` its nodes carry |
+| `detail` | the fact in a line: a failure's error (its first line, or the last line of a bare traceback; `3 of 8 keys failed` for a node whose keys failed with no error of its own), `the code of orders changed`, `no tick reaches ledger`, `inbox's schedule is paused`, `pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1` |
+| `error_group` | a failure's error line with its numbers replaced by `#`, so failures that differ only in their numbers share one; `null` for every other kind and when no error was recorded |
+| `nodes`, `assets` | how many nodes it holds, and how many of them are assets |
+| `causes` | those nodes by cause |
+| `gap_seconds` | the sum of their `gap_seconds` |
+| `unbounded` | how many of them have no `expected_fresh_at` |
+| `action` | what clears it: `{"kind", "command", "estimated_seconds"}` |
+
+| `action.kind` | Printed as | For | `command` |
+|---|---|---|---|
+| `wait` | wait | a change the next tick or a run in flight computes; an undecided chain; a tick waiting for a slot on a schedule that is not queue-bound | `null` |
+| `run` | run | a change whose nodes ticks already missed (`overdue`): `barca get` of the held nodes nothing else held reads (`barca run` when they are all tasks), which computes everything above them. A `Manual` root: the same with `--refresh <node>`, since a run reads a `Manual` node as it is unless it is named there. A pinned root: `barca unpin <node>` | the command |
+| `add_schedule` | add a schedule | a chain no tick reaches: give its top, or a node above it, `freshness=Schedule(...)` | `null` |
+| `resume_schedule` | resume | a paused node: `barca resume <node> --server`. A paused schedule: `barca resume --schedule <node> --server` (`barca docs scheduling`, "Pausing one schedule") | the command |
+| `start_server` | start a server | a schedule no scheduler fires | `barca serve` |
+| `fix_failure` | fix the failure | a failing node: the command tries it again once the error is fixed (`barca get <node>`, `barca run <node>` for a task) | the command |
+| `raise_max_runs` | raise max_runs | a queue-bound schedule: give the server more run slots (`barca serve --max-runs N`, `[server] max_runs`) or space the schedules (`barca docs scheduling`, "When ticks wait for a run slot") | `null` |
+
+A command names a node by its name, or by its id when two nodes in scope share the name, and
+ends in `--server` when a server answered (`GET /state/rollup`, `barca status --rollup
+--server`): the run belongs in that server's queue. `estimated_seconds` is the typical compute
+time of the nodes the root holds: the sum of their typical step durations (the median of a
+node's recent successful runs, once per key without a result for a partitioned node; the
+project's median for a node with none), in whole seconds, and `null` when none of them has a
+sample. It is work, not wall-clock time: steps of one run share the worker pool.
+
+Roots that hold nodes with no estimate come first, the one holding the most nodes first: their
+gap grows until someone acts. Then the rest by `gap_seconds`, then `nodes`, then `id`.
+`data_coverage` at the top is the root entry's.
+
+`barca status --rollup` prints the list under the tree:
+
+```text
+Gap: 152 no refresh path · 6 queued · 247 undecided · 17 catching up (nodes); about 23 fresh within 4m, 399 with no estimate
+
+What holds the 422 nodes that are not fresh, and what clears it:
+1. sensor value: inbox
+     holds 180 nodes (180 assets): 170 undecided · 10 catching up; 3h of gap; 170 with no estimate
+     why:  inbox observed a new value
+     do:   wait (about 9m of compute)
+2. no schedule: ledger
+     holds 152 nodes (152 assets): 152 no refresh path; 152 with no estimate
+     why:  no tick reaches ledger
+     do:   add a schedule: freshness=Schedule(...) on it or on a node above it (about 7m of compute)
+```
 
 ```bash
 barca status --rollup --json | jq -r '.entries[] | select(.kind == "group") | [.label, .nodes, .assets, .health.failing] | @tsv'
-barca status --rollup --json | jq -r '.roots[] | [.nodes, .node, .detail] | @tsv'
+barca status --rollup --json | jq -r '.roots[] | [.nodes, .kind, .node, .action.kind, .action.command // "-"] | @tsv'
+barca status --rollup --json | jq '.entries[0] | {causes, gap_seconds, unbounded, fresh_by}'
 ```
 
-The rollup is experimental (`barca docs contract`). An entry has no `causes`, `asset_causes`
-or `gap_seconds` yet, a root no `causes`, `gap_seconds`, `unbounded` or `action`, and the only root kind is `failure`: a node that is `behind`, `undecided` or
-`never_run` is under no root. A scope given as targets is their upstream cones, so a rollup
-of one group also counts what that group reads from outside it.
+The rollup is experimental (`barca docs contract`). A scope given as targets is their upstream
+cones, so a rollup of one group also counts what that group reads from outside it. Known
+limits: an
+`input` root is named from what the node's run hash recorded, so a result recorded before
+0.29.0 (no components) roots at the node itself; and the command of a `run` action lists
+every held node nothing else held reads, which for a wide fan-out is a long line.
 
 ## Last check
 
@@ -492,7 +639,9 @@ is `--key KEY` (`barca docs partitions`, "Listing keys").
       "health_reason": "cached",
       "signals": [],
       "measured": true,
+      "cause": null,
       "root": null,
+      "gap_seconds": 0,
       "last_check": null,
       "refresh_path": null,
       "stale_since": null,
@@ -503,9 +652,16 @@ is `--key KEY` (`barca docs partitions`, "Listing keys").
     }
   ],
   "summary": {"cached": 2, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0, "blocked": 0, "unknown": 0, "always_runs": 0},
-  "data_coverage": {"assets": 2, "measured": 1, "suspect": 0}
+  "data_coverage": {"assets": 2, "measured": 1, "suspect": 0},
+  "as_of": "2026-10-02T11:57:10Z",
+  "rollup": {"id": "root", "kind": "root", "label": "all", "parent": null, "children": [], "nodes": 2, "assets": 2, "running": 0, "health": {"ok": 2, "...": 0}, "asset_health": {"ok": 2, "...": 0}, "data_coverage": {"assets": 2, "measured": 1, "suspect": 0}, "causes": {"catching_up": 0, "...": 0}, "asset_causes": {"catching_up": 0, "...": 0}, "gap_seconds": 0, "unbounded": 0, "fresh_by": null, "also_in": []}
 }
 ```
+
+`as_of` is the instant the nodes were classified at (every derived time and `gap_seconds` are
+as of it), and `rollup` the scope summed: the root entry of `barca status --rollup --json`
+("The rollup"), for every node in scope whatever `--state`, `--problems` or `--limit` cut from
+`nodes`. Its `children` are empty here; the tree and the roots are the rollup's own document.
 
 A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-23T06:00:00Z",
 "last_fired": null, "last_status": null, "last_run_id": null, "late": false, "late_since": null,
@@ -514,9 +670,9 @@ A scheduled node adds `"schedule": {"cron": "0 6 * * *", "next_fire": "2026-10-2
 "typical_queue_wait_seconds": 0, "typical_run_seconds": null, "queue_bound": false}` (the last
 three: how long its ticks' runs typically wait for a run slot and take, in whole seconds, and
 whether the wait exceeds its interval; `barca docs scheduling`), and `--state` or
-`--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `root`, `signals`,
+`--problems` add `"filter"` beside `summary`. `health`, `health_reason`, `cause`, `root`, `gap_seconds`, `signals`,
 `measured`, `last_check`, `refresh_path`, the three times and `data_coverage` are in "Health",
-"Last check", "Refresh path", "Times" and "Data signals and coverage" above; here `total` is a dict, which has no row count, so one of the two assets
+"Cause", "Root", "Last check", "Refresh path", "Times" and "Data signals and coverage" above; here `total` is a dict, which has no row count, so one of the two assets
 is measured.
 
 Keys inside a `sample` row are printed in alphabetical order; `columns` keeps the file's column

@@ -835,11 +835,54 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     }
     assert_eq!(root["children"].as_array().unwrap().len(), 1);
     assert_eq!(rollup["data_coverage"], root["data_coverage"]);
+    // Every row that is not fresh is under exactly one root (INV-HEALTH-04), and the cause
+    // counts, the gap and the nodes with no estimate add up from the rows (INV-HEALTH-03).
     let roots = rollup["roots"].as_array().unwrap();
-    assert_eq!(roots.len(), 1);
-    assert_eq!(roots[0]["id"], node["root"]["id"]);
-    assert_eq!(roots[0]["detail"], "ValueError: expected contract failure");
-    assert_eq!(roots[0]["nodes"], 1);
+    let behind: Vec<_> = rows.iter().filter(|r| !r["cause"].is_null()).collect();
+    for row in rows {
+        let fresh = row["health"] == "ok" || row["health"] == "suspect";
+        assert_eq!(row["cause"].is_null(), fresh, "{}", row["id"]);
+        assert_eq!(row["root"].is_null(), fresh, "{}", row["id"]);
+    }
+    for row in &behind {
+        let held = roots
+            .iter()
+            .filter(|r| r["id"] == row["root"]["id"])
+            .count();
+        assert_eq!(held, 1, "{}", row["id"]);
+    }
+    let sum = |key: &str| roots.iter().map(|r| r[key].as_u64().unwrap()).sum::<u64>();
+    assert_eq!(sum("nodes"), behind.len() as u64);
+    assert_eq!(sum("gap_seconds"), root["gap_seconds"].as_u64().unwrap());
+    assert_eq!(sum("unbounded"), root["unbounded"].as_u64().unwrap());
+    assert_eq!(
+        root["gap_seconds"].as_i64().unwrap(),
+        rows.iter()
+            .map(|r| r["gap_seconds"].as_i64().unwrap())
+            .sum::<i64>()
+    );
+    for cause in [
+        "catching_up",
+        "queued",
+        "no_refresh_path",
+        "overdue",
+        "failing",
+        "undecided",
+    ] {
+        let of = rows.iter().filter(|r| r["cause"] == cause).count();
+        assert_eq!(root["causes"][cause], of, "{cause}");
+    }
+    let failure = roots.iter().find(|r| r["kind"] == "failure").unwrap();
+    assert_eq!(failure["id"], node["root"]["id"]);
+    assert_eq!(failure["detail"], "ValueError: expected contract failure");
+    assert_eq!(failure["nodes"], 1);
+    assert_eq!(failure["action"]["kind"], "fix_failure");
+    assert!(
+        failure["action"]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with(" --server")
+    );
     let slow = checked(&router, "POST", "/run/slow", "/run/{target}", 200).await["run_id"]
         .as_str()
         .unwrap()
