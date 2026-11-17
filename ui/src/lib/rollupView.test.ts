@@ -10,7 +10,7 @@ const byFile = indexRollup(rollup([
     held_by: [heldBy('failure:a.py:raw', 3, 3), heldBy('no_schedule:b.py:mart', 1, 4), heldBy('undecided:c.py:waits', 1, 5), heldBy('code:c.py:x', 1, 6)],
   }),
   scopeEntry('file:a.py', 'file', ROOT, ['a.py:raw', 'a.py:clean', 'a.py:report'], { failing: 1, blocked: 2 }, { causes: causeCounts({ failing: 3 }), not_fresh: 3, held_by: [heldBy('failure:a.py:raw', 3, 3)] }),
-  nodeEntry('a.py:raw', 'file:a.py', 'failing', { cause: 'failing', keys: { failed: 100, behind: 0, ok: 20 } }),
+  nodeEntry('a.py:raw', 'file:a.py', 'failing', { cause: 'failing', keys: { failed: 100, behind: 0, ok: 20, cause: 'failing' } }),
   nodeEntry('a.py:clean', 'file:a.py', 'blocked', { cause: 'failing' }),
   nodeEntry('a.py:report', 'file:a.py', 'blocked', { cause: 'failing' }),
   scopeEntry('file:c.py', 'file', ROOT, ['c.py:x', 'c.py:waits'], { behind: 1, undecided: 1 }, { causes: causeCounts({ undecided: 1, catching_up: 1 }), not_fresh: 2, held_by: [heldBy('undecided:c.py:waits', 1, 1), heldBy('code:c.py:x', 1, 2)] }),
@@ -152,15 +152,16 @@ describe('the health map', () => {
     // A few failed keys among many stay visible, and the bands still fill the node.
     const big = indexRollup(rollup([
       scopeEntry(ROOT, 'root', null, ['k.py:k'], { failing: 1 }, { causes: causeCounts({ failing: 1 }), not_fresh: 1 }),
-      nodeEntry('k.py:k', ROOT, 'failing', { cause: 'failing', keys: { failed: 24, behind: 0, ok: 4976 } }),
+      nodeEntry('k.py:k', ROOT, 'failing', { cause: 'failing', keys: { failed: 24, behind: 0, ok: 4976, cause: 'failing' } }),
     ]))
     const bands = sunburst(big, 'k.py:k', 1, 0.02)
     expect(bands[0]!.end - bands[0]!.start).toBeCloseTo(0.01)
     expect(bands.at(-1)!.end).toBeCloseTo(1)
-    // Keys not up to date take the node's own colour: why it is not fresh.
+    // Keys not up to date take the colour of the cause the server gives them (`keys.cause`),
+    // whatever the entry's counts would suggest.
     const waiting = indexRollup(rollup([
       scopeEntry(ROOT, 'root', null, ['k.py:k'], { behind: 1 }, { causes: causeCounts({ no_refresh_path: 1 }), not_fresh: 1 }),
-      nodeEntry('k.py:k', ROOT, 'behind', { cause: 'no_refresh_path', keys: { failed: 0, behind: 3, ok: 1 } }),
+      nodeEntry('k.py:k', ROOT, 'behind', { cause: 'catching_up', keys: { failed: 0, behind: 3, ok: 1, cause: 'no_refresh_path' } }),
     ]))
     expect(sunburst(waiting, 'k.py:k').map((a) => [a.label, a.bands[0]!.part])).toEqual([['3 keys not up to date', 'no_refresh_path'], ['1 key ok', 'fresh']])
     // Not past the last ring, and not under a node too thin to hold them.

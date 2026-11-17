@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { runNodeIdle, runNodeLine, runNodeOutcome } from './runs'
 import { NO_STEPS_OPEN, groupRunSteps, runNodeTime, runStepRows, splitRunSteps, toggleStepsOpen } from './runsPage'
-import { failedKeysLabel, formatSeconds, keyBreakdown } from './assetTable'
+import { failedKeysLabel, formatSeconds } from './assetTable'
+import { keyParts } from './nodeDetail'
 import { lastAttemptFailed } from './cacheStateDisplay'
 import type { NodeState, RunNodeSummary, RunStep } from './types'
 
@@ -62,7 +63,7 @@ describe('a run\'s planned nodes', () => {
 })
 
 describe('a partitioned node with failed keys', () => {
-  const partial = { total: 3077, cached: 3037, missing: 40, missing_keys: [], failed: 40 }
+  const partial = { total: 3077, cached: 3037, missing: 40, missing_keys: [], failed: 40, behind: 0 }
 
   it('failed last although the key its last materialization names succeeded; its state stays partial', () => {
     expect(lastAttemptFailed(node(partial))).toBe(true)
@@ -75,8 +76,8 @@ describe('a partitioned node with failed keys', () => {
     expect(failedKeysLabel(node({ ...partial, failed: 0 }))).toBeNull()
   })
 
-  it('splits its keys into parts that add up to the total', () => {
-    expect(keyBreakdown({ ...partial, cached: 3000, missing: 77 })).toEqual({ cached: 3000, failed: 40, stale: 37, total: 3077 })
+  it("reads its keys' parts off the counts the server states", () => {
+    expect(keyParts({ total: 3077, cached: 3000, failed: 40, behind: 37 })).toEqual({ cached: 3000, failed: 40, blocked: 0, behind: 37, total: 3077 })
   })
 })
 

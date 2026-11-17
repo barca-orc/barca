@@ -113,7 +113,7 @@ export const nodeByState = {
   blocked: node('promo_plan', {
     partitioned: true,
     cache: { state: 'blocked', reason: 'upstream_failed', detail: '39 keys wait on failed upstream keys' },
-    partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [] },
+    partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [], blocked: 39, blocked_on: 'planning.py:demand_forecast', behind: 0 },
   }),
   stale: node('revenue_daily', {
     cache: { state: 'stale', reason: 'changed', detail: 'code changed since the last run', changed: ['code'] },
@@ -127,7 +127,7 @@ export const nodeByState = {
   partial: node('sessionize', {
     partitioned: true,
     cache: { state: 'partial', reason: 'partitions_missing', detail: '3 of 10 keys have no cached result' },
-    partitions: { total: 10, cached: 7, missing: 3, missing_keys: ['day=2026-10-27', 'day=2026-10-28', 'day=2026-10-29'] },
+    partitions: { total: 10, cached: 7, missing: 3, missing_keys: ['day=2026-10-27', 'day=2026-10-28', 'day=2026-10-29'], behind: 3 },
   }),
   unknown: node('checkout_events', {
     cache: { state: 'unknown', reason: 'sensor_output_unknown', detail: 'the sensor has not reported its output' },
@@ -147,7 +147,7 @@ export const nodeByState = {
 export const nodeBySignal = {
   empty: node('orders_by_region', {
     partitioned: true,
-    partitions: { total: 1205, cached: 1205, missing: 0, missing_keys: [], empty: 3 },
+    partitions: { total: 1205, cached: 1205, missing: 0, missing_keys: [], empty: 3, behind: 0 },
     signals: [{ kind: 'empty', empty_keys: 3, keys: 1205, previous_empty_keys: 0 }],
   }),
   rows_changed: node('invoices_clean', {

@@ -725,6 +725,7 @@
 .barca-keys-bar .is-cached { background: var(--status-success, var(--text-muted)); }
 .barca-keys-bar .is-failed { background: var(--status-failed); }
 .barca-keys-bar .is-stale { background: var(--status-warning, var(--text-muted)); }
+.barca-keys-bar .is-waiting { background: var(--map-failing); opacity: 0.55; }
 .barca-keys-errors { list-style: none; margin: 4px 0; padding: 0; font-size: var(--text-sm); }
 .barca-keys-errors li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; }
 .barca-keys-errors .barca-error-line { flex: 1; min-width: 0; }

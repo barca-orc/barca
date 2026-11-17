@@ -20,7 +20,7 @@ const states = assets.map((a) => {
   return served({
     ...a, name, partitioned,
     cache: { state: never ? 'never_run' : failed ? 'partial' : 'cached', reason: 'materialized', detail: 'fixture' },
-    partitions: partitioned ? { total: 3077, cached: failed ? 3070 : 3077, missing: failed ? 7 : 0, missing_keys: [], failed: failed ? 7 : 0, failed_keys: [], changed: {} } : null,
+    partitions: partitioned ? { total: 3077, cached: failed ? 3070 : 3077, missing: failed ? 7 : 0, missing_keys: [], failed: failed ? 7 : 0, failed_keys: [], changed: {}, behind: 0 } : null,
     last_materialization: never ? null : materialization(failed || name === 'publish_plan' ? 'failed' : 'success', name === 'publish_plan' ? 'warehouse refused the plan' : null),
     shape: null, durations: null, next_run: null, last_success_at: null, failing_since: null, consecutive_failures: 0, running: null,
     // The server's answer: the validation is blocked by the failing publish step above it.

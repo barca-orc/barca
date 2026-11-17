@@ -599,6 +599,20 @@ pub struct PartitionState {
     #[serde(default, skip_serializing_if = "is_zero")]
     #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
     pub empty: usize,
+    /// How many of `missing` wait on the same keys of an input, which failed (`barca docs
+    /// partitions`, "Failed keys block their own keys"): a run skips them. Absent when none
+    /// does; the node's `cache.state` is then `blocked`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
+    pub blocked: usize,
+    /// The node whose failed keys they wait on, by id. Absent when no key is blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub blocked_on: Option<String>,
+    /// How many of `missing` neither failed nor are blocked: stale, or never run. A run
+    /// computes them. `failed`, `blocked` and `behind` add up to `missing`.
+    #[serde(default)]
+    pub behind: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -892,7 +906,7 @@ pub(crate) async fn status_from_dag_with_membership(
         inputs.dedup();
         let history = histories.get(id).cloned().unwrap_or_default();
         let report = reports.get(id).copied();
-        let partitions = report
+        let mut partitions = report
             .and_then(|r| r.partitions.as_ref())
             .map(|p| PartitionState {
                 total: p.total,
@@ -908,7 +922,13 @@ pub(crate) async fn status_from_dag_with_membership(
                 },
                 changed: p.changed.clone(),
                 empty: empty_keys.get(id).copied().unwrap_or(0),
+                blocked: 0,
+                blocked_on: None,
+                behind: 0,
             });
+        if let Some(p) = partitions.as_mut() {
+            p.behind = p.missing.saturating_sub(p.failed);
+        }
         let held_above = inputs.iter().find_map(|up| {
             let up = up.split('[').next().unwrap_or(up);
             match held.get_key_value(up) {
@@ -944,6 +964,11 @@ pub(crate) async fn status_from_dag_with_membership(
                 p.missing,
                 short_name(&origin)
             );
+            // The same count, as fields: no surface reads it out of the sentence (#992).
+            let p = partitions.as_mut().expect("a partitioned node");
+            p.blocked = count.min(p.missing);
+            p.blocked_on = Some(origin.clone());
+            p.behind = p.missing.saturating_sub(p.blocked);
             blocked.insert(id.to_string(), (count, origin));
         }
         states.insert(id.to_string(), cache.state);

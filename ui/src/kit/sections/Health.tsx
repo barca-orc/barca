@@ -11,7 +11,7 @@ import { Spec, Variant } from '../Kit'
 const levers = Array.from({ length: 6 }, (_, i) => nodeEntry(`drivers.py:lever_${i}`, 'group:p.py:drivers', 'blocked', { cause: 'failing' }))
 const sources = Array.from({ length: 12 }, (_, i) => nodeEntry(`inputs.py:source_${i}`, 'group:p.py:inputs', i < 3 ? 'behind' : 'ok', i < 3 ? { cause: 'no_refresh_path' } : {}))
 const exports = Array.from({ length: 20 }, (_, i) => nodeEntry(`publish.py:export_${i}`, 'group:p.py:publish', 'ok'))
-const cutoff = nodeEntry('drivers.py:cutoff', 'group:p.py:drivers', 'failing', { cause: 'failing', keys: { failed: 400, behind: 0, ok: 0 } })
+const cutoff = nodeEntry('drivers.py:cutoff', 'group:p.py:drivers', 'failing', { cause: 'failing', keys: { failed: 400, behind: 0, ok: 0, cause: 'failing' } })
 const failure = failureRoot('drivers.py:cutoff', "TypeError: cutoff() got an unexpected keyword argument 'registry'", 7)
 const unscheduled = heldRoot({ kind: 'no_schedule', node: 'inputs.py:source_0', detail: 'no tick reaches source_0', nodes: 3, causes: causeCounts({ no_refresh_path: 3 }), unbounded: 3, action: { kind: 'add_schedule', command: null, estimated_seconds: 42 } })
 const held = [

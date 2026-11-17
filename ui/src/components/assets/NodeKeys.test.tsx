@@ -8,7 +8,7 @@ import type { PartitionKeys, PartitionState } from '@/lib/types'
 const text = (html: string) => html.replace(/<[^>]+>/g, '')
 
 const partitions = (over: Partial<PartitionState>): PartitionState => ({
-  total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7, ...over,
+  total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7, behind: 0, ...over,
 })
 
 describe('PartitionBar', () => {
@@ -22,13 +22,22 @@ describe('PartitionBar', () => {
     const html = renderToStaticMarkup(<PartitionBar partitions={partitions({})} />)
     expect(html).toMatch(/class="is-failed" style="width:2%"/)
     expect(html).not.toContain('is-stale')
-    expect(html).toContain('aria-label="3070 cached, 7 failed, 0 stale, of 3077 keys"')
+    expect(html).toContain('aria-label="3070 cached, 7 failed, 0 waiting, 0 not up to date, of 3077 keys"')
   })
 
-  it('counts stale keys as the rest', () => {
-    const html = renderToStaticMarkup(<PartitionBar partitions={partitions({ cached: 3000, missing: 77, failed: 7 })} />)
-    expect(text(html)).toContain('3,000 of 3,077 cached · 7 failed · 70 stale')
+  it('shows the keys a run computes as the server counts them, not as what is left over', () => {
+    const html = renderToStaticMarkup(<PartitionBar partitions={partitions({ cached: 3000, missing: 77, failed: 7, behind: 70 })} />)
+    expect(text(html)).toContain('3,000 of 3,077 cached · 7 failed · 70 not up to date')
     expect(html).toContain('class="is-stale"')
+  })
+
+  it('says how many keys wait and on which input, from the served counts', () => {
+    const html = renderToStaticMarkup(<PartitionBar partitions={partitions({ cached: 2994, missing: 83, failed: 0, blocked: 83, blocked_on: 'planning.py:account_scores', behind: 0 })} />)
+    expect(text(html)).toContain('2,994 of 3,077 cached · 83 wait on account_scores')
+    expect(html).toContain('class="is-waiting"')
+    expect(html).not.toContain('is-stale')
+    // No cache-state word decides it: the same props with nothing blocked say nothing of waiting.
+    expect(text(renderToStaticMarkup(<PartitionBar partitions={partitions({})} />))).not.toContain('wait')
   })
 })
 
@@ -38,7 +47,7 @@ describe('NodeKeys', () => {
     keys: [], total: 0, recorded: 3077, failed: 7,
     errors: Array.from({ length: n }, (_, i) => ({ error: `ValueError: problem ${i}`, keys: 5 - i })),
   })
-  const render = (client: QueryClient, p = partitions({ cached: 3000, missing: 77, failed: 7 })) => renderToStaticMarkup(
+  const render = (client: QueryClient, p = partitions({ cached: 3000, missing: 77, failed: 7, behind: 70 })) => renderToStaticMarkup(
     <QueryClientProvider client={client}><MemoryRouter>
       <NodeKeys id={ID} partitions={p} />
     </MemoryRouter></QueryClientProvider>,

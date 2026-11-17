@@ -316,7 +316,9 @@ barca status planning.py                    # promo_plan: blocked, 39 of 39 miss
 - **`barca status` and `GET /state`** report such a node `blocked` (reason `upstream_failed`,
   `detail` `39 of 39 missing keys wait on 'demand_forecast': the same keys of it failed`) rather
   than stale because of its upstream; `--state blocked` selects them and `summary.blocked` counts
-  them. A node with failed keys of its own is reported by those first.
+  them. The same count is in its `partitions` as fields: `blocked` (39) and `blocked_on` (the
+  input's id), with `behind` for the missing keys a run does compute. A node with failed keys
+  of its own is reported by those first.
 - **The fix** is upstream: once the failed keys succeed, the next `get` computes exactly the
   blocked keys below them, from cache for the rest.
 - **Within one phase** (a chain the planner fused into one stream, such as nodes with static

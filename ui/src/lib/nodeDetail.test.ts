@@ -206,14 +206,14 @@ describe('runPace', () => {
 
 describe('barSegments', () => {
   it('keeps a thin part visible, taking the width from the widest', () => {
-    const w = barSegments({ cached: 3070, failed: 7, stale: 0, total: 3077 })
+    const w = barSegments({ cached: 3070, failed: 7, blocked: 0, behind: 0, total: 3077 })
     expect(w.failed).toBe(2)
-    expect(w.stale).toBe(0)
+    expect([w.blocked, w.behind]).toEqual([0, 0])
     expect(w.cached + w.failed).toBeCloseTo(100, 6)
   })
   it('leaves parts that are wide enough alone', () => {
-    expect(barSegments({ cached: 50, failed: 25, stale: 25, total: 100 })).toEqual({ cached: 50, failed: 25, stale: 25 })
-    expect(barSegments({ cached: 0, failed: 0, stale: 0, total: 0 })).toEqual({ cached: 0, failed: 0, stale: 0 })
+    expect(barSegments({ cached: 50, failed: 25, blocked: 10, behind: 15, total: 100 })).toEqual({ cached: 50, failed: 25, blocked: 10, behind: 15 })
+    expect(barSegments({ cached: 0, failed: 0, blocked: 0, behind: 0, total: 0 })).toEqual({ cached: 0, failed: 0, blocked: 0, behind: 0 })
   })
 })
 

@@ -44,6 +44,7 @@ nodes[].name : string
 nodes[].no_estimate : string
 nodes[].partitioned : boolean
 nodes[].partitions : object  (optional)
+nodes[].partitions.behind : integer
 nodes[].partitions.cached : integer
 nodes[].partitions.missing : integer
 nodes[].partitions.missing_keys : array

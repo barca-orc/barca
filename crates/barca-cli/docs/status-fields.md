@@ -236,8 +236,14 @@ UI's health map, bars and failures list all print this document.
     {"file": "pipeline.py", "nodes": 6, "assets": 4, "running": 0,
      "health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 3},
      "asset_health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 1},
-     "worst": "failing"}
-  ]
+     "worst": "failing",
+     "kinds": {"asset": {"nodes": 4, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0}},
+       "task": {"nodes": 1, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 0, "undecided": 0}},
+       "sensor": {"nodes": 1, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 0, "undecided": 0}}}}
+  ],
+  "kinds": {"asset": {"nodes": 4, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0}},
+    "task": {"nodes": 1, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 0, "undecided": 0}},
+    "sensor": {"nodes": 1, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 0, "undecided": 0}}}
 }
 ```
 
@@ -261,7 +267,7 @@ of `children`.
 | `gap_seconds` | the freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds` ("Root") |
 | `unbounded` | nodes underneath that are not fresh and have no `expected_fresh_at` ("Times"): nothing known will leave them fresh, so the gap has no forward term for them |
 | `fresh_by` | the latest `expected_fresh_at` underneath (RFC 3339, UTC): when the nodes that have an estimate are all expected fresh. `null` when none has one. It speaks only for those nodes; `unbounded` counts the rest |
-| `keys` | on a partitioned node only: its keys that `failed`, are `behind` (no cached result, and did not fail) and are `ok` |
+| `keys` | on a partitioned node only: its keys that `failed`, are `behind` (no cached result, and did not fail) and are `ok`, and `cause`, why the keys that are behind are not fresh: the node's own `cause`, `null` for a fresh node |
 | `also_in` | the other groups that declare this node or group, by id; empty for one declared in at most one group |
 
 Every node has exactly one parent, so every count of an entry is the sum of its children's. A
@@ -273,6 +279,12 @@ others in `also_in`; a group with no node in scope is not listed.
 in whichever group each sits, and `worst`, the most severe health among them. The tree has a
 `file` entry only for the nodes of a file that are in no group, so a list of files (the web
 UI's sidebar) reads `files`.
+
+`kinds` cuts them by kind: `asset`, `task` and `sensor`, each `{"nodes", "fresh", "causes"}`:
+how many nodes of the kind are in scope, how many of them are fresh (no cause) and how many
+have each cause; `fresh` and the causes add up to `nodes`. The document carries it for the
+whole scope and each entry of `files` for its file. A list of one kind (the web UI's Assets,
+Tasks and Sensors pages) reads its filter counts there instead of counting rows.
 
 `roots` is the to-do list: what holds the nodes that are not fresh, and what clears each.
 There is one entry per `root` the nodes carry ("Root"), and every node that is not fresh is
@@ -652,7 +664,11 @@ not one per node.
 
 A partitioned asset is one node with a `partitions` summary: `total`, `cached`, `missing` and up
 to 20 `missing_keys`, and `empty` when some keys' latest successful result wrote no rows (a
-recorded count of 0; keys no longer in the key set count while their result is recorded). Its state is `cached` when every key is, `partial` when some are, and
+recorded count of 0; keys no longer in the key set count while their result is recorded).
+The missing keys are counted three ways, which add up to `missing`: `failed` (their last
+attempt failed; absent when none did), `blocked` (they wait on the same keys of an input,
+which failed, named by id in `blocked_on`; both absent when none does) and `behind` (stale or
+never run: a run computes them). Its state is `cached` when every key is, `partial` when some are, and
 `stale`/`never_run` when none are. `last_materialization` is one key of the latest run (the first in
 sort order), named in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
 

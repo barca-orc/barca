@@ -100,7 +100,7 @@ describe('partitioned failures', () => {
     node('p.py:forecast', [], {
       partitioned: true,
       cache: { state: 'stale', reason: 'failed', detail: '' },
-      partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7, failed_keys: [] },
+      partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7, failed_keys: [], behind: 0 },
       ...over,
     })
   const loaded = new Map([['p.py:forecast', page]])
@@ -127,7 +127,7 @@ describe('partitioned failures', () => {
 
   it('leaves a node whose keys did not fail alone', () => {
     // Failed as a whole, with 7 keys stale rather than failed: its own error, and no key errors to load.
-    const whole = forecast({ ...failedAt('2026-10-31 15:30:12', 'ImportError: no module named prophet'), partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [] } })
+    const whole = forecast({ ...failedAt('2026-10-31 15:30:12', 'ImportError: no module named prophet'), partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], behind: 7 } })
     expect(failures([errorRoot('ImportError: no module named prophet')], one(whole))[0]).toMatchObject({ headline: 'ImportError: no module named prophet', keys: null, missingKeys: 7 })
     expect(failedKeyNodes([forecast(), whole, ...nodes])).toEqual(['p.py:forecast'])
   })

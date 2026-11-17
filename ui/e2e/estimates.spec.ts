@@ -48,3 +48,35 @@ test('the Schedules page reads late and queue-bound from the server, lists them 
   // A row the server does not call late is never late here, whatever its times say.
   await expect(rows.nth(1)).not.toContainText('late by')
 })
+
+test("a kind's page: the chips are the health map's parts, their counts the rollup's, and a chip lists the rows the server gave that cause", async ({ page, request }) => {
+  const api = process.env.BARCA_E2E_API
+  const rollup = await (await request.get(`${api}/state/rollup`)).json()
+  const states: { kind: string; cause: string | null }[] = await (await request.get(`${api}/state`)).json()
+  const kind = rollup.kinds.task
+  // The rollup counts the same nodes the page lists (#992).
+  expect(kind.nodes).toBe(states.filter((s) => s.kind === 'task').length)
+  expect(kind.nodes).toBeGreaterThan(0)
+  const served: Record<string, number> = { ...kind.causes, fresh: kind.fresh }
+  await page.goto('/ui/#/tasks')
+  const chips = page.getByRole('group', { name: 'State' })
+  for (const [part, count] of Object.entries(served)) {
+    const dot = chips.locator(`.barca-chip-dot[data-part="${part}"]`)
+    if (count === 0) {
+      await expect(dot).toHaveCount(0)
+      continue
+    }
+    await expect(dot).toHaveCount(1)
+    await expect(chips.locator(`button:has(.barca-chip-dot[data-part="${part}"]) b`)).toHaveText(count.toLocaleString('en-US'))
+  }
+  // No chip speaks the cache-state vocabulary.
+  await expect(chips).not.toContainText(/stale|never run|cached|blocked/)
+  // Picking a chip lists exactly the rows with that cause, and the URL says so.
+  const [part, count] = Object.entries(served).find(([, n]) => n > 0)!
+  await chips.locator(`button:has(.barca-chip-dot[data-part="${part}"])`).click()
+  await expect(page).toHaveURL(new RegExp(`state=${part}`))
+  await expect(page.locator('.barca-asset-table tbody tr[tabindex="0"]')).toHaveCount(count)
+  // An older link still opens: `failed=1` is the failing cause.
+  await page.goto('/ui/#/tasks?failed=1')
+  await expect(page.locator('.barca-asset-table tbody tr[tabindex="0"]')).toHaveCount(served.failing ?? 0)
+})

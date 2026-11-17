@@ -23,4 +23,19 @@ changed?: { [key in string]: Array<string> },
  * Keys whose latest successful result wrote no rows (its row count was recorded and is 0).
  * Absent when none is.
  */
-empty?: number, };
+empty?: number,
+/**
+ * How many of `missing` wait on the same keys of an input, which failed (`barca docs
+ * partitions`, "Failed keys block their own keys"): a run skips them. Absent when none
+ * does; the node's `cache.state` is then `blocked`.
+ */
+blocked?: number,
+/**
+ * The node whose failed keys they wait on, by id. Absent when no key is blocked.
+ */
+blocked_on?: string,
+/**
+ * How many of `missing` neither failed nor are blocked: stale, or never run. A run
+ * computes them. `failed`, `blocked` and `behind` add up to `missing`.
+ */
+behind: number, };

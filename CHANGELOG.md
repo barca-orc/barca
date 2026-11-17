@@ -10,6 +10,22 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- **The assets table's filter chips, row order and key counts come from the server (#992).**
+  The chips of the Assets, Tasks and Sensors pages are the health map's parts (`failing`,
+  `overdue`, `no refresh path`, `queued`, `undecided`, `catching up`, `fresh`): a row falls
+  under its served `cause`, and with no other filter a chip's count is the rollup's own, read
+  from the new `kinds` (`asset`, `task` and `sensor`, each `{nodes, fresh, causes}`, for the
+  whole scope and for each entry of `files` in `barca status --rollup --json` and
+  `GET /state/rollup`); under a search or another filter it counts the rows listed. Rows are
+  ordered by the served order of the causes, what alarms first, instead of a rank of cache
+  states. "N keys wait on X" and the key bar read counts instead of a state's `detail`
+  sentence: a partitioned node's `partitions` gains `blocked` and `blocked_on` (the keys that
+  wait on the failed keys of an input, and that input's id) and `behind` (the missing keys a
+  run computes), in `barca status --json`, `GET /state` and `GET /nodes`; a node entry's
+  `keys` in the rollup gains `cause`, which colours the band of its keys that are behind.
+  Links written with the old chips still open (`failed=1` and `blocked=1` read
+  `state=failing`, `state=cached` reads `state=fresh`); other `state=` values of the old
+  vocabulary are ignored. Every exemption the layering guard held for this issue is removed.
 - **Every place the web UI shows a state says when it will be fresh, or why there is no
   estimate (#968).** A node's row and panel read `fresh ~15:05` (the server's
   `expected_fresh_at`, to the minute and rounded up), `rechecked 15:00` where a tick will only

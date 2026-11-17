@@ -19,7 +19,6 @@ import { isLive, liveGraphState } from '@/lib/graphState'
 import { fileShown, pipelineName } from '@/lib/pipeline'
 import { useRollup } from '@/hooks/useRollup'
 import {
-  blockedKeys,
   DEFAULT_SORT,
   assetColumns,
   lastRunText,
@@ -271,9 +270,10 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                         r.last?.error && <span className="barca-cell-why" title={r.last.error}>{headline(r.last.error)}</span>
                       ) : r.pinned !== null ? (
                         <span className="barca-cell-why" title={r.pinned}>{r.pinned}</span>
-                      ) : !r.blockedBy && r.state === 'blocked' && r.keys && blockedKeys(r.stateHint) ? (
-                        <span className="barca-cell-why">
-                          {blockedKeys(r.stateHint)!.count.toLocaleString()} of {plural(r.keys.total, 'key')} wait on {blockedKeys(r.stateHint)!.upstream}
+                      ) : !r.blockedBy && r.keys && r.keys.blocked > 0 ? (
+                        // How many keys wait, and on which input's failed keys: counts of the row's `partitions`.
+                        <span className="barca-cell-why" data-keys-blocked={r.keys.blocked}>
+                          {r.keys.blocked.toLocaleString()} of {plural(r.keys.total, 'key')} wait{r.keys.blockedOn ? ` on ${shortName(r.keys.blockedOn)}` : ''}
                         </span>
                       ) : r.kind === 'sensor' && r.changedAt ? (
                         // What a sensor last saw is in its artifact; /state says when it last changed.

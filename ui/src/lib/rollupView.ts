@@ -8,7 +8,7 @@
  */
 
 import { HEALTH_ORDER, isUnhealthy, type Health } from './healthDisplay'
-import { MAP_PARTS, keyBandPart, leadingPart, type MapPart } from './causeDisplay'
+import { MAP_PARTS, keyBandPart, type MapPart } from './causeDisplay'
 import type { HeldBy } from './generated/HeldBy'
 import { formatSpan, parseTime } from './time'
 import type { HealthCounts } from './generated/HealthCounts'
@@ -32,6 +32,8 @@ export interface RollupTree {
   coverage: DataCoverage
   /** Each source file's nodes summed (`files`), by file path. */
   files: ReadonlyMap<string, FileRollup>
+  /** Every node in scope by kind (`kinds`): how many of each are fresh and have each cause. */
+  kinds: Rollup['kinds'] | null
   asOf: string
 }
 
@@ -42,13 +44,14 @@ const NO_CAUSES: RollupEntry['causes'] = { catching_up: 0, queued: 0, no_refresh
 export const EMPTY_ROLLUP: RollupTree = {
   entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, weight: 0, weights: { ...NO_CAUSES, fresh: 0 }, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
   files: new Map(),
+  kinds: null,
   roots: [],
   coverage: { assets: 0, measured: 0, suspect: 0 },
   asOf: '',
 }
 
 export function indexRollup(rollup: Rollup): RollupTree {
-  return { entries: new Map(rollup.entries.map((e) => [e.id, e])), roots: rollup.roots, coverage: rollup.data_coverage, files: new Map(rollup.files.map((f) => [f.file, f])), asOf: rollup.as_of }
+  return { entries: new Map(rollup.entries.map((e) => [e.id, e])), roots: rollup.roots, coverage: rollup.data_coverage, files: new Map(rollup.files.map((f) => [f.file, f])), kinds: rollup.kinds, asOf: rollup.as_of }
 }
 
 /** The most severe health an entry counts (the served order); `ok` for an empty one. */
@@ -213,12 +216,11 @@ export function sunburst(tree: RollupTree, focus: string, rings = 3, minTurn = 0
     const extra = raw.reduce((sum, w) => sum + w, 0) - span
     const roomy = raw.reduce((sum, w) => sum + (w > floor ? w - floor : 0), 0)
     const widths = raw.map((w) => (w > floor && roomy > 0 ? w - (extra * (w - floor)) / roomy : w))
-    // Keys not up to date take the node's own colour: why the node is not fresh.
-    const own = leadingPart(entry.causes)
     let at = start
     bands.forEach(([band, word], i) => {
       const count = keys[band]
-      const part = keyBandPart(band, own)
+      // Keys not up to date take the colour of the cause the server gives them (`keys.cause`).
+      const part = keyBandPart(band, keys.cause)
       const label = `${count.toLocaleString()} ${count === 1 ? 'key' : 'keys'} ${word}`
       const end = at + widths[i]!
       arcs.push({ id: `${entry.id}::keys:${band}`, parent: entry.id, depth, start: at, end, label, kind: 'keys', bands: [{ part, start: at, end }], keys: { count, of } })

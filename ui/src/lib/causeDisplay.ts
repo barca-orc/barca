@@ -72,10 +72,16 @@ export function mapPartColor(part: MapPart): string {
 
 /**
  * The colour of a band of a partitioned node's keys: failed keys are failing, keys with a
- * result fresh, and keys not up to date take the node's own colour (why the node is not fresh).
+ * result fresh, and keys not up to date take the colour of the cause the server gives them
+ * (`keys.cause` of the node's rollup entry: why the node is not fresh).
  */
-export function keyBandPart(band: 'failed' | 'behind' | 'ok', own: MapPart): MapPart {
-  return band === 'failed' ? 'failing' : band === 'ok' ? 'fresh' : own
+export function keyBandPart(band: 'failed' | 'behind' | 'ok', behind: Cause | null): MapPart {
+  return band === 'failed' ? 'failing' : band === 'ok' ? 'fresh' : mapPartOf(behind)
+}
+
+/** Where a map part sorts: the served order of the causes (what alarms first), then fresh. */
+export function mapPartRank(part: MapPart): number {
+  return MAP_PARTS.indexOf(part)
 }
 
 /** The first cause, in the served order, that `counts` has a node in; `fresh` when it has none. */

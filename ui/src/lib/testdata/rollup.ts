@@ -38,11 +38,16 @@ function weighed(entry: Omit<RollupEntry, 'weight' | 'weights'> & Partial<Pick<R
 export function fileSums(file: string, worst: Health, over: Partial<FileRollup> = {}): FileRollup {
   const nodes = over.nodes ?? 1
   const health = over.health ?? counts({ [worst]: nodes })
-  return { file, nodes, assets: nodes, running: 0, health, asset_health: health, worst, ...over }
+  return { file, nodes, assets: nodes, running: 0, health, asset_health: health, worst, kinds: NO_KINDS, ...over }
 }
 
 /** No node with a cause: every node fresh, as a fixture that states none says. */
 export const NO_CAUSES: RollupEntry['causes'] = { catching_up: 0, queued: 0, no_refresh_path: 0, overdue: 0, failing: 0, undecided: 0 }
+
+/** No node of any kind: what a fixture that is not about the kinds states. */
+export const NO_KINDS: Rollup['kinds'] = {
+  asset: { nodes: 0, fresh: 0, causes: NO_CAUSES }, task: { nodes: 0, fresh: 0, causes: NO_CAUSES }, sensor: { nodes: 0, fresh: 0, causes: NO_CAUSES },
+}
 
 /** Cause counts with the parts given, as an entry states them. */
 export function causeCounts(part: Partial<CauseCounts> = {}): CauseCounts {
@@ -90,7 +95,7 @@ export function scopeEntry(
 }
 
 export function rollup(entries: RollupEntry[], roots: RollupRoot[] = [], files: FileRollup[] = []): Rollup {
-  return { as_of: '2026-11-17T14:57:00Z', entries, roots, data_coverage: entries[0]!.data_coverage, files }
+  return { as_of: '2026-11-17T14:57:00Z', entries, roots, data_coverage: entries[0]!.data_coverage, files, kinds: NO_KINDS }
 }
 
 export function failureRoot(node: string, detail: string, nodes = 1, assets = nodes): RollupRoot {

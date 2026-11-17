@@ -12,8 +12,8 @@ import {
   type PageRun,
 } from '@/components'
 import { LAST_RUN_LABEL, PAGE_LABEL, toggle, type AssetFilter } from '@/hooks/useAssetFilter'
-import { BLOCKED_UPSTREAM, PINNED, CACHE_STATES, LAST_ATTEMPT_FAILED, cacheStateGlyph, cacheStateLabel } from '@/lib/cacheStateDisplay'
-import { plural } from '@/lib/plural'
+import { PINNED } from '@/lib/cacheStateDisplay'
+import { MAP_PARTS, mapPartColor, mapPartLabel, mapPartMeaning } from '@/lib/causeDisplay'
 import { pipelineName } from '@/lib/pipeline'
 import { EMPTY_FILTERS, LAST_RUNS, isFiltered } from '@/lib/assetFilters'
 
@@ -23,7 +23,7 @@ import { EMPTY_FILTERS, LAST_RUNS, isFiltered } from '@/lib/assetFilters'
  * its segment says how many, and what it blocks. A page with nothing of its kind has no Run.
  */
 export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run: PageRun | null | undefined; extra?: ReactNode }) {
-  const { kind, data, pipeline, rows, visible, filters, setFilters, counts, blocked } = filter
+  const { kind, data, pipeline, rows, visible, filters, setFilters, counts } = filter
   const loaded = data !== undefined
   return (
     <div className="barca-view-bar">
@@ -38,42 +38,29 @@ export function AssetsToolbar({ filter, run, extra }: { filter: AssetFilter; run
           <Skeleton width={24} height={14} />
         )}
       </div>
-      {/* The state words, as `barca status` prints them; a failed last attempt is a filter of its own. */}
+      {/* Why a node is not fresh, in the health map's words and colours, what alarms first;
+          a row falls under its served cause, and an unfiltered count is the rollup's own. */}
       <ChipGroup label="State" segmented>
-        {(counts.failed > 0 || filters.failed) && (
+        {MAP_PARTS.filter((part) => counts.states[part] > 0 || filters.states.includes(part)).map((part) => (
           <Chip
-            pressed={filters.failed}
-            title={`${counts.failed} ${LAST_ATTEMPT_FAILED}${blocked > 0 ? ` · blocks ${plural(blocked, 'downstream node')}` : ''}`}
-            onClick={() => setFilters({ ...filters, failed: !filters.failed })}
+            key={part}
+            pressed={filters.states.includes(part)}
+            title={`${counts.states[part].toLocaleString()} ${mapPartLabel(part)}: ${mapPartMeaning(part)}`}
+            onClick={() => setFilters({ ...filters, states: toggle(filters.states, part) })}
           >
-            <StatusGlyph glyph="failed" size={12} />
-            <b>{counts.failed}</b> <span className="barca-chip-word">{LAST_ATTEMPT_FAILED}</span>
+            <i className="barca-chip-dot" data-part={part} style={{ background: mapPartColor(part) }} aria-hidden />
+            <b>{counts.states[part].toLocaleString()}</b> <span className="barca-chip-word">{mapPartLabel(part)}</span>
           </Chip>
-        )}
-        {(counts.pinned > 0 || filters.pinned) && (
+        ))}
+      </ChipGroup>
+      {(counts.pinned > 0 || filters.pinned) && (
+        <ChipGroup label="Pinned">
           <Chip pressed={filters.pinned} title={`${counts.pinned} ${PINNED}`} onClick={() => setFilters({ ...filters, pinned: !filters.pinned })}>
             <StatusGlyph glyph="pinned" size={12} />
             <b>{counts.pinned}</b> <span className="barca-chip-word">{PINNED}</span>
           </Chip>
-        )}
-        {(counts.blocked > 0 || filters.blocked) && (
-          <Chip pressed={filters.blocked} title={`${counts.blocked} ${BLOCKED_UPSTREAM}`} onClick={() => setFilters({ ...filters, blocked: !filters.blocked })}>
-            <StatusGlyph glyph="blocked" size={12} />
-            <b>{counts.blocked}</b> <span className="barca-chip-word">{BLOCKED_UPSTREAM}</span>
-          </Chip>
-        )}
-        {CACHE_STATES.filter((state) => counts.states[state] > 0 || filters.states.includes(state)).map((state) => (
-          <Chip
-            key={state}
-            pressed={filters.states.includes(state)}
-            title={`${counts.states[state]} ${cacheStateLabel(state)}`}
-            onClick={() => setFilters({ ...filters, states: toggle(filters.states, state) })}
-          >
-            <StatusGlyph glyph={cacheStateGlyph(state)} size={12} />
-            <b>{counts.states[state]}</b> <span className="barca-chip-word">{cacheStateLabel(state)}</span>
-          </Chip>
-        ))}
-      </ChipGroup>
+        </ChipGroup>
+      )}
       {(counts.scheduled > 0 || filters.scheduled) && (
         <ChipGroup label="Scheduled">
           <Chip pressed={filters.scheduled} title={`${counts.scheduled} scheduled`} onClick={() => setFilters({ ...filters, scheduled: !filters.scheduled })}>

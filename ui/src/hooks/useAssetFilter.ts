@@ -4,6 +4,7 @@ import { useAssetStates } from './useAssetStates'
 import { useAssets } from './useAssets'
 import { usePausedSet } from './usePauses'
 import { usePinNotes } from './usePins'
+import { useRollup } from './useRollup'
 import { inPipeline } from '@/lib/pipeline'
 import { applyFilters, facetCounts, parseFilters, writeFilters, type Filters, type LastRun } from '@/lib/assetFilters'
 import { buildRows, sortRows, type Sort } from '@/lib/assetTable'
@@ -39,8 +40,8 @@ export function useAssetFilter(kind: NodeKind, sort?: Sort) {
   // `?paused=1` (the paused banner's link): only the paused assets.
   const paused = usePausedSet()
   const onlyPaused = params.get('paused') === '1'
-  // Which failing node blocks a row is the server's answer on the row (`root`), judged over
-  // the whole graph. Pinned assets read `pinned` (`GET /pins`), and pass no failure above them on.
+  // Why a row is not fresh, and which node holds it, are the server's answers on the row
+  // (`cause`, `root`). Pinned assets read `pinned` (`GET /pins`).
   const pins = usePinNotes()
   const rows = useMemo(
     () => buildRows((data ?? []).filter((n) => n.kind === kind && inPipeline(n.id, pipeline) && (!onlyPaused || paused.has(n.id))), dataUpdatedAt, pins),
@@ -52,13 +53,15 @@ export function useAssetFilter(kind: NodeKind, sort?: Sort) {
   const filters = { ...parseFilters(params), kinds: [] }
   const setFilters = (f: Filters) => setParams(writeFilters(params, f), { replace: true })
   const now = dataUpdatedAt
-  const counts = facetCounts(rows, filters, now)
+  // The page's kind in the rollup (`kinds`): the whole project's, or the open file's. Every
+  // node of the kind is counted there by cause, so an unfiltered chip states the server's
+  // number; a list cut to the paused nodes is not that population, and counts its own rows.
+  const rollup = useRollup(null)
+  const kinds = pipeline ? rollup.tree.files.get(pipeline)?.kinds : rollup.tree.kinds
+  const counts = facetCounts(rows, filters, now, onlyPaused ? null : kinds?.[kind] ?? null)
   const filtered = applyFilters(rows, filters, now)
   const visible = sort ? sortRows(filtered, sort) : filtered
-  // What fails, and how much of the graph waits on it: the failing segment's tooltip.
-  // The blocked count is the rows that read `blocked`, so the tooltip and the chip agree.
-  const blocked = rows.filter((r) => !r.lastFailed && r.pinned === null && (r.blockedBy || r.state === 'blocked')).length
-  return { kind, states, data, graph, pipeline, paused, onlyPaused, pins, rows, filters, setFilters, counts, visible, blocked, now }
+  return { kind, states, data, graph, pipeline, paused, onlyPaused, pins, rows, filters, setFilters, counts, visible, now }
 }
 
 export type AssetFilter = ReturnType<typeof useAssetFilter>

@@ -10,7 +10,8 @@
 
 import { blockerOf } from './healthDisplay'
 import { match } from 'ts-pattern'
-import { CACHE_STATES, cacheStateRank, lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { CACHE_STATES, lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { mapPartOf, mapPartRank } from './causeDisplay'
 import { streakLabel } from './health'
 import { formatAgo, parseTime } from './time'
 import type { CacheStatus, NodeRunning, NodeState } from './types'
@@ -31,8 +32,12 @@ export interface AssetRow {
   reason: CacheStatus['reason']
   /** The latest attempt failed (or some keys did): shown beside the state, never in its place. */
   lastFailed: boolean
-  /** A partitioned node's keys: how many of how many last failed. Null for a node without keys. */
-  keys: { failed: number; total: number } | null
+  /**
+   * A partitioned node's keys, as `partitions` of its row counts them: how many of how many
+   * last failed, and how many wait on the failed keys of which input (`blocked`, `blocked_on`).
+   * Null for a node without keys.
+   */
+  keys: { failed: number; total: number; blocked: number; blockedOn: string | null } | null
   /** The failed node upstream that keeps it from running (`blocked`); null when none. */
   blockedBy: string | null
   /** Pinned (`barca pin`): what it is pinned to, in a line; null when not pinned. Reads `pinned`. */
@@ -74,12 +79,6 @@ export function failedKeysLabel(node: NodeState): string | null {
   return p?.failed ? `${p.failed.toLocaleString()} of ${p.total.toLocaleString()} keys failed` : null
 }
 
-/** A partitioned node's keys as parts of a whole. Parts add up to `total`. */
-export function keyBreakdown(p: NonNullable<NodeState['partitions']>): { cached: number; failed: number; stale: number; total: number } {
-  const failed = p.failed ?? 0
-  return { cached: p.cached, failed, stale: Math.max(p.total - p.cached - failed, 0), total: p.total }
-}
-
 /**
  * A node's typical time, in seconds. Durations are recorded per key, whichever call computed
  * it, so a batched node's per-key median is a few milliseconds and says nothing; a partitioned
@@ -104,24 +103,15 @@ function fileOf(id: string): string {
 }
 
 /**
- * What needs attention first: a failed last attempt, then the state's rank, then the name.
- * Presentation order only; the state itself is never changed by the attempt.
+ * The default order: the served order of the causes (what alarms first: failing, overdue, no
+ * refresh path, then what needs no one), fresh rows last, then the name. Which cause a row has
+ * is the server's (`cause`); this only puts them in the order `barca status --rollup` names them.
  */
-function compareAttention(a: Pick<AssetRow, 'state' | 'lastFailed' | 'blockedBy' | 'pinned' | 'name'>, b: Pick<AssetRow, 'state' | 'lastFailed' | 'blockedBy' | 'pinned' | 'name'>): number {
-  return Number(b.lastFailed) - Number(a.lastFailed) || Number(!b.lastFailed && b.pinned !== null) - Number(!a.lastFailed && a.pinned !== null) || Number(!!b.blockedBy) - Number(!!a.blockedBy) || cacheStateRank(a.state) - cacheStateRank(b.state) || a.name.localeCompare(b.name)
+function compareByCause(a: Pick<AssetRow, 'cause' | 'name'>, b: Pick<AssetRow, 'cause' | 'name'>): number {
+  return mapPartRank(mapPartOf(a.cause)) - mapPartRank(mapPartOf(b.cause)) || a.name.localeCompare(b.name)
 }
 
-/**
- * A partitioned node the server reports blocked: how many of its keys wait, and on which input's
- * failed keys, read from its state detail ("83 of 83 missing keys wait on 'scores': ..."). Null
- * for any other detail.
- */
-export function blockedKeys(detail: string): { count: number; upstream: string } | null {
-  const m = /^([\d,]+) of [\d,]+ missing keys wait on '([^']+)'/.exec(detail)
-  return m ? { count: Number(m[1]!.replace(/,/g, '')), upstream: m[2]! } : null
-}
-
-/** One row per node, what needs attention first. */
+/** One row per node, what alarms first. */
 export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<string, string> = new Map()): AssetRow[] {
   return nodes
     .map((n): AssetRow => {
@@ -135,7 +125,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         state: shownCacheState(n),
         reason: n.cache.reason,
         lastFailed: lastAttemptFailed(n),
-        keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total } : null,
+        keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total, blocked: n.partitions.blocked ?? 0, blockedOn: n.partitions.blocked_on ?? null } : null,
         blockedBy: blockerOf(n),
         pinned: pins.get(n.id) ?? null,
         stateHint: n.cache.detail,
@@ -158,7 +148,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         running: n.running ?? null,
       }
     })
-    .sort(compareAttention)
+    .sort(compareByCause)
 }
 
 // ── Sorting ───────────────────────────────────────────────────────────────────
@@ -199,7 +189,7 @@ export function parseSort(key: string | null, dir: string | null): Sort {
 function sortValue(row: AssetRow, key: SortKey): string | number | null {
   return match(key)
     .with('name', () => row.name)
-    .with('state', () => (row.lastFailed ? 0 : row.pinned !== null ? 1 : row.blockedBy ? 2 : 3) * CACHE_STATES.length + cacheStateRank(row.state))
+    .with('state', () => mapPartRank(mapPartOf(row.cause)))
     .with('last', () => row.lastAtMs)
     .with('success', () => (row.lastSuccessAt === null ? null : parseTime(row.lastSuccessAt)))
     .with('typical', () => row.typicalSeconds)
@@ -209,7 +199,7 @@ function sortValue(row: AssetRow, key: SortKey): string | number | null {
 
 /**
  * Sort by one column. Rows without a value (never ran, never scheduled) go last
- * in both directions; ties fall back to what needs attention, then name.
+ * in both directions; ties fall back to the cause order, then name.
  */
 export function sortRows(rows: AssetRow[], sort: Sort): AssetRow[] {
   const sign = sort.dir === 'asc' ? 1 : -1
@@ -222,7 +212,7 @@ export function sortRows(rows: AssetRow[], sort: Sort): AssetRow[] {
       const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : va - (vb as number)
       return sign * cmp
     }
-    return compareAttention(a, b)
+    return compareByCause(a, b)
   })
 }
 
