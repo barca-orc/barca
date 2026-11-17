@@ -26,12 +26,12 @@ import { plural } from '@/lib/plural'
 import { shortName } from '@/lib/graph'
 import { headline } from '@/lib/health'
 import { isLive, liveGraphState } from '@/lib/graphState'
-import { pipelineName } from '@/lib/pipeline'
+import { fileShown, pipelineName } from '@/lib/pipeline'
+import { useRollup } from '@/hooks/useRollup'
 import {
   blockedKeys,
   DEFAULT_SORT,
   assetColumns,
-  fileDisplay,
   lastRunText,
   lastRunTitle,
   nextSort,
@@ -121,6 +121,8 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   // unless one pipeline is open: the title names it then. A header folds its file's rows away.
   const [collapsed, setCollapsed] = useState<string[]>([])
   const grouped = !pipeline
+  // A file header's state is the file's sums of the project's rollup: the query the sidebar holds.
+  const rollup = useRollup(null)
   const lines = useMemo(() => tableLines(visible, grouped, new Set(collapsed)), [visible, grouped, collapsed])
   // Columns that say something on this page: Typical when a node takes 0.1s or more, Next run when one has a schedule.
   const columns = assetColumns(rows)
@@ -233,14 +235,15 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                 if (!line) return null
                 if (line.kind === 'file') {
                   const { group, collapsed } = line
-                  // The same derivation as the file's line in the sidebar (`fileDisplay`).
-                  const shown = fileDisplay(group.rows)!
+                  // The file's sums of the rollup, worded as its line in the sidebar is (`fileShown`).
+                  const sums = rollup.tree.files.get(group.file)
+                  const shown = sums ? fileShown(sums) : null
                   return (
                     <tr key={`file:${group.file}`} ref={win.measure} data-index={index} className="barca-file-head">
                       <td colSpan={columnCount}>
                         <button type="button" aria-expanded={!collapsed} title={collapsed ? `Show ${group.file}` : `Fold ${group.file}`} onClick={() => setCollapsed((folded) => toggle([...folded], group.file))}>
                           <ChevronDown size={13} />
-                          <StatusGlyph glyph={shown.glyph} live={shown.live} size={12} label={shown.live ? shown.label : `worst: ${shown.label}`} />
+                          {shown && <StatusGlyph glyph={shown.glyph} live={shown.live} size={12} label={shown.live ? shown.label : `worst: ${shown.label}`} />}
                           <span className="barca-file-name">{group.file || '(no file)'}</span>
                           <span className="barca-count">{group.rows.length.toLocaleString()}</span>
                         </button>

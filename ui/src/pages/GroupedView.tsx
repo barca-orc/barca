@@ -18,7 +18,8 @@ import {
 } from '@/components'
 import { shortName, type GraphEntry } from '@/lib/graph'
 import { cacheGraphState, isLive, memberHealth, PENDING_GRAPH_STATE, UNKNOWN_GRAPH_STATE, type GraphState } from '@/lib/graphState'
-import { groupOutput, groupOutputNote, lastRunDuration, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
+import { blockerOf } from '@/lib/healthDisplay'
+import { alsoInNote, groupOutput, groupOutputNote, lastRunDuration, plural, type GroupTree, type NodeGroup } from '@/lib/groups'
 import { ageCell, isFailed, scopeAge, type Failure, type ScopeHealth } from '@/lib/health'
 import type { RollupTree } from '@/lib/rollupView'
 import { isCheck, nodeKindLabel } from '@/lib/status'
@@ -57,6 +58,12 @@ export interface GroupedTableProps {
 }
 
 /** Groups and nodes of the open level, worst first: a health bar per group, a state per node. */
+/** The failing node that blocks `node`, as the server names it (`root`): one, or none. */
+function blockersOf(node: NodeState): string[] {
+  const by = blockerOf(node)
+  return by ? [by] : []
+}
+
 export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates, labels, isHit, pathOf, selected, nowMs, statesLoaded, statesFailed, window: win, bodyRef, onSelect, onOpenGroup, onReveal }: GroupedTableProps) {
   const hasGroups = entries.some((e) => e.kind === 'group')
   const hasLeaves = entries.some((e) => e.kind !== 'group')
@@ -95,6 +102,8 @@ export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates
           const node = group ? undefined : byId.get(entry.id)
           const running = node?.running
           const duration = group ? null : lastRunDuration(node)
+          // The other groups that declare it: the rollup counts it in this one.
+          const alsoIn = alsoInNote(rollup?.entries.get(entry.id)?.also_in, tree)
           const members = group ? leaves(entry.id) : [entry.id]
           // A row's time is drawn with the row when its states are already known (loaded for
           // another scope); only a row with nothing known yet holds its place with a skeleton.
@@ -132,6 +141,7 @@ export function GroupedTable({ entries, tree, byId, leaves, rollup, visualStates
                     <>
                       {entry.kind !== 'asset' && entry.kind !== 'group' && entry.kind !== 'port' && <Tag size="sm">{nodeKindLabel({ id: entry.id, kind: entry.kind })}</Tag>}
                       {isHit.has(entry.id) && <span className="barca-cell-sub" title={entry.id}>in {pathOf(entry.id) || sourceFile(entry.id)}</span>}
+                      {alsoIn && <span className="barca-cell-sub" title="Declared in these groups too; counted in this one">{alsoIn}</span>}
                     </>
                   )}
                 </div>
@@ -207,7 +217,7 @@ export function GroupPanel({ group, tree, byId, leaves, scope, state, statesFail
   const output = byId.get(outputId)
   // Why the output is not up to date when it did not fail itself: the failing node that blocks
   // it, as the server names it (`root`).
-  const outputNote = output && !isFailed(cacheGraphState(output)) ? groupOutputNote(output, output.health === 'blocked' && output.root ? [output.root.node] : []) : null
+  const outputNote = output && !isFailed(cacheGraphState(output)) ? groupOutputNote(output, blockersOf(output)) : null
   return (
     <SidePanel
       label={`${group.name} group details`}

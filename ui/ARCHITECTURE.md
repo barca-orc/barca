@@ -28,7 +28,10 @@ that once made a failed run render nothing.
 
 ### 1. Business logic — slim
 
-The domain lives in Rust; the frontend's business logic is deliberately thin.
+The domain lives in Rust; the frontend's business logic is deliberately thin. It derives
+nothing: every module of `lib/` is one of six kinds (fetch, types, display, format, layout,
+page), listed in `crates/barca-cli/ui-layering.json` and checked by
+`scripts/check-ui-layering.py` on every pull request (README, "The UI only renders").
 
 - `lib/api.ts` — typed request wrappers over the barca-server HTTP API.
 - `lib/credentials.ts` — tab-scoped credentials, request scope and the shared fetch transport.
@@ -75,7 +78,7 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/knownStates.ts` | `knownStates(current, loaded)` — while a scope's state loads, each node's newest row already loaded (`useKnownStates`): a navigation keeps the last known state, "Checking…" only for a node never loaded | `knownStates.test.ts` |
 | `lib/graph.ts` | `buildGraph(assets, dir)` — assets → dagre-positioned React Flow nodes/edges; `layoutInput` / `graphAt` split it around the layout; `impliedEdges` — in a graph of groups, the edges another path already shows (left out of the layout, drawn for the selection) | `graph.test.ts` |
 | `lib/graphLayout.ts` | `layout(input)` — dagre per connected part (by dependency depth), parts packed in rows, and each edge's route (`routeEdges`: straight through a rank between its boxes, curving only between ranks, so no edge crosses a card; drawn by `routePath` in `components/graph/RoutedEdge.tsx`), no React: what `graphLayout.worker.ts` runs off the main thread | `graph.test.ts` |
-| `lib/pipeline.ts` | derive pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count and state, through `assetTable.fileDisplay`, as its table header shows it); `mergeStates` for the sidebar | `pipeline.test.ts` |
+| `lib/pipeline.ts` | pipeline/source names from asset ids; `pipelineSummaries` (a file's sidebar count, and its state from its sums in the rollup's `files`), `fileShown` (those sums as a glyph and a word, for the sidebar and the table's file header) | `pipeline.test.ts` |
 | `lib/health.ts` | `healthCounts` (a scope by state word, failed last attempts beside them), `failures`, `failedUpstream`, `consumersOf`, `scopeAge`, `ageCell`, `streakLabel` — what is broken in a scope, why, and how late; a failing streak is always "N failed runs in a row", a partitioned node's success is "any key"'s, a group's "oldest member"'s | `health.test.ts` |
 | `lib/time.ts` | `parseTime`, `formatAgo`, `formatRelative` (`3h ago`, `in 5m`), `formatInstant` — the one time format, drawn by `Age` (relative, absolute on hover) | `time.test.ts` |
 | `lib/sidebar.ts` | `updateSidebar`, `fileGroups`, `listedPipelines` — the sidebar's collapse and width (dragged, by keyboard, reset), the files it lists and the tree of groups under a file | `sidebar.test.ts` |
@@ -87,7 +90,6 @@ Pure functions that decide *what* to show. These are the unit-test targets.
 | `lib/lineage.ts` | `lineage(id, graph, depth)` — what a graph too big to draw shows instead | `lineage.test.ts` |
 | `lib/partitionGrid.ts` | `gridOf`, `filterCells`, `issueGroups`, `heatmap`, `filterSelection`, `issueSelection` — every key of a partitioned node (`GET /assets/{id}/partitions/grid`) decoded and filtered, its problems grouped with where they are, binned into the overview, and a filter or a problem turned into a run's `partition` | `partitionGrid.test.ts` |
 | `lib/keysPage.ts` | `keysParams`, `keysSearch`, `keysHref` — the key explorer's URL (node, open key, filters) | `keysPage.test.ts` |
-| `lib/runExplain.ts` | `planExplanation`, `runOverview`, `cancellationNotice`, `attemptsLabel`, `inFlightSummary` — a run's `plan_reasons`, trigger, cancellation and attempts → what the run overview says; a live run's progress, nodes in flight by group, ETA at the rate so far and slowest nodes; one line for a large run in flight | `runExplain.test.ts` |
 | `lib/runsPage.ts` / `lib/tokensPage.ts` | page programs (`update`), `visibleRuns`, `runActivity`; `runsCountLabel` (a filtered count over the runs loaded says it is partial), `runStepRows` (a run's Steps as rows: a node's keys one row with their count, listed when opened) | `*.test.ts` |
 
 These return **descriptors** (plain data / discriminated unions), never JSX. e.g.

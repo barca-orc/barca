@@ -60,6 +60,7 @@ pub mod report;
 pub mod results;
 pub mod rollup;
 pub mod run_explanation;
+pub mod run_list;
 pub mod schedule;
 pub mod schedule_standing;
 pub mod serve;
@@ -154,5 +155,7 @@ mod layering_tests;
 mod selection_tests;
 #[cfg(test)]
 mod step_status_literals_tests;
+#[cfg(test)]
+mod ui_fixture_tests;
 #[cfg(test)]
 mod write_boundary_tests;

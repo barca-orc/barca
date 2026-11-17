@@ -282,7 +282,9 @@ mod tests {
             .cloned()
             .collect();
         let mut columns: Vec<String> = RUN_COLUMNS.iter().map(|(c, _)| c.to_string()).collect();
-        let mut keys = keys;
+        // `line` is the run in the words of a list row (#959): computed from these columns, not
+        // one of them.
+        let mut keys: Vec<String> = keys.into_iter().filter(|k| k != "line").collect();
         keys.sort();
         columns.sort();
         assert_eq!(keys, columns);

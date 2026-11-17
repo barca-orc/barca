@@ -119,14 +119,20 @@ UI's health map, bars and failures list all print this document.
      "nodes": 6, "assets": 4, "running": 0,
      "health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 3},
      "asset_health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 1},
-     "data_coverage": {"assets": 4, "measured": 0, "suspect": 0}}
+     "data_coverage": {"assets": 4, "measured": 0, "suspect": 0}, "also_in": []}
   ],
   "roots": [
     {"id": "failure:pipeline.py:orders", "kind": "failure", "node": "pipeline.py:orders",
      "detail": "ValueError: 12 rows rejected", "error_group": "ValueError: # rows rejected",
      "nodes": 3, "assets": 3}
   ],
-  "data_coverage": {"assets": 4, "measured": 0, "suspect": 0}
+  "data_coverage": {"assets": 4, "measured": 0, "suspect": 0},
+  "files": [
+    {"file": "pipeline.py", "nodes": 6, "assets": 4, "running": 0,
+     "health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 3},
+     "asset_health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 1},
+     "worst": "failing"}
+  ]
 }
 ```
 
@@ -143,10 +149,17 @@ of `children`.
 | `health`, `asset_health` | how many nodes, and how many assets, are in each health |
 | `data_coverage` | the coverage of "Data signals and coverage", for the assets underneath |
 | `keys` | on a partitioned node only: its keys that `failed`, are `behind` (no cached result, and did not fail) and are `ok` |
+| `also_in` | the other groups that declare this node or group, by id; empty for one declared in at most one group |
 
 Every node has exactly one parent, so every count of an entry is the sum of its children's. A
-node declared in several groups is counted under the first of them by group id; a group with
-no node in scope is not listed.
+node declared in several groups is counted under the first of them by group id and names the
+others in `also_in`; a group with no node in scope is not listed.
+
+`files` cuts the same nodes by source file: one object per file in scope, by path, with its
+`nodes`, `assets`, `running`, `health` and `asset_health` summed over every node of the file,
+in whichever group each sits, and `worst`, the most severe health among them. The tree has a
+`file` entry only for the nodes of a file that are in no group, so a list of files (the web
+UI's sidebar) reads `files`.
 
 `roots` lists what holds the nodes that are not fresh, the most nodes first, then by id: each
 `root` the nodes carry (above), with `nodes` and `assets`, how many it holds (a failing node

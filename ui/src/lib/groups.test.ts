@@ -24,7 +24,7 @@ import { isFailed } from './health'
 const tree = groupTree(metadata)
 const FAILING_CHECK = 'modeling.py:validate__cv__fold_03__trained_model'
 
-import type { ListNode, NodeState } from './types'
+import type { ListNode, NodeGroup, NodeState } from './types'
 import { served } from './testdata/served'
 
 function state(id: string): NodeState {
@@ -245,5 +245,34 @@ describe('groupOutputNote', () => {
     expect(groupOutputNote(output('an input failed'), ['p.py:a', 'p.py:b'])).toBe('Not up to date: 2 failed nodes upstream of it (a, b). An input failed.')
     expect(groupOutputNote(output(''), ['p.py:a', 'p.py:b', 'p.py:c', 'p.py:d'])).toBe('Not up to date: 4 failed nodes upstream of it (a, b, c and 1 more).')
     expect(groupOutputNote(output('cached'), [])).toBe('Cached')
+  })
+})
+
+describe('a group lists the members the rollup counts under it', () => {
+  const declared: NodeGroup[] = [
+    { id: 'group:p.py:ingest', name: 'ingest', description: '', members: ['p.py:a', 'p.py:shared'], output: 'p.py:shared' },
+    { id: 'group:p.py:model', name: 'model', description: '', members: ['p.py:shared', 'p.py:b'], output: 'p.py:b' },
+  ]
+  // The entries of `GET /state/rollup`: `p.py:shared` is counted under `ingest`, and names `model`.
+  const placed = new Map([
+    ['p.py:a', { parent: 'group:p.py:ingest' }],
+    ['p.py:shared', { parent: 'group:p.py:ingest' }],
+    ['p.py:b', { parent: 'group:p.py:model' }],
+  ])
+
+  it('lists a node declared twice once, where it is counted, and notes the other group', async () => {
+    const { alsoInNote, groupTree } = await import('./groups')
+    const tree = groupTree(declared, placed)
+    expect(tree.groups.get('group:p.py:ingest')?.members).toEqual(['p.py:a', 'p.py:shared'])
+    expect(tree.groups.get('group:p.py:model')?.members).toEqual(['p.py:b'])
+    expect(tree.parents.get('p.py:shared')).toBe('group:p.py:ingest')
+    expect(alsoInNote(['group:p.py:model'], tree)).toBe('also in model')
+    expect(alsoInNote([], tree)).toBeNull()
+  })
+
+  it('is the declarations as given until the rollup has loaded, and for a member it has no entry for', async () => {
+    const { groupTree } = await import('./groups')
+    expect(groupTree(declared).groups.get('group:p.py:model')?.members).toEqual(['p.py:shared', 'p.py:b'])
+    expect(groupTree(declared, new Map()).groups.get('group:p.py:model')?.members).toEqual(['p.py:shared', 'p.py:b'])
   })
 })

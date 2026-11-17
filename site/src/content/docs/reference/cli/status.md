@@ -302,6 +302,14 @@ carries it as `failure: {node, error}` and again as the flat `failed_node` and `
 for every other run, and for a run that failed before any step did, such as a file that does
 not parse), so `--fields run_id,failed_node,error` needs no nesting.
 
+Each run of the list also has `line` (experimental), the run in the words of one row, the
+same the web UI's run list prints: `steps` (`7 ok · 1 failed · 0 cached`, or `3 started · 0
+cached` for a run that did not finish; steps are keys, a partitioned node counts one per key),
+`steps_detail` (what `steps` counts, the nodes planned and the step the run stopped at),
+`failure` (`stopped at orders · KeyError: 'region'`, or for a partitioned node
+`demand_forecast: 7 keys failed · BatchKeyFailed: ...`; `null` with nothing wrong to say) and
+`failure_detail` (the same in full).
+
 ```bash
 barca history --status failed --since 24h
 barca history --status failed --target clean --json --fields run_id,started_at,failure

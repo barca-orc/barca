@@ -7,11 +7,10 @@
 
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
-import { headline } from './health'
 import { only, type Next } from './program'
 import { parseRunStatus, runIsLive } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
-import type { FirstFailure, RunList, RunNodeSummary, RunStep, RunSummary, StatusKind } from './types'
+import type { RunList, RunNodeSummary, RunStep, RunSummary, StatusKind } from './types'
 
 const RUNS_PAGE_SIZE = 100
 export const RUNS_MAX = 1000
@@ -169,62 +168,6 @@ export function stepName(nodeId: string): string {
   return key < 0 ? shortName(nodeId) : shortName(nodeId.slice(0, key)) + nodeId.slice(key)
 }
 
-/** `orders: KeyError: 'x'`: the first failure in a line. */
-function failureLine(failure: FirstFailure): string {
-  return `${stepName(failure.node_id)}: ${headline(failure.error)}`
-}
-
-/** A row's error line: the run's own error, else its first failed step; null with nothing to say. */
-export function runRowError(run: RunSummary): { text: string; title: string } | null {
-  if (run.error) return { text: headline(run.error), title: run.error }
-  if (!runFailed(run.status)) return null
-  if (run.first_failure) return { text: failureLine(run.first_failure), title: `${run.first_failure.node_id}: ${run.first_failure.error}` }
-  return parseRunStatus(run.status) === 'failed' ? { text: 'No failed step recorded: open the run', title: 'No failed step recorded: open the run' } : null
-}
-
-/**
- * What the row says went wrong: where it stopped and why, or its own error. A partitioned
- * node's failure counts its keys: `demand_forecast: 7 keys failed · BatchKeyFailed: …`.
- */
-export function runFailureLine(run: RunSummary): string | null {
-  const error = runRowError(run)
-  if (!error) return null
-  if (!run.first_failure) return error.text
-  const why = headline(run.error ?? run.first_failure.error)
-  const key = run.first_failure.node_id.indexOf('[')
-  if (key < 0) return `stopped at ${stepName(run.first_failure.node_id)} · ${why}`
-  const failed = Math.max(run.steps_failed ?? 1, 1)
-  return `${shortName(run.first_failure.node_id.slice(0, key))}: ${failed.toLocaleString()} key${failed === 1 ? '' : 's'} failed · ${why}`
-}
-
-/**
- * `7 ok · 1 failed · 0 cached`: a run's steps (keys) by outcome. `executed` counts every step
- * that ran, failed ones included, so `ok` is `executed - failed`. `skipped` (steps a failure kept
- * from running) is shown only when known and non-zero; `0 ok · 9,236 cached` when all cached.
- */
-export function stepsLabel(executed: number, cached: number, failed = 0, skipped = 0): string {
-  const f = Math.min(Math.max(failed, 0), executed)
-  const parts = [`${(executed - f).toLocaleString()} ok`]
-  if (f > 0) parts.push(`${f.toLocaleString()} failed`)
-  if (skipped > 0) parts.push(`${skipped.toLocaleString()} skipped`)
-  parts.push(`${cached.toLocaleString()} cached`)
-  return parts.join(' · ')
-}
-
-/** How far a run got, in steps, and the step it stopped at when it did not finish. */
-export function runProgress(run: RunSummary): { steps: string; stoppedAt: string | null; title: string } {
-  const total = run.steps_total
-  const planned = total === null ? [] : [`${total.toLocaleString()} node${total === 1 ? '' : 's'} planned`]
-  const stopped = run.first_failure ? [`stopped at ${run.first_failure.node_id}`] : []
-  return {
-    steps: ['cancelled', 'interrupted', 'error'].includes(run.status)
-      ? `${run.steps_executed.toLocaleString()} started · ${run.steps_cached.toLocaleString()} cached`
-      : stepsLabel(run.steps_executed, run.steps_cached, run.steps_failed ?? 0),
-    stoppedAt: run.first_failure && runFailed(run.status) ? stepName(run.first_failure.node_id) : null,
-    title: ['Steps are keys: a partitioned node counts one per key', ...planned, ...stopped].join(' · '),
-  }
-}
-
 /** A run's steps by node: its totals, and the keys the page lists, failed ones first. */
 export interface RunNodeGroup {
   summary: RunNodeSummary
@@ -378,8 +321,8 @@ interface ActivityHour {
   ok: number
   failed: number
   live: number
-  /** The first failed step of the newest failed run of the hour. */
-  firstFailure: FirstFailure | null
+  /** What went wrong in the newest failed run of the hour, as its row says it (`line.failure`). */
+  failure: string | null
 }
 
 /** What the loaded runs say about the last day. */
@@ -397,7 +340,7 @@ export interface RunActivity {
 export function runActivity(runs: readonly RunSummary[], nowMs: number, hours = 24, truncated = false): RunActivity {
   const end = Math.floor(nowMs / HOUR) * HOUR + HOUR
   const start = end - hours * HOUR
-  const buckets: ActivityHour[] = Array.from({ length: hours }, (_, i) => ({ at: start + i * HOUR, ok: 0, failed: 0, live: 0, firstFailure: null }))
+  const buckets: ActivityHour[] = Array.from({ length: hours }, (_, i) => ({ at: start + i * HOUR, ok: 0, failed: 0, live: 0, failure: null }))
   const durations: number[] = []
   let oldest = Infinity
   for (const run of runs) {
@@ -409,7 +352,7 @@ export function runActivity(runs: readonly RunSummary[], nowMs: number, hours = 
     if (runIsLive(run.status)) bucket.live += 1
     else if (runFailed(run.status)) {
       bucket.failed += 1
-      bucket.firstFailure ??= run.first_failure
+      bucket.failure ??= run.line.failure
     }
     else bucket.ok += 1
     if (run.elapsed_seconds !== null && !runIsLive(run.status)) durations.push(run.elapsed_seconds)
@@ -436,7 +379,7 @@ export function activityBarLabel(h: ActivityHour, zone: TimeZone = 'local'): str
   const parts = [`${hourLabel(h.at, zone)} ${zoneName(zone, h.at)}: ${n} run${n === 1 ? '' : 's'}`]
   if (h.failed) parts.push(`${h.failed} not successful`)
   if (h.live) parts.push(`${h.live} in progress`)
-  const failure = h.firstFailure ? `\n${failureLine(h.firstFailure)}` : ''
+  const failure = h.failure ? `\n${h.failure}` : ''
   return parts.join(', ') + failure
 }
 

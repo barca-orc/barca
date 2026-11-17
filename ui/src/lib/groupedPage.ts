@@ -5,6 +5,7 @@
  * effects and renders; everything it decides is here, so it can be tested without a browser.
  */
 
+import { HEALTH_ORDER, healthRank } from './healthDisplay'
 import { shortName, type GraphEntry } from './graph'
 import { liveGraphState, memberHealth, PENDING_GRAPH_STATE, type GraphState } from './graphState'
 import {
@@ -21,7 +22,7 @@ import {
   type EntrySort,
   type GroupTree,
 } from './groups'
-import { consumersOf, isFailed, needsAttention, scopeAge, type Failure } from './health'
+import { consumersOf, needsAttention, scopeAge, type Failure } from './health'
 import type { RollupTree } from './rollupView'
 import { GRAPH_LIMIT, lineage } from './lineage'
 import { inPipeline, pipelineName, sourceFile } from './pipeline'
@@ -249,17 +250,18 @@ interface SearchInput {
 
 /**
  * A search reaches every node in scope, not just this level: a node whose name matches, deep in
- * a nested group, is listed with its path, what needs attention first (a failed last attempt,
- * then a state other than cached), then by name; at most `SEARCH_LIMIT`. Nothing in a flat
+ * a nested group, is listed with its path, the most severe health first (the server's word and
+ * order), then by name; at most `SEARCH_LIMIT`. Nothing in a flat
  * view, the failures list or the graph.
  */
 export function searchHits({ needle, flat, show, graph, entries, scope, leavesOf, assets, byId, byKind }: SearchInput): GraphEntry[] {
   if (!needle || flat || show === 'failures' || graph) return []
   const level = new Set(entries.map((e) => e.id))
   const ids = scope ? leavesOf.get(scope) ?? [] : assets.map((a) => a.id)
+  // By the server's health, most severe first; a node with no state loaded goes last.
   const rank = (id: string) => {
-    const box = memberHealth(byId.get(id))
-    return isFailed(box) ? 0 : box.kind === 'cache' && box.state !== 'cached' ? 1 : 2
+    const node = byId.get(id)
+    return node ? healthRank(node.health) : HEALTH_ORDER.length
   }
   return ids
     .filter((id) => !level.has(id) && shortName(id).toLowerCase().includes(needle))

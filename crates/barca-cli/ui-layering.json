@@ -1,0 +1,596 @@
+{
+  "about": "The table of the UI layering guard (#959): scripts/check-ui-layering.py holds ui/src to it, crates/barca-cli/src/ui_layering_tests.rs holds it to the CLI and the server. How to extend it: site/src/content/docs/contributing/ui-layering.md.",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/state",
+      "cli": "barca status --json"
+    },
+    {
+      "method": "GET",
+      "path": "/state/rollup",
+      "cli": "barca status --rollup --json"
+    },
+    {
+      "method": "GET",
+      "path": "/assets",
+      "cli": "barca list --json"
+    },
+    {
+      "method": "GET",
+      "path": "/groups",
+      "cli": "barca list --groups --json"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{}",
+      "cli": "barca stats NODE --json"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{}/schema",
+      "cli": "barca status NODE --sample 5 --json"
+    },
+    {
+      "method": "GET",
+      "path": "/schedule",
+      "cli": "barca status --json --fields id,schedule"
+    },
+    {
+      "method": "GET",
+      "path": "/runs",
+      "cli": "barca history --json"
+    },
+    {
+      "method": "GET",
+      "path": "/runs/{}",
+      "cli": "barca history RUN_ID --json"
+    },
+    {
+      "method": "POST",
+      "path": "/runs",
+      "cli": "barca get NODE --server --json"
+    },
+    {
+      "method": "GET",
+      "path": "/queue",
+      "cli": "barca queue --json"
+    },
+    {
+      "method": "POST",
+      "path": "/queue/pause",
+      "cli": "barca queue pause --json"
+    },
+    {
+      "method": "POST",
+      "path": "/queue/resume",
+      "cli": "barca queue resume --json"
+    },
+    {
+      "method": "GET",
+      "path": "/pauses",
+      "cli": "barca pause --json"
+    },
+    {
+      "method": "POST",
+      "path": "/pauses",
+      "cli": "barca pause NODE --json"
+    },
+    {
+      "method": "POST",
+      "path": "/pauses/resume",
+      "cli": "barca resume NODE --json"
+    },
+    {
+      "method": "GET",
+      "path": "/pins",
+      "cli": "barca pin --json"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{}/versions",
+      "cli": "barca pin NODE --versions --json"
+    },
+    {
+      "method": "POST",
+      "path": "/assets/{}/pin",
+      "cli": "barca pin NODE --previous --json"
+    },
+    {
+      "method": "POST",
+      "path": "/assets/{}/pin/upload",
+      "cli": "barca pin NODE --from-file data.parquet --json"
+    },
+    {
+      "method": "DELETE",
+      "path": "/assets/{}/pin",
+      "cli": "barca unpin NODE --json"
+    },
+    {
+      "method": "POST",
+      "path": "/state/reset",
+      "cli": "barca state reset"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/bootstrap",
+      "exempt": {
+        "reason": "auth: trades the one-use code `barca tokens bootstrap` prints for a token; a credential exchange, not a pipeline answer"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/auth/status",
+      "exempt": {
+        "reason": "auth: whether this server asks for a token, read before any credential exists"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/auth/tokens",
+      "exempt": {
+        "reason": "auth: token management is the browser's after bootstrap; a token is never printed twice, so there is nothing for a CLI to show beyond `barca tokens bootstrap`"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/auth/tokens",
+      "exempt": {
+        "reason": "auth: see GET /auth/tokens"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/auth/tokens/{}",
+      "exempt": {
+        "reason": "auth: see GET /auth/tokens"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "exempt": {
+        "reason": "connection probe: liveness, read-only mode and capabilities of this server, which every CLI command that takes --server reads for itself; no pipeline answer"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/project",
+      "exempt": {
+        "reason": "page chrome: the project root (to shorten traceback paths) and the telemetry link; no pipeline answer"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/runs/{}/events",
+      "exempt": {
+        "reason": "event stream: `barca get --server` and `barca logs --follow` follow the same stream; a stream has no JSON document to compare"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/runs/{}",
+      "exempt": {
+        "reason": "no CLI command cancels a server run it is not attached to",
+        "issue": 932
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/schedule/{}/pause",
+      "exempt": {
+        "reason": "no CLI command pauses one schedule",
+        "issue": 989
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/schedule/{}/resume",
+      "exempt": {
+        "reason": "no CLI command resumes one schedule",
+        "issue": 989
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{}/partitions",
+      "exempt": {
+        "reason": "the CLI prints a node's key counts (`barca status`), not its keys",
+        "issue": 990
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{}/partitions/grid",
+      "exempt": {
+        "reason": "the CLI prints a node's key counts (`barca status`), not every key's state",
+        "issue": 990
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{}/partitions/key",
+      "exempt": {
+        "reason": "the CLI has no view of one key across its chain",
+        "issue": 990
+      }
+    }
+  ],
+  "routes_passed_in": [
+    "lib/api.ts",
+    "lib/eventStream.ts"
+  ],
+  "modules": {
+    "api": {
+      "kind": "fetch",
+      "does": "typed request wrappers over the server's routes"
+    },
+    "apiBase": {
+      "kind": "fetch",
+      "does": "where the API is, from where the UI is served"
+    },
+    "credentials": {
+      "kind": "fetch",
+      "does": "the tab's credentials and the one fetch transport"
+    },
+    "eventStream": {
+      "kind": "fetch",
+      "does": "the run event stream: decoding, resume and reconnect"
+    },
+    "types": {
+      "kind": "types",
+      "does": "re-exports the generated wire types and the few shapes the server builds by hand"
+    },
+    "cacheStateDisplay": {
+      "kind": "display",
+      "does": "a cache state's word, tone, glyph and rank"
+    },
+    "healthDisplay": {
+      "kind": "display",
+      "does": "a health's word, tone, glyph and order; a tick outcome's word"
+    },
+    "dataSignals": {
+      "kind": "display",
+      "does": "the words of a node's data signals and of the coverage the server measured"
+    },
+    "glyph": {
+      "kind": "display",
+      "does": "the glyph of each state and tone"
+    },
+    "status": {
+      "kind": "display",
+      "does": "the run lifecycle's word, tone and glyph; kind and freshness labels"
+    },
+    "tone": {
+      "kind": "display",
+      "does": "the tones every display table maps onto"
+    },
+    "runs": {
+      "kind": "display",
+      "does": "a run's status, trigger and outcome as word, tone and glyph"
+    },
+    "graphState": {
+      "kind": "display",
+      "does": "a node's box on the graph: its served state, or the run on it, as a glyph and a word"
+    },
+    "causesView": {
+      "kind": "display",
+      "does": "the causes list's words over the rollup's roots"
+    },
+    "artifactSchema": {
+      "kind": "format",
+      "does": "an artifact's columns and sample rows as a table"
+    },
+    "documentTitle": {
+      "kind": "format",
+      "does": "the tab's title from the route"
+    },
+    "nodeDetail": {
+      "kind": "format",
+      "does": "the node panel's lines from the node's served row"
+    },
+    "pins": {
+      "kind": "format",
+      "does": "a pin's words"
+    },
+    "pipeline": {
+      "kind": "format",
+      "does": "file names from node ids; a file's line from its sums in the rollup"
+    },
+    "plural": {
+      "kind": "format",
+      "does": "`1 node`, `5,000 nodes`"
+    },
+    "queue": {
+      "kind": "format",
+      "does": "`GET /queue` as the queue strip's rows and labels"
+    },
+    "running": {
+      "kind": "format",
+      "does": "what a run in progress says of a node: elapsed, keys done, links"
+    },
+    "schedules": {
+      "kind": "format",
+      "does": "scheduled nodes as rows: next run, last run, the server's lateness in words"
+    },
+    "time": {
+      "kind": "format",
+      "does": "the one time format: relative, absolute, zones"
+    },
+    "health": {
+      "kind": "format",
+      "does": "a scope's rollup entry and its roots as the words of a bar, a label and a failures list",
+      "derives": [
+        {
+          "what": "`scopeAge`: a group row's \"Last success\" is the oldest of its members' times",
+          "reason": "the rollup has no times yet",
+          "issue": 962
+        },
+        {
+          "what": "`consumersOf`, `downstreamIds`: the node panel's downstream count and what a pause with `--downstream` would cover",
+          "reason": "layout: a walk of the static graph (`inputs` of `GET /assets`, which `barca list --json` prints) for navigation; it reads no state and decides no health",
+          "kept": true
+        }
+      ]
+    },
+    "assetTable": {
+      "kind": "layout",
+      "does": "the flat assets table: rows from served rows, sort, file headers",
+      "derives": [
+        {
+          "what": "`compareAttention`: the default row order (failing, pinned, blocked, then cache state)",
+          "reason": "the table sorts by cache-state rank, not the server's health order",
+          "issue": 992
+        },
+        {
+          "what": "`blockedKeys`: \"N keys wait on X\" read out of a state's `detail` text",
+          "reason": "the count is not served as a field",
+          "issue": 992
+        }
+      ]
+    },
+    "graph": {
+      "kind": "layout",
+      "does": "assets as positioned graph nodes and edges"
+    },
+    "graphLayout": {
+      "kind": "layout",
+      "does": "dagre layout per connected part and edge routes"
+    },
+    "graphLayout.worker": {
+      "kind": "layout",
+      "does": "the layout, off the main thread"
+    },
+    "graphView": {
+      "kind": "layout",
+      "does": "viewport fits, keyboard neighbours"
+    },
+    "groups": {
+      "kind": "layout",
+      "does": "the tree of groups, each listing the members the rollup counts under it; a group's box from its entry"
+    },
+    "lineage": {
+      "kind": "layout",
+      "does": "the lineage drawn in place of a graph too big to read"
+    },
+    "partitionGrid": {
+      "kind": "layout",
+      "does": "a node's key grid decoded, filtered, grouped and binned for the overview",
+      "derives": [
+        {
+          "what": "`heatmap`: a bin's colour is the worst state among the keys it holds",
+          "reason": "layout: many served key states drawn as one cell; no key's state is decided",
+          "kept": true
+        }
+      ]
+    },
+    "rollupView": {
+      "kind": "layout",
+      "does": "the rollup indexed by id and the geometry of the health map over it",
+      "derives": [
+        {
+          "what": "`behindAs`: the health the \"not up to date\" band of a node's keys is drawn as",
+          "reason": "key bands carry counts, not a health",
+          "issue": 992
+        }
+      ]
+    },
+    "assetFilters": {
+      "kind": "page",
+      "does": "the assets table's filters in the URL and the chips' counts",
+      "derives": [
+        {
+          "what": "`facetCounts`, `matchesStates`: which chip a row falls under, and how many rows each chip would show",
+          "reason": "the chips count the rows on screen under the other filters and a text search; their vocabulary is still the cache state",
+          "issue": 992
+        }
+      ]
+    },
+    "connection": {
+      "kind": "page",
+      "does": "connecting, online or offline"
+    },
+    "failuresView": {
+      "kind": "page",
+      "does": "the failures view's program"
+    },
+    "groupedPage": {
+      "kind": "page",
+      "does": "the grouped page: URL, scope, entries, search hits, order"
+    },
+    "keysPage": {
+      "kind": "page",
+      "does": "the key explorer's URL"
+    },
+    "knownStates": {
+      "kind": "page",
+      "does": "the last state loaded for each node, kept across navigation"
+    },
+    "palette": {
+      "kind": "page",
+      "does": "the command palette's index, search and program"
+    },
+    "pauses": {
+      "kind": "page",
+      "does": "what is paused, and the request a pause control sends"
+    },
+    "program": {
+      "kind": "page",
+      "does": "model, message, effect: how a page with state is written"
+    },
+    "remote": {
+      "kind": "page",
+      "does": "loading, failed or ready"
+    },
+    "runFeedback": {
+      "kind": "page",
+      "does": "a node's run status as the feedback a panel shows"
+    },
+    "runRecovery": {
+      "kind": "page",
+      "does": "what a page does when its run stream gaps or the server restarts"
+    },
+    "runStream": {
+      "kind": "page",
+      "does": "a run's events folded into the state a page renders"
+    },
+    "runTarget": {
+      "kind": "page",
+      "does": "what a toolbar's Run button acts on"
+    },
+    "runsPage": {
+      "kind": "page",
+      "does": "the Runs page's program, filters and the rows of a run's Steps",
+      "derives": [
+        {
+          "what": "`runActivity`: the activity strip buckets the loaded runs by hour and takes their median duration",
+          "reason": "not served yet",
+          "issue": 991
+        }
+      ]
+    },
+    "sidebar": {
+      "kind": "page",
+      "does": "the sidebar's collapse, width and the files and groups it lists"
+    },
+    "tokensPage": {
+      "kind": "page",
+      "does": "the Tokens page's program"
+    },
+    "writeAccess": {
+      "kind": "page",
+      "does": "whether write controls are drawn: read-only, or not known yet"
+    }
+  },
+  "vocabulary": {
+    "types": [
+      "Health",
+      "HealthReason",
+      "CacheState"
+    ],
+    "ambiguous": [
+      "ok",
+      "unknown",
+      "empty"
+    ],
+    "display_components": [
+      "components/StatusGlyph.tsx"
+    ],
+    "exemptions": [
+      {
+        "file": "components/DagNode.tsx",
+        "words": [
+          "blocked"
+        ],
+        "reason": "a Glyph name: the card of a node the server names a blocker for (`blockedBy`, from `root`) draws the blocked glyph"
+      },
+      {
+        "file": "components/graph/GraphCanvas.tsx",
+        "words": [
+          "blocked"
+        ],
+        "reason": "a Glyph name, as in DagNode"
+      },
+      {
+        "file": "components/assets/NodeKeys.tsx",
+        "words": [
+          "blocked"
+        ],
+        "reason": "the key bar's word for keys that wait",
+        "issue": 992
+      },
+      {
+        "file": "components/assets/NodePanel.tsx",
+        "words": [
+          "blocked",
+          "cached"
+        ],
+        "reason": "`cached` is the tag of the panel's own shown-key union, not a cache state; `blocked` picks the key bar's word",
+        "issue": 992
+      },
+      {
+        "file": "pages/AssetsPage.tsx",
+        "words": [
+          "blocked"
+        ],
+        "reason": "shows \"N keys blocked\" read from a state's detail text",
+        "issue": 992
+      },
+      {
+        "file": "hooks/useAssetFilter.ts",
+        "words": [
+          "blocked"
+        ],
+        "reason": "the blocked chip's count",
+        "issue": 992
+      },
+      {
+        "file": "lib/assetFilters.ts",
+        "words": [
+          "blocked"
+        ],
+        "reason": "which chip a row falls under",
+        "issue": 992
+      },
+      {
+        "file": "lib/rollupView.ts",
+        "words": [
+          "behind",
+          "failing"
+        ],
+        "reason": "`behindAs`: the health a node's key band is drawn as",
+        "issue": 992
+      },
+      {
+        "file": "lib/health.ts",
+        "words": [
+          "failing"
+        ],
+        "reason": "the order of a health bar's segments: failures, then run work, then the rest in the served order; nothing is decided about a node"
+      },
+      {
+        "file": "lib/partitionGrid.ts",
+        "words": [
+          "blocked",
+          "never_run",
+          "stale"
+        ],
+        "reason": "groups a node's keys by the state the server gave each key (the grid's own codes); no state is decided"
+      },
+      {
+        "file": "lib/runsPage.ts",
+        "words": [
+          "cached"
+        ],
+        "reason": "a run step's status (`RunNodeSummary.status`), not a cache state"
+      },
+      {
+        "file": "pages/RunsView.tsx",
+        "words": [
+          "cached"
+        ],
+        "reason": "a run step's status, not a cache state"
+      }
+    ]
+  }
+}

@@ -1,35 +1,34 @@
 /**
  * Fixture rows as the server would serve them. Test and kit data only: nothing the app ships
- * imports this.
+ * imports this (the layering guard, `crates/barca-cli/src/ui_layering_tests.rs`, checks it).
  *
  * Health is classified in `barca-core` (`crates/barca-core/src/health.rs`) and arrives on every
  * row. A fixture that spells a row by hand would have to repeat `health` beside the facts that
- * decide it, and could get it wrong; `served` fills in the word the server gives a row with
- * these facts and no evidence around it (no graph, no signals, no schedule, no tick). A fixture about
- * `blocked` by a node upstream, `suspect` or a late schedule states its `health` itself (and,
- * for a node a failure blocks, its `root`: `blockedBy(id)` spells one).
+ * decide it; `served` fills it in. No health rule is written here: the word of a row with these
+ * facts and no evidence around it (no graph, no signals, no schedule, no tick) is looked up in
+ * `health-alone.json`, which a Rust test generates by running `health::classify` on each such
+ * row (`crates/barca-core/src/ui_fixture_tests.rs`) and fails when the file is out of date. A
+ * fixture about `blocked` by a node upstream, `suspect` or a late schedule states its `health`
+ * itself (and, for a node a failure blocks, its `root`: `blockedBy(id)` spells one).
  */
 
 import type { Health } from '../generated/Health'
 import type { HealthReason } from '../generated/HealthReason'
 import type { NodeState } from '../types'
+import table from './health-alone.json'
 
 type Classified = 'health' | 'health_reason' | 'measured' | 'root' | 'last_check'
 export type Unserved = Omit<NodeState, Classified> & Partial<Pick<NodeState, Classified>>
 
+const ALONE = table as Record<string, { health: Health; health_reason: HealthReason }>
+
+/** What `health::classify` says of `row` on its own: a lookup, by the facts the fixture states. */
 function alone(row: Unserved): [Health, HealthReason] {
-  if (row.last_materialization?.status === 'failed') return ['failing', 'last_attempt_failed']
-  if ((row.partitions?.failed ?? 0) > 0) return ['failing', 'keys_failed']
-  switch (row.cache.state) {
-    case 'blocked': return ['blocked', 'cache_blocked']
-    case 'stale': return ['behind', 'stale']
-    case 'partial': return ['behind', 'partial']
-    case 'unsynced': return ['behind', 'unsynced']
-    case 'unknown': return ['undecided', 'unknown']
-    case 'never_run': return ['never_run', 'never_run']
-    case 'always_runs': return row.last_materialization ? ['ok', 'last_run_succeeded'] : ['never_run', 'no_successful_run']
-    case 'cached': return ['ok', 'cached']
-  }
+  const last = row.last_materialization === null ? 'none' : row.last_materialization.status
+  const key = `${row.cache.state}|${last}|${(row.partitions?.failed ?? 0) > 0}`
+  const found = ALONE[key]
+  if (!found) throw new Error(`no row ${key} in health-alone.json: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
+  return [found.health, found.health_reason]
 }
 
 /** `row` with the health the server gives it on its own, unless the fixture states one. */
@@ -40,7 +39,7 @@ export function served(row: Unserved): NodeState {
   return { ...row, root, health: row.health ?? health, health_reason: row.health_reason ?? (row.health ? REASON[row.health] : reason), measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null }
 }
 
-/** The usual reason of a health a fixture states without one. */
+/** The reason a fixture that states a health without one gets: a default of the fixtures, not a rule. */
 const REASON = {
   failing: 'last_attempt_failed',
   blocked: 'upstream_failing',
