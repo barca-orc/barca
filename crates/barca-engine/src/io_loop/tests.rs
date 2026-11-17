@@ -930,3 +930,124 @@ fn shutdown_terminates_all_workers_in_one_shared_grace_window() {
         let _ = std::fs::remove_file(&socket_path);
     });
 }
+
+/// A host with a shared capacity that admits everything and records what the pool asks of it.
+#[derive(Debug)]
+struct RecordingHost {
+    calls: std::sync::Mutex<Vec<String>>,
+    changed: tokio::sync::watch::Sender<u64>,
+}
+
+impl crate::run_host::RunHost for RecordingHost {
+    fn server_owned(&self) -> bool {
+        true
+    }
+    fn shared_capacity(&self) -> Option<crate::run_host::SharedBudget> {
+        Some(crate::run_host::SharedBudget {
+            total: 1,
+            source: "test",
+        })
+    }
+    fn capacity_changes(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        Some(self.changed.subscribe())
+    }
+    fn weight_of(&self, weight: u32) -> u32 {
+        weight.clamp(1, 1)
+    }
+    fn capacity_in_use(&self) -> u32 {
+        0
+    }
+    fn try_acquire(&self, _run_id: &str, release: u32, node: &str, weight: u32) -> bool {
+        let mut calls = self.calls.lock().unwrap();
+        calls.push(format!("ask {node} {weight}, give back {release}"));
+        true
+    }
+    fn withdraw(&self, _run_id: &str) {
+        self.calls.lock().unwrap().push("withdraw".into());
+    }
+    fn release_capacity(&self, _run_id: &str, weight: u32) {
+        self.calls.lock().unwrap().push(format!("release {weight}"));
+    }
+    fn force_capacity(&self, _run_id: &str, weight: u32) {
+        self.calls.lock().unwrap().push(format!("force {weight}"));
+    }
+    fn leave_capacity(&self, _run_id: &str) {}
+    fn shares_steps(&self) -> bool {
+        false
+    }
+    fn claim_step(&self, _run_id: &str, _key: &crate::run_host::StepKey) -> crate::run_host::StepClaim {
+        crate::run_host::StepClaim::Mine
+    }
+    fn finish_step(&self, _run_id: &str, _key: &crate::run_host::StepKey, _artifact: serde_json::Value) {}
+    fn release_step(&self, _run_id: &str, _key: &crate::run_host::StepKey) {}
+    fn leave_steps(&self, _run_id: &str) {}
+}
+
+/// #1003: when a step ends and the run has another ready, the weight the step held goes back
+/// in the same call that asks for the next one, never on its own first: another run woken by
+/// a bare release could take the weight before this run asked.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_step_that_ends_gives_its_weight_back_with_the_next_ask() {
+    let host = std::sync::Arc::new(RecordingHost {
+        calls: Default::default(),
+        changed: tokio::sync::watch::channel(0).0,
+    });
+    let mut config = test_config("release-with-ask", 1);
+    config.capacity = 1;
+    config.host = host.clone();
+    let mut pool = WorkerPool::start(config).unwrap();
+    let mut coord = Coordinator::new();
+    let mut cost = CostModel::new();
+    for name in ["a", "b"] {
+        coord.add_item(
+            barca_model::StepId {
+                base: std::sync::Arc::from(format!("p.py:{name}")),
+                partition: barca_model::model::PartitionKey(Default::default()),
+            },
+            test_spec(name),
+            vec![],
+        );
+        // Heavy enough that each step is a batch of its own.
+        cost.observe(&format!("p.py:{name}"), 5.0, 5.0, 0);
+    }
+    pool.launch(sh("exec sleep 30"), 0).unwrap();
+    let _client = connect_as(&pool.socket_path.clone(), Some(0)).await;
+    let Some(IoEvent::Connected {
+        worker_id,
+        pid,
+        stream,
+    }) = pool.event_rx.recv().await
+    else {
+        panic!("expected a connection");
+    };
+    assert!(pool.on_connected(worker_id, pid, stream));
+    let cancel = CancellationToken::new();
+
+    pool.assign_ready(&mut coord, &cost, &cancel).await;
+    let first = pool.workers[&0].leases[0];
+    assert_eq!(
+        *host.calls.lock().unwrap(),
+        ["ask p.py:a 1, give back 0"],
+        "a is leased, b waits for the run's own capacity"
+    );
+
+    // a ends: b is ready, and its ask carries a's weight.
+    pool.take_lease(0, "p.py:a", &coord).unwrap();
+    coord.record_output(first, serde_json::json!({}));
+    coord.on_item_completed(first);
+    pool.assign_ready(&mut coord, &cost, &cancel).await;
+    assert_eq!(
+        host.calls.lock().unwrap()[1..],
+        ["ask p.py:b 1, give back 1"]
+    );
+
+    // b ends with nothing more ready: its weight goes back on its own.
+    let second = pool.workers[&0].leases[0];
+    pool.take_lease(0, "p.py:b", &coord).unwrap();
+    coord.record_output(second, serde_json::json!({}));
+    coord.on_item_completed(second);
+    pool.assign_ready(&mut coord, &cost, &cancel).await;
+    assert_eq!(host.calls.lock().unwrap()[2..], ["release 1"]);
+    pool.shutdown().await;
+}

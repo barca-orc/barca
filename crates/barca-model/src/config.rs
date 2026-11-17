@@ -227,7 +227,36 @@ pub struct ServerToml {
     /// Seconds a run under `barca serve` may take before it is stopped (`--run-timeout`
     /// overrides it). 0 or not set: no limit (#628).
     pub run_timeout_seconds: Option<toml::Value>,
+    /// The order of the shared capacity's line: `"requested_first"` (the default: a requested
+    /// run's steps go ahead of a scheduled run's) or `"first_come"` (#1003).
+    pub admission: Option<toml::Value>,
+    /// Under `admission = "requested_first"`, the seconds a scheduled run's step waits at most
+    /// before it goes ahead of requested ones. At least 1; default
+    /// [`DEFAULT_SCHEDULED_MAX_WAIT_SECS`].
+    pub scheduled_max_wait_seconds: Option<toml::Value>,
 }
+
+/// How the capacity a server's runs share orders the steps that wait for it
+/// (`[server] admission`, `[server] scheduled_max_wait_seconds`, #1003).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerAdmission {
+    /// A requested run's step goes ahead of a scheduled run's, unless that one has waited
+    /// `max_wait_secs`.
+    RequestedFirst { max_wait_secs: u64 },
+    /// First come, first served, whatever started the run.
+    FirstCome,
+}
+
+impl Default for ServerAdmission {
+    fn default() -> Self {
+        ServerAdmission::RequestedFirst {
+            max_wait_secs: DEFAULT_SCHEDULED_MAX_WAIT_SECS,
+        }
+    }
+}
+
+/// How long a scheduled run's step waits at most behind requested ones by default.
+pub const DEFAULT_SCHEDULED_MAX_WAIT_SECS: u64 = 120;
 
 /// How long `barca serve` waits for in-flight runs on SIGTERM or SIGINT by default: the
 /// grace period Kubernetes gives a pod.
@@ -448,6 +477,9 @@ pub struct ResolvedConfig {
     /// `[server] capacity`: the weight budget every run of `barca serve` shares (`None`: each
     /// run has only its own). Only `serve` reads it.
     pub server_capacity: Option<(usize, &'static str)>,
+    /// `[server] admission` and `[server] scheduled_max_wait_seconds`: the order of that
+    /// capacity's line. Only `serve` reads it.
+    pub server_admission: ServerAdmission,
     /// `[server] run_timeout_seconds`: how long a run under `barca serve` may take (`None`:
     /// not set; `Some(0)`: no limit). Only `serve` reads it.
     pub server_run_timeout_secs: Option<(u64, &'static str)>,
@@ -733,6 +765,35 @@ pub fn resolve_in(cli_env: Option<&str>, cwd: &Path) -> Result<ResolvedConfig, B
     resolve_with(cli_env, cwd, Vars::Process)
 }
 
+/// `[server] admission` and `[server] scheduled_max_wait_seconds` (#1003).
+fn server_admission(server: Option<&ServerToml>) -> Result<ServerAdmission, BarcaError> {
+    let admission = server.and_then(|s| s.admission.as_ref());
+    let max_wait = server.and_then(|s| s.scheduled_max_wait_seconds.as_ref());
+    let max_wait_secs = match max_wait {
+        None => DEFAULT_SCHEDULED_MAX_WAIT_SECS,
+        Some(toml::Value::Integer(n)) if *n >= 1 => *n as u64,
+        Some(other) => {
+            return Err(BarcaError::Usage(format!(
+                "[server] scheduled_max_wait_seconds: expected a whole number of seconds of at \
+                 least 1, got {other}"
+            )));
+        }
+    };
+    match admission.map(|v| v.as_str()) {
+        None | Some(Some("requested_first")) => Ok(ServerAdmission::RequestedFirst { max_wait_secs }),
+        Some(Some("first_come")) if max_wait.is_some() => Err(BarcaError::Usage(
+            "[server] scheduled_max_wait_seconds applies only to admission = \"requested_first\"; \
+             remove it or the admission = \"first_come\" line"
+                .to_string(),
+        )),
+        Some(Some("first_come")) => Ok(ServerAdmission::FirstCome),
+        Some(_) => Err(BarcaError::Usage(format!(
+            "[server] admission: expected \"requested_first\" or \"first_come\", got {}",
+            admission.expect("matched Some")
+        ))),
+    }
+}
+
 /// [`resolve_in`] reading the `BARCA_*` variables from `vars`. Tests pass [`Vars::NONE`] or
 /// [`Vars::Fixed`], so that what they resolve does not depend on the process environment.
 pub fn resolve_with(
@@ -792,6 +853,8 @@ pub fn resolve_with(
             )));
         }
     };
+
+    let server_admission = server_admission(file.server.as_ref())?;
 
     // env name: CLI > BARCA_ENV > default_env in toml > "default"
     let (env, env_source) = match (cli_env, vars.get("BARCA_ENV"), file.default_env) {
@@ -876,6 +939,7 @@ pub fn resolve_with(
                 server_max_runs,
                 server_auth,
                 server_capacity,
+                server_admission,
                 server_run_timeout_secs,
                 server_url: vars.get("BARCA_SERVER").or_else(|| {
                     file.server
@@ -988,6 +1052,7 @@ pub fn resolve_with(
         server_max_runs,
         server_auth,
         server_capacity,
+        server_admission,
         server_run_timeout_secs,
         server_url,
         capacity,

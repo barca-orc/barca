@@ -317,7 +317,22 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let capacity = barca_core::serve::capacity::SharedCapacity::new(4, "--capacity");
     assert!(capacity.try_acquire("r1", "p.py:a", 3));
     assert!(!capacity.try_acquire("r2", "p.py:b", 2));
+    assert!(!capacity.try_acquire_as(
+        "r3",
+        "p.py:c",
+        2,
+        barca_core::serve::capacity::Origin::Scheduled
+    ));
     view["capacity"] = serde_json::to_value(capacity.snapshot()).unwrap();
+    assert!(queue.is_valid(&view), "{view}");
+    assert_eq!(view["capacity"]["admission"], "requested_first");
+    assert_eq!(view["capacity"]["waiting"][1]["origin"], "scheduled");
+    let first_come = barca_core::serve::capacity::SharedCapacity::with_admission(
+        4,
+        "--capacity",
+        barca_core::serve::capacity::Admission::FirstCome,
+    );
+    view["capacity"] = serde_json::to_value(first_come.snapshot()).unwrap();
     assert!(queue.is_valid(&view), "{view}");
     let mut no_queue = ok.clone();
     no_queue.as_object_mut().unwrap().remove("queue");

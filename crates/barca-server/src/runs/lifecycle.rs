@@ -208,6 +208,7 @@ async fn execute(
                     host: std::sync::Arc::new(barca_core::serve::ServeHost::new(
                         state.capacity.clone(),
                         state.shared_steps.clone(),
+                        barca_core::serve::capacity::Origin::of(spec.trigger.triggered_by),
                     )),
                     batch: barca_core::batch::BatchOverride::parse(&spec.batch).unwrap_or_default(),
                 },

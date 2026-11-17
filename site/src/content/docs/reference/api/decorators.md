@@ -329,8 +329,8 @@ def embed_c() -> dict:
   that called `parallel()`; that step is not counted while it waits for them.
 - The capacity is per run: two runs at the same time (two commands, or `barca serve` running two
   schedules at once) each fill their own. `barca serve --capacity N` (`[server] capacity`) adds
-  one capacity that every run of the server shares, admitted first come, first served across
-  runs; see [Scheduling](/scheduling/#heavy-rebuilds-beside-a-frequent-job).
+  one capacity that every run of the server shares, a requested run's steps admitted before a
+  scheduled run's; see [Scheduling](/scheduling/#heavy-rebuilds-beside-a-frequent-job).
 - `barca plan` shows `pool_size`, `pool_source`, `capacity` and `weights`, `--dry-run` shows
   `capacity` and each heavy step's `weight`, and `barca doctor` reports the capacity and the
   pool size.

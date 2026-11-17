@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '24'
+  version: '25'
   description: 'Normative current wire contract; specification version 18 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -4347,8 +4347,9 @@ components:
             $ref: '#/components/schemas/QueueEntry'
         capacity:
           description: The capacity every run shares (--capacity, [server] capacity); null without one.
-            Steps are admitted first come, first served across runs; a waiting step is not overtaken.
-            Experimental.
+            By default a requested run's waiting step is admitted before a scheduled run's, unless
+            that one has waited scheduled_max_wait_seconds; admission = "first_come" admits them in
+            the order they asked. A step is not overtaken by one ranked behind it. Experimental.
           anyOf:
           - type: 'null'
           - $ref: '#/components/schemas/SharedCapacity'
@@ -4358,6 +4359,8 @@ components:
       required:
       - total
       - source
+      - admission
+      - scheduled_max_wait_seconds
       - in_use
       - runs
       - waiting
@@ -4368,6 +4371,19 @@ components:
         source:
           type: string
           description: --capacity or [server] capacity.
+        admission:
+          type: string
+          enum:
+          - requested_first
+          - first_come
+          description: '[server] admission: the order of the steps waiting.'
+        scheduled_max_wait_seconds:
+          description: Under requested_first, how long a scheduled run's step waits at most before
+            it goes ahead of requested ones ([server] scheduled_max_wait_seconds); null under first_come.
+          anyOf:
+          - type: 'null'
+          - type: integer
+            minimum: 1
         in_use:
           type: integer
           minimum: 0
@@ -4398,6 +4414,7 @@ components:
             - node
             - weight
             - waiting_seconds
+            - origin
             properties:
               run_id:
                 type: string
@@ -4409,6 +4426,12 @@ components:
               waiting_seconds:
                 type: number
                 minimum: 0
+              origin:
+                type: string
+                enum:
+                - requested
+                - scheduled
+                description: scheduled for a run a schedule's tick started, requested for any other.
     RunHandle:
       type: object
       additionalProperties: false

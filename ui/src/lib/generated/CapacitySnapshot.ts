@@ -15,6 +15,15 @@ total: number,
  */
 source: string,
 /**
+ * The order of the line (`[server] admission`): `requested_first` or `first_come`.
+ */
+admission: string,
+/**
+ * Under `requested_first`, how long a scheduled step waits at most before it goes ahead of
+ * requested ones (`[server] scheduled_max_wait_seconds`); `null` under `first_come`.
+ */
+scheduled_max_wait_seconds: number | null,
+/**
  * The weight the steps running now (or being leased) take, all runs together.
  */
 in_use: number,

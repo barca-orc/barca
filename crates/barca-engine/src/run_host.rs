@@ -52,8 +52,11 @@ pub trait RunHost: Send + Sync + std::fmt::Debug {
     fn weight_of(&self, weight: u32) -> u32;
     /// The weight in use now, all runs together.
     fn capacity_in_use(&self) -> u32;
-    /// Ask for `weight` for `run_id`'s head step `node`: admitted, or `run_id` waits in line.
-    fn try_acquire(&self, run_id: &str, node: &str, weight: u32) -> bool;
+    /// Give back `release` of what `run_id` holds (the weight of steps that ended) and ask for
+    /// `weight` for its head step `node`, in one step: admitted, or `run_id` waits in line. No
+    /// other run is admitted to the weight given back before this run's ask is ranked, so the
+    /// line's order decides who gets it (#1003).
+    fn try_acquire(&self, run_id: &str, release: u32, node: &str, weight: u32) -> bool;
     /// `run_id`'s head step no longer waits for the shared capacity.
     fn withdraw(&self, run_id: &str);
     /// Give back `weight` of what `run_id` holds.
@@ -103,7 +106,7 @@ impl RunHost for LocalHost {
     fn capacity_in_use(&self) -> u32 {
         0
     }
-    fn try_acquire(&self, _run_id: &str, _node: &str, _weight: u32) -> bool {
+    fn try_acquire(&self, _run_id: &str, _release: u32, _node: &str, _weight: u32) -> bool {
         true
     }
     fn withdraw(&self, _run_id: &str) {}

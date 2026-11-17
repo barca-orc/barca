@@ -60,6 +60,16 @@ export function sharedCapacityLabel(capacity: CapacitySnapshot | null | undefine
   return n === 0 ? used : `${used} · ${n} step${n === 1 ? '' : 's'} waiting`
 }
 
+/**
+ * How the shared capacity orders the steps that wait (`[server] admission`), for the capacity's
+ * tooltip: `requested runs first; a scheduled step waits at most 120s`.
+ */
+export function admissionLabel(capacity: CapacitySnapshot): string {
+  return capacity.admission === 'first_come'
+    ? 'first come, first served'
+    : `requested runs first; a scheduled step waits at most ${capacity.scheduled_max_wait_seconds ?? '?'}s`
+}
+
 /** One step waiting for the shared capacity, in admission order. */
 interface WaitingRow {
   position: string
@@ -67,6 +77,8 @@ interface WaitingRow {
   runId: string
   weight: number
   waited: string
+  /** `requested` or `scheduled`: what puts it ahead in the line. */
+  origin: string
   href: string
 }
 
@@ -77,6 +89,7 @@ export function waitingRows(capacity: CapacitySnapshot | null | undefined): Wait
     runId: w.run_id,
     weight: w.weight,
     waited: `${Math.round(w.waiting_seconds)}s`,
+    origin: w.origin,
     href: runHref(w.run_id),
   }))
 }

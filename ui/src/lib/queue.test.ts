@@ -18,6 +18,7 @@ import {
   queuedLabel,
   sharedCapacityLabel,
   waitingRows,
+  admissionLabel,
 } from './queue'
 
 function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
@@ -42,20 +43,30 @@ describe('shared capacity', () => {
   const capacity = {
     total: 4,
     source: '--capacity',
+    admission: 'requested_first',
+    scheduled_max_wait_seconds: 120,
     in_use: 3,
     runs: [{ run_id: 'r1', weight: 3 }],
-    waiting: [{ run_id: 'r2', node: 'p.py:big', weight: 3, waiting_seconds: 12.4 }],
+    waiting: [
+      { run_id: 'r2', node: 'p.py:big', weight: 3, waiting_seconds: 12.4, origin: 'requested' as const },
+      { run_id: 'r3', node: 'p.py:sync', weight: 1, waiting_seconds: 30, origin: 'scheduled' as const },
+    ],
   }
   it('says nothing without one', () => {
     expect(sharedCapacityLabel(null)).toBeNull()
     expect(waitingRows(null)).toEqual([])
   })
   it('shows the weight in use and the steps waiting, in order', () => {
-    expect(sharedCapacityLabel(capacity)).toBe('weight 3 of 4 in use · 1 step waiting')
+    expect(sharedCapacityLabel(capacity)).toBe('weight 3 of 4 in use · 2 steps waiting')
     expect(sharedCapacityLabel({ ...capacity, waiting: [] })).toBe('weight 3 of 4 in use')
     expect(waitingRows(capacity)).toEqual([
-      { position: '#1', node: 'p.py:big', runId: 'r2', weight: 3, waited: '12s', href: expect.stringContaining('r2') },
+      { position: '#1', node: 'p.py:big', runId: 'r2', weight: 3, waited: '12s', origin: 'requested', href: expect.stringContaining('r2') },
+      { position: '#2', node: 'p.py:sync', runId: 'r3', weight: 1, waited: '30s', origin: 'scheduled', href: expect.stringContaining('r3') },
     ])
+  })
+  it('says the order of the line', () => {
+    expect(admissionLabel(capacity)).toBe('requested runs first; a scheduled step waits at most 120s')
+    expect(admissionLabel({ ...capacity, admission: 'first_come', scheduled_max_wait_seconds: null })).toBe('first come, first served')
   })
 })
 

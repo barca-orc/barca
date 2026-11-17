@@ -329,9 +329,12 @@ run_timeout_seconds = 0    # no limit on how long a run takes (the default)
 ```
 
 With the rebuild's heavy steps at `@asset(weight=3)`, one of them runs at a time and the
-one-minute job's weight-1 steps run beside it. Steps are admitted first come, first served
-across runs, and a heavy step that waits for room is not overtaken by lighter steps that asked
-after it, so it is never starved. `GET /queue` shows the weight in use and the steps waiting.
+one-minute job's weight-1 steps run beside it. A step of a run someone asked for is admitted
+before a step of a scheduled run, unless that one has waited `[server]
+scheduled_max_wait_seconds` (120 by default); `[server] admission = "first_come"` admits them in
+the order they asked. A heavy step that waits for room is not overtaken by lighter steps behind
+it, so it is never starved. `GET /queue` shows the weight in use and the steps waiting, with
+each step's `origin`.
 The pool of each run is the cores, bounded by the capacity, so `capacity = 1` starts one worker.
 
 A run has no time limit by default (before 0.31.0, a fixed 600 seconds). `--run-timeout`,

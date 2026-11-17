@@ -36,7 +36,7 @@ barca serve pipeline.py --run-timeout 3600   # stop a run that takes longer than
 | `--read-only` | off | Refuse runs, never schedule; read compatible WAL metadata in place, never writing it. |
 | `--drain-timeout <SECONDS>` | `[server] drain_timeout`, else `30` | On SIGTERM or SIGINT, how long runs in flight get to finish before they are put back in the run queue for the next start. `0` requeues them at once. |
 | `--max-runs <N>` | `[server] max_runs`, else one per core | How many runs execute at once; the others wait in the run queue, in order (experimental). |
-| `--capacity <N>` | `[server] capacity`, else none | The most the `weight=` of the running steps of every run may add up to, admitted first come, first served across runs; `GET /queue` shows it (experimental). |
+| `--capacity <N>` | `[server] capacity`, else none | The most the `weight=` of the running steps of every run may add up to, a requested run's steps admitted before a scheduled run's (`[server] admission`, `scheduled_max_wait_seconds`); `GET /queue` shows it (experimental). |
 | `--run-timeout <SECONDS>` | `[server] run_timeout_seconds`, else none | Stop a run that takes longer, recorded as an error naming the setting. `0` is no limit; `Schedule(..., timeout_seconds=N)` wins for its ticks. |
 | `--auth <off\|token>` | `[server] auth`, else `off` | `token` requires a project bearer token on every API request ([project tokens](/auth/)); `BARCA_SERVER_AUTH` sets it too. |
 | `--env <name>` | `default` | Use a named environment's cache and history. |
