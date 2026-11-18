@@ -8,6 +8,7 @@ an unknown field is a usage error (exit 2) that lists the valid ones.
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -137,10 +138,10 @@ def test_history_shows_each_runs_target(project):
     assert table.returncode == 0, table.stderr
     header, _, *rows = table.stdout.splitlines()
     assert header.split()[:4] == ["RUN_ID", "CMD", "TARGET", "STATUS"]
-    targets = [row.split()[2] for row in rows]
-    # Function names, `all` without a target, cut at 24 characters with an ellipsis.
-    assert targets == ["report", "a000,a001,a002,a003,a00…", "total", "all"]
-    assert all(row.split()[3] == "success" for row in rows)
+    # Function names, `all` without a target, the first of several and how many more.
+    cells = [re.split(r"\s{2,}", row.strip()) for row in rows]
+    assert [cell[2] for cell in cells] == ["report", "a000 +5 more", "total", "all"]
+    assert all(cell[3] == "success" for cell in cells)
 
 
 def test_history_on_an_empty_project(project):
