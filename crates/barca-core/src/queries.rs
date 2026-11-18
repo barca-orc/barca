@@ -223,11 +223,14 @@ pub struct RunDetail {
 }
 
 /// [`RunDetail`] of `run_id` in this environment; a usage error when it is not recorded.
-/// At most `limit` of its recorded steps (every one with `None`).
+/// At most `limit` of its recorded steps (every one with `None`). A finished run's planned
+/// nodes, the skipped and cached ones included, are counted when the files it ran still plan
+/// what it ran, as a server counts them ([`planned_run_nodes`]).
 pub async fn run_detail(
     cfg: &crate::config::ResolvedConfig,
     run_id: &str,
     limit: Option<usize>,
+    python: &std::path::Path,
 ) -> Result<RunDetail, BarcaError> {
     open_metadata(cfg).await?;
     let Some(run) = db::get_run(&cfg.db_path, run_id).await? else {
@@ -235,7 +238,33 @@ pub async fn run_detail(
             "run '{run_id}' was not found; use barca history --json to find a run id"
         )));
     };
-    let (steps, steps_page) = db::get_run_steps_page(&cfg.db_path, run_id, limit).await?;
+    let (steps, mut steps_page) = db::get_run_steps_page(&cfg.db_path, run_id, limit).await?;
+    if !matches!(run.status.as_str(), "pending" | "running")
+        && let Some(job) = &run.job
+        && !run.files.is_empty()
+        && let Ok(dag) = crate::load::build_dag(&run.files, python).await
+    {
+        let targets: Vec<&str> = if job == "all" {
+            Vec::new()
+        } else {
+            job.split(',').collect()
+        };
+        let recorded = if steps_page.nodes.is_empty() {
+            db::run_node_summaries(&cfg.db_path, run_id).await?
+        } else {
+            steps_page.nodes.clone()
+        };
+        if let Some(nodes) = planned_run_nodes(
+            &dag,
+            &run.command,
+            &targets,
+            &run.status,
+            run.steps_total,
+            recorded,
+        ) {
+            steps_page.nodes = nodes;
+        }
+    }
     let outcome = db::get_run_outcome(&cfg.db_path, run_id)
         .await?
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
