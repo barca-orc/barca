@@ -139,6 +139,7 @@ stability; the row adds the keys and routes that go with it.
 | `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL` and the Slack posts | new: the message text and layout are not a contract and may change in any release |
 | `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
 | `barca queue` and its JSON, `barca serve --max-runs`, `[server] max_runs`, `BARCA_SERVER_RECONNECT` | new in 0.29.4: the run queue (`GET /queue`, `POST /queue/pause`, `POST /queue/resume`), its JSON and table, and how long and how often a `--server` client waits for a restarting server may change after field use |
+| `[server] admission`, `[server] scheduled_max_wait_seconds`, and `capacity.admission`, `capacity.scheduled_max_wait_seconds` and `capacity.waiting[].origin` in `GET /queue` | new in 0.45.0 (#1003): which runs count as requested, the default bound and how the order is shown may change after field use; `admission = "first_come"` keeps the order of earlier releases |
 | `undeclared_env`: the plan-warning kind, `steps[].undeclared_env` in `get`/`run` (and `--dry-run`) JSON, `nodes[].undeclared_env` in `status --json` | new in 0.29.1 (#574): which environment reads are found statically may grow |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |

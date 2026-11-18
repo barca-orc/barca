@@ -45,7 +45,8 @@ impl WorkerPool {
         cancel: &CancellationToken,
     ) {
         self.retire_surplus();
-        self.sync_share(coord);
+        // What ended goes back with the next ask (`admit_head`), or as the run leaves the line.
+        self.sync_share_keeping(coord);
         loop {
             // A cancelled run starts nothing more: no worker, no step.
             if coord.ready_count() == 0 || cancel.is_cancelled() {
@@ -88,11 +89,11 @@ impl WorkerPool {
             // Steps another run of the server is executing wait for it instead (#654).
             let batch = self.claim_batch(coord, batch);
             if batch.is_empty() {
-                // Nothing is leased: what the shared capacity admitted for the head goes back.
+                // Nothing is leased: what the shared capacity admitted for the head goes back,
+                // with the ask for the next head (`admit_head`) or as the run leaves the line.
                 if let Some(share) = self.share.as_mut() {
                     share.grant = None;
                 }
-                self.sync_share(coord);
                 continue;
             }
 

@@ -235,38 +235,55 @@ impl WorkerPool {
     /// Whether the head of the ready queue is admitted by the capacity the server's runs share
     /// (always, without one). Admitted, its weight is held as `grant` until a worker leases
     /// it; not admitted, the run waits in the line and tries again when the capacity changes.
+    ///
+    /// The weight of the steps that ended since the last sync is given back in the same call
+    /// that asks for the head ([`crate::run_host::RunHost::try_acquire`]): another run woken by
+    /// a release cannot take that weight before this run's ask is ranked (#1003).
     pub(super) fn admit_head(&mut self, coord: &Coordinator) -> bool {
         let Some((weight, node)) = self.head_share_weight(coord) else {
             return true;
         };
+        let total = self
+            .share
+            .as_ref()
+            .expect("head_share_weight found one")
+            .total;
+        let running = self.weight_against(coord, total);
         let share = self.share.as_mut().expect("head_share_weight found one");
         match share.grant {
-            Some(granted) if granted == weight => return true,
-            // The head changed since it was admitted (a step returned to the front): give the
-            // weight back and ask for the new head's.
-            Some(granted) => {
-                share.host.release_capacity(&share.run_id, granted);
-                share.held = share.held.saturating_sub(granted);
-                share.grant = None;
+            Some(granted) if granted == weight => {
+                // Admitted already: only what ended goes back.
+                let ended = share.held.saturating_sub(running + granted);
+                if ended > 0 {
+                    share.host.release_capacity(&share.run_id, ended);
+                    share.held -= ended;
+                }
+                return true;
             }
+            // The head changed since it was admitted (a step returned to the front): the
+            // weight goes back with the ask for the new head's.
+            Some(_) => share.grant = None,
             None => {}
         }
+        let give_back = share.held.saturating_sub(running);
         // Seen before asking, so a change after this is not missed by `share_changed`.
         share.changed.borrow_and_update();
-        if share.host.try_acquire(&share.run_id, &node, weight) {
+        let admitted = share
+            .host
+            .try_acquire(&share.run_id, give_back, &node, weight);
+        share.held -= give_back;
+        if admitted {
             share.held += weight;
             share.grant = Some(weight);
-            share.waiting = false;
-            true
-        } else {
-            share.waiting = true;
-            false
         }
+        share.waiting = !admitted;
+        admitted
     }
 
     /// The head of the ready queue does not wait for the shared capacity any more (nothing is
     /// ready, the run is cancelled, or the step does not fit the run's own capacity): leave the
-    /// line, and give back weight admitted for a head that is not going to be leased.
+    /// line, and give back weight admitted for a head that is not going to be leased and the
+    /// weight of the steps that ended.
     pub(super) fn leave_line(&mut self, coord: &Coordinator) {
         let Some(share) = self.share.as_mut() else {
             return;
@@ -275,9 +292,8 @@ impl WorkerPool {
             share.host.withdraw(&share.run_id);
             share.waiting = false;
         }
-        if share.grant.take().is_some() {
-            self.sync_share(coord);
-        }
+        share.grant = None;
+        self.sync_share(coord);
     }
 
     /// Bring what this run holds of the shared capacity in line with what it runs: the weight
@@ -285,6 +301,17 @@ impl WorkerPool {
     /// Ended steps give their weight back here; a step resumed after its `parallel()` branches
     /// takes its weight back here ([`crate::run_host::RunHost::force_capacity`]).
     pub(super) fn sync_share(&mut self, coord: &Coordinator) {
+        self.sync_share_with(coord, true);
+    }
+
+    /// [`Self::sync_share`] that takes what a resumed step needs but keeps the weight of the
+    /// steps that ended: [`Self::admit_head`] gives it back with the run's next ask, or
+    /// [`Self::leave_line`] when the run asks for nothing.
+    pub(super) fn sync_share_keeping(&mut self, coord: &Coordinator) {
+        self.sync_share_with(coord, false);
+    }
+
+    fn sync_share_with(&mut self, coord: &Coordinator, release: bool) {
         let Some(total) = self.share.as_ref().map(|s| s.total) else {
             return;
         };
@@ -292,6 +319,9 @@ impl WorkerPool {
         let share = self.share.as_mut().expect("checked above");
         let wanted = running + share.grant.unwrap_or(0);
         if wanted < share.held {
+            if !release {
+                return;
+            }
             share
                 .host
                 .release_capacity(&share.run_id, share.held - wanted);

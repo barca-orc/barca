@@ -289,20 +289,43 @@ def rebuild_customer() -> dict:
 
 ```bash
 barca serve pipeline.py --capacity 4           # the same, from the command line
-barca queue --server --json                    # capacity: {total, in_use, runs, waiting}
+barca queue --server --json                    # capacity: {total, admission, in_use, runs, waiting}
 ```
 
 While a rebuild step of weight 3 runs, the sync's weight-1 steps run beside it, one at a time;
 a second weight-3 step waits. How a step is admitted:
 
-- **First come, first served across runs, with the head reserved.** A run asks for the step at
-  the head of its own ready queue once that step fits the run's own capacity. If nothing waits
-  and it fits what is left, it starts. Otherwise the run waits in line, one place per run. Only
-  the run at the front of the line can be admitted, when its step fits; nothing behind it goes
-  first, even a lighter step that would fit. So a heavy step is never starved by a stream of
-  light ones: the weight that comes free is kept for it until it fits, and the light steps that
-  asked after it wait that long (in the example, at most one heavy step's length when a heavy
-  step waits). Steps within one run keep the order of their run's queue, as before.
+- **A line, with the head reserved.** A run asks for the step at the head of its own ready
+  queue once that step fits the run's own capacity. If nothing waits and it fits what is left,
+  it starts. Otherwise the run waits in line, one place per run. Only the run at the front of
+  the line can be admitted, when its step fits; nothing behind it goes first, even a lighter
+  step that would fit. So a heavy step is never starved by a stream of light ones: the weight
+  that comes free is kept for it until it fits. Steps within one run keep the order of their
+  run's queue, as before.
+- **Requested runs first.** By default a run someone asked for (`POST /runs`, the web UI, a
+  `--server` client or agent; anything a schedule's tick did not start) is ahead in the line
+  of a scheduled run, whenever it asked. Runs of one kind go in the order they first asked:
+  an earlier request is finished before a later one gets the capacity, and the same between
+  scheduled runs. Nothing running is stopped: a request that asks while a scheduled step runs
+  waits for that step to end (and for earlier requests, and a scheduled step that has waited
+  out the bound below). A run hands the weight of a step that ended back in the same call that
+  asks for its next step, so a scheduled run cannot take it in between.
+- **A bounded wait for schedules.** A scheduled run's step that has waited
+  `scheduled_max_wait_seconds` (default 120) goes ahead of the requested ones, so a stream of
+  requests cannot starve a schedule. The bound is per step: under requests that never stop, a
+  scheduled run advances about one step per bound.
+- **First come, first served on request.** `admission = "first_come"` puts the oldest waiting
+  step at the front whatever started its run, the order before 0.45.0 (a requested run that
+  overlaps a scheduled run then takes turns with it step by step).
+
+```toml
+# barca.toml
+[server]
+capacity = 1
+admission = "requested_first"     # the default; "first_come" restores arrival order
+scheduled_max_wait_seconds = 120  # the default; at least 1, only with requested_first
+```
+
 - **No deadlock.** Only running steps hold weight, and they finish, fail or are cancelled. A
   step heavier than the server's capacity counts as all of it: it runs alone on the server, with
   `[barca] warning: 'x' has weight=8, more than the capacity 4 (--capacity); it runs alone` when
@@ -317,9 +340,10 @@ a second weight-3 step waits. How a step is admitted:
 - **The run queue** is unchanged: runs leave it as before, and the capacity is held in memory, so
   a restart starts with nothing in use.
 
-`GET /queue` (and `barca queue --server --json`) has `capacity: {total, source, in_use, runs,
-waiting}`: the weight in use, the weight each run holds, and the steps waiting in admission
-order with their run, weight and `waiting_seconds`; `null` without a server capacity. `GET
+`GET /queue` (and `barca queue --server --json`) has `capacity: {total, source, admission,
+scheduled_max_wait_seconds, in_use, runs, waiting}`: the order in effect, the weight in use,
+the weight each run holds, and the steps waiting in admission order with their run, weight,
+`waiting_seconds` and `origin` (`requested` or `scheduled`); `null` without a server capacity. `GET
 /health` has `queue.capacity: {total, in_use, waiting}`. The web UI's Runs page shows `weight 3
 of 4 in use · 1 step waiting` and the waiting steps.
 

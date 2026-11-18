@@ -526,7 +526,7 @@ export const queueStates: Record<string, { queue: QueueView | undefined; collaps
   'running, nothing waiting': { queue: { ...deepQueue, queued: [] } },
   paused: { queue: { ...deepQueue, paused: true, paused_at: ago(600), running: [] } },
   draining: { queue: { ...deepQueue, draining: true } },
-  'waiting for capacity': { queue: { ...deepQueue, queued: deepQueue.queued.slice(0, 2), capacity: { total: 4, source: '--capacity', in_use: 3, runs: [{ run_id: runningEntry.run_id, weight: 3 }], waiting: [{ run_id: 'a8ba0001', node: 'web.py:big_join', weight: 3, waiting_seconds: 42 }] } } },
+  'waiting for capacity': { queue: { ...deepQueue, queued: deepQueue.queued.slice(0, 2), capacity: { total: 4, source: '--capacity', admission: 'requested_first', scheduled_max_wait_seconds: 120, in_use: 3, runs: [{ run_id: runningEntry.run_id, weight: 3 }], waiting: [{ run_id: 'a8ba0001', node: 'web.py:big_join', weight: 3, waiting_seconds: 42, origin: 'requested' }, { run_id: 'a8ba0002', node: 'web.py:sync', weight: 1, waiting_seconds: 7, origin: 'scheduled' }] } } },
   'read-only': { queue: deepQueue, readOnly: true },
   unavailable: { queue: undefined, loadError: 'connection refused' },
 }

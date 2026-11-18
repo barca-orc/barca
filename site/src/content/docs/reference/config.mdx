@@ -110,6 +110,12 @@ max_runs = 4
 # The most the weight= of the steps of every run of `barca serve` may add up to (experimental).
 # Default: none (each run has only its own capacity).
 capacity = 4
+# The order of the steps waiting for that capacity: "requested_first" (default) admits a
+# requested run's step before a scheduled run's; "first_come" admits them in the order asked.
+admission = "requested_first"
+# Under requested_first, the seconds a scheduled run's step waits at most before it goes ahead
+# of requested ones. Default: 120.
+scheduled_max_wait_seconds = 120
 # Seconds a run under `barca serve` may take before it is stopped. Default: 0, no limit.
 run_timeout_seconds = 3600
 
@@ -155,7 +161,9 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `[execution].capacity` | the pool size | Experimental. The most the `weight=` of the steps running at once may add up to; a whole number of at least 1. A step heavier than it runs alone. See [Heavy steps](/reference/api/decorators/#heavy-steps-weight). |
 | `[server].drain_timeout` | 30 | Seconds `barca serve` waits for runs in flight once stopped with SIGTERM or SIGINT, before it puts them back at the head of its run queue (they start again after the restart) and exits 0. `0` requeues at once; a second signal cancels them instead. `--drain-timeout` overrides it. |
 | `[execution].pool_size` | the cores, or the capacity when smaller | How many worker processes a run starts at most; a whole number of at least 1. Without it a run starts no more workers than its capacity (every step weighs at least 1). `BARCA_POOL_SIZE` overrides it. `barca plan` (`pool_source`) and `barca doctor` say which applied. |
-| `[server].capacity` | none | Experimental. The most the `weight=` of the steps of every run of `barca serve` may add up to, admitted first come, first served across runs (a heavy step is not overtaken by lighter ones). Bounds each run's pool too. `--capacity` overrides it. See [Scheduling](/scheduling/). |
+| `[server].capacity` | none | Experimental. The most the `weight=` of the steps of every run of `barca serve` may add up to, admitted in the order of `[server].admission` (a heavy step is not overtaken by lighter ones behind it). Bounds each run's pool too. `--capacity` overrides it. See [Scheduling](/scheduling/). |
+| `[server].admission` | `"requested_first"` | Experimental, with `[server].capacity`. `"requested_first"`: a step of a run someone asked for (`POST /runs`, the web UI, a `--server` client) is admitted before a step of a run a schedule's tick started, requests in the order they first asked and schedules likewise; running steps are not stopped. `"first_come"`: the order the steps asked in, whatever started the run (the order before 0.45.0). Anything else exits 2. See [Operating barca serve](/reference/serve-ops/#a-capacity-shared-by-every-run). |
+| `[server].scheduled_max_wait_seconds` | 120 | Experimental. Under `admission = "requested_first"`, the seconds a scheduled run's step waits at most before it is admitted ahead of requested ones, so a stream of requests cannot starve a schedule. Per step: under requests that never stop, a scheduled run advances about one step per bound. A whole number of at least 1; set with `"first_come"` it exits 2. |
 | `[server].run_timeout_seconds` | `0` (no limit) | Seconds a run under `barca serve` may take, from when it leaves the queue; a run that takes longer is stopped and recorded as an error naming the setting. `--run-timeout` overrides it; `Schedule(..., timeout_seconds=N)` wins for its ticks. Before 0.31.0 the limit was a fixed 600 s. |
 | `[telemetry].datadog_site` | `datadoghq.com` with `BARCA_TELEMETRY=datadog`, else none | Experimental. The Datadog site (`datadoghq.com`, `datadoghq.eu`, `us3.datadoghq.com`) whose web app the Runs page's **View trace** links open. `DD_SITE` overrides it. A value that is not a host name stops `barca serve` with exit 2. See [Telemetry](/reference/telemetry/). |
 | `[server].max_runs` | one per core | Experimental. How many runs `barca serve` executes at once; the others wait in its run queue, in order. At least 1. `--max-runs` overrides it. |
