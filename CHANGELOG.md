@@ -16,6 +16,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Freshness rollups put roots that need someone first, label aggregate gap in node-time, and show a one-time command for unscheduled chains. Group tables put actionable groups first and root panels show what they hold (#1041).
+
 - Status reports cause counts, filters by cause, health or root, scopes groups by name and reads a server rollup at the current second with `--now`. Use `barca cancel RUN_ID` to cancel server work (#1043, #932).
 
 - **The key explorer renders served keys, and the graph view and the sidebar use the health

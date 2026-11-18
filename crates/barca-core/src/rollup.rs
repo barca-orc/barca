@@ -316,6 +316,90 @@ pub struct HeldBy {
     /// Nodes held by this root and by the roots listed before it: against the entry's
     /// `not_fresh`, how much of the scope the first roots explain.
     pub cumulative_nodes: usize,
+    /// The root's action, retained when the scope is filtered.
+    #[serde(default)]
+    pub action_kind: ActionKind,
+    /// The oldest `stale_since` among those nodes (RFC 3339, UTC): since when the first of
+    /// them has been out of date. `null` when none has one recorded.
+    #[serde(default)]
+    pub stale_since: Option<String>,
+    /// The latest `expected_fresh_at` among those nodes: when the ones with an estimate are
+    /// all expected fresh. `null` when none has one (`unbounded` is all of them).
+    #[serde(default)]
+    pub fresh_by: Option<String>,
+}
+
+/// A scope's not-fresh nodes in two parts: those held by a root that needs someone and those
+/// held by a root that is in hand ([`ActionKind::needs_someone`]). A node has one root, so the
+/// node counts and the weights are the exact sums of the children's; the root counts are not
+/// (one root may hold nodes under several children).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HeldSplit {
+    /// Roots holding a node underneath that need someone: the head of `held_by`.
+    pub need_someone: usize,
+    /// Roots a tick or a run in flight will clear.
+    pub catching_up: usize,
+    /// Roots run by hand on request.
+    pub run_by_hand: usize,
+    /// Nodes underneath held by a root that needs someone.
+    pub need_someone_nodes: usize,
+    /// Nodes underneath held by a root that is in hand. With `need_someone_nodes` it adds up
+    /// to `not_fresh`.
+    pub in_hand_nodes: usize,
+    /// The weight of the `need_someone_nodes` ([`Cause::weight`] of each).
+    pub need_someone_weight: usize,
+    /// The weight of the `in_hand_nodes`. With `need_someone_weight` it adds up to the weight
+    /// of what is not fresh (`weight` less `weights.fresh`).
+    pub in_hand_weight: usize,
+}
+
+impl HeldSplit {
+    /// The split of `rows`, given the ids of the roots that need someone.
+    fn of<'a>(
+        rows: impl IntoIterator<Item = &'a NodeStatus>,
+        actions: &HashMap<String, ActionKind>,
+    ) -> Self {
+        let mut out = HeldSplit::default();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for node in rows {
+            let (Some(root), Some(cause)) = (&node.root, node.cause) else {
+                continue;
+            };
+            let first = seen.insert(root.id.as_str());
+            let action = actions[&root.id];
+            if action.needs_someone() {
+                out.need_someone += usize::from(first);
+                out.need_someone_nodes += 1;
+                out.need_someone_weight += cause.weight();
+            } else {
+                if action == ActionKind::RunByHand {
+                    out.run_by_hand += usize::from(first);
+                } else {
+                    out.catching_up += usize::from(first);
+                }
+                out.in_hand_nodes += 1;
+                out.in_hand_weight += cause.weight();
+            }
+        }
+        out
+    }
+
+    /// Number of roots that need action, will clear automatically, or run on request.
+    pub fn line(&self) -> String {
+        let needs = self.need_someone;
+        let waiting = self.catching_up;
+        let manual = self.run_by_hand;
+        let mut line = format!(
+            "{needs} {} you · {waiting} {} catching up",
+            if needs == 1 { "needs" } else { "need" },
+            if waiting == 1 { "is" } else { "are" }
+        );
+        if manual > 0 {
+            line.push_str(&format!(" · {manual} run by hand"));
+        }
+        line
+    }
 }
 
 /// One entry of the tree. Every count is the exact sum of the entry's children's.
@@ -362,11 +446,23 @@ pub struct RollupEntry {
     #[serde(default)]
     pub weights: Weights,
     /// The roots that hold those nodes, each with what it holds underneath this entry, in
-    /// the order of the root list applied to what is held here (the most weight held first,
-    /// a failure first among equals; then nodes, gap and id). Their `nodes` add up to
-    /// `not_fresh`. Empty on a node entry: a node's root is on its row.
+    /// the order of the root list applied to what is held here (the roots that need someone
+    /// first; in each part the most weight held first, a failure first among equals; then
+    /// nodes, gap and id). Their `nodes` add up to `not_fresh`. Empty on a node entry: a
+    /// node's root is on its row.
     #[serde(default)]
     pub held_by: Vec<HeldBy>,
+    /// The not-fresh nodes underneath by whether their root needs someone or is in hand:
+    /// how many roots of each, how many nodes they hold and what those weigh. What a list
+    /// of scopes is ordered by: the most `need_someone_weight` first, then the most
+    /// `in_hand_weight`, so a fully fresh scope (both 0) is last.
+    #[serde(default)]
+    pub split: HeldSplit,
+    /// The oldest `stale_since` underneath (RFC 3339, UTC): since when the first node that
+    /// is not fresh has been out of date. `null` when every node is fresh or none has one
+    /// recorded.
+    #[serde(default)]
+    pub stale_since: Option<String>,
     /// The freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds`.
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -411,6 +507,8 @@ impl RollupEntry {
             weight: 0,
             weights: Weights::default(),
             held_by: Vec::new(),
+            split: HeldSplit::default(),
+            stale_since: None,
             gap_seconds: 0,
             unbounded: 0,
             fresh_by: None,
@@ -422,8 +520,11 @@ impl RollupEntry {
 
 impl RollupEntry {
     /// The scope's distance from fresh in a line, as of `now` (unix seconds): `14 overdue ·
-    /// 152 no refresh path · 180 catching up (nodes); about 180 fresh within 5m, 166 with no
-    /// estimate`. `every node is fresh` when none is behind.
+    /// 152 no refresh path · 180 catching up (nodes);
+    /// about 180 fresh within 5m, 166 with no estimate; 38h of gap across nodes (node-time)`. The times
+    /// lead and the sum comes last with its unit: it is node-time added up over the nodes,
+    /// never how long anything has been out of date. `every node is fresh` when none is
+    /// behind.
     pub fn gap_line(&self, now: i64) -> String {
         let behind = self.causes.total();
         if behind == 0 {
@@ -455,6 +556,12 @@ impl RollupEntry {
         }
         if !said.is_empty() {
             line.push_str(&format!("; {}", said.join(", ")));
+        }
+        if self.gap_seconds > 0 {
+            line.push_str(&format!(
+                "; {} of gap across nodes (node-time)",
+                crate::report::span(self.gap_seconds)
+            ));
         }
         line
     }
@@ -495,19 +602,43 @@ impl Sums for RollupEntry {
         if child.fresh_by > self.fresh_by {
             self.fresh_by.clone_from(&child.fresh_by);
         }
+        oldest(&mut self.stale_since, child.stale_since.as_deref());
+    }
+}
+
+/// Keeps in `oldest` the earlier of it and `at`: both RFC 3339 UTC to the second, so the
+/// earlier time is the lesser string. A missing time is never the oldest.
+fn oldest(oldest: &mut Option<String>, at: Option<&str>) {
+    if let Some(at) = at
+        && oldest.as_deref().is_none_or(|known| at < known)
+    {
+        *oldest = Some(at.to_string());
+    }
+}
+
+/// Keeps in `latest` the later of it and `at`.
+fn latest(latest: &mut Option<String>, at: Option<&str>) {
+    if let Some(at) = at
+        && latest.as_deref().is_none_or(|known| at > known)
+    {
+        *latest = Some(at.to_string());
     }
 }
 
 /// What clears a root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ActionKind {
     /// Nothing to do: a run in flight or the next tick computes what it holds.
+    #[default]
     Wait,
-    /// Run `command`: ticks missed what it holds, or no tick computes it (a `Manual` or
-    /// pinned node).
+    /// Run `command`: ticks missed what it holds, or a pin holds it (`barca unpin`).
     Run,
+    /// Run `command` when its result is wanted: the node is run by hand by declaration (a
+    /// `Manual` node, or a task no schedule reaches), so nothing is overdue and nobody is
+    /// asked to act.
+    RunByHand,
     /// Give the node (or one above it) a `Schedule`: nothing scheduled reaches it.
     AddSchedule,
     /// Resume the paused schedule (`barca resume --schedule`) or node (`barca resume`).
@@ -527,6 +658,7 @@ impl ActionKind {
         match self {
             ActionKind::Wait => "wait",
             ActionKind::Run => "run",
+            ActionKind::RunByHand => "run_by_hand",
             ActionKind::AddSchedule => "add_schedule",
             ActionKind::ResumeSchedule => "resume_schedule",
             ActionKind::StartServer => "start_server",
@@ -540,6 +672,7 @@ impl ActionKind {
         match self {
             ActionKind::Wait => "wait",
             ActionKind::Run => "run",
+            ActionKind::RunByHand => "run by hand",
             ActionKind::AddSchedule => "add a schedule",
             ActionKind::ResumeSchedule => "resume",
             ActionKind::StartServer => "start a server",
@@ -550,6 +683,14 @@ impl ActionKind {
 }
 
 impl ActionKind {
+    /// Whether the action asks someone to act. `wait` does not (a run in flight or a tick
+    /// clears the root) and neither does `run_by_hand` (the node waits for its author, by
+    /// declaration); every other action does. A root list puts the roots that need someone
+    /// first.
+    pub fn needs_someone(self) -> bool {
+        !matches!(self, ActionKind::Wait | ActionKind::RunByHand)
+    }
+
     /// What to do where the action has no command, after the display word.
     pub fn hint(self) -> Option<&'static str> {
         match self {
@@ -575,6 +716,12 @@ pub struct RootAction {
     /// node without samples takes the project's median). `null` when none has a sample.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub estimated_seconds: Option<u64>,
+    /// The `barca` command that brings what the root holds up to date once, now, where
+    /// `command` is `null` because what clears the root is a declaration (`add_schedule`):
+    /// the chain is fresh after it and falls behind again at the next change. `null` for
+    /// every other action.
+    #[serde(default)]
+    pub run_once: Option<String>,
 }
 
 /// One upstream fact and what it holds: every node whose `root.id` is this root's.
@@ -607,9 +754,22 @@ pub struct RollupRoot {
     /// Of its nodes, those with no `expected_fresh_at`: their gap grows until someone acts.
     #[serde(default)]
     pub unbounded: usize,
-    /// The weight of the nodes it holds: what `roots` is ranked by ([`CauseCounts::weight`]).
+    /// The weight of the nodes it holds: what each part of `roots` is ranked by
+    /// ([`CauseCounts::weight`]).
     #[serde(default)]
     pub weight: usize,
+    /// The oldest `stale_since` among its nodes (RFC 3339, UTC): since when the first of
+    /// them has been out of date. `null` when none has one recorded.
+    #[serde(default)]
+    pub stale_since: Option<String>,
+    /// The latest `expected_fresh_at` among its nodes: when the ones with an estimate are
+    /// all expected fresh. `null` when none has one (`unbounded` is all of them).
+    #[serde(default)]
+    pub fresh_by: Option<String>,
+    /// Whether it needs someone: its action is neither `wait` nor `run_by_hand`
+    /// ([`ActionKind::needs_someone`]). `roots` lists the ones that do first.
+    #[serde(default)]
+    pub needs_someone: bool,
     /// What clears it.
     pub action: RootAction,
 }
@@ -654,8 +814,9 @@ pub struct Rollup {
     pub as_of: String,
     /// Every entry, the root first, then depth first in `children` order.
     pub entries: Vec<RollupEntry>,
-    /// What holds the nodes that are not fresh: the most weight held first, a failure first
-    /// among equals, then nodes held, gap held and id.
+    /// What holds the nodes that are not fresh: the roots that need someone first, then the
+    /// ones in hand; in each part the most weight held first, a failure first among equals,
+    /// then nodes held, gap held and id.
     pub roots: Vec<RollupRoot>,
     /// The root entry's data coverage.
     pub data_coverage: DataCoverage,
@@ -703,6 +864,7 @@ fn leaf(node: &NodeStatus, running: bool) -> RollupEntry {
     }
     entry.not_fresh = usize::from(node.cause.is_some());
     entry.weigh();
+    entry.stale_since.clone_from(&node.stale_since);
     entry.gap_seconds = node.gap_seconds;
     entry.unbounded = usize::from(!node.health.is_fresh() && node.expected_fresh_at.is_none());
     entry.fresh_by.clone_from(&node.expected_fresh_at);
@@ -932,21 +1094,28 @@ pub fn build(
         .collect();
     let mut under: HashMap<&str, Vec<&NodeStatus>> = HashMap::new();
     for node in nodes.iter().filter(|n| n.root.is_some()) {
-        let mut at = above.get(&node.id);
+        // Its own entry first (for its `split`), then every entry above it.
+        let mut at = Some(&node.id);
         while let Some(id) = at {
             under.entry(id.as_str()).or_default().push(node);
             at = above.get(id);
         }
     }
+    let roots = roots(nodes, evidence, server);
+    let actions = root_actions(&roots);
     for entry in &mut ordered {
         if let Some(rows) = under.remove(entry.id.as_str()) {
-            entry.held_by = held_by(rows);
+            entry.split = HeldSplit::of(rows.iter().copied(), &actions);
+            // A node's root is on its row: its entry lists none.
+            if entry.kind != EntryKind::Node {
+                entry.held_by = held_by(rows, &actions);
+            }
         }
     }
     Rollup {
         as_of: as_of.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         entries: ordered,
-        roots: roots(nodes, evidence, server),
+        roots,
         data_coverage,
         files: files(nodes, running),
         kinds: KindRollup::of(nodes),
@@ -954,18 +1123,33 @@ pub fn build(
 }
 
 /// The root entry of `nodes` alone: every count of the scope, without the tree. What
-/// `barca status --json` carries as `rollup`; `running` as in [`build`].
-pub fn total(nodes: &[NodeStatus], running: &HashSet<String>) -> RollupEntry {
+/// `barca status --json` carries as `rollup`; `running` and `evidence` as in [`build`].
+pub fn total(
+    nodes: &[NodeStatus],
+    running: &HashSet<String>,
+    actions: &HashMap<String, ActionKind>,
+) -> RollupEntry {
     let mut root = RollupEntry::inner(ROOT_ID.to_string(), EntryKind::Root, "all".to_string());
     for node in nodes {
         root.add(&leaf(node, running.contains(&node.id)));
     }
-    root.held_by = held_by(nodes);
+    root.split = HeldSplit::of(nodes, actions);
+    root.held_by = held_by(nodes, actions);
     root
 }
 
-/// What a root list is ranked by: what a root holds, and whether it is a failure.
+/// The action for each root id in the classified scope.
+pub(crate) fn root_actions(roots: &[RollupRoot]) -> HashMap<String, ActionKind> {
+    roots
+        .iter()
+        .map(|r| (r.id.clone(), r.action.kind))
+        .collect()
+}
+
+/// What a root list is ranked by: whether the root needs someone, what it holds, and whether
+/// it is a failure.
 struct Rank<'a> {
+    needs: bool,
     weight: usize,
     failure: bool,
     nodes: usize,
@@ -973,11 +1157,14 @@ struct Rank<'a> {
     id: &'a str,
 }
 
-/// The order of a root list: the most weight held first (how far what the root holds is from
-/// fresh), a failure first among equals, then the most nodes, the largest gap, and id.
+/// The order of a root list: the roots that need someone before the ones in hand (a root
+/// that only waits is nothing to do, however much it holds); in each part the most weight
+/// held first (how far what the root holds is from fresh), a failure first among equals,
+/// then the most nodes, the largest gap, and id.
 fn rank(a: Rank<'_>, b: Rank<'_>) -> std::cmp::Ordering {
-    b.weight
-        .cmp(&a.weight)
+    b.needs
+        .cmp(&a.needs)
+        .then(b.weight.cmp(&a.weight))
         .then(b.failure.cmp(&a.failure))
         .then(b.nodes.cmp(&a.nodes))
         .then(b.gap.cmp(&a.gap))
@@ -989,8 +1176,12 @@ fn is_failure(root: &str) -> bool {
     root.starts_with("failure:")
 }
 
-/// What each root holds among `rows` (one scope's nodes), in the root list's order.
-fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
+/// What each root holds among `rows` (one scope's nodes), in the root list's order. `needs`:
+/// the roots that need someone ([`root_actions`]).
+fn held_by<'a>(
+    rows: impl IntoIterator<Item = &'a NodeStatus>,
+    actions: &HashMap<String, ActionKind>,
+) -> Vec<HeldBy> {
     let mut held: BTreeMap<&str, HeldBy> = BTreeMap::new();
     for node in rows {
         let Some(root) = &node.root else { continue };
@@ -1003,6 +1194,9 @@ fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
             unbounded: 0,
             weight: 0,
             cumulative_nodes: 0,
+            action_kind: actions[&root.id],
+            stale_since: None,
+            fresh_by: None,
         });
         entry.nodes += 1;
         entry.assets += usize::from(node.kind == "asset");
@@ -1011,6 +1205,8 @@ fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
         }
         entry.gap_seconds += node.gap_seconds;
         entry.unbounded += usize::from(node.expected_fresh_at.is_none());
+        oldest(&mut entry.stale_since, node.stale_since.as_deref());
+        latest(&mut entry.fresh_by, node.expected_fresh_at.as_deref());
     }
     let mut out: Vec<HeldBy> = held.into_values().collect();
     for entry in &mut out {
@@ -1018,6 +1214,7 @@ fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
     }
     fn key(h: &HeldBy) -> Rank<'_> {
         Rank {
+            needs: h.action_kind.needs_someone(),
             weight: h.weight,
             failure: is_failure(&h.root),
             nodes: h.nodes,
@@ -1045,8 +1242,9 @@ fn target<'a>(node: &'a NodeStatus, names: &HashMap<&str, usize>) -> &'a str {
 }
 
 /// The roots of `nodes`: each `root` the rows name, with what it holds and what clears it.
-/// The most weight held comes first, a failure first among equals; then nodes held, gap
-/// held and id. `evidence` and `server` as in [`build`].
+/// The roots that need someone come first, then the ones in hand; in each part the most
+/// weight held first, a failure first among equals; then nodes held, gap held and id.
+/// `evidence` and `server` as in [`build`].
 pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<RollupRoot> {
     struct Held<'a> {
         root: RollupRoot,
@@ -1069,10 +1267,14 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
                 gap_seconds: 0,
                 unbounded: 0,
                 weight: 0,
+                stale_since: None,
+                fresh_by: None,
+                needs_someone: false,
                 action: RootAction {
                     kind: ActionKind::Wait,
                     command: None,
                     estimated_seconds: None,
+                    run_once: None,
                 },
             },
             rows: Vec::new(),
@@ -1084,6 +1286,8 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
         }
         entry.root.gap_seconds += node.gap_seconds;
         entry.root.unbounded += usize::from(node.expected_fresh_at.is_none());
+        oldest(&mut entry.root.stale_since, node.stale_since.as_deref());
+        latest(&mut entry.root.fresh_by, node.expected_fresh_at.as_deref());
         entry.rows.push(node);
     }
     if held.is_empty() {
@@ -1106,35 +1310,41 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
             );
             let schedule = evidence.path.schedules.get(&root.node);
             let (detail, error_group) = detail(&root, &name, about, schedule, evidence);
+            let name = crate::envelope::shell_quote(&name);
             root.detail = detail;
             root.error_group = error_group;
             root.weight = root.causes.weight();
             // The command that computes everything the root holds: the held nodes nothing
             // else held reads (a run computes what is above its targets). Tasks are run,
             // never got.
-            let run = || {
+            let run = |refresh: &str| {
                 let ids: HashSet<&str> = rows.iter().map(|n| n.id.as_str()).collect();
                 let read: HashSet<&str> = rows
                     .iter()
                     .flat_map(|n| n.inputs.iter().map(String::as_str))
                     .filter(|input| ids.contains(input))
                     .collect();
-                let mut ends: Vec<&NodeStatus> = rows
-                    .iter()
-                    .copied()
-                    .filter(|n| !read.contains(n.id.as_str()))
-                    .collect();
-                let tasks = ends.iter().all(|n| n.kind == "task");
-                if !tasks {
-                    ends.retain(|n| n.kind != "task");
+                let mut assets = Vec::new();
+                let mut tasks = Vec::new();
+                for node in rows.iter().filter(|n| !read.contains(n.id.as_str())) {
+                    let targets = if node.kind == "task" {
+                        &mut tasks
+                    } else {
+                        &mut assets
+                    };
+                    targets.push(target(node, &names));
                 }
-                let mut targets: Vec<&str> = ends.iter().map(|n| target(n, &names)).collect();
-                targets.sort_unstable();
-                format!(
-                    "barca {} {}",
-                    if tasks { "run" } else { "get" },
-                    targets.join(",")
-                )
+                let mut commands = Vec::new();
+                for (verb, mut targets) in [("get", assets), ("run", tasks)] {
+                    if !targets.is_empty() {
+                        targets.sort_unstable();
+                        commands.push(format!(
+                            "barca {verb} {}{refresh}{via}",
+                            crate::envelope::shell_quote(&targets.join(","))
+                        ));
+                    }
+                }
+                commands.join(" && ")
             };
             let overdue = root.causes.overdue > 0;
             let (kind, command) = match root.kind {
@@ -1172,19 +1382,26 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
                 RootKind::NoSchedule if evidence.path.pinned.contains(&root.node) => {
                     (ActionKind::Run, Some(format!("barca unpin {name}{via}")))
                 }
-                // A run reads a `Manual` node as it is unless it is named in `--refresh`,
-                // which also recomputes what is below it.
+                // Run by hand by declaration: nobody is asked to act. A run reads a `Manual`
+                // node as it is unless it is named in `--refresh`, which also recomputes
+                // what is below it; a task no schedule reaches is run with `barca run`.
                 RootKind::NoSchedule if evidence.path.paths.is_manual(&root.node) => (
-                    ActionKind::Run,
-                    Some(format!("{} --refresh {name}{via}", run())),
+                    ActionKind::RunByHand,
+                    Some(run(&format!(" --refresh {name}"))),
                 ),
+                RootKind::NoSchedule if about.is_some_and(|n| n.kind == "task") => {
+                    (ActionKind::RunByHand, Some(run("")))
+                }
                 RootKind::NoSchedule => (ActionKind::AddSchedule, None),
-                _ if overdue => (ActionKind::Run, Some(format!("{}{via}", run()))),
+                _ if overdue => (ActionKind::Run, Some(run(""))),
                 _ => (ActionKind::Wait, None),
             };
             let sampled = rows.iter().any(|n| durations.contains_key(&n.id));
+            root.needs_someone = kind.needs_someone();
             root.action = RootAction {
                 kind,
+                // What a missing schedule holds can still be computed once, by hand.
+                run_once: (kind == ActionKind::AddSchedule).then(|| run("")),
                 command,
                 estimated_seconds: sampled.then(|| {
                     rows.iter()
@@ -1198,6 +1415,7 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
         .collect();
     fn key(r: &RollupRoot) -> Rank<'_> {
         Rank {
+            needs: r.needs_someone,
             weight: r.weight,
             failure: r.kind == RootKind::Failure,
             nodes: r.nodes,
@@ -1246,7 +1464,18 @@ fn detail(
             format!("{name} is pinned: every run reads its pinned result")
         }
         RootKind::NoSchedule if evidence.path.paths.is_manual(&root.node) => {
-            format!("{name} is Manual: no tick computes it")
+            match about.is_some_and(|n| n.health == Health::NeverRun) {
+                true => format!("{name} is Manual and has not run yet: no tick computes it"),
+                false => format!("{name} is Manual: no tick computes it"),
+            }
+        }
+        RootKind::NoSchedule if about.is_some_and(|n| n.kind == "task") => {
+            match about.is_some_and(|n| n.health == Health::NeverRun) {
+                true => format!(
+                    "{name} is a task with no schedule and has not run yet: it runs when someone runs it"
+                ),
+                false => format!("{name} is a task with no schedule: it runs when someone runs it"),
+            }
         }
         RootKind::NoSchedule => format!("no tick reaches {name}"),
         RootKind::SchedulePaused if evidence.path.paused.contains(&root.node) => {
@@ -2178,6 +2407,8 @@ mod tests {
                 "not_fresh",
                 "parent",
                 "running",
+                "split",
+                "stale_since",
                 "unbounded",
                 "weight",
                 "weights"
@@ -2216,11 +2447,14 @@ mod tests {
                 "causes",
                 "detail",
                 "error_group",
+                "fresh_by",
                 "gap_seconds",
                 "id",
                 "kind",
+                "needs_someone",
                 "node",
                 "nodes",
+                "stale_since",
                 "unbounded",
                 "weight"
             ]
@@ -2241,7 +2475,7 @@ mod tests {
         assert_eq!(
             json["roots"][0]["action"],
             serde_json::json!(
-                {"kind": "fix_failure", "command": "barca get orders", "estimated_seconds": null}
+                {"kind": "fix_failure", "command": "barca get orders", "run_once": null, "estimated_seconds": null}
             )
         );
         assert_eq!(
@@ -2300,6 +2534,7 @@ mod tests {
     #[test]
     fn roots_rank_by_weight_then_failures_first() {
         let r = |weight, failure, nodes, gap, id| Rank {
+            needs: true,
             weight,
             failure,
             nodes,

@@ -139,12 +139,36 @@ describe('grouped level', () => {
       rollup: indexRollup(rollup([
         scopeEntry(ROOT, 'root', null, ['group:p.py:outer'], { failing: 1, ok: 2 }),
         scopeEntry('group:p.py:outer', 'group', ROOT, ['group:p.py:inner', 'p.py:x'], { failing: 1, ok: 2 }),
-        scopeEntry('group:p.py:inner', 'group', 'group:p.py:outer', ['p.py:check__y', 'p.py:y'], { failing: 1, ok: 1 }, { causes: causeCounts({ failing: 1 }) }),
+        scopeEntry('group:p.py:inner', 'group', 'group:p.py:outer', ['p.py:check__y', 'p.py:y'], { failing: 1, ok: 1 }, { causes: causeCounts({ failing: 1 }), split: { need_someone: 1, catching_up: 0, run_by_hand: 0, need_someone_nodes: 1, in_hand_nodes: 0, need_someone_weight: 6, in_hand_weight: 0 } }),
         nodeEntry('p.py:x', 'group:p.py:outer', 'ok'),
       ])),
     })
     expect(level.visibleEntries.map((e) => e.id)).toEqual(['group:p.py:inner', 'p.py:x'])
     expect(level.visualStates['group:p.py:inner']).toMatchObject({ tone: 'failed', label: '1 failing' })
+  })
+
+  it('keeps a large fully fresh group below a single actionable node in another group', () => {
+    const fresh = 'group:p.py:archive'
+    const failed = 'group:p.py:checks'
+    const ready = Array.from({ length: 235 }, (_, i) => asset(`p.py:ready_${i}`))
+    const check = asset('p.py:check', 'task')
+    const members = ready.map((node) => node.id)
+    const groups = groupTree([
+      { id: fresh, name: 'Archive', members, output: members[0]!, description: '' },
+      { id: failed, name: 'Checks', members: [check.id], output: check.id, description: '' },
+    ])
+    const level = input('pipeline=p.py', {
+      tree: groups, allAssets: [...ready, check],
+      rollup: indexRollup(rollup([
+        scopeEntry(ROOT, 'root', null, [fresh, failed], { ok: 235, failing: 1 }),
+        scopeEntry(fresh, 'group', ROOT, members, { ok: 235 }),
+        scopeEntry(failed, 'group', ROOT, [check.id], { failing: 1 }, {
+          causes: causeCounts({ failing: 1 }), not_fresh: 1,
+          split: { need_someone: 1, catching_up: 0, run_by_hand: 0, need_someone_nodes: 1, in_hand_nodes: 0, need_someone_weight: 6, in_hand_weight: 0 },
+        }),
+      ])),
+    })
+    expect(level.visibleEntries.map((entry) => entry.id)).toEqual([failed, fresh])
   })
 
   it('a search lists matches below this level with what needs attention first', () => {

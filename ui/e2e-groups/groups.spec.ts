@@ -457,6 +457,9 @@ test('the to-do list holds every not-fresh node under one root; more opens the r
   // INV-HEALTH-04, as served: the scope's roots add up to its not-fresh nodes.
   expect(held.reduce((n, h) => n + h.nodes, 0)).toBe(root.not_fresh)
   expect(held.length).toBeGreaterThan(3)
+  const head = rollup.roots.slice(0, 3)
+  expect(head.every((root: { needs_someone: boolean }) => root.needs_someone)).toBe(true)
+  expect(head.map((root: { kind: string }) => root.kind)).toContain('failure')
   expect(held.map((h) => h.root)).toEqual(rollup.roots.map((r: { id: string }) => r.id))
 
   await page.goto('/ui/#/assets')
@@ -464,6 +467,7 @@ test('the to-do list holds every not-fresh node under one root; more opens the r
   const list = overview.getByRole('list', { name: /What holds the nodes that are not fresh/ })
   // The head of the list, and how much of the scope it explains, without scrolling.
   await expect(list.locator('> li')).toHaveCount(3)
+  expect(await list.locator('> li').evaluateAll((items) => items.map((item) => item.getAttribute('data-root')))).toEqual(held.slice(0, 3).map((h) => h.root))
   await expect(overview).toContainText(`The first 3 roots hold ${held[2]!.cumulative_nodes} of ${root.not_fresh} nodes that are not fresh`)
   await expect(list.locator('> li').nth(2)).toBeInViewport()
   // More opens the whole list in place: every root is there, none twice, and the page did not
@@ -489,7 +493,7 @@ test('the to-do list holds every not-fresh node under one root; more opens the r
   await expect(overview.locator('.barca-healthmap svg')).toHaveAttribute('data-dimming', 'true')
   // One click on its node's name reaches the node's panel.
   await failure.getByRole('button', { name: 'check__fold_02__model', exact: true }).click()
-  await expect(page.getByRole('complementary', { name: 'check__fold_02__model details' })).toBeVisible()
+  await expect(page.getByRole('complementary', { name: 'check__fold_02__model details' })).toContainText('Holds 1 node')
 })
 
 test('a node panel says why the node is not fresh, what holds it with a link, and why it has no estimate: the row and the root list, as served', async ({ page, request }) => {

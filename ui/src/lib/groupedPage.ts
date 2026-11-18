@@ -217,7 +217,10 @@ export function groupedLevel({ params, tree, allAssets, states, statesFailed, li
   const scopeIds = scope ? leaves(scope) : assets.map((a) => a.id)
   const inScope = new Set(scopeIds)
   const scopedStates = states.filter((s) => inScope.has(s.id))
-  const rankOf = (entry: GraphEntry): EntryRank => ({ name: entry.name ?? entry.id, weight: rollup?.entries.get(entry.id)?.weight ?? 0 })
+  const rankOf = (entry: GraphEntry): EntryRank => {
+    const split = rollup?.entries.get(entry.id)?.split
+    return { name: entry.name ?? entry.id, alarmWeight: split?.need_someone_weight ?? 0, inHandWeight: split?.in_hand_weight ?? 0 }
+  }
   const sorted = entries.map((entry) => ({ entry, rank: rankOf(entry) })).sort((a, b) => compareEntries(params.sort, a.rank, b.rank)).map(({ entry }) => entry)
   // A search lists what matches by its own name: a group because of its name, never because a
   // member deep inside it (or its output) matches; that member is listed itself, with its path.

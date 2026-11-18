@@ -47,9 +47,25 @@ gap_seconds: number,
  */
 unbounded: number,
 /**
- * The weight of the nodes it holds: what `roots` is ranked by ([`CauseCounts::weight`]).
+ * The weight of the nodes it holds: what each part of `roots` is ranked by
+ * ([`CauseCounts::weight`]).
  */
 weight: number,
+/**
+ * The oldest `stale_since` among its nodes (RFC 3339, UTC): since when the first of
+ * them has been out of date. `null` when none has one recorded.
+ */
+stale_since: string | null,
+/**
+ * The latest `expected_fresh_at` among its nodes: when the ones with an estimate are
+ * all expected fresh. `null` when none has one (`unbounded` is all of them).
+ */
+fresh_by: string | null,
+/**
+ * Whether it needs someone: its action is neither `wait` nor `run_by_hand`
+ * ([`ActionKind::needs_someone`]). `roots` lists the ones that do first.
+ */
+needs_someone: boolean,
 /**
  * What clears it.
  */

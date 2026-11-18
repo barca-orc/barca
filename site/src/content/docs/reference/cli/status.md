@@ -281,6 +281,7 @@ all                6       4  3 failing · 3 with no estimate
 Gap: 3 failing (nodes); 3 with no estimate
 
 What holds the 3 nodes that are not fresh, and what clears it:
+1 needs you · 0 are catching up
 1. failure: orders
      holds 3 nodes (3 assets): 3 failing; 3 with no estimate
      why:  ValueError: 12 rows rejected
@@ -293,12 +294,11 @@ As of 2026-11-17T16:49:57Z
 Each entry of the list is a root: one upstream fact (a failing node, a sensor's new value,
 changed code, a missing or paused schedule, a run queue that is behind) with every node it
 explains, so three nodes that need attention here are one thing to fix. Every node that is not
-fresh is under exactly one root. `holds` counts them by cause and adds their gap (`3h of
-gap`: node-time out of date plus node-time until expected fresh) and how many have no
+fresh is under exactly one root. `holds` counts them by cause and adds their gap (`3h of gap across nodes (node-time)`: node-time out of date plus node-time until expected fresh) and how many have no
 estimate; `why` is the fact in a line; `do` is the action that clears it, with the command
 when there is one and the typical compute time of what it holds (`about 7m of compute`).
-Roots whose nodes have no estimate come first, the one holding the most nodes first; then by
-gap. With a server, a level of the tree whose nodes have estimates adds `fresh by ~15:05 UTC`
+Roots that need someone come first. Within each part the greatest weight leads, then failures,
+node count, gap and root id. With a server, a level of the tree whose nodes have estimates adds `fresh by ~15:05 UTC`
 (the latest of them). `Data` is the scope's data coverage and `As of` the instant the nodes
 were classified at. The kinds of root and of action are in [barca status: Fields and JSON](/reference/cli/status-fields/),
 "Root" and "The rollup".

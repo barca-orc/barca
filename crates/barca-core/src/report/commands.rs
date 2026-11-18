@@ -1615,6 +1615,7 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             plural(held as u64, "node"),
             if held == 1 { "is" } else { "are" }
         );
+        line!(rendered, "{}", rollup.root().split.line());
         // How much the head of the list explains, when there is more than a head.
         if let Some(third) = rollup
             .root()
@@ -1646,7 +1647,7 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             );
             if root.gap_seconds > 0 {
                 holds.push_str(&format!(
-                    "; {} of gap",
+                    "; {} of gap across nodes (node-time)",
                     crate::report::span(root.gap_seconds)
                 ));
             }
@@ -1673,6 +1674,9 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
                 },
                 cost.unwrap_or_default()
             );
+            if let Some(command) = &root.action.run_once {
+                line!(rendered, "{pad}run once: {command}");
+            }
         }
     }
     line!(rendered, "");

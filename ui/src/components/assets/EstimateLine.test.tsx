@@ -59,7 +59,7 @@ describe('CauseLine', () => {
   })
 
   it("adds the root's fact and what clears it once the root list has loaded", () => {
-    const held = heldRoot({ kind: 'no_schedule', node: 'ledger.py:ledger', detail: 'no tick reaches ledger', nodes: 152, action: { kind: 'add_schedule', command: null, estimated_seconds: null } })
+    const held = heldRoot({ kind: 'no_schedule', node: 'ledger.py:ledger', detail: 'no tick reaches ledger', nodes: 152, action: { kind: 'add_schedule', command: null, run_once: null, estimated_seconds: null } })
     const shown = text(renderToStaticMarkup(<CauseLine node="ledger.py:ledger" cause="no_refresh_path" root={{ id: held.id, kind: held.kind, node: held.node }} held={held} onSelect={() => {}} />))
     // The root is the node itself: no link to itself.
     expect(shown).toContain('no refresh pathno schedule here')

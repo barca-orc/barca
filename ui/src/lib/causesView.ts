@@ -37,6 +37,7 @@ export const ROOT_KIND_WORD: Record<RootKind, string> = {
 /** An action kind's display word: the one `barca status --rollup` prints. */
 export const ACTION_WORD: Record<ActionKind, string> = {
   wait: 'wait',
+  run_by_hand: 'run by hand',
   run: 'run',
   add_schedule: 'add a schedule',
   resume_schedule: 'resume',
@@ -99,10 +100,10 @@ export function heldCauses({ held }: Held): string {
   return causeLine(held.causes)
 }
 
-/** `2h of gap · 163 with no estimate`: the gap it holds in the scope; empty when it has neither. */
+/** `2h of gap across nodes (node-time) · 163 with no estimate`: the gap it holds in the scope; empty when it has neither. */
 export function heldGap({ held }: Held): string {
   const parts: string[] = []
-  if (held.gap_seconds > 0) parts.push(`${formatSpan(held.gap_seconds)} of gap`)
+  if (held.gap_seconds > 0) parts.push(`${formatSpan(held.gap_seconds)} of gap across nodes (node-time)`)
   if (held.unbounded > 0) parts.push(`${held.unbounded.toLocaleString()} with no estimate`)
   return parts.join(' · ')
 }
