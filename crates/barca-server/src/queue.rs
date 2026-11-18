@@ -608,12 +608,7 @@ pub struct QueueView {
     pub capacity: Option<barca_core::serve::capacity::CapacitySnapshot>,
 }
 
-fn entry(
-    state: &AppState,
-    run: &RunState,
-    position: Option<usize>,
-    draining: bool,
-) -> QueueEntry {
+fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
     QueueEntry {
         run_id: run.handle.clone(),
         status: if run.status == RunStatus::Running {

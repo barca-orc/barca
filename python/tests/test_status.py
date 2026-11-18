@@ -267,12 +267,24 @@ def test_partitioned_assets_summarize_per_key_state(project):
     cached = nodes(status(project, "parts.py", env={"BARCA_TEST_KEYS": "a,b"}))["part"]
     assert cached["partitioned"] is True
     assert cached["cache"]["state"] == "cached"
-    assert cached["partitions"] == {"total": 2, "cached": 2, "missing": 0, "missing_keys": []}
+    assert cached["partitions"] == {
+        "total": 2,
+        "cached": 2,
+        "missing": 0,
+        "missing_keys": [],
+        "behind": 0,
+    }
     assert cached["last_materialization"]["partition"] == "k=a"
     grown = nodes(status(project, "parts.py", env={"BARCA_TEST_KEYS": "a,b,c"}))
     part = grown["part"]
     assert part["cache"]["state"] == "partial"
-    assert part["partitions"] == {"total": 3, "cached": 2, "missing": 1, "missing_keys": ["k=c"]}
+    assert part["partitions"] == {
+        "total": 3,
+        "cached": 2,
+        "missing": 1,
+        "missing_keys": ["k=c"],
+        "behind": 1,
+    }
     assert grown["summary"]["cache"]["state"] == "stale"
     assert grown["summary"]["cache"]["reason"] == "upstream_stale"
 

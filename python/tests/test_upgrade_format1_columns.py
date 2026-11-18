@@ -84,6 +84,8 @@ def _as_written_by_0_24_3(project: Path) -> None:
             "DROP INDEX idx_mat_path",
             # Added in 0.29.3, on a column this removes.
             "DROP INDEX IF EXISTS idx_mat_evicted",
+            # Added in 0.45.0 (#969), on `job`.
+            "DROP INDEX IF EXISTS idx_runs_search",
             "ALTER TABLE runs DROP COLUMN job",
             "ALTER TABLE materializations DROP COLUMN evicted_at",
             "ALTER TABLE materializations DROP COLUMN last_read_at",
