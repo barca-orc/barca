@@ -324,6 +324,9 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         ]
         nodes, _ = _checked(server, "GET", "/nodes?targets=value", 200)
         status = json.loads(cli("status", "value", "pipeline.py", "--json", "--all"))
+        # Each is classified at its own instant (`as_of`, to the second), and the two readings
+        # are taken a process start apart.
+        assert nodes.pop("as_of") and status.pop("as_of")
         assert nodes == status
         # `barca sql` with a server: the views it resolves and barca.materializations' rows.
         catalog, _ = _checked(server, "GET", "/sql/views", 200)

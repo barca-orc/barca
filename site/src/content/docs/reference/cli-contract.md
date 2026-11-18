@@ -1142,10 +1142,10 @@ says what a sink writes.
 | `explanation.counts.attempts_line` | string | always |
 | `explanation.counts.cached` | integer | always |
 | `explanation.counts.failed` | integer | always |
-| `explanation.counts.nodes` | null | always |
+| `explanation.counts.nodes` | integer | always |
 | `explanation.counts.not_reached` | integer | always |
 | `explanation.counts.not_reached_line` | null | always |
-| `explanation.counts.not_reached_nodes` | null | always |
+| `explanation.counts.not_reached_nodes` | integer | always |
 | `explanation.counts.ok` | integer | always |
 | `explanation.counts.outcome` | string | always |
 | `explanation.counts.planned` | string | always |
@@ -1172,6 +1172,7 @@ says what a sink writes.
 | `explanation.steps` | string | always |
 | `explanation.target_line` | string | always |
 | `explanation.target_outcomes` | array | always |
+| `explanation.target_outcomes[]` | string | always |
 | `explanation.targets` | array | always |
 | `explanation.targets[]` | string | always |
 | `explanation.why` | object | always |
@@ -1252,6 +1253,14 @@ says what a sink writes.
 | `steps[].status` | string | always |
 | `steps[].worker_exit` | null | always |
 | `steps_page` | object | always |
+| `steps_page.nodes` | array | always |
+| `steps_page.nodes[]` | object | always |
+| `steps_page.nodes[].calls` | integer | always |
+| `steps_page.nodes[].elapsed_seconds` | number | always |
+| `steps_page.nodes[].failed` | integer | always |
+| `steps_page.nodes[].keys` | integer | always |
+| `steps_page.nodes[].node_id` | string | always |
+| `steps_page.nodes[].status` | string | always |
 | `steps_page.total` | integer | always |
 | `steps_page.truncated` | boolean | always |
 <!-- END GENERATED schema history_sink -->
@@ -3769,10 +3778,10 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `explanation.counts.attempts_line` | string | always |
 | `explanation.counts.cached` | integer | always |
 | `explanation.counts.failed` | integer | always |
-| `explanation.counts.nodes` | null | always |
+| `explanation.counts.nodes` | integer | always |
 | `explanation.counts.not_reached` | integer | always |
 | `explanation.counts.not_reached_line` | null | always |
-| `explanation.counts.not_reached_nodes` | null | always |
+| `explanation.counts.not_reached_nodes` | integer | always |
 | `explanation.counts.ok` | integer | always |
 | `explanation.counts.outcome` | string | always |
 | `explanation.counts.planned` | string | always |
@@ -3791,6 +3800,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `explanation.steps` | string | always |
 | `explanation.target_line` | string | always |
 | `explanation.target_outcomes` | array | always |
+| `explanation.target_outcomes[]` | string | always |
 | `explanation.targets` | array | always |
 | `explanation.targets[]` | string | always |
 | `explanation.why` | object | always |
@@ -3874,6 +3884,14 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `steps[].status` | string | always |
 | `steps[].worker_exit` | null | always |
 | `steps_page` | object | always |
+| `steps_page.nodes` | array | always |
+| `steps_page.nodes[]` | object | always |
+| `steps_page.nodes[].calls` | integer | always |
+| `steps_page.nodes[].elapsed_seconds` | number | always |
+| `steps_page.nodes[].failed` | integer | always |
+| `steps_page.nodes[].keys` | integer | always |
+| `steps_page.nodes[].node_id` | string | always |
+| `steps_page.nodes[].status` | string | always |
 | `steps_page.total` | integer | always |
 | `steps_page.truncated` | boolean | always |
 <!-- END GENERATED schema history_run -->
