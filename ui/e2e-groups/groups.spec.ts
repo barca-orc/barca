@@ -322,7 +322,9 @@ for (const view of ['list', 'graph']) {
   })
 }
 
-test('the grouped list shows running before the first stream event arrives', async ({ page }) => {
+// `queued`, not `running`: a node runs when a worker holds its step (#1042), and until the run
+// reports on it the row says only that the click was taken.
+test('the grouped list shows an accepted run as queued before the first stream event arrives', async ({ page }) => {
   let release!: () => void
   const held = new Promise<void>((resolve) => { release = resolve })
   await page.route(/\/runs\/[^/]+\/events$/, async (route) => {
@@ -335,8 +337,9 @@ test('the grouped list shows running before the first stream event arrives', asy
     await page.getByRole('complementary', { name: 'summary details' }).getByRole('button', { name: 'Run', exact: true }).click()
     expect((await started).status()).toBe(202)
     const row = page.getByRole('row').filter({ hasText: 'summary' })
-    await expect(row).toContainText('running')
-    await expect(page.getByRole('complementary', { name: 'summary details' })).toContainText('running')
+    await expect(row).toContainText('queued')
+    await expect(row).not.toContainText('running')
+    await expect(page.getByRole('complementary', { name: 'summary details' })).toContainText('queued')
     // The breadcrumb's root is the open pipeline.
     await page.getByRole('navigation', { name: 'Group breadcrumb' }).getByRole('button', { name: FILE, exact: true }).click()
     // A group's counts are the server's (the rollup's entry), never the page's own tally of the

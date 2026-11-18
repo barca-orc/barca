@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTriggerNode } from './useTriggerNode'
 import { useRunStream } from './useRunStream'
@@ -69,8 +69,13 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
     if (run) void client.invalidateQueries({ queryKey: ['rollup'] })
   }, [run, client])
 
-  // Show stream activity only after the worker reports it.
-  const statuses = stream.running ? stream.statuses : {}
+  // An accepted run's target reads `queued` until the run reports on it: a worker holding a
+  // step is what `running` means (issue 1042), and a click still has to show that it was taken.
+  const target = run?.nodeId ?? null
+  const statuses = useMemo(() => {
+    if (!stream.running) return {}
+    return target && !(target in stream.statuses) ? { ...stream.statuses, [target]: 'queued' as const } : stream.statuses
+  }, [stream.running, stream.statuses, target])
   const liveStatus = node ? statuses[node.id] : undefined
   const action: NodeRunAction = {
     fire, fireKey, startingKey: keyRun.isPending ? keyRun.variables.key : null,

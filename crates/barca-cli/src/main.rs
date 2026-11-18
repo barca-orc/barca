@@ -1012,6 +1012,7 @@ async fn run_cli(
                     steps_limit(limit, all),
                     is_json(format),
                     &select,
+                    &python,
                 )
                 .await
                 .map_err(engine);

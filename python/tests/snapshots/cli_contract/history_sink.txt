@@ -7,10 +7,10 @@ explanation.counts.attempts : integer
 explanation.counts.attempts_line : string
 explanation.counts.cached : integer
 explanation.counts.failed : integer
-explanation.counts.nodes : null
+explanation.counts.nodes : integer
 explanation.counts.not_reached : integer
 explanation.counts.not_reached_line : null
-explanation.counts.not_reached_nodes : null
+explanation.counts.not_reached_nodes : integer
 explanation.counts.ok : integer
 explanation.counts.outcome : string
 explanation.counts.planned : string
@@ -37,6 +37,7 @@ explanation.slowest[].seconds : number
 explanation.steps : string
 explanation.target_line : string
 explanation.target_outcomes : array
+explanation.target_outcomes[] : string
 explanation.targets : array
 explanation.targets[] : string
 explanation.why : object
@@ -117,5 +118,13 @@ steps[].sink_seconds : number
 steps[].status : string
 steps[].worker_exit : null
 steps_page : object
+steps_page.nodes : array
+steps_page.nodes[] : object
+steps_page.nodes[].calls : integer
+steps_page.nodes[].elapsed_seconds : number
+steps_page.nodes[].failed : integer
+steps_page.nodes[].keys : integer
+steps_page.nodes[].node_id : string
+steps_page.nodes[].status : string
 steps_page.total : integer
 steps_page.truncated : boolean
