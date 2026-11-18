@@ -45,7 +45,10 @@ pub(crate) async fn rollup_cmd(
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-    let rollup = barca_core::rollup::rollup(&cfg, &targets, &file_args, python).await?;
+    let mut rollup = barca_core::rollup::rollup(&cfg, &targets, &file_args, python).await?;
+    if !targets.is_empty() {
+        rollup.entries[0].label = targets.join(", ");
+    }
     super::emit(barca_core::report::render_rollup(&rollup, json));
     Ok(())
 }

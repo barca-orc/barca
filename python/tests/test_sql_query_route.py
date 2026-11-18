@@ -125,6 +125,19 @@ def cli_sql(project: Path, server: Serve, query: str, *args: str, env: dict | No
     return out.returncode, (json.loads(out.stdout) if out.returncode == 0 else None), out.stderr
 
 
+def test_tick_outcomes_with_a_node_literal_need_no_shared_store(tmp_path):
+    (tmp_path / "pipeline.py").write_text(PIPELINE)
+    with Serve(tmp_path, "--no-schedule", env=_env()) as server:
+        query = (
+            "select t.scheduled_at, target.outcome from barca.ticks t, "
+            "unnest(t.targets) as u(target) where target.node = 'pipeline.py:report'"
+        )
+        code, answer, error = cli_sql(tmp_path, server, query)
+        assert code == 0, error
+        assert answer["columns"] == ["scheduled_at", "outcome"]
+        assert answer["rows"] == []
+
+
 def test_an_aggregate_over_barca_runs_is_answered_by_the_server(project, server, tmp_path):
     assert helpers_of(server) == [], "the helper starts with the first query"
     assert finished(server, "report")["status"] == "success"

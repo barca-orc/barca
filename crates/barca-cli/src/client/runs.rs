@@ -263,13 +263,16 @@ async fn stream(
 
 /// `DELETE /runs/{run_id}`. A failure is reported, not fatal: the stream still says how the
 /// run ended.
+pub(crate) async fn cancel_run(server: &Server, run_id: &str) -> Result<Value, CliError> {
+    let path = format!("/runs/{}", super::encode(run_id));
+    let what = format!("DELETE {path}");
+    let request = server.http.request(reqwest::Method::DELETE, &path)?;
+    let (_, body) = server.send(request, &what).await?;
+    serde_json::from_slice(&body).map_err(|e| server.unexpected(&what, &e.to_string()))
+}
+
 async fn cancel(server: &Server, run_id: &str) {
-    let path = format!("/runs/{run_id}");
-    let result = match server.http.request(reqwest::Method::DELETE, &path) {
-        Ok(request) => server.send(request, &format!("DELETE {path}")).await,
-        Err(error) => Err(error),
-    };
-    if let Err(e) = result {
+    if let Err(e) = cancel_run(server, run_id).await {
         barca_core::errln!(
             "[barca] warning: could not cancel run {run_id} on the server: {}",
             e.error

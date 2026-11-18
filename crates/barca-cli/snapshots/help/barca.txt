@@ -20,6 +20,7 @@ Tools:
   pin       Hold an asset at an earlier result
   unpin     Release a pinned asset
   sql       Query cached results with SQL
+  cancel    Cancel a server run
   queue     Inspect or control the server queue
   pause     Hold assets back from scheduled runs (server)
   resume    Let paused assets run on schedule again

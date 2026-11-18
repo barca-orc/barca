@@ -193,6 +193,7 @@ runnable example collection, and `barca docs <topic>` for detailed behavior.
 | `barca pin [<TARGET>] [<FILES>...]` | Pin an asset to an earlier materialization, or list pins and versions (experimental) |
 | `barca unpin <TARGET> [<FILES>...]` | Remove an asset's pin; the next run decides it as before (experimental) |
 | `barca serve [<FILES>...]` | Manage runs, schedules and results on a server (experimental) |
+| `barca cancel <RUN_ID>` | Cancel a queued or running server run (experimental) |
 | `barca queue [<ACTION>]` | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca pause [<TARGET>]` | Pause assets on a barca server: scheduled runs skip them until resumed (experimental) |
 | `barca resume [<TARGET>]` | Resume paused assets on a barca server (experimental) |

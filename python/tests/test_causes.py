@@ -10,6 +10,7 @@ take longer than they are apart: status names the run queue as the cause, with t
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 
 from .helpers import QUICK, barca, wait_until
@@ -136,6 +137,26 @@ def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
         "ledger": ("no_refresh_path", "no_schedule:pipeline.py:ledger"),
         "totals": ("no_refresh_path", "no_schedule:pipeline.py:ledger"),
     }
+    held = json.loads(
+        _ok(
+            barca(
+                project,
+                "status",
+                "--cause",
+                "no_refresh_path",
+                "--root",
+                "no_schedule:pipeline.py:ledger",
+                "--fields",
+                "name",
+            )
+        )
+    )
+    assert {n["name"] for n in held["nodes"]} == {"ledger", "totals"}
+    assert held["rollup"]["health"] == doc["rollup"]["health"]
+    healthy = json.loads(_ok(barca(project, "status", "--health", "ok", "--fields", "name")))
+    assert [n["name"] for n in healthy["nodes"]] == ["inbox"]
+    pretty = _ok(barca(project, "status", "--limit", "1", "--pretty"))
+    assert "1 ok" in next(line for line in pretty.splitlines() if line.startswith("Health:"))
     # Beside `summary`: the instant of classification and the scope summed.
     assert doc["as_of"].endswith("Z")
     total = doc["rollup"]
@@ -263,6 +284,31 @@ def test_a_server_roots_a_stale_chain_at_the_change_on_every_route(project, serv
     manual = next(r for r in rollup["roots"] if r["id"] == "no_schedule:pipeline.py:reviewed")
     assert manual["action"]["command"] == "barca get reviewed --refresh reviewed --server"
 
+    listed = json.loads(
+        _ok(barca(project, "status", "--server", server.url, "--problems", "--json"))
+    )
+    assert not any(n["cause"] in ("catching_up", "queued") for n in listed["nodes"])
+    progress = json.loads(
+        _ok(
+            barca(
+                project,
+                "status",
+                "--server",
+                server.url,
+                "--problems",
+                "--cause",
+                "catching_up",
+                "--fields",
+                "name",
+            )
+        )
+    )
+    assert {n["name"] for n in progress["nodes"]} == {"orders", "clean"}
+    before = int(time.time())
+    current = json.loads(
+        _ok(barca(project, "status", "--rollup", "--now", "--server", server.url, "--json"))
+    )
+    assert before <= datetime.fromisoformat(current["as_of"]).timestamp() <= time.time()
     # The CLI prints the server's list.
     printed = _ok(barca(project, "status", "--rollup", "--pretty", "--server", server.url))
     assert "code change: orders" in printed and "do:   wait" in printed, printed

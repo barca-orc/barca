@@ -284,6 +284,19 @@ def test_the_drain_timeout_puts_the_run_in_flight_back_in_the_queue_and_exits_0(
     assert statuses[long] == "success", statuses
 
 
+def test_cli_cancel_acknowledges_a_queued_run(project, serve):
+    server = serve("--no-schedule")
+    server.post("/queue/pause", {})
+    run_id = server.submit("one")["run_id"]
+    result = barca(project, "cancel", run_id, "--server", server.url, "--json")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"run_id": run_id, "status": "cancelling"}
+    assert server.finished(run_id)["status"] == "cancelled"
+    again = barca(project, "cancel", run_id, "--server", server.url, "--json")
+    assert again.returncode != 0
+    assert "already finished" in again.stderr
+
+
 def test_a_second_signal_cancels_the_runs_in_flight_and_keeps_the_queued_ones(project, serve):
     server = serve("--no-schedule", "--max-runs", "1")
     long = start_long(server, project)

@@ -45,6 +45,7 @@ pub struct NodesQuery {
     pub targets: Option<String>,
     /// `--sample N`.
     pub sample: Option<usize>,
+    pub files: Option<String>,
     /// `--state a,b`: only nodes in these cache states.
     pub state: Option<String>,
     /// `--problems`: only nodes that need attention (`1`, `true`).
@@ -74,13 +75,22 @@ pub async fn nodes(
             .problems
             .as_deref()
             .is_some_and(|v| !matches!(v, "" | "0" | "false")),
-        matched: 0,
+        ..Default::default()
     };
     let dag = state.inspect_dag().await?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
     let sample = query.sample.unwrap_or(0);
-    let mut result = node_status(&state, &dag, &db_state, &snapshot, targets, sample).await?;
+    let mut result = node_status(
+        &state,
+        &dag,
+        &db_state,
+        &snapshot,
+        targets,
+        sample,
+        query.files.as_deref(),
+    )
+    .await?;
     let disk_cfg = state.config.resolved.clone();
     result.disk_usage = tokio::task::spawn_blocking(move || barca_core::gc::disk_usage(&disk_cfg))
         .await
@@ -100,6 +110,7 @@ pub(crate) async fn node_status(
     snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
     targets: Vec<String>,
     sample: usize,
+    files: Option<&str>,
 ) -> Result<barca_core::status::StatusResult, ApiError> {
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
@@ -116,7 +127,18 @@ pub(crate) async fn node_status(
         .map_err(|e| ApiError::run(e, context("status", state)))?;
     let mut result = (*kept).clone();
     crate::handlers::attach_live_schedules(state, &mut result.nodes, dag, &snapshot.path).await?;
-    crate::handlers::attach_health(state, &mut result, dag, db_state, &snapshot.path).await?;
+    let running =
+        crate::handlers::attach_health(state, &mut result, dag, db_state, &snapshot.path).await?;
+    if let Some(files) = files {
+        let files: std::collections::HashSet<_> = files.split(',').collect();
+        result.nodes.retain(|n| {
+            n.id.rsplit_once(':')
+                .is_some_and(|(f, _)| files.contains(f))
+        });
+        result.data_coverage = barca_core::health::DataCoverage::of(&result.nodes);
+        result.rollup = Some(barca_core::rollup::total(&result.nodes, &running));
+        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
+    }
     Ok(result)
 }
 

@@ -117,6 +117,10 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.13: the view naming and the JSON result shape may change after field use",
     ),
     (
+        "cancel",
+        "Cancel a queued or running server run; the response follows DELETE /runs/{id}",
+    ),
+    (
         "queue",
         "new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use",
     ),
@@ -158,8 +162,12 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "status --problems",
-        "new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule)",
+        "orders problems by distance from fresh; work already in hand is omitted unless its cause is requested",
     ),
+    ("status --health", "experimental health inspection (#1043)"),
+    ("status --root", "experimental health inspection (#1043)"),
+    ("status --cause", "experimental health inspection (#1043)"),
+    ("status --now", "experimental health inspection (#1043)"),
     (
         "status --rollup",
         "new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use",

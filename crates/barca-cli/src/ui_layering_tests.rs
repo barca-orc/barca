@@ -175,6 +175,6 @@ fn ui_layering_the_router_is_read_as_written() {
 fn ui_layering_a_command_the_cli_does_not_have_is_caught() {
     assert!(Cli::try_parse_from("barca status --json".split_whitespace()).is_ok());
     assert!(Cli::try_parse_from("barca status --rollup --json".split_whitespace()).is_ok());
-    assert!(Cli::try_parse_from("barca cancel RUN_ID".split_whitespace()).is_err());
+    assert!(Cli::try_parse_from("barca no-such-command".split_whitespace()).is_err());
     assert!(Cli::try_parse_from("barca status --no-such-flag".split_whitespace()).is_err());
 }

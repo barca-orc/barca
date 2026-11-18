@@ -502,6 +502,11 @@ paths:
         required: false
         schema: *id005
         description: 'Comma-separated targets; absent: every node.'
+      - name: files
+        in: query
+        schema:
+          type: string
+        description: Comma-separated files whose classified nodes contribute to the scope.
       - name: sample
         in: query
         required: false
@@ -2245,11 +2250,17 @@ paths:
         the same word in both. roots lists what holds the nodes that are not fresh, each with
         the action that clears it; every node that is not fresh is under exactly one.'
       parameters:
+      - name: now
+        in: query
+        schema:
+          type: boolean
+          default: false
+        description: Classify at the current second instead of the start of the minute.
       - name: targets
         in: query
         required: false
         description: 'Experimental: comma-separated targets, as for GET /state. The rollup covers
-          their upstream cone. Absent or empty (with no files) means every node.'
+          their upstream cone. A group may be named by its unique declared name or full id. Absent or empty (with no files) means every node.'
         schema:
           type: string
       - name: files
@@ -2306,6 +2317,12 @@ paths:
       summary: The rollup of GET /state (headers only)
       operationId: head_state_rollup
       parameters:
+      - name: now
+        in: query
+        schema:
+          type: boolean
+          default: false
+        description: Classify at the current second instead of the start of the minute.
       - name: targets
         in: query
         description: Experimental comma-separated targets, as for GET /state.

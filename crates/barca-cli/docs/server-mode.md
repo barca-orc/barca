@@ -358,6 +358,9 @@ requires a complete transcript and instead exits 3 on an unfillable replay gap, 
 recorded-log command. The browser also marks incomplete replay and follows the outcome.
 Nothing runs here either way.
 
+`barca cancel RUN_ID --server` requests cancellation of a queued or running run.
+Use `--json` for the server acknowledgement.
+
 Ctrl-C (or SIGTERM) asks the server to cancel the run (`DELETE /runs/<run_id>`) and keeps
 printing until the run has stopped; it then exits 130. A second Ctrl-C exits 130 at once, and
 the server still stops the run.

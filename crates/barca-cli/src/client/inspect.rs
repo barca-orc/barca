@@ -76,11 +76,15 @@ pub(crate) async fn rollup(
     targets: &[String],
     files: &[PathBuf],
     json: bool,
+    now: bool,
     env: Option<&str>,
 ) -> Result<(), CliError> {
     server.health(env).await?;
     let files = server.deployed_files(files).await?;
     let mut query = Vec::new();
+    if now {
+        query.push("now=true".into());
+    }
     if !targets.is_empty() {
         query.push(format!("targets={}", encode(&targets.join(","))));
     }
@@ -113,6 +117,9 @@ pub(crate) async fn status(
     let mut path = format!("/nodes?sample={}", opts.sample);
     if !targets.is_empty() {
         path.push_str(&format!("&targets={}", encode(&targets.join(","))));
+    }
+    if !files.is_empty() {
+        path.push_str(&format!("&files={}", encode(&files.join(","))));
     }
     let body = server.get_json(&path).await?;
     let mut result: barca_core::status::StatusResult = serde_json::from_value(body.clone())
@@ -490,6 +497,10 @@ fn server_runs(
     limit: Option<usize>,
 ) -> bool {
     use barca_core::sql::{names, tables};
+    // Node ids in SQL string literals are values, including in a tick-outcomes predicate.
+    // Doubled single quotes escape a quote within a literal.
+    let identifiers = query.split('\'').step_by(2).collect::<Vec<_>>().join(" ");
+    let query = identifiers.as_str();
     let barca = tables::NAMES;
     let views = catalog
         .views

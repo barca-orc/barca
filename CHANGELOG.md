@@ -14,6 +14,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- Status reports cause counts, filters by cause, health or root, scopes groups by name and reads a server rollup at the current second with `--now`. Use `barca cancel RUN_ID` to cancel server work (#1043, #932).
+
 - **The key explorer renders served keys, and the graph view and the sidebar use the health
   map's words and colours (#1036).** `barca status NODE --keys` takes the explorer's filters
   as flags, all of which must hold: `--state`, `--needs-run` (the keys a run computes),

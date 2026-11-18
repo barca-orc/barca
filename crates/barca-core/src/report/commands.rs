@@ -1517,15 +1517,16 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
         "SCOPE".to_string(),
         "NODES".to_string(),
         "ASSETS".to_string(),
-        "HEALTH (nodes)".to_string(),
+        "CAUSE (nodes)".to_string(),
     ]];
     for entry in rollup.entries.iter().filter(|e| e.kind != EntryKind::Node) {
-        let mut health = match entry.health.line() {
-            line if line.is_empty() => "-".to_string(),
+        let mut causes = match entry.causes.line() {
+            line if line.is_empty() && entry.nodes > 0 => format!("all {} fresh", entry.nodes),
+            line if line.is_empty() => "-".to_owned(),
             line => line,
         };
         if entry.running > 0 {
-            health.push_str(&format!(" · {} running", entry.running));
+            causes.push_str(&format!(" · {} running", entry.running));
         }
         // When what has an estimate is expected fresh, and how many have none (#962).
         let now = chrono::Utc::now().timestamp();
@@ -1534,16 +1535,16 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             .as_deref()
             .and_then(|at| crate::estimates::clock(at, now, true))
         {
-            health.push_str(&format!(" · fresh by ~{by}"));
+            causes.push_str(&format!(" · fresh by ~{by}"));
         }
         if entry.unbounded > 0 {
-            health.push_str(&format!(" · {} with no estimate", entry.unbounded));
+            causes.push_str(&format!(" · {} with no estimate", entry.unbounded));
         }
         rows.push([
             format!("{}{}", "  ".repeat(depth(entry)), entry.label),
             entry.nodes.to_string(),
             entry.assets.to_string(),
-            health,
+            causes,
         ]);
     }
     let width = |i: usize| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);

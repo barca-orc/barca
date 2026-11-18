@@ -30,11 +30,27 @@ Options:
       --state <STATE>
           Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh
 
+      --cause <CAUSE>
+          Keep nodes with this cause
+
+          [possible values: failing, overdue, no_refresh_path, queued, undecided, catching_up]
+
+      --health <HEALTH>
+          Keep nodes with this health
+
+          [possible values: failing, blocked, suspect, behind, undecided, never_run, ok]
+
+      --root <ROOT>
+          Keep nodes with this root id
+
       --problems
-          Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
+          List problems by distance from fresh; omit work already in hand unless selected by cause
 
       --rollup
-          Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each
+          Experimental: print the rollup instead of the nodes: counts by cause per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each
+
+      --now
+          Evaluate the rollup at the current second (server polls default to the minute)
 
       --keys
           Experimental: list the keys of one partitioned target, each with its state
@@ -101,10 +117,14 @@ Examples:
   barca status total --server              # cache state on the configured barca server
   barca status total --json                # with a server configured: its ledger, plus `local` per node
   barca status total --local               # this machine's own state, even with a server configured
+  barca status --cause overdue             # nodes whose ticks did not leave them fresh
+  barca status --health behind             # nodes classified behind
+  barca status --root failure:pipeline.py:source  # nodes held by this failure
   barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
   barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
   barca status --problems --server         # what needs attention on the configured server
-  barca status --rollup                    # counts by health per group and file, then what holds the nodes that are not fresh and what clears each
+  barca status --rollup --now --server     # evaluate the deployed graph at the current second
+  barca status --rollup                    # counts by cause per group and file, then what holds the nodes that are not fresh and what clears each
   barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
   barca status --json --fields id,health,cause,root,gap_seconds   # why each node is not fresh, and what explains it
   barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server

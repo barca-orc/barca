@@ -47,7 +47,7 @@ barca status pipeline.py --fields id,cache      # JSON with only these keys per 
 barca status pipeline.py --json --sample 2      # plus up to 2 sample rows per json/parquet artifact
 barca status pipeline.py --problems             # only the nodes that need attention (below)
 barca status pipeline.py --state stale,never_run   # only nodes in these cache states
-barca status pipeline.py --rollup               # counts by health per group and file ("The rollup" below)
+barca status pipeline.py --rollup               # counts by cause per group and file ("The rollup" below)
 ```
 
 The examples run on this `pipeline.py`:
@@ -200,15 +200,11 @@ as in JSON (`never-run` is accepted for `never_run`). An unknown state is a usag
 naming the valid ones; `failed` is not a state (a failed node is `stale` or `never_run` with
 reason `failed`), and the error says to use `--problems`.
 
-`--problems` keeps every node that needs attention:
-
-- every state but `cached` and `always_runs`: `unsynced`, `stale`, `never_run`, `partial`,
-  `blocked` and `unknown`. A node that never ran counts: nothing it would serve exists yet;
-- a task or sensor (`always_runs`) whose last run failed;
-- a node whose schedule is paused or failing (below).
-
-A cached node and a task that last succeeded are fine. Given both, a node must pass both
-(`--problems --state stale` is the stale nodes). The filter applies after the targets' cones and
+`--problems` lists failures, overdue nodes, queue problems, nodes with a cache state other than
+`cached` or `always_runs`, a failed last task or sensor run, or a paused or
+failing schedule. It excludes work already catching up or waiting normally for a slot. Pass
+`--problems --cause catching_up` or `--problems --cause queued` to list that work.
+The filter applies after the targets' cones and
 before `--limit`; `total` counts the nodes that passed. The **summary still counts every node in
 scope**, so the counts do not change with the filter, and the JSON names the filter in `filter`
 (`{"problems": true}`, `{"states": ["stale"]}`); it is absent without one. The table says how many
@@ -227,13 +223,12 @@ ratio         asset  never-run    failed: ZeroDivisionError: division by zero   
 3 of 4 nodes match --problems; the counts below are for every node
 
 1 cached, 1 stale, 1 never run, 0 partial, 0 unknown, 1 always run
-Health (nodes listed): 2 failing, 1 behind
+Health: 2 failing, 1 behind, 1 ok
 ```
 
-The `Health` line counts the nodes listed, so it says so under a filter; the `Gap` and `Data`
-lines that follow it are for every node in scope, like the counts. `--problems` selects by cache state,
-last run and schedule as listed above, not by health: a task that never ran is `never run` and
-is not a problem.
+The Health, Gap and Data lines count the whole scope before filters or limits.
+Use `--health`, `--cause` and `--root` to select the corresponding node fields.
+Problems are ordered by cause weight.
 
 A node whose last run failed shows the first line of its error in WHY: `failed:
 ZeroDivisionError: division by zero` for reason `failed`, `last run failed: ...` for a task or
@@ -271,17 +266,17 @@ web UI's key explorer renders (`--keys` and `--overview`).
 `barca status --rollup` prints, instead of the nodes, how they add up: one tree of everything
 in scope, then each group ([Groups](/reference/groups/)), then, for nodes in no group, each source
 file. Every level is the exact sum of what is under it, and every count names its unit:
-`NODES` counts assets, tasks and sensors, `ASSETS` counts assets only, and the health words
+`NODES` counts assets, tasks and sensors, `ASSETS` counts assets only, and the cause words
 count nodes. Within a level the worst health comes first. Under the tree it prints the gap
 and then the to-do list: what holds the nodes that are not fresh, and what clears each. On a
 project where `orders` (in the group `ingest`, with a sensor) failed and blocks two assets
 below it:
 
 ```
-SCOPE          NODES  ASSETS  HEALTH (nodes)
-all                6       4  1 failing · 2 blocked · 3 ok · 3 with no estimate
-  ingest           2       1  1 failing · 1 ok · 1 with no estimate
-  pipeline.py      4       3  2 blocked · 2 ok · 2 with no estimate
+SCOPE          NODES  ASSETS  CAUSE (nodes)
+all                6       4  3 failing · 3 with no estimate
+  ingest           2       1  1 failing · 1 with no estimate
+  pipeline.py      4       3  2 failing · 2 with no estimate
 
 Gap: 3 failing (nodes); 3 with no estimate
 
@@ -311,6 +306,8 @@ were classified at. The kinds of root and of action are in [barca status: Fields
 ```bash
 barca status --rollup                    # the whole project
 barca status total pipeline.py --rollup  # `total` and its upstream cone
+barca status Reports --rollup            # a uniquely named group and its upstream cone
+barca status --rollup --server --now     # classify at the current second on the server clock
 barca status --rollup --json             # the document below (the default when piped)
 barca status --rollup --server           # the configured server's: GET /state/rollup
 ```
