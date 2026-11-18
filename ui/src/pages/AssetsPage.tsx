@@ -318,7 +318,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                       {typicalText(r)}
                     </td>
                   )}
-                  {columns.next && <td className="col-next"><Age at={r.nextRunMs} nowMs={now} /></td>}
+                  {columns.next && <td className="col-next">{r.scheduleHeld ? "held" : <Age at={r.nextRunMs} nowMs={now} />}</td>}
                 </tr>
                 )
               })}

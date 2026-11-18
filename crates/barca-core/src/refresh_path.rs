@@ -40,6 +40,10 @@ pub struct RefreshPath {
     /// A running scheduler fires the schedule. False without one (no `barca serve` here, a
     /// `--read-only` server) and for a schedule held after `max_failures` failed ticks.
     pub live: bool,
+    /// Where the schedule stands, in one word (`schedule.state`): `paused`, `held`, `late`,
+    /// `overrunning` or `on_time`.
+    #[serde(default)]
+    pub state: crate::schedule_standing::ScheduleState,
     /// How many finished ticks of the node's path had it as a target and did not leave it
     /// fresh (`failed` or `not_reached`), counted back from the newest to the last one that
     /// found it up to date or rebuilt it, and only those that ended after its newest
@@ -69,10 +73,17 @@ impl RefreshPath {
                 })
                 .to_string()
             });
+        use crate::schedule_standing::ScheduleState;
         let path = match (self.paused, self.live, next) {
             (true, _, Some(next)) => format!("{by} is paused, next tick {next}"),
             (true, _, None) => format!("{by} is paused"),
+            (false, true, Some(next)) if self.state == ScheduleState::Overrunning => {
+                format!("next tick {next} by {by}, which is overrunning")
+            }
             (false, true, Some(next)) => format!("next tick {next} by {by}"),
+            (false, _, _) if self.state == ScheduleState::Held => {
+                format!("{by} is held after failed ticks")
+            }
             (false, _, _) => format!("{by} is not firing"),
         };
         match self.missed_ticks {
@@ -163,6 +174,8 @@ pub struct PathSchedule {
     /// Where it stands ([`crate::schedule_standing::standing`]): last tick, typical queue
     /// wait, lateness. `None` for a schedule nothing reported.
     pub standing: Option<Standing>,
+    /// Its one word ([`crate::schedule_standing::ScheduleState`]).
+    pub state: crate::schedule_standing::ScheduleState,
 }
 
 /// A schedule nothing reported (absent from [`PathEvidence::schedules`]): not firing.
@@ -172,6 +185,7 @@ static NOT_FIRING: PathSchedule = PathSchedule {
     live: false,
     failing: false,
     standing: None,
+    state: crate::schedule_standing::ScheduleState::OnTime,
 };
 
 impl PathSchedule {
@@ -203,6 +217,7 @@ impl PathSchedule {
             live,
             failing: block.failing,
             standing: Some(standing.clone()),
+            state: block.state,
         }
     }
 }
@@ -268,19 +283,25 @@ pub fn path_schedule<'a>(
 /// How many of `misses` (a node's finished ticks that did not leave it fresh, as
 /// `(schedule, when the run ended)`, back to the last tick that did:
 /// [`crate::db::LatestTicks::misses`]) count for `node`: those of a schedule of its path that
-/// ended after `last_success` (unix seconds), its newest successful result. A miss older
-/// than that was made good since, by a run no tick started.
+/// ended after `last_success` (unix seconds), its newest successful result, and not before
+/// the latest recovery above it. Once an input recovers, earlier ticks that could not
+/// compute the node cease to count. Later healthy polls do not clear genuine misses.
 pub fn missed_ticks(
     node: &str,
     paths: &Paths,
     misses: &[(String, f64)],
     last_success: Option<i64>,
+    recovered_above: Option<i64>,
 ) -> u32 {
     let schedules = paths.schedules(node);
     misses
         .iter()
         .filter(|(schedule, ended)| {
-            schedules.contains(schedule) && last_success.is_none_or(|at| *ended > at as f64)
+            schedules.contains(schedule)
+                && last_success.is_none_or(|at| *ended > at as f64)
+                // Results are recorded to the second: one in the second the run ended is
+                // the run's own.
+                && recovered_above.is_none_or(|at| ended.floor() >= at as f64)
         })
         .count() as u32
 }
@@ -294,6 +315,7 @@ pub fn refresh_path(node: &str, missed: u32, evidence: PathEvidence<'_>) -> Opti
         next_tick: state.next_tick.and_then(crate::time::rfc3339_secs),
         paused: state.paused,
         live: state.live,
+        state: state.state,
         missed_ticks: missed,
     })
 }
@@ -314,22 +336,18 @@ pub fn recorded_schedules(
             let pause = pauses
                 .get(&job.id)
                 .filter(|p| p.until.is_none_or(|until| until > now.timestamp()));
+            let failed = (
+                failures.get(&job.id).map_or(0, |f| f.failures),
+                job.max_failures,
+            );
             let standing = crate::schedule_standing::standing(
                 &job.cron,
                 zone,
                 now,
-                pause.is_some(),
+                pause.is_some() || failed.0 >= failed.1,
                 ticks.get(&job.id),
             );
-            let block = ScheduleStatus::of(
-                job,
-                standing.clone(),
-                (
-                    failures.get(&job.id).map_or(0, |f| f.failures),
-                    job.max_failures,
-                ),
-                pause,
-            );
+            let block = ScheduleStatus::of(job, standing.clone(), failed, pause);
             (
                 job.id.clone(),
                 PathSchedule::of(job, zone, &standing, &block),
@@ -644,11 +662,11 @@ def both(slow, fast): ...
             (inbox.clone(), 300.0),
             (inbox, 200.0),
         ];
-        assert_eq!(missed_ticks(&orders, &paths, &misses, None), 3);
+        assert_eq!(missed_ticks(&orders, &paths, &misses, None, None), 3);
         // A run nobody scheduled succeeded at 250: the misses before it were made good.
-        assert_eq!(missed_ticks(&orders, &paths, &misses, Some(250)), 2);
-        assert_eq!(missed_ticks(&orders, &paths, &misses, Some(400)), 0);
-        assert_eq!(missed_ticks(&orders, &paths, &[], None), 0);
+        assert_eq!(missed_ticks(&orders, &paths, &misses, Some(250), None), 2);
+        assert_eq!(missed_ticks(&orders, &paths, &misses, Some(400), None), 0);
+        assert_eq!(missed_ticks(&orders, &paths, &[], None, None), 0);
     }
 
     #[test]
@@ -719,6 +737,7 @@ def both(slow, fast): ...
             next_tick: next.map(str::to_string),
             paused,
             live,
+            state: Default::default(),
             missed_ticks: missed,
         };
         let line = |p: RefreshPath| p.line(NOW);

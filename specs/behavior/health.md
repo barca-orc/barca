@@ -234,7 +234,7 @@ Implemented in `crates/barca-core/src/refresh_path.rs` (`Paths`, `path_schedule`
 
 ```json
 {"schedule": "pipeline.py:inbox", "next_tick": "2026-11-17T15:00:00Z",
- "paused": false, "live": true, "missed_ticks": 0}
+ "paused": false, "live": true, "state": "on_time", "missed_ticks": 0}
 ```
 
 - The walk is the scheduler's own target walk (`freshness::tick_targets`, read through
@@ -261,6 +261,14 @@ Implemented in `crates/barca-core/src/refresh_path.rs` (`Paths`, `path_schedule`
   and a pinned asset (`barca pin`) is read as its pinned result, so neither has a path. The
   nodes below one keep theirs: the target list is fixed by the graph, and a tick brings them
   up to date against what the paused or pinned node holds.
+- A tick that could not reach a target during an upstream failure stops counting when that
+  input first succeeds again. Later successful polls do not restart the count.
+- The path's `state` and the schedule's `state` use the same words. A failure hold is
+  `held`. A slot skipped in flight counts as a scheduler decision for lateness; three such
+  skips in the latest twenty decisions give `overrunning` while the scheduler is current.
+- A scheduled run waiting for a slot preserves the underlying change root unless the
+  schedule is queue-bound. A tick cannot promise freshness through a stale paused node.
+
 - `missed_ticks` counts the finished fired ticks of the path's schedules (every schedule that
   reaches the node as a target, not only the one reported) that had the node as a target and
   did not leave it fresh: outcome `failed` or `not_reached`. It counts back from the newest
@@ -358,9 +366,8 @@ The root of a node, by its cause:
 
 - **`failing`:** the failure root `health::classify` names (itself, or `blocked_by`). A node
   whose only failure is its path's held schedule roots at `failure:<scheduled node>`.
-- **`queued`:** `queue:<schedule>` when the schedule's wait is why (its path's schedule is
-  queue-bound or has a waiting tick, or a waiting tick's run plans the node): a `queue` root
-  wins over a change root. A node queued only by a requested run keeps its change root.
+- **`queued`:** a queue-bound schedule is the root. A brief wait for a slot preserves
+  the root that explains why the node needs work.
 - **`no_refresh_path`,** and **`undecided` where no tick of its path will come** (only a run
   decides the node, so what holds it is the missing tick, not the change above it): with a
   path, `schedule_paused:<schedule>` or `scheduler_off:<schedule>`; without one, a paused
@@ -450,12 +457,10 @@ Conformance: `a_root_is_the_change_the_walk_up_stops_at`,
 
 ### Ticks waiting on a run slot (#973)
 
-Nothing new is recorded: the tick record's `queue_wait_seconds` is the evidence. A node on a
-refresh path whose schedule will fire and is queue-bound, or whose newest tick's run waits for
-a run slot now, has cause `queued` and root `queue:<scheduled node>`; the root's `detail`
-states the typical wait, the interval and `max_runs`, and its action is `raise_max_runs`
-(more run slots, or schedules spaced so their runs do not overlap) for a queue-bound schedule
-and `wait` for one that is only waiting now. What a run costs outside its steps is measured
+A waiting tick gives its target the cause `queued`. When its schedule is queue-bound, the
+root is `queue:<scheduled node>`. Its detail states the typical wait, interval and `max_runs`,
+and its action is `raise_max_runs`. A transient wait preserves the target's change root.
+What a run costs outside its steps is measured
 in [#951](https://github.com/barca-orc/barca/issues/951) and not repeated here. Conformance:
 `ticks_that_wait_longer_than_they_are_apart_name_the_queue`
 (`crates/barca-core/src/causes.rs`) and, on a real server with one run slot and two
@@ -494,9 +499,8 @@ called by `health::classify` once per status result:
 
 - **`stale_since`**, a node's own time by what made it not fresh: a failure is
   `failing_since` (the first failed attempt since its last clean run); `inputs_changed` is
-  the earliest `created_at` among its inputs' newest successful results that are newer than
-  its own (a sensor's observation or an asset's result alike); `behind_input` is that input's
-  newer result; the scheduled node of a late schedule is `late_since`; `code_changed` and
+  the earliest recorded change to an input after the node's own successful result
+  (including a changed sensor observation); `behind_input` uses the same change history; the scheduled node of a late schedule is `late_since`; `code_changed` and
   never-run are the source file's modification time, when that is after the node's newest
   successful result. A node that is not fresh because of what is above it (`upstream_stale`,
   blocked) takes the earliest of its own time and those of its not-fresh inputs, so the time
@@ -508,8 +512,8 @@ called by `health::classify` once per status result:
   the graph on an edit; once per CLI command). Its error is one-sided: it is never before the
   change, and an unrelated later edit to the same file moves it forward, so `behind_seconds`
   is a lower bound. A changed helper in another file leaves the node's own file untouched
-  and the time `null`. For `inputs_changed`, an input that changed twice since the node's
-  result dates the staleness from its newest result, also a lower bound.
+  and the time `null`. For `inputs_changed`, later changes or repeated polls preserve the first recorded change
+  since the node's successful result.
 - **`recheck_at`** is `refresh_path.next_tick`, for every node whose path has one, fresh or
   not: the slot itself, exact, without the queue wait. A node that also has
   `expected_fresh_at` is said to be fresh then; one with `recheck_at` alone, rechecked.

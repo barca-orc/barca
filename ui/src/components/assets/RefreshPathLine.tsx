@@ -28,7 +28,8 @@ export function RefreshPathLine({ path, nowMs }: RefreshPathLineProps) {
       <span data-refresh-path={path.schedule}>the schedule of {shortName(path.schedule)}</span>
       {path.next_tick !== null && <span className="barca-cell-sub"> · next tick <Age at={path.next_tick} nowMs={nowMs} /></span>}
       {path.paused && <span className="barca-cell-sub"> · paused</span>}
-      {!path.live && <span className="barca-cell-sub"> · not firing</span>}
+      {(path.state === "held" || path.state === "overrunning") && <span className="barca-cell-sub"> · {path.state}</span>}
+      {!path.live && path.state !== "held" && <span className="barca-cell-sub"> · not firing</span>}
       {path.missed_ticks > 0 && <span className="barca-cell-sub"> · missed {path.missed_ticks} {path.missed_ticks === 1 ? 'tick' : 'ticks'}</span>}
     </KeyValue>
   )

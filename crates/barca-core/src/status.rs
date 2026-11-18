@@ -185,11 +185,21 @@ pub struct ScheduleStatus {
     pub last_status: Option<String>,
     /// The run that tick started (`barca history --run <id>`).
     pub last_run_id: Option<String>,
-    /// The schedule missed a slot and that was longer ago than its grace plus its queue wait
-    /// ([`crate::schedule_standing::standing`]). Never while paused.
+    /// Where it stands, in one word: `paused`, `held` (after `max_failures` failed ticks),
+    /// `late`, `overrunning` (its runs outlast its interval) or `on_time`
+    /// ([`crate::schedule_standing::ScheduleState`]). The word every surface shows.
+    #[serde(default)]
+    pub state: crate::schedule_standing::ScheduleState,
+    /// The fact behind `state` in a line, with what ends it; `null` for `on_time` and
+    /// `paused`.
+    #[serde(default)]
+    pub state_detail: Option<String>,
+    /// A slot passed with nothing decided for it, longer ago than its grace plus its queue
+    /// wait ([`crate::schedule_standing::standing`]). Never while paused or held.
     pub late: bool,
-    /// The first slot after `last_fired` that has passed (RFC 3339, UTC); `null` while on
-    /// time, while paused and when no tick is recorded.
+    /// The first slot that has passed after the newest slot the scheduler decided (fired, or
+    /// skipped because its run was still in flight) (RFC 3339, UTC); `null` while on time,
+    /// while paused or held and when no tick is recorded.
     pub late_since: Option<String>,
     /// Consecutive failed ticks.
     pub failures: u32,
@@ -229,17 +239,18 @@ impl ScheduleStatus {
         self.paused || self.failing
     }
 
-    /// The table's SCHEDULE cell: `*/5 * * * *; failing 3/3`, `0 6 * * *; paused`,
+    /// The table's SCHEDULE cell: `*/5 * * * *; held, failing 3/3`, `0 6 * * *; paused`,
+    /// `*/10 * * * * *; overrunning, next ...`,
     /// `0 6 * * *; next 2026-10-23 06:00:00 UTC`,
     /// `0 6 * * *; late since 2026-10-23 06:00:00 UTC, next 2026-10-24 06:00:00 UTC`.
     pub fn cell(&self) -> String {
-        let state = if self.failing {
-            format!("failing {}/{}", self.failures, self.max_failures)
-        } else if self.paused {
+        let state = if self.paused {
             match &self.paused_until {
                 Some(until) => format!("paused until {}", crate::report::utc_cell(until)),
                 None => "paused".to_string(),
             }
+        } else if self.failing {
+            format!("held, failing {}/{}", self.failures, self.max_failures)
         } else {
             let next = self
                 .next_fire
@@ -248,6 +259,9 @@ impl ScheduleStatus {
                 .unwrap_or_else(|| "no next fire".to_string());
             let next = match self.late_since.as_deref().filter(|_| self.late) {
                 Some(since) => format!("late since {}, {next}", crate::report::utc_cell(since)),
+                None if self.state == crate::schedule_standing::ScheduleState::Overrunning => {
+                    format!("overrunning, {next}")
+                }
                 None => next,
             };
             match self.failures {
@@ -325,7 +339,7 @@ pub fn attach_standings(
             &job.cron,
             zone,
             now,
-            pause.is_some(),
+            pause.is_some() || failures >= job.max_failures,
             ticks.get(&job.id),
         );
         node.schedule = Some(ScheduleStatus::of(
@@ -347,7 +361,19 @@ impl ScheduleStatus {
         (failures, max_failures): (u32, u32),
         pause: Option<&db::SchedulePause>,
     ) -> Self {
+        let state = crate::schedule_standing::ScheduleState::of(
+            &standing,
+            pause.is_some(),
+            (failures, max_failures),
+        );
         Self {
+            state,
+            state_detail: state.detail(
+                crate::targets::short_name(&job.id),
+                &standing,
+                (failures, max_failures),
+                job.kind == crate::NodeKind::Task,
+            ),
             cron: job.cron_str.clone(),
             next_fire: standing.next_fire.and_then(rfc3339_secs),
             last_fired: standing.last_fired.and_then(rfc3339_secs),
@@ -1900,9 +1926,26 @@ mod tests {
             s.cell(),
             "*/5 * * * *; paused until 2026-10-24 00:00:00 UTC"
         );
+        // A pause comes first: resuming it is what the schedule waits for.
         s.failures = 3;
         s.failing = true;
-        assert_eq!(s.cell(), "*/5 * * * *; failing 3/3");
+        assert_eq!(
+            s.cell(),
+            "*/5 * * * *; paused until 2026-10-24 00:00:00 UTC"
+        );
+        s.paused = false;
+        assert_eq!(s.cell(), "*/5 * * * *; held, failing 3/3");
+        // Its runs outlast its interval: said beside the next slot.
+        let s = ScheduleStatus {
+            cron: "*/5 * * * *".into(),
+            next_fire: Some("2026-10-23T06:00:00Z".into()),
+            state: crate::schedule_standing::ScheduleState::Overrunning,
+            ..Default::default()
+        };
+        assert_eq!(
+            s.cell(),
+            "*/5 * * * *; overrunning, next 2026-10-23 06:00:00 UTC"
+        );
     }
 
     #[test]
@@ -1949,7 +1992,7 @@ mod tests {
             table.contains("last run failed: RuntimeError: 503"),
             "{table}"
         );
-        assert!(table.contains("* * * * *; failing 2/2"), "{table}");
+        assert!(table.contains("* * * * *; held, failing 2/2"), "{table}");
         assert!(
             table.contains("failed: ZeroDivisionError: division by zero"),
             "{table}"

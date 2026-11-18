@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '25'
-  description: 'Normative current wire contract; specification version 18 is independent of package versions.
+  version: '26'
+  description: 'Normative current wire contract; specification version 26 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -6588,7 +6588,7 @@ components:
         refresh_path: &id_refresh_path
           type: [object, 'null']
           additionalProperties: false
-          required: [schedule, next_tick, paused, live, missed_ticks]
+          required: [schedule, next_tick, paused, live, state, missed_ticks]
           description: The schedule whose tick brings the node up to date (specs/behavior/health.md,
             "Refresh path"); null when no tick has the node as a target (a Manual asset or task,
             an Always node no scheduled node or polled sensor is above, a sensor only polled as an
@@ -6612,6 +6612,9 @@ components:
               type: boolean
               description: This server's scheduler fires the schedule. false on a --read-only or
                 --no-schedule server and for a schedule held after max_failures failed ticks.
+            state: &schedule_state
+              type: string
+              enum: [paused, held, late, overrunning, on_time]
             missed_ticks:
               type: integer
               minimum: 0
@@ -6685,6 +6688,8 @@ components:
       additionalProperties: false
       description: barca status --json nodes[].schedule. Times are RFC 3339 UTC.
       required:
+      - state
+      - state_detail
       - cron
       - next_fire
       - last_fired
@@ -6703,6 +6708,9 @@ components:
       - typical_run_seconds
       - queue_bound
       properties:
+        state: *schedule_state
+        state_detail:
+          type: [string, 'null']
         cron:
           type: string
         next_fire:
@@ -6733,7 +6741,7 @@ components:
           type:
           - string
           - 'null'
-          description: The first slot after last_fired that has passed; null while on time, while
+          description: The first slot after the newest scheduler decision that has passed; null while on time, while
             paused and when no tick is recorded.
         failures:
           type: integer
@@ -7200,6 +7208,8 @@ components:
       type: object
       additionalProperties: false
       required:
+      - state
+      - state_detail
       - id
       - cron
       - kind
@@ -7222,6 +7232,9 @@ components:
       - typical_run_seconds
       - queue_bound
       properties:
+        state: *schedule_state
+        state_detail:
+          type: [string, 'null']
         id: *id003
         cron: *id003
         typical_queue_wait_seconds: *id_typical_wait
@@ -7277,7 +7290,7 @@ components:
           anyOf:
           - *id054
           - type: 'null'
-          description: The first slot after last_fired that has passed (unix epoch seconds); null
+          description: The first slot after the newest scheduler decision that has passed (unix epoch seconds); null
             while on time, while paused and when no tick is recorded.
         last_skipped:
           description: Last time a due tick was skipped (unix epoch seconds), because a run of the node

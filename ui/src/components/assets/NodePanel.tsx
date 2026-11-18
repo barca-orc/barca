@@ -414,6 +414,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         <KeyValue label="runs when">
           {detail ? freshnessLabel(detail.asset) : <Skeleton width={72} height={12} />}
         </KeyValue>
+        {row?.scheduleHeld && <KeyValue label="schedule">held</KeyValue>}
         {row?.nextRunMs != null && (
           <KeyValue label="next run"><Age at={row.nextRunMs} nowMs={nowMs} /></KeyValue>
         )}

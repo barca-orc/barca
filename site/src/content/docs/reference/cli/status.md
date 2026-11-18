@@ -216,7 +216,7 @@ barca status --problems --json --fields id,cache,last_materialization,schedule
 
 ```
 NAME          KIND   STATE        WHY                                                       LAST RUN                               SHAPE         SCHEDULE                    DEPS
-nightly_sync  task   always-runs  last run failed: RuntimeError: upstream API returned 503  failed 2026-10-22 22:51:16 UTC         -             */2 * * * * *; failing 2/2  -
+nightly_sync  task   always-runs  last run failed: RuntimeError: upstream API returned 503  failed 2026-10-22 22:51:16 UTC         -             */2 * * * * *; held, failing 2/2  -
 prices        asset  stale        changed: code                                             success 2026-10-22 22:51:12 UTC 0.00s  dict (1 key)  -                           -
 ratio         asset  never-run    failed: ZeroDivisionError: division by zero               failed 2026-10-22 22:51:12 UTC         -             -                           orders
 
@@ -333,13 +333,14 @@ table adds a SCHEDULE column when a node it shows is scheduled:
 | `next_fire` | when it next matches (RFC 3339, UTC) |
 | `last_fired` | its newest tick: the slot of the newest run the schedule started or queued (RFC 3339, UTC), or `null` |
 | `last_run_id`, `last_status` | the run that tick started and its status as `barca history` words it (`pending` while it waits in the server's run queue), or `null` |
-| `late`, `late_since` | `late_since` is the first slot after `last_fired` that has passed (RFC 3339, UTC, or `null`); `late` is true when that is further back than the schedule's grace plus its queue wait ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot") |
+| `state`, `state_detail` | schedule standing (`paused`, `held`, `late`, `overrunning`, `on_time`) and its explanation |
+| `late`, `late_since` | `late_since` is the first slot after the newest recorded scheduler decision that has passed (RFC 3339, UTC, or `null`); `late` is true when that is further back than the schedule's grace plus its queue wait ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot") |
 | `failures`, `max_failures`, `failing` | consecutive failed ticks, `Schedule(..., max_failures=N)` (default 5), and `failures >= max_failures`: ticks are skipped ([Scheduling With Cron](/scheduling/)) |
 | `paused`, `paused_until` | held back by `barca pause --schedule NODE` (`POST /schedule/{id}/pause`); `paused_until` is `null` for a pause until resumed |
 | `skip_reason` | why the last due tick was skipped: `in_flight` or `paused`, or `null` |
 | `live` | `true` when a running scheduler reported this entry |
 
-The SCHEDULE cell is `<cron>; failing 2/2`, `<cron>; paused` (or `paused until <time> UTC`), or
+The SCHEDULE cell is `<cron>; held, failing 2/2` (held after `max_failures` failed ticks), `<cron>; paused` (or `paused until <time> UTC`), or
 `<cron>; next <time> UTC`, with `1 failure, ` before `next` while failures are counting and
 `late since <time> UTC, ` before `next` while the schedule is late.
 
