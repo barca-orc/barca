@@ -158,7 +158,7 @@ export function GroupedPipelinePage() {
       ? PENDING_GRAPH_STATE : selectedGroupHealth
     : undefined
   // How many nodes in view a run is working on now, whoever started it.
-  const runningHere = runningCount(scopeIds, byId, live)
+  const runningHere = runningCount(scopeIds, byId)
 
   // Against the URL as it is when the change lands, never the render's copy: a navigation is a
   // transition, and a keystroke right after a click (a search typed after going up a level)

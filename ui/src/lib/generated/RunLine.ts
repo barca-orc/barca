@@ -22,7 +22,17 @@ failure_detail: string | null,
 steps: string,
 /**
  * What `steps` counts, with what was planned and where the run stopped:
- * `Steps are keys: a partitioned node counts one per key · 12 nodes planned · stopped at
+ * `Steps are keys: a partitioned node counts one per key · 12 steps planned · stopped at
  * billing.py:orders`.
  */
-steps_detail: string, };
+steps_detail: string,
+/**
+ * The run's targets in a few words ([`target_line`]): `all assets`, `billing.py:orders`,
+ * `billing.py:orders +21 more`. The full list is `target` (and `explanation.targets` of
+ * one run).
+ */
+target: string,
+/**
+ * How many targets the run named; 0 for a run of everything.
+ */
+target_count: number, };

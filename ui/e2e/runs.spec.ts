@@ -253,10 +253,10 @@ test('a status chip and the search list the runs the server keeps', async ({ pag
 test('a deep queue lists its running run first and leaves the history the page', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
-  const entry = (n: number) => ({ run_id: `q${n}`, status: 'pending', position: n, command: 'get', target: `pipeline.py:t${n}`, triggered_by: 'api', schedule_id: null, queued_at: at(20 - n / 2), started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null })
+  const entry = (n: number) => ({ run_id: `q${n}`, status: 'pending', position: n, command: 'get', target: `pipeline.py:t${n},pipeline.py:second`, target_line: `pipeline.py:t${n} +1 more`, triggered_by: 'api', schedule_id: null, queued_at: at(20 - n / 2), started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null })
   await page.route(/\/queue$/, (route) => route.fulfill({ json: {
-    paused: false, paused_at: null, draining: false, max_runs: 1, capacity: null,
-    running: [{ ...entry(0), run_id: 'live', status: 'running', position: null, target: 'pipeline.py:slow', queued_at: at(25) }],
+    paused: false, paused_at: null, draining: false, max_runs: 1, slots: '1 of 1 running', capacity: null,
+    running: [{ ...entry(0), run_id: 'live', status: 'running', position: null, target: 'pipeline.py:slow', target_line: 'pipeline.py:slow', queued_at: at(25) }],
     queued: Array.from({ length: 18 }, (_, i) => entry(i + 1)),
   } }))
   await page.goto('/ui/#/runs')

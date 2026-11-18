@@ -5,7 +5,7 @@
  */
 export type PartitionProgress = {
 /**
- * Keys not done yet while the node's step is running; 0 while it is queued.
+ * Keys not done yet while the node's step is running; 0 while it waits.
  */
 running: number,
 /**

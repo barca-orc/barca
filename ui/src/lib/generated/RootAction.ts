@@ -15,4 +15,11 @@ command: string | null,
  * their typical step durations (a partitioned node once per key without a result; a
  * node without samples takes the project's median). `null` when none has a sample.
  */
-estimated_seconds: number | null, };
+estimated_seconds: number | null,
+/**
+ * The `barca` command that brings what the root holds up to date once, now, where
+ * `command` is `null` because what clears the root is a declaration (`add_schedule`):
+ * the chain is fresh after it and falls behind again at the next change. `null` for
+ * every other action.
+ */
+run_once: string | null, };

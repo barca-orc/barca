@@ -39,6 +39,9 @@ impl ServeHost {
 }
 
 impl RunHost for ServeHost {
+    fn set_executing(&self, run_id: &str, nodes: std::collections::HashMap<String, usize>) {
+        self.steps.set_executing(run_id, nodes);
+    }
     fn server_owned(&self) -> bool {
         true
     }

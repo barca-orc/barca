@@ -1,3 +1,4 @@
+import { actionWords } from '@/lib/causesView'
 import { keysHref } from '@/lib/keysPage'
 import { useEffect, useMemo, useState } from 'react'
 import { plural } from '@/lib/plural'
@@ -7,7 +8,7 @@ import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, Si
 import { runGlyph } from '@/lib/runs'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
-import { formatAbsolute } from '@/lib/time'
+import { formatAbsolute, formatEstimate } from '@/lib/time'
 import { ArtifactSchema } from './ArtifactSchema'
 import { AssetVersions } from './AssetVersions'
 import { CopyButton, KeyErrors, NodeKeys, PartitionBar } from './NodeKeys'
@@ -206,7 +207,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {/* Since when it is out of date and when it is expected fresh, or only rechecked: the server's estimates. */}
         <EstimateLine staleSince={node.stale_since} expectedFreshAt={node.expected_fresh_at} recheckAt={node.recheck_at} noEstimate={node.no_estimate} nowMs={nowMs} />
         {node.running && (
-          <KeyValue label="computing now">
+          <KeyValue label={node.running.step === 'running' ? 'computing now' : 'run'}>
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}
             <span className="barca-cell-sub">started by {startedBy(node.running.triggered_by)}</span>
           </KeyValue>
@@ -305,6 +306,15 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
             </span>
           </KeyValue>
         )}
+        {rollupRoots?.filter((root) => root.node === node.id).map((root) => {
+          const action = actionWords(root)
+          return <KeyValue key={root.id} label="root">
+            Holds {plural(root.nodes, 'node')} · {root.fresh_by && <>{plural(root.nodes - root.unbounded, 'node')} expected fresh by {formatEstimate(root.fresh_by, zone, nowMs)} </>}
+            {root.unbounded > 0 && <>{root.unbounded} with no estimate </>}
+            · {action.word} {action.hint} {action.command && <code>{action.command}</code>}
+            {root.action.run_once && <> · run once <code>{root.action.run_once}</code></>}
+          </KeyValue>
+        })}
         <KeyValue label="downstream">
           {impact === 0 ? 'nothing reads it' : impact === 1 ? '1 node depends on it' : `${impact.toLocaleString()} nodes depend on it`}
         </KeyValue>

@@ -875,7 +875,7 @@ def hourly(below_loose): ...
                 root.action.estimated_seconds
             ),
             (
-                ActionKind::Run,
+                ActionKind::RunByHand,
                 Some("barca get signed --refresh reviewed"),
                 Some(61)
             )
@@ -1233,7 +1233,27 @@ def rows(feed): ...
         );
         assert_eq!(
             rollup.root().gap_line(NOW),
-            "1 undecided · 1 catching up (nodes); about 1 fresh within 4m, 1 with no estimate"
+            "1 undecided · 1 catching up (nodes); about 1 fresh within 4m, 1 with no estimate; 1h of gap across nodes (node-time)"
+        );
+    }
+
+    #[test]
+    fn a_manual_task_has_no_result_due_before_its_first_request() {
+        let mut world = World::new(
+            "from barca import task, Manual\n@task(freshness=Manual)\ndef release(): ...\n",
+        );
+        let previous_run = world.node("release").last_materialization.clone();
+        world.set("release", "never_run", &[]);
+        world.classify();
+        let node = world.node("release");
+        assert_eq!(node.health_reason, crate::health::HealthReason::OnDemand);
+        assert!(assert_held(&world).roots.is_empty());
+        world.nodes[0].last_materialization = previous_run;
+        world.fail("release");
+        world.classify();
+        assert_eq!(
+            assert_held(&world).roots[0].action.kind,
+            ActionKind::FixFailure
         );
     }
 
@@ -1366,7 +1386,7 @@ def pulse(): ...
     }
 
     #[test]
-    fn on_the_audit_shape_three_roots_hold_nine_in_ten_of_what_is_not_fresh() {
+    fn on_the_audit_shape_actionable_roots_lead() {
         let world = audit();
         assert_eq!(world.nodes.len(), 698);
         let rollup = assert_held(&world);
@@ -1381,10 +1401,10 @@ def pulse(): ...
             seen,
             [
                 ("no_schedule:p.py:ledger", 152, ActionKind::AddSchedule),
+                ("queue:p.py:pulse", 6, ActionKind::RaiseMaxRuns),
                 ("sensor_value:p.py:inbox", 180, ActionKind::Wait),
                 ("code:p.py:prices", 60, ActionKind::Wait),
                 ("env:p.py:rates", 24, ActionKind::Wait),
-                ("queue:p.py:pulse", 6, ActionKind::RaiseMaxRuns),
             ]
         );
         // The scope's own list says the same, and how much its head explains (#967).
@@ -1397,15 +1417,14 @@ def pulse(): ...
                 .collect::<Vec<_>>(),
             [
                 ("no_schedule:p.py:ledger", 152, 152),
-                ("sensor_value:p.py:inbox", 180, 332),
-                ("code:p.py:prices", 60, 392),
-                ("env:p.py:rates", 24, 416),
-                ("queue:p.py:pulse", 6, 422),
+                ("queue:p.py:pulse", 6, 158),
+                ("sensor_value:p.py:inbox", 180, 338),
+                ("code:p.py:prices", 60, 398),
+                ("env:p.py:rates", 24, 422),
             ]
         );
         let top: usize = rollup.roots.iter().take(3).map(|r| r.nodes).sum();
-        assert!(top * 10 >= behind * 9, "{top} of {behind}");
-        assert_eq!(top, 392);
+        assert_eq!(top, 338);
         let causes = rollup.root().causes;
         assert_eq!(
             (
@@ -1422,7 +1441,7 @@ def pulse(): ...
         // 180 that a tick will decide or compute 2 each.
         assert_eq!(
             rollup.roots.iter().map(|r| r.weight).collect::<Vec<_>>(),
-            [912, 360, 120, 48, 12]
+            [912, 12, 360, 120, 48]
         );
         assert_eq!(
             rollup.roots.iter().map(|r| r.weight).sum::<usize>() + 276,
@@ -1440,7 +1459,7 @@ def pulse(): ...
             .collect();
         println!("{text}");
         assert!(text.contains("What holds the 422 nodes that are not fresh, and what clears it:"));
-        assert!(text.contains("The first 3 hold 392 of them."));
+        assert!(text.contains("The first 3 hold 338 of them."));
         assert!(text.contains("1. no schedule: ledger"));
         assert!(
             text.contains(
@@ -1456,9 +1475,7 @@ def pulse(): ...
         ));
     }
 
-    /// #1028: roots rank by the weight they hold, so a failure that blocks 20 nodes is among
-    /// the first three, ahead of a change that holds 60 a tick will bring up to date, and the
-    /// first three hold three quarters of what is not fresh.
+    /// #1041: a failure and a queue-bound schedule both outrank a larger waiting chain.
     #[test]
     fn roots_rank_by_weight_and_a_failure_with_blocked_nodes_is_among_the_first_three() {
         let world = audit_with(20);
@@ -1474,20 +1491,18 @@ def pulse(): ...
             seen,
             [
                 ("no_schedule:p.py:ledger", 152, 912),
-                ("sensor_value:p.py:inbox", 180, 360),
                 ("failure:p.py:load", 21, 126),
+                ("queue:p.py:pulse", 6, 12),
+                ("sensor_value:p.py:inbox", 180, 360),
                 ("code:p.py:prices", 60, 120),
                 ("env:p.py:rates", 24, 48),
-                ("queue:p.py:pulse", 6, 12),
             ]
         );
         let third = &rollup.root().held_by[2];
-        assert_eq!(third.root, "failure:p.py:load");
-        assert!(
-            third.cumulative_nodes * 4 >= behind * 3,
-            "{} of {behind}",
-            third.cumulative_nodes
-        );
+        assert!(rollup.roots[..3].iter().all(|r| r.needs_someone));
+        assert_eq!(third.root, "queue:p.py:pulse");
+        assert_eq!(third.cumulative_nodes, 179);
+        assert_eq!(rollup.root().split.need_someone, 3);
     }
 
     /// #968: a node that is not fresh and has no `expected_fresh_at` says why in one word;

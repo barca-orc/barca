@@ -12,7 +12,8 @@ export type RunNow = {
  */
 running: Array<ActiveNode>,
 /**
- * How many nodes wait (for a run slot or for their upstream steps).
+ * How many nodes the run has not started executing: they wait for their upstream steps,
+ * or, for a run in the queue, for its run slot.
  */
 queued: number,
 /**
@@ -26,7 +27,7 @@ keys: KeysDone | null,
 groups: Array<GroupActivity>,
 /**
  * The same in one line, as `barca history --status running` prints it under the run:
- * `executing 3: orders, clean, report · 12 queued · 240/900 keys`. The first
+ * `executing 3: orders, clean, report · 12 waiting · 240/900 keys`. The first
  * [`NOW_NAMES`] nodes are named, by their short names.
  */
 line: string, };

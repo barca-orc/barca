@@ -132,6 +132,8 @@ pub enum HealthReason {
     NoSuccessfulRun,
     /// `ok`: a task, sensor or `always` asset whose last run did not fail.
     LastRunSucceeded,
+    /// An explicitly Manual task has no result due before its first requested run.
+    OnDemand,
     /// `ok`: `cache.state` is `cached`.
     Cached,
 }
@@ -156,6 +158,7 @@ impl HealthReason {
             HealthReason::NeverRun => "never_run",
             HealthReason::NoSuccessfulRun => "no_successful_run",
             HealthReason::LastRunSucceeded => "last_run_succeeded",
+            HealthReason::OnDemand => "on_demand",
             HealthReason::Cached => "cached",
         }
     }
@@ -988,6 +991,14 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
                 evidence.late.contains(&node.id),
                 checked,
             );
+            let (health, reason) = if health == Health::NeverRun
+                && node.kind == "task"
+                && evidence.path.paths.is_manual(&node.id)
+            {
+                (Health::Ok, HealthReason::OnDemand)
+            } else {
+                (health, reason)
+            };
             // The failure root; every other cause's root is named below
             // ([`crate::causes::attribute`]), once the paths and the times are known.
             let root = match health {
@@ -1057,7 +1068,12 @@ pub fn attach(result: &mut StatusResult, evidence: Evidence<'_>, running: &HashS
     classify(&mut result.nodes, evidence);
     result.data_coverage = DataCoverage::of(&result.nodes);
     result.as_of = crate::time::rfc3339_secs(evidence.now);
-    result.rollup = Some(crate::rollup::total(&result.nodes, running));
+    let roots = crate::rollup::roots(&result.nodes, evidence, false);
+    result.rollup = Some(crate::rollup::total(
+        &result.nodes,
+        running,
+        &crate::rollup::root_actions(&roots),
+    ));
 }
 
 /// [`attach`] with the evidence the metadata DB of `cfg` holds (none when it does not exist

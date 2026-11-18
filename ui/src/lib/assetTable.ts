@@ -147,7 +147,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
         scheduleHeld: n.schedule?.state === "held",
         nextRunMs: n.schedule?.state === "held" || n.next_run === null ? null : n.next_run * 1000,
-        running: n.running ?? null,
+        running: n.running?.step === 'running' ? n.running : null,
       }
     })
     .sort(compareByCause)

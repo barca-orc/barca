@@ -4711,7 +4711,9 @@ components:
       - estimated_start_at
       - wait_seconds
       - waiting_for
+      - target_line
       properties:
+        target_line: {type: string}
         run_id:
           type: string
         status:
@@ -4833,7 +4835,9 @@ components:
       - running
       - queued
       - capacity
+      - slots
       properties:
+        slots: {type: string}
         paused:
           type: boolean
           description: Paused by an operator (POST /queue/pause); kept across restarts.
@@ -5017,7 +5021,7 @@ components:
       description: One entry of the rollup tree. Every count is the exact sum of its children's.
       required: [id, kind, label, parent, children, nodes, assets, running, health, asset_health,
         data_coverage, causes, asset_causes, not_fresh, weight, weights, held_by, gap_seconds,
-        unbounded, fresh_by, also_in]
+        unbounded, fresh_by, stale_since, split, also_in]
       properties:
         id:
           type: string
@@ -5125,16 +5129,29 @@ components:
             undecided: {type: integer, minimum: 0}
             catching_up: {type: integer, minimum: 0}
             fresh: {type: integer, minimum: 0}
+        stale_since: {type: [string, 'null'], format: date-time}
+        split:
+          type: object
+          additionalProperties: false
+          required: [need_someone, catching_up, run_by_hand, need_someone_nodes, in_hand_nodes, need_someone_weight, in_hand_weight]
+          properties:
+            need_someone: {type: integer, minimum: 0}
+            catching_up: {type: integer, minimum: 0}
+            run_by_hand: {type: integer, minimum: 0}
+            need_someone_nodes: {type: integer, minimum: 0}
+            in_hand_nodes: {type: integer, minimum: 0}
+            need_someone_weight: {type: integer, minimum: 0}
+            in_hand_weight: {type: integer, minimum: 0}
         held_by:
           type: array
           description: The roots that hold the not-fresh nodes underneath, each with what it holds
             under this entry, in the order of the root list applied to what is held here (the
-            most weight first). Their nodes add up to not_fresh. Empty on a node entry.
+            actionable roots first, then the most weight). Their nodes add up to not_fresh. Empty on a node entry.
           items:
             type: object
             additionalProperties: false
             required: [root, nodes, assets, causes, gap_seconds, unbounded, weight,
-              cumulative_nodes]
+              cumulative_nodes, action_kind, stale_since, fresh_by]
             properties:
               root:
                 type: string
@@ -5172,6 +5189,9 @@ components:
                 minimum: 0
                 description: The weight of those nodes; each counts its cause's weight. What the
                   list is ranked by.
+              action_kind: {type: string, enum: [wait, run, run_by_hand, add_schedule, resume_schedule, start_server, fix_failure, raise_max_runs]}
+              stale_since: {type: [string, 'null'], format: date-time}
+              fresh_by: {type: [string, 'null'], format: date-time}
               cumulative_nodes:
                 type: integer
                 minimum: 1
@@ -5225,7 +5245,7 @@ components:
       additionalProperties: false
       description: One upstream fact and what it holds; every node whose root.id is this root's.
       required: [id, kind, node, detail, error_group, nodes, assets, causes, gap_seconds,
-        unbounded, weight, action]
+        unbounded, weight, needs_someone, stale_since, fresh_by, action]
       properties:
         id:
           type: string
@@ -5279,17 +5299,20 @@ components:
           type: integer
           minimum: 0
           description: The weight of the nodes it holds; each counts its cause's weight. roots is
-            ranked by it, the most first, a failure first among equals, then nodes, gap_seconds
+            ranked by actionability and then by it, the most first, a failure first among equals, then nodes, gap_seconds
             and id.
+        needs_someone: {type: boolean}
+        stale_since: {type: [string, 'null'], format: date-time}
+        fresh_by: {type: [string, 'null'], format: date-time}
         action:
           type: object
           additionalProperties: false
           description: What clears the root.
-          required: [kind, command, estimated_seconds]
+          required: [kind, command, estimated_seconds, run_once]
           properties:
             kind:
               type: string
-              enum: [wait, run, add_schedule, resume_schedule, start_server, fix_failure,
+              enum: [wait, run, run_by_hand, add_schedule, resume_schedule, start_server, fix_failure,
                 raise_max_runs]
               description: wait (a run in flight or the next tick computes what it holds), run
                 (ticks missed what it holds, or no tick computes a Manual or pinned node), add_schedule,
@@ -5300,6 +5323,7 @@ components:
               type: [string, 'null']
               description: The barca command that clears the root, naming --server; null when the
                 action is not a command.
+            run_once: {type: [string, 'null'], description: One-time refresh command for an unscheduled chain.}
             estimated_seconds:
               type: [integer, 'null']
               minimum: 0
@@ -5426,7 +5450,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RollupRoot'
-          description: What holds the nodes that are not fresh, ranked by weight; the most weight
+          description: What holds the nodes that are not fresh, actionable roots first; the most weight
             held first, a failure first among equals, then nodes, gap_seconds and id.
         data_coverage:
           $ref: '#/components/schemas/RollupCoverage'
@@ -6503,7 +6527,7 @@ components:
           type: string
           enum: [last_attempt_failed, keys_failed, upstream_failing, cache_blocked, empty,
             rows_changed, behind_input, schedule_late, stale, partial, unsynced,
-            checked_up_to_date, unknown, never_run, no_successful_run, last_run_succeeded, cached]
+            checked_up_to_date, unknown, never_run, no_successful_run, last_run_succeeded, on_demand, cached]
           description: The rule that decided health. checked_up_to_date is ok for a node whose
             cache.state is unknown and whose last_check found it up to date or rebuilt it, while
             that check stands (specs/behavior/health.md, "What estimates change"). Experimental.
@@ -6958,7 +6982,9 @@ components:
       - started_at
       - step
       - partitions
+      - label
       properties:
+        label: {type: string}
         run_id:
           type: string
           description: The run (GET /runs/{run_id}).
@@ -6982,8 +7008,8 @@ components:
       enum:
       - queued
       - running
-      description: queued while the run waits for a run slot or for the node's upstream steps;
-        running once the node's step executes. A CLI run reports running for its targets.
+      - waiting
+      description: Queued for a run slot, waiting within a run, or executing on a worker.
     PartitionProgress:
       type: object
       additionalProperties: false
@@ -7486,8 +7512,10 @@ components:
       type: object
       additionalProperties: false
       description: A run in the words of a list row, the line of barca history --json. Experimental.
-      required: [steps, steps_detail, failure, failure_detail]
+      required: [steps, steps_detail, failure, failure_detail, target, target_count]
       properties:
+        target: {type: string}
+        target_count: {type: integer, minimum: 0}
         steps:
           type: string
           description: The run's steps by outcome, "7 ok · 1 failed · 0 cached", or "3 started · 0
@@ -8271,11 +8299,46 @@ components:
     RunExplanation:
       type: object
       additionalProperties: false
-      required: [targets, requested_by, attempts, steps, target_outcomes, cancellation, why, progress, slowest]
+      required: [targets, target_line, counts, outputs, requested_by, attempts, steps, target_outcomes, cancellation, why, progress, slowest]
       description: The run in words, derived from what it recorded (plan_reasons, cancellation, its
         counters and steps_page.nodes) by the code that prints barca history RUN_ID, whose --json has
         the same object. The wording may change; parse the recorded fields. Experimental.
       properties:
+        target_line: {type: string}
+        counts:
+          type: object
+          additionalProperties: false
+          required: [steps, ran, ok, failed, cached, not_reached, nodes, not_reached_nodes, attempts, retries, outcome, planned, units, not_reached_line, attempts_line]
+          properties:
+            steps: {type: integer}
+            ran: {type: integer}
+            ok: {type: integer}
+            failed: {type: integer}
+            cached: {type: integer}
+            not_reached: {type: integer}
+            nodes: {type: [integer, 'null']}
+            not_reached_nodes: {type: [integer, 'null']}
+            attempts: {type: [integer, 'null']}
+            retries: {type: [integer, 'null']}
+            outcome: {type: string}
+            planned: {type: string}
+            units: {type: string}
+            not_reached_line: {type: [string, 'null']}
+            attempts_line: {type: [string, 'null']}
+        outputs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [node_id, line, format, path, rows, size_bytes, keys]
+            properties:
+              node_id: {type: string}
+              line: {type: string}
+              format: {type: [string, 'null']}
+              path: {type: [string, 'null']}
+              rows: {type: [integer, 'null']}
+              size_bytes: {type: [integer, 'null']}
+              keys: {type: [integer, 'null']}
         targets:
           type: array
           description: The run's targets, one each; its job's node ids, else the targets as given. Empty

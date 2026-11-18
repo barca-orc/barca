@@ -39,6 +39,8 @@ pub struct SharedBudget {
 /// [`Self::shares_steps`]; their arguments are as `barca_core::serve::capacity::SharedCapacity`
 /// and `barca_core::serve::claims::SharedSteps` take them.
 pub trait RunHost: Send + Sync + std::fmt::Debug {
+    /// Replace this run's snapshot of active worker steps, grouped by base node.
+    fn set_executing(&self, _run_id: &str, _nodes: std::collections::HashMap<String, usize>) {}
     /// Whether the run belongs to a server, which owns the final shutdown backup: the run's
     /// own end takes a routine backup instead.
     fn server_owned(&self) -> bool;

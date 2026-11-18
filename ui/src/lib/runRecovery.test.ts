@@ -58,7 +58,7 @@ describe('incident summary', () => {
   const tb = '  File "/x/p.py", line 3, in helper\n  File "/x/p.py", line 9, in load\n    raise ValueError("bad")'
   const step = { node_id: 'p.py:load', status: 'failed', error: 'ValueError: bad\nmore', error_type: 'ValueError', error_message: 'bad', error_traceback: tb } as RunStep
   const view = {
-    run_id: 'r1', status: 'failed', command: 'get', target: 'load', triggered_by: 'schedule',
+    run_id: 'r1', status: 'failed', command: 'get', target: 'load,save', explanation: { target_line: 'load +1 more' }, triggered_by: 'schedule',
     started_at: '2026-11-07T10:00:00Z', elapsed_seconds: 75, error: 'ValueError: bad', failure: null,
     steps: [step, { node_id: 'p.py:ok', status: 'success' } as RunStep],
   } as unknown as RunView
@@ -66,7 +66,7 @@ describe('incident summary', () => {
     expect(raisedAt(tb)).toBe('/x/p.py:9 in load')
     const md = incidentSummary(view, 'http://h/runs?run=r1')
     expect(md).toContain('[r1](http://h/runs?run=r1)')
-    expect(md).toContain('`get load`')
+    expect(md).toContain('`get load +1 more`')
     expect(md).toContain('**Triggered by:** schedule')
     expect(md).toContain('**Started:** 2026-11-07T10:00:00Z')
     expect(md).toContain('**Duration:** 1m 15s')
