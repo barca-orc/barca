@@ -68,7 +68,7 @@ command is experimental with it):
 | `barca plan` | prints the planner's internal phase/stream layout, which changes with scheduling work |
 | `barca sql` | new in 0.13: the view naming and the JSON result shape may change after field use |
 | `barca cancel` | Cancel a queued or running server run; the response follows DELETE /runs/{id} |
-| `barca queue` | a read-only server reports the writer's recorded `max_runs`, or null when unknown; the run queue's JSON shape, its table and the pause's scope may change after field use |
+| `barca queue` | new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use |
 | `barca pause` | new in 0.41: pausing assets for scheduled runs; the JSON shape, the table and what a pause covers may change after field use |
 | `barca resume` | new in 0.41: resuming paused assets; the JSON shape and the table may change after field use |
 | `barca get --allow-paused` | new in 0.41: runs a paused target by hand; which requests need it may change after field use |
@@ -245,7 +245,7 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca unpin` | `<TARGET> [<FILES>...]` | experimental: new in 0.41 (barca docs pins): the JSON shape may change after field use | Remove an asset's pin; the next run decides it as before |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open | Manage runs, schedules and results on a server |
 | `barca cancel` | `<RUN_ID>` | experimental: Cancel a queued or running server run; the response follows DELETE /runs/{id} | Cancel a queued or running server run |
-| `barca queue` | `[<ACTION>]` | experimental: a read-only server reports the writer's recorded `max_runs`, or null when unknown; the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
+| `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca pause` | `[<TARGET>]` | experimental: new in 0.41: pausing assets for scheduled runs; the JSON shape, the table and what a pause covers may change after field use | Pause assets on a barca server: scheduled runs skip them until resumed (experimental) |
 | `barca resume` | `[<TARGET>]` | experimental: new in 0.41: resuming paused assets; the JSON shape and the table may change after field use | Resume paused assets on a barca server (experimental) |
 | `barca list` | `[<FILES>...]` | stable | List all discovered definitions (assets, tasks, sensors) with their deps |
