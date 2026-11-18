@@ -54,6 +54,7 @@ pub struct Queue {
 /// The counts of a recorded queue: paused, queued, running.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedCounts {
+    pub max_runs: Option<usize>,
     pub paused: bool,
     pub queued: usize,
     pub running: usize,
@@ -81,6 +82,7 @@ impl Queue {
     /// Note what a read of the recorded queue found.
     fn note_recorded(&self, view: &QueueView) {
         let counts = RecordedCounts {
+            max_runs: view.max_runs,
             paused: view.paused,
             queued: view.queued.len(),
             running: view.running.len(),
@@ -253,7 +255,7 @@ async fn ensure_db(state: &AppState) -> Result<(), barca_core::BarcaError> {
         }
         db::init_db(&cfg.db_path).await?;
     }
-    Ok(())
+    state.record_writer().await
 }
 
 /// Accept a run: allocate its id, record it in the queue (the metadata DB) and in memory, and
@@ -596,8 +598,8 @@ pub struct QueueView {
     /// The server is stopping: nothing new starts; the queue waits for the next start.
     pub draining: bool,
     /// How many runs execute at once.
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub max_runs: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub max_runs: Option<usize>,
     /// The runs executing now, oldest first.
     pub running: Vec<QueueEntry>,
     /// The runs waiting to start, next first.
@@ -761,7 +763,7 @@ pub fn view(state: &AppState) -> QueueView {
         paused: paused_at.is_some(),
         paused_at: paused_at.map(barca_core::outcome::rfc3339),
         draining: state.is_draining(),
-        max_runs: state.queue.max_runs,
+        max_runs: Some(state.queue.max_runs),
         running,
         queued,
         capacity: state.capacity.as_ref().map(|c| c.snapshot()),
@@ -774,12 +776,29 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
     let snapshot = snapshot_db(state).await?;
     let rows = run_queue::list(&snapshot.path).await?;
     let paused_at = run_queue::paused_at(&snapshot.path).await?;
+    let now = chrono::Utc::now().timestamp();
+    let timing = if rows.is_empty() {
+        barca_core::liveness::RecordedTiming {
+            max_runs: barca_core::liveness::serving(&snapshot.path)
+                .await?
+                .map(|s| s.max_runs),
+            ..Default::default()
+        }
+    } else {
+        let dag = state.inspect_dag().await?;
+        crate::handlers::recorded_queue(state, &dag, &snapshot.path, now).await?
+    };
     let (mut running, mut queued) = (Vec::new(), Vec::new());
     for row in rows {
         let Ok((spec, accepted_at)) = load(&row.spec) else {
             continue;
         };
-        let started = row.state != QueueState::Queued;
+        let started = timing.started.contains_key(&row.run_id);
+        let start = timing.started.get(&row.run_id).copied();
+        let estimate = timing
+            .starts
+            .get(&row.run_id)
+            .map(|at| barca_core::estimates::rounded(*at, now));
         let item = QueueEntry {
             run_id: row.run_id,
             status: if started { "running" } else { "pending" }.into(),
@@ -789,9 +808,11 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             triggered_by: spec.trigger.triggered_by,
             schedule_id: spec.trigger.schedule_id.clone(),
             queued_at: timestamp(accepted_at),
-            started_at: None,
-            estimated_start_at: None,
-            wait_seconds: None,
+            started_at: start.and_then(barca_core::time::rfc3339_secs),
+            estimated_start_at: estimate.and_then(barca_core::time::rfc3339_secs),
+            wait_seconds: start
+                .or(estimate)
+                .map(|at| (at - accepted_at as i64).max(0) as u64),
             state: row.state.as_str(),
             scheduled_at: spec.trigger.scheduled_at.clone(),
             // A `--read-only` server does not know whether the server that writes drains.
@@ -803,11 +824,15 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             queued.push(item);
         }
     }
+    queued.sort_by_key(|entry| entry.schedule_id.is_some());
+    for (i, entry) in queued.iter_mut().enumerate() {
+        entry.position = Some(i + 1);
+    }
     let view = QueueView {
         paused: paused_at.is_some(),
         paused_at: paused_at.map(barca_core::outcome::rfc3339),
         draining: state.is_draining(),
-        max_runs: state.queue.max_runs,
+        max_runs: timing.max_runs,
         running,
         queued,
         capacity: None,
@@ -903,6 +928,7 @@ pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, Ap
 /// the last recorded counts (read by `GET /queue`, or in the background when they are older than
 /// a few seconds) and its own counts until there are any.
 pub fn health(state: &AppState) -> serde_json::Value {
+    let mut max_runs = Some(state.queue.max_runs);
     let mut paused = state.queue.paused_at().is_some();
     let mut queued = state.queue.waiting_ids().len();
     let mut running = state
@@ -912,6 +938,7 @@ pub fn health(state: &AppState) -> serde_json::Value {
         .count();
     if state.config.read_only {
         let (recorded, old) = state.queue.recorded(std::time::Duration::from_secs(5));
+        max_runs = recorded.and_then(|c| c.max_runs);
         if let Some(c) = recorded {
             (paused, queued, running) = (c.paused, c.queued, c.running);
         }
@@ -927,7 +954,7 @@ pub fn health(state: &AppState) -> serde_json::Value {
         "paused": paused,
         "queued": queued,
         "running": running,
-        "max_runs": state.queue.max_runs,
+        "max_runs": max_runs,
         "capacity": state.capacity.as_ref().map(|c| {
             let s = c.snapshot();
             serde_json::json!({
@@ -1025,7 +1052,7 @@ mod tests {
             let view = view(&next);
             assert_eq!(view.queued.len(), 2);
             assert_eq!(view.queued[1].position, Some(2));
-            assert_eq!(view.max_runs, 1);
+            assert_eq!(view.max_runs, Some(1));
             // Paused, nothing starts; resumed, the head starts (and fails: no Python here).
             dispatch(&next);
             assert_eq!(next.queue.waiting_ids().len(), 2);

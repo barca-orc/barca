@@ -417,7 +417,9 @@ fn render_queue(body: &Value) -> String {
         "queue: {} · {} of {} running · {} queued\n",
         state.join(", "),
         running.len(),
-        body["max_runs"].as_u64().unwrap_or(0),
+        body["max_runs"]
+            .as_u64()
+            .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
         queued.len()
     );
     if running.is_empty() && queued.is_empty() {

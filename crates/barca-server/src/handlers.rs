@@ -32,6 +32,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
         // `[remote]`; null when artifacts stay on this machine.
         "store_uri": cfg.remote_artifacts().then(|| cfg.artifact_root.clone()),
         "read_only": state.config.read_only,
+        "graph_stale": state.graph_stale(),
         "load_errors": *state.load_errors.read().unwrap(),
         // Whether this server fires `Schedule(...)` nodes: the same rule `serve`
         // uses to start the scheduler (on unless --no-schedule or --read-only).
@@ -302,7 +303,15 @@ async fn state_rows_for_targets(
     let running = crate::running::by_node(&runs, &status.nodes, &dag);
     let now = chrono::Utc::now();
     let schedules = live_schedules(state, &dag, &db_state, &snapshot.path, now).await?;
-    let timings = timings(state, &dag, &durations, &runs, now.timestamp()).await;
+    let timings = timings(
+        state,
+        &dag,
+        &durations,
+        &runs,
+        now.timestamp(),
+        &snapshot.path,
+    )
+    .await?;
     Ok(rows(
         &status.nodes,
         &durations,
@@ -370,6 +379,7 @@ pub(crate) async fn live_schedules(
     db_path: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<std::collections::HashMap<String, LiveSchedule>, ApiError> {
+    let observed_at = chrono::Utc::now();
     let jobs = barca_core::schedule::jobs_from_dag(dag);
     if jobs.is_empty() {
         return Ok(Default::default());
@@ -377,8 +387,15 @@ pub(crate) async fn live_schedules(
     crate::pause::pauses(state).await?;
     let ids = jobs.iter().map(|j| j.id.clone()).collect();
     let facts = state.cached_ticks(db_state, db_path, ids).await?;
-    let zone = crate::scheduler::zone_of(&state.config);
+    let mut zone = crate::scheduler::zone_of(&state.config);
     let published = state.schedule.read().map(|g| g.clone()).unwrap_or_default();
+    let observed = if state.config.read_only || !state.config.schedule {
+        let record = barca_core::liveness::recorded(db_path).await?;
+        zone = record.zone().unwrap_or(zone);
+        barca_core::liveness::observe(&jobs, &zone, observed_at, &record)
+    } else {
+        Default::default()
+    };
     Ok(jobs
         .iter()
         .map(|job| {
@@ -405,9 +422,11 @@ pub(crate) async fn live_schedules(
                 pause.as_ref(),
             );
             block.skip_reason = live.and_then(|p| p.skip_reason).map(str::to_string);
-            block.live = live.is_some();
+            let seen = observed.schedules.get(&job.id).copied().unwrap_or_default();
+            block.live = live.is_some() || seen.live;
             // A refresh path through it: live when this server's scheduler fires it.
-            let path = barca_core::refresh_path::PathSchedule::of(job, &zone, &standing, &block);
+            let path = barca_core::refresh_path::PathSchedule::of(job, &zone, &standing, &block)
+                .seen(&seen);
             (job.id.clone(), (standing, block, path))
         })
         .collect())
@@ -451,7 +470,7 @@ pub(crate) struct Timings {
     queue_open: bool,
     workers: usize,
     source_times: crate::read_cache::SourceTimes,
-    max_runs: usize,
+    max_runs: Option<usize>,
 }
 
 impl Timings {
@@ -463,7 +482,7 @@ impl Timings {
             queue_open: self.queue_open,
             workers: self.workers,
             source_times: &self.source_times,
-            max_runs: Some(self.max_runs),
+            max_runs: self.max_runs,
         }
     }
 }
@@ -479,7 +498,24 @@ async fn timings(
     durations: &std::collections::HashMap<String, Durations>,
     runs: &[crate::running::InFlight],
     now: i64,
-) -> Timings {
+    db_path: &str,
+) -> Result<Timings, ApiError> {
+    let durations = durations
+        .iter()
+        .map(|(id, d)| (id.clone(), d.median_seconds))
+        .collect();
+    if state.config.read_only {
+        let q = recorded_queue(state, dag, db_path, now).await?;
+        return Ok(Timings {
+            durations,
+            runs: q.runs,
+            queue_clear_at: q.queue_clear_at,
+            queue_open: q.queue_open,
+            workers: q.workers.unwrap_or(1),
+            max_runs: q.max_runs,
+            source_times: state.cached_source_times(dag),
+        });
+    }
     let facts = published_ticks(state).await.unwrap_or_default();
     let queue = crate::queue::estimate(state, &facts.ticks, now);
     let cfg = &state.config.resolved;
@@ -513,18 +549,52 @@ async fn timings(
             },
         })
         .collect();
-    Timings {
-        durations: durations
-            .iter()
-            .map(|(id, d)| (id.clone(), d.median_seconds))
-            .collect(),
+    Ok(Timings {
+        durations,
         runs,
         queue_clear_at: queue.clear_at,
         queue_open: queue.open,
         workers,
         source_times: state.cached_source_times(dag),
-        max_runs: state.queue.max_runs,
-    }
+        max_runs: Some(state.queue.max_runs),
+    })
+}
+
+pub(crate) async fn recorded_queue(
+    state: &AppState,
+    dag: &barca_core::dag::Dag,
+    path: &str,
+    now: i64,
+) -> Result<barca_core::liveness::RecordedTiming, ApiError> {
+    let jobs = barca_core::schedule::jobs_from_dag(dag);
+    let rec = barca_core::liveness::recorded(path).await?;
+    let zone = rec
+        .zone()
+        .unwrap_or_else(|| crate::scheduler::zone_of(&state.config));
+    let observed = barca_core::liveness::observe(
+        &jobs,
+        &zone,
+        chrono::DateTime::from_timestamp(now, 0).unwrap(),
+        &rec,
+    );
+    let facts = state
+        .cached_ticks(
+            &state.db_state(),
+            path,
+            jobs.iter().map(|j| j.id.clone()).collect(),
+        )
+        .await?;
+    Ok(barca_core::liveness::recorded_timing(
+        &barca_core::liveness::recorded_runs(path).await?,
+        &facts.ticks,
+        &rec,
+        barca_core::serve::run_queue::paused_at(path)
+            .await?
+            .is_some(),
+        observed.server_gone(&rec),
+        dag,
+        now,
+    ))
 }
 
 /// Each schedule of [`live_schedules`] as a refresh path reads it.
@@ -779,6 +849,41 @@ async fn running_node(
 /// status) are computed per request.
 pub async fn schedule(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     crate::pause::pauses(&state).await?;
+    if state.config.read_only || !state.config.schedule {
+        let dag = state.loaded_dag().await?;
+        let jobs = barca_core::schedule::jobs_from_dag(&dag);
+        let snap = snapshot_db(&state).await?;
+        let facts = state
+            .cached_ticks(
+                &state.db_state(),
+                &snap.path,
+                jobs.iter().map(|j| j.id.clone()).collect(),
+            )
+            .await?;
+        let registry = jobs
+            .into_iter()
+            .map(|j| crate::state::JobStatus {
+                failures: facts.failures.get(&j.id).map_or(0, |f| f.failures),
+                id: j.id,
+                cron: j.cron_str,
+                kind: j.kind,
+                max_failures: j.max_failures,
+                last_skipped: None,
+                skipped_for: None,
+                skip_reason: None,
+            })
+            .collect();
+        return Ok(Json(schedule_items(
+            &state,
+            chrono::Utc::now(),
+            &facts.ticks,
+            registry,
+            barca_core::liveness::recorded(&snap.path)
+                .await?
+                .zone()
+                .unwrap_or_else(|| crate::scheduler::zone_of(&state.config)),
+        )));
+    }
     let facts = published_ticks(&state).await?;
     Ok(Json(schedule_at(&state, chrono::Utc::now(), &facts.ticks)))
 }
@@ -899,7 +1004,7 @@ pub(crate) async fn health_facts(
         })
         .await?;
     let runs = crate::running::in_flight(state, Some(db_path)).await;
-    let timings = timings(state, dag, &durations, &runs, now.timestamp()).await;
+    let timings = timings(state, dag, &durations, &runs, now.timestamp(), db_path).await?;
     Ok(HealthFacts {
         ages,
         pinned,
@@ -935,10 +1040,23 @@ pub(crate) fn schedule_at(
     now: chrono::DateTime<chrono::Utc>,
     ticks: &std::collections::HashMap<String, barca_core::schedule_standing::Ticks>,
 ) -> Value {
-    use barca_core::CronExpr;
-
-    let zone = crate::scheduler::zone_of(&state.config);
     let jobs = state.schedule.read().map(|g| g.clone()).unwrap_or_default();
+    schedule_items(
+        state,
+        now,
+        ticks,
+        jobs,
+        crate::scheduler::zone_of(&state.config),
+    )
+}
+fn schedule_items(
+    state: &AppState,
+    now: chrono::DateTime<chrono::Utc>,
+    ticks: &std::collections::HashMap<String, barca_core::schedule_standing::Ticks>,
+    jobs: Vec<crate::state::JobStatus>,
+    zone: barca_core::schedule::Zone,
+) -> Value {
+    use barca_core::CronExpr;
     let items: Vec<Value> = jobs
         .into_iter()
         .map(|j| {

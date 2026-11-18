@@ -210,7 +210,8 @@ def test_missed_ticks_are_counted_from_the_tick_record(project, serve):
     assert _status(project)["orders"]["missed_ticks"] == 0
 
     # Two ticks had `orders` and `report` as targets and left neither fresh.
-    slot = int(time.time()) - 600
+    # Both decisions predate the latest daily slot and its grace.
+    slot = int(time.time()) - 2 * 86400
     _tick(project, slot, {"inbox": "rebuilt", "orders": "failed", "report": "not_reached"})
     _tick(project, slot + 60, {"inbox": "rebuilt", "orders": "failed", "report": "not_reached"})
     paths = _status(project)

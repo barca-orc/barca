@@ -108,6 +108,7 @@ export interface Health {
   /** Why the metadata DB cannot be used, while it cannot; null otherwise. */
   metadata_error: string | null
   /** Unloaded sources and graph-invalid definitions; healthy node routes remain available. */
+  graph_stale?: boolean | null
   load_errors: LoadError[]
   /** Major version of the HTTP API; a client refuses another. */
   api_version: number
@@ -126,7 +127,7 @@ export interface HealthQueue {
   paused: boolean
   queued: number
   running: number
-  max_runs: number
+  max_runs: number | null
   /** The capacity every run shares (`--capacity`); null when the server has none. */
   capacity?: { total: number; in_use: number; waiting: number } | null
 }

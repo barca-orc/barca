@@ -21,7 +21,7 @@ draining: boolean,
 /**
  * How many runs execute at once.
  */
-max_runs: number,
+max_runs: number | null,
 /**
  * The runs executing now, oldest first.
  */

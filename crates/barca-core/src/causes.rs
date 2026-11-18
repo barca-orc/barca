@@ -40,34 +40,6 @@ pub fn gap_seconds(node: &NodeStatus, at: i64) -> i64 {
     crate::estimates::behind_seconds(node, at) + crate::estimates::ahead_seconds(node, at)
 }
 
-/// Whether a scheduler is firing schedules, as far as this process can tell: one it runs
-/// itself published a schedule (`live`), or the tick record proves one somewhere does (a
-/// schedule that is not paused fired its newest slot: it has a tick and is not late). A
-/// `--read-only` server and `barca status` on the serving machine run no scheduler; the
-/// ticks the scheduling server wrote say it is up.
-pub fn scheduler_seen(evidence: PathEvidence<'_>) -> bool {
-    evidence.schedules.values().any(|s| {
-        s.live
-            || (!s.paused
-                && s.standing
-                    .as_ref()
-                    .is_some_and(|st| st.last_fired.is_some() && !st.late))
-    })
-}
-
-/// Whether a tick of `schedule` will come: it has a next tick (a scheduler here fires it), or
-/// a scheduler is seen firing ([`scheduler_seen`]) and this schedule is not paused, held as
-/// failing, or late (one a running scheduler does not fire falls behind its slots).
-pub fn fires(schedule: &PathSchedule, seen: bool) -> bool {
-    if schedule.next_tick.is_some() {
-        return true;
-    }
-    if schedule.paused || schedule.failing {
-        return false;
-    }
-    seen && schedule.standing.as_ref().is_none_or(|st| !st.late)
-}
-
 /// Whether a tick of the schedule is waiting for a run slot now, or its ticks typically wait
 /// longer than they are apart (queue-bound): the run queue, not the schedule, is behind.
 fn waits_for_slot(schedule: &PathSchedule) -> bool {
@@ -232,7 +204,6 @@ pub fn attribute(
     if nodes.iter().all(|n| n.health.is_fresh()) {
         return vec![(None, None); nodes.len()];
     }
-    let seen = scheduler_seen(evidence.path);
     let mut above = Above {
         at: nodes
             .iter()
@@ -262,17 +233,19 @@ pub fn attribute(
         // will come and waits (or typically waits) for a run slot, or a waiting tick's run.
         let waiting = plans(false);
         let queue = path
-            .filter(|(_, s)| fires(s, seen) && waits_for_slot(s))
+            .filter(|(_, s)| s.next_tick.is_some() && waits_for_slot(s))
             .map(|(id, _)| id)
             .or(waiting.and_then(|r| r.schedule.as_deref()));
         // A tick of its refresh path will come.
-        let reached = path.is_some_and(|(_, s)| fires(s, seen));
+        let reached = path.is_some_and(|(_, s)| s.next_tick.is_some());
         let cause = if failure.is_some() || path.is_some_and(|(_, s)| s.failing) {
             Cause::Failing
         } else if node.health == Health::Undecided {
             Cause::Undecided
         } else if plans(true).is_some() {
             Cause::CatchingUp
+        } else if path.is_some_and(|(_, s)| s.off()) {
+            Cause::NoRefreshPath
         } else if node
             .refresh_path
             .as_ref()
@@ -286,18 +259,12 @@ pub fn attribute(
         } else {
             Cause::CatchingUp
         };
-        // What a node no tick will reach hangs on: its path's schedule when that is paused
-        // or not fired; a paused node itself; else the topmost node of the chain that
-        // nothing refreshes.
+        // What a node no tick will reach hangs on: its path's schedule when that is paused;
+        // the scheduler, one root for every schedule nothing fires; a paused node itself;
+        // else the topmost node of the chain that nothing refreshes.
         let unreached = || match path {
-            Some((schedule, state)) => Root::of(
-                if state.paused {
-                    RootKind::SchedulePaused
-                } else {
-                    RootKind::SchedulerOff
-                },
-                schedule,
-            ),
+            Some((schedule, state)) if state.paused => Root::of(RootKind::SchedulePaused, schedule),
+            Some(_) => Root::scheduler_off(),
             None if evidence.path.paused.contains(&node.id) => {
                 Root::of(RootKind::SchedulePaused, &node.id)
             }
@@ -328,6 +295,18 @@ pub fn attribute(
             // Only a run decides it. Where no tick will come, what holds it is that, not
             // the change above it: waiting clears nothing.
             Cause::Undecided if !reached => unreached(),
+            // A late schedule, or a target of one nothing serves: the scheduler, when none
+            // fires it. A schedule that is late under a running scheduler (its runs outlast
+            // its interval) is behind its own slots: the scheduled node is the fact.
+            _ if found.0 == RootKind::SchedulerOff => {
+                let schedule = evidence.path.schedules.get(found.1).or_else(|| {
+                    crate::refresh_path::path_schedule(found.1, evidence.path).map(|(_, s)| s)
+                });
+                match schedule.is_none_or(PathSchedule::off) {
+                    true => Root::scheduler_off(),
+                    false => Root::of(RootKind::Input, found.1),
+                }
+            }
             _ => Root::of(found.0, found.1),
         };
         above.cause[i] = Some(cause);
@@ -548,7 +527,11 @@ mod tests {
             }
             behind += 1;
             let root = node.root.as_ref().unwrap();
-            assert_eq!(root.id, format!("{}:{}", root.kind.as_str(), root.node));
+            if root.kind == RootKind::SchedulerOff {
+                assert_eq!(root, &Root::scheduler_off());
+            } else {
+                assert_eq!(root.id, format!("{}:{}", root.kind.as_str(), root.node));
+            }
             assert_eq!(
                 rollup.roots.iter().filter(|r| r.id == root.id).count(),
                 1,
@@ -946,21 +929,15 @@ def hourly(below_loose): ...
         world.schedule("hourly", false, false, None);
         world.classify();
         assert!(!world.node("orders").refresh_path.as_ref().unwrap().live);
-        assert_eq!(
-            world.why("orders"),
-            is("no_refresh_path", "scheduler_off:inbox")
-        );
+        assert_eq!(world.why("orders"), is("no_refresh_path", "scheduler_off"));
         // An undecided node stays undecided, but what holds it is the tick that will not
         // come, not the change above it: waiting clears nothing.
-        assert_eq!(world.why("clean"), is("undecided", "scheduler_off:inbox"));
+        assert_eq!(world.why("clean"), is("undecided", "scheduler_off"));
         assert_eq!(
             world.why("reviewed"),
             is("undecided", "no_schedule:reviewed")
         );
-        assert_eq!(
-            world.why("hourly"),
-            is("no_refresh_path", "scheduler_off:hourly")
-        );
+        assert_eq!(world.why("hourly"), is("no_refresh_path", "scheduler_off"));
         let rollup = assert_held(&world);
         assert_eq!(
             (
@@ -969,46 +946,18 @@ def hourly(below_loose): ...
                 rollup.roots[0].action.command.as_deref()
             ),
             (
-                "no scheduler is firing inbox's schedule",
+                "no scheduler has run for this project: 2 schedules will not fire",
                 ActionKind::StartServer,
                 Some("barca serve")
             )
         );
 
-        // A `--read-only` server: no scheduler here, but `inbox` fired its newest slot, so
-        // one is running somewhere. `refresh_path.live` still says what this process fires;
-        // the cause reads the record. `hourly` never fired and is not late: it will too.
-        let mut world = World::new(SHAPES);
-        stale(&mut world);
-        world.schedule("inbox", false, false, Some(fired(last_slot)));
-        world.schedule("hourly", false, false, None);
+        // One live schedule does not vouch for a second schedule.
+        world.schedule("inbox", true, false, Some(fired(last_slot)));
         world.classify();
-        assert!(!world.node("orders").refresh_path.as_ref().unwrap().live);
+        assert!(world.node("orders").refresh_path.as_ref().unwrap().live);
         assert_eq!(world.why("orders"), is("catching_up", "sensor_value:inbox"));
-        assert_eq!(world.why("hourly"), is("catching_up", "code:hourly"));
-        // No estimate without a scheduler here: the gap counts what is behind only.
-        assert_eq!(world.node("orders").expected_fresh_at, None);
-
-        // The scheduler stopped an hour ago: its newest tick is far behind its slots.
-        let mut world = World::new(SHAPES);
-        stale(&mut world);
-        world.schedule("inbox", false, false, Some(fired(last_slot - 3600)));
-        world.schedule("hourly", false, false, None);
-        world.classify();
-        assert_eq!(
-            world.why("orders"),
-            is("no_refresh_path", "scheduler_off:inbox")
-        );
-        let rollup = assert_held(&world);
-        let root = rollup
-            .roots
-            .iter()
-            .find(|r| r.id == "scheduler_off:p.py:inbox")
-            .unwrap();
-        assert_eq!(
-            root.detail,
-            "no scheduler has fired inbox's schedule for 57m"
-        );
+        assert_eq!(world.why("hourly"), is("no_refresh_path", "scheduler_off"));
     }
 
     const QUEUE: &str = r#"

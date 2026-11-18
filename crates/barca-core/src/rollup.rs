@@ -966,6 +966,9 @@ pub fn total(nodes: &[NodeStatus], running: &HashSet<String>) -> RollupEntry {
 
 /// What a root list is ranked by: what a root holds, and whether it is a failure.
 struct Rank<'a> {
+    /// The scheduler root: nothing it holds clears until a scheduler runs, whatever else
+    /// is wrong, so it comes before every other root.
+    scheduler: bool,
     weight: usize,
     failure: bool,
     nodes: usize,
@@ -976,8 +979,9 @@ struct Rank<'a> {
 /// The order of a root list: the most weight held first (how far what the root holds is from
 /// fresh), a failure first among equals, then the most nodes, the largest gap, and id.
 fn rank(a: Rank<'_>, b: Rank<'_>) -> std::cmp::Ordering {
-    b.weight
-        .cmp(&a.weight)
+    b.scheduler
+        .cmp(&a.scheduler)
+        .then(b.weight.cmp(&a.weight))
         .then(b.failure.cmp(&a.failure))
         .then(b.nodes.cmp(&a.nodes))
         .then(b.gap.cmp(&a.gap))
@@ -1018,6 +1022,7 @@ fn held_by<'a>(rows: impl IntoIterator<Item = &'a NodeStatus>) -> Vec<HeldBy> {
     }
     fn key(h: &HeldBy) -> Rank<'_> {
         Rank {
+            scheduler: h.root == RootKind::SchedulerOff.as_str(),
             weight: h.weight,
             failure: is_failure(&h.root),
             nodes: h.nodes,
@@ -1156,7 +1161,8 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
                     },
                     None,
                 ),
-                RootKind::SchedulerOff if root.causes.no_refresh_path > 0 => {
+                // One action whatever it holds: nothing under it moves until a scheduler runs.
+                RootKind::SchedulerOff => {
                     (ActionKind::StartServer, Some("barca serve".to_string()))
                 }
                 // A paused node is resumed by name, a paused schedule by its scheduled node;
@@ -1198,6 +1204,7 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
         .collect();
     fn key(r: &RollupRoot) -> Rank<'_> {
         Rank {
+            scheduler: r.id == RootKind::SchedulerOff.as_str(),
             weight: r.weight,
             failure: r.kind == RootKind::Failure,
             nodes: r.nodes,
@@ -1253,13 +1260,7 @@ fn detail(
             format!("{name} is paused: every tick skips it")
         }
         RootKind::SchedulePaused => format!("{name}'s schedule is paused"),
-        RootKind::SchedulerOff => match standing.and_then(|st| st.late_since) {
-            Some(since) => format!(
-                "no scheduler has fired {name}'s schedule for {}",
-                span(evidence.now - since)
-            ),
-            None => format!("no scheduler is firing {name}'s schedule"),
-        },
+        RootKind::SchedulerOff => scheduler_detail(evidence),
         RootKind::Queue => {
             let slots = match evidence.timing.max_runs {
                 Some(n) => format!("max_runs is {n}"),
@@ -1277,6 +1278,44 @@ fn detail(
         RootKind::Undecided => format!("barca cannot decide {name} until a run reports"),
     };
     (line, None)
+}
+
+/// The scheduler root's fact: that no scheduler is running and since when, how many
+/// schedules that leaves unfired and how many of them have already missed a slot. Where a
+/// scheduler runs and does not serve some schedules, those.
+fn scheduler_detail(evidence: Evidence<'_>) -> String {
+    use crate::report::span;
+    let schedules = evidence.path.schedules;
+    let off: Vec<(&String, &crate::refresh_path::PathSchedule)> =
+        schedules.iter().filter(|(_, s)| s.off()).collect();
+    let count = |n: usize| format!("{n} schedule{}", if n == 1 { "" } else { "s" });
+    let missed = off.iter().filter(|(_, s)| s.unserved()).count();
+    let unfired = match missed {
+        0 => format!("{} will not fire", count(off.len())),
+        n if n == off.len() => format!("{} missed a slot", count(n)),
+        n => format!("{} will not fire, {n} missed a slot", count(off.len())),
+    };
+    // A scheduler fires other schedules: these are ones it does not serve.
+    if schedules.values().any(|s| s.live) {
+        let mut names: Vec<&str> = off
+            .iter()
+            .map(|(id, _)| crate::targets::short_name(id))
+            .collect();
+        names.sort_unstable();
+        let more = names.len().saturating_sub(3);
+        let mut list = names.into_iter().take(3).collect::<Vec<_>>().join(", ");
+        if more > 0 {
+            list.push_str(&format!(" and {more} more"));
+        }
+        return format!("the running scheduler does not fire {list}: {unfired}");
+    }
+    match off.iter().filter_map(|(_, s)| s.off_since).max() {
+        Some(since) => format!(
+            "the scheduler is not running: no sign of it for {}, {unfired}",
+            span(evidence.now - since)
+        ),
+        None => format!("no scheduler has run for this project: {unfired}"),
+    }
 }
 
 /// A failing node's error in a line, and the group it shares with errors that differ only in
@@ -2300,6 +2339,7 @@ mod tests {
     #[test]
     fn roots_rank_by_weight_then_failures_first() {
         let r = |weight, failure, nodes, gap, id| Rank {
+            scheduler: false,
             weight,
             failure,
             nodes,

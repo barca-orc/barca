@@ -45,7 +45,8 @@ export function queueStateLabel(state: QueueState, formatTime: (value: string | 
 }
 
 /** `1 of 4 running`. */
-export function capacityLabel(running: number, maxRuns: number): string {
+export function capacityLabel(running: number, maxRuns: number | null): string {
+  if (maxRuns === null) return `${running} running · run slots unknown`
   return `${running} of ${maxRuns} running`
 }
 

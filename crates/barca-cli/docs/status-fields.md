@@ -114,15 +114,12 @@ Every node that is not fresh has a `cause`: one word for why. A node is fresh wh
 to look at. A cause is never a guess: where barca cannot tell, the word is `undecided` or
 `no_refresh_path`.
 
-**Whether a scheduler is firing.** Row 6 asks whether a tick will come. `refresh_path.live`
-says whether the answering process fires the schedule, which a `--read-only` server and
-`barca status` beside a server never do. For the cause, the tick record also counts
-(`schedule_ticks`, "Last check"): when a schedule that is not paused fired its newest slot (it
-has a tick and is not late), a scheduler is running somewhere, and every schedule that is not
-paused, held as failing or late counts as fired. So a read-only server says `catching_up`
-where the scheduling server would, with `refresh_path.live` still `false` and no
-`expected_fresh_at` (it cannot estimate another process's queue). With no tick on record, or
-only old ones, the cause is `no_refresh_path`.
+**Whether a scheduler is firing.** A read-only observer uses the writer's schedule IDs,
+cron timezone, tick decisions and heartbeat. Each served schedule has a next tick and
+its nodes use the same estimate rules as on the writer. A graceful stop takes effect as
+soon as the observer reads it. If the writer disappears, its heartbeat expires after
+45 seconds. An older database with no heartbeat uses each schedule's decisions and grace.
+Affected paths share one `scheduler_off` root and the action `barca serve`.
 
 The table of `barca status` sums the causes of every node in scope under the health words:
 `Gap: 14 overdue · 152 no refresh path · 180 catching up (nodes); about 180 fresh within 5m,
@@ -137,7 +134,7 @@ barca sql "select cause, count(*) from barca.nodes where cause is not null group
 
 Every node with a cause has a `root`: the upstream fact that explains it, as `{"id":
 "code:pipeline.py:orders", "kind": "code", "node": "pipeline.py:orders"}`. The id is
-`<kind>:<node id>`; nodes with the same `root.id` are held by the same thing, so a few roots
+`<kind>:<node id>` (or `scheduler_off` for the scheduler); nodes with the same `root.id` are held by the same thing, so a few roots
 usually explain hundreds of nodes (`barca status --rollup` lists them, "The rollup" below).
 
 | `kind` | Printed as | `node` | Explains |
@@ -150,7 +147,7 @@ usually explain hundreds of nodes (`barca status --rollup` lists them, "The roll
 | `undecided` | undecided | the topmost node barca cannot decide, with nothing above it that explains it | undecided |
 | `no_schedule` | no schedule | the topmost not-fresh node no tick reaches: where a schedule would have to be added, or a `Manual` or pinned node | no refresh path |
 | `schedule_paused` | paused | the scheduled node of a paused schedule; or a paused node (`barca pause`) | no refresh path |
-| `scheduler_off` | scheduler off | the scheduled node of a schedule no scheduler fires | no refresh path |
+| `scheduler_off` | scheduler off | one project-wide root for paths whose schedule has stopped; its id is `scheduler_off` and its node is empty | no refresh path |
 | `failure` | failure | the failing node: the node itself, or the nearest one upstream that blocks it; or the scheduled node of a schedule held after `max_failures` failed ticks | failing |
 | `queue` | run queue | the scheduled node whose ticks wait for a run slot | queued |
 
@@ -290,7 +287,7 @@ Tasks and Sensors pages) reads its filter counts there instead of counting rows.
 `roots` is the to-do list: what holds the nodes that are not fresh, and what clears each.
 There is one entry per `root` the nodes carry ("Root"), and every node that is not fresh is
 under exactly one, so the roots' `nodes` add up to the nodes that are not fresh.
-The list is ranked by `weight`, the most first: a root that holds 152 nodes nothing will
+A stopped scheduler ranks first. The remaining roots are ranked by `weight`, the most first: a root that holds 152 nodes nothing will
 refresh (6 each) comes before one that holds 180 the next tick computes (2 each). Among roots
 of the same weight a failure comes first, then the most `nodes`, the largest `gap_seconds`,
 and the id.
@@ -449,7 +446,7 @@ path:
 | `schedule` | the scheduled node's id. With several schedules reaching the node, the one that fires earliest next; a schedule with no next tick comes last, and ties go to the lower id |
 | `next_tick` | that schedule's next slot (RFC 3339, UTC); the first slot after a timed pause ends; `null` for a pause until resumed and when `live` is false |
 | `paused` | the schedule is paused (`barca pause --schedule NODE`, `POST /schedule/{id}/pause`). A paused schedule is still the path |
-| `live` | a running scheduler fires the schedule. `false` from `barca status` on a machine with no server, from a `--read-only` or `--no-schedule` server, and for a schedule held after `max_failures` failed ticks (`schedule.failing`) |
+| `live` | a running scheduler fires the schedule. `false` when no scheduler is observed firing this schedule and for a schedule held after `max_failures` failed ticks (`schedule.failing`) |
 | `missed_ticks` | how many finished ticks of the path's schedules had the node as a target and did not leave it fresh |
 
 `missed_ticks` reads the tick record (`last_check` above): it counts the ticks whose outcome
@@ -504,7 +501,7 @@ first that applies:
 | `undecided` | undecided until a run reports | its cause is `undecided` |
 | `missed` | ticks missed it | its cause is `overdue` |
 | `queue_stopped` | the run queue is not starting runs | a tick or a run will reach it, and the run queue is paused or draining |
-| `no_scheduler_here` | no scheduler runs here | a tick will reach it, and the answering process runs no scheduler (`barca status` beside a server, a `--read-only` server): it has no next tick to estimate from |
+| `no_scheduler_here` | no scheduler runs here | a tick will reach it, and the records provide no next tick to estimate from |
 | `not_promised` | a result above it may come out unchanged | a tick will look at it and may find it up to date or leave it as it is (`recheck_at` only) |
 
 `stale_since` is, for the node itself:

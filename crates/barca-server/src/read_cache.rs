@@ -510,7 +510,9 @@ impl AppState {
         }
         let has_latest = {
             let latest = self.reads.latest.lock().unwrap();
-            latest.results.contains_key(&query) && !latest.failed.contains(&query)
+            latest.results.get(&query).is_some_and(|previous| {
+                !self.config.read_only || Arc::ptr_eq(&previous.key.dag, dag)
+            }) && !latest.failed.contains(&query)
         };
         if has_latest {
             return Ok(self.catch_up(key, query, compute).await);

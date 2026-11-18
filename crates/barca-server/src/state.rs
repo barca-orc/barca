@@ -380,6 +380,7 @@ pub struct AppState {
     pub dag_generation: Arc<AtomicU64>,
     /// Paused schedules by node id, read from `schedule_state` on first use and kept in step
     /// with it by the pause and resume routes.
+    pub(crate) writer_recorded: Arc<tokio::sync::OnceCell<()>>,
     pub pauses: Arc<tokio::sync::OnceCell<RwLock<HashMap<String, db::SchedulePause>>>>,
     /// When this server started (unix seconds), for `GET /project`'s `deployed_at`.
     pub started_at: i64,
@@ -433,6 +434,7 @@ impl AppState {
             run_tasks: tokio_util::task::TaskTracker::new(),
             schedule: Arc::new(RwLock::new(Vec::new())),
             dag_generation: Arc::new(AtomicU64::new(0)),
+            writer_recorded: Default::default(),
             pauses: Arc::new(tokio::sync::OnceCell::new()),
             started_at: now.timestamp(),
             started: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -518,6 +520,42 @@ impl AppState {
             .iter()
             .map(|file| SourceStamp::of(std::slice::from_ref(file)))
             .collect()
+    }
+
+    /// Publish the writer's settings on its first metadata write. An idle server can
+    /// inspect a project with no database without creating one.
+    pub(crate) async fn record_writer(&self) -> Result<(), barca_core::BarcaError> {
+        self.writer_recorded
+            .get_or_try_init(|| self.publish_writer(vec![]))
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn publish_writer(
+        &self,
+        schedules: Vec<String>,
+    ) -> Result<(), barca_core::BarcaError> {
+        let cfg = &self.config.resolved;
+        let workers = barca_core::sizing(
+            cfg.capacity,
+            cfg.pool_size,
+            self.capacity
+                .as_ref()
+                .map(|c| (c.total() as usize, c.source())),
+        )
+        .pool_size;
+        let now = chrono::Utc::now().timestamp();
+        barca_core::liveness::record_serving(&cfg.db_path, now, self.queue.max_runs, workers)
+            .await?;
+        barca_core::liveness::record_scheduler(&cfg.db_path, now, schedules, &self.config.timezone)
+            .await
+    }
+
+    pub(crate) fn graph_stale(&self) -> Option<bool> {
+        let loaded = self.loaded.try_lock().ok()?;
+        loaded
+            .as_ref()
+            .map(|current| current.stamp != self.source_stamp())
     }
 
     /// Observe the selected graph without refreshing sources or waiting for loading.

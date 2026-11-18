@@ -18,6 +18,14 @@ use std::sync::RwLock;
 pub(crate) async fn pauses(
     state: &AppState,
 ) -> Result<&RwLock<HashMap<String, SchedulePause>>, ApiError> {
+    if state.config.read_only
+        && let Some(pauses) = state.pauses.get()
+    {
+        let snapshot = snapshot_db(state).await?;
+        let saved = db::get_schedule_pauses(&snapshot.path).await?;
+        *pauses.write().unwrap() = saved;
+        return Ok(pauses);
+    }
     state
         .pauses
         .get_or_try_init(|| async {

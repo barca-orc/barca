@@ -49,6 +49,16 @@ pub async fn reset(State(state): State<AppState>) -> Result<Json<Reset>, ApiErro
     if let Some(pauses) = state.pauses.get() {
         pauses.write().unwrap().clear();
     }
+    if state.writer_recorded.get().is_some() {
+        let schedules = state
+            .schedule
+            .read()
+            .unwrap()
+            .iter()
+            .map(|job| job.id.clone())
+            .collect();
+        state.publish_writer(schedules).await?;
+    }
     state.queue.reset();
     crate::queue::dispatch(&state);
     // The finished runs this server still remembers go with the history they were part of

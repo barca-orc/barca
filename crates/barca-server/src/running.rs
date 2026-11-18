@@ -75,6 +75,7 @@ pub(crate) struct InFlight {
     /// `YYYY-MM-DD HH:MM:SS` UTC, comparable with a materialization's `created_at`.
     started_sql: String,
     pub command: String,
+    from_queue: bool,
     /// The resolved target node ids; empty for a run of every asset and sensor.
     pub nodes: Vec<String>,
     /// Waiting for a run slot.
@@ -129,6 +130,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
                 .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default(),
             command: r.command.clone(),
+            from_queue: true,
             nodes: r.nodes.clone(),
             pending: r.status == RunStatus::Pending,
             progress: state.events.get(&r.handle).map(|c| c.progress()),
@@ -140,7 +142,37 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         return runs;
     };
     // The server's own runs have rows too; they are the ones above (or finished).
-    let held: HashSet<String> = state.runs.iter().map(|r| r.handle.clone()).collect();
+    let mut held: HashSet<String> = state.runs.iter().map(|r| r.handle.clone()).collect();
+    if state.config.read_only
+        && let Ok(recorded) = barca_core::liveness::recorded_runs(read_path).await
+    {
+        let stopped = !recorded.is_empty()
+            && barca_core::liveness::recorded(read_path)
+                .await
+                .is_ok_and(|rec| rec.writer_stopped(chrono::Utc::now().timestamp()));
+        for r in recorded {
+            let at = r.started_at.or(r.queued_at).unwrap_or_default();
+            held.insert(r.run_id.clone());
+            if stopped {
+                continue;
+            }
+            runs.push(InFlight {
+                run_id: r.run_id,
+                triggered_by: r.triggered_by,
+                command: r.command,
+                from_queue: true,
+                nodes: r.targets,
+                pending: !r.started,
+                progress: None,
+                schedule_id: r.schedule,
+                refreshes: r.refreshes,
+                started_at: barca_core::time::rfc3339_secs(at).unwrap_or_default(),
+                started_sql: chrono::DateTime::from_timestamp(at, 0)
+                    .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_default(),
+            });
+        }
+    }
     for alive in db::alive_running_runs_in(read_path, &state.config.resolved.db_path).await {
         if held.contains(&alive.run_id) {
             continue;
@@ -162,6 +194,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             started_at: barca_core::time::sql_datetime_rfc3339(&started_sql),
             started_sql,
             command: alive.command,
+            from_queue: false,
             nodes,
             pending: false,
             progress: None,
@@ -247,7 +280,7 @@ fn covered<'a>(
     dag: &barca_core::dag::Dag,
 ) -> Vec<&'a str> {
     // A CLI run: the rule `barca history --status running` applies on its own machine.
-    if run.progress.is_none() {
+    if !run.from_queue {
         return nodes
             .iter()
             .filter(|n| barca_core::run_list::unfollowed_run_covers(&run.command, &run.nodes, n))
@@ -261,12 +294,8 @@ fn covered<'a>(
             .map(|n| n.id.as_str())
             .collect();
     }
-    let wanted: HashSet<&str> = if run.progress.is_some() {
-        let targets: Vec<&str> = run.nodes.iter().map(String::as_str).collect();
-        dag.subgraph_many(&targets).into_iter().collect()
-    } else {
-        run.nodes.iter().map(String::as_str).collect()
-    };
+    let targets: Vec<&str> = run.nodes.iter().map(String::as_str).collect();
+    let wanted: HashSet<&str> = dag.subgraph_many(&targets).into_iter().collect();
     nodes
         .iter()
         .map(|n| n.id.as_str())
@@ -304,10 +333,11 @@ pub(crate) fn by_node(
                 return true;
             };
             // Served from cache: nothing reports it until the run ends.
-            if !run.refreshes
+            if run.from_queue
+                && !run.refreshes
                 && !run.pending
                 && n.cache.state == barca_core::cache_state::CacheState::Cached
-                && progress.is_some_and(|p| !p.touched.contains(id))
+                && progress.is_none_or(|p| !p.touched.contains(id))
             {
                 return true;
             }
@@ -338,9 +368,9 @@ pub(crate) fn by_node(
             let n = by_id[id];
             let step = match &progress {
                 _ if run.pending => RunningStep::Queued,
-                None => RunningStep::Running,
+                None if !run.from_queue => RunningStep::Running,
                 Some(p) if p.touched.contains(id) => RunningStep::Running,
-                Some(_) => {
+                _ => {
                     let ready = n
                         .inputs
                         .iter()

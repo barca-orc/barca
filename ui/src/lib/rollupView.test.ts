@@ -55,6 +55,7 @@ describe('the rollup, indexed', () => {
     expect(freshWithin(root, byFile.asOf)).toBe('fresh within about 5m')
     expect(freshWithin({ fresh_by: '2026-11-17T14:57:20Z' }, byFile.asOf)).toBe('fresh within about 20s')
     expect(freshWithin({ fresh_by: '2026-11-18T06:00:00Z' }, byFile.asOf)).toBe('fresh within about 16h')
+    expect(freshWithin({ fresh_by: byFile.asOf }, byFile.asOf)).toBe('freshness estimate due now')
     expect(freshWithin({ fresh_by: null }, byFile.asOf)).toBeNull()
     expect(noEstimate(root)).toBe('5 with no estimate')
     expect(noEstimate({ unbounded: 0 })).toBeNull()

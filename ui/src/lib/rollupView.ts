@@ -108,6 +108,7 @@ export function freshWithin(entry: Pick<RollupEntry, 'fresh_by'>, asOf: string):
   const now = parseTime(asOf)
   if (at === null || now === null) return null
   const left = Math.max(0, Math.ceil((at - now) / 1000))
+  if (left === 0) return 'freshness estimate due now'
   const unit = left < 60 ? 1 : left < 3600 ? 60 : left < 86400 ? 3600 : 86400
   return `fresh within about ${formatSpan(Math.ceil(left / unit) * unit)}`
 }

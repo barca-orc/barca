@@ -37,8 +37,9 @@ pub struct RefreshPath {
     pub next_tick: Option<String>,
     /// The schedule is paused (`POST /schedule/{id}/pause`).
     pub paused: bool,
-    /// A running scheduler fires the schedule. False without one (no `barca serve` here, a
-    /// `--read-only` server) and for a schedule held after `max_failures` failed ticks.
+    /// A running scheduler fires the schedule: the answering server's own, or one the
+    /// metadata DB shows deciding its slots. False when none does and for a schedule held
+    /// after `max_failures` failed ticks.
     pub live: bool,
     /// How many finished ticks of the node's path had it as a target and did not leave it
     /// fresh (`failed` or `not_reached`), counted back from the newest to the last one that
@@ -163,6 +164,12 @@ pub struct PathSchedule {
     /// Where it stands ([`crate::schedule_standing::standing`]): last tick, typical queue
     /// wait, lateness. `None` for a schedule nothing reported.
     pub standing: Option<Standing>,
+    /// The first slot no scheduler has decided, when one has passed
+    /// ([`crate::liveness::Seen::unserved_since`]). Read only where the schedule is not live.
+    pub unserved_since: Option<i64>,
+    /// For a schedule no scheduler fires: the last sign of the one that did
+    /// ([`crate::liveness::Seen::off_since`]); `None` when none ever did.
+    pub off_since: Option<i64>,
 }
 
 /// A schedule nothing reported (absent from [`PathEvidence::schedules`]): not firing.
@@ -172,6 +179,8 @@ static NOT_FIRING: PathSchedule = PathSchedule {
     live: false,
     failing: false,
     standing: None,
+    unserved_since: None,
+    off_since: None,
 };
 
 impl PathSchedule {
@@ -203,7 +212,31 @@ impl PathSchedule {
             live,
             failing: block.failing,
             standing: Some(standing.clone()),
+            unserved_since: None,
+            off_since: None,
         }
+    }
+
+    /// With what the records say of the scheduler that fires it ([`crate::liveness::observe`]),
+    /// for a process that runs none: the slot nothing served and since when nothing fires it.
+    pub fn seen(mut self, seen: &crate::liveness::Seen) -> Self {
+        if !seen.live {
+            self.unserved_since = seen.unserved_since;
+            self.off_since = seen.off_since;
+        }
+        self
+    }
+
+    /// No scheduler fires it, and that (not a pause, not a hold after `max_failures`) is why
+    /// no tick comes.
+    pub fn off(&self) -> bool {
+        !self.live && !self.paused && !self.failing
+    }
+
+    /// A slot of it has passed that no scheduler served, and none fires it: what it refreshes
+    /// is no longer kept fresh ([`crate::health::decide`], row 6a).
+    pub fn unserved(&self) -> bool {
+        self.off() && self.unserved_since.is_some()
     }
 }
 
@@ -298,14 +331,16 @@ pub fn refresh_path(node: &str, missed: u32, evidence: PathEvidence<'_>) -> Opti
     })
 }
 
-/// Each schedule of `dag` as this machine's metadata records it, as of `now`: no scheduler
-/// runs here, so none is `live` and none has a next tick. For `barca status` and `barca sql`
+/// Each schedule of `dag` as this machine's metadata records it, as of `now`. No scheduler
+/// runs here: a schedule is `live`, with a next tick, when the records show a scheduler
+/// firing it (`observed`: [`crate::liveness::observe`]). For `barca status` and `barca sql`
 /// without a server.
 pub fn recorded_schedules(
     jobs: &[crate::schedule::ScheduledJob],
     ticks: &HashMap<String, crate::schedule_standing::Ticks>,
     failures: &HashMap<String, crate::db::ScheduleFailures>,
     pauses: &HashMap<String, crate::db::SchedulePause>,
+    observed: &crate::liveness::Observed,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> PathSchedules {
@@ -321,7 +356,7 @@ pub fn recorded_schedules(
                 pause.is_some(),
                 ticks.get(&job.id),
             );
-            let block = ScheduleStatus::of(
+            let mut block = ScheduleStatus::of(
                 job,
                 standing.clone(),
                 (
@@ -330,9 +365,11 @@ pub fn recorded_schedules(
                 ),
                 pause,
             );
+            let seen = observed.schedules.get(&job.id).copied().unwrap_or_default();
+            block.live = seen.live;
             (
                 job.id.clone(),
-                PathSchedule::of(job, zone, &standing, &block),
+                PathSchedule::of(job, zone, &standing, &block).seen(&seen),
             )
         })
         .collect()
@@ -559,6 +596,7 @@ def plain(rows): ...
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &crate::liveness::Observed::default(),
             &Zone::Utc,
             chrono::DateTime::from_timestamp(NOW, 0).unwrap(),
         );

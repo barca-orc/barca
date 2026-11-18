@@ -4,10 +4,11 @@ import { useHealth } from '@/hooks/useHealth'
 export function LoadErrors() {
   const { data } = useHealth()
   const errors = data?.load_errors ?? []
-  if (!errors.length) return null
+  if (!errors.length && !data?.graph_stale) return null
   return (
     <aside role="alert" className="barca-load-errors">
-      <strong>Some source files or definitions could not be loaded.</strong>
+      {data?.graph_stale && <strong>The loaded graph is older than its source files.</strong>}
+      {errors.length > 0 && <strong>Some source files or definitions could not be loaded.</strong>}
       <ul>
         {errors.map((error, index) => (
           <li key={`${error.file}:${index}`}>

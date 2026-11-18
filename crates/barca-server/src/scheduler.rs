@@ -464,6 +464,10 @@ pub async fn run_scheduler(state: AppState) {
                 state.scheduler_failed(error.to_string());
                 return;
             }
+            if let Err(error) = state.record_writer().await {
+                state.scheduler_failed(error.to_string());
+                return;
+            }
             Some(path)
         }
         Err(_) => {
@@ -510,8 +514,20 @@ pub async fn run_scheduler(state: AppState) {
     if let Some(dbp) = &db_path {
         trim_ticks(dbp, &mut book, zone.now().timestamp()).await;
     }
+    if let Some(path) = &db_path
+        && let Err(e) = barca_core::liveness::record_scheduler(
+            path,
+            zone.now().timestamp(),
+            jobs.iter().map(|j| j.id.clone()).collect(),
+            &state.config.timezone,
+        )
+        .await
+    {
+        barca_core::errln!("[barca] could not record scheduler: {e}");
+    }
     publish_registry(&state, &jobs, &book);
 
+    let mut last_heartbeat = zone.now().timestamp();
     loop {
         // A draining server starts no run: the scheduler stops, and a tick it misses is
         // caught up by the next server's startup catch-up.
@@ -531,11 +547,30 @@ pub async fn run_scheduler(state: AppState) {
             let fresh = reload_jobs(&state).await;
             barca_core::errln!("[barca] schedule reloaded: {} job(s)", fresh.len());
             jobs = fresh;
+            if let Some(path) = &db_path
+                && let Err(e) = barca_core::liveness::record_scheduler(
+                    path,
+                    zone.now().timestamp(),
+                    jobs.iter().map(|j| j.id.clone()).collect(),
+                    &state.config.timezone,
+                )
+                .await
+            {
+                barca_core::errln!("[barca] could not record scheduler: {e}");
+            }
             log_schedule(&jobs, &zone);
             publish_registry(&state, &jobs, &book);
         }
 
         let now = zone.now();
+        if let Some(path) = &db_path
+            && now.timestamp() - last_heartbeat >= barca_core::liveness::HEARTBEAT_SECONDS
+        {
+            if let Err(e) = barca_core::liveness::heartbeat(path, now.timestamp()).await {
+                barca_core::errln!("[barca] could not record scheduler heartbeat: {e}");
+            }
+            last_heartbeat = now.timestamp();
+        }
         let mut changed = count_outcomes(&state, &jobs, &mut book, db_path.as_deref()).await;
         if let Some(dbp) = &db_path {
             reset_failing(&state, &now, &jobs, &mut book, dbp).await;

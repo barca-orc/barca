@@ -193,6 +193,9 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // The runs the last server accepted and did not start, in their order. Before the
     // scheduler's catch-up, which skips a job whose node has one.
     if !read_only {
+        if std::path::Path::new(&state.config.resolved.db_path).exists() {
+            state.record_writer().await.map_err(ServeError::Metadata)?;
+        }
         queue::resume_at_startup(&state)
             .await
             .map_err(ServeError::Metadata)?;
@@ -663,6 +666,15 @@ async fn drain_then_stop(
     let secs = state.config.resolved.drain_timeout_secs;
     state.draining.cancel();
     state.run_tasks.close();
+    if state.writer_recorded.get().is_some()
+        && let Err(e) = barca_core::liveness::record_stopped(
+            &state.config.resolved.db_path,
+            chrono::Utc::now().timestamp(),
+        )
+        .await
+    {
+        barca_core::errln!("[barca] could not record server stop: {e}");
+    }
     // Recorded before anything else: if whatever sent the signal kills the server before the
     // drain ends, the next server puts these runs back in the queue instead of recording them
     // interrupted (#628).
