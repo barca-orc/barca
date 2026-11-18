@@ -493,13 +493,14 @@ def big() -> list:
 """
 
 
-def test_ctrl_c_mid_upload_leaves_no_object_and_no_record(tmp_path, backend, container, proxy):
+def test_ctrl_c_mid_upload_leaves_no_object_and_an_owed_upload(tmp_path, backend, container, proxy):
     """An upload interrupted midway must never leave an object a later run could read (#249).
 
     The proxy lets the first 128 KB of the upload reach the emulator and then holds the
     connection, so the request is certainly in flight when Ctrl-C arrives. On every backend
-    the object appears only when its upload completes, so afterwards there is none; and the
-    step is not recorded, because its upload was never confirmed.
+    the object appears only when its upload completes, so afterwards there is none. The step
+    had computed, so it keeps its row and its upload is owed (#1002): the next run uploads the
+    artifact it has and computes nothing again.
     """
     import signal
 
@@ -528,12 +529,13 @@ def test_ctrl_c_mid_upload_leaves_no_object_and_no_record(tmp_path, backend, con
     assert _stored(backend, container) == [], "an interrupted upload left an object behind"
     db = sqlite3.connect(a.dir / ".barca" / "metadata.db")
     try:
-        assert db.execute("select count(*) from materializations").fetchone() == (0,)
+        assert db.execute("select count(*) from materializations").fetchone() == (1,)
+        assert db.execute("select count(*) from pending_uploads").fetchone() == (1,)
         assert db.execute("select status from runs").fetchall() == [("cancelled",)]
     finally:
         db.close()
 
-    # With the store answering again, the step runs and its object is whole.
+    # With the store answering again, the owed upload is made and its object is whole.
     proxy.cut_after = None
     proc, _ = a.get("big")
     assert proc.returncode == 0, _explain(proc)
