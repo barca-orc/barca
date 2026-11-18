@@ -154,8 +154,8 @@ every database from before 0.29.2 (#629):
   a job. `posted_at` is UTC text in SQLite's `datetime('now')` format; `state` is `failing`,
   `still_failing`, `recovered` or `succeeded`; `message_ref` is empty for a webhook post and
   reserved for an integration whose posts have ids.
-- `pending_uploads` (0.26.0, #390): one row per artifact-store object whose upload failed after
-  its step succeeded (`store_path` primary key, `node_id`, `run_hash`, `run_id`, `local_path`,
+- `pending_uploads` (0.26.0, #390): one row per artifact-store object whose upload failed, or
+  was abandoned by a cancelled run (#1002), after its step succeeded (`store_path` primary key, `node_id`, `run_hash`, `run_id`, `local_path`,
   `host`, `error`, `attempts`, timestamps). A database without it (opened read-only, or a copy
   being validated) reads as having no pending uploads. Only rows of this host are read, retried
   or shown. Older binaries ignore the table.

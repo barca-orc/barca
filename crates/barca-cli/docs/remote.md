@@ -220,7 +220,8 @@ first run that checks, rather than by the very next run. `barca state reset` and
 
 The work is done when the steps are. If every step succeeded and only an upload to the store
 failed (permission denied, an expired token, a store that went away mid-run), or only the
-upload of the history backup did, the run is a success:
+upload of the history backup did, the run is a success (an upload a cancel stopped, by Ctrl-C or
+a server's drain timeout, is kept pending the same way; the run is then `cancelled`):
 
 - it exits 0 with the usual result, and stderr has one warning naming what was not published
   and why:
@@ -382,8 +383,14 @@ wrap-up is reported on stderr, not as an error.
 
 What is left behind is always consistent:
 
-- A step is recorded only once its artifact is confirmed in the store. A step whose upload
-  was still in flight is not recorded, and runs again next time.
+- A recorded step's artifact is in the store, or on this machine with its upload pending. A
+  step that finished while its upload was still in flight is recorded, and the upload kept
+  pending, as a failed upload is ("When an upload fails after the steps succeeded"): stderr has
+  `[barca] warning: 1 result not uploaded to <store> (pipeline.py:numbers): the run was
+  cancelled before the upload was confirmed; those steps finished, the results are kept on this
+  machine ...`, and the next command that opens the store uploads it before its own work and
+  does not run the step again. A step stopped in the middle of its function is not recorded, and
+  runs again next time.
 - No partial file is left. A download, and an upload into a store that is a directory, is
   written to a temp file beside its destination and renamed when whole; the temp file is
   removed when the transfer is stopped. An object store shows an object only once its upload

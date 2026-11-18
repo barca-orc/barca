@@ -549,13 +549,22 @@ pub(super) async fn finalize_run(
             };
             crate::run_line!(
                 Always,
-                "[barca] warning: {} result{} not uploaded to {} ({shown}{more}): {}; every step \
-                 succeeded, the results are kept on this machine (`unsynced`, local only) and the \
-                 next command that uses the store uploads them",
+                "[barca] warning: {} result{} not uploaded to {} ({shown}{more}): {}; {}, the \
+                 results are kept on this machine (`unsynced`, local only) and the next command \
+                 that uses the store uploads them",
                 pending.len(),
                 if pending.len() == 1 { "" } else { "s" },
                 store_location.as_deref().unwrap_or_default(),
-                upload_error.as_deref().unwrap_or("upload failed"),
+                upload_error.as_deref().unwrap_or(if was_cancelled {
+                    CANCELLED_UPLOAD
+                } else {
+                    "upload failed"
+                }),
+                if was_cancelled {
+                    "those steps finished"
+                } else {
+                    "every step succeeded"
+                },
             );
         }
         let error = match (upload_error, publish_error) {
@@ -659,13 +668,17 @@ pub(super) async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
     }
 }
 
+/// Why a finished step's upload is pending after its run was cancelled (#1002).
+const CANCELLED_UPLOAD: &str = "the run was cancelled before the upload was confirmed";
+
 pub(super) struct DrainStore<'a> {
     pub(super) timeout_secs: u64,
     pub(super) store: &'a mut Option<StoreSync>,
     pub(super) cancel: &'a CancellationToken,
     pub(super) all_outputs: &'a mut HashMap<String, OutputRef>,
     pub(super) store_paths: &'a mut HashMap<String, String>,
-    /// Uploads that failed: kept pending, their steps recorded (#390).
+    /// Uploads that failed, or were abandoned by a cancel: kept pending, their steps recorded
+    /// (#390, #1002).
     pub(super) pending: &'a mut Vec<crate::pending_uploads::PendingUpload>,
     /// The first upload failure's message, for the run's warning and `uploads.error`.
     pub(super) upload_error: &'a mut Option<String>,
@@ -684,12 +697,13 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
     let mut was_cancelled = cancel.is_cancelled();
 
-    // Artifact store, before anything is recorded: wait for every upload. Rows are recorded
-    // only for artifacts confirmed in the store, so the metadata never points at a missing
-    // object. The transfer client stays up to fetch the final outputs below.
+    // Artifact store, before anything is recorded: wait for every upload. A row points at an
+    // object confirmed in the store, or at one this machine still has to upload (a
+    // `pending_uploads` row, written before the row). The transfer client stays up to fetch
+    // the final outputs below.
     //
     // Ctrl-C during the wait cancels the run like one during a step: the uploads still in
-    // flight are abandoned and their steps are not recorded.
+    // flight are abandoned and kept pending, their steps recorded.
     let drained = match store.as_mut() {
         Some(s) if !was_cancelled => {
             let queued = s.client.pending_uploads();
@@ -726,14 +740,45 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
     };
     if was_cancelled {
         if let Some(s) = store.take() {
+            let layout = s.client.layout().clone();
             let (unconfirmed, hashes) = s.client.abort().await;
-            for node in unconfirmed {
-                all_outputs.remove(&node);
-                store_paths.remove(&node);
-            }
             for (node, sha256) in hashes {
                 if let Some(oref) = all_outputs.get_mut(&node) {
                     oref.content_hash.get_or_insert(sha256);
+                }
+            }
+            // A step that finished is computed, whoever stopped the run (a Ctrl-C, a server's
+            // drain deadline before a requeue): its complete artifact is on this machine. Its
+            // upload was abandoned, not failed, and is kept pending like a failed one (#390,
+            // #1002): the row is recorded with the worker's digest, and the next command that
+            // opens the store uploads the reusable local artifact path before its own work, so
+            // nothing is computed twice. The run's upload snapshots are not needed for that.
+            for node in unconfirmed {
+                let Some(oref) = all_outputs.get(&node) else {
+                    store_paths.remove(&node);
+                    continue;
+                };
+                let at = store_paths
+                    .get(&node)
+                    .cloned()
+                    .or_else(|| layout.store_for(&oref.path));
+                match at {
+                    // An executed step's location is in `store_paths`; a cached target's repair
+                    // upload (`repair_targets`) has none there, and keeps none.
+                    Some(at) if std::path::Path::new(&oref.path).is_file() => {
+                        pending.push(crate::pending_uploads::PendingUpload {
+                            store_path: at,
+                            node_id: node,
+                            run_hash: None,
+                            run_id: None,
+                            local_path: oref.path.clone(),
+                            error: Some(CANCELLED_UPLOAD.to_string()),
+                        });
+                    }
+                    _ => {
+                        all_outputs.remove(&node);
+                        store_paths.remove(&node);
+                    }
                 }
             }
         }

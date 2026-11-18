@@ -1,12 +1,13 @@
 # Artifact upload receipts
 
-Specification version: 2. Status: implemented. This boundary covers atomic producer
+Specification version: 3. Status: implemented. This boundary covers atomic producer
 publication, upload source ownership, and confirmed receipt persistence. It preserves the
 existing computation-hash artifact paths and sensor content identities. It does not define
 immutable historical objects or isolation of concurrent readers of the shared local path.
 
 Conformance: [controlled CLI overlap, primitive storage and cleanup tests](../../python/tests/test_upload_snapshot_receipts.py),
 [transfer lifecycle tests](../../python/tests/test_remote_cancel.py),
+[drain/requeue with an upload in flight](../../python/tests/test_drain_keeps_computed_steps.py),
 [transfer confirmation tests](../../crates/barca-core/src/transfer.rs), and
 [checkpoint/terminal persistence](../../crates/barca-core/src/persist.rs).
 
@@ -46,12 +47,24 @@ The transfer helper removes its run's snapshots on SIGTERM, socket closure and c
 lifeline EOF. Its existing staged-file registry cleans SDK stages on shutdown. If both
 coordinator and helper are killed outright, the next worker's dead-PID cleanup is the crash
 backstop. An unconfirmed or abandoned (cancelled) upload supplies no successful receipt and
-cannot publish a receipt-driven checkpoint row. This does not prohibit the fail-soft
-terminal materialization of a completed computation described next.
+cannot publish a receipt-driven checkpoint row. A completed computation whose upload was
+abandoned still gets the fail-soft terminal materialization described next (#1002).
 
 A request that failed after its step succeeded (#390) does not fail the step. The terminal
 ledger records the success row at the store location with the worker's producer digest, and the
 upload is kept in the `pending_uploads` table (see [metadata-schema.md](metadata-schema.md)).
+
+A request abandoned because the run was cancelled after its step succeeded (#1002) is treated
+the same way, whoever cancelled: one cancelled-run path handles every cancellation, and the
+conformance exercises a user's Ctrl-C to a CLI run and a server's drain deadline that requeues
+the run. The step is computed;
+only its publication is unfinished. When its reusable local artifact path is a file, the
+terminal ledger of the cancelled run records its success row at the store location with the
+worker's producer digest, and the pending row's `error` is `the run was cancelled before the
+upload was confirmed`. The pending row is written before the materialization row. A step whose
+function was interrupted has no artifact and is not recorded. A requeued server run, or the
+next command, retries the pending upload before its own work and takes the step as a cache hit.
+The run's upload snapshots are still removed on cancellation: the retry does not need them.
 The next command that opens the store re-uploads the reusable local artifact path, before its own
 work; a confirmed retry removes the pending row and fills a missing `output_hash` from its
 receipt. A retry has no producer snapshot: a later refresh of the same path between the failure

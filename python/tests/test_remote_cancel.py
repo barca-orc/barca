@@ -9,7 +9,8 @@ The rule (`barca docs remote`, "Ctrl-C"):
 - Whatever the moment, the count and the target of the signals (the whole job, as a terminal
   sends it, or barca alone), and whether the store answers: exit 130 with the `cancelled`
   envelope, no traceback, no helper process left, a step recorded only if its artifact is in
-  the store, no half-written file, and a next run that succeeds.
+  the store or its upload is kept pending with the artifact on this machine (#1002), no
+  half-written file, and a next run that succeeds and uploads what was pending.
 - If barca itself is killed, its helpers notice and exit on their own.
 
 Each test stops one of barca's helper processes at a point the test controls (the shim in
@@ -181,6 +182,14 @@ def recorded(root: Path) -> dict[str, str]:
         }
 
 
+def pending(root: Path) -> dict[str, str]:
+    """store path -> local path, for every upload kept pending for the next command."""
+    with snapshot(root) as db:
+        if db is None:
+            return {}
+        return dict(db.execute("select store_path, local_path from pending_uploads"))
+
+
 def temp_files(*roots: Path) -> list[str]:
     """Files a transfer in flight leaves if it is not cleaned up: staged artifacts and staged
     backup copies (`*.tmp`)."""
@@ -202,9 +211,13 @@ def cancelled_cleanly(run: Run, ran: bool = True) -> None:
     assert [pid for pid in run.helpers() if alive(pid)] == []
     if ran:
         assert history(root, store)[0]["status"] == "cancelled"
-        # Every recorded step has its artifact in the store.
+        # Every recorded step has its artifact in the store, or on this machine with its
+        # upload kept pending for the next command (#1002).
+        kept = pending(root)
         for node, path in recorded(root).items():
-            assert Path(path).is_file(), f"{node} is recorded but {path} is not in the store"
+            assert Path(path).is_file() or Path(kept.get(path, "")).is_file(), (
+                f"{node} is recorded but {path} is neither in the store nor pending"
+            )
     else:
         assert not (root / ".barca" / "metadata.db").exists()
     assert temp_files(root, store) == []
@@ -219,6 +232,10 @@ def recovers(run: Run, target: str, expected) -> subprocess.CompletedProcess:
     assert json.loads(again.stdout)["final_output"] == expected
     assert "backed up the metadata DB" in again.stderr, again.stderr
     assert not list((run.root / ".barca" / "backups").glob("*.unsent"))
+    # What the cancelled run kept pending is in the store now.
+    assert pending(run.root) == {}
+    for node, path in recorded(run.root).items():
+        assert Path(path).is_file(), f"{node} is recorded but {path} is not in the store"
     return again
 
 
@@ -258,13 +275,19 @@ def test_ctrl_c_during_the_end_of_run_upload_wait(project, whole_group):
     run.end()
 
     cancelled_cleanly(run)
-    # The upload never finished, so the step is not recorded and its object does not exist.
-    assert recorded(run.root) == {}
+    # The upload never finished: its object is not in the store, but the step finished, so it
+    # is recorded and its upload kept pending (#1002).
+    assert list(recorded(run.root)) == ["numbers"]
+    assert list(pending(run.root)) == [recorded(run.root)["numbers"]]
     assert list(store.glob("default/artifacts/*/*")) == []
+    assert "1 result not uploaded" in run.stderr, run.stderr
     # The wrap-up backed the run's record up all the same.
     assert "backed up the metadata DB" in run.stderr, run.stderr
     assert "did not finish" not in run.stderr, run.stderr
-    recovers(run, "numbers", [1, 2, 3])
+    # The next run uploads it and computes nothing.
+    again = recovers(run, "numbers", [1, 2, 3])
+    assert "uploaded 1 pending result" in again.stderr, again.stderr
+    assert json.loads(again.stdout)["steps_executed"] == 0, again.stdout
 
 
 @GROUP
@@ -316,9 +339,12 @@ def test_ctrl_c_during_a_step_with_an_upload_in_flight(project, whole_group):
     run.end()
 
     cancelled_cleanly(run)
-    assert recorded(run.root) == {}  # `numbers` was never confirmed in the store
+    # `numbers` finished but was never confirmed in the store: recorded, its upload pending
+    # (#1002); `slow` was interrupted in its function and is not recorded.
+    assert list(recorded(run.root)) == ["numbers"]
     assert "cancelled after" in run.stderr and "| done in" not in run.stderr, run.stderr
-    recovers(run, "slow", 3)
+    again = recovers(run, "slow", 3)
+    assert json.loads(again.stdout)["steps_executed"] == 1, again.stdout
 
 
 # ─── a store that does not answer: the wrap-up is bounded, and can be abandoned ──

@@ -137,6 +137,13 @@ are cache hits on the next attempt), and the stopped attempt is not recorded as 
 its row and lines are replaced by the next attempt's. The server exits 0, and the next server
 starts them again from the beginning, first, under the same run ids.
 
+With a store, a step that finished counts as kept even when its upload was still in flight at the
+drain timeout: the upload is stopped and kept pending, as a failed one is ([Remote Storage](/reference/remote-storage/),
+"When an upload fails after the steps succeeded"). The next server's attempt prints
+`[barca] uploading 1 pending result to <store> from an earlier run`, uploads it from this
+machine's `.barca/artifacts/` before its own work, and executes only the steps that had not
+finished.
+
 A second SIGTERM or SIGINT during the drain cancels the runs in flight instead: each run is
 recorded as `cancelled` in `barca history`, with `[barca] run cancelled: server shutdown` in its
 logs (`barca logs RUN_ID`) and `barca.reason: server shutdown` on its `barca.run` telemetry span.

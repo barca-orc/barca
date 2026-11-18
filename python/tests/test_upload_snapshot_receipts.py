@@ -1,6 +1,7 @@
 """Successful receipts describe the bytes sent by that upload (#381)."""
 
 import hashlib
+import json
 import threading
 
 import pytest
@@ -235,17 +236,35 @@ def test_cancelled_real_upload_cleans_run_owned_snapshots(tmp_path):
         proc.send_signal(signal.SIGINT)
         out, err = proc.communicate(timeout=QUICK)
         assert proc.returncode == 130, (out, err)
+        # The step finished, so it is recorded and its abandoned upload kept pending (#1002),
+        # from the reusable local artifact path: not from a snapshot, which the run removed.
         with contextlib.closing(sqlite3.connect(tmp_path / ".barca/metadata.db")) as db:
-            assert (
-                db.execute(
-                    "SELECT count(*) FROM materializations WHERE status='success'"
-                ).fetchone()[0]
-                == 0
-            )
+            rows = db.execute(
+                "SELECT artifact_path FROM materializations WHERE status='success'"
+            ).fetchall()
+            kept = db.execute("SELECT store_path, local_path FROM pending_uploads").fetchall()
+        assert [r[0] for r in rows] == [kept[0][0]], (rows, kept)
+        assert ".barca/staging" not in kept[0][1]
+        assert Path(kept[0][1]).is_file()
+        assert not Path(kept[0][0]).exists()
         assert not list((tmp_path / ".barca/staging").rglob("*.tmp"))
         pid = int((hold / "upload-open.started").read_text())
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+        # The next command uploads those bytes before its own work and computes nothing.
+        (hold / "release").touch()
+        again = subprocess.run(
+            [_find_binary(), "get", "value", "pipeline.py", "-o", "value", "--json"],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=QUICK,
+        )
+        assert again.returncode == 0, again.stderr
+        assert "uploaded 1 pending result" in again.stderr, again.stderr
+        assert json.loads(again.stdout)["steps_executed"] == 0, again.stdout
+        assert json.loads(Path(kept[0][0]).read_text()) == 11
     finally:
         (hold / "release").touch()
         if proc.poll() is None:

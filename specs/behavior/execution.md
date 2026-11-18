@@ -88,7 +88,9 @@ least once;
 replay must not duplicate the same run/key result. This is not an exactly-once promise for
 user side effects or external sinks.
 
-An explicit cancellation stops that run's work and reaps its owned helpers. A server records
+An explicit cancellation stops that run's work and reaps its owned helpers. A step that
+finished before the cancellation stays recorded even when its upload to a store was abandoned;
+the upload is kept pending ([upload receipts](../interfaces/artifact-upload-receipts.md), #1002). A server records
 why it cancelled a run (`runs.cancellation`): a request or its own stop, the token of the
 request, and whether the run had started; one cancelled while it waited in the queue executed
 nothing and names the runs it waited behind, among them one doing the same work. A server does
