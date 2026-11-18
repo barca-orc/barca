@@ -421,9 +421,9 @@ fn render_queue(body: &Value) -> String {
     // extra slot. Older servers omit this field.
     let slots = match body["slots"].as_str() {
         Some(slots) => slots.to_string(),
-        None => barca_core::run_list::queue_slots_line(
-            running.len(),
-            body["max_runs"].as_u64().unwrap_or(0) as usize,
+        None => body["max_runs"].as_u64().map_or_else(
+            || format!("{} running · run slots unknown", running.len()),
+            |max| barca_core::run_list::queue_slots_line(running.len(), max as usize),
         ),
     };
     let mut out = format!(

@@ -276,6 +276,66 @@ pub async fn set_paused(db_path: &str, at: Option<i64>) -> Result<(), BarcaError
     Ok(())
 }
 
+/// The `server_state` entry `key`, when there is one: what a server recorded of itself
+/// ([`crate::liveness`]). A database without the table has none.
+pub async fn state_value(db_path: &str, key: &str) -> Result<Option<String>, BarcaError> {
+    if std::fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
+        return Ok(None);
+    }
+    let _g = db::db_guard_for(db_path).await;
+    let (_db, conn) = db::open_conn(db_path).await?;
+    if !has_table(&conn, "server_state").await? {
+        return Ok(None);
+    }
+    let mut rows = conn
+        .query("SELECT value FROM server_state WHERE key = ?1", [key])
+        .await
+        .map_err(failed("reading the server's record"))?;
+    let value = rows
+        .next()
+        .await
+        .map_err(failed("reading the server's record"))?
+        .and_then(|row| row.get::<String>(0).ok());
+    while rows
+        .next()
+        .await
+        .map_err(failed("reading the server's record"))?
+        .is_some()
+    {}
+    Ok(value)
+}
+
+/// Start and most recent step completion of the queue's executing runs, in Unix seconds.
+pub async fn progress(
+    db_path: &str,
+) -> Result<std::collections::HashMap<String, (i64, Option<i64>)>, BarcaError> {
+    let _guard = db::db_guard_for(db_path).await;
+    let (_db, conn) = db::open_conn(db_path).await?;
+    let mut rows = conn.query(
+        "SELECT q.run_id, unixepoch(r.started_at),
+                (SELECT unixepoch(MAX(m.created_at)) FROM materializations m WHERE m.run_id = q.run_id)
+         FROM run_queue q JOIN runs r ON r.run_id = q.run_id WHERE q.state != 'queued'", ())
+        .await.map_err(failed("reading run progress"))?;
+    let mut progress = std::collections::HashMap::new();
+    while let Some(row) = rows.next().await.map_err(failed("reading run progress"))? {
+        if let (Ok(id), Ok(at)) = (row.get::<String>(0), row.get::<i64>(1)) {
+            progress.insert(id, (at, row.get::<i64>(2).ok()));
+        }
+    }
+    Ok(progress)
+}
+
+/// Set the `server_state` entry `key` to `value`.
+pub async fn set_state_value(db_path: &str, key: &str, value: &str) -> Result<(), BarcaError> {
+    let _g = db::db_guard().await;
+    let (_db, conn) = db::open_conn(db_path).await?;
+    ensure(&conn).await?;
+    db::run_queue::set_state(&conn, key, value)
+        .await
+        .map_err(failed("recording the server"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1632,13 +1632,16 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
         let rank = rollup.roots.len().to_string().len();
         for (at, root) in rollup.roots.iter().enumerate() {
             let pad = " ".repeat(rank + 4);
-            line!(
-                rendered,
-                "{:>rank$}. {}: {}",
-                at + 1,
-                root.kind.word(),
-                crate::targets::short_name(&root.node)
-            );
+            let title = if root.node.is_empty() {
+                root.kind.word().to_string()
+            } else {
+                format!(
+                    "{}: {}",
+                    root.kind.word(),
+                    crate::targets::short_name(&root.node)
+                )
+            };
+            line!(rendered, "{:>rank$}. {title}", at + 1);
             let mut holds = format!(
                 "holds {} ({}): {}",
                 plural(root.nodes as u64, "node"),

@@ -92,7 +92,7 @@ export function CausesList({ todos, scope, name, onOpen, selected = null, onSele
   const shown = all ? todos : todos.slice(0, limit)
   const more = todos.length - shown.length
   const select = (id: string) => onSelect?.(selected === id ? null : id)
-  const title = ({ root }: Held) => `${ROOT_KIND_WORD[root.kind]}: ${name(root.node)}`
+  const title = ({ root }: Held) => root.node ? `${ROOT_KIND_WORD[root.kind]}: ${name(root.node)}` : ROOT_KIND_WORD[root.kind]
   return (
     <div className="barca-todos">
       <ExplainedBar todos={todos} scope={scope} head={limit} />
@@ -127,14 +127,14 @@ export function CausesList({ todos, scope, name, onOpen, selected = null, onSele
                   >
                     {ROOT_KIND_WORD[root.kind]}
                   </button>
-                  <button
+                  {root.node && <button
                     type="button"
                     className="barca-todo-node"
                     title={`Open ${root.node}`}
                     onClick={(event) => { event.stopPropagation(); onOpen(root.node) }}
                   >
                     {name(root.node)}
-                  </button>
+                  </button>}
                   <span className="barca-todo-why" title={root.detail}>{root.detail}</span>
                   <span className="barca-todo-held">{heldLine(todo)}</span>
                 </div>

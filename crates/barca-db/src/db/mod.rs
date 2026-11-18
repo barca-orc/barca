@@ -132,8 +132,8 @@ pub(crate) use ticks::CREATE as CREATE_SCHEDULE_TICKS;
 pub use ticks::{
     LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
     TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, TickTimings,
-    latest_ticks, recent_ticks, record_tick, record_tick_finished, record_tick_started,
-    tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
+    latest_ticks, newest_decided, recent_ticks, record_tick, record_tick_finished,
+    record_tick_started, tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
 };
 
 /// Process-wide serialization of `metadata.db` operations. The server can run

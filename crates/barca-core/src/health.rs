@@ -390,7 +390,8 @@ pub enum RootKind {
     NoSchedule,
     /// A paused schedule (`node` is the scheduled node) or a paused node (`barca pause`).
     SchedulePaused,
-    /// A schedule no running scheduler fires: `node` is the scheduled node.
+    /// No scheduler fires the schedules of the nodes it holds: one root for the project
+    /// ([`Root::scheduler_off`]), about no node.
     SchedulerOff,
     /// A failing node: the node itself, or the nearest failing node upstream ([`blocked_by`]);
     /// or a schedule held after `max_failures` failed ticks (`node` is the scheduled node).
@@ -437,7 +438,8 @@ impl RootKind {
     }
 }
 
-/// The upstream fact that explains why a node is not fresh: `<kind>:<node id>`.
+/// The upstream fact that explains why a node is not fresh: `<kind>:<node id>`, or
+/// `scheduler_off` alone.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Root {
@@ -445,7 +447,8 @@ pub struct Root {
     pub id: String,
     pub kind: RootKind,
     /// The node the fact is about: the failing node, the sensor whose observation changed,
-    /// the node whose code changed, the scheduled node of a paused schedule.
+    /// the node whose code changed, the scheduled node of a paused schedule. Empty for
+    /// `scheduler_off`, which is about the scheduler.
     pub node: String,
 }
 
@@ -456,6 +459,18 @@ impl Root {
             id: format!("{}:{node}", kind.as_str()),
             kind,
             node: node.to_string(),
+        }
+    }
+
+    /// The one root of every node whose refresh path's schedule no scheduler fires: the
+    /// scheduler is not running (or never ran, or does not serve that schedule). Its id is
+    /// `scheduler_off` and it is about no node (`node` is empty): one entry for the project,
+    /// however many schedules are unfired.
+    pub fn scheduler_off() -> Self {
+        Root {
+            id: RootKind::SchedulerOff.as_str().to_string(),
+            kind: RootKind::SchedulerOff,
+            node: String::new(),
         }
     }
 
@@ -940,6 +955,29 @@ pub fn decide(
     }
 }
 
+/// Row 6a of the health table: a node [`decide`] found up to date from its last result
+/// (`cached`, a task or sensor whose last run succeeded, a tick's standing verdict) is
+/// `behind` (`schedule_late`) when a slot of its refresh path's schedule has passed that no
+/// scheduler served and none fires that schedule
+/// ([`crate::refresh_path::PathSchedule::unserved`]): the result is current only because
+/// nothing has looked since. Every other answer stands.
+pub fn unserved(
+    decided: (Health, HealthReason),
+    node: &str,
+    path: crate::refresh_path::PathEvidence<'_>,
+) -> (Health, HealthReason) {
+    use HealthReason as R;
+    match decided {
+        (Health::Ok, R::CheckedUpToDate | R::LastRunSucceeded | R::Cached)
+            if crate::refresh_path::path_schedule(node, path)
+                .is_some_and(|(_, schedule)| schedule.off() && schedule.off_since.is_some()) =>
+        {
+            (Health::Behind, R::ScheduleLate)
+        }
+        other => other,
+    }
+}
+
 /// Fill `health`, `health_reason`, `signals`, `measured`, `last_check`, `refresh_path`,
 /// `cause`, `root`, `gap_seconds` ([`crate::causes`]) and the times (`stale_since`, `expected_fresh_at`, `recheck_at`:
 /// [`crate::estimates::times`]) on every row of `nodes` (one status result: a scope with its upstream cone,
@@ -984,12 +1022,16 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
                 });
             let signals = signals(node, evidence.ages, |id| assets.contains(id), checked);
             let by = blocked.remove(&node.id);
-            let (health, reason) = decide(
-                node,
-                by.is_some(),
-                &signals,
-                evidence.late.contains(&node.id),
-                checked,
+            let (health, reason) = unserved(
+                decide(
+                    node,
+                    by.is_some(),
+                    &signals,
+                    evidence.late.contains(&node.id),
+                    checked,
+                ),
+                &node.id,
+                evidence.path,
             );
             let (health, reason) = if health == Health::NeverRun
                 && node.kind == "task"
@@ -1116,6 +1158,19 @@ async fn from_db(
     let db_path = cfg.db_path.as_str();
     let jobs = crate::schedule::jobs_from_dag(dag);
     let ids: Vec<String> = jobs.iter().map(|job| job.id.clone()).collect();
+    // What the records say of a scheduler and of the queue of the server that writes them
+    // (`crate::liveness`): none runs here.
+    let (seen, queued) = if Path::new(db_path).exists() {
+        (
+            crate::liveness::recorded(db_path).await?,
+            crate::liveness::recorded_runs(db_path).await?,
+        )
+    } else {
+        Default::default()
+    };
+    let recorded_zone = seen.zone();
+    let zone = recorded_zone.as_ref().unwrap_or(zone);
+    let observed = crate::liveness::observe(&jobs, zone, now, &seen);
     let (ages, pinned, paused_nodes, pauses, failures, ticks, checks) =
         if Path::new(db_path).exists() {
             let ages = db::node_ages(db_path).await?;
@@ -1140,31 +1195,46 @@ async fn from_db(
         } else {
             Default::default()
         };
-    // The scheduler's walk, once per command (#961); no scheduler runs here, so no schedule
-    // is live.
+    // The scheduler's walk, once per command (#961). No scheduler runs here: a schedule is
+    // live when the records show one firing it (#1039).
     let paths = crate::refresh_path::Paths::of(dag);
-    let schedules =
-        crate::refresh_path::recorded_schedules(&jobs, &ticks, &failures, &pauses, zone, now);
+    let schedules = crate::refresh_path::recorded_schedules(
+        &jobs, &ticks, &failures, &pauses, &observed, zone, now,
+    );
     let late = schedules
         .iter()
         .filter(|(_, schedule)| schedule.standing.as_ref().is_some_and(|s| s.late))
         .map(|(id, _)| id.clone())
         .collect();
-    // No scheduler and no run queue here: only `stale_since` can be told, from the records
-    // and the source files' modification times. The typical durations are read only for the
-    // rollup, whose roots say what clearing them costs.
-    let source_times = crate::estimates::source_times_of(dag);
-    let durations: HashMap<String, f64> = if rollup && Path::new(db_path).exists() {
-        let ids: Vec<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
-        db::recent_durations(db_path, &ids, 20)
-            .await?
-            .into_iter()
-            .filter(|(_, recent)| !recent.is_empty())
-            .map(|(id, recent)| (id, crate::schedule_standing::median(&recent)))
-            .collect()
-    } else {
-        HashMap::new()
+    // No run queue here either: the one the serving server records, with its run slots.
+    let queue_paused = match Path::new(db_path).exists() {
+        true => crate::serve::run_queue::paused_at(db_path).await?.is_some(),
+        false => false,
     };
+    let queue = crate::liveness::recorded_timing(
+        &queued,
+        &ticks,
+        &seen,
+        queue_paused,
+        observed.server_gone(&seen),
+        dag,
+        now.timestamp(),
+    );
+    // The typical durations are what an estimate is made of where a scheduler is seen
+    // firing, and what the rollup's roots cost.
+    let source_times = crate::estimates::source_times_of(dag);
+    let durations: HashMap<String, f64> =
+        if (rollup || observed.running) && Path::new(db_path).exists() {
+            let ids: Vec<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
+            db::recent_durations(db_path, &ids, 20)
+                .await?
+                .into_iter()
+                .filter(|(_, recent)| !recent.is_empty())
+                .map(|(id, recent)| (id, crate::schedule_standing::median(&recent)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
     let evidence = Evidence {
         ages: &ages,
         pinned: &pinned,
@@ -1178,9 +1248,13 @@ async fn from_db(
         },
         timing: crate::estimates::Timing {
             durations: &durations,
+            runs: &queue.runs,
+            queue_clear_at: queue.queue_clear_at,
+            queue_open: queue.queue_open,
+            workers: queue.workers.unwrap_or(1),
             source_times: &source_times,
-            max_runs: cfg.server_max_runs,
-            ..crate::estimates::Timing::none()
+            // The serving server's, when it recorded them; else what is configured here.
+            max_runs: queue.max_runs.or(cfg.server_max_runs),
         },
         now: now.timestamp(),
     };

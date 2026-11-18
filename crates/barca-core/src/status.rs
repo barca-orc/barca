@@ -214,8 +214,10 @@ pub struct ScheduleStatus {
     pub paused_until: Option<String>,
     /// Why the last due tick was skipped: `in_flight` or `paused` (server only).
     pub skip_reason: Option<String>,
-    /// True when a running scheduler reported this (a `barca serve` that fires schedules);
-    /// false when it was read from the metadata DB because no scheduler runs here.
+    /// A scheduler is firing the schedule: the answering server's own, or, where none runs
+    /// (`barca status` without `--server`, a `--read-only` or `--no-schedule` server), one
+    /// the metadata DB shows deciding its slots ([`crate::liveness::observe`]). False when
+    /// none does: it stopped, it left a slot undecided past the grace, or none ever ran.
     pub live: bool,
     /// How long its ticks' runs typically wait for a run slot, whole seconds: the median
     /// queue wait of its newest 20 fired ticks; 0 with none recorded.
@@ -303,15 +305,25 @@ pub async fn attach_schedules_of(
         return Ok(());
     }
     let ids: Vec<String> = jobs.iter().map(|j| j.id.clone()).collect();
-    let (ticks, failures, pauses) = match db_path.filter(|p| Path::new(p).exists()) {
+    let (ticks, failures, pauses, seen) = match db_path.filter(|p| Path::new(p).exists()) {
         Some(path) => (
             crate::schedule_standing::recorded(path, &ids).await?,
             db::get_schedule_failures(path).await?,
             db::get_schedule_pauses(path).await?,
+            crate::liveness::recorded(path).await?,
         ),
         None => Default::default(),
     };
+    let recorded_zone = seen.zone();
+    let zone = recorded_zone.as_ref().unwrap_or(zone);
     attach_standings(nodes, jobs, &ticks, &failures, &pauses, zone, now);
+    // No scheduler runs here: `live` is what the records show (`crate::liveness`).
+    let observed = crate::liveness::observe(jobs, zone, now, &seen);
+    for node in nodes.iter_mut() {
+        if let (Some(block), Some(seen)) = (&mut node.schedule, observed.schedules.get(&node.id)) {
+            block.live = seen.live;
+        }
+    }
     Ok(())
 }
 
@@ -353,8 +365,8 @@ pub fn attach_standings(
 
 impl ScheduleStatus {
     /// `job`'s schedule as it stands (`standing`), with its failed ticks `(failures,
-    /// max_failures)` and its pause when one is on. Not `live`: a server that runs the
-    /// scheduler says so itself.
+    /// max_failures)` and its pause when one is on. Not `live`: the caller says whether a
+    /// scheduler fires it (its own, or [`crate::liveness::observe`]).
     pub fn of(
         job: &crate::schedule::ScheduledJob,
         standing: crate::schedule_standing::Standing,

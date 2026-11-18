@@ -68,24 +68,43 @@ fn serve(rt: &tokio::runtime::Runtime, router: Router) -> String {
     format!("http://{addr}")
 }
 
-/// `root` replaced so a local and a served copy compare equal.
-fn normalized(out: &Output, roots: &[&Path]) -> (Option<i32>, String, String) {
+/// Both copies have the same source mtime, which status uses as stale_since for
+/// never-run assets. Each command measures their gap at its own minute boundary.
+const SOURCE_MTIME: u64 = 1_700_000_000;
+
+fn normalized_status(stdout: String) -> String {
+    let mut status: Value = serde_json::from_str(&stdout).unwrap();
+    let as_of = chrono::DateTime::parse_from_rfc3339(status["as_of"].as_str().unwrap()).unwrap();
+    let gap = barca_core::causes::gap_instant(as_of.timestamp()) - SOURCE_MTIME as i64;
+    let nodes = status["nodes"].as_array_mut().unwrap();
+    let total = gap * nodes.len() as i64;
+    for node in nodes {
+        assert_eq!(node["gap_seconds"], gap);
+        node["gap_seconds"] = Value::Null;
+    }
+    let rollup = &mut status["rollup"];
+    assert_eq!(rollup["gap_seconds"], total);
+    assert_eq!(rollup["held_by"][0]["gap_seconds"], total);
+    rollup["gap_seconds"] = Value::Null;
+    rollup["held_by"][0]["gap_seconds"] = Value::Null;
+    status["as_of"] = Value::Null;
+    status.to_string()
+}
+
+fn normalized(out: &Output, roots: &[&Path], status: bool) -> (Option<i32>, String, String) {
     let clean = |s: String| {
-        let s = roots.iter().fold(s, |s, root| {
+        roots.iter().fold(s, |s, root| {
             s.replace(&root.display().to_string(), "<root>")
-        });
-        // `as_of` is the instant each command classified at: two commands, two instants.
-        s.lines()
-            .map(|line| match line.split_once("\"as_of\": \"") {
-                Some((before, _)) => format!("{before}\"as_of\": \"<t>\","),
-                None => line.to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        })
     };
+    let stdout = clean(text(&out.stdout));
     (
         out.status.code(),
-        clean(text(&out.stdout)),
+        if status {
+            normalized_status(stdout)
+        } else {
+            stdout
+        },
         clean(text(&out.stderr)),
     )
 }
@@ -97,7 +116,12 @@ fn server_mode_without_python() {
     let served = tmp.path().join("served");
     for dir in [&local, &served] {
         std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join("pipeline.py"), PIPELINE).unwrap();
+        let path = dir.join("pipeline.py");
+        std::fs::write(&path, PIPELINE).unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(SOURCE_MTIME))
+            .unwrap();
     }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -150,8 +174,8 @@ fn server_mode_without_python() {
         remote_args.extend(["--server", url.as_str()]);
         let there = barca(&local, &remote_args);
         assert_eq!(
-            normalized(&here, &roots),
-            normalized(&there, &roots),
+            normalized(&here, &roots, args[0] == "status"),
+            normalized(&there, &roots, args[0] == "status"),
             "barca {}",
             args.join(" ")
         );

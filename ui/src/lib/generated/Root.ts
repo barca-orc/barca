@@ -2,7 +2,8 @@
 import type { RootKind } from "./RootKind";
 
 /**
- * The upstream fact that explains why a node is not fresh: `<kind>:<node id>`.
+ * The upstream fact that explains why a node is not fresh: `<kind>:<node id>`, or
+ * `scheduler_off` alone.
  */
 export type Root = {
 /**
@@ -11,6 +12,7 @@ export type Root = {
 id: string, kind: RootKind,
 /**
  * The node the fact is about: the failing node, the sensor whose observation changed,
- * the node whose code changed, the scheduled node of a paused schedule.
+ * the node whose code changed, the scheduled node of a paused schedule. Empty for
+ * `scheduler_off`, which is about the scheduler.
  */
 node: string, };

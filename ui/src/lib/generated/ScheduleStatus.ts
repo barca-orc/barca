@@ -80,8 +80,10 @@ paused_until: string | null,
  */
 skip_reason: string | null,
 /**
- * True when a running scheduler reported this (a `barca serve` that fires schedules);
- * false when it was read from the metadata DB because no scheduler runs here.
+ * A scheduler is firing the schedule: the answering server's own, or, where none runs
+ * (`barca status` without `--server`, a `--read-only` or `--no-schedule` server), one
+ * the metadata DB shows deciding its slots ([`crate::liveness::observe`]). False when
+ * none does: it stopped, it left a slot undecided past the grace, or none ever ran.
  */
 live: boolean,
 /**

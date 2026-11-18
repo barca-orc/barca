@@ -206,14 +206,14 @@ def test_state_filters_by_cache_state(deployment):
 
 
 def test_problems_on_the_servers_own_machine_read_the_metadata_db(deployment):
-    # No [server] here: status runs locally. No scheduler runs in this command, so the schedule
-    # is what the metadata DB holds (the failures `serve` persisted), with `live: false`.
+    # Local status reads the writer’s scheduler liveness and failure hold from the DB.
     out = barca(deployment.server_root, "status", "pipeline.py", "--problems", "--json")
     assert out.returncode == 0, out.stderr
     nodes = nodes_by_id(json.loads(out.stdout))
     assert set(nodes) == PROBLEMS
     schedule = nodes["pipeline.py:nightly_sync"]["schedule"]
-    assert schedule["live"] is False
+    assert schedule["live"] is True
+    assert schedule["state"] == "held"
     assert schedule["failing"] is True
     assert schedule["failures"] == 2
     # The last tick and its run are read from the metadata DB, as the server reads them.

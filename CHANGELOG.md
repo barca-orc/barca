@@ -130,6 +130,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Read-only servers report the writer’s schedules, run slots, queue timing and freshness estimates. A stopped scheduler appears once at the top of the rollup (#1039).
+
 - **A run's detail and an accepted run read the same wherever they are read.** `barca history RUN_ID` on this machine counts the run's planned nodes as a server does (`8 steps planned over 6 nodes`, `counts.nodes` in `--json`), when the files it ran still plan what it ran; before, only a server's answer had them. In the web UI, a node whose run was accepted reads `queued` until the run reports on it, where it read `running` before 0.45 and nothing after #1042.
 - Health estimates respect paused dependencies, keep the first input change as the stale time, and disregard ticks that preceded an upstream recovery. Schedules report failure holds and in-flight skips, and a brief queue wait preserves the underlying change as the cause (#1040).
 

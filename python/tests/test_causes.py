@@ -87,7 +87,10 @@ def _held(rollup: dict, nodes: list[dict]) -> None:
             continue
         assert node["cause"] in CAUSES
         root = node["root"]
-        assert root["id"] == f"{root['kind']}:{root['node']}"
+        if root["kind"] == "scheduler_off":
+            assert (root["id"], root["node"]) == ("scheduler_off", "")
+        else:
+            assert root["id"] == f"{root['kind']}:{root['node']}"
         assert [r["id"] for r in rollup["roots"]].count(root["id"]) == 1
     total = rollup["entries"][0]
     assert sum(total["causes"].values()) == len(behind)
@@ -100,7 +103,9 @@ def _held(rollup: dict, nodes: list[dict]) -> None:
     assert total["weight"] == sum(total["weights"].values())
     assert total["weights"]["fresh"] == fresh
     assert sum(r["weight"] for r in rollup["roots"]) == total["weight"] - fresh
-    weights = [(r["needs_someone"], r["weight"]) for r in rollup["roots"]]
+    weights = [
+        (r["needs_someone"], r["weight"]) for r in rollup["roots"] if r["kind"] != "scheduler_off"
+    ]
     assert weights == sorted(weights, reverse=True)
     split = total["split"]
     roots = rollup["roots"]
@@ -138,8 +143,8 @@ def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
     # topmost node.
     assert _why(doc["nodes"]) == {
         "inbox": (None, None),
-        "orders": ("no_refresh_path", "scheduler_off:pipeline.py:inbox"),
-        "clean": ("no_refresh_path", "scheduler_off:pipeline.py:inbox"),
+        "orders": ("no_refresh_path", "scheduler_off"),
+        "clean": ("no_refresh_path", "scheduler_off"),
         "reviewed": ("no_refresh_path", "no_schedule:pipeline.py:reviewed"),
         "ledger": ("no_refresh_path", "no_schedule:pipeline.py:ledger"),
         "totals": ("no_refresh_path", "no_schedule:pipeline.py:ledger"),
@@ -212,12 +217,12 @@ def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
     _held(rollup, doc["nodes"])
     roots = {r["id"]: r for r in rollup["roots"]}
     assert [(r["id"], r["nodes"]) for r in rollup["roots"]] == [
+        ("scheduler_off", 2),
         ("no_schedule:pipeline.py:ledger", 2),
-        ("scheduler_off:pipeline.py:inbox", 2),
         ("no_schedule:pipeline.py:reviewed", 1),
     ]
-    off = roots["scheduler_off:pipeline.py:inbox"]
-    assert off["detail"] == "no scheduler is firing inbox's schedule"
+    off = roots["scheduler_off"]
+    assert off["detail"] == "no scheduler has run for this project: 1 schedule will not fire"
     assert off["action"]["kind"] == "start_server" and off["action"]["command"] == "barca serve"
     assert roots["no_schedule:pipeline.py:ledger"]["action"] == {
         "kind": "add_schedule",
@@ -239,7 +244,7 @@ def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
     assert "What holds the 5 nodes that are not fresh, and what clears it:" in printed, printed
     assert "2 need you · 0 are catching up · 1 run by hand" in printed
     assert "run once: barca get totals" in printed
-    assert "1. no schedule: ledger" in printed, printed
+    assert "1. scheduler off\n" in printed and "2. no schedule: ledger" in printed, printed
     assert "do:   run by hand: barca get reviewed --refresh reviewed" in printed, printed
     assert "do:   start a server: barca serve" in printed, printed
 
@@ -450,7 +455,7 @@ def test_ticks_waiting_on_one_run_slot_name_the_queue_as_the_cause(tmp_path, ser
         until = time.time() + 4
         while time.time() < until:
             beat = next(n for n in reader.get("/state") if n["name"] == "beat")
-            if beat["cause"] is not None:
+            if beat["cause"] == "queued":
                 seen["read"] = beat
                 return True
             time.sleep(0.1)
@@ -458,7 +463,7 @@ def test_ticks_waiting_on_one_run_slot_name_the_queue_as_the_cause(tmp_path, ser
 
     wait_until(read, "the read-only server to see beat out of date", timeout=60)
     beat = seen["read"]
-    assert beat["refresh_path"]["live"] is False, beat
+    assert beat["refresh_path"]["live"] is True, beat
     assert beat["cause"] == "queued" and beat["root"]["kind"] == "queue", beat
 
 

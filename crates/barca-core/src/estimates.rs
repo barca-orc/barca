@@ -196,7 +196,12 @@ fn own_stale_since(node: &NodeStatus, evidence: Evidence<'_>) -> Option<i64> {
             .schedules
             .get(&node.id)
             .and_then(|s| s.standing.as_ref())
-            .and_then(|s| s.late_since),
+            .and_then(|s| s.late_since)
+            // A target of a schedule no scheduler fires (row 6a): the first unserved slot.
+            .or_else(|| {
+                crate::refresh_path::path_schedule(&node.id, evidence.path)
+                    .and_then(|(_, schedule)| schedule.unserved_since)
+            }),
         // An input's newer result: when that input first changed after the node's own.
         HealthReason::BehindInput => node
             .signals

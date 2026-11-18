@@ -50,6 +50,7 @@ pub mod http;
 mod incremental;
 pub mod key_query;
 pub mod ledger;
+pub mod liveness;
 mod mismatch;
 pub mod outcome;
 pub mod partition_grid;

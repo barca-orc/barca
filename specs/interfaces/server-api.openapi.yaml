@@ -4584,6 +4584,11 @@ components:
           description: Why the metadata DB cannot be used, while it cannot; null otherwise. A
             writer whose database cannot be set up at startup exits 3 instead of serving; a
             read-only server keeps serving and reports it here until a read succeeds again.
+        graph_stale:
+          description: Whether the selected graph differs from its configured sources on disk. Null while loading.
+          anyOf:
+          - type: boolean
+          - type: 'null'
         load_errors:
           type: array
           items:
@@ -4635,8 +4640,10 @@ components:
           type: integer
           minimum: 0
         max_runs:
-          type: integer
-          minimum: 1
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
         capacity:
           description: The capacity every run shares (--capacity, [server] capacity); null without one. Experimental.
           anyOf:
@@ -4850,8 +4857,10 @@ components:
           type: boolean
           description: The server is stopping; nothing starts until the next server resumes the queue.
         max_runs:
-          type: integer
-          minimum: 1
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
           description: How many runs execute at once (--max-runs, [server] max_runs, else one per core).
         running:
           type: array
@@ -4984,7 +4993,7 @@ components:
       properties:
         id:
           type: string
-          description: '<kind>:<node id>, e.g. failure:pipeline.py:orders.'
+          description: 'scheduler_off for the scheduler, otherwise <kind>:<node id>.'
         kind:
           type: string
           enum: [sensor_value, code, env, input, never_run, no_schedule, schedule_paused,
@@ -5249,7 +5258,7 @@ components:
       properties:
         id:
           type: string
-          description: '<kind>:<node id>: the root.id of every node it holds.'
+          description: 'The root.id of every node it holds, including scheduler_off for the scheduler.'
         kind:
           type: string
           enum: [sensor_value, code, env, input, never_run, no_schedule, schedule_paused,
@@ -6610,8 +6619,7 @@ components:
               description: The schedule is paused (POST /schedule/{id}/pause).
             live:
               type: boolean
-              description: This server's scheduler fires the schedule. false on a --read-only or
-                --no-schedule server and for a schedule held after max_failures failed ticks.
+              description: A scheduler fires this schedule, as observed locally or from its recorded decisions. A failure hold suppresses its next tick.
             state: &schedule_state
               type: string
               enum: [paused, held, late, overrunning, on_time]

@@ -607,6 +607,39 @@ pub async fn latest_ticks(db_path: &str) -> Result<LatestTicks, BarcaError> {
     Ok(out)
 }
 
+/// The newest slot recorded for each schedule, whatever the scheduler decided for it (fired,
+/// paused, skipped, failing), unix seconds: the last time a scheduler is known to have served
+/// the schedule (`barca_core::liveness`). One grouped read of the primary key; a database
+/// without the table has none.
+pub async fn newest_decided(db_path: &str) -> Result<HashMap<String, i64>, BarcaError> {
+    let mut out = HashMap::new();
+    if fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
+        return Ok(out);
+    }
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_table(&conn).await? {
+        return Ok(out);
+    }
+    let mut rows = conn
+        .query(
+            "SELECT schedule_id, MAX(scheduled_at) FROM schedule_ticks GROUP BY schedule_id",
+            (),
+        )
+        .await
+        .map_err(failed("reading the newest ticks"))?;
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(failed("reading the newest ticks"))?
+    {
+        if let (Ok(schedule), Ok(at)) = (row.get::<String>(0), row.get::<i64>(1)) {
+            out.insert(schedule, at);
+        }
+    }
+    Ok(out)
+}
+
 /// How long the newest fired ticks of one schedule waited and ran ([`tick_timings`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TickTimings {

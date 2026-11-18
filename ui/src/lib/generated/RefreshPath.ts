@@ -20,8 +20,9 @@ next_tick: string | null,
  */
 paused: boolean,
 /**
- * A running scheduler fires the schedule. False without one (no `barca serve` here, a
- * `--read-only` server) and for a schedule held after `max_failures` failed ticks.
+ * A running scheduler fires the schedule: the answering server's own, or one the
+ * metadata DB shows deciding its slots. False when none does and for a schedule held
+ * after `max_failures` failed ticks.
  */
 live: boolean,
 /**
