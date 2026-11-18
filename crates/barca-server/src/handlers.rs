@@ -197,9 +197,12 @@ pub async fn rollup(
         facts.evidence(),
         true,
     );
-    let scope: Vec<_> = [query.targets.as_deref(), query.files.as_deref()]
+    // Named by the targets alone, as `barca status --rollup` names it locally: a rollup of
+    // whole files keeps the root's `all`.
+    let scope: Vec<_> = query
+        .targets
+        .as_deref()
         .into_iter()
-        .flatten()
         .flat_map(|s| s.split(','))
         .map(str::trim)
         .filter(|s| !s.is_empty())
