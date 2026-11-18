@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.45.0 (2026-11-18)
+
 - Run counts reflect active worker steps. Queue and history rows summarize multi-target runs, the queue explains its extra requested-run slot, and run details distinguish attempts, steps, planned nodes and unreached work (#1042).
 
 ### Breaking
