@@ -1218,7 +1218,7 @@ def test_sql_topic_health_queries(binary, topics, tmp_path):
     # Two ticks of `inbox`, as a scheduling server records them (`schedule_ticks`): each
     # waited 400 seconds for a run slot, longer than the five minutes between ticks, and its
     # run failed before it reached `clean`.
-    slot = int(time.time()) // 300 * 300 - 900
+    slot = int(time.time()) // 300 * 300 - 300
     targets = [
         ["pipeline.py:inbox", "rebuilt"],
         ["pipeline.py:orders", "up_to_date"],
