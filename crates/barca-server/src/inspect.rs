@@ -136,7 +136,13 @@ pub(crate) async fn node_status(
                 .is_some_and(|(f, _)| files.contains(f))
         });
         result.data_coverage = barca_core::health::DataCoverage::of(&result.nodes);
-        result.rollup = Some(barca_core::rollup::total(&result.nodes, &running));
+        let actions = result
+            .rollup
+            .iter()
+            .flat_map(|entry| &entry.held_by)
+            .map(|held| (held.root.clone(), held.action_kind))
+            .collect();
+        result.rollup = Some(barca_core::rollup::total(&result.nodes, &running, &actions));
         result.summary = barca_core::status::StatusSummary::of(&result.nodes);
     }
     Ok(result)

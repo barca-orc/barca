@@ -42,7 +42,7 @@ const NO_CAUSES: RollupEntry['causes'] = { catching_up: 0, queued: 0, no_refresh
 
 /** A tree with only an empty root: what a page holds until the rollup has loaded. */
 export const EMPTY_ROLLUP: RollupTree = {
-  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, weight: 0, weights: { ...NO_CAUSES, fresh: 0 }, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
+  entries: new Map([[ROOT, { id: ROOT, kind: 'root', label: 'all', parent: null, children: [], nodes: 0, assets: 0, running: 0, health: NO_COUNTS, asset_health: NO_COUNTS, data_coverage: { assets: 0, measured: 0, suspect: 0 }, causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, weight: 0, weights: { ...NO_CAUSES, fresh: 0 }, split: { need_someone: 0, catching_up: 0, run_by_hand: 0, need_someone_nodes: 0, in_hand_nodes: 0, need_someone_weight: 0, in_hand_weight: 0 }, stale_since: null, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [] }]]),
   files: new Map(),
   kinds: null,
   roots: [],

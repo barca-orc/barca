@@ -80,7 +80,7 @@ export function cacheGraphState(node: NodeState): GraphState {
 
 /** A run working on the node now (whoever started it) outranks its resting state. */
 export function graphState(node: NodeState): GraphState {
-  if (node.running) return runningGraphState(node.running)
+  if (node.running?.step === 'running') return runningGraphState(node.running)
   return cacheGraphState(node)
 }
 

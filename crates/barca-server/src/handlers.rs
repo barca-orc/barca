@@ -186,9 +186,9 @@ pub async fn rollup(
         chrono::DateTime::from_timestamp(now.timestamp() / 60 * 60, 0).unwrap_or(now)
     };
     let facts = health_facts(&state, &dag, &db_state, &snapshot.path, as_of).await?;
-    let running = crate::running::by_node(&facts.runs, &result.nodes, &dag)
-        .into_keys()
-        .collect();
+    // "N running" counts the nodes a run is executing, not every node of every run in flight.
+    let running =
+        crate::running::executing(&crate::running::by_node(&facts.runs, &result.nodes, &dag));
     barca_core::health::attach(&mut result, facts.evidence(), &running);
     let mut rollup = barca_core::rollup::build(
         &result.nodes,
@@ -400,13 +400,6 @@ pub(crate) async fn live_schedules(
         .iter()
         .map(|job| {
             let pause = crate::pause::active(state, &job.id, now.timestamp());
-            let standing = barca_core::schedule_standing::standing(
-                &job.cron,
-                &zone,
-                now,
-                pause.is_some(),
-                facts.ticks.get(&job.id),
-            );
             let live = published.iter().find(|p| p.id == job.id);
             let failed = match live {
                 Some(p) => (p.failures, p.max_failures),
@@ -415,6 +408,14 @@ pub(crate) async fn live_schedules(
                     job.max_failures,
                 ),
             };
+            // Paused, or held after `max_failures` failed ticks: no tick is expected of it.
+            let standing = barca_core::schedule_standing::standing(
+                &job.cron,
+                &zone,
+                now,
+                pause.is_some() || failed.0 >= failed.1,
+                facts.ticks.get(&job.id),
+            );
             let mut block = barca_core::status::ScheduleStatus::of(
                 job,
                 standing.clone(),
@@ -930,9 +931,8 @@ pub(crate) async fn attach_health_at(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<std::collections::HashSet<String>, ApiError> {
     let facts = health_facts(state, dag, db_state, db_path, now).await?;
-    let running = crate::running::by_node(&facts.runs, &result.nodes, dag)
-        .into_keys()
-        .collect();
+    let running =
+        crate::running::executing(&crate::running::by_node(&facts.runs, &result.nodes, dag));
     barca_core::health::attach(result, facts.evidence(), &running);
     Ok(running)
 }
@@ -1061,17 +1061,33 @@ fn schedule_items(
         .into_iter()
         .map(|j| {
             let pause = crate::pause::active(state, &j.id, now.timestamp());
+            let failed = (j.failures, j.max_failures);
             let standing = CronExpr::parse(&j.cron).ok().map(|cron| {
                 barca_core::schedule_standing::standing(
                     &cron,
                     &zone,
                     now,
-                    pause.is_some(),
+                    pause.is_some() || failed.0 >= failed.1,
                     ticks.get(&j.id),
                 )
             });
             let standing = standing.as_ref();
+            // The one word for where it stands, and the fact behind it: what the `schedule`
+            // block of `GET /state` and a node's `refresh_path` carry too.
+            let word = standing.map(|s| {
+                barca_core::schedule_standing::ScheduleState::of(s, pause.is_some(), failed)
+            });
+            let detail = standing.zip(word).and_then(|(s, word)| {
+                word.detail(
+                    barca_core::targets::short_name(&j.id),
+                    s,
+                    failed,
+                    j.kind == barca_core::NodeKind::Task,
+                )
+            });
             json!({
+                "state": word,
+                "state_detail": detail,
                 "id": j.id,
                 "cron": j.cron,
                 "kind": j.kind,

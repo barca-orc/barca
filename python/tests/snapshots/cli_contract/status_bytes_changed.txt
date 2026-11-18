@@ -101,6 +101,15 @@ rollup.nodes : integer
 rollup.not_fresh : integer
 rollup.parent : null
 rollup.running : integer
+rollup.split : object
+rollup.split.catching_up : integer
+rollup.split.in_hand_nodes : integer
+rollup.split.in_hand_weight : integer
+rollup.split.need_someone : integer
+rollup.split.need_someone_nodes : integer
+rollup.split.need_someone_weight : integer
+rollup.split.run_by_hand : integer
+rollup.stale_since : null
 rollup.unbounded : integer
 rollup.weight : integer
 rollup.weights : object

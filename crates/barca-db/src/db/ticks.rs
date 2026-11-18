@@ -649,6 +649,9 @@ pub struct TickTimings {
     /// How long the runs of its newest fired ticks that ended `success` took (start to end),
     /// newest first, at most [`TICKS_WITH_TARGETS`].
     pub run_seconds: Vec<f64>,
+    /// What the scheduler decided for its newest due slots, whatever it decided, as
+    /// `(slot, decision)`, newest first, at most [`TICKS_WITH_TARGETS`].
+    pub decisions: Vec<(i64, TickDecision)>,
 }
 
 /// [`TickTimings`] of every schedule: one read of the table, which is bounded by its writers
@@ -666,9 +669,9 @@ pub async fn tick_timings(db_path: &str) -> Result<HashMap<String, TickTimings>,
     }
     let mut rows = conn
         .query(
-            "SELECT schedule_id, queue_wait_seconds, started_at, finished_at, run_status
-             FROM schedule_ticks WHERE action = 'fired' AND started_at IS NOT NULL
-             ORDER BY schedule_id, scheduled_at DESC",
+            "SELECT schedule_id, queue_wait_seconds, started_at, finished_at, run_status,
+                    scheduled_at, action
+             FROM schedule_ticks ORDER BY schedule_id, scheduled_at DESC",
             (),
         )
         .await
@@ -678,6 +681,19 @@ pub async fn tick_timings(db_path: &str) -> Result<HashMap<String, TickTimings>,
         let timings = out
             .entry(row.get::<String>(0).unwrap_or_default())
             .or_default();
+        let decision = row
+            .get::<String>(6)
+            .ok()
+            .and_then(|action| TickDecision::parse(&action));
+        if timings.decisions.len() < window
+            && let (Ok(slot), Some(decision)) = (row.get::<i64>(5), decision)
+        {
+            timings.decisions.push((slot, decision));
+        }
+        // The waits and the run times are of fired ticks whose run started.
+        if decision != Some(TickDecision::Fired) || row.get::<f64>(2).is_err() {
+            continue;
+        }
         if timings.queue_waits.len() < window
             && let Ok(wait) = row.get::<f64>(1)
         {
@@ -1141,8 +1157,15 @@ mod tests {
         record_tick(&db, tick(JOB, 340, TickDecision::Paused, None, None))
             .await
             .unwrap();
+        record_tick(
+            &db,
+            tick(JOB, 400, TickDecision::Skipped, Some("run-4"), None),
+        )
+        .await
+        .unwrap();
         let timings = tick_timings(&db).await.unwrap();
         assert_eq!(timings.len(), 1);
+        assert_eq!(timings[JOB].decisions[0], (400, TickDecision::Skipped));
         // Newest first; a tick whose run has not started has no wait yet.
         assert_eq!(timings[JOB].queue_waits, [2.0, 0.0, 4.5]);
         // Only a run that succeeded says how long a run takes.

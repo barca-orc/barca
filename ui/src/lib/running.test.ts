@@ -27,7 +27,7 @@ function run(overrides: Partial<NodeRunning> = {}): NodeRunning {
     run_id: 'r1',
     triggered_by: 'schedule',
     started_at: STARTED,
-    step: 'running',
+    label: 'running', step: 'running',
     partitions: null,
     ...overrides,
   }
@@ -71,10 +71,13 @@ describe('running state from /state', () => {
     }
     expect(graphState(node('p.py:a', run())).hint).toBe('Run r1, started by the scheduler')
     expect(graphState(node('p.py:a', run({ triggered_by: 'manual' }))).hint).toContain('the CLI')
-    // A step waiting for its upstream is queued: shown, but still.
+    // Queue membership preserves the node's served state.
     const queued = graphState(node('p.py:a', run({ step: 'queued' })))
-    expect(queued).toMatchObject({ kind: 'run', status: 'queued', tone: 'queued', label: 'queued' })
-    expect(statusMeta('queued').live).toBe(false)
+    expect(queued).toMatchObject({ kind: 'cache', label: 'fresh' })
+    const waiting = node('p.py:b', run({ step: 'waiting' }))
+    expect(graphState(waiting)).toMatchObject({ kind: 'cache', label: 'fresh' })
+    const rows = [waiting, node('p.py:c', run({ step: 'queued' })), node('p.py:d', run())]
+    expect(runningCount(rows.map(n => n.id), new Map(rows.map(n => [n.id, n])))).toBe(1)
     // No run: the resting state, in its own word.
     expect(graphState(node('p.py:a'))).toMatchObject({ kind: 'cache', state: 'cached', label: 'fresh', tone: 'success' })
   })

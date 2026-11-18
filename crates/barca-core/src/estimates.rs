@@ -153,6 +153,22 @@ pub(crate) fn work(node: &NodeStatus, durations: &HashMap<String, f64>, default:
     one * keys as f64
 }
 
+/// When `input`'s result first changed after `own` (unix seconds: when the node reading it
+/// last succeeded): the earliest of its recorded value changes ([`crate::db::NodeAge::changed_at`])
+/// that is newer. A sensor polled again with the same observation, and a rerun that wrote
+/// the same bytes, add a result and no change, so this does not move while the reader stays
+/// out of date. Where no change is on record (rows that recorded no digest), the input's
+/// newest result, when that is newer. `None` when nothing of the input is newer than `own`.
+fn changed_after(input: &str, own: i64, evidence: Evidence<'_>) -> Option<i64> {
+    let age = evidence.ages.get(input)?;
+    let newer = |at: &str| Some(recorded_at(at)).filter(|at| *at != i64::MAX && *at > own);
+    if age.changed_at.is_empty() {
+        return age.last_success_at.as_deref().and_then(newer);
+    }
+    let first = age.changed_at.partition_point(|at| recorded_at(at) <= own);
+    age.changed_at.get(first).and_then(|at| newer(at))
+}
+
 /// When `node` itself went out of date, from its own evidence: unix seconds, `None` when no
 /// record holds the time.
 fn own_stale_since(node: &NodeStatus, evidence: Evidence<'_>) -> Option<i64> {
@@ -186,28 +202,34 @@ fn own_stale_since(node: &NodeStatus, evidence: Evidence<'_>) -> Option<i64> {
                 crate::refresh_path::path_schedule(&node.id, evidence.path)
                     .and_then(|(_, schedule)| schedule.unserved_since)
             }),
-        // An input's newer result: when that result was written.
-        HealthReason::BehindInput => node.signals.iter().find_map(|signal| match signal {
-            DataSignal::BehindInput {
-                input_success_at, ..
-            } => Some(recorded_at(input_success_at)).filter(|at| *at != i64::MAX),
-            _ => None,
-        }),
+        // An input's newer result: when that input first changed after the node's own.
+        HealthReason::BehindInput => node
+            .signals
+            .iter()
+            .filter_map(|signal| match signal {
+                DataSignal::BehindInput {
+                    input,
+                    input_success_at,
+                    ..
+                } => last_success
+                    .and_then(|own| changed_after(input, own, evidence))
+                    .or(Some(recorded_at(input_success_at)).filter(|at| *at != i64::MAX)),
+                _ => None,
+            })
+            .min(),
         HealthReason::Stale | HealthReason::NeverRun | HealthReason::NoSuccessfulRun => {
             let causes = node.cache.change_causes.as_deref().unwrap_or(&[]);
             let has = |cause: &str| causes.iter().any(|c| c == cause);
             let mut candidates: Vec<i64> = Vec::new();
-            // An input (a sensor's observation, an asset's result) written after the node's
-            // own newest result.
+            // An input (a sensor's observation, an asset's result) that changed after the
+            // node's own newest result: the first such change, which stays put however often
+            // the input is polled or rewritten with the same value afterwards.
             if let Some(own) = last_success.filter(|_| has("inputs_changed")) {
-                candidates.extend(node.inputs.iter().filter_map(|input| {
-                    evidence
-                        .ages
-                        .get(input)
-                        .and_then(|a| a.last_success_at.as_deref())
-                        .map(recorded_at)
-                        .filter(|at| *at != i64::MAX && *at > own)
-                }));
+                candidates.extend(
+                    node.inputs
+                        .iter()
+                        .filter_map(|input| changed_after(input, own, evidence)),
+                );
             }
             // Its code changed, or it was never run: no record holds when the definition was
             // first seen, so the source file's modification time stands for it, when that is
@@ -422,14 +444,25 @@ pub fn times(nodes: &[NodeStatus], evidence: Evidence<'_>) -> Vec<Times> {
     // Runs in flight first: running ones, then waiting ones in the order they start.
     let mut runs: Vec<&PlannedRun> = timing.runs.iter().filter(|r| r.start.is_some()).collect();
     runs.sort_by_key(|r| (!r.running, r.start));
+    // A node a tick's run reads as it is and does not compute: paused, pinned or `Manual`.
+    // No estimate is given for one and none passes through one that is not fresh
+    // ([`finish_after`]), whether the tick is the next one or already has a run in flight.
+    let held = |id: &str| {
+        evidence.path.paused.contains(id)
+            || evidence.path.pinned.contains(id)
+            || evidence.path.paths.is_manual(id)
+    };
     for run in runs {
         let member = |n: &NodeStatus| match (&run.schedule, &run.nodes) {
-            (Some(schedule), _) => evidence
-                .path
-                .paths
-                .schedules(&n.id)
-                .iter()
-                .any(|s| s == schedule),
+            (Some(schedule), _) => {
+                evidence
+                    .path
+                    .paths
+                    .schedules(&n.id)
+                    .iter()
+                    .any(|s| s == schedule)
+                    && !held(&n.id)
+            }
             (None, Some(planned)) => planned.contains(&n.id),
             (None, None) => true,
         };
@@ -484,8 +517,7 @@ pub fn times(nodes: &[NodeStatus], evidence: Evidence<'_>) -> Vec<Times> {
                 .schedules(&n.id)
                 .iter()
                 .any(|s| s == schedule)
-                && !evidence.path.paused.contains(&n.id)
-                && !evidence.path.pinned.contains(&n.id)
+                && !held(&n.id)
         };
         let finish = finish_after(nodes, member, timing, default);
         give(

@@ -240,10 +240,24 @@ pub(crate) async fn view_page(
         view.error = view.steps.iter().find_map(|step| step.error.clone());
     }
     view.explanation = barca_core::run_explanation::explain(
-        (&view).into(),
+        barca_core::run_explanation::RunFacts {
+            steps_failed: record.as_ref().and_then(|r| r.steps_failed),
+            ..(&view).into()
+        },
         &view.steps_page.nodes,
         &view.steps,
         barca_core::time::now_secs_f64(),
+    );
+    // What the targets returned, as rows: nothing prints the raw pointers (#1042).
+    let outcome = view
+        .outcome
+        .as_ref()
+        .and_then(|o| serde_json::from_str::<serde_json::Value>(o.text()).ok());
+    view.explanation.outputs = barca_core::run_explanation::run_outputs(
+        &view.status,
+        outcome.as_ref(),
+        &barca_core::run_explanation::output_targets(view.target.as_deref(), view.job.as_deref()),
+        &view.steps,
     );
     Ok(view)
 }
@@ -325,6 +339,7 @@ impl RunSummary {
                 .first_failure
                 .as_ref()
                 .map(|f| (f.node_id.as_str(), f.error.as_str())),
+            target: self.target.as_deref(),
         });
         self
     }

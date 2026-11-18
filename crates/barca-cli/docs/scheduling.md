@@ -287,9 +287,9 @@ Where a schedule stands is decided once, on the server, and every surface reads 
   `last_run_id` is that run and `last_status` its status as `barca history` words it, `pending`
   while it waits in the run queue. The node's own last result is not the schedule's last run:
   a tick that found the node up to date ran and wrote nothing.
-- `late_since` is the first slot after `last_fired` that has passed: a slot no tick fired for
-  (it was skipped behind a run in flight, or the server was down). It is `null` while on time,
-  while the schedule is paused, and when no tick is recorded.
+- `late_since` is the first elapsed slot after the latest recorded scheduler decision. A
+  slot skipped while a run was in flight counts as a decision. This field is `null` while
+  on time, paused or held, and when no decision or run is recorded.
 - `late` is true when `late_since` is further back than the schedule's grace plus its queue
   wait. The grace is 60 seconds, or half the interval for a schedule more frequent than every
   two minutes. The queue wait is the median wait, from slot to start, of the schedule's newest
@@ -302,6 +302,8 @@ Where a schedule stands is decided once, on the server, and every surface reads 
   median of the newest 20 that succeeded, `null` with none. `queue_bound` is true when the
   typical wait exceeds the schedule's interval: its ticks wait for a run slot longer than they
   are apart, and more run slots (`--max-runs`) or a slower schedule is what helps.
+
+A schedule reports `held` after its consecutive failures reach `max_failures`. Its cron slots continue, but it skips them until recovery. In-flight skips count as scheduler decisions. Three or more in the latest twenty decisions give an otherwise on-time schedule the state `overrunning`. The schedule registry and node status expose `state` and `state_detail`, and the refresh path carries the same `state`.
 
 These feed two estimates, both computed on the server and both rounded up to 5 seconds. A run
 waiting in the queue has `estimated_start_at` in `GET /queue` (`barca queue --json`): each of
@@ -326,7 +328,7 @@ and the root `{"kind": "queue", "node": "<the scheduled node>"}` (`barca docs st
 
 ```text
 1. run queue: pulse
-     holds 6 nodes (6 assets): 6 queued; 20m of gap
+     holds 6 nodes (6 assets): 6 queued; 20m of gap across nodes (node-time)
      why:  pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1
      do:   raise max_runs: barca serve --max-runs N or [server] max_runs in barca.toml, or space the schedules
 ```

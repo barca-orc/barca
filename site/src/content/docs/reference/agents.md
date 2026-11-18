@@ -392,7 +392,7 @@ barca status --problems --local                     # this machine's own state, 
 
 Against a server with an asset that raises, an asset whose code changed, and a scheduled task
 that failed `max_failures=2` ticks in a row, `barca status --problems` lists the three nodes with
-their WHY (`failed: ZeroDivisionError...`, `changed: code`, `last run failed: ...; failing 2/2`)
+their WHY (`failed: ZeroDivisionError...`, `changed: code`, `last run failed: ...; held, failing 2/2`)
 before the summary of every node; the table is shown in [barca status: Finding problems](/reference/cli/status/#finding-problems---problems-and---state).
 The failed runs behind them:
 

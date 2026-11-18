@@ -4,7 +4,6 @@ import { startsLabel,
   queueMatters,
   QUEUE_POLL_BUSY_MS,
   QUEUE_POLL_IDLE_MS,
-  capacityLabel,
   healthQueueLabel,
   queueControl,
   queuePollInterval,
@@ -27,7 +26,7 @@ function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
     status: 'pending',
     position: 1,
     command: 'get',
-    target: null,
+    target: null, target_line: over.target ?? 'all assets',
     triggered_by: 'api',
     schedule_id: null,
     queued_at: '2026-10-22T10:00:00Z',
@@ -40,7 +39,7 @@ function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
 }
 
 function view(over: Partial<QueueView> = {}): QueueView {
-  return { paused: false, paused_at: null, draining: false, max_runs: 4, running: [], queued: [], capacity: null, ...over }
+  return { slots: '0 of 4 running', paused: false, paused_at: null, draining: false, max_runs: 4, running: [], queued: [], capacity: null, ...over }
 }
 
 describe('shared capacity', () => {
@@ -101,8 +100,7 @@ describe('queueStateLabel', () => {
 })
 
 describe('labels', () => {
-  it('counts running against the limit and the waiting runs', () => {
-    expect(capacityLabel(1, 4)).toBe('1 of 4 running')
+  it('counts the waiting runs', () => {
     expect(queuedLabel(0)).toBe('nothing queued')
     expect(queuedLabel(3)).toBe('3 queued')
   })

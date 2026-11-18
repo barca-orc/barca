@@ -3,4 +3,4 @@
 /**
  * Which row of the health table decided a node's [`Health`].
  */
-export type HealthReason = "last_attempt_failed" | "keys_failed" | "upstream_failing" | "cache_blocked" | "empty" | "rows_changed" | "behind_input" | "schedule_late" | "stale" | "partial" | "unsynced" | "checked_up_to_date" | "unknown" | "never_run" | "no_successful_run" | "last_run_succeeded" | "cached";
+export type HealthReason = "last_attempt_failed" | "keys_failed" | "upstream_failing" | "cache_blocked" | "empty" | "rows_changed" | "behind_input" | "schedule_late" | "stale" | "partial" | "unsynced" | "checked_up_to_date" | "unknown" | "never_run" | "no_successful_run" | "last_run_succeeded" | "on_demand" | "cached";

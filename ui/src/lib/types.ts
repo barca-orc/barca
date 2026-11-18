@@ -169,6 +169,8 @@ export type RunViewStatus =
 
 /** One `GET /schedule` entry (ad-hoc JSON, not a ts-rs type). */
 export interface ScheduleJob {
+  state: import('./generated/ScheduleState').ScheduleState
+  state_detail: string | null
   id: string
   cron: string
   kind: NodeKind

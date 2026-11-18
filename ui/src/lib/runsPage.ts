@@ -12,7 +12,7 @@ import { formatSeconds } from './assetTable'
 import { shortName } from './graph'
 import type { RunsQuery } from './api'
 import { only, type Next } from './program'
-import { parseRunStatus, runIsLive, runNodeIdle } from './runs'
+import { parseRunStatus, runNodeIdle } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
 import type { ActivityHour, RunNodeSummary, RunStep } from './types'
 
@@ -180,10 +180,12 @@ export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, Runs
     .exhaustive()
 }
 
-/** A run that did not succeed: failed, errored, cancelled or interrupted. */
-export function runFailed(status: string): boolean {
+/** Whether the recovery action should offer to re-run failed steps. */
+export function rerunLabel(status: string): string | null {
   const known = parseRunStatus(status)
-  return known !== null && known !== 'success' && !runIsLive(status)
+  if (known === 'failed' || known === 'error') return 'Re-run failed'
+  if (known === 'cancelled' || known === 'interrupted') return 'Re-run'
+  return null
 }
 
 /** A step's short name, with its partition key: `pipeline.py:a[day=1]` → `a[day=1]`. */

@@ -126,6 +126,7 @@ def test_a_path_is_the_schedule_whose_tick_targets_the_node(project):
         assert path == {
             "schedule": path["schedule"],
             "next_tick": None,
+            "state": "on_time",
             "paused": False,
             "live": False,
             "missed_ticks": 0,
@@ -164,6 +165,7 @@ def test_a_scheduling_server_says_when_the_next_tick_is(project, serve):
         assert path == {
             "schedule": schedule,
             "next_tick": owner["next_fire"],
+            "state": "on_time",
             "paused": False,
             "live": True,
             "missed_ticks": 0,
@@ -179,6 +181,7 @@ def test_a_scheduling_server_says_when_the_next_tick_is(project, serve):
             == {
                 "schedule": INBOX,
                 "next_tick": None,
+                "state": "paused",
                 "paused": True,
                 "live": True,
                 "missed_ticks": 0,

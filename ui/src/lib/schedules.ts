@@ -21,6 +21,8 @@ export interface ScheduleRow {
   cron: string
   /** The schedule in words, when it is a common shape; null otherwise. */
   human: string | null
+  standing: NonNullable<NodeState["schedule"]>["state"] | undefined
+  detail: string | null
   nextRunMs: number | null
   /** The server says it is late (`schedule.late`): no tick fired for the slot at `sinceMs`
    * (`schedule.late_since`). `by`: "late by 12m". While late, the next slot is not when it
@@ -121,6 +123,7 @@ export function scheduleRows(
       // Where the schedule stands is the server's answer (`schedule` of `GET /state`, the
       // same values as `GET /schedule` and `barca status`): nothing here compares times.
       const stands = st?.schedule
+      const standing = stands?.state ?? job?.state
       const nextRunSecs = st?.next_run ?? job?.next_fire ?? null
       const nextRunMs = nextRunSecs !== null ? nextRunSecs * 1000 : null
       const lateSinceMs = stands?.late && stands.late_since ? parseTime(stands.late_since) : null
@@ -136,7 +139,9 @@ export function scheduleRows(
           kind: a.kind,
           cron,
           human: humanizeCron(cron),
-          nextRunMs,
+          standing,
+          detail: stands?.state_detail ?? job?.state_detail ?? null,
+          nextRunMs: standing === "held" ? null : nextRunMs,
           late: lateSinceMs !== null ? { sinceMs: lateSinceMs, by: formatLate(lateSinceMs, nowMs) } : null,
           last: stands?.last_fired
             ? { status: stands.last_status, at: stands.last_fired, runId: stands.last_run_id }

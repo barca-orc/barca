@@ -44,12 +44,6 @@ export function queueStateLabel(state: QueueState, formatTime: (value: string | 
     .exhaustive()
 }
 
-/** `1 of 4 running`. */
-export function capacityLabel(running: number, maxRuns: number | null): string {
-  if (maxRuns === null) return `${running} running · run slots unknown`
-  return `${running} of ${maxRuns} running`
-}
-
 /**
  * The capacity every run shares (`--capacity`): `weight 3 of 4 in use`, with how many steps
  * wait for it; null when the server has none.
@@ -190,7 +184,7 @@ export function queueRows(
       runId: entry.run_id,
       state,
       position: state === 'running' ? 'running' : entry.position === null ? '–' : `#${entry.position}`,
-      target: entry.target ?? 'all assets',
+      target: entry.target_line,
       command: entry.command,
       trigger: triggeredByLabel(entry.triggered_by),
       scheduleId: entry.schedule_id,
@@ -258,7 +252,7 @@ export function queueSummary(view: QueueView, nowMs: number): string | null {
   const next = [...view.queued].sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity))[0]
   const parts: string[] = []
   if (status.oldestWaitSeconds !== null) parts.push(`oldest waiting ${waitLabel(status.oldestWaitSeconds)}`)
-  if (next) parts.push(`next ${next.target ?? 'all assets'}`)
+  if (next) parts.push(`next ${next.target_line}`)
   if (next && next.estimated_start_at !== null) parts.push(startsLabel(next.estimated_start_at, nowMs))
   return parts.join(' · ') || null
 }

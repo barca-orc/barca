@@ -73,7 +73,7 @@ function ExplainedBar({ todos, scope, head }: { todos: readonly Todo[]; scope: C
 /**
  * barca · CausesList
  * The to-do list of a scope: what holds the nodes that are not fresh, one entry per root, ranked
- * as the server ranks them (roots holding nodes with no estimate first, the most nodes first).
+ * as the server ranks them (roots needing someone first, then by weight).
  * Each entry says what it is (the root's kind and node), why (the fact in a line), what it holds
  * here (nodes and assets, by cause), the gap it holds or how many nodes have no estimate, and
  * what to do: the action, its command with a copy button, and the compute it takes. Every
@@ -110,7 +110,7 @@ export function CausesList({ todos, scope, name, onOpen, selected = null, onSele
               className="barca-todo"
               data-kind={root.kind}
               data-root={root.id}
-              data-alarm={(lead !== 'fresh' && causeDisplay(lead).alarm) || undefined}
+              data-alarm={root.needs_someone || undefined}
               data-selected={selected === root.id || undefined}
               onClick={() => select(root.id)}
             >
@@ -148,6 +148,7 @@ export function CausesList({ todos, scope, name, onOpen, selected = null, onSele
                   <strong>{action.word}</strong>
                   {action.command && <Command text={action.command} />}
                   {action.hint && <span className="barca-todo-hint">{action.hint}</span>}
+                  {root.action.run_once && <>run once <Command text={root.action.run_once} /></>}
                   {action.cost && <span className="barca-todo-cost">{action.cost}</span>}
                 </span>
                 {same.length > 0 && (

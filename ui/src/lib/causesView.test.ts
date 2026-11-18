@@ -4,12 +4,12 @@ import { causeCounts, failureRoot, heldBy, heldRoot } from './testdata/rollup'
 
 // As served: roots holding nodes with no estimate first, the most nodes first.
 const roots = [
-  heldRoot({ kind: 'no_schedule', node: 'p.py:ledger', detail: 'no tick reaches ledger', nodes: 152, assets: 140, action: { kind: 'add_schedule', command: null, estimated_seconds: 420 } }),
+  heldRoot({ kind: 'no_schedule', node: 'p.py:ledger', detail: 'no tick reaches ledger', nodes: 152, assets: 140, action: { kind: 'add_schedule', command: null, run_once: null, estimated_seconds: 420 } }),
   failureRoot('p.py:orders', 'row count fell 64%', 59, 52),
   failureRoot('p.py:refunds', 'row count fell 12%', 1),
-  heldRoot({ kind: 'queue', node: 'p.py:pulse', detail: "pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1", nodes: 6, action: { kind: 'raise_max_runs', command: null, estimated_seconds: 18 } }),
-  heldRoot({ kind: 'no_schedule', node: 'p.py:reviewed', detail: 'reviewed is Manual: no tick computes it', nodes: 1, action: { kind: 'run', command: 'barca get reviewed --refresh reviewed --server', estimated_seconds: null } }),
-  heldRoot({ kind: 'sensor_value', node: 'p.py:inbox', detail: 'inbox observed a new value', nodes: 180, action: { kind: 'wait', command: null, estimated_seconds: 45 } }),
+  heldRoot({ kind: 'queue', node: 'p.py:pulse', detail: "pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1", nodes: 6, action: { kind: 'raise_max_runs', command: null, run_once: null, estimated_seconds: 18 } }),
+  heldRoot({ kind: 'no_schedule', node: 'p.py:reviewed', detail: 'reviewed is Manual: no tick computes it', nodes: 1, action: { kind: 'run', command: 'barca get reviewed --refresh reviewed --server', run_once: null, estimated_seconds: null } }),
+  heldRoot({ kind: 'sensor_value', node: 'p.py:inbox', detail: 'inbox observed a new value', nodes: 180, action: { kind: 'wait', command: null, run_once: null, estimated_seconds: 45 } }),
 ]
 const scope = {
   not_fresh: 399,
@@ -42,9 +42,9 @@ describe('the to-do list', () => {
     const [ledger, , , , inbox] = todos(scope, roots)
     expect(heldLine(ledger!)).toBe('holds 152 nodes (140 assets)')
     expect(heldCauses(ledger!)).toBe('152 no refresh path')
-    expect(heldGap(ledger!)).toBe('95d of gap · 152 with no estimate')
+    expect(heldGap(ledger!)).toBe('95d of gap across nodes (node-time) · 152 with no estimate')
     expect(heldCauses(inbox!)).toBe('163 undecided · 17 catching up')
-    expect(heldGap(inbox!)).toBe('2h of gap · 163 with no estimate')
+    expect(heldGap(inbox!)).toBe('2h of gap across nodes (node-time) · 163 with no estimate')
     // In a scope that holds only some of a root's nodes, both numbers are said.
     const part = todos({ held_by: [heldBy('sensor_value:p.py:inbox', 40, 40, { assets: 38 })] }, roots)[0]!
     expect(heldLine(part)).toBe('holds 40 nodes (38 assets) here, 180 in all')

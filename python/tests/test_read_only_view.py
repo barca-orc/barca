@@ -89,9 +89,18 @@ def first():
     try:
         for server in (writer, reader):
             wait_until(
-                lambda: server.get("/state/rollup")["entries"][0]["running"] == 51,
+                lambda: sum(
+                    (row.get("running") or {}).get("run_id") == accepted["run_id"]
+                    for row in server.get("/state")
+                )
+                == 51,
                 "the run to cover all 51 nodes",
             )
+        wait_until(
+            lambda: writer.get("/state/rollup")["entries"][0]["running"] == 1,
+            "only the first step to be executing",
+        )
+        assert reader.get("/state/rollup")["entries"][0]["running"] == 0
     finally:
         (tmp_path / "release").touch()
     assert writer.finished(accepted["run_id"])["status"] == "success"

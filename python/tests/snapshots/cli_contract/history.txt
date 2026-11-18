@@ -21,6 +21,8 @@ runs[].line.failure : string
 runs[].line.failure_detail : string
 runs[].line.steps : string
 runs[].line.steps_detail : string
+runs[].line.target : string
+runs[].line.target_count : integer
 runs[].principal : null
 runs[].run_id : string
 runs[].schedule_id : null

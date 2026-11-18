@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTriggerNode } from './useTriggerNode'
 import { useRunStream } from './useRunStream'
 import { useTopbarRun } from './useTopbarRun'
 import { api } from '@/lib/api'
-import { overlayRunStatus, shortName } from '@/lib/graph'
+import { shortName } from '@/lib/graph'
 import { liveGraphState, type GraphState } from '@/lib/graphState'
 import { partitionSelection } from '@/lib/nodeDetail'
 import type { ListNode } from '@/lib/types'
@@ -69,11 +69,8 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
     if (run) void client.invalidateQueries({ queryKey: ['rollup'] })
   }, [run, client])
 
-  // Seed the accepted target as running before its first SSE event, just as GraphPage does.
-  const statuses = useMemo(
-    () => stream.running ? overlayRunStatus(stream.statuses, true, run?.nodeId ?? null) : {},
-    [stream.statuses, stream.running, run?.nodeId],
-  )
+  // Show stream activity only after the worker reports it.
+  const statuses = stream.running ? stream.statuses : {}
   const liveStatus = node ? statuses[node.id] : undefined
   const action: NodeRunAction = {
     fire, fireKey, startingKey: keyRun.isPending ? keyRun.variables.key : null,

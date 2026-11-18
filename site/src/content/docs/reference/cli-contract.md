@@ -137,7 +137,7 @@ stability; the row adds the keys and routes that go with it.
 | `barca sql` with a server (`GET /sql/views`, `GET /materializations`) and the `barca` schema (`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`, `barca.queue`) | new in 0.29.3 (the last three in 0.44.1): the columns of barca's tables, the limit of rows read from a server and the wording of the notes may change after field use; the result JSON is `sql`'s |
 | `barca sql` with a server, for a query that names only barca's tables (`POST /sql/query`) | new in 0.44.0: the server answers it instead of this machine. Which queries are sent to the server, its limits (5 seconds, 10000 rows and 4MB an answer, 100000 rows a table, four queries at once), the `notes` and the wording of its refusals may change; the result JSON is `sql`'s, a refusal is exit 2 with the standard envelope |
 | `logs -f/--follow` | new in 0.29.2: the end-of-run line on stderr (`barca: run <run_id> ended: <status>`) and the choice of the run to follow without a run id may change after field use; the exit codes (0 succeeded, 130 cancelled, 1 otherwise) and the JSON Lines on stdout are stable |
-| `status --problems`, `nodes[].schedule` and `filter` in `status --json` (and `GET /nodes?state=&problems=`) | new in 0.29.3: what counts as needing attention may grow (ordered by cause weight; work already in hand is omitted unless the cause is requested); `schedule` may gain keys. `--state` and the summary counting every node are stable |
+| `status --problems`, `nodes[].schedule` and `filter` in `status --json` (and `GET /nodes?state=&problems=`) | new in 0.29.3: what counts as needing attention may grow (ordered by cause weight; work already in hand is omitted unless the cause is requested); `schedule.state` and `refresh_path.state` identify paused, held, late, overrunning or on-time schedules. `schedule.state_detail` explains the standing. These objects may gain keys. `--state` and the summary counting every node are stable |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
@@ -1137,6 +1137,31 @@ says what a sink writes.
 | `explanation` | object | always |
 | `explanation.attempts` | string | always |
 | `explanation.cancellation` | null | always |
+| `explanation.counts` | object | always |
+| `explanation.counts.attempts` | integer | always |
+| `explanation.counts.attempts_line` | string | always |
+| `explanation.counts.cached` | integer | always |
+| `explanation.counts.failed` | integer | always |
+| `explanation.counts.nodes` | null | always |
+| `explanation.counts.not_reached` | integer | always |
+| `explanation.counts.not_reached_line` | null | always |
+| `explanation.counts.not_reached_nodes` | null | always |
+| `explanation.counts.ok` | integer | always |
+| `explanation.counts.outcome` | string | always |
+| `explanation.counts.planned` | string | always |
+| `explanation.counts.ran` | integer | always |
+| `explanation.counts.retries` | integer | always |
+| `explanation.counts.steps` | integer | always |
+| `explanation.counts.units` | string | always |
+| `explanation.outputs` | array | always |
+| `explanation.outputs[]` | object | always |
+| `explanation.outputs[].format` | string | always |
+| `explanation.outputs[].keys` | null | always |
+| `explanation.outputs[].line` | string | always |
+| `explanation.outputs[].node_id` | string | always |
+| `explanation.outputs[].path` | string | always |
+| `explanation.outputs[].rows` | null | always |
+| `explanation.outputs[].size_bytes` | integer | always |
 | `explanation.progress` | null | always |
 | `explanation.requested_by` | string | always |
 | `explanation.slowest` | array | always |
@@ -1145,6 +1170,7 @@ says what a sink writes.
 | `explanation.slowest[].node_id` | string | always |
 | `explanation.slowest[].seconds` | number | always |
 | `explanation.steps` | string | always |
+| `explanation.target_line` | string | always |
 | `explanation.target_outcomes` | array | always |
 | `explanation.targets` | array | always |
 | `explanation.targets[]` | string | always |
@@ -1819,6 +1845,7 @@ fetched) is still exit 3.
 | `rollup.health.undecided` | integer | always |
 | `rollup.held_by` | array | always |
 | `rollup.held_by[]` | object | always |
+| `rollup.held_by[].action_kind` | string | always |
 | `rollup.held_by[].assets` | integer | always |
 | `rollup.held_by[].causes` | object | always |
 | `rollup.held_by[].causes.catching_up` | integer | always |
@@ -1828,9 +1855,11 @@ fetched) is still exit 3.
 | `rollup.held_by[].causes.queued` | integer | always |
 | `rollup.held_by[].causes.undecided` | integer | always |
 | `rollup.held_by[].cumulative_nodes` | integer | always |
+| `rollup.held_by[].fresh_by` | null | always |
 | `rollup.held_by[].gap_seconds` | integer | always |
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
+| `rollup.held_by[].stale_since` | null | always |
 | `rollup.held_by[].unbounded` | integer | always |
 | `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
@@ -1840,6 +1869,15 @@ fetched) is still exit 3.
 | `rollup.not_fresh` | integer | always |
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
+| `rollup.split` | object | always |
+| `rollup.split.catching_up` | integer | always |
+| `rollup.split.in_hand_nodes` | integer | always |
+| `rollup.split.in_hand_weight` | integer | always |
+| `rollup.split.need_someone` | integer | always |
+| `rollup.split.need_someone_nodes` | integer | always |
+| `rollup.split.need_someone_weight` | integer | always |
+| `rollup.split.run_by_hand` | integer | always |
+| `rollup.stale_since` | null | always |
 | `rollup.unbounded` | integer | always |
 | `rollup.weight` | integer | always |
 | `rollup.weights` | object | always |
@@ -2314,6 +2352,7 @@ counts every node even when `nodes` is truncated.
 | `rollup.health.undecided` | integer | always |
 | `rollup.held_by` | array | always |
 | `rollup.held_by[]` | object | always |
+| `rollup.held_by[].action_kind` | string | always |
 | `rollup.held_by[].assets` | integer | always |
 | `rollup.held_by[].causes` | object | always |
 | `rollup.held_by[].causes.catching_up` | integer | always |
@@ -2323,9 +2362,11 @@ counts every node even when `nodes` is truncated.
 | `rollup.held_by[].causes.queued` | integer | always |
 | `rollup.held_by[].causes.undecided` | integer | always |
 | `rollup.held_by[].cumulative_nodes` | integer | always |
+| `rollup.held_by[].fresh_by` | null | always |
 | `rollup.held_by[].gap_seconds` | integer | always |
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
+| `rollup.held_by[].stale_since` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
 | `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
@@ -2335,6 +2376,15 @@ counts every node even when `nodes` is truncated.
 | `rollup.not_fresh` | integer | always |
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
+| `rollup.split` | object | always |
+| `rollup.split.catching_up` | integer | always |
+| `rollup.split.in_hand_nodes` | integer | always |
+| `rollup.split.in_hand_weight` | integer | always |
+| `rollup.split.need_someone` | integer | always |
+| `rollup.split.need_someone_nodes` | integer | always |
+| `rollup.split.need_someone_weight` | integer | always |
+| `rollup.split.run_by_hand` | integer | always |
+| `rollup.stale_since` | string | always |
 | `rollup.unbounded` | integer | always |
 | `rollup.weight` | integer | always |
 | `rollup.weights` | object | always |
@@ -2468,6 +2518,7 @@ whole-scope totals. The health and root filters intersect with the cause filter.
 | `rollup.health.undecided` | integer | always |
 | `rollup.held_by` | array | always |
 | `rollup.held_by[]` | object | always |
+| `rollup.held_by[].action_kind` | string | always |
 | `rollup.held_by[].assets` | integer | always |
 | `rollup.held_by[].causes` | object | always |
 | `rollup.held_by[].causes.catching_up` | integer | always |
@@ -2477,9 +2528,11 @@ whole-scope totals. The health and root filters intersect with the cause filter.
 | `rollup.held_by[].causes.queued` | integer | always |
 | `rollup.held_by[].causes.undecided` | integer | always |
 | `rollup.held_by[].cumulative_nodes` | integer | always |
+| `rollup.held_by[].fresh_by` | null | always |
 | `rollup.held_by[].gap_seconds` | integer | always |
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
+| `rollup.held_by[].stale_since` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
 | `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
@@ -2489,6 +2542,15 @@ whole-scope totals. The health and root filters intersect with the cause filter.
 | `rollup.not_fresh` | integer | always |
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
+| `rollup.split` | object | always |
+| `rollup.split.catching_up` | integer | always |
+| `rollup.split.in_hand_nodes` | integer | always |
+| `rollup.split.in_hand_weight` | integer | always |
+| `rollup.split.need_someone` | integer | always |
+| `rollup.split.need_someone_nodes` | integer | always |
+| `rollup.split.need_someone_weight` | integer | always |
+| `rollup.split.run_by_hand` | integer | always |
+| `rollup.stale_since` | string | always |
 | `rollup.unbounded` | integer | always |
 | `rollup.weight` | integer | always |
 | `rollup.weights` | object | always |
@@ -2626,6 +2688,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `rollup.health.undecided` | integer | always |
 | `rollup.held_by` | array | always |
 | `rollup.held_by[]` | object | always |
+| `rollup.held_by[].action_kind` | string | always |
 | `rollup.held_by[].assets` | integer | always |
 | `rollup.held_by[].causes` | object | always |
 | `rollup.held_by[].causes.catching_up` | integer | always |
@@ -2635,9 +2698,11 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `rollup.held_by[].causes.queued` | integer | always |
 | `rollup.held_by[].causes.undecided` | integer | always |
 | `rollup.held_by[].cumulative_nodes` | integer | always |
+| `rollup.held_by[].fresh_by` | null | always |
 | `rollup.held_by[].gap_seconds` | integer | always |
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
+| `rollup.held_by[].stale_since` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
 | `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
@@ -2647,6 +2712,15 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `rollup.not_fresh` | integer | always |
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
+| `rollup.split` | object | always |
+| `rollup.split.catching_up` | integer | always |
+| `rollup.split.in_hand_nodes` | integer | always |
+| `rollup.split.in_hand_weight` | integer | always |
+| `rollup.split.need_someone` | integer | always |
+| `rollup.split.need_someone_nodes` | integer | always |
+| `rollup.split.need_someone_weight` | integer | always |
+| `rollup.split.run_by_hand` | integer | always |
+| `rollup.stale_since` | string | always |
 | `rollup.unbounded` | integer | always |
 | `rollup.weight` | integer | always |
 | `rollup.weights` | object | always |
@@ -2733,6 +2807,7 @@ clears the root:
 | `entries[].health.undecided` | integer | always |
 | `entries[].held_by` | array | always |
 | `entries[].held_by[]` | object | always |
+| `entries[].held_by[].action_kind` | string | always |
 | `entries[].held_by[].assets` | integer | always |
 | `entries[].held_by[].causes` | object | always |
 | `entries[].held_by[].causes.catching_up` | integer | always |
@@ -2742,9 +2817,11 @@ clears the root:
 | `entries[].held_by[].causes.queued` | integer | always |
 | `entries[].held_by[].causes.undecided` | integer | always |
 | `entries[].held_by[].cumulative_nodes` | integer | always |
+| `entries[].held_by[].fresh_by` | null | always |
 | `entries[].held_by[].gap_seconds` | integer | always |
 | `entries[].held_by[].nodes` | integer | always |
 | `entries[].held_by[].root` | string | always |
+| `entries[].held_by[].stale_since` | string | always |
 | `entries[].held_by[].unbounded` | integer | always |
 | `entries[].held_by[].weight` | integer | always |
 | `entries[].id` | string | always |
@@ -2759,6 +2836,15 @@ clears the root:
 | `entries[].not_fresh` | integer | always |
 | `entries[].parent` | null \| string | always |
 | `entries[].running` | integer | always |
+| `entries[].split` | object | always |
+| `entries[].split.catching_up` | integer | always |
+| `entries[].split.in_hand_nodes` | integer | always |
+| `entries[].split.in_hand_weight` | integer | always |
+| `entries[].split.need_someone` | integer | always |
+| `entries[].split.need_someone_nodes` | integer | always |
+| `entries[].split.need_someone_weight` | integer | always |
+| `entries[].split.run_by_hand` | integer | always |
+| `entries[].stale_since` | null \| string | always |
 | `entries[].unbounded` | integer | always |
 | `entries[].weight` | integer | always |
 | `entries[].weights` | object | always |
@@ -2868,6 +2954,7 @@ clears the root:
 | `roots[].action.command` | null \| string | always |
 | `roots[].action.estimated_seconds` | null | always |
 | `roots[].action.kind` | string | always |
+| `roots[].action.run_once` | null \| string | always |
 | `roots[].assets` | integer | always |
 | `roots[].causes` | object | always |
 | `roots[].causes.catching_up` | integer | always |
@@ -2878,11 +2965,14 @@ clears the root:
 | `roots[].causes.undecided` | integer | always |
 | `roots[].detail` | string | always |
 | `roots[].error_group` | null \| string | always |
+| `roots[].fresh_by` | null | always |
 | `roots[].gap_seconds` | integer | always |
 | `roots[].id` | string | always |
 | `roots[].kind` | string | always |
+| `roots[].needs_someone` | boolean | always |
 | `roots[].node` | string | always |
 | `roots[].nodes` | integer | always |
+| `roots[].stale_since` | string | always |
 | `roots[].unbounded` | integer | always |
 | `roots[].weight` | integer | always |
 <!-- END GENERATED schema status_rollup -->
@@ -3220,6 +3310,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `rollup.health.undecided` | integer | always |
 | `rollup.held_by` | array | always |
 | `rollup.held_by[]` | object | always |
+| `rollup.held_by[].action_kind` | string | always |
 | `rollup.held_by[].assets` | integer | always |
 | `rollup.held_by[].causes` | object | always |
 | `rollup.held_by[].causes.catching_up` | integer | always |
@@ -3229,9 +3320,11 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `rollup.held_by[].causes.queued` | integer | always |
 | `rollup.held_by[].causes.undecided` | integer | always |
 | `rollup.held_by[].cumulative_nodes` | integer | always |
+| `rollup.held_by[].fresh_by` | null | always |
 | `rollup.held_by[].gap_seconds` | integer | always |
 | `rollup.held_by[].nodes` | integer | always |
 | `rollup.held_by[].root` | string | always |
+| `rollup.held_by[].stale_since` | string | always |
 | `rollup.held_by[].unbounded` | integer | always |
 | `rollup.held_by[].weight` | integer | always |
 | `rollup.id` | string | always |
@@ -3241,6 +3334,15 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `rollup.not_fresh` | integer | always |
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
+| `rollup.split` | object | always |
+| `rollup.split.catching_up` | integer | always |
+| `rollup.split.in_hand_nodes` | integer | always |
+| `rollup.split.in_hand_weight` | integer | always |
+| `rollup.split.need_someone` | integer | always |
+| `rollup.split.need_someone_nodes` | integer | always |
+| `rollup.split.need_someone_weight` | integer | always |
+| `rollup.split.run_by_hand` | integer | always |
+| `rollup.stale_since` | string | always |
 | `rollup.unbounded` | integer | always |
 | `rollup.weight` | integer | always |
 | `rollup.weights` | object | always |
@@ -3360,7 +3462,7 @@ run; additive and experimental.
 
 `runs[].line` (experimental, #959) is the run in the words of one row of a list, the same the
 web UI's run list prints: `steps` (the steps by outcome, `7 ok · 1 failed · 0 cached`),
-`steps_detail` (what that counts, the nodes planned and the step the run stopped at), `failure`
+`steps_detail` (what that counts, the steps planned and where the run stopped), `failure`
 (what went wrong in one line, `null` when nothing did) and `failure_detail` (the same in full).
 
 `runs[].principal` and `runs[].trigger_reason` (experimental, #925) say who asked a server for
@@ -3451,11 +3553,11 @@ and `evicted` (a valid result whose file is gone), `task` and `sensor` (they alw
 10,000 keys of one node ran in one phase). `example` is the first node executed for the reason.
 `explanation` (experimental, #956) is the run in words, derived from those recorded facts by
 the same code that answers `GET /runs/{run_id}` (its `explanation`), so the table, the JSON
-and the web UI say the same: `targets` (a list: the job's node ids, else the targets as given;
+and the web UI say the same. Its `counts` separates planned steps and nodes, executed steps, cache hits, unreached steps, attempts and retries. `outputs` describes returned artifacts, and `target_line` summarizes the requested targets. Other fields include `targets` (a list: the job's node ids, else the targets as given;
 empty for a run of every asset; `run.target` stays the string as given), `requested_by`
-(`api · token:ci-bot`), `attempts` (`29 steps, no retries`, `19,399 steps, 62 retries`:
+(`api · token:ci-bot`), `attempts` (`29 attempts: one per step, none retried`, `19,461 attempts: 19,399 steps, 62 retries`:
 retries are counted apart from each step's first attempt; `null` before an attempt is
-recorded), `steps` (`7 ok · 1 failed · 2 skipped · 0 cached`), `target_outcomes` (one line per
+recorded), `steps` (`7 ok · 1 failed · 0 cached · 2 not reached`), `target_outcomes` (one line per
 target when the server rebuilt the run's plan, otherwise empty), `cancellation` (`{headline,
 detail, run}` or `null`), `why`, `progress` (`{done, total, percent, executed, cached,
 eta_seconds, eta}` for a run in progress, otherwise `null`) and `slowest` (at most five
@@ -3505,6 +3607,8 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].line.failure_detail` | string | always |
 | `runs[].line.steps` | string | always |
 | `runs[].line.steps_detail` | string | always |
+| `runs[].line.target` | string | always |
+| `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
@@ -3547,6 +3651,8 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].line.failure_detail` | string | always |
 | `runs[].line.steps` | string | always |
 | `runs[].line.steps_detail` | string | always |
+| `runs[].line.target` | string | always |
+| `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
@@ -3658,6 +3764,23 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `explanation` | object | always |
 | `explanation.attempts` | string | always |
 | `explanation.cancellation` | null | always |
+| `explanation.counts` | object | always |
+| `explanation.counts.attempts` | integer | always |
+| `explanation.counts.attempts_line` | string | always |
+| `explanation.counts.cached` | integer | always |
+| `explanation.counts.failed` | integer | always |
+| `explanation.counts.nodes` | null | always |
+| `explanation.counts.not_reached` | integer | always |
+| `explanation.counts.not_reached_line` | null | always |
+| `explanation.counts.not_reached_nodes` | null | always |
+| `explanation.counts.ok` | integer | always |
+| `explanation.counts.outcome` | string | always |
+| `explanation.counts.planned` | string | always |
+| `explanation.counts.ran` | integer | always |
+| `explanation.counts.retries` | integer | always |
+| `explanation.counts.steps` | integer | always |
+| `explanation.counts.units` | string | always |
+| `explanation.outputs` | array | always |
 | `explanation.progress` | null | always |
 | `explanation.requested_by` | string | always |
 | `explanation.slowest` | array | always |
@@ -3666,6 +3789,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `explanation.slowest[].node_id` | string | always |
 | `explanation.slowest[].seconds` | number | always |
 | `explanation.steps` | string | always |
+| `explanation.target_line` | string | always |
 | `explanation.target_outcomes` | array | always |
 | `explanation.targets` | array | always |
 | `explanation.targets[]` | string | always |
@@ -3791,6 +3915,8 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].line.failure_detail` | null | always |
 | `runs[].line.steps` | string | always |
 | `runs[].line.steps_detail` | string | always |
+| `runs[].line.target` | string | always |
+| `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
 | `runs[].retries` | integer | always |
 | `runs[].run_id` | string | always |
@@ -4386,6 +4512,15 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `rollup.not_fresh` | integer | always |
 | `rollup.parent` | null | always |
 | `rollup.running` | integer | always |
+| `rollup.split` | object | always |
+| `rollup.split.catching_up` | integer | always |
+| `rollup.split.in_hand_nodes` | integer | always |
+| `rollup.split.in_hand_weight` | integer | always |
+| `rollup.split.need_someone` | integer | always |
+| `rollup.split.need_someone_nodes` | integer | always |
+| `rollup.split.need_someone_weight` | integer | always |
+| `rollup.split.run_by_hand` | integer | always |
+| `rollup.stale_since` | null | always |
 | `rollup.unbounded` | integer | always |
 | `rollup.weight` | integer | always |
 | `rollup.weights` | object | always |

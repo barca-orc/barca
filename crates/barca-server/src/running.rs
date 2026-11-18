@@ -6,16 +6,11 @@
 //! CLI runs on the same `.barca/`: `running` rows of the metadata database whose owner is
 //! alive ([`db::alive_running_runs_in`], the check the scheduler's overlap skip uses), read
 //! from the snapshot the caller already took. A CLI run has no event stream here: its job's
-//! nodes count as running until each records a materialization during the run.
+//! unfinished targets are visible without a confirmed worker assignment.
 //!
-//! The engine emits `step_finished` but no `step_started`, so which nodes of a server run are
-//! executing is derived: a node is `running` once its function has printed a line or every
-//! upstream node in the run has finished, and `queued` before that (and while the run waits
-//! for a run slot). A step served from cache is announced only when the run ends (it may yet
-//! be computed again, if its artifact turns out lost), so a node the cache state calls
-//! `cached` that the run has not touched counts as done already, unless the run was asked to
-//! refresh: it is not what the run is executing, and its dependants do not wait for it. A partitioned node's keys come from the cache state the same request
-//! reads (`done`: keys with a result, `total`: every key) and from the run's own step events.
+//! Worker-front leases identify the nodes executing now. Other nodes retain their own state.
+//! Cached steps are announced at the end of the run. Until then, cache state and completion
+//! events identify finished nodes and partition keys.
 
 use crate::state::{AppState, RunStatus};
 use barca_core::outcome::TriggeredBy;
@@ -24,7 +19,8 @@ use barca_core::{RunEvent, StepId, db};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
-/// A run working on a node now.
+/// A run in flight that has a node in it: executing it, about to reach it, or waiting in the
+/// queue with it among its nodes (`step`).
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct NodeRunning {
@@ -34,27 +30,22 @@ pub struct NodeRunning {
     pub triggered_by: Option<TriggeredBy>,
     /// When the run started (RFC 3339, UTC).
     pub started_at: String,
+    /// `running`: the run is executing it now. `waiting`: the run is executing and will still
+    /// reach it. `queued`: the run waits in the queue.
     pub step: RunningStep,
+    /// `step` in the words every surface prints: `running`, `in this run`, `in a queued run`.
+    pub label: String,
     /// For a partitioned node: how many of its keys are done.
     pub partitions: Option<PartitionProgress>,
 }
 
-/// Where a node is in a run.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-#[serde(rename_all = "snake_case")]
-pub enum RunningStep {
-    /// The run will get to it: it waits for a run slot or for its upstream steps.
-    Queued,
-    /// Its step is executing (for a CLI run: the run is going and the node has not finished).
-    Running,
-}
+pub use barca_core::run_list::RunningStep;
 
 /// The keys of a partitioned node, while a run works on it.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PartitionProgress {
-    /// Keys not done yet while the node's step is running; 0 while it is queued.
+    /// Keys not done yet while the node's step is running; 0 while it waits.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub running: usize,
     /// Keys with a result: cached, or finished by this run.
@@ -133,7 +124,11 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             from_queue: true,
             nodes: r.nodes.clone(),
             pending: r.status == RunStatus::Pending,
-            progress: state.events.get(&r.handle).map(|c| c.progress()),
+            progress: state.events.get(&r.handle).map(|c| {
+                let mut p = c.progress();
+                p.executing = state.shared_steps.executing(&r.handle);
+                p
+            }),
             schedule_id: r.trigger.schedule_id.clone(),
             refreshes: r.refreshes,
         })
@@ -222,6 +217,7 @@ pub(crate) struct Progress {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ProgressSnapshot {
+    pub executing: HashMap<String, usize>,
     pub touched: HashSet<String>,
     pub finished: HashSet<String>,
     pub keys_done: HashMap<String, usize>,
@@ -258,6 +254,7 @@ impl Progress {
     }
     pub(crate) fn snapshot(&self) -> ProgressSnapshot {
         ProgressSnapshot {
+            executing: HashMap::new(),
             touched: self.touched.clone(),
             finished: self.finished.clone(),
             keys_done: self
@@ -303,8 +300,27 @@ fn covered<'a>(
         .collect()
 }
 
-/// The `running` entry of every node a run in `runs` is working on now. When several runs
-/// work on one node, a running step wins over a queued one, then the oldest run.
+/// The nodes a run is executing now: the only ones "N running" counts, anywhere.
+pub(crate) fn executing(by_node: &HashMap<String, NodeRunning>) -> HashSet<String> {
+    by_node
+        .iter()
+        .filter(|(_, r)| r.step == RunningStep::Running)
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// How far along a step is, for choosing among several runs with one node.
+fn rank(step: RunningStep) -> u8 {
+    match step {
+        RunningStep::Running => 0,
+        RunningStep::Waiting => 1,
+        RunningStep::Queued => 2,
+    }
+}
+
+/// The `running` entry of every node a run in `runs` has in it. When several runs have one
+/// node, a running step wins over a waiting one and that over a queued one, then the oldest
+/// run.
 pub(crate) fn by_node(
     runs: &[InFlight],
     nodes: &[NodeStatus],
@@ -362,32 +378,23 @@ pub(crate) fn by_node(
             }
         };
         for id in covered {
-            if finished(id) {
+            if finished(id) && !progress.is_some_and(|p| p.executing.contains_key(id)) {
                 continue;
             }
             let n = by_id[id];
             let step = match &progress {
                 _ if run.pending => RunningStep::Queued,
-                None if !run.from_queue => RunningStep::Running,
-                Some(p) if p.touched.contains(id) => RunningStep::Running,
-                _ => {
-                    let ready = n
-                        .inputs
-                        .iter()
-                        .filter(|up| in_run.contains(up.as_str()))
-                        .all(|up| finished(up));
-                    if ready {
-                        RunningStep::Running
-                    } else {
-                        RunningStep::Queued
-                    }
-                }
+                Some(p) if p.executing.contains_key(id) => RunningStep::Running,
+                _ => RunningStep::Waiting,
             };
             let partitions = n.partitioned.then(|| {
                 let (done, total) = keys(n);
                 PartitionProgress {
                     running: if step == RunningStep::Running {
-                        total - done
+                        progress
+                            .and_then(|p| p.executing.get(id))
+                            .copied()
+                            .unwrap_or(0)
                     } else {
                         0
                     },
@@ -400,12 +407,13 @@ pub(crate) fn by_node(
                 triggered_by: run.triggered_by,
                 started_at: run.started_at.clone(),
                 step,
+                label: step.label().to_string(),
                 partitions,
             };
             let better = match out.get(id) {
                 None => true,
                 Some(old) => {
-                    (entry.step == RunningStep::Running && old.step == RunningStep::Queued)
+                    rank(entry.step) < rank(old.step)
                         || (entry.step == old.step && entry.started_at < old.started_at)
                 }
             };

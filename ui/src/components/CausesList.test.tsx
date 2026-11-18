@@ -12,10 +12,10 @@ const noop = () => {}
 
 // As `GET /state/rollup` answers: four roots, the first three holding 212 of 218 not-fresh nodes.
 const roots = [
-  heldRoot({ kind: 'no_schedule', node: 'p.py:ledger', detail: 'no tick reaches ledger', nodes: 152, assets: 140, action: { kind: 'add_schedule', command: null, estimated_seconds: 420 } }),
+  heldRoot({ kind: 'no_schedule', node: 'p.py:ledger', detail: 'no tick reaches ledger', nodes: 152, assets: 140, action: { kind: 'add_schedule', command: null, run_once: null, estimated_seconds: 420 } }),
   failureRoot('p.py:orders', 'row count fell 64%', 59, 52),
   failureRoot('p.py:refunds', 'row count fell 12%', 1),
-  heldRoot({ kind: 'queue', node: 'p.py:pulse', detail: "pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1", nodes: 6, action: { kind: 'raise_max_runs', command: null, estimated_seconds: null } }),
+  heldRoot({ kind: 'queue', node: 'p.py:pulse', detail: "pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1", nodes: 6, action: { kind: 'raise_max_runs', command: null, run_once: null, estimated_seconds: null } }),
 ]
 const scope = {
   not_fresh: 218,
@@ -34,7 +34,7 @@ describe('CausesList', () => {
   it('lists each root as a to-do: what it is, why, what it holds, the gap, and what to do', () => {
     const shown = text(render())
     expect(shown).toContain('no schedule ledger no tick reaches ledger holds 152 nodes (140 assets)')
-    expect(shown).toContain('152 no refresh path · 95d of gap · 152 with no estimate')
+    expect(shown).toContain('152 no refresh path · 95d of gap across nodes (node-time) · 152 with no estimate')
     expect(shown).toContain('do add a schedule freshness=Schedule(...) on it or on a node above it about 7m of compute')
     // A failure: its error, the command to copy, and the failures that share the error under it.
     expect(shown).toContain('failure orders row count fell 64% holds 59 nodes (52 assets)')

@@ -70,6 +70,10 @@ struct Above<'a> {
     cause: Vec<Option<Cause>>,
     root: Vec<Option<Root>>,
     has_path: Vec<bool>,
+    /// For a row that is not fresh: the paused node (by row) that holds it, itself or the
+    /// nearest above it through inputs that are not fresh. A tick reads a paused node as it
+    /// is, so no tick leaves the row fresh until that node is resumed.
+    held: Vec<Option<usize>>,
 }
 
 /// The node a changed component of a run hash names (`input ID`, `sensor ID`): its row.
@@ -214,6 +218,7 @@ pub fn attribute(
         cause: vec![None; nodes.len()],
         root: vec![None; nodes.len()],
         has_path: vec![false; nodes.len()],
+        held: vec![None; nodes.len()],
     };
     for (i, node) in nodes.iter().enumerate() {
         let path = crate::refresh_path::path_schedule(&node.id, evidence.path);
@@ -223,28 +228,60 @@ pub fn attribute(
         }
         let found = origin(node, nodes, &above);
         above.origin[i] = Some(found);
+        // What holds it: a paused node that is not fresh, itself or above it.
+        let holder = if evidence.path.paused.contains(&node.id) {
+            Some(i)
+        } else {
+            node.inputs
+                .iter()
+                .filter_map(|input| above.at.get(input.as_str()).copied())
+                .filter(|input| !nodes[*input].health.is_fresh())
+                .filter_map(|input| above.held[input])
+                .min()
+        };
+        above.held[i] = holder;
+        // A run that leaves it fresh: one that computes it and, where a paused node holds
+        // it, computes that node too, which only a run someone asked for does.
         let plans = |running: bool| {
             evidence.timing.runs.iter().find(|r| {
-                r.running == running && computes(r, &node.id, path.is_some(), evidence.path)
+                r.running == running
+                    && computes(r, &node.id, path.is_some(), evidence.path)
+                    && holder.is_none_or(|holder| {
+                        r.schedule.is_none() && computes(r, &nodes[holder].id, false, evidence.path)
+                    })
             })
         };
         let failure = node.root.as_ref().filter(|r| r.kind == RootKind::Failure);
-        // The schedule whose queue wait explains the node: its path's, when a tick of it
-        // will come and waits (or typically waits) for a run slot, or a waiting tick's run.
         let waiting = plans(false);
-        let queue = path
-            .filter(|(_, s)| s.next_tick.is_some() && waits_for_slot(s))
-            .map(|(id, _)| id)
-            .or(waiting.and_then(|r| r.schedule.as_deref()));
         // A tick of its refresh path will come.
         let reached = path.is_some_and(|(_, s)| s.next_tick.is_some());
+        // That tick waits, or typically waits, for a run slot.
+        let slot_wait = path.is_some_and(|(_, s)| s.next_tick.is_some() && waits_for_slot(s));
+        // The schedule whose queue explains the node: its path's, or a waiting tick's, when
+        // its ticks wait for a run slot longer than they are apart (queue-bound). A tick
+        // that only waits now is a moment, not an explanation: the node keeps the change
+        // that made it out of date as its root.
+        let bound = |id: &str| {
+            evidence
+                .path
+                .schedules
+                .get(id)
+                .and_then(|s| s.standing.as_ref())
+                .is_some_and(|st| st.queue_bound)
+        };
+        let queue = path
+            .filter(|(id, s)| s.next_tick.is_some() && bound(id))
+            .map(|(id, _)| id)
+            .or(waiting
+                .and_then(|r| r.schedule.as_deref())
+                .filter(|id| bound(id)));
         let cause = if failure.is_some() || path.is_some_and(|(_, s)| s.failing) {
             Cause::Failing
         } else if node.health == Health::Undecided {
             Cause::Undecided
         } else if plans(true).is_some() {
             Cause::CatchingUp
-        } else if path.is_some_and(|(_, s)| s.off()) {
+        } else if path.is_some_and(|(_, s)| s.off()) || (holder.is_some() && waiting.is_none()) {
             Cause::NoRefreshPath
         } else if node
             .refresh_path
@@ -252,7 +289,7 @@ pub fn attribute(
             .is_some_and(|p| p.missed_ticks >= 1)
         {
             Cause::Overdue
-        } else if waiting.is_some() || queue.is_some() {
+        } else if waiting.is_some() || slot_wait {
             Cause::Queued
         } else if !reached {
             Cause::NoRefreshPath
@@ -291,7 +328,10 @@ pub fn attribute(
             Cause::Queued if queue.is_some() => {
                 Root::of(RootKind::Queue, queue.unwrap_or(&node.id))
             }
-            Cause::NoRefreshPath => unreached(),
+            Cause::NoRefreshPath => match holder {
+                Some(holder) => Root::of(RootKind::SchedulePaused, &nodes[holder].id),
+                None => unreached(),
+            },
             // Only a run decides it. Where no tick will come, what holds it is that, not
             // the change above it: waiting clears nothing.
             Cause::Undecided if !reached => unreached(),
@@ -643,8 +683,9 @@ def hourly(below_loose): ...
         world.classify();
         assert_eq!(world.why("clean"), is("catching_up", "sensor_value:inbox"));
 
-        // Row 5: the run that computes it waits for a run slot. A tick's run names the
-        // queue; a run someone asked for keeps the change as the root.
+        // Row 5: the run that computes it waits for a run slot. The root stays the change
+        // that made it out of date, for a tick's run and a run someone asked for alike: a
+        // wait for a slot is a moment (#1040). Only a queue-bound schedule names the queue.
         let mut world = World::new(SHAPES);
         stale(&mut world);
         world.runs = vec![PlannedRun {
@@ -655,7 +696,7 @@ def hourly(below_loose): ...
             start: Some(NOW + 30),
         }];
         world.classify();
-        assert_eq!(world.why("clean"), is("queued", "queue:inbox"));
+        assert_eq!(world.why("clean"), is("queued", "sensor_value:inbox"));
         let mut world = World::new(SHAPES);
         stale(&mut world);
         world.runs = vec![PlannedRun {
@@ -812,7 +853,7 @@ def hourly(below_loose): ...
                 root.action.estimated_seconds
             ),
             (
-                ActionKind::Run,
+                ActionKind::RunByHand,
                 Some("barca get signed --refresh reviewed"),
                 Some(61)
             )
@@ -824,7 +865,8 @@ def hourly(below_loose): ...
         );
 
         // A paused node (`barca pause`) is skipped by every tick: it is its own root, and
-        // resuming it is the action. What is below it keeps its path.
+        // resuming it is the action. What is below it keeps its path, and no tick leaves it
+        // fresh while the node above is read as it is: it roots at the paused node (#1040).
         let mut world = World::new(SHAPES);
         world.set("orders", "stale", &["sensor p.py:inbox"]);
         world.set("clean", "stale", &[]);
@@ -834,13 +876,17 @@ def hourly(below_loose): ...
             world.why("orders"),
             is("no_refresh_path", "schedule_paused:orders")
         );
-        assert_eq!(world.why("clean"), is("catching_up", "sensor_value:inbox"));
+        assert_eq!(
+            world.why("clean"),
+            is("no_refresh_path", "schedule_paused:orders")
+        );
         let rollup = assert_held(&world);
         let root = rollup
             .roots
             .iter()
             .find(|r| r.kind == RootKind::SchedulePaused)
             .unwrap();
+        assert_eq!(root.nodes, 2);
         assert_eq!(root.detail, "orders is paused: every tick skips it");
         assert_eq!(
             (root.action.kind, root.action.command.as_deref()),
@@ -909,6 +955,7 @@ def hourly(below_loose): ...
             }),
             queue_waits: vec![0.0],
             run_seconds: vec![20.0],
+            decisions: Vec::new(),
         }
     }
 
@@ -1010,12 +1057,15 @@ def rows(feed): ...
                 }),
                 queue_waits: vec![5.0],
                 run_seconds: vec![20.0],
+                decisions: Vec::new(),
             }),
         );
         world.durations = HashMap::from([(world.id("beat"), 45.0)]);
         world.classify();
         assert_eq!(world.why("beat"), is("queued", "queue:pulse"));
-        assert_eq!(world.why("rows"), is("queued", "queue:feed"));
+        // A tick that only waits now is queued, and keeps what made it out of date as its
+        // root: the queue root is for a schedule whose ticks wait longer than they are apart.
+        assert_eq!(world.why("rows"), is("queued", "sensor_value:feed"));
         let rollup = assert_held(&world);
         assert_eq!(rollup.root().causes.queued, 2);
         let root = |id: &str| rollup.roots.iter().find(|r| r.id == id).unwrap();
@@ -1032,12 +1082,8 @@ def rows(feed): ...
             ),
             (ActionKind::RaiseMaxRuns, None, Some(45))
         );
-        let feed = root("queue:p.py:feed");
-        assert_eq!(
-            feed.detail,
-            "a tick of feed is waiting for a run slot: max_runs is 1"
-        );
-        assert_eq!(feed.action.kind, ActionKind::Wait);
+        assert!(rollup.roots.iter().all(|r| r.id != "queue:p.py:feed"));
+        assert_eq!(root("sensor_value:p.py:feed").action.kind, ActionKind::Wait);
         // Where the answering process does not know the setting, it is named without a number.
         world.max_runs = None;
         assert!(
@@ -1131,7 +1177,27 @@ def rows(feed): ...
         );
         assert_eq!(
             rollup.root().gap_line(NOW),
-            "1 undecided · 1 catching up (nodes); about 1 fresh within 4m, 1 with no estimate"
+            "1 undecided · 1 catching up (nodes); about 1 fresh within 4m, 1 with no estimate; 1h of gap across nodes (node-time)"
+        );
+    }
+
+    #[test]
+    fn a_manual_task_has_no_result_due_before_its_first_request() {
+        let mut world = World::new(
+            "from barca import task, Manual\n@task(freshness=Manual)\ndef release(): ...\n",
+        );
+        let previous_run = world.node("release").last_materialization.clone();
+        world.set("release", "never_run", &[]);
+        world.classify();
+        let node = world.node("release");
+        assert_eq!(node.health_reason, crate::health::HealthReason::OnDemand);
+        assert!(assert_held(&world).roots.is_empty());
+        world.nodes[0].last_materialization = previous_run;
+        world.fail("release");
+        world.classify();
+        assert_eq!(
+            assert_held(&world).roots[0].action.kind,
+            ActionKind::FixFailure
         );
     }
 
@@ -1264,7 +1330,7 @@ def pulse(): ...
     }
 
     #[test]
-    fn on_the_audit_shape_three_roots_hold_nine_in_ten_of_what_is_not_fresh() {
+    fn on_the_audit_shape_actionable_roots_lead() {
         let world = audit();
         assert_eq!(world.nodes.len(), 698);
         let rollup = assert_held(&world);
@@ -1279,10 +1345,10 @@ def pulse(): ...
             seen,
             [
                 ("no_schedule:p.py:ledger", 152, ActionKind::AddSchedule),
+                ("queue:p.py:pulse", 6, ActionKind::RaiseMaxRuns),
                 ("sensor_value:p.py:inbox", 180, ActionKind::Wait),
                 ("code:p.py:prices", 60, ActionKind::Wait),
                 ("env:p.py:rates", 24, ActionKind::Wait),
-                ("queue:p.py:pulse", 6, ActionKind::RaiseMaxRuns),
             ]
         );
         // The scope's own list says the same, and how much its head explains (#967).
@@ -1295,15 +1361,14 @@ def pulse(): ...
                 .collect::<Vec<_>>(),
             [
                 ("no_schedule:p.py:ledger", 152, 152),
-                ("sensor_value:p.py:inbox", 180, 332),
-                ("code:p.py:prices", 60, 392),
-                ("env:p.py:rates", 24, 416),
-                ("queue:p.py:pulse", 6, 422),
+                ("queue:p.py:pulse", 6, 158),
+                ("sensor_value:p.py:inbox", 180, 338),
+                ("code:p.py:prices", 60, 398),
+                ("env:p.py:rates", 24, 422),
             ]
         );
         let top: usize = rollup.roots.iter().take(3).map(|r| r.nodes).sum();
-        assert!(top * 10 >= behind * 9, "{top} of {behind}");
-        assert_eq!(top, 392);
+        assert_eq!(top, 338);
         let causes = rollup.root().causes;
         assert_eq!(
             (
@@ -1320,7 +1385,7 @@ def pulse(): ...
         // 180 that a tick will decide or compute 2 each.
         assert_eq!(
             rollup.roots.iter().map(|r| r.weight).collect::<Vec<_>>(),
-            [912, 360, 120, 48, 12]
+            [912, 12, 360, 120, 48]
         );
         assert_eq!(
             rollup.roots.iter().map(|r| r.weight).sum::<usize>() + 276,
@@ -1338,7 +1403,7 @@ def pulse(): ...
             .collect();
         println!("{text}");
         assert!(text.contains("What holds the 422 nodes that are not fresh, and what clears it:"));
-        assert!(text.contains("The first 3 hold 392 of them."));
+        assert!(text.contains("The first 3 hold 338 of them."));
         assert!(text.contains("1. no schedule: ledger"));
         assert!(
             text.contains(
@@ -1354,9 +1419,7 @@ def pulse(): ...
         ));
     }
 
-    /// #1028: roots rank by the weight they hold, so a failure that blocks 20 nodes is among
-    /// the first three, ahead of a change that holds 60 a tick will bring up to date, and the
-    /// first three hold three quarters of what is not fresh.
+    /// #1041: a failure and a queue-bound schedule both outrank a larger waiting chain.
     #[test]
     fn roots_rank_by_weight_and_a_failure_with_blocked_nodes_is_among_the_first_three() {
         let world = audit_with(20);
@@ -1372,20 +1435,18 @@ def pulse(): ...
             seen,
             [
                 ("no_schedule:p.py:ledger", 152, 912),
-                ("sensor_value:p.py:inbox", 180, 360),
                 ("failure:p.py:load", 21, 126),
+                ("queue:p.py:pulse", 6, 12),
+                ("sensor_value:p.py:inbox", 180, 360),
                 ("code:p.py:prices", 60, 120),
                 ("env:p.py:rates", 24, 48),
-                ("queue:p.py:pulse", 6, 12),
             ]
         );
         let third = &rollup.root().held_by[2];
-        assert_eq!(third.root, "failure:p.py:load");
-        assert!(
-            third.cumulative_nodes * 4 >= behind * 3,
-            "{} of {behind}",
-            third.cumulative_nodes
-        );
+        assert!(rollup.roots[..3].iter().all(|r| r.needs_someone));
+        assert_eq!(third.root, "queue:p.py:pulse");
+        assert_eq!(third.cumulative_nodes, 179);
+        assert_eq!(rollup.root().split.need_someone, 3);
     }
 
     /// #968: a node that is not fresh and has no `expected_fresh_at` says why in one word;
@@ -1421,6 +1482,243 @@ def pulse(): ...
         assert_eq!(
             serde_json::to_value(NoEstimate::NoSchedulerHere).unwrap(),
             "no_scheduler_here"
+        );
+    }
+
+    /// `at` (unix seconds) as a materialization records it.
+    fn stamp(at: i64) -> String {
+        chrono::DateTime::from_timestamp(at, 0)
+            .unwrap()
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string()
+    }
+
+    /// #1040: a paused node that is out of date, the nodes below it, and the tick of its
+    /// path's schedule in every state (to come, waiting for a run slot, running). No tick
+    /// computes the paused node, so none leaves it or what is below it fresh: no estimate is
+    /// given and then withdrawn, and all of it roots at the paused node, cleared by resuming it.
+    #[test]
+    fn nothing_is_promised_through_a_paused_node_and_what_is_below_it_roots_at_it() {
+        let tick_run = |running: bool| PlannedRun {
+            run_id: "r1".into(),
+            schedule: Some("p.py:inbox".into()),
+            nodes: None,
+            running,
+            start: Some(if running { NOW - 5 } else { NOW + 10 }),
+        };
+        for runs in [vec![], vec![tick_run(false)], vec![tick_run(true)]] {
+            let mut world = World::new(SHAPES);
+            world.set("orders", "stale", &["sensor p.py:inbox"]);
+            world.set("clean", "stale", &[]);
+            world.set("report", "stale", &[]);
+            world.paused = HashSet::from([world.id("orders")]);
+            world.durations = HashMap::from([(world.id("orders"), 10.0)]);
+            let waits = runs.iter().any(|r| !r.running);
+            if waits {
+                // The tick's run waits for a run slot: the schedule's newest tick is pending.
+                let slot = NOW - NOW.rem_euclid(300);
+                world.schedule(
+                    "inbox",
+                    true,
+                    false,
+                    Some(Ticks {
+                        newest: Some(TickRun {
+                            run_id: "r1".into(),
+                            scheduled_at: slot,
+                            status: "pending".into(),
+                            queued_at: Some(slot),
+                            started_at: None,
+                            finished_at: None,
+                        }),
+                        ..Default::default()
+                    }),
+                );
+            }
+            world.runs = runs;
+            world.classify();
+            for name in ["orders", "clean", "report"] {
+                let node = world.node(name);
+                assert_eq!(node.expected_fresh_at, None, "{name}: {:?}", world.runs);
+                assert_eq!(
+                    world.why(name),
+                    is("no_refresh_path", "schedule_paused:orders"),
+                    "{name}: {:?}",
+                    world.runs
+                );
+                assert_eq!(node.no_estimate, Some(crate::health::NoEstimate::Paused));
+            }
+            let rollup = assert_held(&world);
+            assert_eq!(rollup.roots.len(), 1);
+            assert_eq!(
+                (
+                    rollup.roots[0].nodes,
+                    rollup.roots[0].action.kind,
+                    rollup.roots[0].action.command.as_deref()
+                ),
+                (
+                    3,
+                    ActionKind::ResumeSchedule,
+                    Some("barca resume orders --server")
+                )
+            );
+        }
+        // A run someone asked for computes a paused node: it clears all three.
+        let mut world = World::new(SHAPES);
+        world.set("orders", "stale", &["sensor p.py:inbox"]);
+        world.set("clean", "stale", &[]);
+        world.paused = HashSet::from([world.id("orders")]);
+        world.runs = vec![PlannedRun {
+            run_id: "r2".into(),
+            schedule: None,
+            nodes: None,
+            running: true,
+            start: Some(NOW - 5),
+        }];
+        world.classify();
+        assert_eq!(world.why("clean"), is("catching_up", "sensor_value:inbox"));
+        assert!(world.node("clean").expected_fresh_at.is_some());
+    }
+
+    /// #1040: `stale_since` is when the input first changed after the node's own result, and
+    /// stays there however often the sensor is polled with the same observation afterwards.
+    #[test]
+    fn out_of_date_since_is_the_inputs_first_change_however_often_it_is_polled() {
+        let since = |polled: i64, changes: &[i64]| {
+            let mut world = World::new(SHAPES);
+            world.set("orders", "stale", &["sensor p.py:inbox"]);
+            world.set("clean", "stale", &[]);
+            world.ages = HashMap::from([
+                (
+                    world.id("inbox"),
+                    NodeAge {
+                        last_success_at: Some(stamp(polled)),
+                        changed_at: std::sync::Arc::new(
+                            changes.iter().map(|at| stamp(*at)).collect(),
+                        ),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    world.id("orders"),
+                    NodeAge {
+                        last_success_at: Some(stamp(NOW - 3600)),
+                        ..Default::default()
+                    },
+                ),
+            ]);
+            world.classify();
+            assert_eq!(
+                world.node("clean").stale_since,
+                world.node("orders").stale_since
+            );
+            world
+                .node("orders")
+                .stale_since
+                .as_deref()
+                .and_then(crate::time::parse_rfc3339)
+                .map(|at| at - NOW)
+        };
+        // The observation changed 20 minutes ago (and once, long before the node's own
+        // result); the sensor has been polled every minute since, without a change.
+        let changes = [NOW - 7200, NOW - 1200];
+        assert_eq!(since(NOW - 1200, &changes), Some(-1200));
+        assert_eq!(since(NOW - 60, &changes), Some(-1200));
+        assert_eq!(since(NOW, &changes), Some(-1200));
+        // It changed again: still the first change after the node's result.
+        assert_eq!(since(NOW, &[NOW - 7200, NOW - 1200, NOW - 30]), Some(-1200));
+        // No change on record (results that recorded no digest): the newest result.
+        assert_eq!(since(NOW - 60, &[]), Some(-60));
+    }
+
+    /// #1040: ticks could not compute what is below a failing node. Once that node is fixed
+    /// and run by hand, those ticks are not misses of the nodes below it: they could not
+    /// have made them fresh, and no tick has yet had the chance to since.
+    #[test]
+    fn a_tick_that_could_not_reach_a_node_is_not_a_miss_once_what_is_above_it_succeeds_again() {
+        let after = |fixed: Option<i64>| {
+            let mut world = World::new(SHAPES);
+            world.set("clean", "stale", &["input p.py:orders"]);
+            world.set("report", "stale", &[]);
+            let inbox = world.id("inbox");
+            let misses = vec![
+                (inbox.clone(), (NOW - 300) as f64),
+                (inbox, (NOW - 600) as f64),
+            ];
+            world.checks.misses = HashMap::from([
+                (world.id("clean"), misses.clone()),
+                (world.id("report"), misses),
+            ]);
+            if let Some(at) = fixed {
+                world.ages.insert(
+                    world.id("orders"),
+                    NodeAge {
+                        last_success_at: Some(stamp(NOW - 1)),
+                        recovered_at: Some(stamp(at)),
+                        ..Default::default()
+                    },
+                );
+            }
+            world.classify();
+            let node = world.node("report");
+            (
+                world.why("report").0,
+                node.refresh_path.as_ref().unwrap().missed_ticks,
+                node.expected_fresh_at.is_some(),
+            )
+        };
+        // Nothing above it succeeded since: two ticks reached it and left it out of date.
+        assert_eq!(after(None), (Some("overdue"), 2, false));
+        assert_eq!(after(Some(NOW - 900)), (Some("overdue"), 2, false));
+        // `orders` succeeded between the two: the older tick is from before that.
+        assert_eq!(after(Some(NOW - 400)), (Some("overdue"), 1, false));
+        // `orders` was fixed and run a minute ago: no tick has missed it since, and the
+        // next one is expected to leave it fresh.
+        assert_eq!(after(Some(NOW - 60)), (Some("catching_up"), 0, true));
+    }
+
+    /// #1040: a tick waiting for a run slot does not replace a code change as the root; a
+    /// queue-bound schedule does.
+    #[test]
+    fn a_tick_waiting_for_a_run_slot_keeps_the_change_as_the_root() {
+        let slot = NOW - NOW.rem_euclid(300);
+        let why = |waits: Vec<f64>| {
+            let mut world = World::new(SHAPES);
+            world.set("orders", "stale", &["code"]);
+            world.set("clean", "stale", &[]);
+            world.schedule(
+                "inbox",
+                true,
+                false,
+                Some(Ticks {
+                    newest: Some(TickRun {
+                        run_id: "r1".into(),
+                        scheduled_at: slot,
+                        status: "pending".into(),
+                        queued_at: Some(slot),
+                        started_at: None,
+                        finished_at: None,
+                    }),
+                    queue_waits: waits,
+                    ..Default::default()
+                }),
+            );
+            world.runs = vec![PlannedRun {
+                run_id: "r1".into(),
+                schedule: Some(world.id("inbox")),
+                nodes: None,
+                running: false,
+                start: Some(NOW + 20),
+            }];
+            world.classify();
+            (world.why("orders"), world.why("clean"))
+        };
+        assert_eq!(
+            why(vec![2.0, 3.0]),
+            (is("queued", "code:orders"), is("queued", "code:orders"))
+        );
+        assert_eq!(
+            why(vec![400.0, 500.0]),
+            (is("queued", "queue:inbox"), is("queued", "queue:inbox"))
         );
     }
 }

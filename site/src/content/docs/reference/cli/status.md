@@ -216,7 +216,7 @@ barca status --problems --json --fields id,cache,last_materialization,schedule
 
 ```
 NAME          KIND   STATE        WHY                                                       LAST RUN                               SHAPE         SCHEDULE                    DEPS
-nightly_sync  task   always-runs  last run failed: RuntimeError: upstream API returned 503  failed 2026-10-22 22:51:16 UTC         -             */2 * * * * *; failing 2/2  -
+nightly_sync  task   always-runs  last run failed: RuntimeError: upstream API returned 503  failed 2026-10-22 22:51:16 UTC         -             */2 * * * * *; held, failing 2/2  -
 prices        asset  stale        changed: code                                             success 2026-10-22 22:51:12 UTC 0.00s  dict (1 key)  -                           -
 ratio         asset  never-run    failed: ZeroDivisionError: division by zero               failed 2026-10-22 22:51:12 UTC         -             -                           orders
 
@@ -281,6 +281,7 @@ all                6       4  3 failing · 3 with no estimate
 Gap: 3 failing (nodes); 3 with no estimate
 
 What holds the 3 nodes that are not fresh, and what clears it:
+1 needs you · 0 are catching up
 1. failure: orders
      holds 3 nodes (3 assets): 3 failing; 3 with no estimate
      why:  ValueError: 12 rows rejected
@@ -293,12 +294,11 @@ As of 2026-11-17T16:49:57Z
 Each entry of the list is a root: one upstream fact (a failing node, a sensor's new value,
 changed code, a missing or paused schedule, a run queue that is behind) with every node it
 explains, so three nodes that need attention here are one thing to fix. Every node that is not
-fresh is under exactly one root. `holds` counts them by cause and adds their gap (`3h of
-gap`: node-time out of date plus node-time until expected fresh) and how many have no
+fresh is under exactly one root. `holds` counts them by cause and adds their gap (`3h of gap across nodes (node-time)`: node-time out of date plus node-time until expected fresh) and how many have no
 estimate; `why` is the fact in a line; `do` is the action that clears it, with the command
 when there is one and the typical compute time of what it holds (`about 7m of compute`).
-Roots whose nodes have no estimate come first, the one holding the most nodes first; then by
-gap. With a server, a level of the tree whose nodes have estimates adds `fresh by ~15:05 UTC`
+Roots that need someone come first. Within each part the greatest weight leads, then failures,
+node count, gap and root id. With a server, a level of the tree whose nodes have estimates adds `fresh by ~15:05 UTC`
 (the latest of them). `Data` is the scope's data coverage and `As of` the instant the nodes
 were classified at. The kinds of root and of action are in [barca status: Fields and JSON](/reference/cli/status-fields/),
 "Root" and "The rollup".
@@ -333,13 +333,14 @@ table adds a SCHEDULE column when a node it shows is scheduled:
 | `next_fire` | when it next matches (RFC 3339, UTC) |
 | `last_fired` | its newest tick: the slot of the newest run the schedule started or queued (RFC 3339, UTC), or `null` |
 | `last_run_id`, `last_status` | the run that tick started and its status as `barca history` words it (`pending` while it waits in the server's run queue), or `null` |
-| `late`, `late_since` | `late_since` is the first slot after `last_fired` that has passed (RFC 3339, UTC, or `null`); `late` is true when that is further back than the schedule's grace plus its queue wait ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot") |
+| `state`, `state_detail` | schedule standing (`paused`, `held`, `late`, `overrunning`, `on_time`) and its explanation |
+| `late`, `late_since` | `late_since` is the first slot after the newest recorded scheduler decision that has passed (RFC 3339, UTC, or `null`); `late` is true when that is further back than the schedule's grace plus its queue wait ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot") |
 | `failures`, `max_failures`, `failing` | consecutive failed ticks, `Schedule(..., max_failures=N)` (default 5), and `failures >= max_failures`: ticks are skipped ([Scheduling With Cron](/scheduling/)) |
 | `paused`, `paused_until` | held back by `barca pause --schedule NODE` (`POST /schedule/{id}/pause`); `paused_until` is `null` for a pause until resumed |
 | `skip_reason` | why the last due tick was skipped: `in_flight` or `paused`, or `null` |
 | `live` | `true` when a running scheduler reported this entry |
 
-The SCHEDULE cell is `<cron>; failing 2/2`, `<cron>; paused` (or `paused until <time> UTC`), or
+The SCHEDULE cell is `<cron>; held, failing 2/2` (held after `max_failures` failed ticks), `<cron>; paused` (or `paused until <time> UTC`), or
 `<cron>; next <time> UTC`, with `1 failure, ` before `next` while failures are counting and
 `late since <time> UTC, ` before `next` while the schedule is late.
 
@@ -392,7 +393,7 @@ not parse), so `--fields run_id,failed_node,error` needs no nesting.
 Each run of the list also has `line` (experimental), the run in the words of one row, the
 same the web UI's run list prints: `steps` (`7 ok · 1 failed · 0 cached`, or `3 started · 0
 cached` for a run that did not finish; steps are keys, a partitioned node counts one per key),
-`steps_detail` (what `steps` counts, the nodes planned and the step the run stopped at),
+`steps_detail` (what `steps` counts, the steps planned and where the run stopped),
 `failure` (`stopped at orders · KeyError: 'region'`, or for a partitioned node
 `demand_forecast: 7 keys failed · BatchKeyFailed: ...`; `null` with nothing wrong to say) and
 `failure_detail` (the same in full).
@@ -409,7 +410,7 @@ barca history --search daily_report --since 7d
 ### Runs in progress and the last day's activity
 
 When `--status` names `running`, each listed run that is in progress also says what it is
-working on now (experimental): a `now: executing 3: orders, clean, report · 12 queued ·
+working on now (experimental): a `now: executing 3: orders, clean, report · 12 waiting ·
 240/900 keys` line under its row, and in JSON `now`, the object the web UI's run panel shows:
 `running` (the nodes executing, the one furthest from done first, each with `keys` such as
 `3,120 of 5,000 keys` and its `share` done), `queued` (how many nodes wait), `keys` (`{done,
@@ -423,18 +424,11 @@ barca history --status running --json --fields run_id,now
 
 Where `now` comes from, and what it cannot say:
 
-- Against a server ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)), a run the server started is followed through
-  its step events: a node is executing once its function printed a line or its upstream steps
-  finished, and queued before that. A step served from the cache sends no event until the run
-  ends, so a node whose result is cached and that the run has not touched counts as done: it
-  is not listed as executing, and what depends on it does not wait for it. A run asked to
-  refresh (`--refresh`, `--refresh-all`) computes cached nodes again, so there they count as
-  any other. The cache state is read as the request is answered: a node that stops being
-  cached while the run goes (an input of it changed) shows from the next poll.
-- Without a server, and for a `barca get` or `barca run` in a shell beside a server, the run
-  streams its steps to nobody. barca reads what it recorded: every node of its job that has
-  no result since the run started counts as executing, and `queued` is always 0. A run of
-  named targets counts those targets only, not the upstream nodes it also runs.
+- A server reads its workers' current steps. A node counts once while a worker executes
+  one or more of its keys. Nodes waiting for a run slot are `queued`; nodes waiting within
+  an admitted run are `waiting`. Both retain their own state in graph and table cells.
+- A separate CLI process records run and materialization data without publishing its worker
+  assignments. Its unfinished targets appear in the waiting count.
 - A run has no `now` when its owner cannot be seen alive from this machine (another host's
   run), when it was started by a barca older than 0.26 (no recorded job), or when its files no
   longer parse.

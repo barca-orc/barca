@@ -94,12 +94,10 @@ barca history 836fdca186c8 --json   # {run, steps: [...], hint?}
 ## Runs in progress and the last day's activity
 
 With `--status running`, each listed run that is in progress says what it is working on now
-(experimental): a `now: executing 3: orders, clean, report · 12 queued · 240/900 keys` line
+(experimental): a `now: executing 3: orders, clean, report · 12 waiting · 240/900 keys` line
 under its row, and in JSON `now` (`running`, `queued`, `keys`, `groups`, `line`), the object
-the web UI's run panel shows. Against a server, a run the server started is followed through
-its step events. Without one, a run streams its steps to nobody: every node of its job with
-no result since the run started counts as executing and `queued` is 0, and a run whose owner
-cannot be seen alive from this machine has no `now`.
+the web UI's run panel shows. The server counts the nodes its workers are executing. A separate CLI
+process publishes no worker assignments, so its unfinished targets appear in the waiting count.
 
 `barca history --activity` prints, instead of the runs, how many started in each of the last
 24 hours (experimental), by status and by what started them, with each hour's median time and

@@ -71,7 +71,7 @@ export function causeCounts(part: Partial<CauseCounts> = {}): CauseCounts {
 /** What a root holds under an entry, as `held_by` states it: `cumulative_nodes` is stated, not added up. */
 export function heldBy(root: string, nodes: number, cumulative: number, over: Partial<HeldBy> = {}): HeldBy {
   const causes = over.causes ?? NO_CAUSES
-  return { root, nodes, assets: nodes, causes, gap_seconds: 0, unbounded: 0, weight: weightOf({ ...weightsOf(0, causes), fresh: 0 }), cumulative_nodes: cumulative, ...over }
+  return { action_kind: 'wait', fresh_by: null, stale_since: null, root, nodes, assets: nodes, causes, gap_seconds: 0, unbounded: 0, weight: weightOf({ ...weightsOf(0, causes), fresh: 0 }), cumulative_nodes: cumulative, ...over }
 }
 
 export function counts(part: Partial<HealthCounts> = {}): HealthCounts {
@@ -86,7 +86,7 @@ export function nodeEntry(id: string, parent: string, health: Health, over: Part
   return weighed({
     id, kind: 'node', label: id.slice(id.lastIndexOf(':') + 1), parent, children: [], nodes: 1, assets: task ? 0 : 1, running: 0,
     health: one, asset_health: task ? counts() : one, data_coverage: { assets: task ? 0 : 1, measured: 0, suspect: 0 },
-    causes: why, asset_causes: task ? NO_CAUSES : why, not_fresh: cause ? 1 : 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...rest,
+    causes: why, asset_causes: task ? NO_CAUSES : why, not_fresh: cause ? 1 : 0, split: { need_someone: 0, catching_up: 0, run_by_hand: 0, need_someone_nodes: 0, in_hand_nodes: 0, need_someone_weight: 0, in_hand_weight: 0 }, stale_since: null, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...rest,
   })
 }
 
@@ -104,7 +104,7 @@ export function scopeEntry(
   return weighed({
     id, kind, label: kind === 'root' ? 'all' : id.slice(id.indexOf(':') + 1), parent, children, nodes, assets: nodes, running: 0,
     health: h, asset_health: h, data_coverage: { assets: nodes, measured: 0, suspect: 0 },
-    causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...over,
+    causes: NO_CAUSES, asset_causes: NO_CAUSES, not_fresh: 0, split: { need_someone: 0, catching_up: 0, run_by_hand: 0, need_someone_nodes: 0, in_hand_nodes: 0, need_someone_weight: 0, in_hand_weight: 0 }, stale_since: null, held_by: [], gap_seconds: 0, unbounded: 0, fresh_by: null, also_in: [], ...over,
   })
 }
 
@@ -114,14 +114,14 @@ export function rollup(entries: RollupEntry[], roots: RollupRoot[] = [], files: 
 
 export function failureRoot(node: string, detail: string, nodes = 1, assets = nodes): RollupRoot {
   return {
-    id: `failure:${node}`, kind: 'failure', node, detail, error_group: detail.replace(/\d[\d,._]*\d|\d/g, '#'), nodes, assets,
+    needs_someone: true, stale_since: null, fresh_by: null, id: `failure:${node}`, kind: 'failure', node, detail, error_group: detail.replace(/\d[\d,._]*\d|\d/g, '#'), nodes, assets,
     causes: { ...NO_CAUSES, failing: nodes }, gap_seconds: 0, unbounded: nodes, weight: nodes * WEIGHTS.failing,
-    action: { kind: 'fix_failure', command: `barca get ${node.slice(node.lastIndexOf(':') + 1)} --server`, estimated_seconds: null },
+    action: { kind: 'fix_failure', command: `barca get ${node.slice(node.lastIndexOf(':') + 1)} --server`, run_once: null, estimated_seconds: null },
   }
 }
 
 /** A root that is not a failure, as the server words it. */
 export function heldRoot(over: Pick<RollupRoot, 'kind' | 'node' | 'detail' | 'nodes' | 'action'> & Partial<RollupRoot>): RollupRoot {
   const causes = over.causes ?? NO_CAUSES
-  return { id: `${over.kind}:${over.node}`, error_group: null, assets: over.nodes, causes, gap_seconds: 0, unbounded: 0, weight: weightOf({ ...weightsOf(0, causes), fresh: 0 }), ...over }
+  return { needs_someone: over.action.kind !== 'wait' && over.action.kind !== 'run_by_hand', fresh_by: null, stale_since: null, id: `${over.kind}:${over.node}`, error_group: null, assets: over.nodes, causes, gap_seconds: 0, unbounded: 0, weight: weightOf({ ...weightsOf(0, causes), fresh: 0 }), ...over }
 }

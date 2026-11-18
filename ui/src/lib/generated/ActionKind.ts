@@ -3,4 +3,4 @@
 /**
  * What clears a root.
  */
-export type ActionKind = "wait" | "run" | "add_schedule" | "resume_schedule" | "start_server" | "fix_failure" | "raise_max_runs";
+export type ActionKind = "wait" | "run" | "run_by_hand" | "add_schedule" | "resume_schedule" | "start_server" | "fix_failure" | "raise_max_runs";

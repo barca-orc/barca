@@ -168,8 +168,8 @@ pub async fn activity_at(
 /// ([`crate::run_list::RunNow`]): `now` of `barca history --status running` without a server.
 ///
 /// A run in another process streams its steps to nobody, so this reads what it recorded: the
-/// nodes of its job that have no result since it started count as executing
-/// ([`crate::run_list::unfollowed_run_now`]), and none as queued. A run whose owner cannot be
+/// unfinished nodes of its job appear in the waiting count
+/// ([`crate::run_list::unfollowed_run_now`]). A run whose owner cannot be
 /// seen alive from here, one that recorded no job, and one whose files no longer parse have
 /// no entry.
 pub async fn history_now(
@@ -216,6 +216,10 @@ pub struct RunDetail {
     /// How many steps the run recorded, and whether `steps` lists fewer.
     #[serde(default)]
     pub steps_page: db::StepsPage,
+    /// What the run's targets returned ([`crate::run_explanation::run_outputs`]): computed
+    /// where the run is recorded, so a client prints the server's rows.
+    #[serde(default)]
+    pub outputs: Vec<crate::run_explanation::RunOutput>,
 }
 
 /// [`RunDetail`] of `run_id` in this environment; a usage error when it is not recorded.
@@ -232,10 +236,20 @@ pub async fn run_detail(
         )));
     };
     let (steps, steps_page) = db::get_run_steps_page(&cfg.db_path, run_id, limit).await?;
+    let outcome = db::get_run_outcome(&cfg.db_path, run_id)
+        .await?
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let outputs = crate::run_explanation::run_outputs(
+        &run.status,
+        outcome.as_ref(),
+        &crate::run_explanation::output_targets(run.target.as_deref(), run.job.as_deref()),
+        &steps,
+    );
     Ok(RunDetail {
         run,
         steps,
         steps_page,
+        outputs,
     })
 }
 

@@ -215,6 +215,8 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
                 >
                   <StatusBadge glyph="paused" label="paused" size="sm" />
                 </span>
+              ) : r.standing === "held" || r.standing === "overrunning" ? (
+                <span title={r.detail ?? undefined}>{r.standing === "held" ? r.detail ?? r.standing : r.standing}</span>
               ) : r.late ? (
                 <span title="No tick has fired for a slot that passed longer ago than its grace and its typical queue wait">
                   <StatusBadge glyph="stale" label="late" size="sm" />
@@ -230,7 +232,7 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
             </td>
             {canPause && (
               <td className="barca-row-action">
-                <Button
+                {r.standing !== "held" && <Button
                   size="sm"
                   variant="ghost"
                   loading={toggle.busyId === r.id}
@@ -242,7 +244,7 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
                   onKeyDown={(e) => e.stopPropagation()}
                 >
                   {r.paused ? "Resume" : "Pause"}
-                </Button>
+                </Button>}
               </td>
             )}
           </tr>

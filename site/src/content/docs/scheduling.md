@@ -365,8 +365,10 @@ block of `GET /state` and of `barca status --json`, and the web UI all show that
   `last_run_id` is that run and `last_status` its status (`pending` while it waits in the run
   queue). The node's own last result is not the schedule's last run: a tick that found the node
   up to date ran and wrote nothing.
-- `late_since` is the first slot after `last_fired` that has passed: no tick fired for it (it
-  was skipped behind a run in flight, or the server was down).
+- `late_since` is the first elapsed slot after the newest scheduler decision. Skipping a
+  slot while a run is in flight counts as a decision. Three such skips in the newest
+  twenty decisions give an otherwise on-time schedule the state `overrunning`.
+- A schedule held after `max_failures` reports `held`, with the reason in `state_detail`.
 - `late` is true when `late_since` is further back than the schedule's grace (60 seconds, or
   half the interval for a schedule more frequent than every two minutes) plus its queue wait:
   the median wait of its newest 20 runs or, when longer, the wait of its newest tick's run. A

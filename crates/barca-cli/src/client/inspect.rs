@@ -297,10 +297,14 @@ pub(crate) async fn run_detail(
             ..Default::default()
         },
     };
+    // The server's own rows of what the targets returned (it has the run's outcome).
+    let outputs =
+        serde_json::from_value(body["explanation"]["outputs"].clone()).unwrap_or_default();
     let detail = barca_core::queries::RunDetail {
         run,
         steps,
         steps_page,
+        outputs,
     };
     crate::commands::emit(barca_core::report::render_run_detail(&detail, json, select));
     Ok(())
@@ -413,13 +417,18 @@ fn render_queue(body: &Value) -> String {
     if state.is_empty() {
         state.push("open".to_string());
     }
+    // The slots in the server's words (`slots`): it says when a requested run is in the
+    // extra slot. Older servers omit this field.
+    let slots = match body["slots"].as_str() {
+        Some(slots) => slots.to_string(),
+        None => body["max_runs"].as_u64().map_or_else(
+            || format!("{} running · run slots unknown", running.len()),
+            |max| barca_core::run_list::queue_slots_line(running.len(), max as usize),
+        ),
+    };
     let mut out = format!(
-        "queue: {} · {} of {} running · {} queued\n",
+        "queue: {} · {slots} · {} queued\n",
         state.join(", "),
-        running.len(),
-        body["max_runs"]
-            .as_u64()
-            .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
         queued.len()
     );
     if running.is_empty() && queued.is_empty() {
@@ -430,7 +439,11 @@ fn render_queue(body: &Value) -> String {
         "POS", "RUN_ID", "STATUS", "COMMAND", "TARGET", "TRIGGER", "QUEUED_AT", "START"
     ));
     for run in running.iter().chain(queued.iter()) {
-        let target = run["target"].as_str().unwrap_or("(all)");
+        // The targets in a few words (`target_line`); `--json` has the full list.
+        let target = match run["target_line"].as_str() {
+            Some(line) => line.to_string(),
+            None => barca_core::run_list::target_line(run["target"].as_str()),
+        };
         // When it started, or (`~`) when the server estimates it will.
         let start = match (
             run["started_at"].as_str(),

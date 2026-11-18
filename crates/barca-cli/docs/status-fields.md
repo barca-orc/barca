@@ -73,6 +73,7 @@ the web UI shows it. The words, most severe first:
 | `unknown` | `undecided` | `cache.state` is `unknown` |
 | `never_run` | `never_run` | `cache.state` is `never_run` |
 | `no_successful_run` | `never_run` | a task, sensor or `always` asset with no recorded run |
+| `on_demand` | `ok` | an explicitly Manual task has no run due before its first request |
 | `last_run_succeeded` | `ok` | a task, sensor or `always` asset whose last run did not fail |
 | `cached` | `ok` | `cache.state` is `cached` |
 
@@ -260,6 +261,8 @@ of `children`.
 | `not_fresh` | nodes underneath that are not fresh: what `causes` counts, as one number |
 | `weight` | the entry's distance from fresh, in weighted nodes: every node underneath counts 1, and one that is not fresh counts its cause's weight instead: 6 for `failing`, `overdue` and `no_refresh_path` (someone has to act), 2 for `queued`, `catching_up` and `undecided` (it will be fresh without anyone acting, or barca cannot say). A fully fresh scope weighs its `nodes`. The web UI's health map sizes a segment by it |
 | `weights` | `weight` by what the nodes are: one number per cause (its nodes times its weight) and `fresh` (the fresh nodes, 1 each). They add up to `weight` |
+| `split` | counts of actionable, waiting and hand-run roots (`need_someone`, `catching_up`, `run_by_hand`); node counts and weights for actionable and in-hand roots. Groups sort by actionable weight then in-hand weight. |
+| `stale_since` | oldest recorded stale time underneath |
 | `held_by` | the roots that hold those nodes, each with what it holds underneath this entry: `root` (an id of `roots`), `nodes`, `assets`, `causes`, `gap_seconds`, `unbounded`, `weight` (the weight of those nodes), and `cumulative_nodes` (the nodes held by this root and the ones listed before it). In the order of `roots`, applied to what is held here; their `nodes` add up to `not_fresh`. Empty on a node entry, whose root is on its row |
 | `gap_seconds` | the freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds` ("Root") |
 | `unbounded` | nodes underneath that are not fresh and have no `expected_fresh_at` ("Times"): nothing known will leave them fresh, so the gap has no forward term for them |
@@ -287,14 +290,14 @@ Tasks and Sensors pages) reads its filter counts there instead of counting rows.
 `roots` is the to-do list: what holds the nodes that are not fresh, and what clears each.
 There is one entry per `root` the nodes carry ("Root"), and every node that is not fresh is
 under exactly one, so the roots' `nodes` add up to the nodes that are not fresh.
-A stopped scheduler ranks first. The remaining roots are ranked by `weight`, the most first: a root that holds 152 nodes nothing will
+A stopped scheduler ranks first. Among the remaining roots, those whose actions need someone lead. Within each part the list is ranked by `weight`, the most first: a root that holds 152 nodes nothing will
 refresh (6 each) comes before one that holds 180 the next tick computes (2 each). Among roots
 of the same weight a failure comes first, then the most `nodes`, the largest `gap_seconds`,
 and the id.
 A root's numbers are over every node in scope; what it holds under one group or file is that
 entry's `held_by`, which is the same list cut to the entry, so a group's to-do list is its own
 entry's. `cumulative_nodes` against `not_fresh` says how much the head of a list explains:
-`barca status --rollup` prints "The first 3 hold 392 of them." under the list's heading when
+`barca status --rollup` prints "The first 3 hold 338 of them." under the list's heading when
 there are more than three roots.
 
 | Key of a root | Meaning |
@@ -307,12 +310,15 @@ there are more than three roots.
 | `gap_seconds` | the sum of their `gap_seconds` |
 | `unbounded` | how many of them have no `expected_fresh_at` |
 | `weight` | the weight of the nodes it holds (each counts its cause's weight, as on an entry): what the list is ranked by |
-| `action` | what clears it: `{"kind", "command", "estimated_seconds"}` |
+| `needs_someone` | whether someone needs to act |
+| `stale_since`, `fresh_by` | oldest stale time and latest known estimate among held nodes |
+| `action` | kind, command, estimated_seconds and run_once (a one-time command for an unscheduled chain) |
 
 | `action.kind` | Printed as | For | `command` |
 |---|---|---|---|
 | `wait` | wait | a change the next tick or a run in flight computes; an undecided chain; a tick waiting for a slot on a schedule that is not queue-bound | `null` |
-| `run` | run | a change whose nodes ticks already missed (`overdue`): `barca get` of the held nodes nothing else held reads (`barca run` when they are all tasks), which computes everything above them. A `Manual` root: the same with `--refresh <node>`, since a run reads a `Manual` node as it is unless it is named there. A pinned root: `barca unpin <node>` | the command |
+| `run` | run | a change whose nodes ticks already missed (`overdue`): `barca get` of the held nodes nothing else held reads (`barca run` when they are all tasks), which computes everything above them. A pinned root: `barca unpin <node>` | the command |
+| `run_by_hand` | run by hand | a Manual node or unscheduled task, when its result is wanted | the command |
 | `add_schedule` | add a schedule | a chain no tick reaches: give its top, or a node above it, `freshness=Schedule(...)` | `null` |
 | `resume_schedule` | resume | a paused node: `barca resume <node> --server`. A paused schedule: `barca resume --schedule <node> --server` (`barca docs scheduling`, "Pausing one schedule") | the command |
 | `start_server` | start a server | a schedule no scheduler fires | `barca serve` |
@@ -327,24 +333,22 @@ node's recent successful runs, once per key without a result for a partitioned n
 project's median for a node with none), in whole seconds, and `null` when none of them has a
 sample. It is work, not wall-clock time: steps of one run share the worker pool.
 
-Roots that hold nodes with no estimate come first, the one holding the most nodes first: their
-gap grows until someone acts. Then the rest by `gap_seconds`, then `nodes`, then `id`.
 `data_coverage` at the top is the root entry's.
 
 `barca status --rollup` prints the list under the tree:
 
 ```text
-Gap: 152 no refresh path · 6 queued · 247 undecided · 17 catching up (nodes); about 23 fresh within 4m, 399 with no estimate
-
-What holds the 422 nodes that are not fresh, and what clears it:
-1. sensor value: inbox
-     holds 180 nodes (180 assets): 170 undecided · 10 catching up; 3h of gap; 170 with no estimate
-     why:  inbox observed a new value
-     do:   wait (about 9m of compute)
-2. no schedule: ledger
-     holds 152 nodes (152 assets): 152 no refresh path; 152 with no estimate
-     why:  no tick reaches ledger
-     do:   add a schedule: freshness=Schedule(...) on it or on a node above it (about 7m of compute)
+What holds the 4 nodes that are not fresh, and what clears it:
+1 needs you · 1 is catching up
+1. no schedule: source
+     holds 1 node (1 asset): 1 no refresh path; 1 with no estimate; weight 6
+     why:  no tick reaches source
+     do:   add a schedule: freshness=Schedule(...) on it or on a node above it
+     run once: barca get source
+2. sensor value: changes
+     holds 3 nodes (3 assets): 3 catching up; 15m of gap across nodes (node-time); weight 6
+     why:  changes observed a new value
+     do:   wait
 ```
 
 ```bash
