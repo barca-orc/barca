@@ -439,10 +439,18 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
             "{surface}: {entry} {row} {block}"
         );
     }
-    // `GET /state` carries the block `GET /nodes` does, field for field.
-    assert_eq!(row["schedule"], block, "{row}");
+    // Each request predicts the next tick from its own clock. The cron fires every
+    // second, so two requests can straddle a tick even after the scheduler stops.
+    let stable_fields = |mut schedule: Value| {
+        schedule.as_object_mut().unwrap().remove("next_fire");
+        schedule
+    };
+    assert_eq!(
+        stable_fields(row["schedule"].clone()),
+        stable_fields(block.clone())
+    );
     assert_eq!(block["live"], true, "{block}");
-    assert_eq!(row["next_run"], entry["next_fire"], "{row} {entry}");
+    assert_eq!(rfc(&row["next_run"]), row["schedule"]["next_fire"], "{row}");
 
     for id in [run["id"].as_str().unwrap(), blocker.as_str()] {
         let (status, body) = send(&app, "DELETE", &format!("/runs/{id}"), None).await;
