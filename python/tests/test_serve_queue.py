@@ -162,10 +162,14 @@ def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_ord
     queued = [server.submit(t) for t in ("one", "two", "three")]
     assert [q["status"] for q in queued] == ["pending"] * 3, queued
     assert [q["position"] for q in queued] == [1, 2, 3], queued
+    # Queued behind a run, not a restart: nothing else holds them (#1011).
+    assert [q["waiting_for"] for q in queued] == [None] * 3, queued
     ids = [q["run_id"] for q in queued]
     queue = server.request("GET", "/queue")[1]
     assert [r["run_id"] for r in queue["running"]] == [long], queue
     assert [r["run_id"] for r in queue["queued"]] == ids, queue
+    assert [r["waiting_for"] for r in queue["running"] + queue["queued"]] == [None] * 4, queue
+    assert server.run(ids[0])["waiting_for"] is None
     assert queue["max_runs"] == 1, queue
 
     # Clients following a queued run: `barca logs -f` and the GET /runs/{id} poll.
@@ -203,17 +207,32 @@ def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart
     server.send(signal.SIGTERM)
     wait_until(lambda: draining(server), "draining")
 
-    # Accepted and recorded (202, pending), not refused with 503; the older route too.
+    # Accepted and recorded (202, pending), not refused with 503; the older route too. The
+    # answer says the run waits for the next server, not for the runs ahead of it (#1011).
     accepted = server.submit("one")
     assert accepted["status"] == "pending", accepted
+    assert accepted["position"] == 1, accepted
+    assert accepted["waiting_for"] == "restart", accepted
     status, alias = server.request("POST", "/run/two")
     assert status == 200 and alias["run_id"], alias
     queue = server.request("GET", "/queue")[1]
     assert queue["draining"] is True, queue
     assert [r["run_id"] for r in queue["queued"]] == [accepted["run_id"], alias["run_id"]]
-    # A `--server` client submits and rides through the restart.
+    assert [r["waiting_for"] for r in queue["queued"]] == ["restart"] * 2, queue
+    assert [r["waiting_for"] for r in queue["running"]] == [None], "the run in flight finishes"
+    view = server.run(accepted["run_id"])
+    assert (view["status"], view["waiting_for"]) == ("pending", "restart"), view
+    # A `--server` client submits, says it waits for a restart, and rides through it.
     rider = client(project, "run", "three", "--server", server.url, "--json")
     wait_until(lambda: len(server.request("GET", "/queue")[1]["queued"]) == 3, "the third run")
+    third = server.request("GET", "/queue")[1]["queued"][2]
+    wait_until(
+        lambda: "is queued behind a restart" in client_output(project, rider)[1], "the rider's line"
+    )
+    assert (
+        f"[barca] run {third['run_id']} is queued behind a restart (position 3): the server at "
+        f"{server.url} is draining and starts no run; it starts when the next server is up"
+    ) in client_output(project, rider)[1]
 
     (project / "release-long").write_text("")
     assert server.exited() == 0, server.stderr
@@ -222,7 +241,8 @@ def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart
     restarted = serve("--no-schedule", "--max-runs", "1")
     assert "[barca] resuming 3 queued runs" in restarted.stderr
     for run_id in (accepted["run_id"], alias["run_id"]):
-        assert restarted.finished(run_id)["status"] == "success"
+        finished = restarted.finished(run_id)
+        assert (finished["status"], finished["waiting_for"]) == ("success", None), finished
     assert rider.wait(timeout=RUN) == 0
     out, err = client_output(project, rider)
     assert json.loads(out)["status"] == "success", (out, err)

@@ -40,7 +40,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::coordinator::{Coordinator, FailureAction, GroupId, ItemId, ItemSpec};
 use crate::cost::CostModel;
-use crate::protocol::{CoordinatorMessage, ParallelResult, WorkerMessage, read_frame, write_frame};
+use crate::protocol::{
+    CoordinatorMessage, FrameReader, ParallelResult, WorkerMessage, write_frame,
+};
 use barca_model::events::RunEvent;
 
 mod leases;
@@ -245,9 +247,12 @@ async fn worker_io_task(
     event_tx: mpsc::Sender<IoEvent>,
 ) {
     let mut journal: Option<crate::result_journal::ResultJournal> = None;
+    // The read races commands to send: a FrameReader keeps a partly received frame when a
+    // command wins (#1001).
+    let mut frames = FrameReader::new();
     loop {
         tokio::select! {
-            result = read_frame::<_, serde_json::Value>(&mut stream) => {
+            result = frames.next::<_, serde_json::Value>(&mut stream) => {
                 // File receipts can be ahead of socket consumption. Only publish a
                 // counted prefix after its earlier stdout frames were consumed. Submit
                 // blocks the producer, and EOF follows all complete socket frames.

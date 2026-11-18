@@ -3,7 +3,7 @@
 
 Each case changes one thing a real run can tell apart and checks the reason the run recorded
 for it: never run, a changed helper and the input it changed downstream, new partition keys,
-the retry of a failed step, `--refresh-all`, and a run served from cache recording none.
+the retry of a failed step and of one whose newest attempt had other code, `--refresh-all`, and a run served from cache recording none.
 """
 
 import json
@@ -125,6 +125,22 @@ def test_a_failed_step_retried_unchanged_is_failed(tmp_path):
     assert proc.returncode == 1
     proc, again = run(tmp_path)
     assert proc.returncode == 1
+    assert reasons(again) == {("failed", None): (1, 1)}
+
+
+def test_the_newest_attempt_decides_not_an_older_failure_at_this_hash(tmp_path):
+    # k2 fails under the first code, then under the second; back on the first, its newest
+    # attempt was under another run hash, so it is not a retry of that failure. It never
+    # succeeded while other keys did: a new key (#1009 reads only each step's newest rows).
+    write(tmp_path, fail=2)
+    run(tmp_path)
+    write(tmp_path, step=2, fail=2)
+    run(tmp_path)
+    write(tmp_path, fail=2)
+    proc, back = run(tmp_path)
+    assert proc.returncode == 1
+    assert reasons(back) == {("new_keys", None): (1, 1)}
+    proc, again = run(tmp_path)
     assert reasons(again) == {("failed", None): (1, 1)}
 
 

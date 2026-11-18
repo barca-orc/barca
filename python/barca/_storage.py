@@ -183,6 +183,74 @@ def get_fs(path: "str | Path") -> Any:
         return fs
 
 
+# ─── How a file is uploaded (#1007) ───────────────────────────────────────────
+#
+# Left to s3fs, an S3 upload under about 105 MB goes as one request on one connection, so a
+# mid-size file uploads at one connection's speed while a larger one goes in parallel parts.
+# Barca sizes the parts itself. The values come from a sweep of 1 to 400 MiB against MinIO and
+# Azurite behind a per-connection throttle (#1007).
+#
+# S3: s3fs puts a file smaller than twice the part size as one PutObject (so a file under
+# 10 MiB is still one request), and a larger one as a multipart upload, S3_CONCURRENCY parts
+# per round, waiting for each round. Parts are sized to make a file about one round, between
+# S3's 5 MiB minimum and s3fs's own 50 MiB (a 16 MiB cap measured slower at 400 MiB). From
+# 500 MiB that is exactly what s3fs did before.
+MIB = 1 << 20
+S3_PART_MIN = 5 * MIB
+S3_PART_MAX = 50 * MIB
+S3_CONCURRENCY = 10  # s3fs's default
+# S3 allows 10,000 parts; a file too big for that many S3_PART_MAX parts gets larger parts.
+S3_MAX_PARTS = 10_000
+# Azure: blocks of one file in flight at once. adlfs passes fsspec's batch size for one file
+# (the open-file limit / 8, tens of thousands), so the SDK read every block of a large file
+# into memory at once, and 1 for each file of a multi-file put (a sink). 64 measured as fast as
+# the former up to 400 MiB, and holds at most 256 MiB of 4 MiB blocks; 32 was slower.
+# Which files go in blocks is left to the SDK (over 64 MiB): 4 MiB measured faster behind the
+# throttle and slower against Azurite unthrottled, so it waits for a run against real Azure.
+#
+# GCS is left as gcsfs does it: its resumable upload sends one chunk after another, and gcsfs
+# offers no parallel upload.
+AZURE_CONCURRENCY = 64
+# The size above which azure-storage-blob uploads in blocks (its default, which barca keeps).
+AZURE_SINGLE_PUT_MAX = 64 * MIB
+
+
+def upload_options(dest: str, size: int = 0, blocked_files: int = 1) -> dict[str, Any]:
+    """Keyword arguments for ``fs.put_file`` / ``fs.put`` to `dest`: how many blocks at once
+    and, for S3, the part size. `size` is the largest file being uploaded (S3 parts must be
+    large enough that it fits in 10,000).
+
+    A multi-file put (a sink) sends its files at the same time: to Azure, the
+    `blocked_files` that go in blocks share AZURE_CONCURRENCY between them, so the whole put
+    holds no more blocks in memory than one file would.
+
+    A ``max_concurrency`` given in BARCA_STORAGE_OPTIONS is used in place of barca's (for a
+    sink's files too, which adlfs would otherwise send one block at a time).
+    """
+    scheme = _scheme(dest)
+    protocol = _SCHEMES.get(scheme or "", ("", "", None))[0]
+    if protocol not in ("abfs", "s3"):
+        return {}
+    default = AZURE_CONCURRENCY if protocol == "abfs" else S3_CONCURRENCY
+    concurrency = storage_options(protocol).get("max_concurrency") or default
+    if protocol == "abfs":
+        concurrency = max(1, concurrency // max(1, blocked_files))
+    options: dict[str, Any] = {"max_concurrency": concurrency}
+    if protocol == "s3":
+        options["chunksize"] = s3_part_size(size, concurrency)
+    return options
+
+
+def s3_part_size(size: int, concurrency: int = S3_CONCURRENCY) -> int:
+    """The multipart part size for an S3 upload of `size` bytes, a whole number of MiB."""
+
+    def mib_up(n: int) -> int:
+        return -(-n // MIB) * MIB
+
+    part = min(max(S3_PART_MIN, mib_up(-(-size // max(1, int(concurrency))))), S3_PART_MAX)
+    return max(part, mib_up(-(-size // S3_MAX_PARTS)))
+
+
 # ─── Putting a file in place ──────────────────────────────────────────────────
 
 # Temp files that are being written now. Reentrant: `discard_staged` runs in a signal
@@ -402,7 +470,7 @@ def put_file(local_path: "str | Path", dest: str) -> None:
         except Exception:
             # Object stores have no real directories; makedirs is best-effort.
             pass
-    fs.put_file(str(local_path), dest)
+    fs.put_file(str(local_path), dest, **upload_options(dest, os.path.getsize(local_path)))
 
 
 def get_file(src: str, local_path: "str | Path") -> None:

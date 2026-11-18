@@ -774,6 +774,7 @@ impl Incremental {
                     digest: None,
                     cpu_seconds: None,
                     max_rss_bytes: None,
+                    sink_seconds: None,
                     error_type: None,
                     error_message: None,
                     error_traceback: None,

@@ -21,7 +21,7 @@ return the corresponding headers without a body.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/runs` | Start a run of `barca get` or `barca run` on the server. Body: [`RunRequest`](/reference/server-api/#starting-a-run). `202 {"run_id", "status", "position"}` (the run joins the [run queue](#the-run-queue): `running` when it started at once, or `pending` and its place, 1 = next), or `200` with the `--dry-run` JSON when `dry_run` is set. |
+| `POST` | `/runs` | Start a run of `barca get` or `barca run` on the server. Body: [`RunRequest`](/reference/server-api/#starting-a-run). `202 {"run_id", "status", "position", "waiting_for"}` (the run joins the [run queue](#the-run-queue): `running` when it started at once, or `pending` and its place, 1 = next; `waiting_for` is `"restart"` while the server [drains](#stopping-the-drain), else `null`), or `200` with the `--dry-run` JSON when `dry_run` is set. |
 | `GET`  | `/runs/{run_id}` | The run: what started it, its status and, once finished, its [outcome](/reference/server-api/#outcomes), with its steps and captured lines. Survives a restart. At most 1000 steps (`?limit=N`, `?offset=M`, `?all=true`; failed steps first), with `steps_page: {total, truncated, next_offset?}`; why it executed what it did (`plan_reasons`), who asked and why (`principal`, `trigger_reason`), `retries`, and for a cancelled run `cancellation`. |
 | `GET`  | `/runs/{run_id}/events` | Server-sent events, each with an `id:`: `run_started`, `line`, `log`, `step_finished`, `run_finished`. |
 | `DELETE` | `/runs/{run_id}` | Cancel a pending or running run; the run records who cancelled it and whether it had started (`cancellation`). |
@@ -80,7 +80,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/pauses` | The paused assets (`barca pause`) and the paused schedules: `{total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}`. Scheduled ticks skip them (step reason `paused`) until resumed. Experimental. |
 | `POST` | `/pauses` | Pause `{"target", "downstream"}`: a node, a node and everything below it, or a `file.py`. Answers `added` and every pause; `403` read-only. A `POST /runs` naming a paused node is `400` unless it sends `"allow_paused": true`. |
 | `POST` | `/pauses/resume` | Resume `{"target", "downstream"}` or `{"all": true}`. Answers `removed` and every pause; `403` read-only. |
-| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at, started_at, estimated_start_at, wait_seconds}` (`estimated_start_at`: when a run slot is expected to free for a waiting run, an estimate); `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
+| `GET`  | `/queue` | The [run queue](#the-run-queue): `{paused, paused_at, draining, max_runs, running: [...], queued: [...], capacity}`, each run `{run_id, status, position, command, target, triggered_by, schedule_id, queued_at, started_at, estimated_start_at, wait_seconds, waiting_for}` (`estimated_start_at`: when a run slot is expected to free for a waiting run, an estimate; `waiting_for`: `"restart"` for a queued run while the server drains, else `null`; experimental); `capacity` is `{total, source, in_use, runs: [{run_id, weight}], waiting: [{run_id, node, weight, waiting_seconds}]}` with `--capacity`, else `null`. |
 | `POST` | `/queue/pause` | Hold every queued run back until resumed; runs in flight go on. Kept across restarts. Answers the queue; `403` read-only. |
 | `POST` | `/queue/resume` | Let queued runs start again, in order. Answers the queue; `403` read-only. |
 | `GET`  | `/`, `/ui` | Redirect (relative `Location: ui/`) to the web UI. |
@@ -346,7 +346,11 @@ The first SIGTERM or SIGINT starts a drain. Until the server exits:
 
 - No queued run starts. `POST /runs` and the older `POST /run`, `POST /run/{target}` and
   `POST /get/{target}` still accept runs (`202`, `status: "pending"`): they wait in the queue
-  for the next server. `GET /queue` says `draining: true`.
+  for the next server. `GET /queue` says `draining: true`, and the `POST /runs` answer, each
+  queued entry of `GET /queue` and `GET /runs/{run_id}` say `waiting_for: "restart"`
+  (experimental). A run accepted now waits for the whole drain, up to the drain timeout, plus
+  the restart: a long drain timeout makes every request that arrives during a restart wait that
+  long. With no next server it stays queued in the metadata DB until a server starts on it.
 - `POST /state/reset` and `POST /ledger/runs` return `503` with the error envelope (`kind:
   infra`) and a `Retry-After` header: the drain timeout in seconds, at least 1.
 - `GET /health` returns `200` with `"status": "draining"`.

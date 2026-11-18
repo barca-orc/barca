@@ -7,7 +7,7 @@ import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useTimeZone } from '@/context/timeZone'
 import { ApiError } from '@/lib/api'
 import { runTime } from '@/lib/runs'
-import { capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queueState, queueStateLabel, queueSummary, sharedCapacityLabel, waitingRows } from '@/lib/queue'
+import { admissionLabel, capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queueState, queueStateLabel, queueSummary, sharedCapacityLabel, waitingRows } from '@/lib/queue'
 import type { QueueView } from '@/lib/types'
 
 /** Where the reader's choice to fold the queue's list is kept (this browser only). */
@@ -114,7 +114,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
             {capacityLabel(data.running.length, data.max_runs)}
           </span>
           <span className="barca-queue-count">{queuedLabel(data.queued.length)}</span>
-          {shared && <span className="barca-queue-count" title="The capacity every run of this server shares (--capacity)">{shared}</span>}
+          {shared && data.capacity && <span className="barca-queue-count" title={`The capacity every run of this server shares (--capacity): ${admissionLabel(data.capacity)}`}>{shared}</span>}
           {state && stateLabel && match(state)
             .with({ kind: 'open' }, () => null)
             .with({ kind: 'paused' }, () => <Tag tone="bare">{stateLabel}</Tag>)
@@ -143,12 +143,13 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
       {!collapsed && listed > 0 && <div className="barca-queue-list">
         {waiting.length > 0 && (
           <table className="barca-table barca-queue-table" aria-label="Steps waiting for capacity">
-            <thead><tr><th className="num">#</th><th>Waiting step</th><th>Run</th><th className="num">Weight</th><th>Waiting</th></tr></thead>
+            <thead><tr><th className="num">#</th><th>Waiting step</th><th>Run</th><th title="A requested run's step goes ahead of a scheduled run's">Origin</th><th className="num">Weight</th><th>Waiting</th></tr></thead>
             <tbody>{waiting.map(row => (
               <tr key={row.runId}>
                 <td className="num">{row.position}</td>
                 <td><code className="barca-run-target" title={row.node}>{row.node}</code></td>
                 <td><Link className="barca-run-link" to={row.href}>{row.runId}</Link></td>
+                <td>{row.origin}</td>
                 <td className="num">{row.weight}</td>
                 <td>{row.waited}</td>
               </tr>
@@ -162,7 +163,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
               <tr key={row.runId} data-state={row.state}>
                 <td>{row.state === 'running'
                   ? <StatusBadge size="sm" glyph="running" label="running" live />
-                  : <span className="barca-queue-place">{row.position}</span>}</td>
+                  : <span className="barca-queue-place">{row.position}{row.waitingFor && <span className="barca-cell-sub" title="The server is draining: this run starts on the next server, after the drain and the restart"> {row.waitingFor}</span>}</span>}</td>
                 <td><Link className="barca-run-link" to={row.href}>{row.runId}</Link> <span className="barca-cell-sub">{row.command}</span></td>
                 <td><code className="barca-run-target" title={row.target}>{row.target}</code></td>
                 <td>{row.trigger}{row.scheduleId && <span className="barca-cell-sub"> {row.scheduleId}</span>}</td>

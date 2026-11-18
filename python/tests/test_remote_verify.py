@@ -282,6 +282,88 @@ def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path, serve):
     assert run["result"]["warnings"] == []
 
 
+# How old a checked file must be before the check for barca serve to remember it
+# (`verified_copies::SETTLED` in barca-core), with a margin.
+SETTLED = 2.5
+
+
+def _checks(text: str) -> list[tuple[int, int]]:
+    """(unchanged since checked, hashed) per `ensure_local` trace line: hashed here, or sent
+    to the transfer helper to check."""
+    import re
+
+    return [
+        (int(m[1]), int(m[2]) + int(m[3]))
+        for m in re.finditer(
+            r"ensure_local: \d+ cached input\(s\), (\d+) unchanged since checked, (\d+) hashed "
+            r"here, (\d+) sent to the transfer helper to check",
+            text,
+        )
+    ]
+
+
+def test_barca_serve_hashes_an_unchanged_local_copy_once(tmp_path, serve):
+    """#1010: a server remembers the local copies it checked against their recorded digest, so
+    later runs reading the same cached input hash nothing; a copy changed since (another
+    size, or the same size with its mtime put back) is still checked and fetched again, and a
+    restarted server starts with nothing remembered."""
+    store = tmp_path / "store"
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "pipeline.py").write_text(PIPELINE)
+    env = clean_env(BARCA_REMOTE_URI=str(store), BARCA_TRACE_TIMING="1")
+    first = helpers.barca(root, "get", "total", "-o", "value", "--json", env=env)
+    assert first.returncode == 0, first.stderr
+    copy = _one(root, ".barca/artifacts/*numbers*/*.json")
+    assert copy.read_text() == "[1, 2, 3]"
+    time.sleep(SETTLED)  # A copy written just before a check is checked again next time.
+    server = serve("--no-schedule", root=root, env=env)
+
+    def run() -> tuple[int, int]:
+        """`total` is recomputed and reads the cached `numbers`: how its copy was checked."""
+        seen = len(server.stderr)
+        handle = server.request(
+            "POST",
+            "/runs",
+            {"command": "get", "targets": ["total"], "refresh": ["total"]},
+        )[1]["run_id"]
+        done = server.wait(
+            f"run {handle}",
+            lambda: (r := server.get(f"/status/{handle}"))["status"] not in ("pending", "running")
+            and r,
+        )
+        assert done["status"] == "complete", done
+        output = Path(done["result"]["final_output"]["path"])
+        assert json.loads(output.read_text()) == {"sum": 6}, done["result"]
+        assert copy.read_text() == "[1, 2, 3]"
+        (checked,) = _checks(server.stderr[seen:])
+        return checked
+
+    assert run() == (0, 1)
+    assert run() == (1, 0), "an unchanged copy is not hashed again"
+    assert run() == (1, 0)
+
+    copy.write_text("[9, 9, 9, 9]")  # another size
+    assert run() == (0, 1)  # checked, and the store's copy fetched over it
+    time.sleep(SETTLED)
+    assert run() == (0, 1)  # the copy just fetched is checked once more, then remembered
+    assert run() == (1, 0)
+
+    stat = copy.stat()
+    copy.write_text("[9, 9, 9]")  # the same size, with the old mtime put back
+    os.utime(copy, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert copy.stat().st_size == stat.st_size and copy.stat().st_mtime_ns == stat.st_mtime_ns
+    assert run() == (0, 1)
+    time.sleep(SETTLED)
+    assert run() == (0, 1)
+    assert run() == (1, 0)
+
+    server.stop()
+    server = serve("--no-schedule", root=root, env=env, port=server.port)
+    assert run() == (0, 1), "a restarted server remembers nothing"
+    assert run() == (1, 0)
+
+
 def test_a_dry_run_does_not_contact_the_store_and_reports_no_mismatch(shared):
     store, make = shared
     _one(store, "default/artifacts/*numbers*/*.json").write_text("[5, 5]")

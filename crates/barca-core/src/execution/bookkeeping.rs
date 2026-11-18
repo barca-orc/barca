@@ -20,6 +20,8 @@ pub(super) struct RunResults {
     pub(super) timings: HashMap<String, (Option<f64>, Option<u64>)>,
     /// Rows each executed step's tabular result holds, when its worker counted them.
     pub(super) rows: HashMap<String, u64>,
+    /// Seconds each executed step spent writing its sinks, outside its own duration (#1004).
+    pub(super) sink_seconds: HashMap<String, f64>,
     pub(super) observations: HashMap<String, serde_json::Value>,
     pub(super) clocks: HashMap<String, (f64, f64)>,
     pub(super) failures: Vec<StepFailure>,
@@ -138,6 +140,9 @@ impl RunResults {
         if let Some(rows) = artifact_val.get("rows").and_then(|v| v.as_u64()) {
             self.rows.insert(node_id.to_string(), rows);
         }
+        if let Some(seconds) = artifact_val.get("sink_seconds").and_then(|v| v.as_f64()) {
+            self.sink_seconds.insert(node_id.to_string(), seconds);
+        }
         if let (Some(finished), Some(wall)) = (
             artifact_val.get("finished_at").and_then(|v| v.as_f64()),
             artifact_val.get("wall_seconds").and_then(|v| v.as_f64()),
@@ -246,7 +251,15 @@ impl RunResults {
             let count = attempts_by_base.entry(base).or_default();
             *count = (*count).max(*attempts);
         }
+        let mut sinks_by_base: HashMap<String, f64> = HashMap::new();
+        for (node, seconds) in &self.sink_seconds {
+            let id = crate::StepId::parse(node);
+            if !id.partition.0.contains_key("_branch") {
+                *sinks_by_base.entry(id.base_id().to_string()).or_default() += seconds;
+            }
+        }
         for report in step_reports {
+            report.sink_seconds = sinks_by_base.get(&report.id).copied();
             if let Some(attempts) = attempts_by_base.get(&report.id) {
                 report.attempts = Some(*attempts);
             }
@@ -281,6 +294,7 @@ impl RunResults {
             all_attempts: &self.attempts,
             all_timings: &self.timings,
             all_rows: &self.rows,
+            all_sink_seconds: &self.sink_seconds,
             batches: &self.batches,
             cached_node_ids: run.cached_node_ids,
             run_hashes: run.decisions.run_hashes(),

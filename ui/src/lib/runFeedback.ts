@@ -49,7 +49,8 @@ export function runFeedback(
 export type RunNotice =
   | { kind: 'starting'; target: string | null }
   | { kind: 'rejected'; target: string | null; error: string }
-  | { kind: 'queued'; target: string | null; runId: string }
+  /** `restart`: the server is draining, and the run starts on the next server. */
+  | { kind: 'queued'; target: string | null; runId: string; restart: boolean }
   | { kind: 'running'; target: string | null; runId: string; done: number; total: number | null }
   | { kind: 'finished'; target: string | null; runId: string; status: StatusKind; summary: string }
 
@@ -93,9 +94,11 @@ export function runNotice({ target, pending, error, started, run }: RunNoticeInp
   if (!started) return null
   const { runId } = started
   const named = started.target
-  if (!run || run.run_id !== runId) return { kind: 'queued', target: named, runId }
+  if (!run || run.run_id !== runId) return { kind: 'queued', target: named, runId, restart: false }
   const status = parseRunStatus(run.status)
-  if (status === 'pending' || status === null) return { kind: 'queued', target: named, runId }
+  if (status === 'pending' || status === null) {
+    return { kind: 'queued', target: named, runId, restart: run.waiting_for === 'restart' }
+  }
   if (status === 'running') {
     return { kind: 'running', target: named, runId, done: run.steps_executed, total: run.steps_total }
   }

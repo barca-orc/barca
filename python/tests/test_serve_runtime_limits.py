@@ -294,6 +294,145 @@ def test_a_heavy_step_is_not_starved_by_light_ones(tmp_path):
         assert order(project) == ["light", "heavy", "light_two"]
 
 
+# ─── #1003: requested runs first in the shared capacity's line ───────────────
+
+# A schedule's tick runs s1 (held until released), then s2..s4; a request runs r1..r3. Every
+# step but s1 is instant and appends its name to `order` as it ends.
+ADMISSION = """
+def done(name):
+    with open("order", "a") as f:
+        f.write(name + "\\n")
+
+@asset(weight=WEIGHT_S)
+def s1() -> int:
+    hold("s1")
+    return 1
+
+@asset(inputs={"s1": s1})
+def s2(s1: int) -> int:
+    done("s2")
+    return s1 + 1
+
+@asset(inputs={"s2": s2})
+def s3(s2: int) -> int:
+    done("s3")
+    return s2 + 1
+
+@asset(inputs={"s3": s3})
+def s4(s3: int) -> int:
+    done("s4")
+    return s3 + 1
+
+@task(inputs={"s4": s4}, freshness=Schedule("* * * * * *"))
+def tick(s4: int) -> None:
+    assert s4 == 4
+
+@asset(weight=WEIGHT_R)
+def r1() -> int:
+    done("r1")
+    return 1
+
+@asset(weight=WEIGHT_R, inputs={"r1": r1})
+def r2(r1: int) -> int:
+    done("r2")
+    return r1 + 1
+
+@asset(weight=WEIGHT_R, inputs={"r2": r2})
+def r3(r2: int) -> int:
+    done("r3")
+    return r2 + 1
+"""
+
+
+def overlap(
+    project: Path, capacity: int, *, weight_s: int = 1, weight_r: int = 1, toml: str = ""
+) -> list[str]:
+    """A request for r3 made while the first tick's s1 holds the capacity; the order the steps
+    ended in, once both runs succeeded."""
+    body = ADMISSION.replace("WEIGHT_S", str(weight_s)).replace("WEIGHT_R", str(weight_r))
+    write(project, body, toml)
+    with serving(project, "--capacity", str(capacity), "--max-runs", "4") as server:
+        wait_until(lambda: started(project, "s1") == 1, "the scheduled run's first step")
+        status, body = server.request("POST", "/runs", {"command": "get", "targets": ["r3"]})
+        assert status == 202, body
+        requested = body["run_id"]
+        wait_until(
+            lambda: [w["run_id"] for w in queue(server)["capacity"]["waiting"]] == [requested],
+            "the request to wait for the capacity",
+        )
+        waiting = queue(server)["capacity"]["waiting"][0]
+        assert (waiting["origin"], waiting["node"]) == ("requested", "pipeline.py:r1"), waiting
+        release(project, "s1")
+        assert server.finished(requested)["status"] == "success"
+        wait_until(lambda: "s4" in order(project), "the scheduled run's last step")
+        wait_until(
+            lambda: any(
+                r["status"] == "success"
+                for r in server.get("/history?triggered_by=schedule")["runs"]
+            ),
+            "the scheduled run to succeed",
+        )
+        return order(project)
+
+
+def test_a_request_is_not_interleaved_with_a_scheduled_run(tmp_path):
+    # Capacity 1: the request waits only for the scheduled step running when it asked. Under
+    # first come, first served the two took turns: s1 r1 s2 r2 s3 r3 s4.
+    ended = overlap(tmp_path / "p", 1)
+    assert ended[:7] == ["s1", "r1", "r2", "r3", "s2", "s3", "s4"], ended
+
+
+def test_first_come_takes_turns_as_before(tmp_path):
+    ended = overlap(tmp_path / "p", 1, toml='[server]\nadmission = "first_come"\n')
+    assert ended[:7] == ["s1", "r1", "s2", "r2", "s3", "r3", "s4"], ended
+
+
+def test_requested_first_with_a_capacity_above_one_and_heavy_steps(tmp_path):
+    # Capacity 2; s1 and the requested steps weigh 2, the other scheduled steps 1. The
+    # scheduled run's next step asks as s1 ends and still goes behind the request.
+    ended = overlap(tmp_path / "p", 2, weight_s=2, weight_r=2)
+    assert ended[:7] == ["s1", "r1", "r2", "r3", "s2", "s3", "s4"], ended
+
+
+def test_the_queue_shows_the_admission_order_in_effect(tmp_path):
+    project = write(tmp_path / "p", "", "[server]\ncapacity = 2\nscheduled_max_wait_seconds = 30\n")
+    with serving(project, "--no-schedule") as server:
+        capacity = queue(server)["capacity"]
+        assert (capacity["admission"], capacity["scheduled_max_wait_seconds"]) == (
+            "requested_first",
+            30,
+        )
+    write(project, "", '[server]\ncapacity = 2\nadmission = "first_come"\n')
+    with serving(project, "--no-schedule") as server:
+        capacity = queue(server)["capacity"]
+        assert (capacity["admission"], capacity["scheduled_max_wait_seconds"]) == (
+            "first_come",
+            None,
+        )
+
+
+def test_admission_settings_are_checked(tmp_path):
+    for toml, message in [
+        ('admission = "fastest"', '[server] admission: expected "requested_first" or "first_come"'),
+        (
+            "scheduled_max_wait_seconds = 0",
+            "[server] scheduled_max_wait_seconds: expected a whole number",
+        ),
+        (
+            'admission = "first_come"\nscheduled_max_wait_seconds = 60',
+            "scheduled_max_wait_seconds applies only to",
+        ),
+    ]:
+        project = write(
+            tmp_path / "p",
+            "@asset()\ndef a() -> int:\n    return 1\n",
+            f"[server]\ncapacity = 2\n{toml}\n",
+        )
+        result = barca(project, "get", "pipeline.py")
+        assert result.returncode == 2, (toml, result.stderr)
+        assert message in json.loads(result.stderr.splitlines()[-1])["error"], (toml, result.stderr)
+
+
 # ─── #628.4: the run timeout ─────────────────────────────────────────────────
 
 TIMEOUT = """

@@ -34,13 +34,20 @@ import json
 import os
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from barca import _storage
-from barca._artifacts import FORMAT_OF_EXTENSION, resolve_format, safe_node_id, serialize
+from barca._artifacts import (
+    FORMAT_OF_EXTENSION,
+    copy_file,
+    resolve_format,
+    safe_node_id,
+    serialize,
+)
 
 MARKER = "_barca_sink.json"
 # The Hive name of a null (or empty) partition value, as pyarrow, polars and DuckDB write it.
@@ -654,7 +661,10 @@ class _RemoteTarget:
             local.append(str(path))
             remote.append(f"{base}/{path.relative_to(stage).as_posix()}")
         if local:
-            self.fs.put(local, remote)
+            sizes = [os.path.getsize(p) for p in local]
+            blocked = sum(n > _storage.AZURE_SINGLE_PUT_MAX for n in sizes)
+            options = _storage.upload_options(self.root, max(sizes), blocked)
+            self.fs.put(local, remote, **options)
         new = {self._key(r) for r in remote}
         old = [o for o in self._objects(base) if self._key(o) not in new]
         old = [o for o in old if self._key(o) != self._key(f"{self.root}/{MARKER}")]
@@ -737,31 +747,70 @@ def _partition_values(step: dict, node_id: str) -> dict[str, Any]:
     return values
 
 
-def write_sink(result: Any, sink: dict, step: dict, node_id: str, primary_fmt: str) -> dict:
-    """Write one `@sink` of a step: a dataset (`write`) or one file at the sink's path."""
+def file_format(sink: dict, primary_fmt: str) -> str:
+    """The format a file sink is written in: `serializer=`, else its path's extension, else
+    the artifact's."""
+    dest = sink.get("path", "")
+    return sink.get("serializer") or FORMAT_OF_EXTENSION.get(_storage.suffix(dest)) or primary_fmt
+
+
+def copies_artifact(sink: dict, primary_fmt: str) -> bool:
+    """Whether a sink is written by copying the artifact's bytes (#1005): a file sink in the
+    artifact's own format. Its bytes are then the artifact's, and the result is not encoded
+    again (a returned DuckDB relation or lazy frame is not computed a second time)."""
+    return not is_dataset(sink.get("path", "")) and file_format(sink, primary_fmt) == primary_fmt
+
+
+def write_sink(
+    result: Any,
+    sink: dict,
+    step: dict,
+    node_id: str,
+    primary_fmt: str,
+    source: str | None = None,
+) -> dict:
+    """Write one `@sink` of a step: a dataset (`write`) or one file at the sink's path.
+
+    `source` is a local file holding this step's artifact bytes (in `primary_fmt`). A file
+    sink in that format is a copy of it; any other sink encodes `result`. Without `source`
+    every sink encodes `result`.
+    """
+    started = time.perf_counter()
     dest = sink.get("path", "")
     if is_dataset(dest):
         base = node_id.split("[", 1)[0]
-        return write(result, sink, _partition_values(step, node_id), base)
-    fmt = sink.get("serializer") or FORMAT_OF_EXTENSION.get(_storage.suffix(dest)) or primary_fmt
+        outcome = write(result, sink, _partition_values(step, node_id), base)
+        outcome["seconds"] = time.perf_counter() - started
+        return outcome
+    fmt = file_format(sink, primary_fmt)
     if fmt not in ("json", "pickle", "parquet", "csv"):
         raise ValueError(
             f"sink serializer '{fmt}' is not supported yet (supported: json, pickle, parquet, csv)"
         )
-    if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
-        # An artifact may fall back to pickle (barca picks its file name), but a sink's
-        # path is the user's promise to another system: never write pickle bytes there.
-        raise ValueError(
-            f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
-            "Arrow table or DuckDB relation, or sink it as json or pickle"
-        )
     dest = _sink_dest(dest, node_id)
-    size = serialize(result, _through_symlink(dest), fmt)
-    return {"path": str(dest), "status": "ok", "size_bytes": size}
+    if source is not None and fmt == primary_fmt:
+        size = copy_file(source, _through_symlink(dest))
+    else:
+        if fmt == "parquet" and resolve_format(result, fmt, warn=False) != "parquet":
+            # An artifact may fall back to pickle (barca picks its file name), but a sink's
+            # path is the user's promise to another system: never write pickle bytes there.
+            raise ValueError(
+                f"a {type(result).__name__} cannot be written as parquet; return a DataFrame, "
+                "Arrow table or DuckDB relation, or sink it as json or pickle"
+            )
+        size = serialize(result, _through_symlink(dest), fmt)
+    return {
+        "path": str(dest),
+        "status": "ok",
+        "size_bytes": size,
+        "seconds": time.perf_counter() - started,
+    }
 
 
-def write_sinks(result: Any, step: dict, node_id: str, primary_fmt: str) -> list[dict]:
-    """Write each @sink declared on the step.
+def write_sinks(
+    result: Any, step: dict, node_id: str, primary_fmt: str, source: str | None = None
+) -> list[dict]:
+    """Write each @sink declared on the step (`write_sink`).
 
     Every sink is attempted. If any failed, the step fails with a `SinkError` naming each
     failed sink: a missing export must not pass unnoticed in automation.
@@ -771,7 +820,7 @@ def write_sinks(result: Any, step: dict, node_id: str, primary_fmt: str) -> list
     for sink in step.get("sinks") or []:
         dest = sink.get("path", "")
         try:
-            outcomes.append(write_sink(result, sink, step, node_id, primary_fmt))
+            outcomes.append(write_sink(result, sink, step, node_id, primary_fmt, source))
         except Exception as exc:
             failures.append(f"sink {dest}: {type(exc).__name__}: {exc}")
     if failures:
@@ -842,8 +891,15 @@ def republish(request: dict) -> dict:
     for item in request.get("items", []):
         node_id = item["node_id"]
         sinks = item.get("sinks") or []
+        step = {"sinks": sinks, "partition": item.get("partition") or {}}
+        fmt = item["format"]
+        local = _storage.local_path_of(item["path"])
+        source = str(local) if local is not None else None
         try:
-            value = _cached_value(item)
+            # A sink in the artifact's format is a copy of the cached bytes (#1005); the value is
+            # read only when some sink is written in another format, or as a dataset.
+            needs_value = source is None or not all(copies_artifact(s, fmt) for s in sinks)
+            value = _cached_value(item) if needs_value else None
         except Exception as exc:
             why = _storage.safe_error(
                 f"the cached result could not be read: {type(exc).__name__}: {exc}"
@@ -851,11 +907,10 @@ def republish(request: dict) -> dict:
             failed = [{"path": s["path"], "error": why} for s in sinks]
             out.append({"node_id": node_id, "sinks": failed})
             continue
-        step = {"sinks": sinks, "partition": item.get("partition") or {}}
         results = []
         for sink in sinks:
             try:
-                outcome = write_sink(value, sink, step, node_id, item["format"])
+                outcome = write_sink(value, sink, step, node_id, fmt, source)
                 done: dict = {"path": sink["path"]}
                 if outcome.get("warning"):
                     done["warning"] = outcome["warning"]

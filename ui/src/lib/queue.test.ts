@@ -18,6 +18,7 @@ import { startsLabel,
   queuedLabel,
   sharedCapacityLabel,
   waitingRows,
+  admissionLabel,
 } from './queue'
 
 function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
@@ -33,6 +34,7 @@ function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
     started_at: null,
     estimated_start_at: null,
     wait_seconds: null,
+    waiting_for: null,
     ...over,
   }
 }
@@ -45,20 +47,30 @@ describe('shared capacity', () => {
   const capacity = {
     total: 4,
     source: '--capacity',
+    admission: 'requested_first',
+    scheduled_max_wait_seconds: 120,
     in_use: 3,
     runs: [{ run_id: 'r1', weight: 3 }],
-    waiting: [{ run_id: 'r2', node: 'p.py:big', weight: 3, waiting_seconds: 12.4 }],
+    waiting: [
+      { run_id: 'r2', node: 'p.py:big', weight: 3, waiting_seconds: 12.4, origin: 'requested' as const },
+      { run_id: 'r3', node: 'p.py:sync', weight: 1, waiting_seconds: 30, origin: 'scheduled' as const },
+    ],
   }
   it('says nothing without one', () => {
     expect(sharedCapacityLabel(null)).toBeNull()
     expect(waitingRows(null)).toEqual([])
   })
   it('shows the weight in use and the steps waiting, in order', () => {
-    expect(sharedCapacityLabel(capacity)).toBe('weight 3 of 4 in use · 1 step waiting')
+    expect(sharedCapacityLabel(capacity)).toBe('weight 3 of 4 in use · 2 steps waiting')
     expect(sharedCapacityLabel({ ...capacity, waiting: [] })).toBe('weight 3 of 4 in use')
     expect(waitingRows(capacity)).toEqual([
-      { position: '#1', node: 'p.py:big', runId: 'r2', weight: 3, waited: '12s', href: expect.stringContaining('r2') },
+      { position: '#1', node: 'p.py:big', runId: 'r2', weight: 3, waited: '12s', origin: 'requested', href: expect.stringContaining('r2') },
+      { position: '#2', node: 'p.py:sync', runId: 'r3', weight: 1, waited: '30s', origin: 'scheduled', href: expect.stringContaining('r3') },
     ])
+  })
+  it('says the order of the line', () => {
+    expect(admissionLabel(capacity)).toBe('requested runs first; a scheduled step waits at most 120s')
+    expect(admissionLabel({ ...capacity, admission: 'first_come', scheduled_max_wait_seconds: null })).toBe('first come, first served')
   })
 })
 
@@ -129,6 +141,7 @@ describe('queueRows', () => {
       queuedAt: '2026-10-22T10:00:00Z',
       elapsed: '20m',
       starts: 'no estimate',
+      waitingFor: null,
       href: '/runs?run=r1',
     })
     expect(rows[1]).toMatchObject({ position: '#2', target: 'a.py:x,a.py:y', command: 'run', trigger: 'schedule', scheduleId: 'a.py:x' })
@@ -143,6 +156,10 @@ describe('queueRows', () => {
     expect(startsLabel('2026-10-22T10:19:00Z', now)).toBe('starting')
     // No estimate from a paused or draining queue or a read-only server: said, not blank.
     expect(startsLabel(null, now)).toBe('no estimate')
+  })
+  it('says a run queued on a draining server waits for the restart', () => {
+    const rows = queueRows(view({ draining: true, queued: [entry('r1', { waiting_for: 'restart' }), entry('r2', { position: 2 })] }), iso, now)
+    expect(rows.map((r) => r.waitingFor)).toEqual(['after restart', null])
   })
   it('puts an entry without a position last', () => {
     expect(queueRows(view({ queued: [entry('a', { position: null }), entry('b', { position: 1 })] }), iso, now).map((r) => r.position)).toEqual(['#1', '–'])

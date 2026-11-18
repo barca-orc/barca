@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 3. Status: approved product intent; implementation conformance has not
+Specification version: 4. Status: approved product intent; implementation conformance has not
 been established. This records requirements, not shipped commands, configuration keys,
 wire fields or an implementation plan. Existing interface owners remain authoritative.
 See [agent interaction](agents.md), [resource bounds](resources.md), and
@@ -89,9 +89,12 @@ Cancellation first requests graceful termination, then force-stops after a confi
 timeout. Clean the entire owned process tree and release resources, not just the immediate
 worker. A foreground Ctrl+C follows the same rule; a second interrupt forces cleanup.
 
-Coordinator/server shutdown drains: reject new work promptly with a clear retryable shutting
-down error, pause schedules and sensor polling, and allow active work a configurable grace
-period. Status and logs remain readable until exit. At the deadline, stop remaining work
+Coordinator/server shutdown drains: pause schedules and sensor polling, and allow active
+work a configurable grace period. A draining server accepts a new request and queues it; it
+starts nothing new, and the next server picks the request up (version 4, 2026-11-17, which is
+what the server does; version 3 said to reject new work with a retryable shutting down error).
+The request's answer and the queue say that it waits for a restart (`waiting_for: "restart"`,
+experimental, #1011). Status and logs remain readable until exit. At the deadline, stop remaining work
 gracefully then force-stop its process trees. A second shutdown signal skips the remaining
 grace period and forces cleanup. Preserve recovery state/outcomes, flush logs, and release
 locks, connections and listeners. The precise durable transition ordering is implementation

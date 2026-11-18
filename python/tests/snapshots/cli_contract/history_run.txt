@@ -90,6 +90,7 @@ steps[].output_tail : array|null
 steps[].partition_key : null
 steps[].rows : null
 steps[].run_hash : string
+steps[].sink_seconds : null
 steps[].status : string
 steps[].worker_exit : null
 steps_page : object

@@ -74,7 +74,8 @@ Optional guided experiences may be interactive. A future `barca tutorial` is an
 using the core product.
 
 Agent information parity, discovery and large structured results are specified in
-[agent interaction](agents.md). Shared budgets, FIFO ready-work admission and
+[agent interaction](agents.md). Shared budgets, ready-work admission (requested runs first, with a bounded wait for scheduled
+runs) and
 coordinator overhead bounds are in [project resources](resources.md).
 The requirements discussion remains open; the first-use decisions above are not an exhaustive
 product acceptance specification.

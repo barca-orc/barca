@@ -75,6 +75,9 @@ pub struct StepReport {
     pub digest: Option<String>,
     pub cpu_seconds: Option<f64>,
     pub max_rss_bytes: Option<u64>,
+    /// Seconds the step spent writing its `@sink`s after its own work (#1004); inside
+    /// `duration_ns`, at its end.
+    pub sink_seconds: Option<f64>,
     pub error_type: Option<String>,
     pub error_message: Option<String>,
     pub error_traceback: Option<String>,

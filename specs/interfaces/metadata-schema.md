@@ -154,8 +154,8 @@ every database from before 0.29.2 (#629):
   a job. `posted_at` is UTC text in SQLite's `datetime('now')` format; `state` is `failing`,
   `still_failing`, `recovered` or `succeeded`; `message_ref` is empty for a webhook post and
   reserved for an integration whose posts have ids.
-- `pending_uploads` (0.26.0, #390): one row per artifact-store object whose upload failed after
-  its step succeeded (`store_path` primary key, `node_id`, `run_hash`, `run_id`, `local_path`,
+- `pending_uploads` (0.26.0, #390): one row per artifact-store object whose upload failed, or
+  was abandoned by a cancelled run (#1002), after its step succeeded (`store_path` primary key, `node_id`, `run_hash`, `run_id`, `local_path`,
   `host`, `error`, `attempts`, timestamps). A database without it (opened read-only, or a copy
   being validated) reads as having no pending uploads. Only rows of this host are read, retried
   or shown. Older binaries ignore the table.
@@ -258,6 +258,17 @@ every database from before 0.29.2 (#629):
   AND status = 'success'`: `barca status` counts a partitioned node's keys whose latest success is
   empty from these rows, a probe each. Opening an older database adds both; the index is empty
   until a result is counted.
+- `idx_mat_node_rest (node_id, id) WHERE status != 'success' OR artifact_path IS NULL` (#1009, a
+  partial index): the rows of a node that `idx_mat_node_latest` leaves out, failures and
+  successes without an artifact path (a ledger post's). With the two, a node's newest row and
+  newest success are a few seeks (`db::step_histories`, read at every phase boundary of a run
+  to say why its steps ran), not a read of its history. Opening an older database builds it,
+  about 80 ms for 300k rows; older binaries ignore it.
+- `materializations.sink_seconds` (REAL, nullable, 0.45, #1004): the seconds a successful step
+  spent writing its `@sink`s, after its own duration (`elapsed_seconds`, which excludes them) was
+  taken. Each sink's own time is `seconds` in that row's `sinks_json`. NULL for a step without
+  sinks, on failed rows and on older rows. Read by `barca history RUN_ID` and `GET /runs/{run_id}`;
+  never part of a cache key. Opening an older database adds it; older binaries ignore it.
 - `run_queue (run_id, seq, state, spec, queued_at)` (0.29.4), primary key `run_id`: the runs
   `barca serve` accepted and has not finished recording, in the order `seq`. `state` is `queued`,
   `running`, or `draining` (0.31.0: in flight when the server was told to stop); `spec` is the server's description of the run (JSON: command, targets, nodes,

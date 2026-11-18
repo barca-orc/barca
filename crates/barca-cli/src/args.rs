@@ -1058,8 +1058,9 @@ pub(crate) enum Cli {
         #[arg(help = "Maximum concurrent runs; others queue (default: config or CPU count)", long_help = None)]
         max_runs: Option<usize>,
         /// The most the weight= of the steps running at once may add up to across every run
-        /// of this server, admitted first come, first served. At least 1. Default: [server]
-        /// capacity in barca.toml, else none (each run has only its own). Experimental
+        /// of this server; a requested run's steps are admitted before a scheduled run's
+        /// ([server] admission). At least 1. Default: [server] capacity in barca.toml, else
+        /// none (each run has only its own). Experimental
         #[arg(long, value_name = "N", value_parser = parse_capacity)]
         #[arg(help = "Limit total running step weight across server runs (experimental)", long_help = None)]
         capacity: Option<usize>,

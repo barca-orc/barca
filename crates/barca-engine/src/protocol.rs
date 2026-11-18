@@ -169,6 +169,11 @@ pub(crate) struct ArtifactRef {
     pub finished_at: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall_seconds: Option<f64>,
+    /// How long writing the step's `@sink`s took, all of them (#1004). Not part of
+    /// `elapsed_seconds` or `wall_seconds`: the sinks are written after those are stamped,
+    /// before the result is reported. Absent for a step without sinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sink_seconds: Option<f64>,
     /// For a `parallel()` branch that returned a frame: which reader gives the caller the
     /// type the branch returned (`pandas`, `polars`, `polars_lazy`, `pyarrow`, `duckdb`).
     /// A step's consumer picks its reader from its own annotation; a branch's caller has
@@ -214,6 +219,9 @@ pub(crate) struct SinkOutcome {
     /// A dataset sink's size warning (too many directories, or files that are too small).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// How long this sink took to write (#1004).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f64>,
 }
 
 // ─── Coordinator → Worker ────────────────────────────────────────────────────
@@ -329,7 +337,7 @@ fn yes() -> bool {
 // ─── Framing functions ───────────────────────────────────────────────────────
 
 /// Encode a message as a length-prefixed JSON frame.
-pub(crate) fn encode_message<T: Serialize>(msg: &T) -> io::Result<Vec<u8>> {
+pub fn encode_message<T: Serialize>(msg: &T) -> io::Result<Vec<u8>> {
     let payload =
         serde_json::to_vec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if payload.len() > 256 * 1024 * 1024 {
@@ -420,6 +428,90 @@ where
     serde_json::from_slice(&payload)
         .map(Some)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Reads length-prefixed JSON frames from one stream, keeping a partly received frame between
+/// calls, so [`Self::next`] is cancel safe: a loop may `tokio::select!` it against other work
+/// and drop it at any point without losing bytes (#1001).
+///
+/// [`read_frame`] is not: its `read_exact` consumes bytes into a buffer that dies with the
+/// future, so cancelling it mid-frame lost the bytes read so far and the next read started
+/// inside a frame. Use [`read_frame`] only where nothing races the read (the hello).
+#[derive(Debug, Default)]
+pub struct FrameReader {
+    /// Bytes received and not yet returned as frames: a frame header and payload, possibly
+    /// incomplete, possibly followed by the start of further frames.
+    buf: Vec<u8>,
+}
+
+impl FrameReader {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next frame, or `None` on a clean EOF at a frame boundary. An EOF inside a frame is
+    /// an `UnexpectedEof` error. Cancel safe: its only await is a `read_buf` that either
+    /// appends to the buffer kept in `self` or reads nothing.
+    pub async fn next<R, T>(&mut self, reader: &mut R) -> io::Result<Option<T>>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+        T: for<'de> Deserialize<'de>,
+    {
+        use tokio::io::AsyncReadExt;
+        loop {
+            if let Some(len) = self.complete_frame()? {
+                let msg = serde_json::from_slice(&self.buf[4..4 + len])
+                    .map(Some)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
+                self.buf.drain(..4 + len);
+                // A large frame's buffer is not kept for the life of the connection.
+                if self.buf.capacity() > 1024 * 1024 && self.buf.len() < 64 * 1024 {
+                    self.buf.shrink_to(64 * 1024);
+                }
+                return msg;
+            }
+            // Room for the rest of the frame being read (or a header), so a large frame is
+            // read in few calls; `read_buf` fills only the spare capacity.
+            let want = match self.header() {
+                Some(len) => 4 + len - self.buf.len(),
+                None => 4 - self.buf.len(),
+            };
+            self.buf.reserve(want.max(8 * 1024));
+            if reader.read_buf(&mut self.buf).await? == 0 {
+                return if self.buf.is_empty() {
+                    Ok(None)
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        format!(
+                            "connection closed inside a frame ({} bytes)",
+                            self.buf.len()
+                        ),
+                    ))
+                };
+            }
+        }
+    }
+
+    /// The payload length announced by the buffered header, once all 4 bytes are in.
+    fn header(&self) -> Option<usize> {
+        let len: [u8; 4] = self.buf.get(..4)?.try_into().ok()?;
+        Some(u32::from_be_bytes(len) as usize)
+    }
+
+    /// The first frame's payload length, once the whole frame is buffered.
+    fn complete_frame(&self) -> io::Result<Option<usize>> {
+        let Some(len) = self.header() else {
+            return Ok(None);
+        };
+        if len > 256 * 1024 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("message too large: {len} bytes"),
+            ));
+        }
+        Ok((self.buf.len() >= 4 + len).then_some(len))
+    }
 }
 
 // ─── Socket path helper ──────────────────────────────────────────────────────

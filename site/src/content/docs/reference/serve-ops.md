@@ -19,8 +19,9 @@ Every run the server accepts joins its run queue: `POST /runs` and the older tri
 (`run_queue`) under its run id before the server answers, so a restart does not lose it. Runs
 start in the order they were accepted, at most `--max-runs` at once (`[server] max_runs` in
 `barca.toml`, default one per core); the others wait with status `pending`. `POST /runs` answers
-`202 {"run_id", "status", "position"}`: `running` when it started at once, or `pending` and its
-place in the queue (1 = next). A run someone asked for (API, UI, CLI) starts ahead of waiting scheduled runs, and while a
+`202 {"run_id", "status", "position", "waiting_for"}`: `running` when it started at once, or
+`pending` and its place in the queue (1 = next); `waiting_for` is `"restart"` when the server is
+draining (below) and `null` otherwise. A run someone asked for (API, UI, CLI) starts ahead of waiting scheduled runs, and while a
 scheduled run holds a slot and every slot is taken, it may use one extra slot of its own.
 
 ```bash
@@ -118,7 +119,13 @@ and new runs are queued for the next start; waiting up to 30s for 1 run in fligh
 
 - starts no queued run, and keeps accepting new ones: `POST /runs` (and the older routes)
   answer as usual, with `status: "pending"`, and the run waits in the queue for the next server
-  (`draining: true` in `GET /queue`);
+  (`draining: true` in `GET /queue`). Each queued run says so: `waiting_for: "restart"` in the
+  `POST /runs` answer, its `GET /queue` entry and `GET /runs/{run_id}` (`null` on a server that
+  is not draining; experimental), and a `--server` client prints `[barca] run RUN_ID is queued
+  behind a restart`. A run accepted during the drain waits for all of it: a long drain timeout
+  (given so a long run can finish) makes every request that arrives during a restart wait that
+  long too, up to the drain timeout plus the restart. With no next server it stays queued in the
+  metadata DB until a server starts on it;
 - stops the scheduler (`[barca] scheduler stopped: the server is draining`). A tick that falls
   in the drain starts nothing; the next server's startup catch-up fires the job once;
 - reports `"status": "draining"` on `GET /health` (still `200`);
@@ -136,6 +143,13 @@ putting it back in the queue`. Their workers are stopped, the steps that finishe
 are cache hits on the next attempt), and the stopped attempt is not recorded as a run that ended:
 its row and lines are replaced by the next attempt's. The server exits 0, and the next server
 starts them again from the beginning, first, under the same run ids.
+
+With a store, a step that finished counts as kept even when its upload was still in flight at the
+drain timeout: the upload is stopped and kept pending, as a failed one is ([Remote Storage](/reference/remote-storage/),
+"When an upload fails after the steps succeeded"). The next server's attempt prints
+`[barca] uploading 1 pending result to <store> from an earlier run`, uploads it from this
+machine's `.barca/artifacts/` before its own work, and executes only the steps that had not
+finished.
 
 A second SIGTERM or SIGINT during the drain cancels the runs in flight instead: each run is
 recorded as `cancelled` in `barca history`, with `[barca] run cancelled: server shutdown` in its
@@ -282,20 +296,43 @@ def rebuild_customer() -> dict:
 
 ```bash
 barca serve pipeline.py --capacity 4           # the same, from the command line
-barca queue --server --json                    # capacity: {total, in_use, runs, waiting}
+barca queue --server --json                    # capacity: {total, admission, in_use, runs, waiting}
 ```
 
 While a rebuild step of weight 3 runs, the sync's weight-1 steps run beside it, one at a time;
 a second weight-3 step waits. How a step is admitted:
 
-- **First come, first served across runs, with the head reserved.** A run asks for the step at
-  the head of its own ready queue once that step fits the run's own capacity. If nothing waits
-  and it fits what is left, it starts. Otherwise the run waits in line, one place per run. Only
-  the run at the front of the line can be admitted, when its step fits; nothing behind it goes
-  first, even a lighter step that would fit. So a heavy step is never starved by a stream of
-  light ones: the weight that comes free is kept for it until it fits, and the light steps that
-  asked after it wait that long (in the example, at most one heavy step's length when a heavy
-  step waits). Steps within one run keep the order of their run's queue, as before.
+- **A line, with the head reserved.** A run asks for the step at the head of its own ready
+  queue once that step fits the run's own capacity. If nothing waits and it fits what is left,
+  it starts. Otherwise the run waits in line, one place per run. Only the run at the front of
+  the line can be admitted, when its step fits; nothing behind it goes first, even a lighter
+  step that would fit. So a heavy step is never starved by a stream of light ones: the weight
+  that comes free is kept for it until it fits. Steps within one run keep the order of their
+  run's queue, as before.
+- **Requested runs first.** By default a run someone asked for (`POST /runs`, the web UI, a
+  `--server` client or agent; anything a schedule's tick did not start) is ahead in the line
+  of a scheduled run, whenever it asked. Runs of one kind go in the order they first asked:
+  an earlier request is finished before a later one gets the capacity, and the same between
+  scheduled runs. Nothing running is stopped: a request that asks while a scheduled step runs
+  waits for that step to end (and for earlier requests, and a scheduled step that has waited
+  out the bound below). A run hands the weight of a step that ended back in the same call that
+  asks for its next step, so a scheduled run cannot take it in between.
+- **A bounded wait for schedules.** A scheduled run's step that has waited
+  `scheduled_max_wait_seconds` (default 120) goes ahead of the requested ones, so a stream of
+  requests cannot starve a schedule. The bound is per step: under requests that never stop, a
+  scheduled run advances about one step per bound.
+- **First come, first served on request.** `admission = "first_come"` puts the oldest waiting
+  step at the front whatever started its run, the order before 0.45.0 (a requested run that
+  overlaps a scheduled run then takes turns with it step by step).
+
+```toml
+# barca.toml
+[server]
+capacity = 1
+admission = "requested_first"     # the default; "first_come" restores arrival order
+scheduled_max_wait_seconds = 120  # the default; at least 1, only with requested_first
+```
+
 - **No deadlock.** Only running steps hold weight, and they finish, fail or are cancelled. A
   step heavier than the server's capacity counts as all of it: it runs alone on the server, with
   `[barca] warning: 'x' has weight=8, more than the capacity 4 (--capacity); it runs alone` when
@@ -310,9 +347,10 @@ a second weight-3 step waits. How a step is admitted:
 - **The run queue** is unchanged: runs leave it as before, and the capacity is held in memory, so
   a restart starts with nothing in use.
 
-`GET /queue` (and `barca queue --server --json`) has `capacity: {total, source, in_use, runs,
-waiting}`: the weight in use, the weight each run holds, and the steps waiting in admission
-order with their run, weight and `waiting_seconds`; `null` without a server capacity. `GET
+`GET /queue` (and `barca queue --server --json`) has `capacity: {total, source, admission,
+scheduled_max_wait_seconds, in_use, runs, waiting}`: the order in effect, the weight in use,
+the weight each run holds, and the steps waiting in admission order with their run, weight,
+`waiting_seconds` and `origin` (`requested` or `scheduled`); `null` without a server capacity. `GET
 /health` has `queue.capacity: {total, in_use, waiting}`. The web UI's Runs page shows `weight 3
 of 4 in use · 1 step waiting` and the waiting steps.
 

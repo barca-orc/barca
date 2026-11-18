@@ -133,6 +133,7 @@ stability; the row adds the keys and routes that go with it.
 | `BARCA_SLACK_WEBHOOK_URL`, `BARCA_SLACK_NOTIFY`, `BARCA_UI_URL` and the Slack posts | new: the message text and layout are not a contract and may change in any release |
 | `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
 | `barca queue` and its JSON, `barca serve --max-runs`, `[server] max_runs`, `BARCA_SERVER_RECONNECT` | new in 0.29.4: the run queue (`GET /queue`, `POST /queue/pause`, `POST /queue/resume`), its JSON and table, and how long and how often a `--server` client waits for a restarting server may change after field use |
+| `[server] admission`, `[server] scheduled_max_wait_seconds`, and `capacity.admission`, `capacity.scheduled_max_wait_seconds` and `capacity.waiting[].origin` in `GET /queue` | new in 0.45.0 (#1003): which runs count as requested, the default bound and how the order is shown may change after field use; `admission = "first_come"` keeps the order of earlier releases |
 | `undeclared_env`: the plan-warning kind, `steps[].undeclared_env` in `get`/`run` (and `--dry-run`) JSON, `nodes[].undeclared_env` in `status --json` | new in 0.29.1 (#574): which environment reads are found statically may grow |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
@@ -321,7 +322,7 @@ default, and any aliases.
 | `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
 | `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `sink_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
@@ -343,7 +344,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `sink_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
@@ -812,8 +813,8 @@ later reported as `interrupted` (`barca docs cache`).
 
 `barca serve` is not a run. Every run it accepts is recorded in its run queue before it answers,
 and a restart resumes the queued runs in order under their ids. Stopped by SIGINT or SIGTERM it
-drains: the queue pauses (new runs are still accepted, `202` with `status: pending`, and wait for
-the next start) and it waits for the runs in flight for up to `--drain-timeout` seconds
+drains: the queue pauses (new runs are still accepted, `202` with `status: pending` and
+`waiting_for: "restart"`, and wait for the next start) and it waits for the runs in flight for up to `--drain-timeout` seconds
 (`[server] drain_timeout` in `barca.toml`, default 30). It exits 0 when they all finished, and 0
 when the deadline passed and it put the runs left back in the queue, to start again from the
 beginning after the restart (at least once: `barca docs serve-ops`, "At least once"). A second
@@ -1031,7 +1032,8 @@ may grow.
   project's `.env`; `null` when unset in both, `"<redacted>"` for secret-looking names).
 
 Executed steps also carry `attempts` and `elapsed_seconds`, including failures.
-Elapsed seconds sum active reported time across attempts; backoff is excluded. For
+Elapsed seconds sum active reported time across attempts; backoff is excluded; a step's
+sinks are excluded too (`sink_seconds`, below). For
 partition summaries, elapsed time sums executed keys while attempts is the maximum
 per key. Cached steps and dry runs omit these keys. Worker disconnects use the
 coordinator's observed in-flight time. Slow module imports (> 1 second) add
@@ -1066,6 +1068,140 @@ avoid depending on CI machine speed. `barca docs status` explains the timing sco
 | `steps_executed` | integer | always |
 | `warnings` | array | always |
 <!-- END GENERATED schema get_timing_retry -->
+
+A step whose asset declares `@sink`s adds `sink_seconds` (stable, 0.45.0): the seconds its sinks
+took to write, summed over the keys that ran. They are written after the step's own work and are
+not part of its `elapsed_seconds`, which stays the time of the step itself; a step's time with its
+sinks is the sum of the two. Cached steps, dry runs and steps without sinks omit it. `barca history
+RUN_ID --json` has it on each recorded step (`null` without sinks, on a failed step and on rows from
+before 0.45.0), and each sink's own time is `seconds` in the step's record. `barca docs sinks`
+says what a sink writes.
+
+<!-- BEGIN GENERATED schema get_sink -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].sink_seconds` | number | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_sink -->
+
+<!-- BEGIN GENERATED schema history_sink -->
+| Key | Type | Present |
+|---|---|---|
+| `explanation` | object | always |
+| `explanation.attempts` | string | always |
+| `explanation.cancellation` | null | always |
+| `explanation.progress` | null | always |
+| `explanation.requested_by` | string | always |
+| `explanation.slowest` | array | always |
+| `explanation.slowest[]` | object | always |
+| `explanation.slowest[].keys` | integer | always |
+| `explanation.slowest[].node_id` | string | always |
+| `explanation.slowest[].seconds` | number | always |
+| `explanation.steps` | string | always |
+| `explanation.target_outcomes` | array | always |
+| `explanation.targets` | array | always |
+| `explanation.targets[]` | string | always |
+| `explanation.why` | object | always |
+| `explanation.why.groups` | array | always |
+| `explanation.why.groups[]` | object | always |
+| `explanation.why.groups[].category` | string | always |
+| `explanation.why.groups[].label` | string | always |
+| `explanation.why.groups[].rows` | array | always |
+| `explanation.why.groups[].rows[]` | object | always |
+| `explanation.why.groups[].rows[].counts` | string | always |
+| `explanation.why.groups[].rows[].example` | string | always |
+| `explanation.why.groups[].rows[].example_text` | string | always |
+| `explanation.why.groups[].rows[].line` | string | always |
+| `explanation.why.groups[].rows[].nodes` | integer | always |
+| `explanation.why.groups[].rows[].share` | number | always |
+| `explanation.why.groups[].rows[].steps` | integer | always |
+| `explanation.why.groups[].rows[].subject` | null | always |
+| `explanation.why.groups[].steps` | integer | always |
+| `explanation.why.headline` | string | always |
+| `explanation.why.omitted` | integer | always |
+| `explanation.why.partial` | boolean | always |
+| `run` | object | always |
+| `run.attempts` | integer | always |
+| `run.cancellation` | null | always |
+| `run.client_run_id` | null | always |
+| `run.command` | string | always |
+| `run.elapsed_seconds` | number | always |
+| `run.failure` | null | always |
+| `run.files` | array | always |
+| `run.files[]` | string | always |
+| `run.finished_at` | string | always |
+| `run.job` | string | always |
+| `run.plan_reasons` | object | always |
+| `run.plan_reasons.nodes` | integer | always |
+| `run.plan_reasons.omitted` | integer | always |
+| `run.plan_reasons.reasons` | array | always |
+| `run.plan_reasons.reasons[]` | object | always |
+| `run.plan_reasons.reasons[].category` | string | always |
+| `run.plan_reasons.reasons[].example` | string | always |
+| `run.plan_reasons.reasons[].nodes` | integer | always |
+| `run.plan_reasons.reasons[].steps` | integer | always |
+| `run.plan_reasons.reasons[].subject` | null | always |
+| `run.plan_reasons.steps` | integer | always |
+| `run.principal` | null | always |
+| `run.retries` | integer | always |
+| `run.run_id` | string | always |
+| `run.schedule_id` | null | always |
+| `run.scheduled_at` | null | always |
+| `run.started_at` | string | always |
+| `run.status` | string | always |
+| `run.steps_cached` | integer | always |
+| `run.steps_executed` | integer | always |
+| `run.steps_total` | integer | always |
+| `run.target` | string | always |
+| `run.trigger_reason` | null | always |
+| `run.triggered_by` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact_format` | string | always |
+| `steps[].artifact_path` | string | always |
+| `steps[].artifact_size_bytes` | integer | always |
+| `steps[].attempts` | integer | always |
+| `steps[].batch` | null | always |
+| `steps[].cpu_seconds` | number | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].error` | null | always |
+| `steps[].error_message` | null | always |
+| `steps[].error_phase` | null | always |
+| `steps[].error_traceback` | null | always |
+| `steps[].error_type` | null | always |
+| `steps[].max_rss_bytes` | integer | always |
+| `steps[].node_id` | string | always |
+| `steps[].output_tail` | null | always |
+| `steps[].partition_key` | null | always |
+| `steps[].rows` | null | always |
+| `steps[].run_hash` | string | always |
+| `steps[].sink_seconds` | number | always |
+| `steps[].status` | string | always |
+| `steps[].worker_exit` | null | always |
+| `steps_page` | object | always |
+| `steps_page.total` | integer | always |
+| `steps_page.truncated` | boolean | always |
+<!-- END GENERATED schema history_sink -->
 
 Under `-o value --json`, `final_output` is the value instead (a table is a list of row
 objects):
@@ -3466,6 +3602,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `steps[].partition_key` | null | always |
 | `steps[].rows` | null | always |
 | `steps[].run_hash` | string | always |
+| `steps[].sink_seconds` | null | always |
 | `steps[].status` | string | always |
 | `steps[].worker_exit` | null | always |
 | `steps_page` | object | always |
@@ -3928,6 +4065,7 @@ placeholders:
 | `[barca] still running (<n>s): <id>` | a step in flight for `BARCA_PROGRESS_SECS` (every mode) | experimental |
 | `[barca] <n> more: <first line of a warning>` | before the end-of-run line (every mode): a `logging` WARNING printed because logging is unconfigured, or a `warnings` warning, from a step's process was printed once and suppressed `<n>` more times in this run; beyond ten texts, one `[barca] <n> more: <k> other repeated warnings` (`barca docs agents`) | experimental |
 | `[barca] server <url> (<source>)` | once when a command uses the configured server (`BARCA_SERVER` or `[server] url in barca.toml`, every mode): a local `get`/`run` reads and posts to its ledger, `status`/`history`/`stats` and a bare `--server` are answered by it (`barca docs server-mode`) | experimental |
+| `[barca] run <id> is queued behind a restart (position <n>): the server at <url> is draining and starts no run; it starts when the next server is up` | `get`/`run --server` (every mode), once after `POST /runs`, when the server is draining and the run waits for the next server (`waiting_for: "restart"`; `barca docs server-mode`) | experimental |
 | `[barca] recorded run <id> on the server (run <server id>)` | a run this machine could not post before was accepted by the server's ledger, before the command's own lookup | experimental |
 | `[barca] warning: run <id> was not recorded on the server <url>: <why>; it stays on this machine (unsynced) and ...`, `[barca] warning: run <id> is still not recorded on the server <url>: <why>` | the server refused a run's post (`409`) or could not be reached after the run; the run's result and exit code are unchanged | experimental |
 | `[barca] skipped N task(s) ...`, `[barca] nothing to get ...` | `get` with no target skipped tasks | experimental |

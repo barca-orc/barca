@@ -261,6 +261,11 @@ pub struct StepReport {
     /// Slow module imports included in elapsed_seconds, summed across attempts/keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_seconds: Option<f64>,
+    /// Seconds spent writing the step's `@sink`s, summed across its executed partition keys
+    /// (#1004). Not part of `elapsed_seconds`: sinks are written after the step's own work.
+    /// Absent for a step without sinks, a cache hit and a dry run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sink_seconds: Option<f64>,
     /// This recompute produced different bytes for the same node and run hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_changed: Option<bool>,

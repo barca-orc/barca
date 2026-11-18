@@ -330,7 +330,8 @@ tracing are in [Telemetry](/reference/telemetry/#datadog).
 - **Stopped with SIGINT or SIGTERM** (`docker compose stop`, `docker stop`, `systemctl stop`,
   Ctrl-C; SIGTERM from 0.20.0, see `stop_signal` above). From 0.29.4 nothing the server
   accepted is lost: the run queue pauses (new runs are still accepted, `202` with
-  `status: "pending"`, and wait for the next start), the scheduler stops, `/health` reports
+  `status: "pending"` and `waiting_for: "restart"`, and wait for the next start, so a long
+  drain timeout makes them wait that long), the scheduler stops, `/health` reports
   `draining`, and the runs in progress finish and are recorded, artifact uploads included, for
   up to `--drain-timeout` seconds (default 30). The process then exits 0. If the deadline
   passes first, the runs left are stopped and put back at the head of the queue, and the

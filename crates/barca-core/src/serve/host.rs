@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::capacity::SharedCapacity;
+use super::capacity::{Origin, SharedCapacity};
 use super::claims::{self, Claim, SharedSteps};
 use crate::run_host::{RunHost, SharedBudget, StepClaim, StepKey};
 
@@ -17,16 +17,23 @@ pub struct ServeHost {
     /// When the run started ([`SharedSteps::now`]): a step another run finishes after this is
     /// taken from that run.
     started: u64,
+    /// Where the run came from: a requested run's ready steps go ahead of a scheduled run's.
+    origin: Origin,
 }
 
 impl ServeHost {
     /// The host of one run, made as the run starts.
-    pub fn new(capacity: Option<Arc<SharedCapacity>>, steps: Arc<SharedSteps>) -> Self {
+    pub fn new(
+        capacity: Option<Arc<SharedCapacity>>,
+        steps: Arc<SharedSteps>,
+        origin: Origin,
+    ) -> Self {
         let started = steps.now();
         Self {
             capacity,
             steps,
             started,
+            origin,
         }
     }
 }
@@ -53,10 +60,10 @@ impl RunHost for ServeHost {
     fn capacity_in_use(&self) -> u32 {
         self.capacity.as_ref().map_or(0, |c| c.snapshot().in_use)
     }
-    fn try_acquire(&self, run_id: &str, node: &str, weight: u32) -> bool {
+    fn try_acquire(&self, run_id: &str, release: u32, node: &str, weight: u32) -> bool {
         self.capacity
             .as_ref()
-            .is_none_or(|c| c.try_acquire(run_id, node, weight))
+            .is_none_or(|c| c.release_and_try_acquire(run_id, release, node, weight, self.origin))
     }
     fn withdraw(&self, run_id: &str) {
         if let Some(c) = &self.capacity {
