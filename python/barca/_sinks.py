@@ -661,7 +661,10 @@ class _RemoteTarget:
             local.append(str(path))
             remote.append(f"{base}/{path.relative_to(stage).as_posix()}")
         if local:
-            self.fs.put(local, remote)
+            sizes = [os.path.getsize(p) for p in local]
+            blocked = sum(n > _storage.AZURE_SINGLE_PUT_MAX for n in sizes)
+            options = _storage.upload_options(self.root, max(sizes), blocked)
+            self.fs.put(local, remote, **options)
         new = {self._key(r) for r in remote}
         old = [o for o in self._objects(base) if self._key(o) not in new]
         old = [o for o in old if self._key(o) != self._key(f"{self.root}/{MARKER}")]
