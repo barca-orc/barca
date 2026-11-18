@@ -326,7 +326,7 @@ and the root `{"kind": "queue", "node": "<the scheduled node>"}` (`barca docs st
 
 ```text
 1. run queue: pulse
-     holds 6 nodes (6 assets): 6 queued; 20m of gap
+     holds 6 nodes (6 assets): 6 queued; 20m of gap across nodes (node-time)
      why:  pulse's ticks wait about 2m for a run slot, every 1m: max_runs is 1
      do:   raise max_runs: barca serve --max-runs N or [server] max_runs in barca.toml, or space the schedules
 ```

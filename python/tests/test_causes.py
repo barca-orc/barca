@@ -100,8 +100,15 @@ def _held(rollup: dict, nodes: list[dict]) -> None:
     assert total["weight"] == sum(total["weights"].values())
     assert total["weights"]["fresh"] == fresh
     assert sum(r["weight"] for r in rollup["roots"]) == total["weight"] - fresh
-    weights = [r["weight"] for r in rollup["roots"]]
+    weights = [(r["needs_someone"], r["weight"]) for r in rollup["roots"]]
     assert weights == sorted(weights, reverse=True)
+    split = total["split"]
+    roots = rollup["roots"]
+    assert split["need_someone"] == sum(r["needs_someone"] for r in roots)
+    assert split["catching_up"] == sum(r["action"]["kind"] == "wait" for r in roots)
+    assert split["run_by_hand"] == sum(r["action"]["kind"] == "run_by_hand" for r in roots)
+    assert split["need_someone_nodes"] + split["in_hand_nodes"] == total["not_fresh"]
+    assert split["need_someone_weight"] + split["in_hand_weight"] == total["weight"] - fresh
     assert [h["root"] for h in total["held_by"]] == [r["id"] for r in rollup["roots"]]
     # The same nodes by kind (#992): fresh and each cause, as a list of one kind counts them.
     for kind, counted in rollup["kinds"].items():
@@ -118,7 +125,7 @@ def _held(rollup: dict, nodes: list[dict]) -> None:
         acted = causes["failing"] + causes["overdue"] + causes["no_refresh_path"]
         assert root["weight"] == 6 * acted + 2 * (root["nodes"] - acted)
         assert sum(root["causes"].values()) == root["nodes"]
-        assert set(root["action"]) == {"kind", "command", "estimated_seconds"}
+        assert set(root["action"]) == {"kind", "command", "estimated_seconds", "run_once"}
 
 
 def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
@@ -214,6 +221,7 @@ def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
     assert off["action"]["kind"] == "start_server" and off["action"]["command"] == "barca serve"
     assert roots["no_schedule:pipeline.py:ledger"]["action"] == {
         "kind": "add_schedule",
+        "run_once": "barca get totals",
         "command": None,
         "estimated_seconds": None,
     }
@@ -222,14 +230,17 @@ def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
     manual = roots["no_schedule:pipeline.py:reviewed"]
     assert manual["detail"] == "reviewed is Manual: no tick computes it"
     assert (manual["action"]["kind"], manual["action"]["command"]) == (
-        "run",
+        "run_by_hand",
         "barca get reviewed --refresh reviewed",
     )
+    assert not manual["needs_someone"]
     assert manual["action"]["estimated_seconds"] is not None
     printed = _ok(barca(project, "status", "pipeline.py", "--rollup", "--pretty", timeout=QUICK))
     assert "What holds the 5 nodes that are not fresh, and what clears it:" in printed, printed
+    assert "2 need you · 0 are catching up · 1 run by hand" in printed
+    assert "run once: barca get totals" in printed
     assert "1. no schedule: ledger" in printed, printed
-    assert "do:   run: barca get reviewed --refresh reviewed" in printed, printed
+    assert "do:   run by hand: barca get reviewed --refresh reviewed" in printed, printed
     assert "do:   start a server: barca serve" in printed, printed
 
     # The command clears its root: everything above `reviewed` is computed with it.
@@ -243,6 +254,11 @@ def test_status_says_why_each_node_is_not_fresh_and_what_explains_it(project):
         "ledger": ("no_refresh_path", "no_schedule:pipeline.py:ledger"),
         "totals": ("no_refresh_path", "no_schedule:pipeline.py:ledger"),
     }
+
+    once = roots["no_schedule:pipeline.py:ledger"]["action"]["run_once"]
+    _ok(barca(project, *once.split()[1:], "pipeline.py"))
+    refreshed = json.loads(_ok(barca(project, "status", "--rollup", "--json")))
+    assert refreshed["roots"] == []
 
 
 def test_a_server_roots_a_stale_chain_at_the_change_on_every_route(project, serve):
@@ -279,7 +295,9 @@ def test_a_server_roots_a_stale_chain_at_the_change_on_every_route(project, serv
     assert code["causes"]["catching_up"] == 2 and code["unbounded"] == 0
     assert code["action"]["kind"] == "wait" and code["action"]["command"] is None
     # Catching up has an estimate, so a gap ahead: the next tick is tomorrow at the latest.
-    assert code["gap_seconds"] > 0
+    assert code["fresh_by"] and code["gap_seconds"] > 0
+    assert rollup["roots"][0]["id"] == "no_schedule:pipeline.py:ledger"
+    assert rollup["roots"][0]["action"]["run_once"] == "barca get totals --server"
     # A command a server's answer names goes to the server.
     manual = next(r for r in rollup["roots"] if r["id"] == "no_schedule:pipeline.py:reviewed")
     assert manual["action"]["command"] == "barca get reviewed --refresh reviewed --server"

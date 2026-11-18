@@ -4,6 +4,7 @@ import type { DataCoverage } from "./DataCoverage";
 import type { EntryKind } from "./EntryKind";
 import type { HealthCounts } from "./HealthCounts";
 import type { HeldBy } from "./HeldBy";
+import type { HeldSplit } from "./HeldSplit";
 import type { KeyCounts } from "./KeyCounts";
 import type { Weights } from "./Weights";
 
@@ -76,11 +77,25 @@ weight: number,
 weights: Weights,
 /**
  * The roots that hold those nodes, each with what it holds underneath this entry, in
- * the order of the root list applied to what is held here (the most weight held first,
- * a failure first among equals; then nodes, gap and id). Their `nodes` add up to
- * `not_fresh`. Empty on a node entry: a node's root is on its row.
+ * the order of the root list applied to what is held here (the roots that need someone
+ * first; in each part the most weight held first, a failure first among equals; then
+ * nodes, gap and id). Their `nodes` add up to `not_fresh`. Empty on a node entry: a
+ * node's root is on its row.
  */
 held_by: Array<HeldBy>,
+/**
+ * The not-fresh nodes underneath by whether their root needs someone or is in hand:
+ * how many roots of each, how many nodes they hold and what those weigh. What a list
+ * of scopes is ordered by: the most `need_someone_weight` first, then the most
+ * `in_hand_weight`, so a fully fresh scope (both 0) is last.
+ */
+split: HeldSplit,
+/**
+ * The oldest `stale_since` underneath (RFC 3339, UTC): since when the first node that
+ * is not fresh has been out of date. `null` when every node is fresh or none has one
+ * recorded.
+ */
+stale_since: string | null,
 /**
  * The freshness gap underneath, node-seconds: the sum of the nodes' `gap_seconds`.
  */

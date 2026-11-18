@@ -74,9 +74,12 @@ export function HealthOverview({ rollup, byId, signals, scope, onScope, onOpen, 
               </span>
             ))}
             {estimate.length > 0 && <span className="barca-gap-estimate">{estimate.join(' · ')}</span>}
-            {center.gap_seconds > 0 && <span className="barca-gap-estimate" title="The freshness gap: how long the nodes have been out of date plus how long until they are expected fresh, added up over the nodes">{formatSpan(center.gap_seconds)} of gap</span>}
+            {center.gap_seconds > 0 && <span className="barca-gap-estimate" title="The freshness gap: how long the nodes have been out of date plus how long until they are expected fresh, added up over the nodes">{formatSpan(center.gap_seconds)} of gap across nodes (node-time)</span>}
           </p>
         )}
+        {center.split && center.not_fresh > 0 && <p>
+          {center.split.need_someone} {center.split.need_someone === 1 ? 'needs' : 'need'} you · {center.split.catching_up} {center.split.catching_up === 1 ? 'is' : 'are'} catching up{center.split.run_by_hand > 0 && <> · {center.split.run_by_hand} run by hand</>}
+        </p>}
         <CausesList
           todos={list}
           scope={center}

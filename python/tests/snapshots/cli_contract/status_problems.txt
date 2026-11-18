@@ -101,6 +101,7 @@ rollup.health.suspect : integer
 rollup.health.undecided : integer
 rollup.held_by : array
 rollup.held_by[] : object
+rollup.held_by[].action_kind : string
 rollup.held_by[].assets : integer
 rollup.held_by[].causes : object
 rollup.held_by[].causes.catching_up : integer
@@ -110,9 +111,11 @@ rollup.held_by[].causes.overdue : integer
 rollup.held_by[].causes.queued : integer
 rollup.held_by[].causes.undecided : integer
 rollup.held_by[].cumulative_nodes : integer
+rollup.held_by[].fresh_by : null
 rollup.held_by[].gap_seconds : integer
 rollup.held_by[].nodes : integer
 rollup.held_by[].root : string
+rollup.held_by[].stale_since : string
 rollup.held_by[].unbounded : integer
 rollup.held_by[].weight : integer
 rollup.id : string
@@ -122,6 +125,15 @@ rollup.nodes : integer
 rollup.not_fresh : integer
 rollup.parent : null
 rollup.running : integer
+rollup.split : object
+rollup.split.catching_up : integer
+rollup.split.in_hand_nodes : integer
+rollup.split.in_hand_weight : integer
+rollup.split.need_someone : integer
+rollup.split.need_someone_nodes : integer
+rollup.split.need_someone_weight : integer
+rollup.split.run_by_hand : integer
+rollup.stale_since : string
 rollup.unbounded : integer
 rollup.weight : integer
 rollup.weights : object

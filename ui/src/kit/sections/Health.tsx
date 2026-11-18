@@ -13,7 +13,7 @@ const sources = Array.from({ length: 12 }, (_, i) => nodeEntry(`inputs.py:source
 const exports = Array.from({ length: 20 }, (_, i) => nodeEntry(`publish.py:export_${i}`, 'group:p.py:publish', 'ok'))
 const cutoff = nodeEntry('drivers.py:cutoff', 'group:p.py:drivers', 'failing', { cause: 'failing', keys: { failed: 400, behind: 0, ok: 0, cause: 'failing' } })
 const failure = failureRoot('drivers.py:cutoff', "TypeError: cutoff() got an unexpected keyword argument 'registry'", 7)
-const unscheduled = heldRoot({ kind: 'no_schedule', node: 'inputs.py:source_0', detail: 'no tick reaches source_0', nodes: 3, causes: causeCounts({ no_refresh_path: 3 }), unbounded: 3, action: { kind: 'add_schedule', command: null, estimated_seconds: 42 } })
+const unscheduled = heldRoot({ kind: 'no_schedule', node: 'inputs.py:source_0', detail: 'no tick reaches source_0', nodes: 3, causes: causeCounts({ no_refresh_path: 3 }), unbounded: 3, action: { kind: 'add_schedule', command: null, run_once: null, estimated_seconds: 42 } })
 const held = [
   heldBy(failure.id, 7, 7, { causes: causeCounts({ failing: 7 }), unbounded: 7, gap_seconds: 93_600 }),
   heldBy(unscheduled.id, 3, 10, { causes: causeCounts({ no_refresh_path: 3 }), unbounded: 3 }),

@@ -146,20 +146,19 @@ export function parseEntrySort(raw: string | null): EntrySort {
 export interface EntryRank {
   name: string
   /** The entry's served `weight` (`GET /state/rollup`): its distance from fresh. 0 until loaded. */
-  weight: number
+  alarmWeight: number
+  inHandWeight: number
 }
 
 const RANK_NAMES = new Intl.Collator(undefined, { numeric: true })
 
 /**
- * Worst first, or by name. Worst is the farthest from fresh: the served `weight` of the row's
- * rollup entry, the number the health map sizes its segment by, so the table and the map put
- * the same scope first. Nothing is weighed here.
+ * Rank by the served actionable weight, then in-hand weight. Fresh nodes add neither.
  */
 export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): number {
   const name = RANK_NAMES.compare(a.name, b.name)
   if (sort === 'name') return name
-  return b.weight - a.weight || name
+  return b.alarmWeight - a.alarmWeight || b.inHandWeight - a.inHandWeight || name
 }
 
 /** What a group's box reads of its rollup entry: its nodes by cause, the fresh ones, and run work. */

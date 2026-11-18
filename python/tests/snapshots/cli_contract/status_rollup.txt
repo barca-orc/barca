@@ -48,6 +48,7 @@ entries[].health.suspect : integer
 entries[].health.undecided : integer
 entries[].held_by : array
 entries[].held_by[] : object
+entries[].held_by[].action_kind : string
 entries[].held_by[].assets : integer
 entries[].held_by[].causes : object
 entries[].held_by[].causes.catching_up : integer
@@ -57,9 +58,11 @@ entries[].held_by[].causes.overdue : integer
 entries[].held_by[].causes.queued : integer
 entries[].held_by[].causes.undecided : integer
 entries[].held_by[].cumulative_nodes : integer
+entries[].held_by[].fresh_by : null
 entries[].held_by[].gap_seconds : integer
 entries[].held_by[].nodes : integer
 entries[].held_by[].root : string
+entries[].held_by[].stale_since : string
 entries[].held_by[].unbounded : integer
 entries[].held_by[].weight : integer
 entries[].id : string
@@ -74,6 +77,15 @@ entries[].nodes : integer
 entries[].not_fresh : integer
 entries[].parent : null|string
 entries[].running : integer
+entries[].split : object
+entries[].split.catching_up : integer
+entries[].split.in_hand_nodes : integer
+entries[].split.in_hand_weight : integer
+entries[].split.need_someone : integer
+entries[].split.need_someone_nodes : integer
+entries[].split.need_someone_weight : integer
+entries[].split.run_by_hand : integer
+entries[].stale_since : null|string
 entries[].unbounded : integer
 entries[].weight : integer
 entries[].weights : object
@@ -183,6 +195,7 @@ roots[].action : object
 roots[].action.command : null|string
 roots[].action.estimated_seconds : null
 roots[].action.kind : string
+roots[].action.run_once : null|string
 roots[].assets : integer
 roots[].causes : object
 roots[].causes.catching_up : integer
@@ -193,10 +206,13 @@ roots[].causes.queued : integer
 roots[].causes.undecided : integer
 roots[].detail : string
 roots[].error_group : null|string
+roots[].fresh_by : null
 roots[].gap_seconds : integer
 roots[].id : string
 roots[].kind : string
+roots[].needs_someone : boolean
 roots[].node : string
 roots[].nodes : integer
+roots[].stale_since : string
 roots[].unbounded : integer
 roots[].weight : integer
