@@ -153,6 +153,68 @@ def draining(server: Serve) -> bool:
     return server.request("GET", "/health")[1]["status"] == "draining"
 
 
+def test_multi_target_counts_match_queue_history_and_run_detail(project, serve):
+    with (project / "pipeline.py").open("a") as pipeline:
+        pipeline.write("\nfrom barca import asset\n")
+        for name in ("alpha", "beta", "gamma"):
+            pipeline.write(f"\n@asset()\ndef {name}() -> int:\n    return 1\n")
+    server = serve("--no-schedule", "--max-runs", "1")
+    start_long(server, project)
+    targets = ["alpha", "beta", "gamma"]
+    status, accepted = server.request("POST", "/runs", {"command": "get", "targets": targets})
+    assert status == 202, accepted
+    run_id = accepted["run_id"]
+    queue = server.request("GET", "/queue")[1]
+    assert queue["slots"] == "1 of 1 running"
+    assert queue["queued"][0]["target_line"] == "alpha +2 more"
+    cli = barca(project, "queue", "--server", server.url, "--pretty")
+    assert cli.returncode == 0, cli.stderr
+    assert "alpha +2 more" in cli.stdout and "alpha,beta,gamma" not in cli.stdout
+    (project / "release-long").touch()
+    detail = server.finished(run_id)["explanation"]
+    counts = detail["counts"]
+    assert counts["steps"] == counts["ran"] == counts["attempts"] == 3
+    assert counts["ok"] + counts["failed"] + counts["cached"] + counts["not_reached"] == 3
+    assert len(detail["outputs"]) == 3
+    rows = server.request("GET", "/runs")[1]["runs"]
+    row = next(row for row in rows if row["id"] == run_id)["line"]
+    assert row["steps"] == counts["outcome"]
+    assert row["target"] == detail["target_line"] == "alpha +2 more"
+
+
+def test_failed_run_accounts_for_the_downstream_steps_it_never_reached(project, serve):
+    with (project / "pipeline.py").open("a") as pipeline:
+        pipeline.write("""
+from barca import asset
+
+@asset()
+def seed() -> int:
+    raise ValueError("synthetic failure")
+
+@asset(inputs={"seed": seed})
+def middle(seed: int) -> int:
+    return seed
+
+@asset(inputs={"middle": middle})
+def output(middle: int) -> int:
+    return middle
+""")
+    server = serve("--no-schedule", "--max-runs", "1")
+    run_id = server.submit("output", command="get")["run_id"]
+    detail = server.finished(run_id)["explanation"]
+    counts = detail["counts"]
+    assert counts["steps"] == counts["nodes"] == 3
+    assert counts["ran"] == counts["failed"] == counts["attempts"] == 1
+    assert counts["ok"] == counts["cached"] == counts["retries"] == 0
+    assert counts["not_reached"] == counts["not_reached_nodes"] == 2
+    assert counts["outcome"] == "0 ok · 1 failed · 0 cached · 2 not reached"
+    row = next(r for r in server.get("/runs")["runs"] if r["id"] == run_id)
+    assert row["line"]["steps"] == counts["outcome"]
+    history = barca(project, "history", run_id, "--server", server.url, "--json")
+    assert history.returncode == 0, history.stderr
+    assert json.loads(history.stdout)["explanation"]["counts"] == counts
+
+
 # ─── a restart resumes the queue ─────────────────────────────────────────────
 
 

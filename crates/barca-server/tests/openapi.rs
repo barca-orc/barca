@@ -312,7 +312,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     shared["queue"]["capacity"] = json!({"total": 4, "in_use": 3, "waiting": 1});
     assert!(health.is_valid(&shared));
     let queue = validator(&json!({"$ref":"#/components/schemas/Queue"}));
-    let mut view = json!({"paused":false,"paused_at":null,"draining":false,"max_runs":4,"running":[],"queued":[],"capacity":null});
+    let mut view = json!({"paused":false,"paused_at":null,"draining":false,"max_runs":4,"slots":"0 of 4 running","running":[],"queued":[],"capacity":null});
     assert!(queue.is_valid(&view));
     let capacity = barca_core::serve::capacity::SharedCapacity::new(4, "--capacity");
     assert!(capacity.try_acquire("r1", "p.py:a", 3));

@@ -105,7 +105,7 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
             lambda: _running_of(port, "slow"), "slow to show as running", timeout=10
         )
         assert running["triggered_by"] == "manual", running
-        assert running["step"] == "running", running
+        assert running["step"] == "waiting", running
         assert running["partitions"] is None, running
         assert _running_of(port, "upstream") is None
         detail = _get(port, "/assets/slow")
@@ -182,9 +182,9 @@ def test_history_says_what_a_run_in_flight_is_working_on_here_and_through_a_serv
         # On this machine, from what the run recorded: its target has no result yet.
         [here] = _in_flight(tmp_path)
         now = here["now"]
-        assert [n["node_id"] for n in now["running"]] == ["pipeline.py:slow"], now
-        assert (now["queued"], now["keys"], now["groups"]) == (0, None, []), now
-        assert now["line"] == "executing 1: slow", now
+        assert now["running"] == [], now
+        assert (now["queued"], now["keys"], now["groups"]) == (1, None, []), now
+        assert now["line"] == "1 waiting", now
         # The server reads the same run by the same rule, and its route says the same.
         [there] = wait_until(lambda: _in_flight(tmp_path, *server), "the server to list the run")
         assert there["run_id"] == here["run_id"]
@@ -193,7 +193,7 @@ def test_history_says_what_a_run_in_flight_is_working_on_here_and_through_a_serv
         assert route["now"] == now
         # The table prints it under the run's row; `--fields` selects it.
         table = _history(tmp_path, "--status", "running", "--pretty")
-        assert "\n  now: executing 1: slow\n" in table.stdout, table.stdout
+        assert "\n  now: 1 waiting\n" in table.stdout, table.stdout
         fields = _in_flight(tmp_path, "--fields", "run_id,now")
         assert fields == [{"run_id": here["run_id"], "now": now}]
         # Not asked for the runs in progress: the list stays as it was.

@@ -554,7 +554,11 @@ pub struct QueueEntry {
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub position: Option<usize>,
     pub command: String,
+    /// The targets as given, comma-separated; `null` for every asset.
     pub target: Option<String>,
+    /// `target` in a few words, as a row shows it (`barca_core::run_list::target_line`):
+    /// `all assets`, `billing.py:orders +21 more`.
+    pub target_line: String,
     pub triggered_by: TriggeredBy,
     pub schedule_id: Option<String>,
     /// When the server accepted it.
@@ -602,6 +606,10 @@ pub struct QueueView {
     pub running: Vec<QueueEntry>,
     /// The runs waiting to start, next first.
     pub queued: Vec<QueueEntry>,
+    /// The run slots in use, in words (`barca_core::run_list::queue_slots_line`): `1 of 4
+    /// running`, or `1 of 1 running, plus 1 requested run` while a run someone asked for
+    /// executes in the extra slot past `max_runs`.
+    pub slots: String,
     /// The capacity every run shares (`--capacity`, `[server] capacity`): the weight in use,
     /// by run, and the steps waiting for it, in the order they are admitted. `null` when the
     /// server has none (each run has only its own).
@@ -619,6 +627,7 @@ fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bo
         .into(),
         position,
         command: run.command.clone(),
+        target_line: barca_core::run_list::target_line(run.target.as_deref()),
         target: run.target.clone(),
         triggered_by: run.trigger.triggered_by,
         schedule_id: run.trigger.schedule_id.clone(),
@@ -762,6 +771,7 @@ pub fn view(state: &AppState) -> QueueView {
         paused_at: paused_at.map(barca_core::outcome::rfc3339),
         draining: state.is_draining(),
         max_runs: state.queue.max_runs,
+        slots: barca_core::run_list::queue_slots_line(running.len(), state.queue.max_runs),
         running,
         queued,
         capacity: state.capacity.as_ref().map(|c| c.snapshot()),
@@ -780,12 +790,14 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             continue;
         };
         let started = row.state != QueueState::Queued;
+        let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
         let item = QueueEntry {
             run_id: row.run_id,
             status: if started { "running" } else { "pending" }.into(),
             position: (!started).then_some(queued.len() + 1),
             command: spec.command.as_str().into(),
-            target: (!spec.targets.is_empty()).then(|| spec.targets.join(",")),
+            target_line: barca_core::run_list::target_line(target.as_deref()),
+            target,
             triggered_by: spec.trigger.triggered_by,
             schedule_id: spec.trigger.schedule_id.clone(),
             queued_at: timestamp(accepted_at),
@@ -808,6 +820,7 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
         paused_at: paused_at.map(barca_core::outcome::rfc3339),
         draining: state.is_draining(),
         max_runs: state.queue.max_runs,
+        slots: barca_core::run_list::queue_slots_line(running.len(), state.queue.max_runs),
         running,
         queued,
         capacity: None,

@@ -31,6 +31,12 @@ running: Array<QueueEntry>,
  */
 queued: Array<QueueEntry>,
 /**
+ * The run slots in use, in words (`barca_core::run_list::queue_slots_line`): `1 of 4
+ * running`, or `1 of 1 running, plus 1 requested run` while a run someone asked for
+ * executes in the extra slot past `max_runs`.
+ */
+slots: string,
+/**
  * The capacity every run shares (`--capacity`, `[server] capacity`): the weight in use,
  * by run, and the steps waiting for it, in the order they are admitted. `null` when the
  * server has none (each run has only its own).

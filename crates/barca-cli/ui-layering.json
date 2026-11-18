@@ -497,13 +497,6 @@
         "reason": "a run step's status in the event stream, not a cause"
       },
       {
-        "file": "lib/running.ts",
-        "words": [
-          "queued"
-        ],
-        "reason": "a run step's live status, not a cause"
-      },
-      {
         "file": "lib/schedules.ts",
         "words": [
           "queued"

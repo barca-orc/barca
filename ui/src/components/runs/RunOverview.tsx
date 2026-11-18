@@ -67,7 +67,7 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
           </p>
           <span className="barca-run-reason-label">Executing now</span>
           {overview.now.running.length === 0
-            ? <p className="barca-note barca-muted">{overview.now.queued > 0 ? `${plural(overview.now.queued, 'node')} waiting for a worker.` : 'Between steps.'}</p>
+            ? <p className="barca-note barca-muted">{overview.now.queued > 0 ? `${plural(overview.now.queued, 'node')} waiting.` : 'Between steps.'}</p>
             : <ul className="barca-run-active">
                 {overview.now.running.slice(0, ACTIVE_SHOWN).map((node) => (
                   <li key={node.node_id}>
@@ -80,7 +80,7 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
                   <li className="barca-note barca-muted">
                     {overview.now.running.length > ACTIVE_SHOWN && <>{(overview.now.running.length - ACTIVE_SHOWN).toLocaleString()} more running</>}
                     {overview.now.running.length > ACTIVE_SHOWN && overview.now.queued > 0 && ' · '}
-                    {overview.now.queued > 0 && <>{overview.now.queued.toLocaleString()} queued</>}
+                    {overview.now.queued > 0 && <>{overview.now.queued.toLocaleString()} waiting</>}
                   </li>
                 )}
               </ul>}
@@ -88,7 +88,7 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
             <span className="barca-run-reason-label">By group</span>
             <ul className="barca-run-groups">
               {overview.now.groups.slice(0, GROUPS_SHOWN).map((g) => (
-                <li key={g.id}><MiddleName name={g.group} /><span className="barca-cell-sub">{g.running} running{g.queued > 0 && `, ${g.queued} queued`}</span></li>
+                <li key={g.id}><MiddleName name={g.group} /><span className="barca-cell-sub">{g.running} running{g.queued > 0 && `, ${g.queued} waiting`}</span></li>
               ))}
             </ul>
           </>}

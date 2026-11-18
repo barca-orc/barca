@@ -40,6 +40,7 @@ pub(crate) const FINISHED_KEPT: usize = 4096;
 #[derive(Debug, Default)]
 pub struct SharedSteps {
     inner: Mutex<Inner>,
+    executing: Mutex<HashMap<String, HashMap<String, usize>>>,
 }
 
 #[derive(Debug, Default)]
@@ -82,6 +83,17 @@ pub(crate) enum Claim {
 }
 
 impl SharedSteps {
+    pub(crate) fn set_executing(&self, run: &str, nodes: HashMap<String, usize>) {
+        self.executing.lock().unwrap().insert(run.into(), nodes);
+    }
+    pub fn executing(&self, run: &str) -> HashMap<String, usize> {
+        self.executing
+            .lock()
+            .unwrap()
+            .get(run)
+            .cloned()
+            .unwrap_or_default()
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -165,6 +177,7 @@ impl SharedSteps {
 
     /// Release every claim `run_id` holds (its run ended, or was cancelled).
     pub fn leave(&self, run_id: &str) {
+        self.executing.lock().unwrap().remove(run_id);
         self.inner
             .lock()
             .unwrap()

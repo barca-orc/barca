@@ -4,7 +4,8 @@ import type { RunningStep } from "./RunningStep";
 import type { TriggeredBy } from "./TriggeredBy";
 
 /**
- * A run working on a node now.
+ * A run in flight that has a node in it: executing it, about to reach it, or waiting in the
+ * queue with it among its nodes (`step`).
  */
 export type NodeRunning = {
 /**
@@ -18,7 +19,16 @@ triggered_by: TriggeredBy | null,
 /**
  * When the run started (RFC 3339, UTC).
  */
-started_at: string, step: RunningStep,
+started_at: string,
+/**
+ * `running`: the run is executing it now. `waiting`: the run is executing and will still
+ * reach it. `queued`: the run waits in the queue.
+ */
+step: RunningStep,
+/**
+ * `step` in the words every surface prints: `running`, `in this run`, `in a queued run`.
+ */
+label: string,
 /**
  * For a partitioned node: how many of its keys are done.
  */

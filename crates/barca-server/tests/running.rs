@@ -163,7 +163,7 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     // `first` finishes at once; `slow` then runs for seconds, and `after` waits for it.
     let running = wait_for(&app, "slow", "ran", |r| r["step"] == "running").await;
     let after = running_of(&app, "after").await;
-    assert_eq!(after["step"], "queued", "{after}");
+    assert_eq!(after["step"], "waiting", "{after}");
     assert_eq!(after["run_id"], run_id.as_str(), "{after}");
     assert_eq!(running["run_id"], run_id.as_str(), "{running}");
     assert_eq!(running["triggered_by"], "api", "{running}");
@@ -262,10 +262,10 @@ async fn a_cached_upstream_step_is_not_executing_and_its_dependant_is() {
     let slow = wait_for(&app, "slow", "ran", |r| r["step"] == "running").await;
     assert_eq!(slow["run_id"], run_id.as_str(), "{slow}");
     assert!(running_of(&app, "first").await.is_null());
-    assert_eq!(running_of(&app, "after").await["step"], "queued");
+    assert_eq!(running_of(&app, "after").await["step"], "waiting");
     let runs = in_flight(&app).await;
     let now = &runs[0]["now"];
-    assert_eq!(now["line"], "executing 1: slow · 1 queued", "{now}");
+    assert_eq!(now["line"], "executing 1: slow · 1 waiting", "{now}");
     // A run asked to compute `first` again does execute it.
     send(&app, "DELETE", &format!("/runs/{run_id}"), None).await;
     wait_for(&app, "slow", "cleared", Value::is_null).await;
@@ -294,11 +294,8 @@ async fn a_partitioned_node_shows_its_keys_done() {
     })
     .await;
     if !partway.is_null() {
-        assert_eq!(
-            partway["partitions"]["running"].as_u64().unwrap() + done(&partway),
-            4,
-            "{partway}"
-        );
+        let running_keys = partway["partitions"]["running"].as_u64().unwrap();
+        assert!(running_keys + done(&partway) <= 4, "{partway}");
     }
     wait_for(&app, "keyed", "cleared", Value::is_null).await;
 }
@@ -389,6 +386,16 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
             .unwrap()
     };
     let row = named(&state);
+    assert_eq!(row["running"]["step"], "queued");
+    let executing = state
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["running"]["step"] == "running")
+        .count();
+    assert_eq!(executing, 1);
+    let (_, rollup) = send(&app, "GET", "/state/rollup", None).await;
+    assert_eq!(rollup["entries"][0]["running"], executing);
     let block = named(&nodes["nodes"])["schedule"].clone();
     let run = runs["runs"]
         .as_array()

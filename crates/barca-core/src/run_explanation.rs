@@ -30,12 +30,26 @@ pub struct RunExplanation {
     pub targets: Vec<String>,
     /// What started the run and, when the server knows, who: `api · token:ci-bot`.
     pub requested_by: String,
-    /// Steps tried and how many of the attempts were retries: `29 steps, no retries`,
-    /// `19,399 steps, 62 retries`. `null` before the run recorded an attempt.
+    /// The run's attempts and how many of them retried a step within this run
+    /// ([`RunCounts::attempts_line`]): `29 attempts: one per step, none retried`,
+    /// `19,461 attempts: 19,399 steps, 62 retries`. `null` before the run recorded an attempt.
     pub attempts: Option<String>,
-    /// The run's steps by outcome: `7 ok · 1 failed · 2 skipped · 0 cached`, or
-    /// `3 started · 0 cached` for a run that did not finish.
+    /// The run's steps by outcome ([`RunCounts::outcome`]): `7 ok · 1 failed · 0 cached · 2 not
+    /// reached`, or `3 started · 0 cached` for a run that did not finish.
     pub steps: String,
+    /// The run's numbers, each counted once with its unit: steps planned, ran, ok, failed,
+    /// cached and not reached (which add up), the nodes they belong to, attempts and retries.
+    #[serde(default)]
+    pub counts: RunCounts,
+    /// The run's targets in a few words ([`crate::run_list::target_line`]):
+    /// `billing.py:orders +21 more`. `targets` is the full list.
+    #[serde(default)]
+    pub target_line: String,
+    /// What the run's targets returned, one row each ([`RunOutput`]): the artifact's format,
+    /// size and rows instead of the raw pointer. Empty when the run returned no artifact (a
+    /// run of every asset, a task's value, a run that did not succeed).
+    #[serde(default)]
+    pub outputs: Vec<RunOutput>,
     /// What became of each target, one line each: `publish_plan did not run: upstream
     /// demand_forecast failed 7 keys`. Empty for a run of every asset, or when the run's plan
     /// could not be rebuilt.
@@ -48,6 +62,86 @@ pub struct RunExplanation {
     pub progress: Option<RunProgress>,
     /// The nodes that took longest, slowest first, at most [`SLOWEST_SHOWN`].
     pub slowest: Vec<SlowNode>,
+}
+
+/// A run's numbers (#1042), each counted once here so no surface counts them again. The unit
+/// is the step: one node, or one key of a partitioned node. They add up:
+/// `steps = ok + failed + cached + not_reached` and `ran = ok + failed`; with retries recorded,
+/// `attempts = ran + retries`. Experimental.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunCounts {
+    /// Steps the run planned. A dynamic `partitions_from` node adds its keys once they are
+    /// known, so a run in progress can still grow.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub steps: u64,
+    /// Nodes of the run's plan; `null` when the plan could not be rebuilt (a run in progress,
+    /// a local `barca history RUN_ID`, sources that no longer plan what it ran).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub nodes: Option<u64>,
+    /// Steps the run executed, failed ones included.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub ran: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub ok: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub failed: u64,
+    /// Steps served from cache. A run counts them when it ends: 0 while it is in progress.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub cached: u64,
+    /// Planned steps the run did not get to: downstream of a failure, or after it stopped.
+    /// For a run in progress, the steps it has left.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub not_reached: u64,
+    /// Of `not_reached`, the nodes that never started (some of a partitioned node's keys may
+    /// also be not reached while the node itself ran); `null` with `nodes`.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub not_reached_nodes: Option<u64>,
+    /// Recorded attempts: `ran` plus `retries`. `null` before the run recorded one.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub attempts: Option<u64>,
+    /// Attempts after a step's first, within this run; `null` when not recorded (before 0.43).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub retries: Option<u64>,
+    /// The steps by outcome: `32 ok · 6 failed · 0 cached · 10 not reached`;
+    /// `3 started · 0 cached · 2 not reached` for a run that did not finish; `12 ok · 988
+    /// left` for a run in progress.
+    pub outcome: String,
+    /// What was planned, with its units: `48 steps planned over 9 nodes`.
+    pub planned: String,
+    /// For a run that left steps undone: `10 steps not reached, 2 nodes never started:
+    /// left_output, right_output`. `null` when it reached everything, and while it runs.
+    pub not_reached_line: Option<String>,
+    /// `29 attempts: one per step, none retried`; `null` with `attempts`.
+    pub attempts_line: Option<String>,
+    /// What a step is, for a tooltip or a footnote.
+    pub units: String,
+}
+
+/// What a step is, as every surface that prints step counts says it.
+pub const STEP_UNITS: &str = "A step is one node, or one key of a partitioned node";
+
+/// What one target of a run returned (#1042): the artifact in a few served fields, so no
+/// surface prints the raw `_barca_artifact` pointer. Experimental.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunOutput {
+    pub node_id: String,
+    /// `json`, `parquet`, `pickle`, …; `null` when the pointer does not say.
+    pub format: Option<String>,
+    /// The artifact's size; for a partitioned node, the sum over the keys the run returned.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub size_bytes: Option<u64>,
+    /// Rows of a tabular artifact, when the run recorded them (a step it executed).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub rows: Option<u64>,
+    /// For a partitioned node: how many keys.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub keys: Option<u64>,
+    /// The artifact's path (one key's is left out).
+    pub path: Option<String>,
+    /// The row in one line: `orders  parquet · 2.8 KB · 50 rows`.
+    pub line: String,
 }
 
 /// Why a cancelled run was cancelled, as a sentence.
@@ -166,6 +260,8 @@ pub struct RunFacts<'a> {
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
     pub steps_cached: i64,
+    /// Recorded steps that failed, each key counted; `None` when the caller has no count.
+    pub steps_failed: Option<i64>,
     /// As recorded (`YYYY-MM-DD HH:MM:SS`, UTC) or RFC 3339.
     pub started_at: &'a str,
     pub plan_reasons: Option<&'a PlanReasons>,
@@ -185,6 +281,7 @@ impl<'a> From<&'a RunRecord> for RunFacts<'a> {
             steps_total: r.steps_total,
             steps_executed: r.steps_executed,
             steps_cached: r.steps_cached,
+            steps_failed: r.steps_failed,
             started_at: &r.started_at,
             plan_reasons: r.plan_reasons.as_ref(),
             cancellation: r.cancellation.as_ref(),
@@ -205,6 +302,7 @@ impl<'a> From<&'a RunView> for RunFacts<'a> {
             steps_total: r.steps_total,
             steps_executed: r.steps_executed,
             steps_cached: r.steps_cached,
+            steps_failed: None,
             started_at: &r.started_at,
             plan_reasons: r.plan_reasons.as_ref(),
             cancellation: r.cancellation.as_ref(),
@@ -221,22 +319,27 @@ pub fn explain(
     now: f64,
 ) -> RunExplanation {
     let live = matches!(run.status, "pending" | "running");
+    let counts = run_counts(run, nodes, steps);
     RunExplanation {
         targets: targets(run),
         requested_by: requested_by(run.triggered_by, run.principal),
-        attempts: attempts_label(run.attempts, run.retries),
-        steps: steps_label(run, nodes, steps),
+        attempts: counts.attempts_line.clone(),
+        steps: counts.outcome.clone(),
+        target_line: crate::run_list::target_line(run.target),
+        outputs: Vec::new(),
         target_outcomes: target_outcomes(run, nodes),
         cancellation: run.cancellation.map(cancellation_notice),
         why: why_ran(
             run.plan_reasons,
             live,
-            run.steps_executed.max(0) as u64,
+            counts.ran,
+            counts.cached > 0 && counts.cached == counts.steps,
             // A run cancelled in the queue decided nothing: its cancellation says so.
             run.cancellation.is_some_and(|c| !c.started),
         ),
         progress: live.then(|| progress(run, now)),
         slowest: slowest_nodes(nodes, steps, SLOWEST_SHOWN),
+        counts,
     }
 }
 
@@ -296,61 +399,339 @@ fn requested_by(triggered_by: Option<TriggeredBy>, principal: Option<&str>) -> S
     }
 }
 
-/// Steps tried, and the retries apart from them: a step's first attempt is not a retry, so a
-/// run of 29 steps that retried nothing is `29 steps, no retries`, not 29 attempts. A run that
-/// did not record its retries (before 0.43) says only its attempts.
-fn attempts_label(attempts: Option<i64>, retries: Option<i64>) -> Option<String> {
-    let attempts = attempts.filter(|n| *n > 0)? as u64;
-    Some(match retries.map(|n| n.max(0) as u64) {
+/// A run's attempts beside its steps: each step that ran has one attempt, and each attempt
+/// after a step's first is a retry within this run. (A step that runs because an earlier run's
+/// attempt failed is not a retry of this run: that is a reason it ran, [`reason_label`].) A run
+/// that did not record its retries (before 0.43) says only its attempts.
+fn attempts_label(attempts: Option<u64>, retries: Option<u64>) -> Option<String> {
+    let attempts = attempts.filter(|n| *n > 0)?;
+    Some(match retries {
         None => plural(attempts, "attempt", "attempts"),
-        Some(0) => format!("{}, no retries", steps_of(attempts)),
+        Some(0) => format!(
+            "{}: one per step, none retried",
+            plural(attempts, "attempt", "attempts")
+        ),
         Some(retries) => format!(
-            "{}, {}",
+            "{}: {}, {}",
+            plural(attempts, "attempt", "attempts"),
             steps_of(attempts.saturating_sub(retries)),
             plural(retries, "retry", "retries")
         ),
     })
 }
 
-/// `7 ok · 1 failed · 2 skipped · 0 cached`. `executed` counts every step that ran, failed
-/// ones included, so ok is `executed - failed`.
-fn outcome_label(executed: u64, cached: u64, failed: u64, skipped: u64) -> String {
-    let failed = failed.min(executed);
-    let mut parts = vec![format!("{} ok", count(executed - failed))];
-    if failed > 0 {
-        parts.push(format!("{} failed", count(failed)));
-    }
-    if skipped > 0 {
-        parts.push(format!("{} skipped", count(skipped)));
-    }
-    parts.push(format!("{} cached", count(cached)));
-    parts.join(" · ")
+/// What [`step_counts`] reads of a run.
+#[derive(Clone, Copy, Debug)]
+pub struct StepFacts<'a> {
+    pub status: &'a str,
+    pub steps_total: Option<i64>,
+    pub steps_executed: i64,
+    pub steps_cached: i64,
+    /// Steps that failed, each key counted.
+    pub steps_failed: u64,
 }
 
-/// A run's steps by outcome: failed keys and skipped nodes from its per-node summary. A run
-/// that did not finish says what it started, since what it did not reach is not an outcome.
-fn steps_label(run: RunFacts<'_>, nodes: &[RunNodeSummary], steps: &[RunStep]) -> String {
-    let executed = run.steps_executed.max(0) as u64;
+/// A run's steps by outcome, counted once: what a run's panel, a row of the run list and
+/// `barca history` all print. `nodes`, `not_reached_nodes`, attempts and their lines are left
+/// for [`run_counts`], which has the run's per-node summary.
+pub fn step_counts(run: StepFacts<'_>) -> RunCounts {
+    let ran = run.steps_executed.max(0) as u64;
     let cached = run.steps_cached.max(0) as u64;
+    let failed = run.steps_failed.min(ran);
+    let ok = ran - failed;
+    let steps = (run.steps_total.unwrap_or(0).max(0) as u64).max(ran + cached);
+    let not_reached = steps - ran - cached;
+    let live = matches!(run.status, "pending" | "running");
+    let mut parts = Vec::new();
     if matches!(run.status, "cancelled" | "interrupted" | "error") {
-        return format!("{} started · {} cached", count(executed), count(cached));
+        // What it started may not have finished, so none of it is called ok.
+        parts.push(format!("{} started", count(ran)));
+    } else {
+        parts.push(format!("{} ok", count(ok)));
+        if failed > 0 {
+            parts.push(format!("{} failed", count(failed)));
+        }
     }
+    if live {
+        // A run counts its cached steps when it ends.
+        if not_reached > 0 {
+            parts.push(format!("{} left", count(not_reached)));
+        }
+    } else {
+        parts.push(format!("{} cached", count(cached)));
+        if not_reached > 0 {
+            parts.push(format!("{} not reached", count(not_reached)));
+        }
+    }
+    RunCounts {
+        steps,
+        nodes: None,
+        ran,
+        ok,
+        failed,
+        cached,
+        not_reached,
+        not_reached_nodes: None,
+        attempts: None,
+        retries: None,
+        outcome: parts.join(" · "),
+        planned: format!("{} planned", steps_of(steps)),
+        not_reached_line: (!live && not_reached > 0)
+            .then(|| format!("{} not reached", steps_of(not_reached))),
+        attempts_line: None,
+        units: STEP_UNITS.to_string(),
+    }
+}
+
+/// How many nodes [`RunCounts::not_reached_line`] names.
+const NOT_REACHED_NAMES: usize = 3;
+
+/// A run's numbers: its steps by outcome ([`step_counts`]), then what its per-node summary
+/// adds (the nodes of its plan, those that never started) and its attempts.
+fn run_counts(run: RunFacts<'_>, nodes: &[RunNodeSummary], steps: &[RunStep]) -> RunCounts {
     // A local `barca history RUN_ID` has no per-node summary (only a server rebuilds the run's
     // plan), so the failed steps it lists are counted too: a failed step is never "ok".
     let listed_failed = steps
         .iter()
         .filter(|s| StepStatus::Failed.is(Some(s.status.as_str())))
         .count();
-    let failed: usize = nodes
+    let failed = nodes
         .iter()
         .map(|n| n.failed)
         .sum::<usize>()
-        .max(listed_failed);
-    let skipped = nodes
+        .max(listed_failed)
+        .max(run.steps_failed.unwrap_or(0).max(0) as usize);
+    let mut counts = step_counts(StepFacts {
+        status: run.status,
+        steps_total: run.steps_total,
+        steps_executed: run.steps_executed,
+        steps_cached: run.steps_cached,
+        steps_failed: failed as u64,
+    });
+    if nodes.iter().any(|n| n.status.is_some()) {
+        let skipped: Vec<&str> = nodes
+            .iter()
+            .filter(|n| StepStatus::Skipped.is(n.status.as_deref()))
+            .map(|n| short_name(&n.node_id))
+            .collect();
+        counts.nodes = Some(nodes.len() as u64);
+        counts.not_reached_nodes = Some(skipped.len() as u64);
+        counts.planned = format!(
+            "{} planned over {}",
+            steps_of(counts.steps),
+            nodes_of(nodes.len() as u64)
+        );
+        if counts.not_reached_line.is_some() && !skipped.is_empty() {
+            let mut names: Vec<String> = skipped
+                .iter()
+                .take(NOT_REACHED_NAMES)
+                .map(|n| (*n).to_string())
+                .collect();
+            if skipped.len() > NOT_REACHED_NAMES {
+                names.push(format!(
+                    "+{} more",
+                    count((skipped.len() - NOT_REACHED_NAMES) as u64)
+                ));
+            }
+            counts.not_reached_line = Some(format!(
+                "{} not reached, {} never started: {}",
+                steps_of(counts.not_reached),
+                nodes_of(skipped.len() as u64),
+                names.join(", ")
+            ));
+        }
+    }
+    counts.attempts = run.attempts.filter(|n| *n > 0).map(|n| n as u64);
+    counts.retries = counts.attempts.and(run.retries).map(|n| n.max(0) as u64);
+    counts.attempts_line = match (counts.attempts, counts.retries) {
+        (Some(attempts), Some(retries)) if attempts != counts.ran + retries => Some(format!(
+            "{} recorded, including {}",
+            plural(attempts, "attempt", "attempts"),
+            plural(retries, "retry", "retries")
+        )),
+        _ => attempts_label(counts.attempts, counts.retries),
+    };
+    counts
+}
+
+/// The size of an artifact in words, as `barca status` prints sizes.
+fn size_label(bytes: u64) -> String {
+    crate::gc::size::human(bytes)
+}
+
+/// One target's output from the pointer its run returned. `value`: the target's
+/// `final_output`. `None` when it is not an artifact (a task's value, nothing).
+fn output_of(node_id: &str, value: &serde_json::Value, steps: &[RunStep]) -> Option<RunOutput> {
+    const POINTER: &str = "_barca_artifact";
+    let object = value.as_object()?;
+    let pointer = |v: &serde_json::Value| -> Option<(Option<String>, Option<u64>, Option<String>)> {
+        let p = v.get(POINTER)?;
+        Some((
+            p.get("format").and_then(|f| f.as_str()).map(str::to_string),
+            p.get("size_bytes").and_then(|n| n.as_u64()),
+            p.get("path").and_then(|f| f.as_str()).map(str::to_string),
+        ))
+    };
+    let rows_of = |id: &str| {
+        steps
+            .iter()
+            .find(|s| s.node_id == id)
+            .and_then(|s| s.rows)
+            .map(|n| n.max(0) as u64)
+    };
+    let (format, size_bytes, path, keys, rows) = if let Some((format, size, path)) = pointer(value)
+    {
+        (format, size, path, None, rows_of(node_id))
+    } else {
+        // A partitioned target: pointers by key, or the summary of a node with many keys.
+        let summary = object.get(crate::report::KEY_SUMMARY);
+        let listed = match summary {
+            Some(s) => s.get("outputs").and_then(|o| o.as_object())?,
+            None => object,
+        };
+        let pointers: Vec<_> = listed.values().filter_map(pointer).collect();
+        if summary.is_none() && (pointers.is_empty() || pointers.len() != listed.len()) {
+            return None;
+        }
+        let keys = summary
+            .and_then(|s| s.get("keys"))
+            .and_then(|n| n.as_u64())
+            .unwrap_or(pointers.len() as u64);
+        // The summary lists some keys only: their sizes are not the node's.
+        let size = if keys == pointers.len() as u64 {
+            pointers.iter().map(|p| p.1).sum::<Option<u64>>()
+        } else {
+            None
+        };
+        (
+            pointers.first().and_then(|p| p.0.clone()),
+            size,
+            None,
+            Some(keys),
+            None,
+        )
+    };
+    Some(output_row(node_id, format, size_bytes, rows, keys, path))
+}
+
+/// The run's targets as node ids, in the order they were given when they were given as node
+/// ids; else its job's (sorted). Empty for a run of everything.
+pub fn output_targets(target: Option<&str>, job: Option<&str>) -> Vec<String> {
+    let given = crate::run_list::target_ids(target);
+    let ids = if !given.is_empty() && given.iter().all(|id| id.contains(':')) {
+        given
+    } else {
+        crate::run_list::target_ids(job)
+    };
+    ids.into_iter().map(str::to_string).collect()
+}
+
+/// One target's output from the steps the run listed for it: its own step, or the keys of a
+/// partitioned node. `None` when the run executed nothing of it (it was cached).
+fn output_of_steps(node_id: &str, steps: &[RunStep]) -> Option<RunOutput> {
+    let mine: Vec<&RunStep> = steps
         .iter()
-        .filter(|n| StepStatus::Skipped.is(n.status.as_deref()))
-        .count();
-    outcome_label(executed, cached, failed as u64, skipped as u64)
+        .filter(|s| crate::StepId::parse(&s.node_id).base_id() == node_id)
+        .filter(|s| StepStatus::Success.is(Some(s.status.as_str())) && s.artifact_path.is_some())
+        .collect();
+    let first = mine.first()?;
+    let partitioned = mine.len() > 1 || first.node_id != node_id;
+    let sum = |f: fn(&RunStep) -> Option<i64>| -> Option<u64> {
+        let values: Vec<i64> = mine.iter().filter_map(|s| f(s)).collect();
+        (!values.is_empty()).then(|| values.iter().map(|n| (*n).max(0) as u64).sum())
+    };
+    let format = first.artifact_format.clone();
+    let size_bytes = sum(|s| s.artifact_size_bytes);
+    let rows = sum(|s| s.rows);
+    let keys = partitioned.then_some(mine.len() as u64);
+    Some(output_row(
+        node_id,
+        format,
+        size_bytes,
+        rows,
+        keys,
+        (!partitioned)
+            .then(|| first.artifact_path.clone())
+            .flatten(),
+    ))
+}
+
+/// A [`RunOutput`] with its line.
+fn output_row(
+    node_id: &str,
+    format: Option<String>,
+    size_bytes: Option<u64>,
+    rows: Option<u64>,
+    keys: Option<u64>,
+    path: Option<String>,
+) -> RunOutput {
+    let mut about: Vec<String> = format.iter().cloned().collect();
+    if let Some(keys) = keys {
+        about.push(keys_of(keys));
+    }
+    if let Some(size) = size_bytes {
+        about.push(size_label(size));
+    }
+    if let Some(rows) = rows {
+        about.push(plural(rows, "row", "rows"));
+    }
+    RunOutput {
+        node_id: node_id.to_string(),
+        line: format!("{}  {}", short_name(node_id), about.join(" · ")),
+        format,
+        size_bytes,
+        rows,
+        keys,
+        path,
+    }
+}
+
+/// What a successful run's targets returned ([`RunExplanation::outputs`]): from its recorded
+/// outcome when it has one (`outcome`: the JSON of `barca get --json`, with one `final_output`
+/// or several `targets`; a run a server started), which also has the targets served from
+/// cache; else from the steps it listed. `targets`: [`output_targets`]. Rows come from the
+/// listed steps either way.
+pub fn run_outputs(
+    status: &str,
+    outcome: Option<&serde_json::Value>,
+    targets: &[String],
+    steps: &[RunStep],
+) -> Vec<RunOutput> {
+    if status != "success" {
+        return Vec::new();
+    }
+    let of_outcome = outcome
+        .filter(|o| o.get("status").and_then(|s| s.as_str()) == Some("success"))
+        .map(|outcome| {
+            if let Some(per_target) = outcome.get("targets").and_then(|t| t.as_object()) {
+                // In the order the targets were given, then any the list does not name.
+                let named: std::collections::HashSet<&str> =
+                    targets.iter().map(String::as_str).collect();
+                return targets
+                    .iter()
+                    .map(String::as_str)
+                    .chain(
+                        per_target
+                            .keys()
+                            .map(String::as_str)
+                            .filter(|id| !named.contains(id)),
+                    )
+                    .filter_map(|id| output_of(id, per_target.get(id)?.get("final_output")?, steps))
+                    .collect();
+            }
+            match (outcome.get("final_output"), targets) {
+                (Some(value), [target]) => output_of(target, value, steps).into_iter().collect(),
+                _ => Vec::new(),
+            }
+        })
+        .unwrap_or_default();
+    if !of_outcome.is_empty() {
+        return of_outcome;
+    }
+    targets
+        .iter()
+        .filter_map(|id| output_of_steps(id, steps))
+        .collect()
 }
 
 /// What became of each target, from the run's planned nodes.
@@ -447,7 +828,7 @@ pub fn reason_label(category: ReasonCategory) -> &'static str {
     match category {
         ReasonCategory::NeverRun => "never run",
         ReasonCategory::NewKeys => "new partition keys",
-        ReasonCategory::Failed => "retrying a failed attempt",
+        ReasonCategory::Failed => "failed in an earlier run",
         ReasonCategory::CodeChanged => "code changed",
         ReasonCategory::InputsChanged => "input changed",
         ReasonCategory::EnvChanged => "environment changed",
@@ -525,7 +906,13 @@ fn reason_row(reason: &PlanReason, run_steps: u64) -> ReasonRow {
 /// A run's recorded reasons grouped by category, most steps first. `live`: the run is still
 /// deciding phases. `executed`: the steps it executed, for a run that recorded no reasons.
 /// `never_started`: it was cancelled in the queue.
-fn why_ran(plan: Option<&PlanReasons>, live: bool, executed: u64, never_started: bool) -> WhyRan {
+fn why_ran(
+    plan: Option<&PlanReasons>,
+    live: bool,
+    executed: u64,
+    all_cached: bool,
+    never_started: bool,
+) -> WhyRan {
     let Some(plan) = plan.filter(|p| p.steps > 0) else {
         let headline = if never_started {
             "It was cancelled before it decided what to run.".to_string()
@@ -536,8 +923,10 @@ fn why_ran(plan: Option<&PlanReasons>, live: bool, executed: u64, never_started:
                 "{} ran, but this run recorded no reasons (barca records them from 0.43).",
                 steps_of(executed)
             )
-        } else {
+        } else if all_cached {
             "Every step was served from cache.".to_string()
+        } else {
+            "No step executed.".to_string()
         };
         return WhyRan {
             headline,
@@ -576,7 +965,15 @@ fn why_ran(plan: Option<&PlanReasons>, live: bool, executed: u64, never_started:
             plural(more as u64, "more reason", "more reasons")
         ));
     }
-    let verb = if live { "decided to run so far" } else { "ran" };
+    // A run that stopped early ran fewer steps than it had reasons for: say both numbers, so
+    // the headline never claims steps the counts say it did not run.
+    let verb = if live {
+        "decided to run so far".to_string()
+    } else if executed != plan.steps {
+        format!("were due to run, {} ran", count(executed))
+    } else {
+        "ran".to_string()
+    };
     WhyRan {
         headline: format!("{} {verb}: {}", steps_of(plan.steps), clauses.join(", ")),
         groups,
@@ -700,6 +1097,7 @@ mod tests {
             steps_total: None,
             steps_executed: 0,
             steps_cached: 0,
+            steps_failed: None,
             started_at: "",
             plan_reasons: None,
             cancellation: None,
@@ -792,7 +1190,7 @@ mod tests {
     #[test]
     fn steps_are_grouped_by_the_reason_they_ran_most_steps_first() {
         let plan = plan();
-        let why = why_ran(Some(&plan), false, 5_492, false);
+        let why = why_ran(Some(&plan), false, 5_492, false, false);
         assert_eq!(
             why.headline,
             "5,492 steps ran: 5,000 new partition keys, 31 code changed, 3 input changed"
@@ -839,7 +1237,7 @@ mod tests {
                 reason(ReasonCategory::NeverRun, None, 2, 2, "feeds.py:orders"),
             ],
         };
-        let why = why_ran(Some(&plan), false, 29, false);
+        let why = why_ran(Some(&plan), false, 29, false, false);
         assert_eq!(
             why.headline,
             "29 steps ran: 27 sensors (always run), 2 never run"
@@ -871,7 +1269,7 @@ mod tests {
                 "feeds.py:poll_inbox",
             )],
         };
-        let why = why_ran(Some(&one), false, 1, false);
+        let why = why_ran(Some(&one), false, 1, false, false);
         assert_eq!(why.headline, "1 step ran: 1 sensor (always runs)");
         assert_eq!(why.groups[0].rows[0].line, "1 node: poll_inbox");
     }
@@ -893,7 +1291,7 @@ mod tests {
                 ),
             ],
         };
-        let why = why_ran(Some(&plan), false, 2, false);
+        let why = why_ran(Some(&plan), false, 2, false, false);
         assert_eq!(why.groups[0].steps, 2);
         assert_eq!(why.headline, "2 steps ran: 2 code changed");
     }
@@ -917,10 +1315,10 @@ mod tests {
                 .map(|(i, c)| reason(*c, None, 1, 5 - i as u64, "a.py:x"))
                 .collect(),
         };
-        let why = why_ran(Some(&plan), true, 0, false);
+        let why = why_ran(Some(&plan), true, 0, false, false);
         assert_eq!(
             why.headline,
-            "15 steps decided to run so far: 5 never run, 4 retrying a failed attempt, \
+            "15 steps decided to run so far: 5 never run, 4 failed in an earlier run, \
              3 artifact evicted, and 2 more reasons"
         );
         assert!(why.partial);
@@ -944,7 +1342,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let lines = why_lines(&why_ran(Some(&subjects), false, 3, false), 2);
+        let lines = why_lines(&why_ran(Some(&subjects), false, 3, false, false), 2);
         assert_eq!(
             lines[1..],
             [
@@ -958,7 +1356,7 @@ mod tests {
 
     #[test]
     fn a_run_that_decided_nothing_says_so_in_a_sentence() {
-        let none = |live, executed, never| why_ran(None, live, executed, never);
+        let none = |live, executed, never| why_ran(None, live, executed, true, never);
         assert_eq!(none(true, 0, false).headline, "No step decided to run yet.");
         assert_eq!(
             none(false, 0, false).headline,
@@ -973,7 +1371,11 @@ mod tests {
             "It was cancelled before it decided what to run."
         );
         let empty = PlanReasons::default();
-        assert!(why_ran(Some(&empty), false, 0, false).groups.is_empty());
+        assert!(
+            why_ran(Some(&empty), false, 0, false, false)
+                .groups
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1017,19 +1419,19 @@ mod tests {
     fn retries_are_counted_apart_from_first_attempts() {
         assert_eq!(
             attempts_label(Some(29), Some(0)).as_deref(),
-            Some("29 steps, no retries")
+            Some("29 attempts: one per step, none retried")
         );
         assert_eq!(
             attempts_label(Some(19_461), Some(62)).as_deref(),
-            Some("19,399 steps, 62 retries")
+            Some("19,461 attempts: 19,399 steps, 62 retries")
         );
         assert_eq!(
             attempts_label(Some(3), Some(1)).as_deref(),
-            Some("2 steps, 1 retry")
+            Some("3 attempts: 2 steps, 1 retry")
         );
         assert_eq!(
             attempts_label(Some(1), Some(0)).as_deref(),
-            Some("1 step, no retries")
+            Some("1 attempt: one per step, none retried")
         );
         // A run recorded before barca counted retries.
         assert_eq!(attempts_label(Some(3), None).as_deref(), Some("3 attempts"));
@@ -1106,34 +1508,202 @@ mod tests {
 
     #[test]
     fn steps_are_counted_by_outcome_and_a_run_that_did_not_finish_says_what_it_started() {
+        let of = |status, total, executed, cached, failed| {
+            step_counts(StepFacts {
+                status,
+                steps_total: total,
+                steps_executed: executed,
+                steps_cached: cached,
+                steps_failed: failed,
+            })
+        };
+        assert_eq!(of("success", Some(8), 8, 0, 0).outcome, "8 ok · 0 cached");
         assert_eq!(
-            outcome_label(8, 0, 1, 2),
-            "7 ok · 1 failed · 2 skipped · 0 cached"
+            of("success", None, 0, 9_236, 0).outcome,
+            "0 ok · 9,236 cached"
         );
-        assert_eq!(outcome_label(0, 9_236, 0, 0), "0 ok · 9,236 cached");
+        assert_eq!(
+            of("failed", Some(10), 8, 0, 1).outcome,
+            "7 ok · 1 failed · 0 cached · 2 not reached"
+        );
+        let cancelled = of("cancelled", Some(4), 1, 0, 0);
+        assert_eq!(cancelled.outcome, "1 started · 0 cached · 3 not reached");
+        // A run in progress counts its cached steps when it ends: it says what it has left.
+        let live = of("running", Some(1_000), 12, 0, 0);
+        assert_eq!(live.outcome, "12 ok · 988 left");
+        assert_eq!(live.not_reached_line, None);
+    }
+
+    /// A partitioned plan can leave both keys and whole nodes unreached.
+    #[test]
+    fn a_runs_numbers_add_up_and_say_their_units() {
         let run = RunFacts {
-            steps_executed: 3,
-            steps_cached: 1,
+            status: "failed",
+            steps_total: Some(48),
+            steps_executed: 38,
+            steps_cached: 0,
+            attempts: Some(38),
+            retries: Some(0),
             ..facts()
         };
-        let nodes = [
-            RunNodeSummary {
-                failed: 1,
-                ..planned("a", "ran", None)
-            },
-            planned("b", "ran", None),
-            planned("c", "skipped", None),
-        ];
+        let mut nodes: Vec<RunNodeSummary> = (0..5)
+            .map(|i| planned(&format!("p.py:n{i}"), "ran", None))
+            .collect();
+        nodes.push(RunNodeSummary {
+            status: Some("ran".into()),
+            ..node("p.py:left_input", 23, 4, 40.0)
+        });
+        nodes.push(RunNodeSummary {
+            status: Some("ran".into()),
+            ..node("p.py:right_input", 8, 2, 0.1)
+        });
+        nodes.push(planned(
+            "p.py:left_output",
+            "skipped",
+            Some("p.py:left_input"),
+        ));
+        nodes.push(planned(
+            "p.py:right_output",
+            "skipped",
+            Some("p.py:right_input"),
+        ));
+        let c = explain(run, &nodes, &[], NOW).counts;
+        assert_eq!((c.steps, c.nodes), (48, Some(9)));
         assert_eq!(
-            steps_label(run, &nodes, &[]),
-            "2 ok · 1 failed · 1 skipped · 1 cached"
+            (c.ran, c.ok, c.failed, c.cached, c.not_reached),
+            (38, 32, 6, 0, 10)
         );
-        let cancelled = RunFacts {
-            status: "cancelled",
-            steps_executed: 1,
+        assert_eq!(c.ok + c.failed + c.cached + c.not_reached, c.steps);
+        assert_eq!(c.ok + c.failed, c.ran);
+        assert_eq!(c.attempts, Some(c.ran + c.retries.unwrap()));
+        assert_eq!(c.outcome, "32 ok · 6 failed · 0 cached · 10 not reached");
+        assert_eq!(c.planned, "48 steps planned over 9 nodes");
+        assert_eq!(
+            c.not_reached_line.as_deref(),
+            Some("10 steps not reached, 2 nodes never started: left_output, right_output")
+        );
+        assert_eq!(
+            c.attempts_line.as_deref(),
+            Some("38 attempts: one per step, none retried")
+        );
+        assert_eq!(c.not_reached_nodes, Some(2));
+    }
+
+    /// A step that runs because an earlier run's attempt failed is a reason, not a retry: the
+    /// two sentences cannot contradict each other (#1042).
+    #[test]
+    fn a_step_that_failed_in_an_earlier_run_is_not_called_a_retry() {
+        let plan = PlanReasons {
+            nodes: 2,
+            steps: 4,
+            omitted: 0,
+            reasons: vec![
+                reason(ReasonCategory::Failed, None, 1, 3, "p.py:right_input"),
+                reason(ReasonCategory::Sensor, None, 1, 1, "p.py:clock"),
+            ],
+        };
+        let run = RunFacts {
+            status: "failed",
+            steps_total: Some(42),
+            steps_executed: 4,
+            steps_cached: 37,
+            steps_failed: Some(3),
+            attempts: Some(4),
+            retries: Some(0),
+            plan_reasons: Some(&plan),
             ..facts()
         };
-        assert_eq!(steps_label(cancelled, &[], &[]), "1 started · 0 cached");
+        let e = explain(run, &[], &[], NOW);
+        assert_eq!(
+            e.why.headline,
+            "4 steps ran: 3 failed in an earlier run, 1 sensor (always runs)"
+        );
+        assert_eq!(
+            e.attempts.as_deref(),
+            Some("4 attempts: one per step, none retried")
+        );
+        assert!(!format!("{:?}", e.why).contains("retry"));
+        assert_eq!(e.steps, "1 ok · 3 failed · 37 cached · 1 not reached");
+        assert_eq!(
+            e.counts.not_reached_line.as_deref(),
+            Some("1 step not reached")
+        );
+    }
+
+    /// A run that stopped early had reasons for more steps than it ran: the headline says both.
+    #[test]
+    fn the_headline_never_claims_steps_the_run_did_not_run() {
+        let plan = plan();
+        let run = RunFacts {
+            status: "failed",
+            steps_executed: 5_000,
+            plan_reasons: Some(&plan),
+            ..facts()
+        };
+        assert!(
+            explain(run, &[], &[], NOW)
+                .why
+                .headline
+                .starts_with("5,492 steps were due to run, 5,000 ran: "),
+        );
+    }
+
+    fn pointer(format: &str, size: u64) -> serde_json::Value {
+        serde_json::json!({"_barca_artifact": {"path": format!("a.{format}"), "format": format, "size_bytes": size}})
+    }
+
+    /// A run's outputs are rows of served fields, never the raw pointer (#1042).
+    #[test]
+    fn outputs_are_rows_from_the_outcome_or_the_listed_steps() {
+        let targets = vec!["p.py:feed".to_string(), "p.py:orders".to_string()];
+        let outcome = serde_json::json!({"status": "success", "targets": {
+            "p.py:orders": {"status": "success", "final_output": pointer("parquet", 2_833)},
+            "p.py:feed": {"status": "success", "final_output": pointer("json", 4)},
+        }});
+        let steps = [RunStep {
+            node_id: "p.py:orders".into(),
+            status: "success".into(),
+            rows: Some(50),
+            ..Default::default()
+        }];
+        let rows = run_outputs("success", Some(&outcome), &targets, &steps);
+        assert_eq!(
+            rows.iter().map(|r| r.line.as_str()).collect::<Vec<_>>(),
+            ["feed  json · 4 B", "orders  parquet · 2.8 KB · 50 rows"]
+        );
+        assert_eq!(rows[1].rows, Some(50));
+        assert!(
+            !serde_json::to_string(&rows)
+                .unwrap()
+                .contains("_barca_artifact")
+        );
+        // One target: its `final_output`.
+        let single = serde_json::json!({"status": "success", "final_output": pointer("json", 28)});
+        let one = run_outputs("success", Some(&single), &targets[..1], &[]);
+        assert_eq!(one[0].line, "feed  json · 28 B");
+        // A partitioned target: keys, and their sizes summed.
+        let keyed = serde_json::json!({"status": "success", "final_output": {
+            "day=1": pointer("json", 10), "day=2": pointer("json", 12),
+        }});
+        let keys = run_outputs("success", Some(&keyed), &targets[..1], &[]);
+        assert_eq!(keys[0].line, "feed  json · 2 keys · 22 B");
+        // No outcome (a local run): the steps it listed.
+        let listed = [RunStep {
+            node_id: "p.py:orders".into(),
+            status: "success".into(),
+            artifact_path: Some("a.parquet".into()),
+            artifact_format: Some("parquet".into()),
+            artifact_size_bytes: Some(2_833),
+            rows: Some(50),
+            ..Default::default()
+        }];
+        let local = run_outputs("success", None, &targets, &listed);
+        assert_eq!(local.len(), 1);
+        assert_eq!(local[0].line, "orders  parquet · 2.8 KB · 50 rows");
+        // A task's value is not an artifact, and a failed run returned nothing.
+        let value = serde_json::json!({"status": "success", "final_output": {"sent": 3}});
+        assert!(run_outputs("success", Some(&value), &targets[..1], &[]).is_empty());
+        assert!(run_outputs("failed", Some(&outcome), &targets, &steps).is_empty());
     }
 
     #[test]
