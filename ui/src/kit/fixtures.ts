@@ -346,7 +346,7 @@ function step(node_id: string, status: string, error: string | null = null): Run
     node_id, status, elapsed_seconds: 4.2, error, partition_key: null, attempts: 1, run_hash: null,
     artifact_path: null, artifact_format: null, artifact_size_bytes: null, error_type: null,
     error_message: null, error_traceback: null, error_phase: null, worker_exit: null,
-    cpu_seconds: null, max_rss_bytes: null, rows: null, output_tail: null, batch: null,
+    cpu_seconds: null, max_rss_bytes: null, rows: null, sink_seconds: null, output_tail: null, batch: null,
   }
 }
 

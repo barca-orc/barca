@@ -65,6 +65,12 @@ attempts?: number | null,
  */
 import_seconds?: number | null,
 /**
+ * Seconds spent writing the step's `@sink`s, summed across its executed partition keys
+ * (#1004). Not part of `elapsed_seconds`: sinks are written after the step's own work.
+ * Absent for a step without sinks, a cache hit and a dry run.
+ */
+sink_seconds?: number | null,
+/**
  * This recompute produced different bytes for the same node and run hash.
  */
 bytes_changed?: boolean | null, partitions?: PartitionSummary | null,

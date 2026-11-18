@@ -52,6 +52,7 @@ fn step(node_id: &str, outcome: StepOutcome) -> StepReport {
         digest: None,
         cpu_seconds: None,
         max_rss_bytes: None,
+        sink_seconds: None,
         error_type: None,
         error_message: None,
         error_traceback: None,
@@ -351,6 +352,7 @@ fn a_step_is_the_root_of_its_own_trace_named_by_its_node_with_its_place_in_the_p
     orders.digest = Some("sha".to_string());
     orders.cpu_seconds = Some(0.5);
     orders.max_rss_bytes = Some(1024);
+    orders.sink_seconds = Some(0.25);
     let step = step_root(&orders);
     assert_eq!(step["name"], "barca.step");
     assert_eq!(step["resource"], "orders");
@@ -380,6 +382,7 @@ fn a_step_is_the_root_of_its_own_trace_named_by_its_node_with_its_place_in_the_p
     assert_eq!(metrics["barca.attempts"], 1);
     assert_eq!(metrics["barca.cpu_seconds"], 0.5);
     assert_eq!(metrics["barca.max_rss_bytes"], 1024);
+    assert_eq!(metrics["barca.sink_seconds"], 0.25);
 }
 
 #[test]
@@ -655,6 +658,7 @@ fn a_finished_step_is_reported_by_its_workers_clock_and_what_it_wrote() {
     assert_eq!(step.partition.as_deref(), Some("week=w1"));
     assert_eq!(step.start_unix_ns, 1_700_000_008_000_000_000);
     assert_eq!(step.duration_ns, 2_500_000_000);
+    assert_eq!(step.sink_seconds, None);
     assert_eq!(step.attempts, Some(3));
     assert_eq!(step.run_hash.as_deref(), Some("hash1"));
     assert_eq!(step.upstream, ["p.py:orders"]);
@@ -669,6 +673,20 @@ fn a_finished_step_is_reported_by_its_workers_clock_and_what_it_wrote() {
     assert!(step.start_unix_ns + step.duration_ns >= before);
     assert_eq!(step.duration_ns, 1_000_000_000);
     assert!(step.upstream.is_empty());
+}
+
+#[test]
+fn a_steps_span_ends_after_its_sinks_which_are_outside_its_own_time() {
+    let dispatch = dispatch();
+    // `finished_at` and `wall_seconds` are taken before the sinks are written (#1004).
+    let artifact = json!({
+        "path": "x.json", "size_bytes": 7,
+        "finished_at": 1_700_000_010.5, "wall_seconds": 2.5, "sink_seconds": 4.0
+    });
+    let step = dispatch.finished_report("p.py:orders", &artifact, 1, "hash1");
+    assert_eq!(step.start_unix_ns, 1_700_000_008_000_000_000);
+    assert_eq!(step.duration_ns, 6_500_000_000);
+    assert_eq!(step.sink_seconds, Some(4.0));
 }
 
 #[test]

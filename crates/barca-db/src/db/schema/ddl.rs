@@ -103,6 +103,10 @@ pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
     // (not a frame, a CSV of a lazy frame or relation, a failed row, rows from older versions and
     // rows a server's ledger received from a client).
     "rows INTEGER",
+    // Seconds the step spent writing its `@sink`s, all of them (#1004), after its own duration
+    // (`elapsed_seconds`, which excludes them) was taken. NULL for a step without sinks, a failed
+    // row and rows from older versions. Each sink's own time is `seconds` in `sinks_json`.
+    "sink_seconds REAL",
 ];
 
 /// Every table's columns added within format 1, by table. The one list that the pre-migration

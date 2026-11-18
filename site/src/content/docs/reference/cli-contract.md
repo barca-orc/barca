@@ -327,7 +327,7 @@ default, and any aliases.
 | `--refresh-all` | - | default `false` | stable | Recompute every asset needed by the target |
 | `--dry-run` | - | default `false` | stable | Preview cached and planned work; execute nothing and record no run |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `sink_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
@@ -349,7 +349,7 @@ default, and any aliases.
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--agent` | - | default `false` | stable | Print plain structured progress on stderr |
-| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `sink_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
@@ -1036,7 +1036,8 @@ may grow.
   project's `.env`; `null` when unset in both, `"<redacted>"` for secret-looking names).
 
 Executed steps also carry `attempts` and `elapsed_seconds`, including failures.
-Elapsed seconds sum active reported time across attempts; backoff is excluded. For
+Elapsed seconds sum active reported time across attempts; backoff is excluded; a step's
+sinks are excluded too (`sink_seconds`, below). For
 partition summaries, elapsed time sums executed keys while attempts is the maximum
 per key. Cached steps and dry runs omit these keys. Worker disconnects use the
 coordinator's observed in-flight time. Slow module imports (> 1 second) add
@@ -1071,6 +1072,140 @@ avoid depending on CI machine speed. [barca status](/reference/cli/status/) expl
 | `steps_executed` | integer | always |
 | `warnings` | array | always |
 <!-- END GENERATED schema get_timing_retry -->
+
+A step whose asset declares `@sink`s adds `sink_seconds` (stable, 0.45.0): the seconds its sinks
+took to write, summed over the keys that ran. They are written after the step's own work and are
+not part of its `elapsed_seconds`, which stays the time of the step itself; a step's time with its
+sinks is the sum of the two. Cached steps, dry runs and steps without sinks omit it. `barca history
+RUN_ID --json` has it on each recorded step (`null` without sinks, on a failed step and on rows from
+before 0.45.0), and each sink's own time is `seconds` in the step's record. [Sinks](/reference/sinks/)
+says what a sink writes.
+
+<!-- BEGIN GENERATED schema get_sink -->
+| Key | Type | Present |
+|---|---|---|
+| `elapsed_seconds` | number | always |
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
+| `phases` | integer | always |
+| `run_id` | string | always |
+| `status` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].attempts` | integer | always |
+| `steps[].detail` | string | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].id` | string | always |
+| `steps[].kind` | string | always |
+| `steps[].reason` | string | always |
+| `steps[].run_hash` | string | always |
+| `steps[].sink_seconds` | number | always |
+| `steps[].status` | string | always |
+| `steps_executed` | integer | always |
+| `warnings` | array | always |
+<!-- END GENERATED schema get_sink -->
+
+<!-- BEGIN GENERATED schema history_sink -->
+| Key | Type | Present |
+|---|---|---|
+| `explanation` | object | always |
+| `explanation.attempts` | string | always |
+| `explanation.cancellation` | null | always |
+| `explanation.progress` | null | always |
+| `explanation.requested_by` | string | always |
+| `explanation.slowest` | array | always |
+| `explanation.slowest[]` | object | always |
+| `explanation.slowest[].keys` | integer | always |
+| `explanation.slowest[].node_id` | string | always |
+| `explanation.slowest[].seconds` | number | always |
+| `explanation.steps` | string | always |
+| `explanation.target_outcomes` | array | always |
+| `explanation.targets` | array | always |
+| `explanation.targets[]` | string | always |
+| `explanation.why` | object | always |
+| `explanation.why.groups` | array | always |
+| `explanation.why.groups[]` | object | always |
+| `explanation.why.groups[].category` | string | always |
+| `explanation.why.groups[].label` | string | always |
+| `explanation.why.groups[].rows` | array | always |
+| `explanation.why.groups[].rows[]` | object | always |
+| `explanation.why.groups[].rows[].counts` | string | always |
+| `explanation.why.groups[].rows[].example` | string | always |
+| `explanation.why.groups[].rows[].example_text` | string | always |
+| `explanation.why.groups[].rows[].line` | string | always |
+| `explanation.why.groups[].rows[].nodes` | integer | always |
+| `explanation.why.groups[].rows[].share` | number | always |
+| `explanation.why.groups[].rows[].steps` | integer | always |
+| `explanation.why.groups[].rows[].subject` | null | always |
+| `explanation.why.groups[].steps` | integer | always |
+| `explanation.why.headline` | string | always |
+| `explanation.why.omitted` | integer | always |
+| `explanation.why.partial` | boolean | always |
+| `run` | object | always |
+| `run.attempts` | integer | always |
+| `run.cancellation` | null | always |
+| `run.client_run_id` | null | always |
+| `run.command` | string | always |
+| `run.elapsed_seconds` | number | always |
+| `run.failure` | null | always |
+| `run.files` | array | always |
+| `run.files[]` | string | always |
+| `run.finished_at` | string | always |
+| `run.job` | string | always |
+| `run.plan_reasons` | object | always |
+| `run.plan_reasons.nodes` | integer | always |
+| `run.plan_reasons.omitted` | integer | always |
+| `run.plan_reasons.reasons` | array | always |
+| `run.plan_reasons.reasons[]` | object | always |
+| `run.plan_reasons.reasons[].category` | string | always |
+| `run.plan_reasons.reasons[].example` | string | always |
+| `run.plan_reasons.reasons[].nodes` | integer | always |
+| `run.plan_reasons.reasons[].steps` | integer | always |
+| `run.plan_reasons.reasons[].subject` | null | always |
+| `run.plan_reasons.steps` | integer | always |
+| `run.principal` | null | always |
+| `run.retries` | integer | always |
+| `run.run_id` | string | always |
+| `run.schedule_id` | null | always |
+| `run.scheduled_at` | null | always |
+| `run.started_at` | string | always |
+| `run.status` | string | always |
+| `run.steps_cached` | integer | always |
+| `run.steps_executed` | integer | always |
+| `run.steps_total` | integer | always |
+| `run.target` | string | always |
+| `run.trigger_reason` | null | always |
+| `run.triggered_by` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact_format` | string | always |
+| `steps[].artifact_path` | string | always |
+| `steps[].artifact_size_bytes` | integer | always |
+| `steps[].attempts` | integer | always |
+| `steps[].batch` | null | always |
+| `steps[].cpu_seconds` | number | always |
+| `steps[].elapsed_seconds` | number | always |
+| `steps[].error` | null | always |
+| `steps[].error_message` | null | always |
+| `steps[].error_phase` | null | always |
+| `steps[].error_traceback` | null | always |
+| `steps[].error_type` | null | always |
+| `steps[].max_rss_bytes` | integer | always |
+| `steps[].node_id` | string | always |
+| `steps[].output_tail` | null | always |
+| `steps[].partition_key` | null | always |
+| `steps[].rows` | null | always |
+| `steps[].run_hash` | string | always |
+| `steps[].sink_seconds` | number | always |
+| `steps[].status` | string | always |
+| `steps[].worker_exit` | null | always |
+| `steps_page` | object | always |
+| `steps_page.total` | integer | always |
+| `steps_page.truncated` | boolean | always |
+<!-- END GENERATED schema history_sink -->
 
 Under `-o value --json`, `final_output` is the value instead (a table is a list of row
 objects):
@@ -3471,6 +3606,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `steps[].partition_key` | null | always |
 | `steps[].rows` | null | always |
 | `steps[].run_hash` | string | always |
+| `steps[].sink_seconds` | null | always |
 | `steps[].status` | string | always |
 | `steps[].worker_exit` | null | always |
 | `steps_page` | object | always |

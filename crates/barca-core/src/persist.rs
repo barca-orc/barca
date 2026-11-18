@@ -422,6 +422,7 @@ pub(crate) fn telemetry_report(
             digest: None,
             cpu_seconds: None,
             max_rss_bytes: None,
+            sink_seconds: None,
             error_type: None,
             error_message: None,
             error_traceback: None,
@@ -432,9 +433,16 @@ pub(crate) fn telemetry_report(
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (node_id, oref) in l.all_outputs {
         let cached = l.cached_node_ids.contains(node_id);
+        let sink_seconds = if cached {
+            None
+        } else {
+            l.all_sink_seconds.get(node_id).copied()
+        };
+        // The span ends after the step's sinks (#1004): `wall` is taken before they are written.
+        let sinks = sink_seconds.unwrap_or(0.0).max(0.0);
         let (step_start, step_duration) = match clocks.get(node_id) {
             _ if cached => (start_unix_ns, 0),
-            Some((finished, wall)) => (ns(finished - wall), ns(*wall)),
+            Some((finished, wall)) => (ns(finished - wall), ns(*wall + sinks)),
             None => (start_unix_ns, ns(oref.elapsed_seconds.unwrap_or(0.0))),
         };
         let (cpu_seconds, max_rss_bytes) =
@@ -454,6 +462,7 @@ pub(crate) fn telemetry_report(
             },
             cpu_seconds,
             max_rss_bytes,
+            sink_seconds,
             ..step(node_id, outcome, step_start, step_duration)
         });
         seen.insert(crate::StepId::parse(node_id).base_id().to_string());
@@ -591,6 +600,7 @@ mod persist_tests {
         attempts: HashMap<String, u32>,
         timings: HashMap<String, (Option<f64>, Option<u64>)>,
         rows: HashMap<String, u64>,
+        sink_seconds: HashMap<String, f64>,
     }
 
     const EXECUTED: [&str; 3] = ["f.py:a", "f.py:part[k=1]", "f.py:part[k=2]"];
@@ -656,6 +666,7 @@ mod persist_tests {
                 attempts: HashMap::new(),
                 timings: HashMap::new(),
                 rows: HashMap::new(),
+                sink_seconds: HashMap::new(),
             }
         }
 
@@ -679,6 +690,7 @@ mod persist_tests {
                 all_attempts: &self.attempts,
                 all_timings: &self.timings,
                 all_rows: &self.rows,
+                all_sink_seconds: &self.sink_seconds,
                 cached_node_ids: &self.cached,
                 touched: &[],
                 plan_reasons: None,

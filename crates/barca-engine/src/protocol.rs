@@ -169,6 +169,11 @@ pub(crate) struct ArtifactRef {
     pub finished_at: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall_seconds: Option<f64>,
+    /// How long writing the step's `@sink`s took, all of them (#1004). Not part of
+    /// `elapsed_seconds` or `wall_seconds`: the sinks are written after those are stamped,
+    /// before the result is reported. Absent for a step without sinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sink_seconds: Option<f64>,
     /// For a `parallel()` branch that returned a frame: which reader gives the caller the
     /// type the branch returned (`pandas`, `polars`, `polars_lazy`, `pyarrow`, `duckdb`).
     /// A step's consumer picks its reader from its own annotation; a branch's caller has
@@ -214,6 +219,9 @@ pub(crate) struct SinkOutcome {
     /// A dataset sink's size warning (too many directories, or files that are too small).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// How long this sink took to write (#1004).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f64>,
 }
 
 // ─── Coordinator → Worker ────────────────────────────────────────────────────

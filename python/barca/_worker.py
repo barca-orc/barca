@@ -563,63 +563,92 @@ def _materialize(
     if local is not None:
         _storage.make_way(local)
     snapshot_prefix = os.environ.get("BARCA_UPLOAD_SNAPSHOT_PREFIX")
+    sinks = step.get("sinks") or []
+    # A file sink in the artifact's format is a copy of the artifact's bytes (#1005). It is
+    # copied from bytes pinned before the reusable artifact path was published (the upload
+    # snapshot, else a private link beside the artifact), never from that path: another run
+    # with the same run hash may replace it meanwhile (specs/interfaces/artifact-formats.md).
+    copies = local is not None and any(_sinks.copies_artifact(s, fmt) for s in sinks)
+    sink_pin_prefix = None
+    if copies and not (snapshot_prefix and not step.get("branch")):
+        Path(local).parent.mkdir(parents=True, exist_ok=True)
+        sink_pin_prefix = str(Path(local).parent / f".{Path(local).name}.sink-")
+    pin_prefix = snapshot_prefix if not step.get("branch") else None
+    pin_prefix = pin_prefix or sink_pin_prefix
     if prewritten is not None:
         from barca._artifacts import publish_file
 
-        size, content_hash, upload_snapshot = publish_file(
-            prewritten, path, want_hash=True, snapshot_prefix=snapshot_prefix
+        size, content_hash, pinned = publish_file(
+            prewritten, path, want_hash=True, snapshot_prefix=pin_prefix
         )
-        if step.get("sinks"):
-            import duckdb
-
-            result = duckdb.read_parquet(str(path))
-    elif snapshot_prefix and not step.get("branch"):
-        size, content_hash, upload_snapshot = serialize_for_upload(
-            result, path, fmt, snapshot_prefix, want_hash=True
+    elif pin_prefix:
+        size, content_hash, pinned = serialize_for_upload(
+            result, path, fmt, pin_prefix, want_hash=True
         )
     else:
         size, content_hash = serialize_hashed(result, path, fmt)
-    elapsed += time.perf_counter() - _ser_wall0
-    if timing and timing.get("cpu_seconds") is not None:
-        timing = {
-            **timing,
-            "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
-        }
-    if timing and "rss_window" in timing:
-        timing = dict(timing)
-        peak = _rss.step_peak_bytes(timing.pop("rss_window"))
-        if peak:
-            timing["max_rss_bytes"] = peak
-    artifact: dict[str, Any] = {"path": str(path), "format": fmt, "size_bytes": size}
-    # Rows of a tabular result (a frame's length, or a parquet file's footer); absent when
-    # unknown, never guessed. A parallel() branch's file is the caller's input, not a result.
-    # A batched call's key was written by the split: its file is what counts.
-    rows = (
-        None if branch_path else row_count(None if prewritten is not None else result, local, fmt)
-    )
-    if rows is not None:
-        artifact["rows"] = rows
-    if upload_snapshot is not None:
-        artifact["upload_snapshot"] = upload_snapshot
-    if content_hash is not None:
-        artifact["content_hash"] = content_hash
-    if step.get("branch") and fmt in ("parquet", "csv"):
-        # The caller of parallel() gets back the frame type the branch returned.
-        from barca import _branches
+        pinned = None
+    if sink_pin_prefix is None:
+        upload_snapshot = pinned
+    try:
+        sink_source = pinned if copies else None
+        if prewritten is not None and not all(_sinks.copies_artifact(s, fmt) for s in sinks):
+            import duckdb
 
-        artifact["frame_type"] = _branches.reader_name(result, fmt)
-    if extra:
-        artifact.update(extra)
-    if elapsed_in_artifact:
-        artifact["elapsed_seconds"] = elapsed
-    if timing:
-        artifact.update(timing)
-    # When the step finished and how long it took, for telemetry: a span needs wall-clock times.
-    artifact["finished_at"] = time.time()
-    artifact["wall_seconds"] = elapsed
-    sink_outcomes = _sinks.write_sinks(result, step, node_id, fmt)
-    if sink_outcomes:
-        artifact["sinks"] = sink_outcomes
+            # Another sink encodes the key's rows: read them back from its artifact.
+            result = duckdb.read_parquet(str(sink_source or path))
+        elapsed += time.perf_counter() - _ser_wall0
+        if timing and timing.get("cpu_seconds") is not None:
+            timing = {
+                **timing,
+                "cpu_seconds": timing["cpu_seconds"] + (time.process_time() - _ser_cpu0),
+            }
+        if timing and "rss_window" in timing:
+            timing = dict(timing)
+            peak = _rss.step_peak_bytes(timing.pop("rss_window"))
+            if peak:
+                timing["max_rss_bytes"] = peak
+        artifact: dict[str, Any] = {"path": str(path), "format": fmt, "size_bytes": size}
+        # Rows of a tabular result (a frame's length, or a parquet file's footer); absent when
+        # unknown, never guessed. A parallel() branch's file is the caller's input, not a result.
+        # A batched call's key was written by the split: its file is what counts.
+        rows = (
+            None
+            if branch_path
+            else row_count(None if prewritten is not None else result, local, fmt)
+        )
+        if rows is not None:
+            artifact["rows"] = rows
+        if upload_snapshot is not None:
+            artifact["upload_snapshot"] = upload_snapshot
+        if content_hash is not None:
+            artifact["content_hash"] = content_hash
+        if step.get("branch") and fmt in ("parquet", "csv"):
+            # The caller of parallel() gets back the frame type the branch returned.
+            from barca import _branches
+
+            artifact["frame_type"] = _branches.reader_name(result, fmt)
+        if extra:
+            artifact.update(extra)
+        if elapsed_in_artifact:
+            artifact["elapsed_seconds"] = elapsed
+        if timing:
+            artifact.update(timing)
+        # When the step finished and how long it took, for telemetry: a span needs wall-clock times.
+        artifact["finished_at"] = time.time()
+        artifact["wall_seconds"] = elapsed
+        if sinks:
+            # Sinks are written after the step's own duration is stamped: their time is reported
+            # beside it (`sink_seconds`, #1004), never inside `elapsed_seconds`.
+            sink_started = time.perf_counter()
+            sink_outcomes = _sinks.write_sinks(result, step, node_id, fmt, sink_source)
+            artifact["sinks"] = sink_outcomes
+            artifact["sink_seconds"] = time.perf_counter() - sink_started
+    finally:
+        if sink_pin_prefix is not None and pinned is not None:
+            # The private link that only the sinks read (the upload snapshot is the run's), gone
+            # before the step is reported: the coordinator may stop this worker right after.
+            Path(pinned).unlink(missing_ok=True)
     if extra and "batch" in extra:
         artifact["write_seconds"] = time.perf_counter() - _ser_wall0
     if before_emit is not None:

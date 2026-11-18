@@ -5606,6 +5606,11 @@ components:
         import_seconds:
           type: number
           exclusiveMinimum: 1
+        sink_seconds:
+          type: number
+          minimum: 0
+          description: Seconds spent writing the step's sinks, summed over its executed keys (0.45.0). Not
+            part of elapsed_seconds. Absent for a step without sinks, a cache hit and a dry run.
         partitions:
           $ref: '#/components/schemas/PartitionSummary'
         env:
@@ -7650,6 +7655,7 @@ components:
       - cpu_seconds
       - max_rss_bytes
       - rows
+      - sink_seconds
       - output_tail
       properties:
         batch:
@@ -7756,6 +7762,11 @@ components:
         rows:
           type: [integer, "null"]
           description: Rows the result holds, as its worker counted them (a frame's length or a parquet footer); null when not counted.
+        sink_seconds:
+          type: [number, "null"]
+          minimum: 0
+          description: Seconds the step spent writing its sinks after its own work (0.45.0); not part of
+            elapsed_seconds. null for a step without sinks, a failed step or a row from an older barca.
         output_tail:
           anyOf:
           - type: array
