@@ -36,13 +36,13 @@ function useStart(onStarted: (runId: string) => void) {
  * only the failed steps and what they stopped run), or with every step recomputed. None on a
  * read-only server.
  */
-export function RunActions({ run, failed, onStarted }: { run: Rerunnable; failed: boolean; onStarted: (runId: string) => void }) {
+export function RunActions({ run, retryLabel, onStarted }: { run: Rerunnable; retryLabel: string | null; onStarted: (runId: string) => void }) {
   const { start, busy, error, writes } = useStart(onStarted)
   if (writes === 'hidden') return null
   const off = busy || writes === 'disabled'
   return <div className="barca-run-actions" style={{ display: 'contents' }}>
-    {failed && <Button size="sm" variant="signal" loading={busy} disabled={off} title="Re-run the failed steps and everything downstream of them: the same target again, the steps that succeeded are cached"
-      onClick={() => void start(rerunFailedRequest(run))}>Re-run failed</Button>}
+    {retryLabel && <Button size="sm" variant="signal" loading={busy} disabled={off} title="Run the same targets again using cached results where available"
+      onClick={() => void start(rerunFailedRequest(run))}>{retryLabel}</Button>}
     <Button size="sm" disabled={off} title="Re-run the whole run: the same target with every step recomputed (--refresh-all)"
       onClick={() => void start(rerunAllRequest(run))}>Re-run all</Button>
     {error && <p className="barca-run-error" role="alert">Could not start the run: {error}</p>}

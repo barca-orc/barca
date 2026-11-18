@@ -168,7 +168,7 @@ export function incidentSummary(run: RunView, link: string, datadogUrl?: string 
     `### barca run \`${run.run_id}\` ${run.status}`,
     '',
     `- **Run:** [${run.run_id}](${link})`,
-    `- **Target:** \`${run.command} ${run.target ?? 'all assets'}\``,
+    `- **Target:** \`${run.command} ${run.explanation.target_line}\``,
     `- **Triggered by:** ${triggeredByLabel(run.triggered_by)}`,
     `- **Started:** ${run.started_at}`,
     `- **Duration:** ${seconds(run.elapsed_seconds)}`,

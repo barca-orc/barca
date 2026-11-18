@@ -193,8 +193,9 @@ export const failedTask: NodeState = node('check__orders', {
 })
 
 export const runningByStep = {
-  queued: { run_id: '128', triggered_by: 'schedule', started_at: ago(8), step: 'queued', partitions: null },
-  running: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'running', partitions: null },
+  waiting: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'waiting', label: 'in this run', partitions: null },
+  queued: { run_id: '128', triggered_by: 'schedule', started_at: ago(8), step: 'queued', label: 'in a queued run', partitions: null },
+  running: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'running', label: 'running', partitions: null },
 } satisfies Record<RunningStep, NodeRunning>
 
 export const runningPartitioned: NodeRunning = {
@@ -286,6 +287,8 @@ export const resetPhases = {
 function explanation(overrides: Partial<RunExplanation> = {}): RunExplanation {
   return {
     targets: ['pipeline.py:orders_clean', 'pipeline.py:revenue_daily'],
+    target_line: 'orders_clean +1 more', outputs: [],
+    counts: { steps: 4, ran: 3, ok: 3, failed: 0, cached: 1, not_reached: 0, nodes: 4, not_reached_nodes: 0, attempts: null, retries: null, outcome: '3 ok · 1 cached', planned: '4 steps planned over 4 nodes', units: 'One step per node or partition key', not_reached_line: null, attempts_line: null },
     requested_by: 'client',
     attempts: null,
     steps: '3 ok · 1 cached',
@@ -420,7 +423,7 @@ function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {})
     error: view.error, first_failure: null, principal: view.principal, trigger_reason: view.trigger_reason,
     cancellation: view.cancellation,
     // `line` as the server words the row; a fixture about a failure states its own.
-    line: { steps: view.explanation.steps, steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: view.error, failure_detail: view.error },
+    line: { target: 'revenue_daily', target_count: 1, steps: view.explanation.steps, steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: view.error, failure_detail: view.error },
     ...overrides,
   }
 }
@@ -458,15 +461,15 @@ const runList: RunList = {
     summary(runByStatus.failed, '125', {
       triggered_by: 'schedule', error: null, steps_total: 28_404, steps_executed: 21_950, steps_cached: 0,
       first_failure: { node_id: 'pipeline.py:sessionize[day=2026-10-27]', error: "KeyError: 'currency'" },
-      line: {
-        steps: '21,949 ok · 1 failed · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 28,404 nodes planned · stopped at pipeline.py:sessionize[day=2026-10-27]',
+      line: { target: 'revenue_daily', target_count: 1,
+        steps: '21,949 ok · 1 failed · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 28,404 steps planned · stopped at pipeline.py:sessionize[day=2026-10-27]',
         failure: "sessionize: 1 key failed · KeyError: 'currency'", failure_detail: "pipeline.py:sessionize[day=2026-10-27]: KeyError: 'currency'",
       },
     }),
     // The same with no failed step on record (a run that died before recording one).
     summary(runByStatus.failed, '124', {
       error: null, started_at: ago(7_500),
-      line: { steps: '0 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: 'No failed step recorded: open the run', failure_detail: 'No failed step recorded: open the run' },
+      line: { target: 'revenue_daily', target_count: 1, steps: '0 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: 'No failed step recorded: open the run', failure_detail: 'No failed step recorded: open the run' },
     }),
   ],
   total: 9,
@@ -510,12 +513,14 @@ export const runDetails: Record<string, Remote<RunView>> = {
 
 const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => ({
   run_id: `a8ba${String(n).padStart(4, '0')}`, status: 'pending', position: n, command: 'get',
+  target_line: overrides.target ?? `web.py:sessions_${String(n).padStart(2, '0')}`,
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
   schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30),
   started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null, ...overrides,
 })
 const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
 const deepQueue: QueueView = {
+  slots: '1 of 1 running',
   paused: false, paused_at: null, draining: false, max_runs: 1,
   running: [runningEntry], queued: Array.from({ length: 18 }, (_, i) => queued(i + 1)), capacity: null,
 }

@@ -527,17 +527,28 @@ const REASON_LINES: usize = 8;
 /// Width of the `barca history` TARGET column; longer targets end in `…`.
 const TARGET_WIDTH: usize = 24;
 
-/// A run's TARGET cell: its job's function names (`kpis`, `country_report,weekly_summary`), or
-/// `all` for a run without targets. Runs recorded before the job was stored show the target as
-/// typed. Cut to [`TARGET_WIDTH`] characters with a trailing `…`.
+/// A run's TARGET cell, a few words whatever the run named: its one target's function name
+/// (`kpis`), `all` for a run without targets, and for several the first as given (a tick's
+/// scheduled node) and how many more (`country_report +1 more`). `--json` has the full list
+/// (`target`, `job`). Runs recorded before the job was stored show the target as typed. Cut to
+/// [`TARGET_WIDTH`] characters with a trailing `…`.
 pub fn history_target(run: &crate::db::RunRecord) -> String {
-    let names = match run.job.as_deref().or(run.target.as_deref()) {
-        None | Some("all") => "all".to_string(),
-        Some(ids) => ids
-            .split(',')
-            .map(|id| crate::telemetry::short_name(id.trim()))
-            .collect::<Vec<_>>()
-            .join(","),
+    let given = crate::run_list::target_ids(run.target.as_deref());
+    let job = crate::run_list::target_ids(run.job.as_deref());
+    // One node: the job's id names it in full. Several: the order they were given in.
+    let ids = if job.len() == 1 || given.is_empty() {
+        job
+    } else {
+        given
+    };
+    let names = match ids.as_slice() {
+        [] => "all".to_string(),
+        [one] => crate::telemetry::short_name(one).to_string(),
+        [first, rest @ ..] => format!(
+            "{} +{} more",
+            crate::telemetry::short_name(first),
+            crate::run_explanation::count(rest.len() as u64)
+        ),
     };
     if names.chars().count() > TARGET_WIDTH {
         let cut: String = names.chars().take(TARGET_WIDTH - 1).collect();
@@ -546,6 +557,9 @@ pub fn history_target(run: &crate::db::RunRecord) -> String {
         names
     }
 }
+
+/// How many of a run's outputs `barca history RUN_ID` lists; `--json` has every one.
+const OUTPUT_LINES: usize = 10;
 
 /// One run of `barca history --json`: the record, plus `failure`'s node and error as the flat
 /// `failed_node` and `error` (#627), so `--fields run_id,failed_node,error` needs no nesting,
@@ -1064,12 +1078,13 @@ pub fn render_run_detail(
 ) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
     let hint = run_detail_hint(detail, select);
-    let explanation = crate::run_explanation::explain(
+    let mut explanation = crate::run_explanation::explain(
         (&detail.run).into(),
         &detail.steps_page.nodes,
         &detail.steps,
         crate::time::now_secs_f64(),
     );
+    explanation.outputs = detail.outputs.clone();
     if json {
         let mut out = serde_json::json!({
             "run": detail.run,
@@ -1086,11 +1101,16 @@ pub fn render_run_detail(
     let r = &detail.run;
     let secs = |s: Option<f64>| s.map_or_else(|| "-".to_string(), |e| format!("{e:.1}s"));
     let target = r.target.as_deref().unwrap_or("all");
+    // The targets in a few words: a tick's run names dozens (`--json` lists them).
+    let named = match crate::run_list::target_ids(r.target.as_deref()).len() {
+        0 => "all".to_string(),
+        _ => explanation.target_line.clone(),
+    };
     let mut head = format!(
         "run {}  {} {}  {}  {}",
         r.run_id,
         r.command,
-        target,
+        named,
         r.status,
         secs(r.elapsed_seconds)
     );
@@ -1135,23 +1155,37 @@ pub fn render_run_detail(
         && job != target
         && history_target(r) != target
     {
-        line!(rendered, "job {job}");
+        line!(
+            rendered,
+            "job {}",
+            crate::run_list::target_line(Some(job.as_str()))
+        );
     }
     if !r.files.is_empty() {
         line!(rendered, "files {}", r.files.join(" "));
     }
-    let failed = detail.steps.iter().filter(|s| s.status == "failed").count();
-    let mut counts = format!("{} executed", r.steps_executed);
-    if failed > 0 {
-        counts.push_str(&format!(" ({failed} failed)"));
-    }
-    counts.push_str(&format!(", {} cached", r.steps_cached));
+    // The run's numbers as its panel says them (`explanation.counts`): they add up.
+    let counts = &explanation.counts;
+    let mut steps_line = format!("steps: {} ({})", counts.outcome, counts.planned);
     if r.steps_cached > 0 {
-        counts.push_str(" (cached steps are not listed)");
+        steps_line.push_str("; cached steps are not listed");
     }
-    line!(rendered, "steps: {counts}");
+    line!(rendered, "{steps_line}");
+    if let Some(not_reached) = &counts.not_reached_line {
+        line!(rendered, "not reached: {not_reached}");
+    }
     for outcome in &explanation.target_outcomes {
         line!(rendered, "target: {outcome}");
+    }
+    for output in explanation.outputs.iter().take(OUTPUT_LINES) {
+        line!(rendered, "output: {}", output.line);
+    }
+    if explanation.outputs.len() > OUTPUT_LINES {
+        line!(
+            rendered,
+            "output: and {} more (--json lists them)",
+            explanation.outputs.len() - OUTPUT_LINES
+        );
     }
     // A run cancelled in the queue decided nothing: its `cancelled:` line says so.
     if r.cancellation.as_ref().is_none_or(|c| c.started) {
@@ -2100,14 +2134,13 @@ mod history_target_tests {
         );
         assert_eq!(
             history_target(&run(Some("b,a"), Some("p.py:a,p.py:b"))),
-            "a,b"
+            "b +1 more"
         );
         // Rows recorded before the job was stored.
         assert_eq!(history_target(&run(Some("p.py:kpis"), None)), "kpis");
         assert_eq!(history_target(&run(None, None)), "all");
         let long = history_target(&run(None, Some("p.py:country_report,p.py:weekly_summary")));
-        assert_eq!(long, "country_report,weekly_s…");
-        assert_eq!(long.chars().count(), 24);
+        assert_eq!(long, "country_report +1 more");
     }
 }
 
@@ -2140,6 +2173,7 @@ mod run_detail_tests {
             run,
             steps,
             steps_page: Default::default(),
+            outputs: Vec::new(),
         }
     }
 
@@ -2266,7 +2300,7 @@ mod run_detail_tests {
         let (stdout, _) = text(&render_run_detail(&d, false, ""));
         assert!(
             stdout
-                .starts_with("run r  get daily_report,orders  success  -  29 steps, no retries\n"),
+                .starts_with("run r  get daily_report +1 more  success  -  29 attempts: one per step, none retried\n"),
             "{stdout}"
         );
         assert!(
@@ -2278,7 +2312,7 @@ mod run_detail_tests {
         let (json, _) = text(&render_run_detail(&d, true, ""));
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let e = &v["explanation"];
-        assert_eq!(e["attempts"], "29 steps, no retries");
+        assert_eq!(e["attempts"], "29 attempts: one per step, none retried");
         assert_eq!(
             e["targets"],
             serde_json::json!(["p.py:daily_report", "p.py:orders"])

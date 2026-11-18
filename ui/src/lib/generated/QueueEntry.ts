@@ -13,7 +13,16 @@ status: string,
 /**
  * Its place among the waiting runs, 1 = next; `null` for a running run.
  */
-position: number | null, command: string, target: string | null, triggered_by: TriggeredBy, schedule_id: string | null,
+position: number | null, command: string,
+/**
+ * The targets as given, comma-separated; `null` for every asset.
+ */
+target: string | null,
+/**
+ * `target` in a few words, as a row shows it (`barca_core::run_list::target_line`):
+ * `all assets`, `billing.py:orders +21 more`.
+ */
+target_line: string, triggered_by: TriggeredBy, schedule_id: string | null,
 /**
  * When the server accepted it.
  */

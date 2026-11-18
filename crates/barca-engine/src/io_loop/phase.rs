@@ -52,6 +52,31 @@ impl WorkerPool {
         out
     }
 
+    /// Publish the front of each worker's lease queue. A batched call executes its keys
+    /// together, while parallel children share their parent's planned step.
+    fn publish_executing(&self, coord: &Coordinator) {
+        let Some(steps) = &self.steps else { return };
+        let mut nodes = std::collections::HashMap::new();
+        let mut parents = std::collections::HashSet::new();
+        for worker in self.workers.values() {
+            let Some(&id) = worker.leases.front() else {
+                continue;
+            };
+            let mut item = coord.item(id);
+            if item.group.is_some() {
+                while let Some(group) = item.group {
+                    item = coord.item(coord.group(group).parent);
+                }
+                if !parents.insert(item.id) {
+                    continue;
+                }
+            }
+            let count = if worker.call { worker.leases.len() } else { 1 };
+            *nodes.entry(item.step_id.base_id().to_owned()).or_default() += count;
+        }
+        steps.host.set_executing(&steps.run_id, nodes);
+    }
+
     /// Drive one phase's coordinator to completion against the (persistent)
     /// pool. `cost` supplies batch sizes and absorbs the timings coming back.
     ///
@@ -85,6 +110,7 @@ impl WorkerPool {
         start_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
+            self.publish_executing(coord);
             if coord.is_finished() {
                 break;
             }

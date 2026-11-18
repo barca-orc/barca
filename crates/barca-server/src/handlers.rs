@@ -185,9 +185,9 @@ pub async fn rollup(
         chrono::DateTime::from_timestamp(now.timestamp() / 60 * 60, 0).unwrap_or(now)
     };
     let facts = health_facts(&state, &dag, &db_state, &snapshot.path, as_of).await?;
-    let running = crate::running::by_node(&facts.runs, &result.nodes, &dag)
-        .into_keys()
-        .collect();
+    // "N running" counts the nodes a run is executing, not every node of every run in flight.
+    let running =
+        crate::running::executing(&crate::running::by_node(&facts.runs, &result.nodes, &dag));
     barca_core::health::attach(&mut result, facts.evidence(), &running);
     let mut rollup = barca_core::rollup::build(
         &result.nodes,
@@ -825,9 +825,8 @@ pub(crate) async fn attach_health_at(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<std::collections::HashSet<String>, ApiError> {
     let facts = health_facts(state, dag, db_state, db_path, now).await?;
-    let running = crate::running::by_node(&facts.runs, &result.nodes, dag)
-        .into_keys()
-        .collect();
+    let running =
+        crate::running::executing(&crate::running::by_node(&facts.runs, &result.nodes, dag));
     barca_core::health::attach(result, facts.evidence(), &running);
     Ok(running)
 }

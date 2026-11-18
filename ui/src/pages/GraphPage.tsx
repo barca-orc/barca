@@ -17,7 +17,7 @@ import { inPipeline } from '@/lib/pipeline'
 import { isFiltered } from '@/lib/assetFilters'
 import { AssetsToolbar } from './AssetsToolbar'
 import { useAssetFilter } from '@/hooks/useAssetFilter'
-import { overlayRunStatus, type LayoutDir } from '@/lib/graph'
+import { type LayoutDir } from '@/lib/graph'
 import { usePinNotes } from '@/hooks/usePins'
 
 export function GraphPage() {
@@ -83,12 +83,8 @@ export function GraphPage() {
     busy: trigger.isPending || stream.running, onStarted,
   })
 
-  // Live status overlay: stream-derived, plus an optimistic "running" on the
-  // triggered node so the click feels instant before the first event lands.
-  const statuses = useMemo(
-    () => overlayRunStatus(stream.statuses, stream.running, run?.nodeId ?? null),
-    [stream.statuses, stream.running, run],
-  )
+  // A submitted target may still be waiting for its inputs.
+  const statuses = stream.statuses
 
   // While a new pipeline's state loads, its nodes keep their last known state (not "Checking…").
   const knownRows = useKnownStates(stateQuery.data)

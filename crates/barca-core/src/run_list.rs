@@ -31,9 +31,83 @@ pub struct RunLine {
     /// a run that did not finish. Steps are keys: a partitioned node counts one per key.
     pub steps: String,
     /// What `steps` counts, with what was planned and where the run stopped:
-    /// `Steps are keys: a partitioned node counts one per key · 12 nodes planned · stopped at
+    /// `Steps are keys: a partitioned node counts one per key · 12 steps planned · stopped at
     /// billing.py:orders`.
     pub steps_detail: String,
+    /// The run's targets in a few words ([`target_line`]): `all assets`, `billing.py:orders`,
+    /// `billing.py:orders +21 more`. The full list is `target` (and `explanation.targets` of
+    /// one run).
+    #[serde(default)]
+    pub target: String,
+    /// How many targets the run named; 0 for a run of everything.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub target_count: u64,
+}
+
+/// Where a node is in a run in flight (#1042): the one distinction every count and cell of
+/// "running" reads. Only `running` is counted as running anywhere; a `waiting` or `queued`
+/// node keeps its own state word, with the run as a note beside it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum RunningStep {
+    /// At least one worker is executing a step of this node.
+    Running,
+    /// A run that is executing will still reach it: it waits for its upstream steps.
+    Waiting,
+    /// It is a node of a run that waits in the queue for a run slot: nothing executes it.
+    Queued,
+}
+
+impl RunningStep {
+    /// The words every surface prints for it: `running`, `in this run`, `in a queued run`.
+    pub fn label(self) -> &'static str {
+        match self {
+            RunningStep::Running => "running",
+            RunningStep::Waiting => "in this run",
+            RunningStep::Queued => "in a queued run",
+        }
+    }
+}
+
+/// A run's targets as given (`target`: comma-separated node ids; `None`, empty or `all` for a
+/// run of everything), one each.
+pub fn target_ids(target: Option<&str>) -> Vec<&str> {
+    target
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty() && *id != "all")
+        .collect()
+}
+
+/// A run's targets in a few words, for a row of a list: `all assets` for a run of everything,
+/// the one target's id, or the first target's id and how many more (`billing.py:orders +21
+/// more`). A tick's first target is its scheduled node. Never the comma-joined list: that is
+/// `target`, for `--json` and a run's own page.
+pub fn target_line(target: Option<&str>) -> String {
+    let ids = target_ids(target);
+    match ids.as_slice() {
+        [] => "all assets".to_string(),
+        [one] => (*one).to_string(),
+        [first, rest @ ..] => format!("{first} +{} more", count(rest.len() as u64)),
+    }
+}
+
+/// The run slots in use, in words (`GET /queue`'s `slots`, the first line of `barca queue`):
+/// `1 of 4 running`, and when a run someone asked for executes in the extra slot past
+/// `max_runs` (a requested run never waits behind scheduled work), `1 of 1 running, plus 1
+/// requested run`.
+pub fn queue_slots_line(running: usize, max_runs: usize) -> String {
+    let extra = running.saturating_sub(max_runs);
+    if extra == 0 {
+        return format!("{running} of {max_runs} running");
+    }
+    format!(
+        "{max_runs} of {max_runs} running, plus {extra} requested {}",
+        if extra == 1 { "run" } else { "runs" }
+    )
 }
 
 /// What [`run_line`] reads of a run.
@@ -49,6 +123,8 @@ pub struct RunLineFacts<'a> {
     pub error: Option<&'a str>,
     /// The first failed step: its node id (with its key) and its error.
     pub first_failure: Option<(&'a str, &'a str)>,
+    /// The targets as given, comma-separated; `None` for a run of everything.
+    pub target: Option<&'a str>,
 }
 
 impl<'a> From<&'a crate::db::RunRecord> for RunLineFacts<'a> {
@@ -64,6 +140,7 @@ impl<'a> From<&'a crate::db::RunRecord> for RunLineFacts<'a> {
                 .failure
                 .as_ref()
                 .map(|f| (f.node.as_str(), f.error.as_str())),
+            target: r.target.as_deref(),
         }
     }
 }
@@ -83,17 +160,6 @@ fn step_name(node_id: &str) -> String {
 
 fn line_of(error: &str) -> String {
     headline(error).unwrap_or_default()
-}
-
-/// `7 ok · 1 failed · 0 cached`. `executed` counts every step that ran, failed ones included.
-fn outcome(executed: u64, cached: u64, failed: u64) -> String {
-    let failed = failed.min(executed);
-    let mut parts = vec![format!("{} ok", count(executed - failed))];
-    if failed > 0 {
-        parts.push(format!("{} failed", count(failed)));
-    }
-    parts.push(format!("{} cached", count(cached)));
-    parts.join(" · ")
 }
 
 /// The row's failure line and its full text.
@@ -132,25 +198,19 @@ fn failure(run: RunLineFacts<'_>) -> (Option<String>, Option<String>) {
 
 /// The words of `run`'s row in a list of runs.
 pub fn run_line(run: RunLineFacts<'_>) -> RunLine {
-    let executed = run.steps_executed.max(0) as u64;
-    let cached = run.steps_cached.max(0) as u64;
-    let steps = if matches!(run.status, "cancelled" | "interrupted" | "error") {
-        format!("{} started · {} cached", count(executed), count(cached))
-    } else {
-        outcome(
-            executed,
-            cached,
-            run.steps_failed.unwrap_or(0).max(0) as u64,
-        )
-    };
-    let mut detail = vec!["Steps are keys: a partitioned node counts one per key".to_string()];
-    if let Some(total) = run.steps_total {
-        let total = total.max(0) as u64;
-        detail.push(format!(
-            "{} {} planned",
-            count(total),
-            if total == 1 { "node" } else { "nodes" }
-        ));
+    // Counted where a run's panel counts them ([`crate::run_explanation::step_counts`]), so a
+    // row and the panel it opens say the same numbers.
+    let counts = crate::run_explanation::step_counts(crate::run_explanation::StepFacts {
+        status: run.status,
+        steps_total: run.steps_total,
+        steps_executed: run.steps_executed,
+        steps_cached: run.steps_cached,
+        steps_failed: run.steps_failed.unwrap_or(0).max(0) as u64,
+    });
+    let steps = counts.outcome;
+    let mut detail = vec![crate::run_explanation::STEP_UNITS.to_string()];
+    if run.steps_total.is_some() {
+        detail.push(counts.planned);
     }
     if let Some((node, _)) = run.first_failure {
         detail.push(format!("stopped at {node}"));
@@ -161,6 +221,8 @@ pub fn run_line(run: RunLineFacts<'_>) -> RunLine {
         failure_detail,
         steps,
         steps_detail: detail.join(" · "),
+        target: target_line(run.target),
+        target_count: target_ids(run.target).len() as u64,
     }
 }
 
@@ -215,7 +277,8 @@ pub struct GroupActivity {
 pub struct RunNow {
     /// The nodes executing, the one furthest from done first: what holds the run up.
     pub running: Vec<ActiveNode>,
-    /// How many nodes wait (for a run slot or for their upstream steps).
+    /// How many nodes the run has not started executing: they wait for their upstream steps,
+    /// or, for a run in the queue, for its run slot.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub queued: usize,
     /// Keys with a result of the partitioned nodes in flight; `null` when none is partitioned.
@@ -224,7 +287,7 @@ pub struct RunNow {
     /// counted under the group the rollup puts it in ([`crate::rollup::node_groups`]).
     pub groups: Vec<GroupActivity>,
     /// The same in one line, as `barca history --status running` prints it under the run:
-    /// `executing 3: orders, clean, report · 12 queued · 240/900 keys`. The first
+    /// `executing 3: orders, clean, report · 12 waiting · 240/900 keys`. The first
     /// [`NOW_NAMES`] nodes are named, by their short names.
     #[serde(default)]
     pub line: String,
@@ -255,7 +318,7 @@ fn now_line(running: &[ActiveNode], queued: usize, keys: Option<KeysDone>) -> St
         ));
     }
     if queued > 0 || running.is_empty() {
-        parts.push(format!("{} queued", count(queued as u64)));
+        parts.push(format!("{} waiting", count(queued as u64)));
     }
     if let Some(keys) = keys {
         parts.push(format!(
@@ -364,8 +427,7 @@ pub fn unfollowed_run_finished(started: &str, node: &crate::status::NodeStatus) 
 }
 
 /// What a run this process cannot follow is working on: the nodes it covers that it is not
-/// past ([`unfollowed_run_covers`], [`unfollowed_run_finished`]). Each counts as executing:
-/// without the run's events nothing says which of them wait, so `queued` is 0.
+/// past ([`unfollowed_run_covers`], [`unfollowed_run_finished`]). Without worker activity the run is visible, but no node can be confirmed executing.
 pub fn unfollowed_run_now(
     command: &str,
     targets: &[String],
@@ -379,7 +441,7 @@ pub fn unfollowed_run_now(
         .filter(|n| !unfollowed_run_finished(started, n))
         .map(|n| ActiveNodeFacts {
             node_id: &n.id,
-            running: true,
+            running: false,
             keys: n
                 .partitions
                 .as_ref()
@@ -773,6 +835,15 @@ pub fn run_activity(
 mod tests {
     use super::*;
 
+    #[test]
+    fn queue_slots_name_the_requested_run_using_the_extra_slot() {
+        assert_eq!(queue_slots_line(1, 1), "1 of 1 running");
+        assert_eq!(
+            queue_slots_line(2, 1),
+            "1 of 1 running, plus 1 requested run"
+        );
+    }
+
     fn facts(status: &'static str) -> RunLineFacts<'static> {
         RunLineFacts {
             status,
@@ -780,6 +851,7 @@ mod tests {
             steps_executed: 8,
             steps_cached: 3,
             steps_failed: Some(1),
+            target: None,
             error: None,
             first_failure: None,
         }
@@ -791,10 +863,10 @@ mod tests {
             steps_failed: Some(0),
             ..facts("success")
         });
-        assert_eq!(line.steps, "8 ok · 3 cached");
+        assert_eq!(line.steps, "8 ok · 3 cached · 1 not reached");
         assert_eq!(
             line.steps_detail,
-            "Steps are keys: a partitioned node counts one per key · 12 nodes planned"
+            "A step is one node, or one key of a partitioned node · 12 steps planned"
         );
         assert_eq!((line.failure, line.failure_detail), (None, None));
     }
@@ -808,7 +880,7 @@ mod tests {
             )),
             ..facts("failed")
         });
-        assert_eq!(line.steps, "7 ok · 1 failed · 3 cached");
+        assert_eq!(line.steps, "7 ok · 1 failed · 3 cached · 1 not reached");
         assert_eq!(
             line.failure.as_deref(),
             Some("stopped at orders · KeyError: 'region'")
@@ -836,7 +908,7 @@ mod tests {
     #[test]
     fn a_run_that_did_not_finish_says_what_it_started() {
         let line = run_line(facts("cancelled"));
-        assert_eq!(line.steps, "8 started · 3 cached");
+        assert_eq!(line.steps, "8 started · 3 cached · 1 not reached");
         assert_eq!(line.failure, None);
     }
 
@@ -902,7 +974,7 @@ mod tests {
             vec![("p.py:b", Some("3,120 of 5,000 keys")), ("p.py:a", None)]
         );
         assert_eq!(now.queued, 1);
-        assert_eq!(now.line, "executing 2: b, a · 1 queued · 3,120/5,001 keys");
+        assert_eq!(now.line, "executing 2: b, a · 1 waiting · 3,120/5,001 keys");
         assert_eq!(
             now.keys,
             Some(KeysDone {
@@ -940,8 +1012,8 @@ mod tests {
             running: false,
             keys: None,
         }];
-        assert_eq!(run_now(&waiting, &[]).line, "1 queued");
-        assert_eq!(run_now(&[], &[]).line, "0 queued");
+        assert_eq!(run_now(&waiting, &[]).line, "1 waiting");
+        assert_eq!(run_now(&[], &[]).line, "0 waiting");
     }
 
     fn at(text: &str) -> chrono::DateTime<chrono::Utc> {

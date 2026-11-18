@@ -4711,7 +4711,9 @@ components:
       - estimated_start_at
       - wait_seconds
       - waiting_for
+      - target_line
       properties:
+        target_line: {type: string}
         run_id:
           type: string
         status:
@@ -4833,7 +4835,9 @@ components:
       - running
       - queued
       - capacity
+      - slots
       properties:
+        slots: {type: string}
         paused:
           type: boolean
           description: Paused by an operator (POST /queue/pause); kept across restarts.
@@ -6950,7 +6954,9 @@ components:
       - started_at
       - step
       - partitions
+      - label
       properties:
+        label: {type: string}
         run_id:
           type: string
           description: The run (GET /runs/{run_id}).
@@ -6974,8 +6980,8 @@ components:
       enum:
       - queued
       - running
-      description: queued while the run waits for a run slot or for the node's upstream steps;
-        running once the node's step executes. A CLI run reports running for its targets.
+      - waiting
+      description: Queued for a run slot, waiting within a run, or executing on a worker.
     PartitionProgress:
       type: object
       additionalProperties: false
@@ -7473,8 +7479,10 @@ components:
       type: object
       additionalProperties: false
       description: A run in the words of a list row, the line of barca history --json. Experimental.
-      required: [steps, steps_detail, failure, failure_detail]
+      required: [steps, steps_detail, failure, failure_detail, target, target_count]
       properties:
+        target: {type: string}
+        target_count: {type: integer, minimum: 0}
         steps:
           type: string
           description: The run's steps by outcome, "7 ok · 1 failed · 0 cached", or "3 started · 0
@@ -8258,11 +8266,46 @@ components:
     RunExplanation:
       type: object
       additionalProperties: false
-      required: [targets, requested_by, attempts, steps, target_outcomes, cancellation, why, progress, slowest]
+      required: [targets, target_line, counts, outputs, requested_by, attempts, steps, target_outcomes, cancellation, why, progress, slowest]
       description: The run in words, derived from what it recorded (plan_reasons, cancellation, its
         counters and steps_page.nodes) by the code that prints barca history RUN_ID, whose --json has
         the same object. The wording may change; parse the recorded fields. Experimental.
       properties:
+        target_line: {type: string}
+        counts:
+          type: object
+          additionalProperties: false
+          required: [steps, ran, ok, failed, cached, not_reached, nodes, not_reached_nodes, attempts, retries, outcome, planned, units, not_reached_line, attempts_line]
+          properties:
+            steps: {type: integer}
+            ran: {type: integer}
+            ok: {type: integer}
+            failed: {type: integer}
+            cached: {type: integer}
+            not_reached: {type: integer}
+            nodes: {type: [integer, 'null']}
+            not_reached_nodes: {type: [integer, 'null']}
+            attempts: {type: [integer, 'null']}
+            retries: {type: [integer, 'null']}
+            outcome: {type: string}
+            planned: {type: string}
+            units: {type: string}
+            not_reached_line: {type: [string, 'null']}
+            attempts_line: {type: [string, 'null']}
+        outputs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [node_id, line, format, path, rows, size_bytes, keys]
+            properties:
+              node_id: {type: string}
+              line: {type: string}
+              format: {type: [string, 'null']}
+              path: {type: [string, 'null']}
+              rows: {type: [integer, 'null']}
+              size_bytes: {type: [integer, 'null']}
+              keys: {type: [integer, 'null']}
         targets:
           type: array
           description: The run's targets, one each; its job's node ids, else the targets as given. Empty

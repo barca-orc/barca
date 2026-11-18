@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { buildGraph, edgeClassName, graphAt, impliedEdges, layoutInput, overlayRunStatus, shortName } from './graph'
+import { buildGraph, edgeClassName, graphAt, impliedEdges, layoutInput, shortName } from './graph'
 import { layout, routeMiddle, routePath } from './graphLayout'
-import type { ListNode, StatusKind } from './types'
+import type { ListNode } from './types'
 import type { Tone } from './tone'
 
 const ASSETS: ListNode[] = [
@@ -51,22 +51,6 @@ describe('layoutInput / graphAt', () => {
   it('gives dagre only the dependencies inside the asset set', () => {
     const orphan: ListNode[] = [{ ...ASSETS[1]!, inputs: ['p.py:missing'] }]
     expect(layoutInput(orphan, 'LR').edges).toEqual([])
-  })
-})
-
-describe('overlayRunStatus', () => {
-  it('adds optimistic running for the triggered node', () => {
-    expect(overlayRunStatus({}, true, 'n')).toEqual({ n: 'running' })
-  })
-
-  it('does not override a status the stream already set', () => {
-    const base: Record<string, StatusKind> = { n: 'success' }
-    expect(overlayRunStatus(base, true, 'n')).toBe(base)
-  })
-
-  it('is a no-op when not running or no node', () => {
-    expect(overlayRunStatus({}, false, 'n')).toEqual({})
-    expect(overlayRunStatus({}, true, null)).toEqual({})
   })
 })
 

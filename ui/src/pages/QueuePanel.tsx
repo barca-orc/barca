@@ -7,7 +7,7 @@ import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useTimeZone } from '@/context/timeZone'
 import { ApiError } from '@/lib/api'
 import { runTime } from '@/lib/runs'
-import { admissionLabel, capacityLabel, queueControl, queueMatters, queuedLabel, queueRows, queueState, queueStateLabel, queueSummary, sharedCapacityLabel, waitingRows } from '@/lib/queue'
+import { admissionLabel, queueControl, queueMatters, queuedLabel, queueRows, queueState, queueStateLabel, queueSummary, sharedCapacityLabel, waitingRows } from '@/lib/queue'
 import type { QueueView } from '@/lib/types'
 
 /** Where the reader's choice to fold the queue's list is kept (this browser only). */
@@ -111,7 +111,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
         {data && <>
           <span className="barca-queue-count">
             <StatusGlyph glyph={data.running.length > 0 ? 'running' : 'queued'} live={data.running.length > 0} size={12} />
-            {capacityLabel(data.running.length, data.max_runs)}
+            {data.slots}
           </span>
           <span className="barca-queue-count">{queuedLabel(data.queued.length)}</span>
           {shared && data.capacity && <span className="barca-queue-count" title={`The capacity every run of this server shares (--capacity): ${admissionLabel(data.capacity)}`}>{shared}</span>}

@@ -69,7 +69,7 @@ export function elapsedLabel(startedAt: string, nowMs: number): string {
 export function runningGraphState(running: NodeRunning): GraphState {
   const keys = keysLabel(running)
   const status = runningStatus(running)
-  const word = statusMeta(status).label
+  const word = running.label
   return {
     kind: 'run',
     tone: statusMeta(status).tone,
@@ -107,8 +107,8 @@ export function runHref(runId: string): string {
 }
 
 /** How many of `ids` a run is working on now. */
-export function runningCount(ids: string[], byId: Map<string, NodeState>, live: Record<string, StatusKind> = {}): number {
-  return ids.filter((id) => byId.get(id)?.running || live[id] === 'running' || live[id] === 'queued').length
+export function runningCount(ids: string[], byId: Map<string, NodeState>): number {
+  return ids.filter((id) => byId.get(id)?.running?.step === 'running').length
 }
 
 /** The distinct runs in progress, by the nodes they are working on. */

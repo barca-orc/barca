@@ -107,7 +107,7 @@ export function GroupedTable({ entries, tree, byId, rollup, visualStates, held =
           const nestedGroups = group?.members.filter((id) => tree.groups.has(id)).length ?? 0
           const state = visualStates[entry.id] ?? UNKNOWN_GRAPH_STATE
           const node = group ? undefined : byId.get(entry.id)
-          const running = node?.running
+          const running = node?.running?.step === 'running' ? node.running : null
           const duration = group ? null : lastRunDuration(node)
           // The other groups that declare it: the rollup counts it in this one.
           const alsoIn = alsoInNote(rollup?.entries.get(entry.id)?.also_in, tree)
@@ -298,7 +298,7 @@ export function GroupPanel({ group, tree, byId, leaves, scope, state, statesFail
 
 /** A node's state as the server says it, with the last attempt as its own fact; or the run on it. */
 function OutputState({ node, nowMs }: { node: NodeState; nowMs: number }) {
-  if (node.running) return <RunningBadge running={node.running} nowMs={nowMs} />
+  if (node.running?.step === 'running') return <RunningBadge running={node.running} nowMs={nowMs} />
   const box = memberHealth(node)
   return (
     <div className="barca-state-line" title={box.hint}>

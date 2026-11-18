@@ -206,7 +206,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         {/* Since when it is out of date and when it is expected fresh, or only rechecked: the server's estimates. */}
         <EstimateLine staleSince={node.stale_since} expectedFreshAt={node.expected_fresh_at} recheckAt={node.recheck_at} noEstimate={node.no_estimate} nowMs={nowMs} />
         {node.running && (
-          <KeyValue label="computing now">
+          <KeyValue label={node.running.step === 'running' ? 'computing now' : 'run'}>
             <RunningBadge running={node.running} nowMs={nowMs} />{' '}
             <span className="barca-cell-sub">started by {startedBy(node.running.triggered_by)}</span>
           </KeyValue>

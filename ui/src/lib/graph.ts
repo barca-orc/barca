@@ -4,7 +4,7 @@ import { DAG_NODE_WIDTH, DAG_NODE_HEIGHT } from '@/components'
 import { edgeId, layout, type Layout, type LayoutDir, type LayoutInput, type Point } from './graphLayout'
 import type { Tone } from './tone'
 import type { Glyph } from './glyph'
-import type { NodeKind, StatusKind } from './types'
+import type { NodeKind } from './types'
 
 export type { LayoutDir }
 
@@ -229,22 +229,6 @@ export function graphAt(assets: GraphEntry[], dir: LayoutDir, laidOut: Layout) {
  */
 export function buildGraph(assets: GraphEntry[], dir: LayoutDir) {
   return graphAt(assets, dir, layout(layoutInput(assets, dir)))
-}
-
-/**
- * Overlay an optimistic "running" status onto the triggered node so the click
- * feels instant before the first event lands. Pure — given the stream-derived
- * statuses, returns the map the graph should render.
- */
-export function overlayRunStatus(
-  statuses: Record<string, StatusKind>,
-  running: boolean,
-  nodeId: string | null,
-): Record<string, StatusKind> {
-  if (running && nodeId && !statuses[nodeId]) {
-    return { ...statuses, [nodeId]: 'running' }
-  }
-  return statuses
 }
 
 /**

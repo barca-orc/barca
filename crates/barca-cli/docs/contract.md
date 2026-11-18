@@ -1132,6 +1132,31 @@ says what a sink writes.
 | `explanation` | object | always |
 | `explanation.attempts` | string | always |
 | `explanation.cancellation` | null | always |
+| `explanation.counts` | object | always |
+| `explanation.counts.attempts` | integer | always |
+| `explanation.counts.attempts_line` | string | always |
+| `explanation.counts.cached` | integer | always |
+| `explanation.counts.failed` | integer | always |
+| `explanation.counts.nodes` | null | always |
+| `explanation.counts.not_reached` | integer | always |
+| `explanation.counts.not_reached_line` | null | always |
+| `explanation.counts.not_reached_nodes` | null | always |
+| `explanation.counts.ok` | integer | always |
+| `explanation.counts.outcome` | string | always |
+| `explanation.counts.planned` | string | always |
+| `explanation.counts.ran` | integer | always |
+| `explanation.counts.retries` | integer | always |
+| `explanation.counts.steps` | integer | always |
+| `explanation.counts.units` | string | always |
+| `explanation.outputs` | array | always |
+| `explanation.outputs[]` | object | always |
+| `explanation.outputs[].format` | string | always |
+| `explanation.outputs[].keys` | null | always |
+| `explanation.outputs[].line` | string | always |
+| `explanation.outputs[].node_id` | string | always |
+| `explanation.outputs[].path` | string | always |
+| `explanation.outputs[].rows` | null | always |
+| `explanation.outputs[].size_bytes` | integer | always |
 | `explanation.progress` | null | always |
 | `explanation.requested_by` | string | always |
 | `explanation.slowest` | array | always |
@@ -1140,6 +1165,7 @@ says what a sink writes.
 | `explanation.slowest[].node_id` | string | always |
 | `explanation.slowest[].seconds` | number | always |
 | `explanation.steps` | string | always |
+| `explanation.target_line` | string | always |
 | `explanation.target_outcomes` | array | always |
 | `explanation.targets` | array | always |
 | `explanation.targets[]` | string | always |
@@ -3355,7 +3381,7 @@ run; additive and experimental.
 
 `runs[].line` (experimental, #959) is the run in the words of one row of a list, the same the
 web UI's run list prints: `steps` (the steps by outcome, `7 ok · 1 failed · 0 cached`),
-`steps_detail` (what that counts, the nodes planned and the step the run stopped at), `failure`
+`steps_detail` (what that counts, the steps planned and where the run stopped), `failure`
 (what went wrong in one line, `null` when nothing did) and `failure_detail` (the same in full).
 
 `runs[].principal` and `runs[].trigger_reason` (experimental, #925) say who asked a server for
@@ -3446,11 +3472,11 @@ and `evicted` (a valid result whose file is gone), `task` and `sensor` (they alw
 10,000 keys of one node ran in one phase). `example` is the first node executed for the reason.
 `explanation` (experimental, #956) is the run in words, derived from those recorded facts by
 the same code that answers `GET /runs/{run_id}` (its `explanation`), so the table, the JSON
-and the web UI say the same: `targets` (a list: the job's node ids, else the targets as given;
+and the web UI say the same. Its `counts` separates planned steps and nodes, executed steps, cache hits, unreached steps, attempts and retries. `outputs` describes returned artifacts, and `target_line` summarizes the requested targets. Other fields include `targets` (a list: the job's node ids, else the targets as given;
 empty for a run of every asset; `run.target` stays the string as given), `requested_by`
-(`api · token:ci-bot`), `attempts` (`29 steps, no retries`, `19,399 steps, 62 retries`:
+(`api · token:ci-bot`), `attempts` (`29 attempts: one per step, none retried`, `19,461 attempts: 19,399 steps, 62 retries`:
 retries are counted apart from each step's first attempt; `null` before an attempt is
-recorded), `steps` (`7 ok · 1 failed · 2 skipped · 0 cached`), `target_outcomes` (one line per
+recorded), `steps` (`7 ok · 1 failed · 0 cached · 2 not reached`), `target_outcomes` (one line per
 target when the server rebuilt the run's plan, otherwise empty), `cancellation` (`{headline,
 detail, run}` or `null`), `why`, `progress` (`{done, total, percent, executed, cached,
 eta_seconds, eta}` for a run in progress, otherwise `null`) and `slowest` (at most five
@@ -3500,6 +3526,8 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].line.failure_detail` | string | always |
 | `runs[].line.steps` | string | always |
 | `runs[].line.steps_detail` | string | always |
+| `runs[].line.target` | string | always |
+| `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
@@ -3542,6 +3570,8 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].line.failure_detail` | string | always |
 | `runs[].line.steps` | string | always |
 | `runs[].line.steps_detail` | string | always |
+| `runs[].line.target` | string | always |
+| `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
@@ -3653,6 +3683,23 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `explanation` | object | always |
 | `explanation.attempts` | string | always |
 | `explanation.cancellation` | null | always |
+| `explanation.counts` | object | always |
+| `explanation.counts.attempts` | integer | always |
+| `explanation.counts.attempts_line` | string | always |
+| `explanation.counts.cached` | integer | always |
+| `explanation.counts.failed` | integer | always |
+| `explanation.counts.nodes` | null | always |
+| `explanation.counts.not_reached` | integer | always |
+| `explanation.counts.not_reached_line` | null | always |
+| `explanation.counts.not_reached_nodes` | null | always |
+| `explanation.counts.ok` | integer | always |
+| `explanation.counts.outcome` | string | always |
+| `explanation.counts.planned` | string | always |
+| `explanation.counts.ran` | integer | always |
+| `explanation.counts.retries` | integer | always |
+| `explanation.counts.steps` | integer | always |
+| `explanation.counts.units` | string | always |
+| `explanation.outputs` | array | always |
 | `explanation.progress` | null | always |
 | `explanation.requested_by` | string | always |
 | `explanation.slowest` | array | always |
@@ -3661,6 +3708,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `explanation.slowest[].node_id` | string | always |
 | `explanation.slowest[].seconds` | number | always |
 | `explanation.steps` | string | always |
+| `explanation.target_line` | string | always |
 | `explanation.target_outcomes` | array | always |
 | `explanation.targets` | array | always |
 | `explanation.targets[]` | string | always |
@@ -3786,6 +3834,8 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].line.failure_detail` | null | always |
 | `runs[].line.steps` | string | always |
 | `runs[].line.steps_detail` | string | always |
+| `runs[].line.target` | string | always |
+| `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
 | `runs[].retries` | integer | always |
 | `runs[].run_id` | string | always |

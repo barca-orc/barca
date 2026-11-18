@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { replay } from './program'
 import type { ActivityHour } from './types'
-import { activityBarLabel, activityHourAt, activityTicks, canLoadMore, everyRun, INITIAL_RUNS, parseRunFilters, RUNS_MAX, runsCommand, runsNarrowed, runsQuery, stepName, updateRuns, windowLabel, writeRunFilters, type RunsMsg } from './runsPage'
+import { activityBarLabel, activityHourAt, activityTicks, canLoadMore, everyRun, INITIAL_RUNS, parseRunFilters, RUNS_MAX, rerunLabel, runsCommand, runsNarrowed, runsQuery, stepName, updateRuns, windowLabel, writeRunFilters, type RunsMsg } from './runsPage'
 
 const run = (...msgs: RunsMsg[]) => replay(updateRuns, INITIAL_RUNS, msgs)
 
 const HOUR = { since: '2026-10-29T12:00:00Z', until: '2026-10-29T13:00:00Z' }
+
+it('offers a cache-aware re-run after cancellation', () => {
+  expect(rerunLabel('cancelled')).toBe('Re-run')
+  expect(rerunLabel('failed')).toBe('Re-run failed')
+})
 
 describe('run filters in the URL', () => {
   it('round-trips, and a default leaves no parameter', () => {
