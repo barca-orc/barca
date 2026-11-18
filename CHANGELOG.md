@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.45.0 (2026-11-18)
+
 ### Breaking
 
 - **On a server with a shared capacity, a requested run's steps go ahead of a scheduled run's (#1003).** With `[server] capacity` (or `barca serve --capacity`), steps were admitted first come, first served across runs, so a run someone asked for that overlapped a scheduled run took turns with it step by step: at `capacity = 1`, a request of 85 steps that took 43 s alone took 202 s beside a scheduled run of 110 steps. Now a step of a requested run (`POST /runs`, the web UI, a `--server` client, an agent: anything a schedule's tick did not start) is admitted before a step of a scheduled run, and the request takes 44 s; the scheduled run's own wall time was unchanged in the runs measured. Requested runs are admitted in the order they first asked, not interleaved with each other, and scheduled runs likewise. Nothing running is stopped. A scheduled step that has waited `[server] scheduled_max_wait_seconds` (default 120) goes next, so requests cannot starve a schedule; the bound is per step, so under requests that never stop a scheduled run advances about one step per bound. A run now gives back the weight of a step that ended in the same call that asks for its next step, so another run cannot take it in between. `[server] admission = "first_come"` restores the old order. `GET /queue` `capacity` gains `admission`, `scheduled_max_wait_seconds` and an `origin` (`requested` or `scheduled`) on each waiting step, and the web UI's waiting steps show it. `barca docs serve-ops` ("A capacity shared by every run") and the resources specification (version 3) state the rule.
