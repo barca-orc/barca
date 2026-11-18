@@ -3,8 +3,8 @@ use clap::CommandFactory;
 
 /// Subcommands that must carry runnable examples in help or --examples.
 const DOCUMENTED: &[&str] = &[
-    "get", "run", "plan", "doctor", "logs", "history", "gc", "stats", "serve", "queue", "list",
-    "status", "sql", "state", "docs",
+    "get", "run", "plan", "doctor", "logs", "history", "gc", "stats", "serve", "queue", "cancel",
+    "list", "status", "sql", "state", "docs",
 ];
 
 fn after_help(cmd: &clap::Command) -> String {

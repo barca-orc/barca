@@ -1,0 +1,21 @@
+Cancel a queued or running server run
+
+Usage: barca cancel [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>  Run id returned by the server
+
+Options:
+      --json            Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty          Emit human-readable output (the default when stdout is a terminal)
+      --env <ENV>       Check the server's environment
+      --server [<URL>]  Use a server (URL or configured); get/run execute its deployed code
+      --local           Use independent local state; ignore the configured server
+  -h, --help            Show concise command help
+      --examples        Show all command examples without running anything
+
+Examples:
+  barca cancel RUN_ID --server --json
+
+All examples: barca cancel --examples
+More: barca docs server-mode

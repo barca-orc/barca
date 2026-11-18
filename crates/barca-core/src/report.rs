@@ -445,12 +445,15 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
     let words: Vec<String> = crate::health::Health::ALL
         .iter()
         .filter_map(|h| {
-            let n = result.nodes.iter().filter(|node| node.health == *h).count();
+            let n = result.rollup.as_ref().map_or_else(
+                || result.nodes.iter().filter(|node| node.health == *h).count(),
+                |scope| scope.health.get(*h),
+            );
             (n > 0).then(|| format!("{n} {}", h.word()))
         })
         .collect();
     if !words.is_empty() {
-        let listed = if filter.is_some() {
+        let listed = if result.rollup.is_none() && filter.is_some() {
             " (nodes listed)"
         } else {
             ""

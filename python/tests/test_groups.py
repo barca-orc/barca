@@ -109,6 +109,22 @@ def test_unassigned_group_calls_are_registered(tmp_path):
         "group:pipeline.py:Experiment",
         "group:pipeline.py:Done",
     ]
+    scoped = run("status", "Preparation", "--rollup", "--json")
+    assert scoped["entries"][0]["label"] == "Preparation"
+    assert scoped["entries"][0]["nodes"] == 1
+    other = tmp_path / "other.py"
+    other.write_text(BASE + GROUPS)
+    ambiguous = subprocess.run(
+        [binary, "status", "Preparation", "--rollup"], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert ambiguous.returncode == 2
+    assert "group:other.py:preparation" in ambiguous.stderr
+    assert "group:pipeline.py:Preparation" in ambiguous.stderr
+    assert (
+        run("status", "group:pipeline.py:Preparation", "--rollup", "--json")["entries"][0]["nodes"]
+        == 1
+    )
+    other.unlink()
     assert groups[0]["members"] == ["pipeline.py:rows"]
     assert groups[2]["members"] == ["group:pipeline.py:training"]
     assert groups[3]["members"] == ["pipeline.py:check"]

@@ -54,13 +54,23 @@ pub use model::*;
 /// on tokio-util directly.
 pub use tokio_util::sync::CancellationToken;
 
+/// A short sample for error messages; callers keep the full list for spelling suggestions.
+pub fn bounded_ids(ids: &str) -> String {
+    let mut names = ids.split(", ");
+    let mut sample = names.by_ref().take(8).collect::<Vec<_>>().join(", ");
+    if names.next().is_some() {
+        sample.push_str(", …");
+    }
+    sample
+}
+
 /// Top-level error type for barca engine operations.
 #[derive(Debug, thiserror::Error)]
 pub enum BarcaError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Asset '{0}' not found. Available: {1}")]
+    #[error("Asset '{0}' not found. Available: {sample}", sample = bounded_ids(.1))]
     AssetNotFound(String, String),
 
     /// A target name that several nodes have (the same function name in two files). Like

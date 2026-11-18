@@ -175,10 +175,7 @@
     {
       "method": "DELETE",
       "path": "/runs/{}",
-      "exempt": {
-        "reason": "no CLI command cancels a server run it is not attached to",
-        "issue": 932
-      }
+      "cli": "barca cancel RUN_ID --json"
     },
     {
       "method": "POST",

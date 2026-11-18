@@ -16,6 +16,28 @@ Discover commands with `barca --help`; use `barca <command> --help` for concise 
 `barca <command> --examples` for the full example collection, and `barca docs` for the
 topic index (`--json` for machine-readable discovery). Load only the topic you need.
 
+## Inspect a deployment
+
+Use a group's declared name to scope its upstream cone. If two groups share
+a name, use the full id, for example `group:pipeline.py:Reports`.
+The rollup prints the UI's cause counts. Health totals cover the whole scope. Use `--cause catching_up` to include work already in hand.
+
+```bash
+barca status Reports --rollup --server
+barca status --now --rollup --server --json
+barca status --problems --server --pretty
+barca status --cause no_refresh_path --server --fields id,root
+barca status --cause overdue --server --fields id,gap_seconds
+barca status --health behind --server --fields id,cause
+barca status --root failure:pipeline.py:source --server --fields id
+barca sql "select t.scheduled_at, target.outcome from barca.ticks t, unnest(t.targets) as u(target) where target.node = 'pipeline.py:report' order by t.scheduled_at desc" --server
+barca history --server --fields run_id,status,elapsed_seconds
+barca cancel RUN_ID --server --json
+```
+
+The history projection omits repeated file lists and target strings. Cancel returns
+the run id and `cancelling` when the server accepts the request.
+
 ## Output format: JSON unless stdout is a terminal
 
 `get`, `run`, `logs`, `list`, `status`, `history` and `stats` pick their stdout format by one rule, first match wins:

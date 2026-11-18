@@ -171,6 +171,7 @@ fn main() {
             Cli::Status { .. }
             | Cli::Stats { .. }
             | Cli::Logs { .. }
+            | Cli::Cancel { .. }
             | Cli::Queue { .. }
             | Cli::Pin { .. }
             | Cli::Unpin { .. }
@@ -244,11 +245,17 @@ fn runtime(json: bool, server: bool) -> tokio::runtime::Runtime {
 fn status_filter(
     states: &[String],
     problems: bool,
+    cause: Option<String>,
+    health: Option<String>,
+    root: Option<String>,
 ) -> Result<barca_core::status::StatusFilter, CliError> {
     let states = barca_core::status::StatusFilter::parse_states(states)
         .map_err(|e| usage_error(&format!("error: --state: {e}")))?;
     Ok(barca_core::status::StatusFilter {
         states,
+        cause,
+        health,
+        root,
         problems,
         matched: 0,
     })
@@ -266,6 +273,7 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
         | Cli::Pin { server, .. }
         | Cli::Unpin { server, .. }
         | Cli::Logs { server, .. }
+        | Cli::Cancel { server, .. }
         | Cli::Queue { server, .. }
         | Cli::Pause { server, .. }
         | Cli::Resume { server, .. }
@@ -421,8 +429,12 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             fields,
             sample,
             state,
+            cause,
+            health,
+            root,
             problems,
             rollup,
+            now,
             keys,
             needs_run,
             value,
@@ -472,9 +484,9 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 )
                 .await;
             }
-            let filter = status_filter(&state, problems)?;
+            let filter = status_filter(&state, problems, cause, health, root)?;
             if rollup {
-                return client::rollup(server, &targets, &files, json, env.as_deref()).await;
+                return client::rollup(server, &targets, &files, json, now, env.as_deref()).await;
             }
             let limit = inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT);
             let opts = StatusOpts {
@@ -604,6 +616,25 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 env.as_deref(),
             )
             .await
+        }
+        Cli::Cancel {
+            run_id,
+            format,
+            env,
+            ..
+        } => {
+            server.health(env.as_deref()).await?;
+            let answer = client::cancel_run(server, &run_id).await?;
+            if is_json(format) {
+                barca_core::outln!("{}", answer);
+            } else {
+                barca_core::outln!(
+                    "{}: {}",
+                    run_id,
+                    answer["status"].as_str().unwrap_or("cancelling")
+                );
+            }
+            Ok(())
         }
         Cli::Queue {
             action,
@@ -778,6 +809,9 @@ async fn run_cli(
     let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
 
     match cli {
+        Cli::Cancel { .. } => Err(usage_error(
+            "cancel needs a server; pass --server URL or configure a server",
+        )),
         Cli::Queue { .. } => Err(queue_needs_a_server()),
         Cli::Pause { .. } => Err(pauses_need_a_server("pause")),
         Cli::Resume { .. } => Err(pauses_need_a_server("resume")),
@@ -1117,6 +1151,9 @@ async fn run_cli(
             fields,
             sample,
             state,
+            cause,
+            health,
+            root,
             problems,
             rollup,
             keys,
@@ -1175,7 +1212,7 @@ async fn run_cli(
                 .await
                 .map_err(|e| get_run_error(e, ctx, &hint_files));
             }
-            let filter = status_filter(&state, problems)?;
+            let filter = status_filter(&state, problems, cause, health, root)?;
             if rollup {
                 return commands::rollup_cmd(env.as_deref(), targets, files, json, &python)
                     .await

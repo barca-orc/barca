@@ -6,6 +6,9 @@ use super::*;
 use crate::key_query::{KeysOverview, KeysPage};
 use crate::partition_grid::{GridCounts, PartitionGrid, PartitionKeyDetail, state};
 
+/// Longer retry selections stay available through JSON.
+const MAX_INLINE_SELECTION_BYTES: usize = 512;
+
 fn out(rendered: &mut RenderedOutput, text: String) {
     rendered.chunks.push(OutputChunk::Stdout(text));
 }
@@ -138,7 +141,13 @@ pub fn render_partition_keys(page: &KeysPage, filtered: bool, json: bool) -> Ren
             plural(page.total as u64, "key"),
             page.needs_run
         ));
-        if let Some(selection) = page.selection.as_deref().filter(|_| page.needs_run > 0) {
+        if page
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.len() > MAX_INLINE_SELECTION_BYTES)
+        {
+            text.push_str("Use --json for the full partition selection.\n");
+        } else if let Some(selection) = page.selection.as_deref().filter(|_| page.needs_run > 0) {
             text.push_str(&format!(
                 "run them: barca get {} --partition '{selection}'\n",
                 page.id
@@ -251,7 +260,11 @@ pub fn render_partition_overview(overview: &KeysOverview, json: bool) -> Rendere
                 "    list: barca status {} --keys {list}\n",
                 overview.id
             ));
-            if let Some(selection) = &issue.selection {
+            if let Some(selection) = issue
+                .selection
+                .as_ref()
+                .filter(|s| s.len() <= MAX_INLINE_SELECTION_BYTES)
+            {
                 text.push_str(&format!(
                     "    run:  barca get {} --partition '{selection}'\n",
                     overview.id
@@ -520,6 +533,19 @@ mod tests {
             serde_json::to_value(&back).unwrap(),
             serde_json::to_value(&page).unwrap()
         );
+    }
+
+    #[test]
+    fn a_large_selection_is_available_in_json_without_filling_the_table() {
+        let mut page = grid().keys_page(&KeyQuery::default()).unwrap();
+        let selection = serde_json::json!({"day": (0..400).collect::<Vec<_>>()}).to_string();
+        page.selection = Some(selection.clone());
+        let pretty = stdout(render_partition_keys(&page, true, false));
+        assert!(pretty.contains("Use --json"));
+        assert!(!pretty.contains(&selection));
+        let json: Value =
+            serde_json::from_str(&stdout(render_partition_keys(&page, true, true))).unwrap();
+        assert_eq!(json["selection"], selection);
     }
 
     #[test]

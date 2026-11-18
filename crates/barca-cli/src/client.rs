@@ -57,7 +57,7 @@ pub(crate) use inspect::{
     run_detail, sql, stats, status,
 };
 pub(crate) use logs::logs;
-pub(crate) use runs::{RunArgs, run};
+pub(crate) use runs::{RunArgs, cancel_run, run};
 
 /// How long one ordinary request (not the event stream) may take, connection included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -113,7 +113,7 @@ const RECONNECT_PAUSE: Duration = Duration::from_millis(500);
 /// The commands that take `--server` and `--local`.
 pub(crate) const SERVER_COMMANDS: &[&str] = &[
     "get", "run", "status", "list", "history", "stats", "logs", "sql", "doctor", "queue", "pause",
-    "resume",
+    "resume", "cancel",
 ];
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the

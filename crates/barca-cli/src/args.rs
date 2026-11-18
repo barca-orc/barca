@@ -150,6 +150,7 @@ Tools:
   pin       Hold an asset at an earlier result
   unpin     Release a pinned asset
   sql       Query cached results with SQL
+  cancel    Cancel a server run
   queue     Inspect or control the server queue
   pause     Hold assets back from scheduled runs (server)
   resume    Let paused assets run on schedule again
@@ -415,6 +416,11 @@ Examples:
 
 More: barca docs scheduling";
 
+const CANCEL_HELP: &str = "Examples:
+  barca cancel RUN_ID --server --json
+
+More: barca docs server-mode";
+
 const QUEUE_HELP: &str = "\
 Examples:
   barca queue --server                 # the configured server's run queue: running and queued runs
@@ -482,10 +488,14 @@ Examples:
   barca status total --server              # cache state on the configured barca server
   barca status total --json                # with a server configured: its ledger, plus `local` per node
   barca status total --local               # this machine's own state, even with a server configured
+  barca status --cause overdue             # nodes whose ticks did not leave them fresh
+  barca status --health behind             # nodes classified behind
+  barca status --root failure:pipeline.py:source  # nodes held by this failure
   barca status --problems                  # only nodes that need attention: not cached, a failed run, a paused or failing schedule
   barca status --state stale,never_run     # only nodes in these cache states; the summary still counts every node
   barca status --problems --server         # what needs attention on the configured server
-  barca status --rollup                    # counts by health per group and file, then what holds the nodes that are not fresh and what clears each
+  barca status --rollup --now --server     # evaluate the deployed graph at the current second
+  barca status --rollup                    # counts by cause per group and file, then what holds the nodes that are not fresh and what clears each
   barca status --rollup --json             # {as_of, entries, roots, data_coverage}: what GET /state/rollup answers
   barca status --json --fields id,health,cause,root,gap_seconds   # why each node is not fresh, and what explains it
   barca status total --rollup --server     # the rollup of `total` and its upstream cone on the configured server
@@ -1075,6 +1085,19 @@ pub(crate) enum Cli {
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
     },
+    /// Cancel a queued or running server run
+    #[command(after_help = quick_help("cancel", CANCEL_HELP), after_long_help = CANCEL_HELP)]
+    Cancel {
+        /// Run id returned by the server
+        run_id: String,
+        #[command(flatten)]
+        format: FormatFlags,
+        /// Check the server's environment
+        #[arg(long)]
+        env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
+    },
     /// Show a barca server's run queue, or pause or resume it (experimental)
     ///
     /// The queue holds the runs a server accepted and has not finished, in order. It lives on
@@ -1222,15 +1245,26 @@ pub(crate) enum Cli {
         /// pinned, fresh
         #[arg(long, value_name = "STATE", value_delimiter = ',')]
         state: Vec<String>,
-        /// Show only nodes that need attention: not cached (unsynced, stale, never_run, partial,
-        /// blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
+        /// Keep nodes with this cause
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Cause::ALL.map(|v| v.as_str())))]
+        cause: Option<String>,
+        /// Keep nodes with this health
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Health::ALL.map(|v| v.as_str())))]
+        health: Option<String>,
+        /// Keep nodes with this root id
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"])]
+        root: Option<String>,
+        /// List problems by distance from fresh; omit work already in hand unless selected by cause
         #[arg(long)]
         problems: bool,
-        /// Experimental: print the rollup instead of the nodes: counts by health per group and
+        /// Experimental: print the rollup instead of the nodes: counts by cause per group and
         /// file, in nodes and in assets, then what holds the nodes that are not fresh (the
         /// ranked roots) and the action that clears each
         #[arg(long, conflicts_with_all = ["limit", "all", "fields", "sample", "state", "problems"])]
         rollup: bool,
+        /// Evaluate the rollup at the current second (server polls default to the minute)
+        #[arg(long, requires = "rollup")]
+        now: bool,
         /// Experimental: list the keys of the one partitioned TARGET instead of the nodes:
         /// each key's state, latest attempt, rows and error. --state, --needs-run, --value,
         /// --range, --error and --match filter (all must hold); --sort orders; --limit and

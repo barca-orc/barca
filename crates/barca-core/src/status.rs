@@ -405,6 +405,12 @@ pub struct StatusFilter {
     /// Keep nodes that need attention ([`needs_attention`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub problems: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
     /// How many nodes passed, before any `--limit` (the table's note).
     #[serde(skip)]
     pub matched: usize,
@@ -441,14 +447,43 @@ impl StatusFilter {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.states.is_empty() && !self.problems
+        self.states.is_empty()
+            && !self.problems
+            && self.cause.is_none()
+            && self.health.is_none()
+            && self.root.is_none()
     }
 
     /// Whether `node` passes: its state is one of `states` (when given) and, with `problems`,
     /// it needs attention.
     pub fn keep(&self, node: &NodeStatus) -> bool {
+        use crate::health::{Cause, NoEstimate, RootKind};
+        let problem = match node.cause {
+            Some(Cause::Queued | Cause::CatchingUp) => {
+                self.cause.is_some()
+                    || node
+                        .root
+                        .as_ref()
+                        .is_some_and(|r| r.kind == RootKind::Queue)
+                    || node.no_estimate == Some(NoEstimate::QueueStopped)
+            }
+            Some(Cause::Failing | Cause::Overdue) => true,
+            _ => needs_attention(node),
+        };
         (self.states.is_empty() || self.states.contains(&node.cache.state))
-            && (!self.problems || needs_attention(node))
+            && self
+                .cause
+                .as_deref()
+                .is_none_or(|c| node.cause.is_some_and(|v| v.as_str() == c))
+            && self
+                .health
+                .as_deref()
+                .is_none_or(|h| node.health.as_str() == h)
+            && self
+                .root
+                .as_deref()
+                .is_none_or(|r| node.root.as_ref().is_some_and(|v| v.id == r))
+            && (!self.problems || problem)
     }
 
     /// Drop the nodes that do not pass, and record the filter on the result. The summary is
@@ -458,6 +493,16 @@ impl StatusFilter {
             return;
         }
         result.nodes.retain(|n| self.keep(n));
+        if self.problems {
+            result.nodes.sort_by_cached_key(|n| {
+                (
+                    std::cmp::Reverse(n.cause.map_or(1, |c| c.weight())),
+                    n.cause,
+                    std::cmp::Reverse(n.gap_seconds),
+                    n.id.clone(),
+                )
+            });
+        }
         result.filter = Some(StatusFilter {
             matched: result.nodes.len(),
             ..self.clone()
@@ -473,6 +518,15 @@ impl StatusFilter {
         if !self.states.is_empty() {
             let states: Vec<&str> = self.states.iter().map(|s| s.as_str()).collect();
             parts.push(format!("--state {}", states.join(",")));
+        }
+        for (flag, value) in [
+            ("cause", &self.cause),
+            ("health", &self.health),
+            ("root", &self.root),
+        ] {
+            if let Some(value) = value {
+                parts.push(format!("--{flag} {value}"));
+            }
         }
         parts.join(" ")
     }
@@ -817,6 +871,54 @@ pub async fn status_from_dag(
     )
 }
 
+/// Expand status group selectors into their leaf nodes before planning the upstream cones.
+pub fn group_targets(dag: &crate::dag::Dag, targets: &[String]) -> Result<Vec<String>, BarcaError> {
+    if targets.is_empty() || dag.groups.is_empty() {
+        return Ok(targets.to_vec());
+    }
+    let groups: HashMap<_, _> = dag.groups.iter().map(|g| (g.id.as_str(), g)).collect();
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for target in targets {
+        let mut matching = dag
+            .groups
+            .iter()
+            .filter(|g| g.name == *target && !target.starts_with("group:"));
+        let mut id = target.as_str();
+        if let Some(first) = matching.next() {
+            if let Some(second) = matching.next() {
+                return Err(BarcaError::AmbiguousTarget(format!(
+                    "group '{target}' is ambiguous: use a full id such as {} or {}",
+                    first.id, second.id
+                )));
+            }
+            if let Some(node) = dag
+                .topo_order()
+                .into_iter()
+                .find(|id| id.rsplit_once(':').is_some_and(|(_, name)| name == target))
+            {
+                return Err(BarcaError::AmbiguousTarget(format!(
+                    "'{target}' names both a node and a group: use {node} or {}",
+                    first.id
+                )));
+            }
+            id = &first.id;
+        }
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(group) = groups.get(id) {
+                stack.extend(group.members.iter().rev().map(String::as_str));
+            } else {
+                out.push(id.to_owned());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Preserve the given graph and move the prediction's private membership to SQL.
 pub(crate) async fn status_from_dag_with_membership(
     cfg: &crate::config::ResolvedConfig,
@@ -827,13 +929,14 @@ pub(crate) async fn status_from_dag_with_membership(
     shape: bool,
 ) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
     let t0 = std::time::Instant::now();
+    let target_names = group_targets(dag, target_names)?;
     // The rules a run follows (#985): each node is decided on its own, and what reads a
     // `Manual` or pinned node is decided against the result a run reads, not against a
     // recompute of it.
     let (explained, membership, _, held) = crate::execution::explain_dag_with_keys(
         dag,
         cfg,
-        target_names,
+        &target_names,
         CachePolicy::CacheAware,
         "status",
         None,

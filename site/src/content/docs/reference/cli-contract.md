@@ -73,6 +73,7 @@ command is experimental with it):
 | `barca list --groups` | Organizational group hierarchy and metadata shape are experimental |
 | `barca plan` | prints the planner's internal phase/stream layout, which changes with scheduling work |
 | `barca sql` | new in 0.13: the view naming and the JSON result shape may change after field use |
+| `barca cancel` | Cancel a queued or running server run; the response follows DELETE /runs/{id} |
 | `barca queue` | new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use |
 | `barca pause` | new in 0.41: pausing assets for scheduled runs; the JSON shape, the table and what a pause covers may change after field use |
 | `barca resume` | new in 0.41: resuming paused assets; the JSON shape and the table may change after field use |
@@ -83,7 +84,11 @@ command is experimental with it):
 | `barca state reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
 | `barca get --expires` | new with -o url (signed links to results in a cloud store); the link format is the cloud's |
 | `barca status --sample` | sample rows come from a Python helper whose output may grow |
-| `barca status --problems` | new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) |
+| `barca status --problems` | orders problems by distance from fresh; work already in hand is omitted unless its cause is requested |
+| `barca status --health` | experimental health inspection (#1043) |
+| `barca status --root` | experimental health inspection (#1043) |
+| `barca status --cause` | experimental health inspection (#1043) |
+| `barca status --now` | experimental health inspection (#1043) |
 | `barca status --rollup` | new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use |
 | `barca status --keys` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
 | `barca status --grid` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
@@ -132,7 +137,7 @@ stability; the row adds the keys and routes that go with it.
 | `barca sql` with a server (`GET /sql/views`, `GET /materializations`) and the `barca` schema (`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`, `barca.queue`) | new in 0.29.3 (the last three in 0.44.1): the columns of barca's tables, the limit of rows read from a server and the wording of the notes may change after field use; the result JSON is `sql`'s |
 | `barca sql` with a server, for a query that names only barca's tables (`POST /sql/query`) | new in 0.44.0: the server answers it instead of this machine. Which queries are sent to the server, its limits (5 seconds, 10000 rows and 4MB an answer, 100000 rows a table, four queries at once), the `notes` and the wording of its refusals may change; the result JSON is `sql`'s, a refusal is exit 2 with the standard envelope |
 | `logs -f/--follow` | new in 0.29.2: the end-of-run line on stderr (`barca: run <run_id> ended: <status>`) and the choice of the run to follow without a run id may change after field use; the exit codes (0 succeeded, 130 cancelled, 1 otherwise) and the JSON Lines on stdout are stable |
-| `status --problems`, `nodes[].schedule` and `filter` in `status --json` (and `GET /nodes?state=&problems=`) | new in 0.29.3: what counts as needing attention may grow (now every state but `cached` and `always_runs`, a task or sensor whose last run failed, and a paused or failing schedule); `schedule` may gain keys. `--state` and the summary counting every node are stable |
+| `status --problems`, `nodes[].schedule` and `filter` in `status --json` (and `GET /nodes?state=&problems=`) | new in 0.29.3: what counts as needing attention may grow (ordered by cause weight; work already in hand is omitted unless the cause is requested); `schedule` may gain keys. `--state` and the summary counting every node are stable |
 | `status --sample` and `nodes[].shape` | read by a Python helper (`barca._inspect`) whose output may grow per format; the wording of `shape.note` (an unreadable, too large or unreachable artifact) may change |
 | `BARCA_PROGRESS_SECS`, `BARCA_POOL_SIZE`, `BARCA_COMM_COST_SECONDS`, `BARCA_TRACE_TIMING` | tuning and benchmarking knobs |
 | `BARCA_TELEMETRY` and the spans and metrics it sends | new: span names, resources, tags and metrics may change |
@@ -245,6 +250,7 @@ as `barca state restore --examples`. Detailed semantics live in `barca docs <top
 | `barca pin` | `[<TARGET>] [<FILES>...]` | experimental: new in 0.41 (barca docs pins): the JSON shapes, the version list and what a pin covers may change after field use | Pin an asset to an earlier materialization, or list pins and versions |
 | `barca unpin` | `<TARGET> [<FILES>...]` | experimental: new in 0.41 (barca docs pins): the JSON shape may change after field use | Remove an asset's pin; the next run decides it as before |
 | `barca serve` | `[<FILES>...]` | experimental: the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open | Manage runs, schedules and results on a server |
+| `barca cancel` | `<RUN_ID>` | experimental: Cancel a queued or running server run; the response follows DELETE /runs/{id} | Cancel a queued or running server run |
 | `barca queue` | `[<ACTION>]` | experimental: new in 0.29.4: the run queue's JSON shape, its table and the pause's scope may change after field use | Show a barca server's run queue, or pause or resume it (experimental) |
 | `barca pause` | `[<TARGET>]` | experimental: new in 0.41: pausing assets for scheduled runs; the JSON shape, the table and what a pause covers may change after field use | Pause assets on a barca server: scheduled runs skip them until resumed (experimental) |
 | `barca resume` | `[<TARGET>]` | experimental: new in 0.41: resuming paused assets; the JSON shape and the table may change after field use | Resume paused assets on a barca server (experimental) |
@@ -495,6 +501,18 @@ default, and any aliases.
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
+#### barca cancel
+
+| Argument | Value | Notes | Stability | Description |
+|---|---|---|---|---|
+| `<RUN_ID>` | - | required | experimental (with the command) | Run id returned by the server |
+| `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
+| `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
+| `--env` | `ENV` | - | experimental (with the command) | Check the server's environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
+
 #### barca queue
 
 | Argument | Value | Notes | Stability | Description |
@@ -564,8 +582,12 @@ default, and any aliases.
 | `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `cause`, `root`, `gap_seconds`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `no_estimate`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh |
-| `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
-| `--rollup` | - | default `false` | experimental: new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use | Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each |
+| `--cause` | `failing\|overdue\|no_refresh_path\|queued\|undecided\|catching_up` | - | experimental: experimental health inspection (#1043) | Keep nodes with this cause |
+| `--health` | `failing\|blocked\|suspect\|behind\|undecided\|never_run\|ok` | - | experimental: experimental health inspection (#1043) | Keep nodes with this health |
+| `--root` | `ROOT` | - | experimental: experimental health inspection (#1043) | Keep nodes with this root id |
+| `--problems` | - | default `false` | experimental: orders problems by distance from fresh; work already in hand is omitted unless its cause is requested | List problems by distance from fresh; omit work already in hand unless selected by cause |
+| `--rollup` | - | default `false` | experimental: new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use | Experimental: print the rollup instead of the nodes: counts by cause per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each |
+| `--now` | - | default `false` | experimental: experimental health inspection (#1043) | Evaluate the rollup at the current second (server polls default to the minute) |
 | `--keys` | - | default `false` | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: list the keys of one partitioned target, each with its state |
 | `--needs-run` | - | default `false` | experimental: new in 0.44.1 (#1036), with --keys: the keys a run computes; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: only keys a run computes |
 | `--value` | `DIM=VALUE[,VALUE]` | - | experimental: new in 0.44.1 (#1036), with --keys: a dimension's values; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: only keys with these values of a dimension |
@@ -2375,6 +2397,123 @@ counts every node even when `nodes` is truncated.
   `failing`, `paused`, `late` and `live` (booleans; `live` is `true` when a running scheduler
   reported it). `last_run_id`, `late` and `late_since` are new in 0.44 (#958). Its types are in
   `specs/interfaces/server-api.openapi.yaml` (`NodeSchedule`).
+
+#### Nodes selected by cause
+
+`barca status --cause failing --fields id,cause,root` reports matching nodes and
+whole-scope totals. The health and root filters intersect with the cause filter.
+
+<!-- BEGIN GENERATED schema status_by_cause -->
+| Key | Type | Present |
+|---|---|---|
+| `as_of` | string | always |
+| `data_coverage` | object | always |
+| `data_coverage.assets` | integer | always |
+| `data_coverage.measured` | integer | always |
+| `data_coverage.suspect` | integer | always |
+| `disk_usage` | object | always |
+| `disk_usage.backup_bytes` | integer | always |
+| `disk_usage.budget_bytes` | integer | always |
+| `disk_usage.limit_bytes` | integer | always |
+| `disk_usage.size_bytes` | integer | always |
+| `filter` | object | always |
+| `filter.cause` | string | always |
+| `nodes` | array | always |
+| `nodes[]` | object | always |
+| `nodes[].cause` | string | always |
+| `nodes[].id` | string | always |
+| `nodes[].root` | object | always |
+| `nodes[].root.id` | string | always |
+| `nodes[].root.kind` | string | always |
+| `nodes[].root.node` | string | always |
+| `rollup` | object | always |
+| `rollup.also_in` | array | always |
+| `rollup.asset_causes` | object | always |
+| `rollup.asset_causes.catching_up` | integer | always |
+| `rollup.asset_causes.failing` | integer | always |
+| `rollup.asset_causes.no_refresh_path` | integer | always |
+| `rollup.asset_causes.overdue` | integer | always |
+| `rollup.asset_causes.queued` | integer | always |
+| `rollup.asset_causes.undecided` | integer | always |
+| `rollup.asset_health` | object | always |
+| `rollup.asset_health.behind` | integer | always |
+| `rollup.asset_health.blocked` | integer | always |
+| `rollup.asset_health.failing` | integer | always |
+| `rollup.asset_health.never_run` | integer | always |
+| `rollup.asset_health.ok` | integer | always |
+| `rollup.asset_health.suspect` | integer | always |
+| `rollup.asset_health.undecided` | integer | always |
+| `rollup.assets` | integer | always |
+| `rollup.causes` | object | always |
+| `rollup.causes.catching_up` | integer | always |
+| `rollup.causes.failing` | integer | always |
+| `rollup.causes.no_refresh_path` | integer | always |
+| `rollup.causes.overdue` | integer | always |
+| `rollup.causes.queued` | integer | always |
+| `rollup.causes.undecided` | integer | always |
+| `rollup.children` | array | always |
+| `rollup.data_coverage` | object | always |
+| `rollup.data_coverage.assets` | integer | always |
+| `rollup.data_coverage.measured` | integer | always |
+| `rollup.data_coverage.suspect` | integer | always |
+| `rollup.fresh_by` | null | always |
+| `rollup.gap_seconds` | integer | always |
+| `rollup.health` | object | always |
+| `rollup.health.behind` | integer | always |
+| `rollup.health.blocked` | integer | always |
+| `rollup.health.failing` | integer | always |
+| `rollup.health.never_run` | integer | always |
+| `rollup.health.ok` | integer | always |
+| `rollup.health.suspect` | integer | always |
+| `rollup.health.undecided` | integer | always |
+| `rollup.held_by` | array | always |
+| `rollup.held_by[]` | object | always |
+| `rollup.held_by[].assets` | integer | always |
+| `rollup.held_by[].causes` | object | always |
+| `rollup.held_by[].causes.catching_up` | integer | always |
+| `rollup.held_by[].causes.failing` | integer | always |
+| `rollup.held_by[].causes.no_refresh_path` | integer | always |
+| `rollup.held_by[].causes.overdue` | integer | always |
+| `rollup.held_by[].causes.queued` | integer | always |
+| `rollup.held_by[].causes.undecided` | integer | always |
+| `rollup.held_by[].cumulative_nodes` | integer | always |
+| `rollup.held_by[].gap_seconds` | integer | always |
+| `rollup.held_by[].nodes` | integer | always |
+| `rollup.held_by[].root` | string | always |
+| `rollup.held_by[].unbounded` | integer | always |
+| `rollup.held_by[].weight` | integer | always |
+| `rollup.id` | string | always |
+| `rollup.kind` | string | always |
+| `rollup.label` | string | always |
+| `rollup.nodes` | integer | always |
+| `rollup.not_fresh` | integer | always |
+| `rollup.parent` | null | always |
+| `rollup.running` | integer | always |
+| `rollup.unbounded` | integer | always |
+| `rollup.weight` | integer | always |
+| `rollup.weights` | object | always |
+| `rollup.weights.catching_up` | integer | always |
+| `rollup.weights.failing` | integer | always |
+| `rollup.weights.fresh` | integer | always |
+| `rollup.weights.no_refresh_path` | integer | always |
+| `rollup.weights.overdue` | integer | always |
+| `rollup.weights.queued` | integer | always |
+| `rollup.weights.undecided` | integer | always |
+| `root` | string | always |
+| `summary` | object | always |
+| `summary.always_runs` | integer | always |
+| `summary.blocked` | integer | always |
+| `summary.cached` | integer | always |
+| `summary.never_run` | integer | always |
+| `summary.partial` | integer | always |
+| `summary.stale` | integer | always |
+| `summary.unknown` | integer | always |
+| `summary.unsynced` | integer | always |
+| `target` | null | always |
+| `targets` | array | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_by_cause -->
 
 #### Problems only
 

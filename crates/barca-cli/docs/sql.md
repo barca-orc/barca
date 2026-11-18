@@ -262,8 +262,8 @@ pipeline.py:inbox  300               400
 `typical_run_seconds` is null until a tick's run has succeeded.
 
 What the ticks did with one node over time (the newest 20 fired ticks of a schedule keep
-their targets). The query names a node, so it names that node's result view too: with a
-server it runs on this machine, as any query over a view does ("With a server").
+their targets). The quoted node id is a value. With a server, the query runs through
+`POST /sql/query` and needs no shared artifact store.
 
 ```sql
 select t.scheduled_at, target.outcome, t.run_status, t.queue_wait_seconds

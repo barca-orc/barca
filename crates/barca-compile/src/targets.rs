@@ -46,13 +46,13 @@ impl std::fmt::Display for TargetError {
                 write!(
                     f,
                     "Asset '{name}' not found. Available: {}",
-                    available.join(", ")
+                    barca_model::bounded_ids(&available.join(", "))
                 )
             }
             TargetError::Ambiguous { name, matches } => write!(
                 f,
                 "'{name}' matches more than one node: {}. Name one by its full id, e.g. `{}`",
-                matches.join(", "),
+                barca_model::bounded_ids(&matches.join(", ")),
                 matches[0]
             ),
             TargetError::WrongKind { name, kind } => match kind {
@@ -897,6 +897,18 @@ mod resolve_target_tests {
         assert_eq!(resolve("poll", "run").unwrap(), "a.py:poll");
         // A command that is neither (stats, status) takes every kind.
         assert_eq!(resolve("publish", "").unwrap(), "a.py:publish");
+    }
+
+    #[test]
+    fn an_unknown_name_bounds_the_examples_in_both_error_displays() {
+        let err = TargetError::NotFound {
+            name: "missing".into(),
+            available: (0..400).map(|n| format!("pipeline.py:n{n}")).collect(),
+        };
+        for text in [err.to_string(), BarcaError::from(err).to_string()] {
+            assert!(text.ends_with("pipeline.py:n7, …"));
+            assert!(!text.contains("pipeline.py:n8"));
+        }
     }
 
     #[test]

@@ -82,8 +82,7 @@ passes through such nodes. `barca status` scoped to targets reads the targets' u
 so a failure above them is seen.
 
 The table prints the words of the nodes it lists under the cache counts, most severe first:
-`Health: 1 failing, 1 blocked, 2 ok`. With `--state` or `--problems` the line reads `Health
-(nodes listed)`.
+`Health: 1 failing, 1 blocked, 2 ok`. The line counts every node in scope before filtering or pagination.
 
 ```bash
 barca status --json | jq -r '.nodes[] | select(.health != "ok") | [.health, .health_reason, .id] | @tsv'

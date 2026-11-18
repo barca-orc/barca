@@ -665,6 +665,14 @@ root entry of `GET /state/rollup` for the scope with `children` empty (the tree 
 rollup's own document), over every node in scope whatever a filter or a limit cuts from
 `nodes`; `GET /nodes` carries both too.
 
+### CLI inspection
+
+The human rollup renders the served cause counts. Status filters intersect before
+pagination. Health totals describe the full requested scope. Problems omit work already in hand unless explicitly selected by cause, retain queue roots and stopped queues, and order by cause
+weight, cause order, descending gap and node id. A named group selects its leaf
+nodes and their upstream cones. A server rollup accepts `now=true` to evaluate
+the same facts at the current second.
+
 ### Rollup (#955)
 
 One tree: root, group, file, node. The root's children are the top-level groups and, for

@@ -117,6 +117,8 @@ pub struct StateQuery {
     pub targets: Option<String>,
     /// Experimental: comma-separated source files, as in node ids; adds every node they define.
     pub files: Option<String>,
+    #[serde(default)]
+    pub now: bool,
 }
 
 /// `GET /state` — every node's cache state (would `barca get` reuse it?), latest
@@ -177,20 +179,35 @@ pub async fn rollup(
     let status = status_for_targets(&state, &dag, &db_state, &snapshot, &targets).await?;
     let mut result = (*status).clone();
     let now = chrono::Utc::now();
-    let as_of = chrono::DateTime::from_timestamp(now.timestamp() / 60 * 60, 0).unwrap_or(now);
+    let as_of = if query.now {
+        now
+    } else {
+        chrono::DateTime::from_timestamp(now.timestamp() / 60 * 60, 0).unwrap_or(now)
+    };
     let facts = health_facts(&state, &dag, &db_state, &snapshot.path, as_of).await?;
     let running = crate::running::by_node(&facts.runs, &result.nodes, &dag)
         .into_keys()
         .collect();
     barca_core::health::attach(&mut result, facts.evidence(), &running);
-    Ok(Json(barca_core::rollup::build(
+    let mut rollup = barca_core::rollup::build(
         &result.nodes,
         &dag.groups,
         &running,
         as_of,
         facts.evidence(),
         true,
-    )))
+    );
+    let scope: Vec<_> = [query.targets.as_deref(), query.files.as_deref()]
+        .into_iter()
+        .flatten()
+        .flat_map(|s| s.split(','))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !scope.is_empty() {
+        rollup.entries[0].label = scope.join(", ");
+    }
+    Ok(Json(rollup))
 }
 
 /// `targets` with each group id replaced by the nodes in it (nested groups included), and
@@ -200,27 +217,15 @@ fn expand_targets(
     targets: Vec<String>,
     files: &[String],
 ) -> Result<Vec<String>, ApiError> {
-    let groups: std::collections::HashMap<&str, &barca_core::groups::NodeGroup> =
-        dag.groups.iter().map(|g| (g.id.as_str(), g)).collect();
-    fn leaves(
-        id: &str,
-        groups: &std::collections::HashMap<&str, &barca_core::groups::NodeGroup>,
-        out: &mut Vec<String>,
-    ) {
-        match groups.get(id) {
-            Some(group) => group.members.iter().for_each(|m| leaves(m, groups, out)),
-            None => out.push(id.to_owned()),
-        }
-    }
-    let mut out = Vec::new();
-    for target in targets {
-        if target.starts_with("group:") && !groups.contains_key(target.as_str()) {
+    for target in &targets {
+        if target.starts_with("group:") && !dag.groups.iter().any(|g| g.id == *target) {
             return Err(ApiError::NotFound(format!(
                 "no group {target}\nGET /groups lists them."
             )));
         }
-        leaves(&target, &groups, &mut out);
     }
+    let mut out = barca_core::status::group_targets(dag, &targets)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     for file in files {
         let before = out.len();
         out.extend(
@@ -803,7 +808,7 @@ pub(crate) async fn attach_health(
     dag: &std::sync::Arc<barca_core::dag::Dag>,
     db_state: &crate::read_cache::Stamp,
     db_path: &str,
-) -> Result<(), ApiError> {
+) -> Result<std::collections::HashSet<String>, ApiError> {
     attach_health_at(state, result, dag, db_state, db_path, chrono::Utc::now()).await
 }
 
@@ -815,13 +820,13 @@ pub(crate) async fn attach_health_at(
     db_state: &crate::read_cache::Stamp,
     db_path: &str,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), ApiError> {
+) -> Result<std::collections::HashSet<String>, ApiError> {
     let facts = health_facts(state, dag, db_state, db_path, now).await?;
     let running = crate::running::by_node(&facts.runs, &result.nodes, dag)
         .into_keys()
         .collect();
     barca_core::health::attach(result, facts.evidence(), &running);
-    Ok(())
+    Ok(running)
 }
 
 /// What a status result is classified with (`barca_core::health::Evidence`), as this server

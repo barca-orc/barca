@@ -219,6 +219,7 @@ fn nodes(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
             &inputs.snapshot,
             Vec::new(),
             0,
+            None,
         )
         .await?;
         let total = status.nodes.len();
@@ -241,6 +242,7 @@ fn schedules(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
             &inputs.snapshot,
             Vec::new(),
             0,
+            None,
         )
         .await?;
         let paths = inputs.state.cached_paths(dag).await?;
