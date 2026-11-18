@@ -175,6 +175,11 @@ pub(crate) const INDEXES: &[&str] = &[
     // three columns it reads, so the scan of every run is of this index and never of the
     // table, whose rows hold each run's stored outcome.
     "CREATE INDEX IF NOT EXISTS idx_runs_search ON runs(target, job, run_id)",
+    // The rows `idx_mat_node_latest` leaves out: failures, and successes without an artifact
+    // path. With it a node's newest row and newest success are a few seeks, not its history
+    // (`db::step_histories`, at every phase boundary of a run, #1009). A healthy history has
+    // few such rows, so it costs little to keep.
+    "CREATE INDEX IF NOT EXISTS idx_mat_node_rest ON materializations(node_id, id) WHERE status != 'success' OR artifact_path IS NULL",
 ];
 
 /// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.

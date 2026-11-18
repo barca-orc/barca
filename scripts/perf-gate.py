@@ -3,7 +3,7 @@
 
     BARCA_BIN=.venv/bin/barca python3 scripts/perf-gate.py     # default: barca on PATH
 
-Two checks, each a few seconds:
+Three checks, each a few seconds:
 
 trivial   benchmarks/trivial/barca/assets.py (one asset, no work), `barca get --refresh-all`,
           TRIVIAL_RUNS runs after three warm-ups. The median wall time must be under
@@ -13,6 +13,12 @@ incremental
           benchmarks/incremental_dag/bench.py at INCREMENTAL_KEYS keys: warm one-key updates
           and an unchanged run, with its own work-count assertions and the native budgets
           COORDINATOR_MAX_KIB and INCREMENTAL_MAX_CPU_MS.
+history   a long-lived database: HISTORY_KEYS partition keys of one asset, each key's history
+          copied to HISTORY_MULT times its rows with sqlite3 (every seventh copy a failure), then
+          HISTORY_RUNS runs that each change the asset's code, so every key misses and is
+          explained. The median of the runs' plan-reasons lookup time (BARCA_TRACE_TIMING's
+          `plan reasons so far`) must be under HISTORY_MAX_MS: it reads each key's newest rows,
+          not its history (#1009).
 
 A check that fails is measured once more from scratch and fails the gate only if it fails
 again: a regression fails both times, a burst of load on a shared runner rarely does.
@@ -21,7 +27,9 @@ Exit 0 when every check passes, 1 otherwise.
 
 import json
 import os
+import re
 import shutil
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -45,6 +53,13 @@ TRIVIAL_MAX_CPU_MS = float(os.environ.get("TRIVIAL_MAX_CPU_MS", "50"))
 COORDINATOR_MAX_KIB = int(os.environ.get("COORDINATOR_MAX_KIB", "19531"))
 INCREMENTAL_KEYS = os.environ.get("INCREMENTAL_KEYS", "5000")
 INCREMENTAL_MAX_CPU_MS = os.environ.get("INCREMENTAL_MAX_CPU_MS", "40")
+# - history: the reference machine's `fast` wheel takes 2-3 ms at 300 keys and 200x history,
+#   and took 76-147 ms before #1009 read only the newest rows; 25 ms leaves a slow runner room
+#   and still fails a lookup that reads the history again.
+HISTORY_KEYS = int(os.environ.get("HISTORY_KEYS", "300"))
+HISTORY_MULT = int(os.environ.get("HISTORY_MULT", "200"))
+HISTORY_RUNS = int(os.environ.get("HISTORY_RUNS", "3"))
+HISTORY_MAX_MS = float(os.environ.get("HISTORY_MAX_MS", "25"))
 
 
 def barca_bin() -> str:
@@ -156,13 +171,89 @@ def incremental(binary: str) -> tuple[bool, dict]:
     return done.returncode == 0, row
 
 
+HISTORY_SOURCE = """\
+from barca import asset, partitions
+
+
+
+@asset(partitions={{"key": partitions({keys})}})
+def a(key: str) -> dict:
+    return {{"key": key, "version": {version}}}
+"""
+
+
+def seed_history(db: Path, mult: int) -> int:
+    """Copy every row of `db`'s materializations `mult - 1` times under new run hashes, newest
+    last, every seventh copy a failure: a server that has run for weeks. Returns the rows."""
+    conn = sqlite3.connect(db)
+    try:
+        top = conn.execute("SELECT max(id) FROM materializations").fetchone()[0]
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(materializations)")]
+        copied = {
+            "run_hash": "run_hash || '-' || f.n",
+            "status": "CASE WHEN f.n % 7 = 3 THEN 'failed' ELSE status END",
+            "artifact_path": "CASE WHEN f.n % 7 = 3 THEN NULL ELSE artifact_path END",
+        }
+        columns = [c for c in columns if c != "id"]
+        conn.execute(
+            f"WITH RECURSIVE f(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM f WHERE n < {mult - 1}) "
+            f"INSERT INTO materializations ({', '.join(columns)}) "
+            f"SELECT {', '.join(copied.get(c, c) for c in columns)} "
+            f"FROM f, materializations WHERE id <= {top} ORDER BY f.n, id"
+        )
+        conn.commit()
+        return conn.execute("SELECT count(*) FROM materializations").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def history(binary: str) -> tuple[bool, dict]:
+    with tempfile.TemporaryDirectory(prefix="barca-perf-history-") as directory:
+        project = Path(directory)
+        (project / "barca.toml").write_text("")
+        env = clean_env()
+
+        def run(version: int) -> float | None:
+            # Literal keys: planning reads them without importing the module.
+            keys = [f"k{i:04d}" for i in range(HISTORY_KEYS)]
+            source = HISTORY_SOURCE.format(keys=keys, version=version)
+            (project / "assets.py").write_text(source)
+            done = subprocess.run(
+                [binary, "get", "assets.py", "--json"],
+                cwd=project,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            assert done.returncode == 0, done.stdout + done.stderr[-2000:]
+            assert json.loads(done.stdout)["steps_executed"] == HISTORY_KEYS, done.stdout
+            found = re.findall(r"plan reasons so far ([0-9.]+)ms", done.stderr)
+            return max(map(float, found)) if found else None
+
+        run(0)
+        rows = seed_history(project / ".barca/metadata.db", HISTORY_MULT)
+        lookups = [run(version) for version in range(1, HISTORY_RUNS + 1)]
+    row = {
+        "check": "history",
+        "keys": HISTORY_KEYS,
+        "rows": rows,
+        "plan_reasons_ms": lookups,
+        "limits": {"plan_reasons_ms_median": HISTORY_MAX_MS},
+    }
+    if None in lookups:
+        row["error"] = "no `plan reasons so far` in BARCA_TRACE_TIMING's output"
+        return False, row
+    row["plan_reasons_ms_median"] = statistics.median(lookups)
+    return row["plan_reasons_ms_median"] < HISTORY_MAX_MS, row
+
+
 def main() -> int:
     binary = barca_bin()
     version = subprocess.run([binary, "--version"], capture_output=True, text=True).stdout
     print(f"perf-gate: {version.strip()} at {binary}", file=sys.stderr)
     failed = False
     lines = []
-    for check in (trivial, incremental):
+    for check in (trivial, incremental, history):
         ok, row = check(binary)
         print(json.dumps(row), flush=True)
         if not ok:
