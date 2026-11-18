@@ -19,7 +19,7 @@
 
 use crate::BarcaError;
 use crate::config::ResolvedConfig;
-use crate::protocol::{TransferReply, TransferRequest, read_frame, write_frame};
+use crate::protocol::{FrameReader, TransferReply, TransferRequest, encode_message};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -787,14 +787,32 @@ async fn settle(rx: ReplyRx) -> Outcome {
 /// Owns the socket: writes requests, routes replies to their waiters. On
 /// disconnect, every outstanding waiter is failed (dropping its sender), so
 /// no caller can hang on a dead helper.
+///
+/// Full duplex in one task (#1001). Replies are read through a [`FrameReader`], which keeps a
+/// partly received reply when another branch of the `select!` wins. Requests are queued as
+/// encoded bytes and written as the socket accepts them, so a request waiting for room never
+/// stops the loop reading replies: the helper sends replies while it reads requests, and a
+/// loop that only read between whole writes could fill both directions of the socket and
+/// wait on the helper while the helper waited on it.
 async fn io_task(mut stream: tokio::net::UnixStream, mut req_rx: mpsc::UnboundedReceiver<Request>) {
+    use tokio::io::AsyncWriteExt;
     let trace = std::env::var("BARCA_TRACE_TIMING").is_ok();
     let mut pending: HashMap<u64, (ReplyTx, Option<UploadNotice>, Instant, String)> =
         HashMap::new();
+    let (mut reader, mut writer) = stream.split();
+    let mut replies = FrameReader::new();
+    // Encoded requests not yet taken by the socket.
+    let mut outgoing: Vec<u8> = Vec::new();
+    let mut requests_open = true;
     loop {
         tokio::select! {
-            req = req_rx.recv() => {
-                let Some(Request { frame: req, reply: tx, uploaded }) = req else { break };
+            req = req_rx.recv(), if requests_open => {
+                let Some(Request { frame: req, reply: tx, uploaded }) = req else {
+                    // No more requests: send what is queued, then stop.
+                    requests_open = false;
+                    if outgoing.is_empty() { break }
+                    continue;
+                };
                 let entry = match &req {
                     TransferRequest::Put { id, remote, .. } => Some((*id, format!("put {}", diagnostic_uri(remote)))),
                     TransferRequest::Get { id, remote, .. } => Some((*id, format!("get {}", diagnostic_uri(remote)))),
@@ -802,15 +820,33 @@ async fn io_task(mut stream: tokio::net::UnixStream, mut req_rx: mpsc::Unbounded
                     TransferRequest::Stat { id, remote } => Some((*id, format!("stat {}", diagnostic_uri(remote)))),
                     TransferRequest::Shutdown => None,
                 };
-                if write_frame(&mut stream, &req).await.is_err() {
-                    let _ = tx.send(Err(Failed::helper_exited()));
-                    break;
+                match encode_message(&req) {
+                    Ok(frame) => outgoing.extend_from_slice(&frame),
+                    Err(_) => {
+                        let _ = tx.send(Err(Failed::helper_exited()));
+                        continue;
+                    }
                 }
                 if let Some((id, what)) = entry {
                     pending.insert(id, (tx, uploaded, Instant::now(), what));
                 }
             }
-            reply = read_frame::<_, TransferReply>(&mut stream) => {
+            // `write` is cancel safe: when another branch wins, nothing was written.
+            written = writer.write(&outgoing), if !outgoing.is_empty() => {
+                match written {
+                    Ok(n) if n > 0 => {
+                        outgoing.drain(..n);
+                        if outgoing.is_empty() {
+                            if !requests_open { break }
+                            // Do not keep a burst's buffer for the life of the run.
+                            outgoing.shrink_to(64 * 1024);
+                        }
+                    }
+                    // The helper is gone: the requests waiting in `pending` fail below.
+                    _ => break,
+                }
+            }
+            reply = replies.next::<_, TransferReply>(&mut reader) => {
                 let (id, result) = match reply {
                     Ok(Some(TransferReply::Done { id, size_bytes, sha256, fetched, mismatch })) => {
                         (id, Ok(Transferred { bytes: size_bytes, sha256, fetched, mismatch }))
