@@ -19,8 +19,9 @@ Every run the server accepts joins its run queue: `POST /runs` and the older tri
 (`run_queue`) under its run id before the server answers, so a restart does not lose it. Runs
 start in the order they were accepted, at most `--max-runs` at once (`[server] max_runs` in
 `barca.toml`, default one per core); the others wait with status `pending`. `POST /runs` answers
-`202 {"run_id", "status", "position"}`: `running` when it started at once, or `pending` and its
-place in the queue (1 = next). A run someone asked for (API, UI, CLI) starts ahead of waiting scheduled runs, and while a
+`202 {"run_id", "status", "position", "waiting_for"}`: `running` when it started at once, or
+`pending` and its place in the queue (1 = next); `waiting_for` is `"restart"` when the server is
+draining (below) and `null` otherwise. A run someone asked for (API, UI, CLI) starts ahead of waiting scheduled runs, and while a
 scheduled run holds a slot and every slot is taken, it may use one extra slot of its own.
 
 ```bash
@@ -118,7 +119,13 @@ and new runs are queued for the next start; waiting up to 30s for 1 run in fligh
 
 - starts no queued run, and keeps accepting new ones: `POST /runs` (and the older routes)
   answer as usual, with `status: "pending"`, and the run waits in the queue for the next server
-  (`draining: true` in `GET /queue`);
+  (`draining: true` in `GET /queue`). Each queued run says so: `waiting_for: "restart"` in the
+  `POST /runs` answer, its `GET /queue` entry and `GET /runs/{run_id}` (`null` on a server that
+  is not draining; experimental), and a `--server` client prints `[barca] run RUN_ID is queued
+  behind a restart`. A run accepted during the drain waits for all of it: a long drain timeout
+  (given so a long run can finish) makes every request that arrives during a restart wait that
+  long too, up to the drain timeout plus the restart. With no next server it stays queued in the
+  metadata DB until a server starts on it;
 - stops the scheduler (`[barca] scheduler stopped: the server is draining`). A tick that falls
   in the drain starts nothing; the next server's startup catch-up fires the job once;
 - reports `"status": "draining"` on `GET /health` (still `200`);

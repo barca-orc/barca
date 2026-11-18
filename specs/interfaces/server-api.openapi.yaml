@@ -3405,8 +3405,10 @@ paths:
         are checked first: no run starts for a request the CLI would refuse. A failed step is not an HTTP
         error: it is a run whose outcome is failed. The run joins the run queue (GET /queue), recorded in
         the metadata DB before the answer: it starts in order when fewer than max_runs run, the queue
-        is not paused and the server is not draining. A draining server accepts it too (status pending):
-        the next server resumes it under the same run id.'
+        is not paused and the server is not draining. A draining server accepts it too (status pending,
+        waiting_for restart): the next server resumes it under the same run id, after the drain, which
+        lasts until the runs in flight finish or [server] drain_timeout passes. With no next server
+        it stays queued in the metadata DB until one starts.'
   /runs/{run_id}:
     get:
       summary: One run, with its outcome once finished
@@ -4646,6 +4648,7 @@ components:
       - run_id
       - status
       - position
+      - waiting_for
       properties:
         run_id:
           type: string
@@ -4661,6 +4664,20 @@ components:
           - type: integer
             minimum: 1
           - type: 'null'
+        waiting_for: &id_waiting_for
+          anyOf:
+          - $ref: '#/components/schemas/WaitingFor'
+          - type: 'null'
+          description: What else a queued run waits for, beyond the runs ahead of it; null when nothing
+            does. Experimental.
+    WaitingFor:
+      type: string
+      enum:
+      - restart
+      description: 'Why a queued run has not started beyond the runs ahead of it. restart: the server
+        is draining before it stops (GET /health says draining) and starts no queued run; the run
+        starts on the next server started on the same metadata DB, after the drain (at most [server]
+        drain_timeout) and the restart. Experimental.'
     QueueEntry:
       type: object
       additionalProperties: false
@@ -4676,6 +4693,7 @@ components:
       - started_at
       - estimated_start_at
       - wait_seconds
+      - waiting_for
       properties:
         run_id:
           type: string
@@ -4727,6 +4745,7 @@ components:
           description: How long it waits for a run slot, whole seconds, from queued_at to started_at
             for a running run and to estimated_start_at for a waiting one; null when neither is
             known. Experimental.
+        waiting_for: *id_waiting_for
     PauseRequest:
       type: object
       additionalProperties: false
@@ -8411,6 +8430,7 @@ components:
       - retries
       - plan_reasons
       - cancellation
+      - waiting_for
       - explanation
       - outcome
       - error
@@ -8490,6 +8510,7 @@ components:
           - type: 'null'
           description: Why the run executed what it did; null before it decided to execute anything.
         cancellation: *id_cancellation
+        waiting_for: *id_waiting_for
         explanation:
           $ref: '#/components/schemas/RunExplanation'
         outcome:

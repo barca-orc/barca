@@ -24,7 +24,7 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
   const text = match(notice)
     .with({ kind: 'starting' }, () => 'starting…')
     .with({ kind: 'rejected' }, (n) => `could not start: ${n.error}`)
-    .with({ kind: 'queued' }, () => 'queued')
+    .with({ kind: 'queued' }, (n) => (n.restart ? 'queued · starts after the server restarts' : 'queued'))
     .with({ kind: 'running' }, (n) => `running · ${n.total === null ? plural(n.done, 'step') : `${n.done.toLocaleString()} of ${plural(n.total, 'step')}`}`)
     .with({ kind: 'finished' }, (n) => n.summary)
     .exhaustive()

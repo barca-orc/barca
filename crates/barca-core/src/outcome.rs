@@ -600,6 +600,9 @@ pub struct RunView {
     /// For a cancelled run: who cancelled it, whether it had started and what it waited behind.
     /// Experimental.
     pub cancellation: Option<crate::run_explain::Cancellation>,
+    /// For a run waiting in the queue: what else it waits for, `restart` while the server
+    /// drains (it starts on the next server); `null` otherwise. Experimental.
+    pub waiting_for: Option<crate::run_explain::WaitingFor>,
     /// The run in words (#956): its steps grouped by the reason they ran, its retries apart
     /// from its attempts, its targets as a list and what became of them, and how far a run in
     /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.

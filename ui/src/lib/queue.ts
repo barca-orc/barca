@@ -131,6 +131,14 @@ function secondsSince(value: string, nowMs: number): number | null {
   return at === null ? null : Math.max(0, (nowMs - at) / 1000)
 }
 
+/** `waiting_for` of a queued run in words; null when nothing but the runs ahead hold it. */
+export function waitingForLabel(waitingFor: QueueEntry['waiting_for']): string | null {
+  return match(waitingFor)
+    .with('restart', () => 'after restart')
+    .with(null, () => null)
+    .exhaustive()
+}
+
 /** One run of the queue list: a running one (first) or a waiting one, in order. */
 interface QueueRow {
   runId: string
@@ -151,6 +159,8 @@ interface QueueRow {
    * or draining, or the server only reads). Null for a running run.
    */
   starts: string | null
+  /** What else it waits for, in words: `after restart` while the server drains; null otherwise. */
+  waitingFor: string | null
   href: string
 }
 
@@ -186,6 +196,7 @@ export function queueRows(
       queuedAt: formatTime(entry.queued_at),
       elapsed: seconds === null ? '–' : waitLabel(seconds),
       starts: state === 'running' ? null : startsLabel(entry.estimated_start_at, nowMs),
+      waitingFor: waitingForLabel(entry.waiting_for),
       href: runHref(entry.run_id),
     }
   }

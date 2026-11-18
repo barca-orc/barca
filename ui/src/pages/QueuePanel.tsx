@@ -163,7 +163,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
               <tr key={row.runId} data-state={row.state}>
                 <td>{row.state === 'running'
                   ? <StatusBadge size="sm" glyph="running" label="running" live />
-                  : <span className="barca-queue-place">{row.position}</span>}</td>
+                  : <span className="barca-queue-place">{row.position}{row.waitingFor && <span className="barca-cell-sub" title="The server is draining: this run starts on the next server, after the drain and the restart"> {row.waitingFor}</span>}</span>}</td>
                 <td><Link className="barca-run-link" to={row.href}>{row.runId}</Link> <span className="barca-cell-sub">{row.command}</span></td>
                 <td><code className="barca-run-target" title={row.target}>{row.target}</code></td>
                 <td>{row.trigger}{row.scheduleId && <span className="barca-cell-sub"> {row.scheduleId}</span>}</td>

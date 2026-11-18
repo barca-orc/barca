@@ -338,9 +338,28 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     no_queue.as_object_mut().unwrap().remove("queue");
     assert!(!health.is_valid(&no_queue));
     let accepted = validator(&json!({"$ref":"#/components/schemas/RunAccepted"}));
-    assert!(accepted.is_valid(&json!({"run_id":"r","status":"pending","position":2})));
-    assert!(accepted.is_valid(&json!({"run_id":"r","status":"running","position":null})));
-    assert!(!accepted.is_valid(&json!({"run_id":"r","status":"queued","position":0})));
+    assert!(
+        accepted
+            .is_valid(&json!({"run_id":"r","status":"pending","position":2,"waiting_for":null}))
+    );
+    assert!(
+        accepted.is_valid(
+            &json!({"run_id":"r","status":"pending","position":2,"waiting_for":"restart"})
+        )
+    );
+    assert!(
+        accepted
+            .is_valid(&json!({"run_id":"r","status":"running","position":null,"waiting_for":null}))
+    );
+    assert!(
+        !accepted
+            .is_valid(&json!({"run_id":"r","status":"queued","position":0,"waiting_for":null}))
+    );
+    assert!(
+        !accepted
+            .is_valid(&json!({"run_id":"r","status":"pending","position":2,"waiting_for":"drain"}))
+    );
+    assert!(!accepted.is_valid(&json!({"run_id":"r","status":"pending","position":2})));
     let mut unusable = ok.clone();
     unusable["metadata_error"] = json!("the metadata DB .barca/metadata.db cannot be used: x");
     assert!(health.is_valid(&unusable));
@@ -1454,8 +1473,26 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
     );
     assert_eq!(body["status"], "pending");
     assert_eq!(body["position"], 4);
+    // It says it waits for the next server, not for the runs ahead of it (#1011).
+    assert_eq!(body["waiting_for"], "restart");
     let queue = checked(&router, "GET", "/queue", "/queue", 200).await;
     assert_eq!(queue["draining"], true);
+    for entry in queue["queued"].as_array().unwrap() {
+        assert_eq!(entry["waiting_for"], "restart", "{entry}");
+    }
+    let id = body["run_id"].as_str().unwrap();
+    let waiting = checked(
+        &router,
+        "GET",
+        &format!("/runs/{id}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(
+        (&waiting["status"], &waiting["waiting_for"]),
+        (&json!("pending"), &json!("restart"))
+    );
     assert_eq!(queue["running"], json!([]));
     let ids: Vec<_> = queue["queued"]
         .as_array()
@@ -1481,7 +1518,6 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
     // Reads stay available while the runs in flight finish.
     checked(&router, "GET", "/runs?limit=0", "/runs", 200).await;
     // A queued run can be cancelled: it leaves the queue and ends cancelled.
-    let id = body["run_id"].as_str().unwrap();
     let cancelled = checked(
         &router,
         "DELETE",
@@ -1500,6 +1536,11 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
     )
     .await;
     assert_eq!(run["status"], "cancelled", "{run}");
+    assert_eq!(
+        run["waiting_for"],
+        Value::Null,
+        "an ended run waits for nothing"
+    );
     let queue = checked(&router, "GET", "/queue", "/queue", 200).await;
     assert_eq!(queue["queued"].as_array().unwrap().len(), 3);
 }
@@ -1528,6 +1569,8 @@ async fn queue_pause_and_resume_match_contract() {
     .await;
     assert_eq!((status, body["status"].as_str()), (202, Some("pending")));
     assert_eq!(body["position"], 1);
+    // Held by the pause, which the queue says, not by a restart.
+    assert_eq!(body["waiting_for"], Value::Null);
     let health = checked(&router, "GET", "/health", "/health", 200).await;
     assert_eq!(health["queue"]["paused"], true);
     // A server started on the same database keeps the pause and the queued run.

@@ -240,6 +240,7 @@ pub struct Admitted {
     pub run_id: String,
     pub status: RunStatus,
     pub position: Option<usize>,
+    pub waiting_for: Option<barca_core::run_explain::WaitingFor>,
 }
 
 /// The metadata DB exists and has barca's tables: the first run of a new project creates it.
@@ -307,6 +308,7 @@ pub async fn admit_as(
         run_id,
         status,
         position,
+        waiting_for: state.waiting_for(status),
     })
 }
 
@@ -578,6 +580,9 @@ pub struct QueueEntry {
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub(crate) scheduled_at: Option<String>,
+    /// What else a waiting run waits for: `restart` while the server drains (it starts on the
+    /// next server); `null` otherwise. Experimental.
+    pub waiting_for: Option<barca_core::run_explain::WaitingFor>,
 }
 
 /// `GET /queue` (and the answer of pause and resume).
@@ -603,7 +608,12 @@ pub struct QueueView {
     pub capacity: Option<barca_core::serve::capacity::CapacitySnapshot>,
 }
 
-fn entry(run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
+fn entry(
+    state: &AppState,
+    run: &RunState,
+    position: Option<usize>,
+    draining: bool,
+) -> QueueEntry {
     QueueEntry {
         run_id: run.handle.clone(),
         status: if run.status == RunStatus::Running {
@@ -628,6 +638,7 @@ fn entry(run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry 
         }
         .as_str(),
         scheduled_at: run.trigger.scheduled_at.clone(),
+        waiting_for: state.waiting_for(run.status),
     }
 }
 
@@ -740,14 +751,14 @@ pub fn view(state: &AppState) -> QueueView {
             state
                 .runs
                 .get(id)
-                .map(|r| entry(&r, Some(at + 1), draining))
+                .map(|r| entry(state, &r, Some(at + 1), draining))
         })
         .collect();
     let mut running: Vec<QueueEntry> = state
         .runs
         .iter()
         .filter(|r| r.status == RunStatus::Running)
-        .map(|r| entry(&r, None, draining))
+        .map(|r| entry(state, &r, None, draining))
         .collect();
     running.sort_by(|a, b| a.queued_at.cmp(&b.queued_at));
     let paused_at = state.queue.paused_at();
@@ -788,6 +799,8 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
             wait_seconds: None,
             state: row.state.as_str(),
             scheduled_at: spec.trigger.scheduled_at.clone(),
+            // A `--read-only` server does not know whether the server that writes drains.
+            waiting_for: None,
         };
         if started {
             running.push(item);

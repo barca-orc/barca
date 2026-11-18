@@ -142,6 +142,18 @@ pub enum CancelledBy {
     Shutdown,
 }
 
+/// Why a queued run has not started beyond the runs ahead of it (`waiting_for` of `POST /runs`,
+/// `GET /queue` and `GET /runs/{run_id}`; `null` when nothing else holds it). Experimental.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum WaitingFor {
+    /// The server is draining before it stops (SIGTERM, SIGINT): it starts no queued run, and
+    /// the run starts on the next server started on the same metadata DB, after the drain
+    /// (at most `[server] drain_timeout`) and the restart.
+    Restart,
+}
+
 /// Why a run was cancelled, recorded with it. Experimental.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

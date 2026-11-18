@@ -142,6 +142,7 @@ async fn create_run(
             "run_id": admitted.run_id,
             "status": live_status(admitted.status),
             "position": admitted.position,
+            "waiting_for": admitted.waiting_for,
         })),
     )
         .into_response())
