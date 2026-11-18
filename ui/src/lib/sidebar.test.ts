@@ -1,3 +1,4 @@
+import { groupScope } from './testdata/rollup'
 import { describe, expect, it } from 'vitest'
 import { groupTree, type NodeGroup } from './groups'
 import { replay } from './program'
@@ -65,7 +66,10 @@ describe('fileGroups', () => {
 
   it('shows no status until the rollup has the group\'s entry', () => {
     expect(fileGroups('a.py', tree, null, new Map())[0]!.tone).toBeNull()
-    const entry = { health: { failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: 1 }, nodes: 1, running: 0 }
-    expect(fileGroups('b.py', tree, null, new Map([[tree.roots.find((id) => id.startsWith('group:b.py:'))!, entry]]))[0]!.tone).toBe('success')
+    const group = tree.roots.find((id) => id.startsWith('group:b.py:'))!
+    expect(fileGroups('b.py', tree, null, new Map([[group, groupScope({}, 1)]]))[0]).toMatchObject({ tone: 'success', part: 'fresh' })
+    // A group's line is marked with its leading cause, in the health map's colour; a run in it leads with the run's glyph.
+    expect(fileGroups('b.py', tree, null, new Map([[group, groupScope({ overdue: 1 }, 1)]]))[0]).toMatchObject({ tone: 'warning', part: 'overdue' })
+    expect(fileGroups('b.py', tree, null, new Map([[group, groupScope({}, 1, 1)]]))[0]).toMatchObject({ glyph: 'running', part: null })
   })
 })

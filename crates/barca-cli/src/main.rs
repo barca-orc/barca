@@ -424,6 +424,14 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             problems,
             rollup,
             keys,
+            needs_run,
+            value,
+            range,
+            error,
+            text,
+            sort,
+            offset,
+            overview,
             grid,
             key,
             env,
@@ -431,8 +439,22 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
         } => {
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
-            let view = commands::KeysView::of(keys, grid, key, &state, sample)
-                .map_err(|e| usage_error(&e))?;
+            let view = commands::KeysView::of(commands::KeysFlags {
+                keys,
+                overview,
+                grid,
+                key,
+                states: state.clone(),
+                needs_run,
+                values: value,
+                range,
+                error,
+                text,
+                sort,
+                offset,
+                sample,
+            })
+            .map_err(|e| usage_error(&e))?;
             let (target, files) = split_target_files(args);
             server_files("status", &files, None)?;
             let targets = targets_arg(target.as_deref())?;
@@ -1098,6 +1120,14 @@ async fn run_cli(
             problems,
             rollup,
             keys,
+            needs_run,
+            value,
+            range,
+            error,
+            text,
+            sort,
+            offset,
+            overview,
             grid,
             key,
             env,
@@ -1105,8 +1135,22 @@ async fn run_cli(
         } => {
             let json = fields_json(format, fields.as_deref())?;
             check_order("status", &args)?;
-            let view = commands::KeysView::of(keys, grid, key, &state, sample)
-                .map_err(|e| usage_error(&e))?;
+            let view = commands::KeysView::of(commands::KeysFlags {
+                keys,
+                overview,
+                grid,
+                key,
+                states: state.clone(),
+                needs_run,
+                values: value,
+                range,
+                error,
+                text,
+                sort,
+                offset,
+                sample,
+            })
+            .map_err(|e| usage_error(&e))?;
             let (target, files) = split_target_files(args);
             check_py_files("status", &files, None)?;
             if files.is_empty() {

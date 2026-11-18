@@ -12,10 +12,8 @@ import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
 import { formatBytes, previewRows, truncateCell } from '@/lib/nodeDetail'
 import { plural } from '@/lib/plural'
-import { KEY_STATE_GLYPH, KEY_STATE_MEANING, KEY_STATE_WORD, needsRun, type KeyState } from '@/lib/partitionGrid'
+import { keyStateDisplay, keyStateOfCode } from '@/lib/keyStateDisplay'
 import type { KeyArtifact, PartitionKeyDetail } from '@/lib/types'
-
-const STATE: Record<string, KeyState> = { p: 'pinned', c: 'fresh', s: 'stale', n: 'never_run', f: 'failed', b: 'blocked' }
 
 /** A key's result or input: its type and columns, and its first rows. */
 function Shape({ artifact, label }: { artifact: KeyArtifact; label: string }) {
@@ -70,7 +68,7 @@ export interface KeyDetailProps {
  * read, and its attempts. Opens beside the key explorer.
  */
 export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRun, running, onClose }: KeyDetailProps) {
-  const state = detail ? STATE[detail.state] ?? null : null
+  const state = detail ? keyStateOfCode(detail.state) : null
   const latest = detail?.attempts[0]
   const health = useHealth()
   const writes = useWriteControl()
@@ -79,7 +77,7 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
       label={`Key ${keyName}`}
       title={<code>{keyName}</code>}
       titleText={keyName}
-      badge={state ? <span className="barca-keydetail-state"><StatusGlyph glyph={KEY_STATE_GLYPH[state]} size={14} />{KEY_STATE_WORD[state]}</span> : undefined}
+      badge={state ? <span className="barca-keydetail-state"><StatusGlyph glyph={keyStateDisplay(state).glyph} size={14} />{keyStateDisplay(state).word}</span> : undefined}
       subtitle={shortName(node)}
       actions={<>
         <IconButton label="Copy key" size="sm" onClick={() => void navigator.clipboard?.writeText(keyName)}><Copy size={13} /></IconButton>
@@ -101,11 +99,11 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
             </div>
           ) : (
             <p className="barca-keydetail-meaning">
-              {KEY_STATE_MEANING[state]}
+              {keyStateDisplay(state).meaning}
               {latest && <span className="barca-cell-sub"> Last attempt <Age at={latest.created_at} />{latest.run_id && <> · <Link to={`/runs?run=${encodeURIComponent(latest.run_id)}`}>run</Link></>}</span>}
             </p>
           )}
-          {onRun && needsRun(state) && (
+          {onRun && detail.needs_run && (
             <div className="barca-keydetail-actions">
               <Button size="sm" iconLeft={<Play size={11} />} loading={running} onClick={onRun}>Run this key</Button>
             </div>
@@ -114,11 +112,11 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
           {detail.chain.length > 1 && (
             <ol className="barca-keychain" aria-label="This key along its chain">
               {detail.chain.map((c, i) => {
-                const s = STATE[c.state] ?? null
+                const s = keyStateOfCode(c.state)
                 return (
                   <li key={c.id} aria-current={c.id === node ? 'true' : undefined}>
                     {i > 0 && <span aria-hidden className="barca-keys-chain-arrow">→</span>}
-                    {s ? <StatusGlyph glyph={KEY_STATE_GLYPH[s]} size={12} label={KEY_STATE_WORD[s]} /> : <StatusGlyph glyph="unknown" size={12} label="keys not known yet" />}
+                    {s ? <StatusGlyph glyph={keyStateDisplay(s).glyph} size={12} label={keyStateDisplay(s).word} /> : <StatusGlyph glyph="unknown" size={12} label="keys not known yet" />}
                     {c.id === node ? <b>{shortName(c.id)}</b> : <Link to={hrefFor(c.id)}>{shortName(c.id)}</Link>}
                   </li>
                 )

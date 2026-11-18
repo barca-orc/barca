@@ -33,6 +33,14 @@ pub fn router(state: AppState) -> Router {
             get(inspect::partition_grid),
         )
         .route("/assets/{name}/partitions/key", get(inspect::partition_key))
+        .route(
+            "/assets/{name}/partitions/keys",
+            get(inspect::partition_keys_page),
+        )
+        .route(
+            "/assets/{name}/partitions/overview",
+            get(inspect::partition_overview),
+        )
         .route("/assets/{name}/versions", get(pins::versions))
         .route("/pins", get(pins::list))
         // The run contract's reads; the middleware leaves the other methods alone.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Play, X, ZoomOut } from 'lucide-react'
@@ -7,37 +7,34 @@ import { IssueList } from '@/components/partitions/IssueList'
 import { KeyDetail } from '@/components/partitions/KeyDetail'
 import { KeyHeatmap } from '@/components/partitions/KeyHeatmap'
 import { KeyTable } from '@/components/partitions/KeyTable'
-import { usePartitionGrid, usePartitionKey } from '@/hooks/usePartitionGrid'
+import { usePartitionKey, usePartitionKeysPages, usePartitionOverview } from '@/hooks/usePartitionGrid'
 import { useWriteControl } from '@/hooks/useWriteControl'
 import { usePausedSet } from '@/hooks/usePauses'
 import { useRunDetail } from '@/hooks/useRuns'
 import { runIsLive, runLabel } from '@/lib/runs'
 import { api } from '@/lib/api'
 import { shortName } from '@/lib/graph'
-import { keysParams, keysSearch, withValues, type KeysParams } from '@/lib/keysPage'
-import {
-  cellOf, countStates, filterCells, exactSelection, gridOf, issueFilter, issueGroups, issueSelection, keyOf, KEY_STATE_GLYPH,
-  KEY_STATE_WORD, KEY_STATES, layoutBlocks, NO_FILTER, rangeBounds, type IssueGroup, type KeyFilter, type KeyState,
-} from '@/lib/partitionGrid'
+import { keysParams, keysQuery, keysSearch, NO_FILTER, toggleSort, withValues, type KeyFilter, type KeysParams } from '@/lib/keysPage'
+import { KEY_STATES, keyStateDisplay } from '@/lib/keyStateDisplay'
+import { alongValues, rangeBounds } from '@/lib/partitionGrid'
 import { plural } from '@/lib/plural'
 import { partitionSelection } from '@/lib/nodeDetail'
-
-/** The states the table shows by default when any key has one: what needs attention. */
-const ATTENTION: readonly KeyState[] = ['failed', 'blocked', 'stale', 'never_run']
+import type { KeyIssue } from '@/lib/types'
 
 /** A dimension with at most this many values gets a select; a longer one is zoomed in the overview or searched. */
 const SELECT_MAX = 60
 
-/** Keys a run computes: every state but fresh. */
-function countNeeding(counts: Record<KeyState, number>): number {
-  return ATTENTION.reduce((n, s) => n + counts[s], 0)
-}
-
 /**
  * The key explorer (`#/keys?node=...`), what is wrong first: the asset's keys counted by state,
  * then each problem with where its keys are, then every key in one small overview, then the keys
- * themselves (those that need attention, unless all are asked for). The page does not scroll:
- * the table and the open key's detail do, each in its own place.
+ * themselves (those that need a run, unless all are asked for). The page does not scroll: the
+ * table and the open key's detail do, each in its own place.
+ *
+ * Everything shown is served: the counts, the issues and the overview's rows by
+ * `GET /assets/{id}/partitions/overview` (`barca status NODE --overview`), the keys a page at a
+ * time by `.../partitions/keys` with the page's filters and order (`barca status NODE --keys`
+ * with the same flags). A filter or an order asks the server again; nothing is decoded,
+ * filtered or counted here.
  */
 export function KeysPage() {
   const [search, setSearch] = useSearchParams()
@@ -49,27 +46,26 @@ export function KeysPage() {
   const readOnly = writes !== 'enabled'
   const paused = usePausedSet().has(node ?? '')
   const [runConfirm, setRunConfirm] = useState<{ node: string; partition: string } | null>(null)
-  const gridQuery = usePartitionGrid(node)
+  const overviewQuery = usePartitionOverview(node)
+  const overview = overviewQuery.data
   const keyQuery = usePartitionKey(node, params.key)
-  const grid = useMemo(() => (gridQuery.data ? gridOf(gridQuery.data) : null), [gridQuery.data])
-  // Ages are read against when the grid arrived, as the asset tables read theirs.
-  const nowMs = gridQuery.dataUpdatedAt
-  const layout = useMemo(() => (grid ? layoutBlocks(grid) : null), [grid])
-  const totals = useMemo(() => (grid ? countStates(grid, null) : null), [grid])
-  const issues = useMemo(() => (grid ? issueGroups(grid) : []), [grid])
-  const needing = totals ? countNeeding(totals) : 0
-  // The table: what the filters keep, and by default only what needs attention.
+  // Ages are read against when the overview arrived, as the asset tables read theirs.
+  const nowMs = overviewQuery.dataUpdatedAt
+  const along = useMemo(() => (overview ? alongValues(overview) : []), [overview])
+  const zoom = rangeBounds(along, filter.range)
+  const needing = overview?.needs_run ?? 0
+  // The table: what the filters keep, and by default only what a run computes.
   const attention = !params.all && filter.states.length === 0 && needing > 0
-  const tableFilter: KeyFilter = attention ? { ...filter, states: ATTENTION } : filter
-  const filterKey = `${keysSearch({ node: null, key: null, filter: tableFilter, all: false })}`
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const cells = useMemo(() => (grid ? filterCells(grid, tableFilter) : []), [grid, filterKey])
-  const selected = grid && params.key ? cellOf(grid, params.key) : null
-  const zoom = grid ? rangeBounds(grid, filter.range) : null
-  const activeIssue = issues.find((i) => {
-    const f = issueFilter(i)
-    return f.error === filter.error && filter.states.length === 1 && filter.states[0] === f.states[0]
-  }) ?? null
+  const query = overview
+    ? keysQuery({ filter, sort: params.sort, needsRun: attention, along: overview.along, rangeValid: zoom !== null })
+    : null
+  const pages = usePartitionKeysPages(node, query, overview)
+  const first = pages.data?.pages[0]
+  const rows = useMemo(() => pages.data?.pages.flatMap((p) => p.keys) ?? [], [pages.data])
+  const issues = overview?.issues ?? []
+  const activeIssue = issues.find((i) => i.error === filter.error && filter.states.length === 1 && filter.states[0] === i.state) ?? null
+  const { fetchNextPage } = pages
+  const needMore = useCallback(() => { void fetchNextPage() }, [fetchNextPage])
 
   // Each change is read against the URL as it is now, not as it was when this page last drew:
   // two changes in a row (a chip, then a select) both land.
@@ -82,15 +78,15 @@ export function KeysPage() {
   // Another node of the chain, at the same key: its own states and errors, so only the key, the
   // dimension values, the range and the search carry over.
   const chainSearch = (id: string) =>
-    keysSearch({ node: id, key: params.key, filter: { ...NO_FILTER, values: filter.values, q: filter.q, range: filter.range }, all: false })
-  const select = (cell: number | null) => go(() => ({ key: cell === null || !grid ? null : keyOf(grid, cell) }))
+    keysSearch({ node: id, key: params.key, filter: { ...NO_FILTER, values: filter.values, q: filter.q, range: filter.range }, all: false, sort: params.sort })
+  const select = (key: string | null) => go(() => ({ key }))
 
   const start = useMutation({
     mutationFn: ({ target, partition, allowPaused = false }: { target: string; partition: string; allowPaused?: boolean }) =>
       api.startRun({ command: 'get', targets: [target], partition, ...(allowPaused ? { allow_paused: true } : {}) }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['runs'] })
-      void client.invalidateQueries({ queryKey: ['partition-grid'] })
+      void client.invalidateQueries({ queryKey: ['partition-overview'] })
     },
   })
 
@@ -105,7 +101,8 @@ export function KeysPage() {
   const retryId = start.data?.run_id
   useEffect(() => {
     if (retryId && retryStatus && !runIsLive(retryStatus)) {
-      void client.invalidateQueries({ queryKey: ['partition-grid'] })
+      void client.invalidateQueries({ queryKey: ['partition-overview'] })
+      void client.invalidateQueries({ queryKey: ['partition-keys-page'] })
       void client.invalidateQueries({ queryKey: ['partition-key'] })
     }
   }, [client, retryId, retryStatus])
@@ -122,13 +119,14 @@ export function KeysPage() {
     return <div className="barca-view"><p className="barca-note">Pick a partitioned asset to explore its keys.</p></div>
   }
 
-  const raw = gridQuery.data
-  const keyCount = totals ? KEY_STATES.reduce((n, s) => n + totals[s], 0) : 0
-  const valueDims = grid?.dims.filter((d) => d.values.length > 1 && d.values.length <= SELECT_MAX) ?? []
-  const along = grid && layout ? grid.dims[layout.along] : null
-  // The primary action follows the same search, state, error and range as the table.
-  const scopeNeeding = grid ? countNeeding(countStates(grid, cells)) : 0
-  const selection = grid ? exactSelection(grid, cells) : null
+  const keyCount = overview ? KEY_STATES.reduce((n, s) => n + overview.counts[s], 0) : 0
+  const valueDims = overview?.dimensions.filter((d) => d.values.length > 1 && d.values.length <= SELECT_MAX) ?? []
+  const otherDims = overview?.dimensions.filter((d) => d.name !== overview.along) ?? []
+  // The primary action follows the same search, state, error and range as the table: the
+  // server counts the keys to run among those it matched, and names them for the run.
+  const scopeNeeding = first?.needs_run ?? 0
+  const selection = first?.selection ?? null
+  const shown = first?.total ?? 0
 
   return (
     <div className="barca-view barca-keys">
@@ -139,11 +137,11 @@ export function KeysPage() {
               <ArrowLeft size={14} />
             </Link>
             <h1>{shortName(node)}</h1>
-            {grid ? <span className="barca-count">{plural(keyCount, 'key')}</span> : <Skeleton width={60} height={14} />}
+            {overview ? <span className="barca-count">{plural(keyCount, 'key')}</span> : <Skeleton width={60} height={14} />}
           </div>
-          {raw && raw.chain.length > 1 && (
+          {overview && overview.chain.length > 1 && (
             <nav className="barca-keys-chain" aria-label="Assets sharing these keys">
-              {raw.chain.map((id, i) => (
+              {overview.chain.map((id, i) => (
                 <span key={id} className="barca-keys-chain-step">
                   {i > 0 && <span aria-hidden className="barca-keys-chain-arrow">→</span>}
                   {id === node
@@ -159,7 +157,11 @@ export function KeysPage() {
               iconLeft={<Play size={11} />}
               disabled={readOnly || scopeNeeding === 0 || selection === null}
               loading={start.isPending}
-              title={scopeNeeding === 0 ? 'Every key here is fresh' : 'Compute the keys that are not fresh; the rest stay cached'}
+              title={scopeNeeding === 0
+                ? 'Every key here is fresh'
+                : selection === null
+                  ? 'Too many scattered keys to name in one run: narrow the filter'
+                  : 'Compute the keys that are not fresh; the rest stay cached'}
               onClick={() => run(selection)}
             >
               {scopeNeeding === 0 ? 'All fresh' : `Run ${plural(scopeNeeding, 'key')} shown`}
@@ -184,16 +186,16 @@ export function KeysPage() {
       />}
       <div className="barca-keys-body">
         <div className="barca-keys-main">
-          {gridQuery.isError && <p className="barca-note">Couldn't load the keys: {(gridQuery.error as Error).message}</p>}
-          {gridQuery.isLoading && <Skeleton height={240} />}
-          {raw && !raw.known && (
+          {overviewQuery.isError && <p className="barca-note">Couldn't load the keys: {(overviewQuery.error as Error).message}</p>}
+          {overviewQuery.isLoading && <Skeleton height={240} />}
+          {overview && !overview.known && (
             <p className="barca-note">The keys are not known yet: they come from an upstream result that has not been computed. Run the asset to compute it.</p>
           )}
 
           {/* 1. How many keys are in each state: the headline, and each a filter. */}
-          {totals && keyCount > 0 && (
+          {overview && keyCount > 0 && (
             <div className="barca-keys-counts" role="group" aria-label="Keys by state">
-              {KEY_STATES.filter((s) => totals[s] > 0).map((s) => (
+              {KEY_STATES.filter((s) => overview.counts[s] > 0).map((s) => (
                 <button
                   key={s}
                   type="button"
@@ -202,38 +204,39 @@ export function KeysPage() {
                   aria-pressed={filter.states.length === 1 && filter.states[0] === s && filter.error === null}
                   onClick={() => setFilter((f) => (f.states.length === 1 && f.states[0] === s && f.error === null ? { ...f, states: [], error: null } : { ...f, states: [s], error: null }))}
                 >
-                  <span className="barca-keys-count-n">{totals[s].toLocaleString()}</span>
-                  <span className="barca-keys-count-word"><StatusGlyph glyph={KEY_STATE_GLYPH[s]} size={12} />{KEY_STATE_WORD[s]}</span>
+                  <span className="barca-keys-count-n">{overview.counts[s].toLocaleString()}</span>
+                  <span className="barca-keys-count-word"><StatusGlyph glyph={keyStateDisplay(s).glyph} size={12} />{keyStateDisplay(s).word}</span>
                 </button>
               ))}
             </div>
           )}
 
           {/* 2. What is wrong, and where. */}
-          {grid && (
+          {overview && (
             <IssueList
               issues={issues}
               active={activeIssue}
               running={start.isPending}
-              onShow={(issue: IssueGroup) => setFilter((f) => {
-                const next = issueFilter(issue)
-                const same = f.error === next.error && f.states.length === 1 && f.states[0] === next.states[0]
-                return same ? { ...f, states: [], error: null } : { ...f, ...next }
+              onShow={(issue: KeyIssue) => setFilter((f) => {
+                const same = f.error === issue.error && f.states.length === 1 && f.states[0] === issue.state
+                const state = KEY_STATES.find((s) => s === issue.state)
+                return same || !state ? { ...f, states: [], error: null } : { ...f, states: [state], error: issue.error }
               })}
-              onRun={readOnly ? null : (issue) => run(issueSelection(grid, issue))}
+              onRun={readOnly ? null : (issue) => run(issue.selection)}
             />
           )}
 
           {/* 3. Every key in one picture; drag to zoom. */}
-          {grid && layout && layout.blocks.length > 0 && (
+          {overview && overview.rows.length > 0 && (
             <section className="barca-keys-overview" aria-label="Every key by state">
               <div className="barca-keys-section-head">
                 <h2>Overview</h2>
-                {along && (
+                {overview.along && (
                   <span className="barca-cell-sub">
                     {zoom
-                      ? <>{along.name} {along.values[zoom[0]]} → {along.values[zoom[1]]}</>
-                      : <>{layout.blocks.length > 1 ? `one row per ${grid.dims.filter((_, i) => i !== layout.along).map((d) => d.name).join(' × ')}, ` : ''}{along.name} left to right · drag to zoom</>}
+                      ? <>{overview.along} {along[zoom[0]]} → {along[zoom[1]]}</>
+                      : <>{overview.rows.length > 1 ? `one row per ${otherDims.map((d) => d.name).join(' × ')}, ` : ''}{overview.along} left to right · drag to zoom</>}
+                    {overview.truncated && <> · the first {overview.rows.length.toLocaleString()} of {overview.rows_total.toLocaleString()} rows</>}
                   </span>
                 )}
                 {zoom && (
@@ -243,17 +246,16 @@ export function KeysPage() {
                 )}
               </div>
               <KeyHeatmap
-                grid={grid}
-                layout={layout}
+                overview={overview}
                 window={zoom}
-                onZoom={(a, b) => setFilter((f) => ({ ...f, range: { from: along!.values[a]!, to: along!.values[b]! } }))}
-                onOpen={(cell) => select(cell)}
+                onZoom={(a, b) => setFilter((f) => ({ ...f, range: { from: along[a]!, to: along[b]! } }))}
+                onOpen={(key) => select(key)}
               />
             </section>
           )}
 
-          {/* 4. The keys: what needs attention, or all of them. */}
-          {grid && (
+          {/* 4. The keys: what needs a run, or all of them. */}
+          {overview && (
             <section className="barca-keys-table" aria-label="Keys">
               <div className="barca-keys-section-head">
                 <div className="barca-seg" role="group" aria-label="Which keys">
@@ -266,7 +268,7 @@ export function KeysPage() {
                     All <b>{keyCount.toLocaleString()}</b>
                   </button>
                 </div>
-                <span className="barca-cell-sub">{cells.length === keyCount ? '' : `${plural(cells.length, 'key')} shown`}</span>
+                <span className="barca-cell-sub">{!first || shown === keyCount ? '' : `${plural(shown, 'key')} shown`}</span>
                 <div className="barca-keys-list-tools">
                   {valueDims.map((d) => (
                     <Select
@@ -283,7 +285,23 @@ export function KeysPage() {
                   )}
                 </div>
               </div>
-              <KeyTable grid={grid} cells={cells} selected={selected} onSelect={select} nowMs={nowMs} />
+              {pages.isError && <p className="barca-note">Couldn't load the keys: {(pages.error as Error).message}</p>}
+              {first ? (
+                <KeyTable
+                  dimensions={first.dimensions}
+                  rows={rows}
+                  total={first.total}
+                  selected={params.key}
+                  onSelect={select}
+                  onNeedMore={needMore}
+                  loadingMore={pages.isFetchingNextPage}
+                  sort={params.sort}
+                  onSort={(pressed) => go((p) => ({ sort: toggleSort(p.sort, pressed) }))}
+                  query={query ?? ''}
+                  stale={pages.isPlaceholderData}
+                  nowMs={nowMs}
+                />
+              ) : !pages.isError && <Skeleton height={120} />}
             </section>
           )}
         </div>

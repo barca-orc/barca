@@ -2,6 +2,7 @@
  * Rollup fixtures written out as `GET /state/rollup` answers them. Nothing here sums: a test
  * or a kit page states each entry's counts, as the server would.
  */
+import { FIXTURE_CAUSE } from './served'
 import type { HealthCounts, HeldBy, Rollup, RollupEntry, RollupRoot } from '../rollupView'
 import type { Cause, CauseCounts } from '../causeDisplay'
 import type { Health } from '../healthDisplay'
@@ -38,7 +39,20 @@ function weighed(entry: Omit<RollupEntry, 'weight' | 'weights'> & Partial<Pick<R
 export function fileSums(file: string, worst: Health, over: Partial<FileRollup> = {}): FileRollup {
   const nodes = over.nodes ?? 1
   const health = over.health ?? counts({ [worst]: nodes })
-  return { file, nodes, assets: nodes, running: 0, health, asset_health: health, worst, kinds: NO_KINDS, ...over }
+  // Every node in the cause the fixtures give `worst` (`FIXTURE_CAUSE`), or fresh, unless `causes` says otherwise.
+  const cause = FIXTURE_CAUSE[worst]
+  const causes = over.causes ?? (cause ? { ...NO_CAUSES, [cause]: nodes } : NO_CAUSES)
+  return { file, nodes, assets: nodes, running: 0, health, asset_health: health, worst, causes, fresh: cause && !over.causes ? 0 : nodes, kinds: NO_KINDS, ...over }
+}
+
+/**
+ * What a group's box reads of its rollup entry (`groupHealth`): `causes` of its nodes that are
+ * not fresh, `fresh` more that are, and `running` of them a run is working on.
+ */
+export function groupScope(causes: Partial<RollupEntry['causes']>, fresh = 0, running = 0): Pick<RollupEntry, 'causes' | 'weights' | 'running' | 'nodes'> {
+  const all = { ...NO_CAUSES, ...causes }
+  const nodes = all.failing + all.overdue + all.no_refresh_path + all.queued + all.undecided + all.catching_up + fresh
+  return { causes: all, weights: weightsOf(nodes, all), running, nodes }
 }
 
 /** No node with a cause: every node fresh, as a fixture that states none says. */

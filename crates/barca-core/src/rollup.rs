@@ -632,8 +632,15 @@ pub struct FileRollup {
     pub health: HealthCounts,
     /// Its assets by health.
     pub asset_health: HealthCounts,
-    /// The most severe health among its nodes: the one word a line about the file shows.
+    /// The most severe health among its nodes.
     pub worst: Health,
+    /// Its nodes that are not fresh, by cause: the first with a node, in the served order of
+    /// the causes, is the one word and colour a line about the file shows.
+    #[serde(default)]
+    pub causes: CauseCounts,
+    /// Its nodes that are fresh: no cause. With `causes` they add up to `nodes`.
+    #[serde(default)]
+    pub fresh: usize,
     /// Its nodes by kind: how many of each are fresh and how many have each cause.
     #[serde(default)]
     pub kinds: KindRollup,
@@ -742,9 +749,15 @@ fn files(nodes: &[NodeStatus], running: &HashSet<String>) -> Vec<FileRollup> {
             health: HealthCounts::default(),
             asset_health: HealthCounts::default(),
             worst: Health::Ok,
+            causes: CauseCounts::default(),
+            fresh: 0,
             kinds: KindRollup::default(),
         });
         sums.kinds.count(node);
+        match node.cause {
+            Some(cause) => *sums.causes.slot(cause) += 1,
+            None => sums.fresh += 1,
+        }
         sums.nodes += 1;
         sums.running += usize::from(running.contains(&node.id));
         *sums.health.slot(node.health) += 1;
@@ -1620,6 +1633,7 @@ mod tests {
             of_files.health.add(&f.health);
             of_files.asset_health.add(&f.asset_health);
             assert_eq!(Some(f.worst), f.health.worst(), "{}", f.file);
+            assert_eq!(f.causes.total() + f.fresh, f.nodes, "{}", f.file);
         }
         assert_eq!(
             (of_files.nodes, of_files.assets, of_files.running),
@@ -2133,7 +2147,9 @@ mod tests {
             [
                 "asset_health",
                 "assets",
+                "causes",
                 "file",
+                "fresh",
                 "health",
                 "kinds",
                 "nodes",

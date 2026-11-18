@@ -4,12 +4,11 @@
  * `layouts/CommandPalette.tsx` runs it.
  */
 
-import type { ScopeHealth } from './health'
 import { keysHref } from './keysPage'
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
 import { graphState, isLive, type GraphState } from './graphState'
-import { groupHealth } from './groups'
+import { groupHealth, type GroupScope } from './groups'
 import type { Glyph } from './glyph'
 import { pipelineName, sourceFile } from './pipeline'
 import { only, type Next } from './program'
@@ -47,7 +46,7 @@ export interface PaletteItem {
 export interface PaletteStates {
   byId: Map<string, NodeState>
   /** The project's rollup entries by id (`GET /state/rollup`): a group's state, a file's. */
-  entries: ReadonlyMap<string, ScopeHealth>
+  entries: ReadonlyMap<string, GroupScope>
   /** A nested group's ancestors (`Ads › Staging`), so groups of one name tell apart. */
   placeOf?: ReadonlyMap<string, string>
 }

@@ -6,23 +6,31 @@ Arguments:
   [ARGS]...  Target(s), then optional files/directories; omit files to discover the project
 
 Options:
-      --json             Emit JSON on stdout (the default when stdout is not a terminal)
-      --pretty           Emit human-readable output (the default when stdout is a terminal)
-  -l, --limit <LIMIT>    Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
-      --all              Show every node (no limit)
-      --fields <FIELDS>  Select JSON fields as a comma-separated list; implies --json [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, cause, root, gap_seconds, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, no_estimate, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
-      --sample <N>       Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
-      --state <STATE>    Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh
-      --problems         Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
-      --rollup           Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each
-      --keys             Experimental: list the keys of one partitioned target, each with its state
-      --grid             Experimental: print one partitioned target's keys as a grid of states
-      --key <KEY>        Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target
-      --env <ENV>        Use a separate cache and history for this environment
-      --server [<URL>]   Use a server (URL or configured); get/run execute its deployed code
-      --local            Use independent local state; ignore the configured server
-  -h, --help             Show concise command help
-      --examples         Show all command examples without running anything
+      --json                       Emit JSON on stdout (the default when stdout is not a terminal)
+      --pretty                     Emit human-readable output (the default when stdout is a terminal)
+  -l, --limit <LIMIT>              Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
+      --all                        Show every node (no limit)
+      --fields <FIELDS>            Select JSON fields as a comma-separated list; implies --json [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, cause, root, gap_seconds, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, no_estimate, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
+      --sample <N>                 Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
+      --state <STATE>              Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh
+      --problems                   Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule
+      --rollup                     Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each
+      --keys                       Experimental: list the keys of one partitioned target, each with its state
+      --needs-run                  Experimental, with --keys: only keys a run computes
+      --value <DIM=VALUE[,VALUE]>  Experimental, with --keys: only keys with these values of a dimension
+      --range <DIM=FROM..TO>       Experimental, with --keys: only keys in a stretch of a dimension
+      --error <N>                  Experimental, with --keys: only the failed keys of error group N
+      --match <TEXT>               Experimental, with --keys: only keys that contain TEXT
+      --sort <ORDER>               Experimental, with --keys: order by key, state, attempted, elapsed, size or rows [possible values: key, state, attempted, elapsed, size, rows]
+      --offset <N>                 Experimental, with --keys: skip the first N matching keys
+      --overview                   Experimental: print one partitioned target's keys in one picture: counts, issues, rows
+      --grid                       Experimental: print one partitioned target's keys as a grid of states
+      --key <KEY>                  Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target
+      --env <ENV>                  Use a separate cache and history for this environment
+      --server [<URL>]             Use a server (URL or configured); get/run execute its deployed code
+      --local                      Use independent local state; ignore the configured server
+  -h, --help                       Show concise command help
+      --examples                   Show all command examples without running anything
 
 Examples:
   barca status                             # every node in the project

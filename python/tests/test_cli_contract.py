@@ -180,6 +180,32 @@ CASES: list[tuple[str, list[str], str, int]] = [
     # one failed.
     ("status_keys", ["status", "flaky", "pipeline.py", "--keys", "--json"], "stdout", 0),
     ("status_grid", ["status", "flaky", "pipeline.py", "--grid", "--json"], "stdout", 0),
+    # The same keys asked for (#1036): filtered, ordered and paged, then in one picture.
+    (
+        "status_keys_filtered",
+        [
+            "status",
+            "flaky",
+            "pipeline.py",
+            "--keys",
+            "--state",
+            "failed",
+            "--value",
+            "k=bad",
+            "--error",
+            "0",
+            "--match",
+            "BAD",
+            "--sort",
+            "attempted",
+            "--limit",
+            "1",
+            "--json",
+        ],
+        "stdout",
+        0,
+    ),
+    ("status_overview", ["status", "flaky", "pipeline.py", "--overview", "--json"], "stdout", 0),
     ("status_key", ["status", "flaky", "pipeline.py", "--key", "k=ok", "--json"], "stdout", 0),
 ]
 

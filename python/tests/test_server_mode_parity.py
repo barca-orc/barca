@@ -344,6 +344,157 @@ def test_the_planning_pipeline_prints_the_same_locally_and_through_a_server(tmp_
     assert all(out.returncode == 0 for _, out in results), [out.stderr for _, out in results]
 
 
+# `day` (3 values) by `region` (2): one key of `events` fails with one error, another with a
+# second, so the same keys of `scored` wait on them; `wide` has more keys than a server lists in
+# one page, and never ran.
+KEYS_PIPELINE = """
+from barca import asset, partitions
+
+DAYS = ["d1", "d2", "d3"]
+REGIONS = ["emea", "apac"]
+MANY = [f"k{i:04}" for i in range(1203)]
+
+
+@asset(partitions={"day": partitions(DAYS), "region": partitions(REGIONS)})
+def events(day: str, region: str) -> list:
+    if day == "d2" and region == "apac":
+        raise ValueError(f"no rows for {region} on {day}")
+    if day == "d3" and region == "emea":
+        raise KeyError("price")
+    return [{"day": day, "region": region}]
+
+
+@asset(partitions={"day": partitions(DAYS), "region": partitions(REGIONS)}, inputs={"events": events})
+def scored(day: str, region: str, events: list) -> list:
+    return [{**row, "score": 1} for row in events]
+
+
+@asset(partitions={"k": partitions(MANY)})
+def wide(k: str) -> str:
+    return k
+"""
+
+# Every filter, order and page `barca status NODE --keys` takes (#1036), as text and as JSON,
+# then the overview: each printed here and through a server.
+KEYS_TABLE: list[tuple[str, list[str]]] = [
+    ("keys_all", ["--keys"]),
+    ("keys_state", ["--keys", "--state", "failed,blocked"]),
+    ("keys_needs_run", ["--keys", "--needs-run"]),
+    ("keys_value", ["--keys", "--value", "region=apac"]),
+    ("keys_values", ["--keys", "--value", "region=apac,emea", "--value", "day=d2,d3"]),
+    ("keys_range", ["--keys", "--range", "day=d3..d2"]),
+    ("keys_error", ["--keys", "--state", "failed", "--error", "1"]),
+    ("keys_match", ["--keys", "--match", "D2"]),
+    ("keys_sort_state", ["--keys", "--sort", "state"]),
+    ("keys_sort_attempted", ["--keys", "--sort", "attempted", "--state", "fresh"]),
+    ("keys_page", ["--keys", "--limit", "2"]),
+    ("keys_next_page", ["--keys", "--limit", "2", "--offset", "2"]),
+    ("keys_last_page", ["--keys", "--limit", "2", "--offset", "4"]),
+    (
+        "keys_every_filter",
+        [
+            "--keys",
+            "--needs-run",
+            "--value",
+            "region=emea",
+            "--range",
+            "day=d1..d3",
+            "--match",
+            "d3",
+            "--sort",
+            "elapsed",
+        ],
+    ),
+    ("keys_none", ["--keys", "--state", "pinned"]),
+    ("overview", ["--overview"]),
+    ("overview_rows", ["--overview", "--limit", "1"]),
+]
+KEYS_ERRORS: list[tuple[str, list[str], str]] = [
+    ("no_dimension", ["--keys", "--value", "zone=a"], "no dimension 'zone'"),
+    ("no_range_value", ["--keys", "--range", "day=d1..d9"], "no day 'd9'"),
+    ("no_error_group", ["--keys", "--error", "5"], "--error takes 0 to 1"),
+]
+
+
+def test_the_keys_of_a_node_print_the_same_locally_and_through_a_server(tmp_path, serve):
+    """`barca status NODE --keys` with each filter, order and page, and `--overview`: a server
+    filters, orders and pages the keys itself (`GET /assets/{name}/partitions/keys`,
+    `.../partitions/overview`), and the CLI prints the same as it does on this machine, where
+    the same `barca-core` function answers. One project, read both ways: the keys, their
+    attempts and their run ids are the same rows."""
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "pipeline.py").write_text(KEYS_PIPELINE)
+    (root / "barca.toml").write_text("")
+
+    def cli(*argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [_find_binary(), *argv],
+            cwd=root,
+            env=_parity_env(),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    assert cli("get", "scored", "pipeline.py", "--json").returncode == 1
+    views = [
+        (f"{case}_{node}_{form}", ["status", node, *argv, f"--{form}"])
+        for case, argv in KEYS_TABLE
+        for node in ("events", "scored")
+        for form in ("json", "pretty")
+        # `scored` has no failed key of its own, so no error group to ask for.
+        if (case, node) != ("keys_error", "scored")
+    ]
+    # More keys than one page of the server's: the CLI reads page after page and prints one list.
+    views += [
+        ("wide_all", ["status", "wide", "--keys", "--all", "--json"]),
+        ("wide_limit", ["status", "wide", "--keys", "--limit", "1100", "--offset", "50", "--json"]),
+        ("wide_table", ["status", "wide", "--keys", "--pretty"]),
+    ]
+    here = [(case, cli(*argv)) for case, argv in views]
+    here_errors = [cli("status", "events", *argv, "--json") for _, argv, _ in KEYS_ERRORS]
+    server = serve("--no-schedule", root=root, env=_parity_env())
+    there = [(case, cli(*argv, "--server", server.url)) for case, argv in views]
+    there_errors = [
+        cli("status", "events", *argv, "--json", "--server", server.url)
+        for _, argv, _ in KEYS_ERRORS
+    ]
+    for (case, a), (_, b) in zip(here, there, strict=True):
+        assert a.returncode == 0 and b.returncode == 0, (case, a.stderr, b.stderr)
+        assert a.stdout == b.stdout, case
+        # The note of a table cut short (`showing 2 of 6 keys; ...`) is the same line.
+        notes = [[line for line in out.stderr.splitlines() if "showing" in line] for out in (a, b)]
+        assert notes[0] == notes[1], case
+    by_case = {case: out for case, out in here}
+    # What the filters keep, so the equality above is not two empty lists.
+    keys = lambda case: [k["key"] for k in json.loads(by_case[case].stdout)["keys"]]  # noqa: E731
+    assert keys("keys_state_events_json") == ["day=d2,region=apac", "day=d3,region=emea"]
+    assert keys("keys_state_scored_json") == ["day=d2,region=apac", "day=d3,region=emea"]
+    assert keys("keys_range_events_json") == [
+        f"day={d},region={r}" for d in ("d2", "d3") for r in ("emea", "apac")
+    ]
+    assert len(keys("keys_error_events_json")) == 1
+    assert keys("keys_match_events_json") == ["day=d2,region=emea", "day=d2,region=apac"]
+    assert keys("keys_next_page_events_json") == ["day=d2,region=emea", "day=d2,region=apac"]
+    assert keys("keys_every_filter_events_json") == ["day=d3,region=emea"]
+    assert keys("keys_none_events_json") == []
+    page = json.loads(by_case["keys_page_events_json"].stdout)
+    assert (page["total"], page["truncated"], page["offset"], page["needs_run"]) == (6, True, 0, 2)
+    overview = json.loads(by_case["overview_scored_json"].stdout)
+    assert [(i["state"], i["keys"]) for i in overview["issues"]] == [("blocked", 2)]
+    assert [r["states"] for r in overview["rows"]] == ["ccb", "cbc"]
+    wide = json.loads(by_case["wide_all"].stdout)
+    assert len(wide["keys"]) == 1203 and wide["truncated"] is False and "hint" not in wide
+    limited = json.loads(by_case["wide_limit"].stdout)
+    assert len(limited["keys"]) == 1100 and limited["keys"][0]["key"] == "k=k0050"
+    assert limited["truncated"] is True and limited["offset"] == 50
+    # A filter the node does not have is the same usage error from both.
+    for (case, _, text), a, b in zip(KEYS_ERRORS, here_errors, there_errors, strict=True):
+        assert a.returncode == 2 and b.returncode == 2, (case, a.stderr, b.stderr)
+        assert text in a.stderr and text in b.stderr, (case, a.stderr, b.stderr)
+
+
 # ─── what only a client does ─────────────────────────────────────────────────
 
 

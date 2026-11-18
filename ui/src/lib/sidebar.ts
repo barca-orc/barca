@@ -3,9 +3,9 @@
  * file. The collapse and the width are remembered in this browser; opening a file is not.
  */
 
-import type { ScopeHealth } from './health'
+import type { MapPart } from './causeDisplay'
 import { match } from 'ts-pattern'
-import { groupHealth, groupPath, type GroupTree } from './groups'
+import { groupHealth, groupPath, type GroupScope, type GroupTree } from './groups'
 import { only, type Next } from './program'
 import type { PipelineSummary } from './pipeline'
 import type { Tone } from './tone'
@@ -97,6 +97,8 @@ export interface SidebarGroup {
   tone: Tone | null
   /** How that state is drawn; null with the tone. */
   glyph: Glyph | null
+  /** The cause (or fresh) its line is marked with, in the health map's colour; null while a run leads, or with the tone. */
+  part: MapPart | null
 }
 
 /**
@@ -107,7 +109,7 @@ export function fileGroups(
   file: string,
   tree: GroupTree,
   open: string | null,
-  entries: ReadonlyMap<string, ScopeHealth>,
+  entries: ReadonlyMap<string, GroupScope>,
 ): SidebarGroup[] {
   const path = new Set(groupPath(open, tree).map((g) => g.id))
   const out: SidebarGroup[] = []
@@ -117,7 +119,7 @@ export function fileGroups(
     // The group's entry of the project's rollup: none until it has loaded.
     const entry = entries.get(id)
     const health = entry ? groupHealth(entry) : null
-    out.push({ id, name: group.name, depth, tone: health?.tone ?? null, glyph: health?.glyph ?? null })
+    out.push({ id, name: group.name, depth, tone: health?.tone ?? null, glyph: health?.glyph ?? null, part: health?.kind === 'group' ? health.part ?? null : null })
     if (path.has(id)) for (const member of group.members) visit(member, depth + 1)
   }
   for (const id of tree.roots) if (id.startsWith(`group:${file}:`)) visit(id, 0)

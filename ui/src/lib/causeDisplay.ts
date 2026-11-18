@@ -49,6 +49,11 @@ export function causeDisplay(cause: Cause): CauseDisplay {
   return DISPLAY[cause]
 }
 
+/** Whether nodes of this cause lead a scope's line even while a run works in it: a failure does. */
+export function leadsRunWork(cause: Cause): boolean {
+  return cause === 'failing'
+}
+
 /** What a segment of the health map is coloured as: a cause, or fresh (no cause). */
 export type MapPart = Cause | 'fresh'
 

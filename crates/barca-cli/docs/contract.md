@@ -82,6 +82,14 @@ command is experimental with it):
 | `barca status --keys` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
 | `barca status --grid` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
 | `barca status --key` | new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use |
+| `barca status --needs-run` | new in 0.44.1 (#1036), with --keys: the keys a run computes; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use |
+| `barca status --value` | new in 0.44.1 (#1036), with --keys: a dimension's values; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use |
+| `barca status --range` | new in 0.44.1 (#1036), with --keys: a stretch of a dimension; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use |
+| `barca status --error` | new in 0.44.1 (#1036), with --keys: one error group's failed keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use |
+| `barca status --match` | new in 0.44.1 (#1036), with --keys: text over the key; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use |
+| `barca status --sort` | new in 0.44.1 (#1036), with --keys: the order of the keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use |
+| `barca status --offset` | new in 0.44.1 (#1036), with --keys: the page of keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use |
+| `barca status --overview` | new in 0.44.1 (#1036): a partitioned node's keys in one picture (counts, issues and the grid's rows); the JSON shape, the wording of an issue and the bound on the rows may change after field use |
 | `barca get --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use |
 | `barca run --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use |
 | `barca get --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
@@ -141,6 +149,7 @@ stability; the row adds the keys and routes that go with it.
 | `steps_page.nodes[].status` (`ran`, `cached`, `skipped`) and `steps_page.nodes[].blocked_by` in `history RUN_ID --json` with a server | the server lists every planned node of a finished run whose plan it can rebuild; the local `history RUN_ID` lists only nodes with recorded steps and never has these keys (`barca docs server-mode`) |
 | `barca pin`, `barca unpin`, their JSON, the step reason `pinned`, `GET /pins`, `GET /assets/{name}/versions`, `POST` and `DELETE /assets/{name}/pin`, `barca pin --from-file` and `POST /assets/{name}/pin/upload` (a version's `upload`) | new in 0.41 (`barca docs pins`): the version list, the JSON shapes and what a pin covers (only unpartitioned assets) may change after field use |
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key`, and the JSON of `barca status NODE --grid` and `--key KEY`, which print them | new in 0.42 (the commands in 0.44, #990): every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
+| `GET /assets/{name}/partitions/keys` and `GET /assets/{name}/partitions/overview`, and the JSON of `barca status NODE --keys` and `--overview`, which print them; `needs_run` in `GET /assets/{name}/partitions/key`; `causes` and `fresh` of each entry of `files` in `GET /state/rollup` and `barca status --rollup --json` | new in 0.44.1 (#1036): the keys of a partitioned node filtered, ordered and paged by the server, and its keys in one picture; the route's parameters, the page size (at most 1000 keys), the bound on a served `selection` (5,000 keys or values) and on the overview's rows (200,000 cells) may change after field use |
 | `barca pause --schedule`, `barca pause --until`, `barca resume --schedule`, their JSON (the schedule's `GET /schedule` entry), `schedules` in `barca pause --json` and `GET /pauses`, and a duration as `?until=` of `POST /schedule/{id}/pause` | new in 0.44 (#989, `barca docs scheduling`, "Pausing one schedule"): the entry's keys follow `GET /schedule` |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, `barca docs status-fields`, "Row counts"): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
@@ -551,6 +560,14 @@ default, and any aliases.
 | `--problems` | - | default `false` | experimental: new in 0.29.3: what counts as needing attention may grow (it is every state but cached and always_runs, a failed task or sensor, a paused or failing schedule) | Show only nodes that need attention: not cached (unsynced, stale, never_run, partial, blocked, unknown), a task or sensor whose last run failed, or a paused or failing schedule |
 | `--rollup` | - | default `false` | experimental: new in 0.44.0 (specs/behavior/health.md): counts by health and by cause, the freshness gap and the ranked roots with their actions; the wording of a root's detail and of the printed list may change after field use | Experimental: print the rollup instead of the nodes: counts by health per group and file, in nodes and in assets, then what holds the nodes that are not fresh (the ranked roots) and the action that clears each |
 | `--keys` | - | default `false` | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: list the keys of one partitioned target, each with its state |
+| `--needs-run` | - | default `false` | experimental: new in 0.44.1 (#1036), with --keys: the keys a run computes; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: only keys a run computes |
+| `--value` | `DIM=VALUE[,VALUE]` | - | experimental: new in 0.44.1 (#1036), with --keys: a dimension's values; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: only keys with these values of a dimension |
+| `--range` | `DIM=FROM..TO` | - | experimental: new in 0.44.1 (#1036), with --keys: a stretch of a dimension; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: only keys in a stretch of a dimension |
+| `--error` | `N` | - | experimental: new in 0.44.1 (#1036), with --keys: one error group's failed keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: only the failed keys of error group N |
+| `--match` | `TEXT` | - | experimental: new in 0.44.1 (#1036), with --keys: text over the key; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: only keys that contain TEXT |
+| `--sort` | `key\|state\|attempted\|elapsed\|size\|rows` | - | experimental: new in 0.44.1 (#1036), with --keys: the order of the keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: order by key, state, attempted, elapsed, size or rows |
+| `--offset` | `N` | - | experimental: new in 0.44.1 (#1036), with --keys: the page of keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use | Experimental, with --keys: skip the first N matching keys |
+| `--overview` | - | default `false` | experimental: new in 0.44.1 (#1036): a partitioned node's keys in one picture (counts, issues and the grid's rows); the JSON shape, the wording of an issue and the bound on the rows may change after field use | Experimental: print one partitioned target's keys in one picture: counts, issues, rows |
 | `--grid` | - | default `false` | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: print one partitioned target's keys as a grid of states |
 | `--key` | `KEY` | - | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
@@ -2483,7 +2500,15 @@ clears the root:
 | `files[].asset_health.suspect` | integer | always |
 | `files[].asset_health.undecided` | integer | always |
 | `files[].assets` | integer | always |
+| `files[].causes` | object | always |
+| `files[].causes.catching_up` | integer | always |
+| `files[].causes.failing` | integer | always |
+| `files[].causes.no_refresh_path` | integer | always |
+| `files[].causes.overdue` | integer | always |
+| `files[].causes.queued` | integer | always |
+| `files[].causes.undecided` | integer | always |
 | `files[].file` | string | always |
+| `files[].fresh` | integer | always |
 | `files[].health` | object | always |
 | `files[].health.behind` | integer | always |
 | `files[].health.blocked` | integer | always |
@@ -2586,7 +2611,8 @@ clears the root:
 
 After one key of the partitioned `flaky` failed (experimental; `barca docs partitions`,
 "Listing keys"). `barca status flaky pipeline.py --keys --json` lists its keys, each with its
-state and latest attempt; `hint` appears when `truncated` is true:
+state and latest attempt, what `GET /assets/{name}/partitions/keys` answers; `hint` appears
+when `truncated` is true:
 
 <!-- BEGIN GENERATED schema status_keys -->
 | Key | Type | Present |
@@ -2616,10 +2642,106 @@ state and latest attempt; `hint` appears when `truncated` is true:
 | `keys[].run_id` | string | always |
 | `keys[].size_bytes` | integer \| null | always |
 | `keys[].state` | string | always |
+| `keys[].values` | array | always |
+| `keys[].values[]` | string | always |
 | `known` | boolean | always |
+| `needs_run` | integer | always |
+| `offset` | integer | always |
+| `selection` | string | always |
 | `total` | integer | always |
 | `truncated` | boolean | always |
 <!-- END GENERATED schema status_keys -->
+
+`barca status flaky pipeline.py --keys --state failed --value k=bad --error 0 --match BAD
+--sort attempted --limit 1 --json` is the same document for the keys the filters keep (every
+filter must hold): `total` and `needs_run` count what matches, `counts` every key, and
+`selection` names what matches as `--partition` takes it:
+
+<!-- BEGIN GENERATED schema status_keys_filtered -->
+| Key | Type | Present |
+|---|---|---|
+| `counts` | object | always |
+| `counts.blocked` | integer | always |
+| `counts.empty` | integer | always |
+| `counts.failed` | integer | always |
+| `counts.fresh` | integer | always |
+| `counts.never_run` | integer | always |
+| `counts.pinned` | integer | always |
+| `counts.stale` | integer | always |
+| `dimensions` | array | always |
+| `dimensions[]` | string | always |
+| `errors` | array | always |
+| `errors[]` | object | always |
+| `errors[].error` | string | always |
+| `errors[].keys` | integer | always |
+| `id` | string | always |
+| `keys` | array | always |
+| `keys[]` | object | always |
+| `keys[].attempted_at` | string | always |
+| `keys[].elapsed_seconds` | null | always |
+| `keys[].error` | string | always |
+| `keys[].key` | string | always |
+| `keys[].rows` | null | always |
+| `keys[].run_id` | string | always |
+| `keys[].size_bytes` | null | always |
+| `keys[].state` | string | always |
+| `keys[].values` | array | always |
+| `keys[].values[]` | string | always |
+| `known` | boolean | always |
+| `needs_run` | integer | always |
+| `offset` | integer | always |
+| `selection` | string | always |
+| `total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_keys_filtered -->
+
+`barca status flaky pipeline.py --overview --json` is the node's keys in one picture, what
+`GET /assets/{name}/partitions/overview` answers: the counts, what is wrong and where
+(`issues`) and the grid's rows along its longest dimension (`rows`); `hint` appears when
+`truncated` is true:
+
+<!-- BEGIN GENERATED schema status_overview -->
+| Key | Type | Present |
+|---|---|---|
+| `along` | string | always |
+| `chain` | array | always |
+| `chain[]` | string | always |
+| `counts` | object | always |
+| `counts.blocked` | integer | always |
+| `counts.empty` | integer | always |
+| `counts.failed` | integer | always |
+| `counts.fresh` | integer | always |
+| `counts.never_run` | integer | always |
+| `counts.pinned` | integer | always |
+| `counts.stale` | integer | always |
+| `dimensions` | array | always |
+| `dimensions[]` | object | always |
+| `dimensions[].name` | string | always |
+| `dimensions[].values` | array | always |
+| `dimensions[].values[]` | string | always |
+| `errors` | array | always |
+| `errors[]` | object | always |
+| `errors[].error` | string | always |
+| `errors[].keys` | integer | always |
+| `id` | string | always |
+| `issues` | array | always |
+| `issues[]` | object | always |
+| `issues[].error` | integer | always |
+| `issues[].keys` | integer | always |
+| `issues[].places` | array | always |
+| `issues[].places[]` | object | always |
+| `issues[].places[].dimension` | string | always |
+| `issues[].places[].words` | string | always |
+| `issues[].selection` | string | always |
+| `issues[].state` | string | always |
+| `issues[].title` | string | always |
+| `known` | boolean | always |
+| `last_attempt_at` | string | always |
+| `needs_run` | integer | always |
+| `rows` | `<user value>` | always |
+| `rows_total` | integer | always |
+| `truncated` | boolean | always |
+<!-- END GENERATED schema status_overview -->
 
 `barca status flaky pipeline.py --grid --json` is every key in columns, what
 `GET /assets/{name}/partitions/grid` answers. `error` maps a failed cell's index to an index
@@ -2692,6 +2814,7 @@ result, `inputs[]` has the keys of `output`, and `shape` is the artifact's shape
 | `id` | string | always |
 | `inputs` | array | always |
 | `key` | string | always |
+| `needs_run` | boolean | always |
 | `output` | object | always |
 | `output.artifact_path` | string | always |
 | `output.format` | string | always |

@@ -3,6 +3,7 @@ import { useRollup } from '@/hooks/useRollup'
 import { useMemo, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { BookOpen, ChevronDown, ChevronRight, KeyRound, Layers, LogOut, Moon, PanelLeft, Search, Sun } from 'lucide-react'
 import { Button, ConnectionBadge, IconButton, RunsInProgress, StatusGlyph } from '@/components'
+import { CauseDot } from '@/components/CauseDot'
 import { QueueStatus } from '@/components/QueueStatus'
 import { useAssets } from '@/hooks/useAssets'
 import { useGroupTree } from '@/hooks/useGroupTree'
@@ -12,7 +13,7 @@ import { useTheme } from '@/context/theme'
 import { useTimeZone } from '@/context/timeZone'
 import { connection } from '@/lib/connection'
 import { fileShown, inPipeline, pipelineSummaries, type FileDisplay, type PipelineSummary } from '@/lib/pipeline'
-import { ROOT, worstOf } from '@/lib/rollupView'
+import { ROOT } from '@/lib/rollupView'
 import { plural } from '@/lib/plural'
 import { SIDEBAR_KEY, SIDEBAR_STEP, SIDEBAR_WIDTH, SIDEBAR_WIDTH_KEY, fileGroups, initialSidebar, listedPipelines, updateSidebar, type SidebarEffect, type SidebarGroup, type SidebarModel, type SidebarMsg } from '@/lib/sidebar'
 import { zoneName } from '@/lib/time'
@@ -103,11 +104,11 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, overal
             <button
               type="button"
               className="barca-pipe"
-              title={`All pipelines · ${plural(total ?? 0, word)}${overall ? ` · ${overall.live ? overall.label : `worst: ${overall.label}`}` : ''}`}
+              title={`All pipelines · ${plural(total ?? 0, word)}${overall ? ` · ${overall.label}` : ''}`}
               aria-label="All pipelines"
               onClick={() => onSelect(null)}
             >
-              {overall ? <StatusGlyph glyph={overall.glyph} live={overall.live} size={12} /> : <Layers size={13} className="barca-pipe-icon" />}
+              {overall ? (overall.part ? <CauseDot part={overall.part} /> : <StatusGlyph glyph={overall.glyph} live={overall.live} size={12} />) : <Layers size={13} className="barca-pipe-icon" />}
             </button>
           </div>
         )}
@@ -151,7 +152,7 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, overal
                 >
                   {/* The file's one state, as its header in the table shows it: none until all of it is known. */}
                   {p.shown
-                    ? <StatusGlyph glyph={p.shown.glyph} live={p.shown.live} size={12} />
+                    ? (p.shown.part ? <CauseDot part={p.shown.part} /> : <StatusGlyph glyph={p.shown.glyph} live={p.shown.live} size={12} />)
                     : <span className="barca-pipe-nodot" />}
                   <span className="barca-pipe-name">{p.name}</span>
                   <span className="barca-pipe-count">{p.total}</span>
@@ -167,7 +168,7 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, overal
                   title={g.name}
                   onClick={() => onOpenGroup(p.file, g.id)}
                 >
-                  {g.glyph ? <StatusGlyph glyph={g.glyph} live={g.glyph === 'running'} size={12} /> : <span className="barca-pipe-nodot" />}
+                  {g.part ? <CauseDot part={g.part} /> : g.glyph ? <StatusGlyph glyph={g.glyph} live={g.glyph === 'running'} size={12} /> : <span className="barca-pipe-nodot" />}
                   <span className="barca-pipe-name">{g.name}</span>
                 </button>
               ))}
@@ -348,7 +349,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // The project's one state, for the collapsed sidebar: none until the rollup has loaded.
   const overall = useMemo(() => {
     const root = rollup.loaded ? rollup.tree.entries.get(ROOT) : undefined
-    return root && root.nodes > 0 ? fileShown({ running: root.running, worst: worstOf(root.health) }) : null
+    return root && root.nodes > 0 ? fileShown(root) : null
   }, [rollup])
   const tree = useGroupTree(null)
   const navigate = useNavigate()

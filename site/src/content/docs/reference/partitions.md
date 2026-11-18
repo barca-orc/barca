@@ -429,9 +429,9 @@ list the first twenty keys in lexical order, independently of worker chunking.
 
 Failed batched calls automatically retry failed partitions in groups at most half the previous size, down to one partition, even without configured retries. Successful partitions are retained. Single-partition failures use the configured retry budget, counting earlier attempts. This also applies when a worker exits unexpectedly.
 
-## Listing keys: `barca status NODE --keys`, `--grid`, `--key`
+## Listing keys: `barca status NODE --keys`, `--overview`, `--grid`, `--key`
 
-`barca status` shows a partitioned node as one row with key counts. Three flags (experimental,
+`barca status` shows a partitioned node as one row with key counts. Four flags (experimental,
 new in 0.44) show the keys of one partitioned node instead, on this machine or from a server
 (`--server`), with the same output either way. They take exactly one target; a node that is not
 partitioned, or no target, is a usage error (exit 2).
@@ -439,7 +439,15 @@ partitioned, or no target, is a usage error (exit 2).
 ```bash
 barca status margin pipeline.py --keys                        # every key: state, last attempt, rows, size, run, error
 barca status margin pipeline.py --keys --state failed,blocked # only keys in these states
-barca status margin pipeline.py --keys --limit 20 --json      # {id, known, dimensions, counts, errors, keys, total, truncated, hint?}
+barca status margin pipeline.py --keys --needs-run            # only keys a run computes: failed, blocked, stale, never run
+barca status margin pipeline.py --keys --value region=apac,emea   # only these values of a dimension; repeat for another
+barca status margin pipeline.py --keys --range region=emea..apac  # a stretch of a dimension, in its own order
+barca status margin pipeline.py --keys --state failed --error 0   # the failed keys of the most common error
+barca status margin pipeline.py --keys --match apac           # keys that contain the text
+barca status margin pipeline.py --keys --sort attempted --limit 20   # the 20 keys attempted last
+barca status margin pipeline.py --keys --limit 20 --offset 20 --json # the next page: {id, known, dimensions, counts, errors, keys, total, truncated, offset, needs_run, selection, hint?}
+barca status margin pipeline.py --overview                    # counts, what is wrong and where, and the grid's rows
+barca status margin pipeline.py --overview --json             # {id, chain, known, dimensions, counts, needs_run, errors, issues, along, rows, rows_total, truncated, last_attempt_at, hint?}
 barca status margin pipeline.py --grid                        # one character per key
 barca status margin pipeline.py --grid --json                 # every key in columns
 barca status margin pipeline.py --key region=apac             # one key along its chain
@@ -459,18 +467,59 @@ its dimensions and are linked through their inputs):
 | `fresh` | `c` | served from cache: a successful result matches its code and inputs |
 
 - **`--keys`** lists the keys in key order (the last dimension varying fastest; a dimension's
-  values in declared order). Each entry of `keys` has `key`, `state`, and from the key's latest
+  values in declared order). Each entry of `keys` has `key`, `values` (the key's value of each
+  dimension, in the order of `dimensions`), `state`, and from the key's latest
   attempt `attempted_at` (RFC 3339), `elapsed_seconds`, `size_bytes`, `rows` (what a successful
   attempt wrote, where its worker counted them) and `run_id`, all `null` for a key with no
   attempt; `error` is a failed key's error as it is grouped: its first line with the key's own
   values replaced by their dimension's name (`no rows for <region>`). `errors` lists those
   groups, most common first (`[{error, keys}]`), and `counts` every key by state, plus `empty`
-  (keys whose latest successful attempt wrote 0 rows), whatever `--state` selects. `--state`
-  takes key states here (an unknown one is a usage error naming them). The list is bounded like
-  every other: every key in JSON and 100 in a table unless `--limit N` or `--all` says
-  otherwise; `total` counts the keys that match `--state`, `truncated` says whether all are
-  shown, and a truncated table ends with a note on stderr. The full error text and traceback of
-  one key are in `--key`.
+  (keys whose latest successful attempt wrote 0 rows), whatever the filters select. The list is
+  bounded like every other: every key in JSON and 100 in a table unless `--limit N` or `--all`
+  says otherwise; a truncated table ends with a note on stderr. The full error text and
+  traceback of one key are in `--key`.
+- **The filters of `--keys`** narrow the list; every one that is given must hold:
+
+  | flag | keeps |
+  |---|---|
+  | `--state failed,blocked` | keys in these states (an unknown one is a usage error naming them) |
+  | `--needs-run` | keys a run computes: failed, blocked, stale and never run |
+  | `--value region=apac,emea` | keys whose dimension is one of the values; repeat the flag for another dimension |
+  | `--range day=2026-01-01..2026-01-31` | keys whose dimension is between two of its values, both included, in the dimension's own order (the order `--grid` prints it in), either way round |
+  | `--error 0` | the failed keys of one error group: its number in `errors` (the table prints it), 0 the most common |
+  | `--match apac` | keys that contain the text, in any case |
+
+  `--sort` orders what is kept: `key` (the default), `state` (most urgent first: failed,
+  blocked, stale, never run, pinned, fresh), `attempted` (latest attempt first), `elapsed`
+  (slowest first), `size` (largest first) or `rows` (most first); keys with nothing to compare
+  come last, and keys that tie stay in key order. `--offset N` skips the first N of them, so
+  `--limit 20 --offset 20` is the second page. A dimension the node does not have, a range
+  value its dimension does not have, or an error number past its groups is a usage error
+  (exit 2) that says what the node has; a `--value` its dimension does not have matches no
+  key. In the JSON, `total` counts the keys that match, `needs_run` how many of them a run
+  computes, `offset` is where the page starts, `truncated` says whether keys follow it, and
+  `selection` names the keys that match as `barca get NODE --partition` takes them: a JSON
+  object of each dimension's values when they are every combination of those values, a JSON
+  list of the keys otherwise (never their cross-product, which would name keys that were not
+  asked for). Past 5,000 scattered keys there is no list to spell: `--needs-run` with only
+  `--value` and `--range` then gets the filters' own rectangle (a run of it computes exactly
+  the keys matched, because a run computes only keys that need one), and any other query gets
+  `"selection": null`. The table prints the same under the list: how many keys match, how many
+  of them a run computes and the `barca get` line that computes them.
+- **`--overview`** prints the node's keys in one picture: the summary line, then what needs
+  attention, the most keys first: each error of the failed keys, then the blocked, stale and
+  never-run keys, each with how many keys it is, where they are in each dimension they do not
+  span whole (`day 2026-03-01 → 2026-03-09 · region apac`: up to three values by name, an
+  unbroken stretch by its ends, anything else as a count between its ends), the `barca status
+  --keys` line that lists them and the `barca get --partition` line that runs them; then the
+  grid's rows as `--grid` prints them. `--limit` bounds the rows (100 in a table; in JSON as
+  many as fit 200,000 cells). The JSON is what `GET /assets/{name}/partitions/overview`
+  answers: `dimensions` (`[{name, values}]`), `counts`, `needs_run`, `errors`, `chain`,
+  `issues` (`[{state, error, title, keys, places: [{dimension, words}], selection}]`; `error`
+  is the group's number for failed keys, `selection` as above), `along` (the dimension the
+  rows run along: the one with the most values), `rows` (`[{label, values, states}]`, one
+  character per value of `along`, the characters of the table above), `rows_total`,
+  `truncated` and `last_attempt_at`.
 - **`--grid`** prints a summary line, then one row per combination of every dimension but the
   longest, each a strip of state characters along the longest dimension's values in order (`-`
   where a combination is not a key). A dimension of more than 100 values wraps, each line
@@ -491,17 +540,23 @@ its dimensions and are linked through their inputs):
   does not have is a usage error (exit 2).
 - `known` is `false` while the keys are not known: a `partitions_from` source that has not run.
   The list and the grid are then empty.
-- With a server, `--keys` and `--grid` read `GET /assets/{name}/partitions/grid` and `--key`
-  reads `GET /assets/{name}/partitions/key`; this machine's unposted results are not marked
-  (`barca status` without these flags marks them).
+- With a server, `--keys` reads `GET /assets/{name}/partitions/keys` (the server filters,
+  orders and pages; it lists at most 1000 keys a request, so `--all` or a longer `--limit`
+  reads page after page and prints one list), `--overview` reads `.../partitions/overview`,
+  `--grid` reads `.../partitions/grid` and `--key` reads `.../partitions/key`; this machine's
+  unposted results are not marked (`barca status` without these flags marks them).
 
 ## Exploring keys in the web UI
 
 `barca serve`'s web UI has a key explorer for a partitioned asset: the asset panel's
 **Explore all N keys** (or **See where they are**) opens it (`#/keys?node=<asset>`), and each
-of the panel's grouped errors opens it filtered to that error. It answers from
-`GET /assets/{name}/partitions/grid`, one request for every key, and reads top down, what is
-wrong first:
+of the panel's grouped errors opens it filtered to that error. It renders what the server
+serves and decides nothing itself: the counts, the problems and the overview's rows are
+`GET /assets/{name}/partitions/overview` (`barca status NODE --overview --json`), and the
+keys are `GET /assets/{name}/partitions/keys` with the page's filters and order
+(`barca status NODE --keys` with the same flags), a page of 200 at a time as the table is
+scrolled. A filter or an order asks the server again, so a node with 100,000 keys costs the
+browser one page. It reads top down, what is wrong first:
 
 - **The counts**: how many keys are failed, blocked (the same key of an input failed), stale,
   never run and fresh, each a filter.
@@ -512,16 +567,19 @@ wrong first:
   cut into columns that fit the page, each column drawn in the most urgent state of its keys
   (fresh is quiet; a column where only a few keys need attention is marked at its foot). Drag
   across columns to zoom to them, down to one key per column; click a one-key column to open it.
-- **The keys**: those that need attention, or all of them, filtered by dimension value and key
-  text, one line each, in a table that scrolls on its own: the page itself does not scroll. The
-  URL holds every filter and the zoom, so a view is a link.
+- **The keys**: those that need attention (`--needs-run`), or all of them, filtered by
+  dimension value and key text, one line each, in a table that scrolls on its own: the page
+  itself does not scroll. A column header (State, Last attempt, Took, Size) orders the keys by
+  it (`--sort`); pressing it again returns to key order. The URL holds every filter, the order
+  and the zoom, so a view is a link.
 - **One key** (`GET /assets/{name}/partitions/key`): its error first, the same key along its
   chain (the partitioned assets that share its keys), what it read (the same key of each input)
   and wrote, schema and first rows, and its attempts.
-- **Running keys.** Run in the header computes the keys that are not fresh, of the dimension
-  values selected and the zoomed range or of the whole asset, as `--partition` with each value
-  listed. Keys are known once their source ran: for a `partitions_from(<asset>)` asset that has
-  not, the explorer says so.
+- **Running keys.** Run in the header computes the keys shown that are not fresh, and a
+  problem's Run its keys, each as the `selection` the server names them by (above). Where
+  there is none (more than 5,000 scattered keys under a state, error or text filter) the
+  button says to narrow the filter. Keys are known once their source ran: for a
+  `partitions_from(<asset>)` asset that has not, the explorer says so.
 
 See also: [Batched Partitions](/reference/batched-partitions/), [Sinks](/reference/sinks/) (one file per partition, or one Hive-partitioned dataset with a
 directory per key), `barca docs examples/partitions`.

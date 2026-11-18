@@ -177,6 +177,38 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use",
     ),
     (
+        "status --needs-run",
+        "new in 0.44.1 (#1036), with --keys: the keys a run computes; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use",
+    ),
+    (
+        "status --value",
+        "new in 0.44.1 (#1036), with --keys: a dimension's values; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use",
+    ),
+    (
+        "status --range",
+        "new in 0.44.1 (#1036), with --keys: a stretch of a dimension; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use",
+    ),
+    (
+        "status --error",
+        "new in 0.44.1 (#1036), with --keys: one error group's failed keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use",
+    ),
+    (
+        "status --match",
+        "new in 0.44.1 (#1036), with --keys: text over the key; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use",
+    ),
+    (
+        "status --sort",
+        "new in 0.44.1 (#1036), with --keys: the order of the keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use",
+    ),
+    (
+        "status --offset",
+        "new in 0.44.1 (#1036), with --keys: the page of keys; the filters, the orders and the JSON's `offset`, `needs_run` and `selection` may change after field use",
+    ),
+    (
+        "status --overview",
+        "new in 0.44.1 (#1036): a partitioned node's keys in one picture (counts, issues and the grid's rows); the JSON shape, the wording of an issue and the bound on the rows may change after field use",
+    ),
+    (
         "get --batch",
         "new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use",
     ),

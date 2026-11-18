@@ -95,7 +95,15 @@ files[].asset_health.ok : integer
 files[].asset_health.suspect : integer
 files[].asset_health.undecided : integer
 files[].assets : integer
+files[].causes : object
+files[].causes.catching_up : integer
+files[].causes.failing : integer
+files[].causes.no_refresh_path : integer
+files[].causes.overdue : integer
+files[].causes.queued : integer
+files[].causes.undecided : integer
 files[].file : string
+files[].fresh : integer
 files[].health : object
 files[].health.behind : integer
 files[].health.blocked : integer

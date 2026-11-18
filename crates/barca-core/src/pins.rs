@@ -72,7 +72,11 @@ fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
     let id = find_target_id(dag, step.base_id())?;
     let node = dag.get_node(&id).expect("resolved node exists");
     if !step.partition.is_empty() {
-        if !name.ends_with(']') || step.partition.0.keys().ne(node.extracted.partitions.keys()) {
+        // The same dimension names, whatever order either map holds them in.
+        let named: std::collections::BTreeSet<&String> = step.partition.0.keys().collect();
+        let declared: std::collections::BTreeSet<&String> =
+            node.extracted.partitions.keys().collect();
+        if !name.ends_with(']') || named != declared {
             return Err(BarcaError::Usage(
                 "name exactly one key with every partition dimension".into(),
             ));
@@ -706,4 +710,35 @@ pub(crate) fn prune_expanded_inputs(
         });
     }
     phase.streams.retain(|stream| !stream.steps.is_empty());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A node's dimensions are held in a map with no order of its own: a key that names every
+    /// dimension is that node's key however the map happens to list them.
+    #[test]
+    fn a_key_of_a_node_with_several_dimensions_is_pinnable_whatever_order_they_are_held_in() {
+        let source = r#"
+from barca import asset, partitions
+
+@asset(partitions={"day": partitions(["d1", "d2"]), "kind": partitions(["a", "b"]), "region": partitions(["emea", "apac"])})
+def events(day: str, kind: str, region: str) -> dict:
+    return {}
+"#;
+        // Each graph hashes its maps anew: enough of them see every order.
+        for _ in 0..40 {
+            let dag =
+                Dag::build(&crate::parse::extract_nodes(source, "p.py").unwrap()).expect("dag");
+            let (id, pinnable) =
+                super::pinnable(&dag, "p.py:events[day=d1,kind=b,region=apac]").unwrap();
+            assert_eq!(id, "p.py:events[day=d1,kind=b,region=apac]");
+            assert!(pinnable);
+            // A dimension left out, or one the node does not have, is still refused.
+            assert!(super::pinnable(&dag, "p.py:events[day=d1,kind=b]").is_err());
+            assert!(super::pinnable(&dag, "p.py:events[day=d1,kind=b,zone=x]").is_err());
+            assert!(super::pinnable(&dag, "p.py:events[day=d9,kind=b,region=apac]").is_err());
+        }
+    }
 }

@@ -50,40 +50,69 @@ pub(crate) async fn rollup_cmd(
     Ok(())
 }
 
-/// `barca status NODE --keys`, `--grid` or `--key KEY`: which view of one partitioned node's
-/// keys is printed.
+/// `barca status NODE --keys`, `--overview`, `--grid` or `--key KEY`: which view of one
+/// partitioned node's keys is printed.
 pub(crate) enum KeysView {
-    /// `--keys [--state a,b]`.
-    Keys(barca_core::partition_grid::KeyFilter),
+    /// `--keys [--state a,b] [--needs-run] [--value D=V] [--range D=A..B] [--error N]
+    /// [--match TEXT] [--sort ORDER] [--offset N]`.
+    Keys(barca_core::key_query::KeyQuery),
+    /// `--overview`.
+    Overview,
     /// `--grid`.
     Grid,
     /// `--key KEY [--sample N]`.
     Key { key: String, sample: usize },
 }
 
+/// The flags of `barca status` that pick a keys view and narrow `--keys`.
+pub(crate) struct KeysFlags {
+    pub(crate) keys: bool,
+    pub(crate) overview: bool,
+    pub(crate) grid: bool,
+    pub(crate) key: Option<String>,
+    pub(crate) states: Vec<String>,
+    pub(crate) needs_run: bool,
+    pub(crate) values: Vec<String>,
+    pub(crate) range: Option<String>,
+    pub(crate) error: Option<usize>,
+    pub(crate) text: Option<String>,
+    pub(crate) sort: Option<String>,
+    pub(crate) offset: Option<usize>,
+    pub(crate) sample: Option<usize>,
+}
+
 impl KeysView {
-    /// The view the flags ask for, if any. `--state` names key states with `--keys`; an
-    /// unknown one is a usage error listing the valid ones.
-    pub(crate) fn of(
-        keys: bool,
-        grid: bool,
-        key: Option<String>,
-        states: &[String],
-        sample: Option<usize>,
-    ) -> Result<Option<KeysView>, String> {
-        if let Some(key) = key {
-            let sample = sample
+    /// The view the flags ask for, if any. `--state` names key states with `--keys`; a state,
+    /// an order, a value or a range barca does not read is a usage error saying what it does.
+    pub(crate) fn of(flags: KeysFlags) -> Result<Option<KeysView>, String> {
+        if let Some(key) = flags.key {
+            let sample = flags
+                .sample
                 .unwrap_or(0)
                 .min(barca_core::partition_grid::KEY_SAMPLE_MAX);
             return Ok(Some(KeysView::Key { key, sample }));
         }
-        if grid {
+        if flags.grid {
             return Ok(Some(KeysView::Grid));
         }
-        if keys {
-            return barca_core::partition_grid::KeyFilter::parse(states)
-                .map(|filter| Some(KeysView::Keys(filter)))
-                .map_err(|e| format!("error: --state: {e}"));
+        if flags.overview {
+            return Ok(Some(KeysView::Overview));
+        }
+        if flags.keys {
+            let args = barca_core::key_query::KeyQueryArgs {
+                states: &flags.states,
+                needs_run: flags.needs_run,
+                values: &flags.values,
+                range: flags.range.as_deref(),
+                error: flags.error,
+                text: flags.text.as_deref(),
+                sort: flags.sort.as_deref(),
+                offset: flags.offset.unwrap_or(0),
+                limit: None,
+            };
+            return barca_core::key_query::KeyQuery::parse(&args)
+                .map(|query| Some(KeysView::Keys(query)))
+                .map_err(|e| format!("error: --keys: {e}"));
         }
         Ok(None)
     }
@@ -104,14 +133,15 @@ impl KeysView {
     fn flag(&self) -> &'static str {
         match self {
             KeysView::Keys(_) => "--keys",
+            KeysView::Overview => "--overview",
             KeysView::Grid => "--grid",
             KeysView::Key { .. } => "--key KEY",
         }
     }
 }
 
-/// `barca status NODE --keys | --grid | --key KEY` on this machine: the same grid and key
-/// detail a server's routes serve, printed by the same renderers.
+/// `barca status NODE --keys | --overview | --grid | --key KEY` on this machine: the same
+/// answers a server's routes serve, printed by the same renderers.
 pub(crate) async fn keys_cmd(
     env: Option<&str>,
     target: &str,
@@ -135,9 +165,17 @@ pub(crate) async fn keys_cmd(
             let grid = grid::grid_for_target(&cfg, target, &file_args, python).await?;
             barca_core::report::render_partition_grid(&grid, limit, json)
         }
-        KeysView::Keys(filter) => {
+        KeysView::Overview => {
             let grid = grid::grid_for_target(&cfg, target, &file_args, python).await?;
-            barca_core::report::render_partition_keys(&grid, &filter, limit, json)
+            barca_core::report::render_partition_overview(&grid.overview(limit), json)
+        }
+        KeysView::Keys(mut query) => {
+            let grid = grid::grid_for_target(&cfg, target, &file_args, python).await?;
+            query.limit = limit;
+            let page = grid
+                .keys_page(&query)
+                .map_err(barca_core::BarcaError::Usage)?;
+            barca_core::report::render_partition_keys(&page, query.filters(), json)
         }
     };
     super::emit(rendered);

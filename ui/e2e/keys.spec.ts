@@ -1,44 +1,139 @@
 import { expect, test, type Page } from '@playwright/test'
 
-// The key explorer against fixed answers: a day × region grid of six keys, one failed and one
-// blocked behind an input, so every control has something to act on.
+// The key explorer against fixed answers: a day × region node of six keys, one failed and one
+// blocked behind an input, so every control has something to act on. The explorer renders what
+// the server serves (#1036): the overview (`.../partitions/overview`) and a page of keys
+// (`.../partitions/keys`), which the server filters, orders and counts. `served` below stands in
+// for that server: it answers the two routes from one small table of keys, so a test can assert
+// both what the page asked for and what it drew from the answer.
 const NODE = 'lake.py:events'
-const grid = {
-  id: NODE,
-  chain: ['lake.py:raw', NODE],
-  known: true,
-  dimensions: [
-    { name: 'day', values: ['d1', 'd2', 'd3'] },
-    { name: 'region', values: ['emea', 'apac'] },
-  ],
-  states: 'ccfcbc',
-  counts: { fresh: 4, stale: 0, never_run: 0, failed: 1, blocked: 1 },
-  attempted_base: 1_790_000_000,
-  attempted_at: [0, 0, 10, 0, null, 0],
-  elapsed_ms: [5, 6, 7, 5, null, 5],
-  size_bytes: [10, 10, null, 10, null, 10],
-  run: [0, 0, 0, 0, null, 0],
-  error: { '2': 0 },
-  errors: [{ error: 'ValueError: no rows for <region> on <day>', keys: 1 }],
-  runs: ['r1'],
+const DAYS = ['d1', 'd2', 'd3']
+const REGIONS = ['emea', 'apac']
+const NAMES: Record<string, string> = { c: 'fresh', f: 'failed', b: 'blocked', s: 'stale', n: 'never_run', p: 'pinned' }
+const NEEDS_RUN = 'fbsn'
+const ERROR = 'ValueError: no rows for <region> on <day>'
+
+interface Key { day: string; region: string; code: string }
+
+/** The node's keys, day by day: `states` has one character per day × region, the region varying fastest. */
+function keysOf(states: string): Key[] {
+  return DAYS.flatMap((day, d) => REGIONS.map((region, r) => ({ day, region, code: states[d * REGIONS.length + r]! })))
 }
+
+/** Keys as a run takes them: each dimension's values when they form a rectangle, each key otherwise. */
+function selectionOf(keys: Key[]): string | null {
+  if (keys.length === 0) return null
+  const days = DAYS.filter((d) => keys.some((k) => k.day === d))
+  const regions = REGIONS.filter((r) => keys.some((k) => k.region === r))
+  if (days.length * regions.length === keys.length) return JSON.stringify({ day: days, region: regions })
+  return JSON.stringify(keys.map((k) => ({ day: k.day, region: k.region })))
+}
+
+function counts(keys: Key[]) {
+  const n = (code: string) => keys.filter((k) => k.code === code).length
+  return { fresh: n('c'), pinned: n('p'), stale: n('s'), never_run: n('n'), failed: n('f'), blocked: n('b'), empty: 0 }
+}
+
+function overviewOf(states: string, error = ERROR) {
+  const keys = keysOf(states)
+  const failed = keys.filter((k) => k.code === 'f')
+  const blocked = keys.filter((k) => k.code === 'b')
+  const places = (of: Key[]) => [
+    { dimension: 'day', words: DAYS.filter((d) => of.some((k) => k.day === d)).join(', ') },
+    { dimension: 'region', words: REGIONS.filter((r) => of.some((k) => k.region === r)).join(', ') },
+  ]
+  return {
+    id: NODE,
+    chain: ['lake.py:raw', NODE],
+    known: true,
+    dimensions: [{ name: 'day', values: DAYS }, { name: 'region', values: REGIONS }],
+    counts: counts(keys),
+    needs_run: keys.filter((k) => NEEDS_RUN.includes(k.code)).length,
+    errors: failed.length ? [{ error, keys: failed.length }] : [],
+    issues: [
+      ...(failed.length ? [{ state: 'failed', error: 0, title: error, keys: failed.length, places: places(failed), selection: selectionOf(failed) }] : []),
+      ...(blocked.length ? [{ state: 'blocked', error: null, title: 'Waiting on the same keys of an input that failed', keys: blocked.length, places: places(blocked), selection: selectionOf(blocked) }] : []),
+    ],
+    along: 'day',
+    rows: REGIONS.map((region) => ({ label: `region=${region}`, values: [region], states: keys.filter((k) => k.region === region).map((k) => k.code).join('') })),
+    rows_total: REGIONS.length,
+    truncated: false,
+    last_attempt_at: '2026-09-21T12:00:00Z',
+  }
+}
+
+/** What the keys route answers for `url`: the server's filters, applied to the table. */
+function keysPageOf(states: string, url: URL, error = ERROR) {
+  const q = url.searchParams
+  const wanted = (q.get('state') ?? '').split(',').filter(Boolean)
+  const values = new Map(q.getAll('value').map((v) => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1).split(',')]))
+  const all = keysOf(states)
+  const matching = all.filter((k) => {
+    const key = `day=${k.day},region=${k.region}`
+    if (wanted.length && !wanted.includes(NAMES[k.code]!)) return false
+    if (q.get('needs_run') === '1' && !NEEDS_RUN.includes(k.code)) return false
+    if (q.has('error') && k.code !== 'f') return false
+    if (q.get('q') && !key.includes(q.get('q')!.toLowerCase())) return false
+    if (values.has('region') && !values.get('region')!.includes(k.region)) return false
+    if (values.has('day') && !values.get('day')!.includes(k.day)) return false
+    return true
+  })
+  const offset = Number(q.get('offset') ?? 0)
+  const page = matching.slice(offset, offset + Number(q.get('limit') ?? 100))
+  return {
+    id: NODE,
+    known: true,
+    dimensions: ['day', 'region'],
+    counts: counts(all),
+    errors: all.some((k) => k.code === 'f') ? [{ error, keys: all.filter((k) => k.code === 'f').length }] : [],
+    keys: page.map((k) => ({
+      key: `day=${k.day},region=${k.region}`,
+      values: [k.day, k.region],
+      state: NAMES[k.code],
+      attempted_at: k.code === 'b' ? null : '2026-09-21T12:00:00Z',
+      elapsed_seconds: k.code === 'b' ? null : 0.005,
+      size_bytes: k.code === 'c' ? 10 : null,
+      rows: null,
+      run_id: k.code === 'b' ? null : 'r1',
+      error: k.code === 'f' ? error : null,
+    })),
+    total: matching.length,
+    truncated: offset + page.length < matching.length,
+    offset,
+    needs_run: matching.filter((k) => NEEDS_RUN.includes(k.code)).length,
+    selection: selectionOf(matching),
+  }
+}
+
+const STATES = 'ccfcbc'
 const detail = {
   id: NODE,
   key: 'day=d2,region=emea',
   state: 'f',
+  needs_run: true,
   chain: [{ id: 'lake.py:raw', state: 'c' }, { id: NODE, state: 'f' }],
   attempts: [{ status: 'failed', created_at: '2026-09-21 12:00:00', elapsed_seconds: 0.007, error: 'ValueError: no rows for emea on d2\nTraceback', run_id: 'r1', artifact_path: null, format: null, size_bytes: null }],
   output: null,
   inputs: [{ id: 'lake.py:raw', step: 'lake.py:raw[day=d2,region=emea]', artifact_path: 'a/raw.json', format: 'json', size_bytes: 40, shape: { type: 'list', rows: 2, columns: [{ name: 'n', type: 'int' }], sample: [{ n: 0 }, { n: 1 }] } }],
 }
 
-async function mock(page: Page) {
-  await page.route(/\/assets\/[^/]+\/partitions\/grid/, (route) => route.fulfill({ json: grid }))
+/** Serve the explorer's routes from `states`; returns every keys query the page sent. */
+async function mock(page: Page, states = STATES, error = ERROR): Promise<URL[]> {
+  const asked: URL[] = []
+  await page.route(/\/assets\/[^/]+\/partitions\/overview/, (route) => route.fulfill({ json: overviewOf(states, error) }))
+  await page.route(/\/assets\/[^/]+\/partitions\/keys\?/, (route) => {
+    const url = new URL(route.request().url())
+    asked.push(url)
+    return route.fulfill({ json: keysPageOf(states, url, error) })
+  })
   await page.route(/\/assets\/[^/]+\/partitions\/key\?/, (route) => route.fulfill({ json: detail }))
+  // The explorer no longer reads the whole grid: a request for it fails the test that made it.
+  await page.route(/\/assets\/[^/]+\/partitions\/grid/, (route) => route.abort())
+  return asked
 }
 
 test('says what is wrong and where, shows those keys, zooms and opens one', async ({ page }) => {
-  await mock(page)
+  const asked = await mock(page)
   await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}`)
   const bar = page.locator('.barca-view-head')
   await expect(bar.getByRole('heading', { name: 'events' })).toBeVisible()
@@ -52,16 +147,21 @@ test('says what is wrong and where, shows those keys, zooms and opens one', asyn
   await expect(issues.getByRole('listitem').first()).toContainText('day d2')
   await expect(issues.getByRole('listitem').first()).toContainText('region emea')
 
-  // The table starts with what needs attention: the failed and the blocked key.
+  // The table starts with what needs attention: the failed and the blocked key, which the
+  // server picks (`needs_run=1`).
   await expect(page.getByRole('table', { name: 'Keys' }).getByRole('row')).toHaveCount(3)
+  expect(asked[0]!.searchParams.get('needs_run')).toBe('1')
   await page.getByRole('group', { name: 'Which keys' }).getByRole('button', { name: /^All/ }).click()
   await expect(page.getByRole('table', { name: 'Keys' }).getByRole('row')).toHaveCount(7)
   await expect(page).toHaveURL(/show=all/)
+  expect(asked.at(-1)!.searchParams.has('needs_run')).toBe(false)
 
-  // Show narrows the table to one problem's keys; its Run computes them.
+  // Show narrows the table to one problem's keys: the page asks the server for them; its Run computes them.
   await issues.getByRole('button', { name: 'Show' }).first().click()
   await expect(page).toHaveURL(/state=failed&error=0/)
   await expect(page.getByRole('table', { name: 'Keys' }).getByRole('row')).toHaveCount(2)
+  expect(asked.at(-1)!.searchParams.get('state')).toBe('failed')
+  expect(asked.at(-1)!.searchParams.get('error')).toBe('0')
   const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/runs'))
   await page.route(/\/runs$/, (route) => route.request().method() === 'POST' ? route.fulfill({ json: { run_id: 'r9', handle: 'r9' } }) : route.fallback())
   await issues.getByRole('button', { name: 'Run' }).first().click()
@@ -156,10 +256,7 @@ test('repair names one key, records the reason, and refreshes its pin', async ({
 
 
 test('both retry controls preserve scattered compound keys', async ({ page }) => {
-  await page.route(/\/assets\/[^/]+\/partitions\/grid/, route => route.fulfill({ json: {
-    ...grid, states: 'fccfcc', counts: { fresh: 4, stale: 0, never_run: 0, failed: 2, blocked: 0 },
-    error: { '0': 0, '3': 0 }, errors: [{ error: 'ValueError: bad feed', keys: 2 }],
-  } }))
+  await mock(page, 'fccfcc', 'ValueError: bad feed')
   const requests: Record<string, unknown>[] = []
   await page.route(/\/runs$/, route => {
     if (route.request().method() !== 'POST') return route.fallback()
@@ -212,4 +309,63 @@ test('read-only key inspection does not offer execution', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Run 2 keys shown' })).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'What needs attention' }).getByRole('button', { name: 'Run', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Run this key' })).toHaveCount(0)
+})
+
+test('each filter and each order asks the server again, with the route\'s own parameters', async ({ page }) => {
+  const asked = await mock(page)
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&show=all`)
+  const table = page.getByRole('table', { name: 'Keys' })
+  await expect(table.getByRole('row')).toHaveCount(7)
+  const last = () => asked.at(-1)!.searchParams
+
+  // A dimension's value.
+  await page.getByLabel('region').selectOption('apac')
+  await expect(table.getByRole('row')).toHaveCount(4)
+  expect(last().getAll('value')).toEqual(['region=apac'])
+  await expect(page.locator('.barca-keys-table')).toContainText('3 keys shown')
+
+  // Free text over the key.
+  await page.getByPlaceholder('Search keys').fill('d3')
+  await expect(table.getByRole('row')).toHaveCount(2)
+  expect(last().get('q')).toBe('d3')
+  expect(last().getAll('value')).toEqual(['region=apac'])
+  await page.getByRole('button', { name: 'Clear' }).click()
+  await expect(table.getByRole('row')).toHaveCount(7)
+
+  // An order: the header asks for it, and pressing it again returns to key order.
+  await table.getByRole('button', { name: 'Last attempt' }).click()
+  await expect(page).toHaveURL(/sort=attempted/)
+  await expect.poll(() => last().get('sort')).toBe('attempted')
+  await expect(table.getByRole('columnheader', { name: /Last attempt/ })).toHaveAttribute('aria-sort', 'descending')
+  await table.getByRole('button', { name: /Last attempt/ }).click()
+  await expect(page).not.toHaveURL(/sort=/)
+
+  // A stretch of the long dimension, named as the route takes it.
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&show=all&range=d2..d3`)
+  await expect.poll(() => last().get('range')).toBe('day=d2..d3')
+})
+
+test('a long list is read a page at a time as it is scrolled', async ({ page }) => {
+  // 500 keys match; the server lists the page asked for and says more follow.
+  const offsets: number[] = []
+  await page.route(/\/assets\/[^/]+\/partitions\/overview/, (route) => route.fulfill({ json: { ...overviewOf(STATES), counts: { fresh: 500, pinned: 0, stale: 0, never_run: 0, failed: 0, blocked: 0, empty: 0 }, needs_run: 0, issues: [] } }))
+  await page.route(/\/assets\/[^/]+\/partitions\/keys\?/, (route) => {
+    const url = new URL(route.request().url())
+    const offset = Number(url.searchParams.get('offset'))
+    const limit = Number(url.searchParams.get('limit'))
+    offsets.push(offset)
+    const keys = Array.from({ length: Math.min(limit, 500 - offset) }, (_, i) => ({
+      key: `day=k${offset + i},region=emea`, values: [`k${offset + i}`, 'emea'], state: 'fresh', attempted_at: null, elapsed_seconds: null, size_bytes: null, rows: null, run_id: null, error: null,
+    }))
+    return route.fulfill({ json: { ...keysPageOf(STATES, url), keys, total: 500, truncated: offset + keys.length < 500, offset, needs_run: 0, selection: null } })
+  })
+  await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}`)
+  const table = page.getByRole('table', { name: 'Keys' })
+  await expect(table).toHaveAttribute('aria-rowcount', '501')
+  await expect(table.getByRole('row').nth(1)).toContainText('k0')
+  expect(offsets).toEqual([0])
+  // Only the first page is in the browser; scrolling to its end asks for the next.
+  await page.locator('.barca-keytable-body').evaluate((el) => el.scrollTo(0, el.scrollHeight))
+  await expect.poll(() => offsets).toContain(200)
+  await expect(page.getByRole('button', { name: 'All fresh' })).toBeDisabled()
 })

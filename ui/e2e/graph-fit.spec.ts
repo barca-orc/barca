@@ -81,7 +81,7 @@ test('fit-to-screen zooms out only as far as 11px labels, and centres the first 
   const failed = page.locator(node('demand_forecast'))
   // Its failed keys make it failing: the one state shown, instead of `partial`.
   await expect(failed).toContainText('failing')
-  // One line a card: the glyph and the name, the state's word in its tooltip and accessible name.
+  // One line a card: the mark (a dot in the health map's colour) and the name, the state's word in its tooltip and accessible name.
   const name = failed.locator('.barca-dag-name')
   expect(parseFloat(await name.evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
   await expect(failed.locator('.barca-dag')).toHaveAttribute('title', /^failing/)
@@ -144,11 +144,17 @@ test('explicit fit includes every node at laptop width', async ({ page }) => {
   }), canvas)).toBe(true)
 })
 
-test('a consumer a failure upstream kept from running reads blocked and names the failure in its hint', async ({ page }) => {
+test('a consumer a failure upstream holds reads failing, as the health map counts it, and names the failure in its hint', async ({ page }) => {
   const validate = page.locator(node('validate_publication'))
-  await expect(validate).toContainText('blocked')
-  await expect(validate.locator('.barca-dag')).toHaveAttribute('data-tone', 'warning')
-  await expect(validate.locator('.barca-dag')).toHaveAttribute('title', /Blocked: waits on publish_plan, whose last attempt failed/)
+  await expect(validate).toContainText('failing')
+  await expect(validate.locator('.barca-dag')).toHaveAttribute('data-tone', 'failed')
+  await expect(validate.locator('.barca-dag')).toHaveAttribute('data-cause', 'failing')
+  await expect(validate.locator('.barca-dag')).toHaveAttribute('title', /Held by publish_plan, whose last attempt failed/)
+  // The legend names the colours on screen, in the health map's words.
+  const legend = page.getByLabel('Legend')
+  await expect(legend).toContainText('failing')
+  await expect(legend).toContainText('fresh')
+  await expect(legend).not.toContainText(/blocked|never run|succeeded/)
 })
 
 test('arrow keys move the selection and Enter opens the panel', async ({ page }) => {

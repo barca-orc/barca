@@ -319,6 +319,16 @@ The parity suite (`python/tests/test_server_mode_parity.py`) runs the contract's
 once locally and once through `barca serve` on a copy of the same project and compares the
 normalized output with exactly these differences.
 
+`barca status NODE --keys --server` sends its filters, order and page to the server
+(`GET /assets/{name}/partitions/keys?state=failed,blocked&needs_run=1&value=region=apac,emea&range=day=2026-01-01..2026-01-31&error=0&q=text&sort=attempted&limit=200&offset=0`;
+`value` repeats, one per dimension), which filters, orders and counts the keys with the
+function a local `--keys` uses, and prints the same text and JSON. The server lists at most
+1000 keys a request: `--all`, or a `--limit` past that, reads page after page and prints one
+list. A filter the node does not have (a dimension, a range value, an error number) is a `400`
+with the usage error a local command prints. `--overview` reads
+`GET /assets/{name}/partitions/overview?limit=N`. The suite compares each filter, order and
+page, as text and as JSON, both ways (`barca docs partitions`, "Listing keys").
+
 `run -o value` on a parquet or pickle result prints the pointer, as locally. `barca.get(...,
 server=True)` reads the value from `GET /runs/{run_id}/output` (an unpartitioned target only).
 With `partition=` it asks for the values instead (`-o value`): the selected keys' values read on

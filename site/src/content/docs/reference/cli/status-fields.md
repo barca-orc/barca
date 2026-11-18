@@ -243,6 +243,7 @@ UI's health map, bars and failures list all print this document.
      "health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 3},
      "asset_health": {"failing": 1, "blocked": 2, "suspect": 0, "behind": 0, "undecided": 0, "never_run": 0, "ok": 1},
      "worst": "failing",
+     "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0}, "fresh": 3,
      "kinds": {"asset": {"nodes": 4, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 3, "undecided": 0}},
        "task": {"nodes": 1, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 0, "undecided": 0}},
        "sensor": {"nodes": 1, "fresh": 1, "causes": {"catching_up": 0, "queued": 0, "no_refresh_path": 0, "overdue": 0, "failing": 0, "undecided": 0}}}}
@@ -282,9 +283,10 @@ others in `also_in`; a group with no node in scope is not listed.
 
 `files` cuts the same nodes by source file: one object per file in scope, by path, with its
 `nodes`, `assets`, `running`, `health` and `asset_health` summed over every node of the file,
-in whichever group each sits, and `worst`, the most severe health among them. The tree has a
-`file` entry only for the nodes of a file that are in no group, so a list of files (the web
-UI's sidebar) reads `files`.
+in whichever group each sits, `worst`, the most severe health among them, and `causes` and
+`fresh`: its nodes that are not fresh by cause, and those that are. The tree has a `file`
+entry only for the nodes of a file that are in no group, so a list of files (the web UI's
+sidebar, which marks a file with the first cause it has a node of) reads `files`.
 
 `kinds` cuts them by kind: `asset`, `task` and `sensor`, each `{"nodes", "fresh", "causes"}`:
 how many nodes of the kind are in scope, how many of them are fresh (no cause) and how many
@@ -679,8 +681,9 @@ never run: a run computes them). Its state is `cached` when every key is, `parti
 sort order), named in its `partition` field (for example `k=a`), and `shape` describes that one key's artifact.
 
 The keys themselves, each with its state, latest attempt, rows and error, are
-`barca status NODE --keys`; every key's state at once is `--grid`, and one key along its chain
-is `--key KEY` ([Partitions: Listing keys](/reference/partitions/#listing-keys-barca-status-node---keys---grid---key)).
+`barca status NODE --keys`, which takes filters, an order and a page; what is wrong and where,
+with the grid's rows, is `--overview`; every key's state at once is `--grid`, and one key
+along its chain is `--key KEY` ([Partitions: Listing keys](/reference/partitions/#listing-keys-barca-status-node---keys---overview---grid---key)).
 
 ## JSON
 

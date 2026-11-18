@@ -1,6 +1,7 @@
-"""A partitioned node's keys from the CLI (#990): `barca status NODE --keys`, `--grid` and
-`--key KEY`, on this machine and against a real `barca serve`, which answers the same documents
-on `GET /assets/{name}/partitions/grid` and `.../partitions/key`."""
+"""A partitioned node's keys from the CLI (#990, #1036): `barca status NODE --keys` with its
+filters, `--overview`, `--grid` and `--key KEY`, on this machine and against a real
+`barca serve`, which answers the same documents on `GET /assets/{name}/partitions/keys`,
+`.../partitions/overview`, `.../partitions/grid` and `.../partitions/key`."""
 
 import json
 import subprocess
@@ -96,8 +97,101 @@ def test_keys_lists_each_key_with_its_state_attempt_and_grouped_error(tmp_path):
     lines = table.stdout.splitlines()
     assert lines[0] == "pipeline.py:events: 6 keys · 1 failed · 5 fresh"
     assert lines[2].split()[:2] == ["KEY", "STATE"] and len(lines) == 8, table.stdout
-    assert "errors of the failed keys:" in table.stdout
+    assert "errors of the failed keys (--error N lists one group's keys):" in table.stdout
+    assert "  0  1 key: ValueError: no rows for <region> on <day>" in table.stdout
     assert "showing 2 of 6 keys" in table.stderr
+
+
+def test_keys_take_filters_an_order_and_a_page_and_say_how_to_run_what_matches(tmp_path):
+    root = _project(tmp_path)
+
+    def keys(*flags):
+        out = _cli(root, "status", "events", "--keys", *flags, "--json")
+        assert out.returncode == 0, out.stderr
+        return json.loads(out.stdout)
+
+    # A dimension's values, a stretch of a dimension, text, an error group: all must hold.
+    assert [
+        k["key"] for k in keys("--value", "region=amer,apac", "--range", "day=d2..d2")["keys"]
+    ] == [
+        "day=d2,region=amer",
+        "day=d2,region=apac",
+    ]
+    assert [k["key"] for k in keys("--match", "D1,REGION=A")["keys"]] == [
+        "day=d1,region=amer",
+        "day=d1,region=apac",
+    ]
+    failed = keys("--state", "failed", "--error", "0")
+    assert [k["key"] for k in failed["keys"]] == ["day=d2,region=amer"]
+    assert failed["keys"][0]["values"] == ["d2", "amer"]
+    # What matches as `barca get --partition` takes it: computing it clears the failure's keys.
+    assert (failed["total"], failed["needs_run"]) == (1, 1)
+    assert json.loads(failed["selection"]) == {"day": ["d2"], "region": ["amer"]}
+    # `--needs-run`: what a run computes, here and on the node that waits on it.
+    assert keys("--needs-run")["total"] == 1
+    scored = json.loads(_cli(root, "status", "scored", "--keys", "--needs-run", "--json").stdout)
+    assert [k["state"] for k in scored["keys"]] == ["blocked"]
+    # An order, then a page of it.
+    by_state = keys("--sort", "state")
+    assert by_state["keys"][0]["state"] == "failed" and by_state["keys"][-1]["state"] == "fresh"
+    second = keys("--limit", "2", "--offset", "2")
+    assert [k["key"] for k in second["keys"]] == ["day=d1,region=apac", "day=d2,region=emea"]
+    assert second["offset"] == 2 and second["truncated"] is True and "--offset 4" in second["hint"]
+    last = keys("--limit", "2", "--offset", "4")
+    assert last["truncated"] is False and "hint" not in last
+    # The table says what matched and the command that runs it.
+    table = _cli(root, "status", "events", "--keys", "--state", "failed", "--pretty")
+    assert "1 key match, 1 of them to run" in table.stdout
+    assert (
+        'run them: barca get pipeline.py:events --partition \'{"day":["d2"],"region":["amer"]}\''
+        in table.stdout
+    )
+    none = _cli(root, "status", "events", "--keys", "--state", "pinned", "--pretty")
+    assert "no key matches" in none.stdout
+    # The selection the list prints is one `barca get` takes: it runs the failed key again.
+    rerun = _cli(root, "get", "events", "--partition", failed["selection"], "--json")
+    assert rerun.returncode == 1 and "day=d2,region=amer" in rerun.stderr
+
+
+def test_overview_counts_the_keys_says_what_is_wrong_and_where_and_rows_the_grid(tmp_path):
+    root = _project(tmp_path)
+    body = json.loads(_cli(root, "status", "scored", "--overview", "--json").stdout)
+    assert body["id"] == "pipeline.py:scored" and body["known"] is True
+    assert body["chain"] == ["pipeline.py:events", "pipeline.py:scored"]
+    assert body["dimensions"] == [
+        {"name": "day", "values": ["d1", "d2"]},
+        {"name": "region", "values": ["emea", "amer", "apac"]},
+    ]
+    assert body["needs_run"] == 1 and body["counts"]["blocked"] == 1
+    # The rows run along the longest dimension, one per value of the other.
+    assert body["along"] == "region"
+    assert body["rows"] == [
+        {"label": "day=d1", "values": ["d1"], "states": "ccc"},
+        {"label": "day=d2", "values": ["d2"], "states": "cbc"},
+    ]
+    assert body["rows_total"] == 2 and body["truncated"] is False
+    [issue] = body["issues"]
+    assert (issue["state"], issue["error"], issue["keys"]) == ("blocked", None, 1)
+    assert issue["places"] == [
+        {"dimension": "day", "words": "d2"},
+        {"dimension": "region", "words": "amer"},
+    ]
+    assert json.loads(issue["selection"]) == {"day": ["d2"], "region": ["amer"]}
+    events = json.loads(_cli(root, "status", "events", "--overview", "--json").stdout)
+    [failure] = events["issues"]
+    assert (failure["state"], failure["error"]) == ("failed", 0)
+    assert failure["title"] == "ValueError: no rows for <region> on <day>"
+    assert events["last_attempt_at"].endswith("Z")
+    text = _cli(root, "status", "events", "--overview", "--pretty").stdout
+    assert "what needs attention, the most keys first:" in text
+    assert (
+        "  1 key  failed: ValueError: no rows for <region> on <day> (day d2 · region amer)" in text
+    )
+    assert "    list: barca status pipeline.py:events --keys --state failed --error 0" in text
+    assert text.rstrip().endswith("day=d1  ccc\nday=d2  cfc")
+    # `--limit` bounds the rows; the note says how many there are.
+    one = _cli(root, "status", "events", "--overview", "--limit", "1", "--pretty")
+    assert "showing 1 of 2 rows" in one.stderr and "day=d2" not in one.stdout.split("not a key")[1]
 
 
 def test_grid_prints_every_key_state_and_its_json_is_the_whole_grid(tmp_path):
@@ -163,6 +257,15 @@ def test_key_views_take_one_partitioned_target_and_known_states(tmp_path):
         (["status", "events,scored", "--grid"], "name exactly one target"),
         (["status", "events", "--key", "day=d9,region=amer"], "has no key"),
         (["status", "events", "--keys", "--state", "cached"], "unknown key state 'cached'"),
+        (["status", "events", "--keys", "--value", "zone=a"], "no dimension 'zone'"),
+        (["status", "events", "--keys", "--value", "region"], "DIMENSION=VALUE"),
+        (["status", "events", "--keys", "--range", "day=d1"], "DIMENSION=FROM..TO"),
+        (["status", "events", "--keys", "--range", "day=d1..d9"], "no day 'd9'"),
+        (["status", "events", "--keys", "--error", "3"], "--error takes 0 to 0"),
+        (["status", "events", "--keys", "--sort", "newest"], "invalid value 'newest'"),
+        (["status", "events", "--value", "region=amer"], "--keys"),
+        (["status", "events", "--overview", "--state", "failed"], "cannot be used with"),
+        (["status", "events", "--keys", "--overview"], "cannot be used with"),
         (["status", "events", "--keys", "--grid"], "cannot be used with"),
         (["status", "events", "--grid", "--state", "failed"], "cannot be used with"),
         (["status", "nope", "--keys"], "not found"),
@@ -190,6 +293,15 @@ def test_a_server_prints_the_same_keys_grid_and_key(tmp_path):
         there = [_cli(root, *argv, "--server", serve.url) for argv in views]
         # The JSON forms are the routes' own answers.
         grid = serve.get("/assets/events/partitions/grid")
+        # `--keys --json` and `--overview --json` are their routes' answers too.
+        page = serve.get("/assets/events/partitions/keys?state=failed&limit=5")
+        overview = serve.get("/assets/scored/partitions/overview")
+        local_page = json.loads(
+            _cli(
+                root, "status", "events", "--keys", "--state", "failed", "--limit", "5", "--json"
+            ).stdout
+        )
+        local_overview = json.loads(_cli(root, "status", "scored", "--overview", "--json").stdout)
         key = serve.get("/assets/scored/partitions/key?key=day%3Dd1%2Cregion%3Demea&sample=2")
         errors = [
             _cli(root, *argv, "--server", serve.url, "--json")
@@ -202,6 +314,7 @@ def test_a_server_prints_the_same_keys_grid_and_key(tmp_path):
         assert a.returncode == 0 and b.returncode == 0, (argv, a.stderr, b.stderr)
         assert a.stdout == b.stdout, argv
     assert json.loads(here[3].stdout) == grid
+    assert local_page == page and local_overview == overview
     assert json.loads(here[5].stdout) == key
     for out, text in zip(errors, ("is not partitioned", "has no key"), strict=True):
         assert out.returncode == 2 and text in out.stderr, out.stderr

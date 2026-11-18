@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { counts } from '@/lib/testdata/rollup'
+import { groupScope } from '@/lib/testdata/rollup'
 import { DagNode } from '@/components'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import type { GraphEntry } from '@/lib/graph'
@@ -31,7 +31,7 @@ const PIPELINE_STATES: Record<string, GraphState> = {
   'p:product_catalog': graphState(nodeByState.cached),
   'p:orders_clean': graphState(nodeByState.cached),
   'p:orders_enriched': runningGraphState(runningPartitioned),
-  'group:p:modeling': groupHealth({ health: counts({ failing: 1, behind: 1, ok: 2 }), nodes: 4, running: 1 }),
+  'group:p:modeling': groupHealth(groupScope({ failing: 1, catching_up: 1 }, 2, 1)),
   'p:revenue_daily': graphState(nodeByState.stale),
   'p:daily_report': runningGraphState(runningByStep.queued),
 }
@@ -54,15 +54,15 @@ const GROUP_GRAPH: GraphEntry[] = Array.from({ length: 6 }, (_, g) => ({
   inputWeights: Object.fromEntries(Array.from({ length: g }, (_, up) => [`group:p:stage_${up}`, g - up])),
 }))
 const GROUP_GRAPH_STATES: Record<string, GraphState> = Object.fromEntries(
-  GROUP_GRAPH.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', glyph: 'fresh', label: '4 fresh', hint: '' } : { kind: 'group', tone: 'failed', glyph: 'failed', label: '2 failing', hint: '' }]),
+  GROUP_GRAPH.map((e, i) => [e.id, i % 3 ? { kind: 'group', tone: 'success', glyph: 'fresh', label: '4 fresh', hint: '', part: 'fresh' } : { kind: 'group', tone: 'failed', glyph: 'failed', label: '2 failing', hint: '', part: 'failing' }]),
 )
 
 /** A group card in each case its health line has: `groupHealth` over the group's rollup entry. */
 const GROUP_CARDS: Record<string, GraphState> = {
-  'failing while running': groupHealth({ health: counts({ failing: 1, behind: 1, ok: 1 }), nodes: 3, running: 1 }),
-  'running, nothing failed': groupHealth({ health: counts({ ok: 2 }), nodes: 2, running: 1 }),
-  'stale and more': groupHealth({ health: counts({ behind: 2, never_run: 1, ok: 2 }), nodes: 5, running: 0 }),
-  'all fresh': groupHealth({ health: counts({ ok: 1 }), nodes: 1, running: 0 }),
+  'failing while running': groupHealth(groupScope({ failing: 1, catching_up: 1 }, 1, 1)),
+  'running, nothing failed': groupHealth(groupScope({}, 2, 1)),
+  'catching up and more': groupHealth(groupScope({ catching_up: 2, no_refresh_path: 1 }, 2)),
+  'all fresh': groupHealth(groupScope({}, 1)),
 }
 const GROUP_CARD_ENTRIES: GraphEntry[] = Object.keys(GROUP_CARDS).map((name) => ({ id: name, kind: 'group', inputs: [], name, summary: '12 assets · 12 tasks', outputName: 'model' }))
 
@@ -86,8 +86,8 @@ export function Graph() {
         <Variant label="never_run · every attempt failed">
           <StateNode name={neverSucceededNode.name} state={graphState(neverSucceededNode)} />
         </Variant>
-        <Variant label="never_run · blocked by a failure upstream">
-          <DagNode name="revenue_summary" kind="asset" tone="warning" label="blocked" blockedBy="broken_report" stateHint="Blocked: waits on broken_report, whose last attempt failed." />
+        <Variant label="held by a failure upstream: failing, as the map counts it">
+          <DagNode name="revenue_summary" kind="asset" tone="failed" label="failing" part="failing" stateHint="Held by broken_report, whose last attempt failed." />
         </Variant>
         <Variant label="stale · pinned (barca pin)">
           <DagNode name="orders" kind="asset" tone="warning" label="pinned" pinned="override from fix.json by me@host" stateHint="Pinned: override from fix.json by me@host. Runs read this version until it is unpinned." />

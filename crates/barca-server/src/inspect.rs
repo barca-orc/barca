@@ -291,29 +291,117 @@ pub async fn partitions(
     ))
 }
 
+/// The key grid of `name`, kept until the sources or the database change: what the grid, the
+/// keys and the overview routes all read, so a filter costs a pass over the grid and no
+/// database read.
+async fn kept_partition_grid(
+    state: &AppState,
+    name: &str,
+) -> Result<std::sync::Arc<barca_core::partition_grid::PartitionGrid>, ApiError> {
+    let dag = state.loaded_dag().await?;
+    let id = barca_core::partition_grid::partitioned_target(&dag, name)
+        .map_err(|e| ApiError::run(e, context("status", state)))?;
+    let db = state.db_state();
+    if let Some(grid) = state.kept_grid(&dag, &db, &id) {
+        return Ok(grid);
+    }
+    let snapshot = snapshot_db(state).await?;
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = snapshot.path.clone();
+    let grid = std::sync::Arc::new(
+        barca_core::partition_grid::partition_grid(&cfg, &dag, &id)
+            .await
+            .map_err(|e| ApiError::run(e, context("partitions grid", state)))?,
+    );
+    state.keep_grid(&dag, &db, grid.clone());
+    Ok(grid)
+}
+
 /// `GET /assets/{name}/partitions/grid` — every key of a partitioned node: its state as the
 /// dry run decides it, across the node's chain, and its latest attempt, in columns.
 pub async fn partition_grid(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<std::sync::Arc<barca_core::partition_grid::PartitionGrid>>, ApiError> {
-    let dag = state.loaded_dag().await?;
-    let id = barca_core::partition_grid::partitioned_target(&dag, &name)
-        .map_err(|e| ApiError::run(e, context("status", &state)))?;
-    let db = state.db_state();
-    if let Some(grid) = state.kept_grid(&dag, &db, &id) {
-        return Ok(Json(grid));
-    }
-    let snapshot = snapshot_db(&state).await?;
-    let mut cfg = state.config.resolved.clone();
-    cfg.db_path = snapshot.path.clone();
-    let grid = std::sync::Arc::new(
-        barca_core::partition_grid::partition_grid(&cfg, &dag, &id)
-            .await
-            .map_err(|e| ApiError::run(e, context("partitions grid", &state)))?,
-    );
-    state.keep_grid(&dag, &db, grid.clone());
-    Ok(Json(grid))
+    Ok(Json(kept_partition_grid(&state, &name).await?))
+}
+
+/// The most keys one `GET /assets/{name}/partitions/keys` lists.
+pub const KEYS_PAGE_MAX: usize = 1000;
+
+/// `GET /assets/{name}/partitions/keys?state=failed,blocked&needs_run=1&value=region=apac,emea
+/// &range=day=a..b&error=0&q=text&sort=state&limit=N&offset=M` — `barca status NODE --keys
+/// --json` with the same filters: one page of the keys that match (default 100, at most
+/// [`KEYS_PAGE_MAX`]). `value` repeats, one per dimension. A filter the node does not have (a
+/// dimension, a range value, an error group) is a 400 saying what it has.
+pub async fn partition_keys_page(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<barca_core::key_query::KeysPage>, ApiError> {
+    let last = |key: &str| -> Option<&str> {
+        params
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    };
+    let number = |key: &str| -> Result<Option<usize>, ApiError> {
+        last(key)
+            .filter(|v| !v.is_empty())
+            .map(|v| {
+                v.parse::<usize>().map_err(|_| {
+                    ApiError::BadRequest(format!("{key}: '{v}' is not a whole number"))
+                })
+            })
+            .transpose()
+    };
+    let states: Vec<String> = last("state").map(str::to_string).into_iter().collect();
+    let values: Vec<String> = params
+        .iter()
+        .filter(|(k, _)| k == "value")
+        .map(|(_, v)| v.clone())
+        .collect();
+    let query = barca_core::key_query::KeyQuery::parse(&barca_core::key_query::KeyQueryArgs {
+        states: &states,
+        needs_run: last("needs_run").is_some_and(|v| !matches!(v, "" | "0" | "false")),
+        values: &values,
+        range: last("range"),
+        error: number("error")?,
+        text: last("q"),
+        sort: last("sort"),
+        offset: number("offset")?.unwrap_or(0),
+        limit: Some(number("limit")?.unwrap_or(100).min(KEYS_PAGE_MAX)),
+    })
+    .map_err(ApiError::BadRequest)?;
+    let grid = kept_partition_grid(&state, &name).await?;
+    // A pass over every key of the node, and a sort when an order is asked for: off the
+    // async threads.
+    let page = tokio::task::spawn_blocking(move || grid.keys_page(&query))
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("the keys query did not finish: {e}")))?
+        .map_err(ApiError::BadRequest)?;
+    Ok(Json(page))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct PartitionOverviewQuery {
+    /// Rows to return (default: as many as fit [`barca_core::key_query::OVERVIEW_CELLS_MAX`]).
+    pub limit: Option<usize>,
+}
+
+/// `GET /assets/{name}/partitions/overview?limit=N` — `barca status NODE --overview --json`:
+/// the node's keys in one picture: counts, what is wrong and where, and the grid's rows.
+pub async fn partition_overview(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<PartitionOverviewQuery>,
+) -> Result<Json<barca_core::key_query::KeysOverview>, ApiError> {
+    let grid = kept_partition_grid(&state, &name).await?;
+    let overview = tokio::task::spawn_blocking(move || grid.overview(query.limit))
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("the overview did not finish: {e}")))?;
+    Ok(Json(overview))
 }
 
 #[derive(Debug, Deserialize)]

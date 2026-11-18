@@ -17,6 +17,10 @@ key: string,
  */
 state: string,
 /**
+ * A run computes this key: it is failed, blocked, stale or never ran.
+ */
+needs_run: boolean,
+/**
  * The same key in each node of the chain, upstream first.
  */
 chain: Array<ChainKeyState>,

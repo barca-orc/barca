@@ -1504,6 +1504,294 @@ paths:
         schema:
           type: integer
           minimum: 0
+  /assets/{name}/partitions/keys:
+    get:
+      summary: One page of the keys of a partitioned node that match a query
+      operationId: get_assets_name_partitions_keys
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeysPage'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '400':
+          description: Invalid target, a node without partitions, or a filter the node does not have
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown node or key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Execution/inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+      - name: state
+        in: query
+        required: false
+        description: Only keys in these states, comma-separated (failed, blocked, stale, never_run, pinned, fresh).
+        schema:
+          type: string
+      - name: needs_run
+        in: query
+        required: false
+        description: 1 or true for only the keys a run computes (failed, blocked, stale, never run).
+        schema:
+          type: string
+      - name: value
+        in: query
+        required: false
+        description: Only keys whose dimension is one of the values (region=apac,emea). Repeat for another dimension.
+        schema:
+          type: string
+      - name: range
+        in: query
+        required: false
+        description: Only keys whose dimension is between two of its values, in the dimension's order, both
+          included (day=2026-01-01..2026-01-31).
+        schema:
+          type: string
+      - name: error
+        in: query
+        required: false
+        description: Only the failed keys of one error group, an index into errors.
+        schema:
+          type: integer
+          minimum: 0
+      - name: q
+        in: query
+        required: false
+        description: Only keys that contain this text, in any case.
+        schema:
+          type: string
+      - name: sort
+        in: query
+        required: false
+        description: The order. key (default), state (most urgent first), attempted (latest first), elapsed
+          (slowest first), size (largest first), rows (most first).
+        schema:
+          type: string
+          enum: [key, state, attempted, elapsed, size, rows]
+      - name: limit
+        in: query
+        required: false
+        description: Keys to return. Default 100, at most 1000.
+        schema:
+          type: integer
+          minimum: 0
+      - name: offset
+        in: query
+        required: false
+        description: Matching keys to skip.
+        schema:
+          type: integer
+          minimum: 0
+    head:
+      summary: One page of the keys of a partitioned node that match a query (headers only)
+      operationId: head_assets_name_partitions_keys
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '400':
+          description: Invalid target, a node without partitions, or a filter the node does not have
+        '404':
+          description: Unknown node or key
+        '409':
+          description: Ambiguous target
+        '500':
+          description: Execution/inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+      - name: state
+        in: query
+        required: false
+        description: Only keys in these states, comma-separated (failed, blocked, stale, never_run, pinned, fresh).
+        schema:
+          type: string
+      - name: needs_run
+        in: query
+        required: false
+        description: 1 or true for only the keys a run computes (failed, blocked, stale, never run).
+        schema:
+          type: string
+      - name: value
+        in: query
+        required: false
+        description: Only keys whose dimension is one of the values (region=apac,emea). Repeat for another dimension.
+        schema:
+          type: string
+      - name: range
+        in: query
+        required: false
+        description: Only keys whose dimension is between two of its values, in the dimension's order, both
+          included (day=2026-01-01..2026-01-31).
+        schema:
+          type: string
+      - name: error
+        in: query
+        required: false
+        description: Only the failed keys of one error group, an index into errors.
+        schema:
+          type: integer
+          minimum: 0
+      - name: q
+        in: query
+        required: false
+        description: Only keys that contain this text, in any case.
+        schema:
+          type: string
+      - name: sort
+        in: query
+        required: false
+        description: The order. key (default), state (most urgent first), attempted (latest first), elapsed
+          (slowest first), size (largest first), rows (most first).
+        schema:
+          type: string
+          enum: [key, state, attempted, elapsed, size, rows]
+      - name: limit
+        in: query
+        required: false
+        description: Keys to return. Default 100, at most 1000.
+        schema:
+          type: integer
+          minimum: 0
+      - name: offset
+        in: query
+        required: false
+        description: Matching keys to skip.
+        schema:
+          type: integer
+          minimum: 0
+  /assets/{name}/partitions/overview:
+    get:
+      summary: The keys of a partitioned node in one picture
+      operationId: get_assets_name_partitions_overview
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+          headers: *id_etag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeysOverview'
+        '304':
+          description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
+          headers: *id_etag
+        '400':
+          description: Invalid target, or a node without partitions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown node or key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ambiguous target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Execution/inspection infrastructure error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+      - name: limit
+        in: query
+        required: false
+        description: Rows to return. Default as many as fit 200,000 cells.
+        schema:
+          type: integer
+          minimum: 0
+    head:
+      summary: The keys of a partitioned node in one picture (headers only)
+      operationId: head_assets_name_partitions_overview
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Response
+        '400':
+          description: Invalid target, or a node without partitions
+        '404':
+          description: Unknown node or key
+        '409':
+          description: Ambiguous target
+        '500':
+          description: Execution/inspection infrastructure error
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          headers: *id016_keys
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema: *id003
+      - name: limit
+        in: query
+        required: false
+        description: Rows to return. Default as many as fit 200,000 cells.
+        schema:
+          type: integer
+          minimum: 0
   /assets/{name}/versions:
     get:
       summary: An asset's recent successful materializations and its pin
@@ -4962,7 +5250,7 @@ components:
       type: object
       additionalProperties: false
       description: One source file's nodes in scope, summed, in whichever group each sits.
-      required: [file, nodes, assets, running, health, asset_health, worst, kinds]
+      required: [file, nodes, assets, running, health, asset_health, worst, causes, fresh, kinds]
       properties:
         file:
           type: string
@@ -5005,6 +5293,23 @@ components:
           type: string
           enum: [failing, blocked, suspect, behind, undecided, never_run, ok]
           description: The most severe health among its nodes.
+        causes:
+          description: Its nodes that are not fresh, by cause. The first with a node, in the served
+            order of the causes, is the word a line about the file shows.
+          type: object
+          additionalProperties: false
+          required: [catching_up, queued, no_refresh_path, overdue, failing, undecided]
+          properties:
+            catching_up: {type: integer, minimum: 0}
+            queued: {type: integer, minimum: 0}
+            no_refresh_path: {type: integer, minimum: 0}
+            overdue: {type: integer, minimum: 0}
+            failing: {type: integer, minimum: 0}
+            undecided: {type: integer, minimum: 0}
+        fresh:
+          type: integer
+          minimum: 0
+          description: Its nodes that are fresh (no cause). With causes they add up to nodes.
         kinds:
           $ref: '#/components/schemas/RollupKinds'
     RollupKinds:
@@ -5759,6 +6064,208 @@ components:
         runs:
           type: array
           items: *id003
+    KeyCounts: &id_keycounts
+      type: object
+      additionalProperties: false
+      description: How many keys are in each state.
+      required: [fresh, pinned, stale, never_run, failed, blocked, empty]
+      properties:
+        fresh: {type: integer, minimum: 0}
+        pinned: {type: integer, minimum: 0}
+        stale: {type: integer, minimum: 0}
+        never_run: {type: integer, minimum: 0}
+        failed: {type: integer, minimum: 0}
+        blocked: {type: integer, minimum: 0}
+        empty:
+          type: integer
+          minimum: 0
+          description: Keys whose latest attempt succeeded and wrote no rows, whatever their state.
+    KeyErrorGroups: &id_keyerrors
+      type: array
+      description: The failed keys' errors, most common first. The first line, each of the
+        key's values replaced by its dimension's name in angle brackets (<region>).
+      items:
+        type: object
+        additionalProperties: false
+        required: [error, keys]
+        properties:
+          error: *id003
+          keys:
+            type: integer
+            minimum: 1
+    KeysPage:
+      type: object
+      additionalProperties: false
+      description: One page of the keys of a partitioned node that match a query, as barca status NODE
+        --keys --json prints it.
+      required: [id, known, dimensions, counts, errors, keys, total, truncated, offset, needs_run, selection]
+      properties:
+        id: *id003
+        known:
+          type: boolean
+          description: False while the keys are not known (a partitions_from source that has not run).
+        dimensions:
+          type: array
+          description: The dimensions' names, in key order.
+          items: *id003
+        counts: *id_keycounts
+        errors: *id_keyerrors
+        keys:
+          type: array
+          maxItems: 1000
+          items:
+            type: object
+            additionalProperties: false
+            required: [key, values, state, attempted_at, elapsed_seconds, size_bytes, rows, run_id, error]
+            properties:
+              key: *id003
+              values:
+                type: array
+                description: The key's value of each dimension, in the order of dimensions.
+                items: *id003
+              state:
+                type: string
+                enum: [failed, blocked, stale, never_run, pinned, fresh]
+              attempted_at:
+                type: [string, "null"]
+                description: The key's latest attempt (RFC 3339).
+              elapsed_seconds:
+                type: [number, "null"]
+              size_bytes:
+                type: [integer, "null"]
+              rows:
+                type: [integer, "null"]
+                description: Rows the latest successful attempt wrote, where its worker counted them.
+              run_id:
+                type: [string, "null"]
+              error:
+                type: [string, "null"]
+                description: A failed key's error as errors groups it.
+        total:
+          type: integer
+          minimum: 0
+          description: Keys the query matches; keys is a page of them.
+        truncated:
+          type: boolean
+          description: True when keys the query matches come after this page.
+        offset:
+          type: integer
+          minimum: 0
+        needs_run:
+          type: integer
+          minimum: 0
+          description: Of the keys the query matches, those a run computes (failed, blocked, stale, never run).
+        selection:
+          type: [string, "null"]
+          description: The keys the query matches as --partition and POST /runs take them. A JSON object
+            of each dimension's values when they form a rectangle, a JSON list of keys otherwise. Past
+            5,000 scattered keys, a query for the keys a run computes that filters by dimension alone
+            (needs_run, value, range) gets its filters' rectangle, whose run computes the same keys;
+            any other gets null. Null when nothing matches.
+        hint:
+          type: string
+          description: Present when truncated. What to pass the CLI for more.
+    KeysOverview:
+      type: object
+      additionalProperties: false
+      description: The keys of a partitioned node in one picture, as barca status NODE --overview --json
+        prints it.
+      required: [id, chain, known, dimensions, counts, needs_run, errors, issues, along, rows, rows_total, truncated, last_attempt_at]
+      properties:
+        id: *id003
+        chain:
+          type: array
+          description: The partitioned nodes sharing this node's keys, upstream first, this node among them.
+          items: *id003
+        known:
+          type: boolean
+        dimensions:
+          type: array
+          description: In key order, each with its values in order.
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, values]
+            properties:
+              name: *id003
+              values:
+                type: array
+                items: *id003
+        counts: *id_keycounts
+        needs_run:
+          type: integer
+          minimum: 0
+          description: Keys a run computes (failed, blocked, stale, never run).
+        errors: *id_keyerrors
+        issues:
+          type: array
+          description: What is wrong and where, the most keys first. Each error of the failed keys, then the
+            blocked, stale and never-run keys.
+          items:
+            type: object
+            additionalProperties: false
+            required: [state, error, title, keys, places, selection]
+            properties:
+              state:
+                type: string
+                enum: [failed, blocked, stale, never_run]
+              error:
+                type: [integer, "null"]
+                minimum: 0
+                description: For failed keys with a grouped error, its index into errors.
+              title:
+                type: string
+                description: The error's first line, or what the state means.
+              keys:
+                type: integer
+                minimum: 1
+              places:
+                type: array
+                description: Per dimension the keys do not span whole, where they are.
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [dimension, words]
+                  properties:
+                    dimension: *id003
+                    words:
+                      type: string
+              selection:
+                type: [string, "null"]
+                description: Its keys as --partition and POST /runs take them; null past 5,000 scattered keys.
+        along:
+          type: [string, "null"]
+          description: The dimension the rows run along, the one with the most values. Null with no keys.
+        rows:
+          type: array
+          description: One row per combination of the other dimensions' values that has a key.
+          items:
+            type: object
+            additionalProperties: false
+            required: [label, values, states]
+            properties:
+              label:
+                type: string
+                description: region=apac; empty for a one-dimension node.
+              values:
+                type: array
+                items: *id003
+              states:
+                type: string
+                pattern: '^[cpsnfb-]*$'
+                description: One character per value of along, in its order, as PartitionGrid.states.
+        rows_total:
+          type: integer
+          minimum: 0
+        truncated:
+          type: boolean
+          description: True when rows holds fewer rows than the node has.
+        last_attempt_at:
+          type: [string, "null"]
+          description: The newest attempt of any key (RFC 3339).
+        hint:
+          type: string
+          description: Present when truncated. What to pass the CLI for more.
     KeyArtifact:
       type: object
       additionalProperties: false
@@ -5783,7 +6290,7 @@ components:
     PartitionKeyDetail:
       type: object
       additionalProperties: false
-      required: [id, key, state, chain, attempts, output, inputs]
+      required: [id, key, state, needs_run, chain, attempts, output, inputs]
       properties:
         id: *id003
         key: *id003
@@ -5791,6 +6298,9 @@ components:
           type: string
           enum: [c, p, s, n, f, b]
           description: As PartitionGrid.states.
+        needs_run:
+          type: boolean
+          description: A run computes this key. It is failed, blocked, stale or never ran.
         chain:
           type: array
           description: The same key in each node of the chain, upstream first.

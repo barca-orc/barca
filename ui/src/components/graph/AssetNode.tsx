@@ -21,8 +21,8 @@ export function AssetNode({ id, data, selected }: NodeProps<GraphNode>) {
         tone={data.tone}
         glyph={data.glyph}
         label={data.label}
+        part={data.part}
         lastFailed={data.lastFailed}
-        blockedBy={data.blockedBy}
         pinned={data.pinned}
         live={data.live}
         stateHint={data.stateHint}

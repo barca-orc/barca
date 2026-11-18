@@ -17,6 +17,7 @@ chain[].state : string
 id : string
 inputs : array
 key : string
+needs_run : boolean
 output : object
 output.artifact_path : string
 output.format : string

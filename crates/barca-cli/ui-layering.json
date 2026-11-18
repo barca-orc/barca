@@ -197,13 +197,18 @@
     },
     {
       "method": "GET",
-      "path": "/assets/{}/partitions/grid",
-      "cli": "barca status NODE --grid --json"
+      "path": "/assets/{}/partitions/key",
+      "cli": "barca status NODE --key KEY --json"
     },
     {
       "method": "GET",
-      "path": "/assets/{}/partitions/key",
-      "cli": "barca status NODE --key KEY --json"
+      "path": "/assets/{}/partitions/keys",
+      "cli": "barca status NODE --keys --state failed --value region=apac --range day=2026-01-01..2026-01-31 --error 0 --match apac --sort attempted --limit 200 --offset 0 --json"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{}/partitions/overview",
+      "cli": "barca status NODE --overview --json"
     }
   ],
   "routes_passed_in": [
@@ -243,6 +248,10 @@
       "kind": "display",
       "does": "a cause's word, tone, glyph and map colour; the served order"
     },
+    "keyStateDisplay": {
+      "kind": "display",
+      "does": "a key state's word, glyph, meaning and order; the state a character of a served row stands for"
+    },
     "dataSignals": {
       "kind": "display",
       "does": "the words of a node's data signals and of the coverage the server measured"
@@ -265,7 +274,7 @@
     },
     "graphState": {
       "kind": "display",
-      "does": "a node's box on the graph: its served state, or the run on it, as a glyph and a word"
+      "does": "a node's box on the graph: its served cause (or fresh) in the health map's word, or the run on it, as a glyph and a word"
     },
     "causesView": {
       "kind": "display",
@@ -289,7 +298,7 @@
     },
     "pipeline": {
       "kind": "format",
-      "does": "file names from node ids; a file's line from its sums in the rollup"
+      "does": "file names from node ids; a file's line from its sums in the rollup, in the health map's words"
     },
     "plural": {
       "kind": "format",
@@ -348,7 +357,7 @@
     },
     "groups": {
       "kind": "layout",
-      "does": "the tree of groups, each listing the members the rollup counts under it; a group's box from its entry"
+      "does": "the tree of groups, each listing the members the rollup counts under it; a group's box from its entry's served `causes`, in the health map's words"
     },
     "lineage": {
       "kind": "layout",
@@ -356,11 +365,11 @@
     },
     "partitionGrid": {
       "kind": "layout",
-      "does": "a node's key grid decoded, filtered, grouped and binned for the overview",
+      "does": "the overview's geometry over the served rows of a node's keys: columns, ticks, a zoom window, the key a cell stands for",
       "derives": [
         {
-          "what": "`heatmap`: a bin's colour is the worst state among the keys it holds",
-          "reason": "layout: many served key states drawn as one cell; no key's state is decided",
+          "what": "`heatmap`: a column's colour is the most urgent state among the keys it holds",
+          "reason": "layout: many served key states drawn as one cell, as wide as the window allows; no key's state is decided",
           "kept": true
         }
       ]
@@ -387,7 +396,7 @@
     },
     "keysPage": {
       "kind": "page",
-      "does": "the key explorer's URL"
+      "does": "the key explorer's URL, and its filters as the parameters `GET /assets/{id}/partitions/keys` takes"
     },
     "knownStates": {
       "kind": "page",
@@ -462,34 +471,11 @@
     ],
     "exemptions": [
       {
-        "file": "components/DagNode.tsx",
-        "words": [
-          "blocked"
-        ],
-        "reason": "a Glyph name: the card of a node the server names a blocker for (`blockedBy`, from `root`) draws the blocked glyph"
-      },
-      {
-        "file": "components/graph/GraphCanvas.tsx",
-        "words": [
-          "blocked"
-        ],
-        "reason": "a Glyph name, as in DagNode"
-      },
-      {
         "file": "components/assets/NodePanel.tsx",
         "words": [
           "cached"
         ],
         "reason": "the tag of the panel's own shown-key union, not a cache state"
-      },
-      {
-        "file": "lib/partitionGrid.ts",
-        "words": [
-          "blocked",
-          "never_run",
-          "stale"
-        ],
-        "reason": "groups a node's keys by the state the server gave each key (the grid's own codes); no state is decided"
       },
       {
         "file": "lib/health.ts",

@@ -2,8 +2,8 @@
 import type { ListNode, NodeState } from './types'
 import { plural } from './plural'
 import { shortName, type GraphEntry } from './graph'
-import type { GraphState } from './graphState'
-import { healthLabel, healthParts, type ScopeHealth } from './health'
+import { causeDisplay, causeParts, leadsRunWork, mapPartGlyph, mapPartLabel } from './causeDisplay'
+import type { GraphState, GroupPart } from './graphState'
 import { isCheck } from './status'
 import { formatSeconds } from './assetTable'
 
@@ -162,28 +162,39 @@ export function compareEntries(sort: EntrySort, a: EntryRank, b: EntryRank): num
   return b.weight - a.weight || name
 }
 
-const NO_SCOPE: ScopeHealth = { health: { failing: 0, blocked: 0, suspect: 0, behind: 0, undecided: 0, never_run: 0, ok: 0 }, running: 0, nodes: 0 }
+/** What a group's box reads of its rollup entry: its nodes by cause, the fresh ones, and run work. */
+export type GroupScope = Pick<RollupEntry, 'causes' | 'weights' | 'running' | 'nodes'>
 
 /**
- * A group's box: its most severe fact first, from the group's entry of the rollup (`GET
- * /state/rollup`, ordered by `healthParts`): failing nodes, then run work, then the health most
- * in need of attention; `parts` carries every part, for a card to show the rest compactly, and
- * the hint names them all, with how many nodes they are of. A group with run work and no
- * failure is a run box (it pulses); a failure inside a group that is also running still leads.
- * A group has no state of its own: this words its entry, and counts nothing. No entry (the
- * rollup has none for it, or has not loaded) is an empty box.
+ * A group's box, in the health map's words, from the group's entry of the rollup (`GET
+ * /state/rollup`): failing nodes first, then run work, then each other cause in the served
+ * order, then the fresh nodes (`weights.fresh`, one each). `parts` carries every part, for a
+ * card to show the rest compactly, and the hint names them all, with how many nodes they are of.
+ * A group with run work and no failure is a run box (it pulses); a failure inside a group that
+ * is also running still leads. A group has no state of its own: this words its entry, and counts
+ * nothing. No entry (the rollup has none for it, or has not loaded) is an empty box.
  */
-export function groupHealth(scope: ScopeHealth | undefined): GraphState {
-  const counts: ScopeHealth = scope ?? NO_SCOPE
-  const label = healthLabel(counts)
-  const hint = label ? `${plural(counts.nodes, 'node')}: ${label}` : 'No members with a state.'
-  const parts = healthParts(counts).map(({ glyph, tone, count, word, text }) => ({ glyph, tone, count, word, text }))
+export function groupHealth(scope: GroupScope | undefined): GraphState {
+  const parts: GroupPart[] = scope
+    ? causeParts(scope.causes).map((p) => ({ part: p.cause, glyph: causeDisplay(p.cause).glyph, tone: causeDisplay(p.cause).tone, count: p.count, word: p.label, text: `${p.count.toLocaleString()} ${p.label}` }))
+    : []
+  if (scope && scope.running > 0) {
+    // Run work sits after a failure and before everything else.
+    const lead = parts[0]?.part
+    const at = lead !== undefined && lead !== 'fresh' && leadsRunWork(lead) ? 1 : 0
+    parts.splice(at, 0, { glyph: 'running', tone: 'running', count: scope.running, word: 'running', text: `${scope.running.toLocaleString()} running` })
+  }
+  if (scope && scope.weights.fresh > 0) {
+    parts.push({ part: 'fresh', glyph: mapPartGlyph('fresh'), tone: 'success', count: scope.weights.fresh, word: mapPartLabel('fresh'), text: `${scope.weights.fresh.toLocaleString()} ${mapPartLabel('fresh')}` })
+  }
+  const label = parts.map((p) => p.text).join(' · ')
+  const hint = scope && label ? `${plural(scope.nodes, 'node')}: ${label}` : 'No members with a state.'
   const [first] = parts
   if (!first) return { kind: 'group', tone: 'neutral', glyph: 'pending', label: 'empty', hint, parts }
-  if (counts.running > 0 && counts.health.failing === 0) {
+  if (first.part === undefined) {
     return { kind: 'run', tone: 'running', glyph: 'running', status: 'running', label: first.text, hint, parts }
   }
-  return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint, parts }
+  return { kind: 'group', tone: first.tone, glyph: first.glyph, label: first.text, hint, part: first.part, parts }
 }
 
 /** Collapse only visual edges. Real inputs and the original graph stay intact. */

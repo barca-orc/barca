@@ -40,14 +40,14 @@ import { runButton } from '@/lib/runTarget'
 /** Every primitive in components/, in each state it has. */
 export function Primitives() {
   const KIT_PIPELINES: PipelineSummary[] = [
-  { file: 'billing.py', name: 'billing.py', total: 639, shown: { glyph: 'failed', label: 'failing', live: false }, running: 0 },
+  { file: 'billing.py', name: 'billing.py', total: 639, shown: { glyph: 'failed', label: 'failing', part: 'failing', live: false }, running: 0 },
   { file: 'catalog.py', name: 'catalog.py', total: 561, shown: null, running: 0 },
-  { file: 'ledger.py', name: 'ledger.py', total: 12, shown: { glyph: 'running', label: '2 running', live: true }, running: 2 },
+  { file: 'ledger.py', name: 'ledger.py', total: 12, shown: { glyph: 'running', label: '2 running', part: null, live: true }, running: 2 },
 ]
 const KIT_GROUPS: SidebarGroup[] = [
-  { id: 'group:billing.py:raw', name: 'Raw', depth: 0, tone: 'failed', glyph: 'failed' },
-  { id: 'group:billing.py:raw:invoices', name: 'Invoices', depth: 1, tone: 'success', glyph: 'fresh' },
-  { id: 'group:billing.py:marts', name: 'Marts', depth: 0, tone: null, glyph: null },
+  { id: 'group:billing.py:raw', name: 'Raw', depth: 0, tone: 'failed', glyph: 'failed', part: 'failing' },
+  { id: 'group:billing.py:raw:invoices', name: 'Invoices', depth: 1, tone: 'success', glyph: 'fresh', part: 'fresh' },
+  { id: 'group:billing.py:marts', name: 'Marts', depth: 0, tone: null, glyph: null, part: null },
 ]
 
 const [query, setQuery] = useState('')
@@ -210,7 +210,7 @@ const [query, setQuery] = useState('')
               model={{ collapsed, width, expanded: [] }}
               total={1200}
               pipelines={KIT_PIPELINES}
-              overall={{ glyph: 'failed', label: 'failing', live: false }}
+              overall={{ glyph: 'failed', label: 'failing', part: 'failing', live: false }}
               groupsOf={(file) => (file === 'billing.py' ? KIT_GROUPS : [])}
               selected="billing.py"
               scope="group:billing.py:raw"

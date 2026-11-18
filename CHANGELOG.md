@@ -10,6 +10,37 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Features
 
+- **The key explorer renders served keys, and the graph view and the sidebar use the health
+  map's words and colours (#1036).** `barca status NODE --keys` takes the explorer's filters
+  as flags, all of which must hold: `--state`, `--needs-run` (the keys a run computes),
+  `--value DIM=V[,V]` (repeatable), `--range DIM=FROM..TO` (a stretch of a dimension, in its
+  own order), `--error N` (one error group's failed keys) and `--match TEXT`; `--sort
+  key|state|attempted|elapsed|size|rows` orders them and `--offset N` pages them with
+  `--limit`. Its JSON gains `offset`, `needs_run` (how many of the keys that match a run
+  computes), `selection` (what matches as `barca get --partition` takes it: a rectangle when
+  the keys form one, a list of keys otherwise) and each key's `values`; the table prints how
+  many keys match and the `barca get` line that computes them, and numbers the error groups.
+  `barca status NODE --overview` is new: the counts, what is wrong and where (each error of
+  the failed keys, then the blocked, stale and never-run keys, with the dimension values they
+  sit in and the commands that list and run them) and the grid's rows. A server answers both
+  itself, with the function a local command uses: `GET /assets/{name}/partitions/keys`
+  (`state`, `needs_run`, `value`, `range`, `error`, `q`, `sort`, `limit` up to 1000, `offset`)
+  and `GET /assets/{name}/partitions/overview`; `--server` prints the same text and JSON, and
+  reads page after page for `--all`. The web UI's key explorer draws these two answers and no
+  longer downloads and decodes the whole grid: a filter, an order or a scroll asks the server
+  for a page of 200 keys, so a node with 100,000 keys costs the browser about 45 KB a filter
+  (the grid it read before was 2.3 MB) and the route 1 to 25 ms; its column headers order the
+  keys. `GET /assets/{name}/partitions/key` and `barca status NODE --key --json` gain
+  `needs_run`. The graph view's cards, a group's card, the legend and the sidebar's lines for
+  files and groups read as the health map does (`failing`, `overdue`, `no refresh path`,
+  `queued`, `undecided`, `catching up`, `fresh`), each a dot in the map's colour, in place of
+  the cache-state and health words; a node a failure upstream holds reads `failing` and its
+  tooltip names the failing node. Each entry of `files` in `barca status --rollup --json` and
+  `GET /state/rollup` gains `causes` and `fresh`, which the sidebar reads. The layering table
+  holds three exemptions fewer. Fixed on the way: `GET /assets/{name}/versions` and `barca pin
+  --versions` refused a key of a node with several dimensions in most processes (`name exactly
+  one key with every partition dimension`), because the dimensions were compared in the order
+  a hash map held them, so the explorer's key panel often had no Versions section.
 - **The assets table's filter chips, row order and key counts come from the server (#992).**
   The chips of the Assets, Tasks and Sensors pages are the health map's parts (`failing`,
   `overdue`, `no refresh path`, `queued`, `undecided`, `catching up`, `fresh`): a row falls

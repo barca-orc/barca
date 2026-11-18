@@ -10,11 +10,11 @@ const FILE = 'grouped.py'
 const G = (name: string) => `group:${FILE}:${name}`
 const N = (name: string) => `${FILE}:${name}`
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`
-// A node shows its state in the CLI's words (`unknown` reads `waiting`; a node that always runs
-// shows its last run, `succeeded`); a group card shows its members' health (#925). A legend line
-// names every word its glyph carries on screen, joined by ` / ` (`ok / succeeded`).
-const CACHE_STATES = ['running', 'blocked', 'stale', 'partial', 'unsynced', 'waiting', 'never run', 'succeeded', 'fresh', 'failing']
-const HEALTH_WORDS = ['failing', 'blocked', 'suspect data', 'behind', 'waiting', 'never run', 'ok']
+// A node at rest and each part of a group card read as the health map reads them (#1036): the
+// served cause in its word, or `fresh`, with a dot in the map's colour; run work and a pin keep
+// their own glyph and word. The legend names what is on screen.
+const MAP_WORDS = ['failing', 'overdue', 'no refresh path', 'queued', 'undecided', 'catching up', 'fresh']
+const OTHER_WORDS = ['running', 'pinned']
 
 // The whole pipeline once, and the fold 2 check (which fails) once: a failed last attempt on
 // record beside cached models.
@@ -72,14 +72,18 @@ test('a failed check is a fact beside its ancestors and itself; the model stays 
   expect(mutations).toEqual([])
 })
 
-test('the legend names the states the graph shows, in the CLI\'s words', async ({ page }) => {
+test('the legend names the states the graph shows, in the health map\'s words and colours', async ({ page }) => {
   await page.goto(`/ui/#/assets?pipeline=${FILE}&view=graph`)
   const legend = page.locator('.barca-legend')
   await expect(legend).toContainText('failing')
   const words = (await legend.locator('span').allTextContents()).map((w) => w.trim())
-  for (const line of words)
-    for (const word of line.split(' / ')) expect([...CACHE_STATES, ...HEALTH_WORDS, 'pinned', 'Group', 'Pipeline']).toContain(word)
-  await expect(legend).not.toContainText(/Healthy|Not run|Stale/)
+  for (const word of words) expect([...MAP_WORDS, ...OTHER_WORDS, 'Group', 'Pipeline']).toContain(word)
+  // Each cause is a dot in the colour the map gives it; no cache-state or older health word is left.
+  await expect(legend.locator('.barca-cause-dot[data-cause="failing"]')).toHaveCount(1)
+  await expect(legend).not.toContainText(/Healthy|Not run|Stale|blocked|behind|never run|succeeded|\bok\b/)
+  // A group card leads with its cause in words, and marks every part with the same dots.
+  const cv = page.locator(node(G('cross_validation')))
+  await expect(cv.locator('.barca-group-node-lead .barca-cause-dot')).toHaveAttribute('data-cause', 'failing')
 })
 
 test('table groups support search, arrow selection and Enter to open', async ({ page }) => {
