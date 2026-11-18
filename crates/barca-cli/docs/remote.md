@@ -318,7 +318,13 @@ metadata DB. Barca uses that hash to decide whether a local copy is current:
 
 - A copy already in `.barca/artifacts/` is hashed the first time a run reads it. If it does not
   match (edited by hand, or left from before a refresh), it is
-  replaced by the store's copy and reported as a fetch.
+  replaced by the store's copy and reported as a fetch. A `barca serve` remembers the copies it
+  found to match, by path, device, inode, size, mtime and ctime (to the nanosecond), and does not
+  hash an unchanged one again in later runs: any write, truncation, replacement or `touch`
+  changes one of them, and a copy written less than 2 seconds before its check is checked again
+  next time rather than remembered. A restarted server remembers nothing, and each `barca get`
+  hashes the copies it reads once. Not detected: bytes changed below the file system, or a clock
+  set back by more than 2 seconds; the step's own read of the file is not hashed either.
 - A downloaded artifact is hashed too. If the store's copy does not match the recorded hash,
   the run still uses it and prints a warning naming the step:
   `[barca] warning: pipeline.py:total: the copy at <location> is not the one this result was
