@@ -60,6 +60,102 @@ pub struct Ticks {
     /// How long the runs of its newest fired ticks that succeeded took, start to end, seconds
     /// (the tick record; at most [`db::TICKS_WITH_TARGETS`]).
     pub run_seconds: Vec<f64>,
+    /// What the scheduler decided for its newest due slots, as `(slot, decision)`, newest
+    /// first (the tick record; at most [`db::TICKS_WITH_TARGETS`]): a slot it fired, and
+    /// equally one it skipped because the schedule's run was still in flight, because the
+    /// schedule was paused or because it is held after `max_failures` failed ticks.
+    pub decisions: Vec<(i64, db::TickDecision)>,
+}
+
+/// How many of a schedule's newest decided slots ([`Ticks::decisions`]) were skipped because
+/// its own run was still in flight before the schedule is [`ScheduleState::Overrunning`]:
+/// one skip is a run that took long once (or a run someone asked for), three are a schedule
+/// that cannot keep its cron.
+pub const OVERRUN_SKIPS: usize = 3;
+
+/// Where a schedule stands, in one word (`specs/behavior/health.md`, "Schedule state"):
+/// what `GET /schedule`, the `schedule` block and a node's `refresh_path` all carry, so no
+/// surface words a schedule on its own. The first that applies, in this order.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleState {
+    /// Paused (`barca pause --schedule`): its ticks are skipped until it is resumed.
+    Paused,
+    /// Held after `max_failures` failed ticks in a row: its ticks are skipped until a run of
+    /// a node it failed on succeeds or an input of one changes. It is not late and has no
+    /// next run.
+    Held,
+    /// A slot passed with no decision recorded for it, longer ago than its grace and queue
+    /// wait ([`Standing::late`]): no scheduler is firing it.
+    Late,
+    /// Its runs outlast its interval: at least [`OVERRUN_SKIPS`] of its newest decided slots
+    /// were skipped because its own run was still in flight. The scheduler is running; the
+    /// schedule cannot keep its cron.
+    Overrunning,
+    /// None of the above.
+    #[default]
+    OnTime,
+}
+
+impl ScheduleState {
+    /// The state of a schedule that stands as `standing`, paused or not, with `failures`
+    /// failed ticks in a row of the `max_failures` it is held at.
+    pub fn of(standing: &Standing, paused: bool, (failures, max_failures): (u32, u32)) -> Self {
+        if paused {
+            ScheduleState::Paused
+        } else if failures >= max_failures {
+            ScheduleState::Held
+        } else if standing.late {
+            ScheduleState::Late
+        } else if standing.overrunning {
+            ScheduleState::Overrunning
+        } else {
+            ScheduleState::OnTime
+        }
+    }
+
+    /// The fact behind the word in a line, with what ends it; `None` for a schedule on time
+    /// and a paused one (its pause says until when). `name` is the scheduled node's.
+    pub fn detail(
+        self,
+        name: &str,
+        standing: &Standing,
+        (failures, _): (u32, u32),
+        task: bool,
+    ) -> Option<String> {
+        match self {
+            ScheduleState::Held => Some(format!(
+                "held after {failures} failed {}: its ticks are skipped until a run of it \
+                 succeeds (barca {} {name}) or an input of a node it failed on changes",
+                if failures == 1 { "tick" } else { "ticks" },
+                if task { "run" } else { "get" },
+            )),
+            ScheduleState::Late => standing.late_since.map(|since| {
+                format!(
+                    "no tick has been decided since the {} slot: no scheduler is firing it",
+                    crate::time::rfc3339_secs(since).unwrap_or_default()
+                )
+            }),
+            ScheduleState::Overrunning => Some(format!(
+                "its runs outlast its interval: {} of its newest {} slots were skipped while \
+                 its run was still in flight{}",
+                standing.skipped_in_flight,
+                standing.decided,
+                match (standing.typical_run_seconds, standing.interval_seconds) {
+                    (Some(run), Some(interval)) => format!(
+                        " (a run takes about {}, a slot comes every {})",
+                        crate::report::span(run.round() as i64),
+                        crate::report::span(interval)
+                    ),
+                    _ => String::new(),
+                }
+            )),
+            ScheduleState::Paused | ScheduleState::OnTime => None,
+        }
+    }
 }
 
 /// The ticks recorded in the metadata database at `db_path` for each of `schedules` (scheduled
@@ -95,6 +191,7 @@ pub async fn recorded(
             ticks.queue_waits = timings.queue_waits;
         }
         ticks.run_seconds = timings.run_seconds;
+        ticks.decisions = timings.decisions;
     }
     // The run queue: a tick that waits for a run slot is only here, and a run that has started
     // is here too until it records how it ended.
@@ -151,9 +248,11 @@ pub struct Standing {
     pub last_run_id: Option<String>,
     /// That run's status ([`TickRun::status`]).
     pub last_status: Option<String>,
-    /// The first slot after `last_fired` that has passed: a slot no tick fired for. `None`
-    /// while on time, while paused, and when no tick is recorded (a schedule that never fired
-    /// is not late: the scheduler anchors a new job at its first start).
+    /// The first slot that has passed after the newest slot the scheduler decided (it fired
+    /// it, or skipped it because the schedule's run was still in flight): a slot nothing was
+    /// decided for. `None` while on time, while paused or held as failing, and when no tick
+    /// is recorded (a schedule that never fired is not late: the scheduler anchors a new job
+    /// at its first start).
     pub late_since: Option<i64>,
     /// `late_since` is further back than the grace plus the queue wait.
     pub late: bool,
@@ -168,6 +267,12 @@ pub struct Standing {
     /// Queue-bound: its typical queue wait exceeds its interval, so its ticks wait for a run
     /// slot longer than they are apart.
     pub queue_bound: bool,
+    /// How many of its newest decided slots ([`Ticks::decisions`]) were skipped because its
+    /// own run was still in flight, and how many slots that is of.
+    pub skipped_in_flight: usize,
+    pub decided: usize,
+    /// At least [`OVERRUN_SKIPS`] of them were: its runs outlast its interval.
+    pub overrunning: bool,
 }
 
 /// The grace: 60 seconds, or half the interval of a schedule more frequent than every two
@@ -212,25 +317,43 @@ pub fn interval_seconds(cron: &Cron, zone: &Zone, now: DateTime<Utc>) -> Option<
 
 /// The one definition of a schedule's last tick, last run, next slot and lateness.
 ///
-/// A schedule is late when it is not paused, a slot after its newest fired tick has passed
-/// (`late_since`), and that was longer ago than its grace plus its queue wait. The queue wait
-/// is the typical one (the median of `ticks.queue_waits`) or, when longer, the newest tick's
-/// own: a tick whose run waits for a run slot is not late for waiting; the run queue is what
-/// is behind.
+/// A schedule is late when it is not `stopped`, a slot after the newest slot the scheduler
+/// decided has passed (`late_since`), and that was longer ago than its grace plus its queue
+/// wait. The queue wait is the typical one (the median of `ticks.queue_waits`) or, when
+/// longer, the newest tick's own: a tick whose run waits for a run slot is not late for
+/// waiting; the run queue is what is behind.
+///
+/// `stopped`: no tick of it is expected, because it is paused or held after `max_failures`
+/// failed ticks. Such a schedule is never late.
+///
+/// A decided slot is one the scheduler fired or skipped because the schedule's own run was
+/// still in flight ([`Ticks::decisions`]): a schedule whose run outlasts its interval skips
+/// slots, and each skip is the scheduler at work, not a missed tick. A slot skipped for a
+/// pause or a hold that has since ended counts too: the schedule owes nothing for it.
 pub fn standing(
     cron: &Cron,
     zone: &Zone,
     now: DateTime<Utc>,
-    paused: bool,
+    stopped: bool,
     ticks: Option<&Ticks>,
 ) -> Standing {
     let at = now.timestamp();
     let prev_fire = prev_fire(cron, zone, now).map(|t| t.timestamp());
     let next = next_fire(cron, zone, now).map(|t| t.timestamp());
     let newest = ticks.and_then(|t| t.newest.as_ref());
+    let decisions = ticks.map_or(&[][..], |t| &t.decisions);
+    let decided_slot = decisions.iter().map(|(slot, _)| *slot).max();
+    let skipped_in_flight = decisions
+        .iter()
+        .filter(|(_, decision)| *decision == db::TickDecision::Skipped)
+        .count();
     let late_since = newest
-        .filter(|_| !paused)
-        .and_then(|run| DateTime::from_timestamp(run.scheduled_at, 0))
+        .map(|run| run.scheduled_at)
+        .into_iter()
+        .chain(decided_slot)
+        .max()
+        .filter(|_| !stopped)
+        .and_then(|slot| DateTime::from_timestamp(slot, 0))
         .and_then(|tick| next_fire(cron, zone, tick))
         .map(|t| t.timestamp())
         .filter(|first| *first <= at);
@@ -254,22 +377,10 @@ pub fn standing(
         interval_seconds,
         queue_bound: interval_seconds
             .is_some_and(|interval| typical_queue_wait_seconds > interval as f64),
+        skipped_in_flight,
+        decided: decisions.len(),
+        overrunning: skipped_in_flight >= OVERRUN_SKIPS,
     }
-}
-
-/// The schedules of `jobs` that are late as of `now` ([`standing`]): what row 6 of the health
-/// table reads (`crate::health`).
-pub fn late_schedules(
-    jobs: &[crate::schedule::ScheduledJob],
-    ticks: &HashMap<String, Ticks>,
-    zone: &Zone,
-    now: DateTime<Utc>,
-    paused: &dyn Fn(&str) -> bool,
-) -> std::collections::HashSet<String> {
-    jobs.iter()
-        .filter(|job| standing(&job.cron, zone, now, paused(&job.id), ticks.get(&job.id)).late)
-        .map(|job| job.id.clone())
-        .collect()
 }
 
 #[cfg(test)]
@@ -297,6 +408,7 @@ mod tests {
             }),
             queue_waits: Vec::new(),
             run_seconds: Vec::new(),
+            decisions: Vec::new(),
         }
     }
 
@@ -419,6 +531,32 @@ mod tests {
         assert!(!s.late);
         assert_eq!(median(&[10.0, 20.0]), 15.0);
         assert_eq!(median(&[]), 0.0);
+    }
+
+    #[test]
+    fn alternate_in_flight_skips_keep_the_scheduler_live() {
+        let cron = CronExpr::parse("*/10 * * * * *").unwrap();
+        let now = at("2026-11-16T12:01:17Z");
+        let mut ticks = run("2026-11-16T12:01:00Z", "success", None, None);
+        let start = secs("2026-11-16T12:00:00Z");
+        ticks.decisions = (0..8)
+            .map(|i| {
+                (
+                    start + i * 10,
+                    if i % 2 == 0 {
+                        db::TickDecision::Fired
+                    } else {
+                        db::TickDecision::Skipped
+                    },
+                )
+            })
+            .collect();
+        let s = standing(&cron, &Zone::Utc, now, false, Some(&ticks));
+        assert_eq!(s.late_since, None);
+        assert_eq!(
+            ScheduleState::of(&s, false, (0, 3)),
+            ScheduleState::Overrunning
+        );
     }
 
     /// A queued tick is in the run queue only; a started one has a `runs` row, and its queue

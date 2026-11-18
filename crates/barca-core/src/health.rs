@@ -584,7 +584,7 @@ pub struct Evidence<'a> {
     pub ages: &'a HashMap<String, NodeAge>,
     /// Pinned assets (`barca pin`): never blocked, and a failure above one does not pass it.
     pub pinned: &'a HashSet<String>,
-    /// Scheduled nodes whose schedule is late ([`crate::schedule_standing::late_schedules`]).
+    /// Scheduled nodes whose schedule is late ([`crate::schedule_standing::standing`]).
     pub late: &'a HashSet<String>,
     /// What the newest ticks found ([`checks`]).
     pub checks: &'a Checks,
@@ -815,6 +815,35 @@ fn newest_above(nodes: &[NodeStatus], evidence: Evidence<'_>) -> HashMap<String,
     above
 }
 
+/// For each node, when a node above it most recently recovered from failure (its whole upstream
+/// cone) was recorded, unix seconds; a node with none above it is absent. What a missed tick
+/// is counted against ([`crate::refresh_path::missed_ticks`]). `nodes` are in dependency
+/// order.
+fn latest_recovery_above(nodes: &[NodeStatus], evidence: Evidence<'_>) -> HashMap<String, i64> {
+    let mut through: HashMap<&str, i64> = HashMap::with_capacity(nodes.len());
+    let mut above: HashMap<String, i64> = HashMap::new();
+    for node in nodes {
+        let over = node
+            .inputs
+            .iter()
+            .filter_map(|input| through.get(input.as_str()).copied())
+            .max();
+        if let Some(at) = over {
+            above.insert(node.id.clone(), at);
+        }
+        let own = evidence
+            .ages
+            .get(&node.id)
+            .and_then(|age| age.recovered_at.as_deref())
+            .map(recorded_at)
+            .filter(|at| *at != i64::MAX);
+        if let Some(at) = own.into_iter().chain(over).max() {
+            through.insert(node.id.as_str(), at);
+        }
+    }
+    above
+}
+
 /// Whether the verdict of `check`, the newest finished tick that had `node` as a target,
 /// still stands as of `now`: a run decided what the read path cannot, and nothing the read
 /// path can see has changed since. All of:
@@ -927,6 +956,15 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
     } else {
         HashMap::new()
     };
+    // Only a node a tick missed asks what has succeeded above it since.
+    let succeeded_above = if nodes
+        .iter()
+        .any(|n| evidence.checks.misses.contains_key(&n.id))
+    {
+        latest_recovery_above(nodes, evidence)
+    } else {
+        HashMap::new()
+    };
     let decided: Vec<_> = nodes
         .iter()
         .map(|node| {
@@ -968,6 +1006,7 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
                         .get(&node.id)
                         .and_then(|age| age.last_success_at.as_deref())
                         .map(recorded_at),
+                    succeeded_above.get(&node.id).copied(),
                 ),
                 _ => 0,
             };
@@ -1085,18 +1124,16 @@ async fn from_db(
         } else {
             Default::default()
         };
-    let paused = |id: &str| {
-        pauses
-            .get(id)
-            .is_some_and(|p| p.until.is_none_or(|until| until > now.timestamp()))
-    };
-    // Row 6: late is the schedule's standing, the one definition (#958).
-    let late = crate::schedule_standing::late_schedules(&jobs, &ticks, zone, now, &paused);
     // The scheduler's walk, once per command (#961); no scheduler runs here, so no schedule
     // is live.
     let paths = crate::refresh_path::Paths::of(dag);
     let schedules =
         crate::refresh_path::recorded_schedules(&jobs, &ticks, &failures, &pauses, zone, now);
+    let late = schedules
+        .iter()
+        .filter(|(_, schedule)| schedule.standing.as_ref().is_some_and(|s| s.late))
+        .map(|(id, _)| id.clone())
+        .collect();
     // No scheduler and no run queue here: only `stale_since` can be told, from the records
     // and the source files' modification times. The typical durations are read only for the
     // rollup, whose roots say what clearing them costs.

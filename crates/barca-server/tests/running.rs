@@ -412,11 +412,14 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
         "{entry} {run}"
     );
     assert_eq!(block["last_fired"], run["scheduled_at"], "{block}");
-    // Slots have passed since that tick, by the same first missed slot everywhere, and the
-    // schedule is not late for it: its run waits for a run slot.
+    // A slot skipped while this run waited was decided. The first undecided slot
+    // follows the newest decision on every surface.
     assert_eq!(
         entry["late_since"].as_i64(),
-        entry["last_fired"].as_i64().map(|t| t + 1),
+        entry["last_fired"]
+            .as_i64()
+            .max(entry["last_skipped"].as_i64())
+            .map(|t| t + 1),
         "{entry}"
     );
     assert_eq!(row["late_since"], entry["late_since"], "{row}");

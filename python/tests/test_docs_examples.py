@@ -1233,6 +1233,13 @@ def test_sql_topic_health_queries(binary, topics, tmp_path):
                 " VALUES ('pipeline.py:inbox', ?, 'fired', ?, ?, ?, 'failed', 400, 1, 1, 0, 1, ?)",
                 (at, f"tick-{at}", at + 400.0, at + 402.0, json.dumps(targets)),
             )
+        # The second run was still queued at the next slot. Record the skip that
+        # a live scheduler would have written, so this fixture stays on time.
+        db.execute(
+            "INSERT INTO schedule_ticks (schedule_id, scheduled_at, action, skipped_for)"
+            " VALUES ('pipeline.py:inbox', ?, 'skipped', ?)",
+            (slot + 600, f"tick-{slot + 300}"),
+        )
     db.close()
 
     def slot_text(at: int) -> str:
@@ -1301,7 +1308,7 @@ def test_sql_topic_health_queries(binary, topics, tmp_path):
         (age,) = rows(
             "select epoch(now() - stale_since::timestamptz) >= 0 as behind,"
             " epoch(finished_at::timestamptz - started_at::timestamptz) as ran"
-            " from barca.nodes, barca.ticks where name = 'ledger' limit 1"
+            " from barca.nodes, barca.ticks where name = 'ledger' and finished_at is not null limit 1"
         )
         assert age == {"behind": True, "ran": 2.0}, age
 

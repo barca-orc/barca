@@ -155,6 +155,9 @@ def test_problems_from_the_configured_server(deployment):
     job = deployment.schedule()
     assert schedule["live"] is True
     assert schedule["cron"] == "*/1 * * * * *"
+    assert schedule["state"] == job["state"] == "held"
+    assert schedule["late"] is job["late"] is False
+    assert "held after 2 failed ticks" in job["state_detail"]
     assert schedule["failing"] is True
     assert schedule["failures"] == job["failures"] == 2
     assert schedule["max_failures"] == job["max_failures"] == 2
@@ -176,7 +179,7 @@ def test_the_table_has_the_error_the_schedule_and_the_filter(deployment):
     assert "SCHEDULE" in table.splitlines()[0]
     assert "failed: ZeroDivisionError: division by zero" in table
     assert "last run failed: RuntimeError: upstream API returned 503" in table
-    assert "*/1 * * * * *; failing 2/2" in table
+    assert "*/1 * * * * *; held, failing 2/2" in table
     assert "3 of 4 nodes match --problems; the counts below are for every node" in table
     assert not any(line.startswith("orders ") for line in table.splitlines())
 

@@ -442,3 +442,51 @@ def test_ticks_waiting_on_one_run_slot_name_the_queue_as_the_cause(tmp_path, ser
     beat = seen["read"]
     assert beat["refresh_path"]["live"] is False, beat
     assert beat["cause"] == "queued" and beat["root"]["kind"] == "queue", beat
+
+
+def test_poller_never_sees_a_freshness_promise_through_a_pause(tmp_path, serve):
+    """Sample a held chain across three different queued and completed ticks."""
+    source = tmp_path / "pipeline.py"
+    source.write_text(
+        QUEUE
+        + """
+@asset(inputs={"value": beat}, freshness=Always)
+def summary(value: dict) -> dict:
+    return value
+
+@asset(inputs={"value": summary}, freshness=Always)
+def report(value: dict) -> dict:
+    return value
+"""
+    )
+    _ok(barca(tmp_path, "get", "report", "pipeline.py"))
+    server = serve("--max-runs", "1")
+    _ok(barca(tmp_path, "pause", "beat", "--server", server.url))
+    _edit(tmp_path, 1)
+    phases = {"pending": set(), "success": set()}
+    samples = []
+
+    def sample():
+        nodes = {node["name"]: node for node in server.get("/state")}
+        if nodes["beat"]["health"] in ("ok", "suspect"):
+            return False
+        schedule = nodes["pulse"]["schedule"]
+        phase = schedule["last_status"]
+        samples.append(
+            [
+                (name, phase, nodes[name]["expected_fresh_at"], nodes[name]["no_estimate"])
+                for name in ("beat", "summary", "report")
+            ]
+        )
+        if phase in phases:
+            phases[phase].add(schedule["last_run_id"])
+        return all(len(ticks) >= 3 for ticks in phases.values())
+
+    wait_until(sample, "three queued and three completed ticks of the held chain", timeout=90)
+    print(
+        f"{len(samples)} state polls, 3 held nodes, {len(phases['pending'])} queued ticks, "
+        f"{len(phases['success'])} completed ticks"
+    )
+    promises = [row for poll in samples for row in poll if row[2] is not None]
+    assert not promises, promises[:5]
+    assert all(row[3] == "paused" for poll in samples for row in poll)

@@ -64,6 +64,8 @@ pub async fn changed_bytes_in_run(db_path: &str, run_id: &str) -> Result<Vec<Str
 pub struct NodeAge {
     /// When its newest successful row was written.
     pub last_success_at: Option<String>,
+    /// First clean result after the most recent failed attempt.
+    pub recovered_at: Option<String>,
     /// The first failed attempt after its last clean run: `None` unless its latest attempts failed.
     pub failing_since: Option<String>,
     /// How many runs in a row failed it, up to now. A run counts once however many keys failed.
@@ -72,6 +74,12 @@ pub struct NodeAge {
     pub last_run: Option<RunTotals>,
     /// The row counts of its latest successful results (#925); `None` until one succeeded.
     pub rows: Option<RowFacts>,
+    /// When its result last changed, oldest first, as recorded (`created_at`): the
+    /// successful rows whose run hash or observation differs from the
+    /// previous success of that step, or whose bytes changed (including the first result). A sensor
+    /// polled with the same observation, or a rerun that wrote the same bytes, adds a row and
+    /// no change: what reads the node is not out of date against it.
+    pub changed_at: std::sync::Arc<Vec<String>>,
 }
 
 /// What a node's latest successful results say about their rows: each key's (the node's own,
@@ -126,6 +134,9 @@ struct Success {
 struct KeySuccesses {
     latest: Option<Success>,
     previous: Option<Success>,
+    /// The newest successful row whose content was read ([`AgeRow::content`]): its id and
+    /// content.
+    content: Option<(i64, u64)>,
 }
 
 impl KeySuccesses {
@@ -275,6 +286,10 @@ pub struct NodeAgesIndex {
     successes: HashMap<String, HashMap<String, KeySuccesses>>,
     /// base id -> [`RowFacts`], computed again for the bases a read touched.
     rows: HashMap<String, RowFacts>,
+    /// Latest failure row and the first clean success after it.
+    recovery: HashMap<String, (i64, Option<String>)>,
+    /// base id -> [`NodeAge::changed_at`].
+    changes: HashMap<String, std::sync::Arc<Vec<String>>>,
 }
 
 /// One row as [`NodeAgesIndex`] folds it in.
@@ -285,17 +300,30 @@ struct AgeRow {
     created_at: String,
     /// The `rows` column (#925); always `None` for a failed row.
     rows: Option<i64>,
+    /// What a successful row holds, as one number: its run hash and observation hash. Two rows
+    /// of a step with the same content are the same result. `None` for a failed row.
+    content: Option<u64>,
+    bytes_changed: bool,
 }
 
 impl AgeRow {
-    /// Columns `id, node_id, run_id, created_at, rows`.
-    fn of(row: &libsql::Row) -> Self {
+    /// Columns `id, node_id, run_id, created_at, rows`, then `run_hash, observation_hash, bytes_changed` when
+    /// `content` (a successful row).
+    fn of(row: &libsql::Row, content: bool) -> Self {
+        use std::hash::{Hash, Hasher};
         Self {
             id: row.get::<i64>(0).unwrap_or_default(),
             node: row.get::<String>(1).unwrap_or_default(),
             run: row.get::<String>(2).ok().filter(|r| !r.is_empty()),
             created_at: row.get::<String>(3).unwrap_or_default(),
             rows: row.get::<i64>(4).ok(),
+            bytes_changed: content && row.get::<i64>(7).unwrap_or(0) != 0,
+            content: content.then(|| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                row.get::<String>(5).ok().hash(&mut hasher);
+                row.get::<String>(6).ok().hash(&mut hasher);
+                hasher.finish()
+            }),
         }
     }
 }
@@ -373,7 +401,7 @@ impl NodeAgesIndex {
             .await
             .map_err(failure)?;
         while let Some(row) = rows.next().await.map_err(failure)? {
-            let row = AgeRow::of(&row);
+            let row = AgeRow::of(&row, false);
             if row.id <= max_id {
                 self.fold_failed(row, &mut touched);
             }
@@ -381,14 +409,15 @@ impl NodeAgesIndex {
         drop(rows);
         let mut rows = conn
             .query(
-                "SELECT id, node_id, run_id, created_at, rows FROM materializations \
-                 WHERE status = 'success' AND id <= ?1",
+                // In row order: a change is a row against the one before it.
+                "SELECT id, node_id, run_id, created_at, rows, run_hash, observation_hash, bytes_changed \
+                 FROM materializations WHERE status = 'success' AND id <= ?1 ORDER BY id",
                 [max_id],
             )
             .await
             .map_err(failure)?;
         while let Some(row) = rows.next().await.map_err(failure)? {
-            self.fold_success(AgeRow::of(&row), &mut touched);
+            self.fold_success(AgeRow::of(&row, true), &mut touched);
         }
         Ok(touched)
     }
@@ -433,6 +462,10 @@ impl NodeAgesIndex {
         note_newest(&mut self.newest, base, row.id, row.run.clone());
         let run = attempt(row.run, row.id);
         let id = row.id;
+        let recovery = self.recovery.entry(base.to_string()).or_default();
+        if id > recovery.0 {
+            *recovery = (id, None);
+        }
         self.failed
             .entry(base.to_string())
             .or_default()
@@ -456,14 +489,40 @@ impl NodeAgesIndex {
             run: row.run.clone(),
             rows: row.rows,
         };
-        match steps.get_mut(&row.node) {
-            Some(step) => step.add(success),
-            None => steps.entry(row.node.clone()).or_default().add(success),
+        let step = match steps.get_mut(&row.node) {
+            Some(step) => step,
+            None => steps.entry(row.node.clone()).or_default(),
+        };
+        step.add(success);
+        // Rows are folded in row order; one out of order is not compared.
+        if let Some(content) = row.content
+            && step.content.is_none_or(|(id, _)| id < row.id)
+        {
+            let changed =
+                row.bytes_changed || step.content.is_none_or(|(_, before)| before != content);
+            step.content = Some((row.id, content));
+            if changed {
+                let changes = match self.changes.get_mut(base) {
+                    Some(changes) => changes,
+                    None => self.changes.entry(base.to_string()).or_default(),
+                };
+                if changes.last() != Some(&row.created_at) {
+                    let changes = std::sync::Arc::make_mut(changes);
+                    changes.push(row.created_at.clone());
+                }
+            }
         }
         let clean = self
             .failed
             .get(base)
             .is_none_or(|runs| row.run.as_ref().is_none_or(|r| !runs.contains_key(r)));
+        if clean
+            && let Some((failure, recovered)) = self.recovery.get_mut(base)
+            && row.id > *failure
+            && recovered.is_none()
+        {
+            *recovered = Some(row.created_at.clone());
+        }
         let entry = match self.success.get_mut(base) {
             Some(entry) => entry,
             None => self.success.entry(base.to_string()).or_default(),
@@ -558,6 +617,7 @@ impl NodeAgesIndex {
             out.insert(
                 base.clone(),
                 NodeAge {
+                    recovered_at: self.recovery.get(base).and_then(|(_, at)| at.clone()),
                     last_success_at: None,
                     failing_since: trailing.clone().map(|(_, at)| at.clone()).min(),
                     consecutive_failures: trailing.count() as u32,
@@ -573,6 +633,9 @@ impl NodeAgesIndex {
         }
         for (base, facts) in &self.rows {
             out.entry(base.clone()).or_default().rows = Some(facts.clone());
+        }
+        for (base, changes) in &self.changes {
+            out.entry(base.clone()).or_default().changed_at = changes.clone();
         }
         out
     }
@@ -595,7 +658,8 @@ async fn rows_between(
     let failure = |e| BarcaError::Db(format!("failed to read node ages: {e}"));
     let mut rows = conn
         .query(
-            "SELECT id, node_id, run_id, created_at, rows, status = 'failed' FROM materializations \
+            "SELECT id, node_id, run_id, created_at, rows, run_hash, observation_hash, bytes_changed, \
+             status = 'failed' FROM materializations \
              WHERE id > ?1 AND id <= ?2 AND status IN ('success', 'failed') ORDER BY id",
             [after, upto],
         )
@@ -603,8 +667,8 @@ async fn rows_between(
         .map_err(failure)?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().await.map_err(failure)? {
-        let failed = row.get::<i64>(5).unwrap_or(0) != 0;
-        out.push((AgeRow::of(&row), failed));
+        let failed = row.get::<i64>(8).unwrap_or(0) != 0;
+        out.push((AgeRow::of(&row, !failed), failed));
     }
     Ok(out)
 }
@@ -1548,20 +1612,20 @@ mod failure_index_tests {
         let ages = node_ages(&path).await.unwrap();
         let age = |id: &str, ok: Option<&str>, since: Option<&str>, n: u32| {
             assert_eq!(
-                NodeAge {
-                    last_run: None,
-                    rows: None,
-                    ..ages[id].clone()
-                },
-                NodeAge {
-                    last_success_at: ok.map(str::to_string),
-                    failing_since: since.map(str::to_string),
-                    consecutive_failures: n,
-                    ..NodeAge::default()
-                },
+                (
+                    ages[id].last_success_at.as_deref(),
+                    ages[id].failing_since.as_deref(),
+                    ages[id].consecutive_failures
+                ),
+                (ok, since, n),
                 "{id}"
             );
         };
+        assert_eq!(
+            ages["p.py:recovered"].recovered_at.as_deref(),
+            Some("2026-01-02 00:00:00")
+        );
+        assert_eq!(ages["p.py:keys"].recovered_at, None);
         age("p.py:recovered", Some("2026-01-02 00:00:00"), None, 0);
         age(
             "p.py:failing",

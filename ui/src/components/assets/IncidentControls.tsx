@@ -47,7 +47,7 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
   const wholeFilePaused = fileNodes.length > 0 && fileNodes.every(n => filePauses.some(p => p.id === n.id))
   const pause = pauses.data?.paused.find((p) => p.id === node.id) ?? null
   const radius = useMemo(() => blastRadius(node.id, graph, jobs ?? []), [node.id, graph, jobs])
-  const running = radius.schedules.filter((s) => !s.job.paused)
+  const running = radius.schedules.filter((s) => !s.job.paused && s.job.state !== "held")
   const held = radius.schedules.filter((s) => s.job.paused)
   const queuePaused = queue.data?.paused ?? false
   const busy = toggle.isPending || scheduleToggle.isPending || queueToggle.isPending

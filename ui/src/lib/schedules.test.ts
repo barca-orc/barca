@@ -47,6 +47,7 @@ function asset(id: string, cron: string | null, kind: ListNode['kind'] = 'task')
 function job(id: string, over: Partial<ScheduleJob> = {}): ScheduleJob {
   return {
     id,
+  state: 'on_time', state_detail: null,
     cron: '*/10 * * * *',
     kind: 'task',
     next_fire: null,
@@ -168,9 +169,17 @@ describe('lateness', () => {
   const s = (iso: string) => Date.parse(iso) / 1000
   const stands = (over: Partial<ScheduleStatus> = {}): ScheduleStatus => ({
     cron: '* * * * *', next_fire: null, last_fired: null, last_status: null, last_run_id: null,
-    late: false, late_since: null, failures: 0, max_failures: 5, failing: false, paused: false,
+    state: 'on_time', state_detail: null, late: false, late_since: null, failures: 0, max_failures: 5, failing: false, paused: false,
     paused_until: null, skip_reason: null, live: true, typical_queue_wait_seconds: 0,
     typical_run_seconds: null, queue_bound: false, ...over,
+  })
+
+  it('shows a held schedule without a next-run countdown', () => {
+    const id = 'job.py:pulse'
+    const [row] = scheduleRows([asset(id, '* * * * *')], [
+      state(id, { next_run: now / 1000 + 10, schedule: stands({ state: 'held', state_detail: 'held after 3 failed ticks' }) }),
+    ])
+    expect(row).toMatchObject({ standing: 'held', nextRunMs: null, detail: 'held after 3 failed ticks' })
   })
 
   it('words how long ago the missed slot was', () => {

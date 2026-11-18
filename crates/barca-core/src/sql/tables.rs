@@ -171,6 +171,8 @@ pub const SCHEDULE_COLUMNS: &[(&str, &str)] = &[
     ("last_fired", V),
     ("last_status", V),
     ("last_run_id", V),
+    ("state", V),
+    ("state_detail", V),
     ("late", B),
     ("late_since", V),
     ("paused", B),

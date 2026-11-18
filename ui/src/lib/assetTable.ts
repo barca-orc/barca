@@ -63,6 +63,7 @@ export interface AssetRow {
   typicalSeconds: number | null
   p95: string | null
   /** Next cron fire time (ms since epoch), if scheduled. */
+  scheduleHeld?: boolean
   nextRunMs: number | null
   /** The run working on the node now, whoever started it. */
   running: NodeRunning | null
@@ -144,7 +145,8 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         typical: typicalLabel(n),
         typicalSeconds: typicalSeconds(n),
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
-        nextRunMs: n.next_run === null ? null : n.next_run * 1000,
+        scheduleHeld: n.schedule?.state === "held",
+        nextRunMs: n.schedule?.state === "held" || n.next_run === null ? null : n.next_run * 1000,
         running: n.running ?? null,
       }
     })
@@ -276,10 +278,10 @@ export function typicalText(row: Pick<AssetRow, 'typical' | 'typicalSeconds'>): 
  * node takes 0.1s or more, Next run when some node has a schedule. Judged over the page's rows,
  * not the filtered ones, so a filter never moves the columns.
  */
-export function assetColumns(rows: readonly Pick<AssetRow, 'typicalSeconds' | 'nextRunMs'>[]): { typical: boolean; next: boolean } {
+export function assetColumns(rows: readonly Pick<AssetRow, 'typicalSeconds' | 'nextRunMs' | 'scheduleHeld'>[]): { typical: boolean; next: boolean } {
   return {
     typical: rows.some((r) => r.typicalSeconds !== null && r.typicalSeconds >= TYPICAL_MIN_SECONDS),
-    next: rows.some((r) => r.nextRunMs !== null),
+    next: rows.some((r) => r.scheduleHeld || r.nextRunMs !== null),
   }
 }
 
