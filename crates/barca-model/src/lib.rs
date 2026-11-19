@@ -224,3 +224,6 @@ pub fn release_free_memory() {
         libc::malloc_trim(0);
     }
 }
+
+#[cfg(test)]
+mod float_roundtrip_tests;

@@ -27,6 +27,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- **A number the CLI reads from a server is printed as the server sent it (#1056).** `barca history --server --json` and the other commands that read a server's answer into a typed value could print a float one unit in the last place off (about one value in fifteen), so the same run's `elapsed_seconds` read differently here and through a server. JSON floats are now parsed exactly.
+
 - **`barca history RUN_ID --json --limit N` says where the rest of a run's steps start, as a server does (#1056).** `steps_page.next_offset` (the position of the first step not listed) was set only when the run was read through a server; the same run read from this machine's database had `truncated: true` and no `next_offset`. Both read one function now. The key is absent, as before, when every step is listed.
 
 - The web UI reads four more answers from the server in place of working them out (#1056): a
