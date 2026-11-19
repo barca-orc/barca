@@ -81,7 +81,7 @@ pub enum HealthReason {
     LastAttemptFailed,
     /// `failing`: its last materialization did not fail, but some of its keys did.
     KeysFailed,
-    /// `blocked`: a failing node upstream ([`blocked_by`]).
+    /// `blocked`: a failing node upstream ([`crate::health::blocked_by`]).
     UpstreamFailing,
     /// `blocked`: its cache state says so (keys waiting on failed keys of an input).
     CacheBlocked,
@@ -100,7 +100,7 @@ pub enum HealthReason {
     /// `behind`: `cache.state` is `unsynced`.
     Unsynced,
     /// `ok`: `cache.state` is `unknown`, and the newest tick that checked the node found it
-    /// up to date or rebuilt it, with nothing seen to have changed since ([`verdict_stands`]).
+    /// up to date or rebuilt it, with nothing seen to have changed since ([`crate::health::verdict_stands`]).
     CheckedUpToDate,
     /// `undecided`: `cache.state` is `unknown`. Also the reason of an unclassified row.
     #[default]
@@ -264,7 +264,7 @@ impl Cause {
 }
 
 /// Why a node that is not fresh has no `expected_fresh_at` (`specs/behavior/health.md`,
-/// "Times"): the one reason a surface gives instead of a blank. [`no_estimate`] names it.
+/// "Times"): the one reason a surface gives instead of a blank. [`crate::health::no_estimate`] names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
@@ -346,7 +346,7 @@ pub enum RootKind {
     /// No scheduler fires the schedules of the nodes it holds: one root for the project
     /// ([`Root::scheduler_off`]), about no node.
     SchedulerOff,
-    /// A failing node: the node itself, or the nearest failing node upstream ([`blocked_by`]);
+    /// A failing node: the node itself, or the nearest failing node upstream ([`crate::health::blocked_by`]);
     /// or a schedule held after `max_failures` failed ticks (`node` is the scheduled node).
     Failure,
     /// A schedule whose ticks wait for a run slot: `node` is the scheduled node.
@@ -447,7 +447,7 @@ pub struct DataCoverage {
 }
 
 impl DataCoverage {
-    /// The coverage of `nodes`, which [`classify`] has filled.
+    /// The coverage of `nodes`, which [`crate::health::classify`] has filled.
     pub fn of(nodes: &[NodeStatus]) -> Self {
         let mut out = DataCoverage::default();
         for node in nodes.iter().filter(|n| n.kind == "asset") {
@@ -479,7 +479,7 @@ impl DataCoverage {
 
 /// `last_check`: what the newest finished tick that had the node as a target did with it
 /// (the tick record, `specs/behavior/health.md`). A record, whatever its age: whether it still
-/// decides the node's health is [`verdict_stands`].
+/// decides the node's health is [`crate::health::verdict_stands`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct LastCheck {
@@ -517,7 +517,7 @@ impl LastCheck {
     }
 }
 
-/// A node's [`LastCheck`] with what [`verdict_stands`] reads of it.
+/// A node's [`LastCheck`] with what [`crate::health::verdict_stands`] reads of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Check {
     pub last: LastCheck,
@@ -531,7 +531,7 @@ pub struct Check {
     pub trusted_until: Option<f64>,
 }
 
-/// What the tick record says about the nodes of a graph ([`checks`]): the same for every
+/// What the tick record says about the nodes of a graph ([`crate::health::checks`]): the same for every
 /// request until the metadata database or the graph changes.
 #[derive(Clone, Debug, Default)]
 pub struct Checks {

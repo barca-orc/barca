@@ -185,7 +185,7 @@ pub struct CacheStatus {
     /// `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`, `evicted`, `no_record`,
     /// `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`,
     /// `not_planned` (the dry run status is computed from has no step for it), `task` or
-    /// `sensor`: [`CACHE_REASONS`].
+    /// `sensor`: [`crate::status::CACHE_REASONS`].
     #[cfg_attr(
         feature = "ts",
         ts(

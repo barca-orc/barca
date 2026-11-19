@@ -31,7 +31,7 @@ pub struct Evidence<'a> {
     pub pinned: &'a HashSet<String>,
     /// Scheduled nodes whose schedule is late ([`crate::schedule_standing::standing`]).
     pub late: &'a HashSet<String>,
-    /// What the newest ticks found ([`checks`]).
+    /// What the newest ticks found ([`crate::health::checks`]).
     pub checks: &'a Checks,
     /// What a refresh path is read from ([`crate::refresh_path`]): the graph's reach, each
     /// schedule now, the paused nodes and the pinned assets.

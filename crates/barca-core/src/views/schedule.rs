@@ -21,9 +21,9 @@ pub enum ScheduleState {
     /// next run.
     Held,
     /// A slot passed with no decision recorded for it, longer ago than its grace and queue
-    /// wait ([`Standing::late`]): no scheduler is firing it.
+    /// wait ([`crate::schedule_standing::Standing::late`]): no scheduler is firing it.
     Late,
-    /// Its runs outlast its interval: at least [`OVERRUN_SKIPS`] of its newest decided slots
+    /// Its runs outlast its interval: at least [`crate::schedule_standing::OVERRUN_SKIPS`] of its newest decided slots
     /// were skipped because its own run was still in flight. The scheduler is running; the
     /// schedule cannot keep its cron.
     Overrunning,

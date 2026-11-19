@@ -1289,7 +1289,7 @@ mod tests {
             "add to CACHE_REASONS and the OpenAPI Cache.reason enum: {unlisted:?}"
         );
 
-        let ts = src
+        let ts = include_str!("views/node.rs")
             .split("pub reason: String")
             .next()
             .and_then(|head| head.rsplit("type = \"").next())

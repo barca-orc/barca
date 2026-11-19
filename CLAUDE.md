@@ -76,7 +76,8 @@ paths (`barca_core::config`). Only barca-db and barca-core link libsql.
 Inside barca-core the modules are layered too (leaf, storage, decisions, engine beside
 analysis, service: `docs/engineering/layering.md`). `crates/barca-core/src/module_layering_tests.rs`
 checks every `crate::<module>` path against the layers; the exceptions are listed in
-`module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there.
+`module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there; an
+analysis module also gets a row (`ANALYSIS_ROWS`) and names only the rows before it.
 
 ### How it works
 
