@@ -43,8 +43,8 @@ Options:
 Examples:
   barca pause clean --server               # scheduled runs skip clean until it is resumed
   barca pause clean --downstream --server  # clean and everything below it
-  barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
   barca pause pipeline.py --server         # every node of the file
+  barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
   barca pause --server --json              # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
   barca pause --schedule nightly --server  # the schedule of `nightly` does not fire until resumed
   barca pause --schedule nightly --until 2h --server   # resumes by itself in two hours

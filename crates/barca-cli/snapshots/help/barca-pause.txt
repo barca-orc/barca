@@ -21,7 +21,7 @@ Options:
 Examples:
   barca pause clean --server               # scheduled runs skip clean until it is resumed
   barca pause clean --downstream --server  # clean and everything below it
-  barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
+  barca pause pipeline.py --server         # every node of the file
 
 All examples: barca pause --examples
 More: barca docs incidents
