@@ -413,6 +413,14 @@ impl Server {
     fn refusal(&self, status: reqwest::StatusCode, body: &[u8], what: &str) -> CliError {
         let body = self.http.error_body(body);
         match serde_json::from_slice::<ErrorEnvelope>(&body) {
+            // This project's server refuses the write (it is read-only): the command was
+            // sent to it without being asked to, so say how to run it here.
+            Ok(envelope) if self.project && status == reqwest::StatusCode::FORBIDDEN => {
+                CliError::from_prose(
+                    ErrorKind::Usage,
+                    format!("error: {}\n{}", envelope.error, self.instead()),
+                )
+            }
             Ok(envelope) => envelope,
             Err(_) => {
                 let text = String::from_utf8_lossy(&body);

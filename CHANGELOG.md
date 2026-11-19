@@ -8,6 +8,19 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- **In a project where `barca serve` is running, `barca get` and `barca run` are submitted to that server's run queue instead of running in the command's own process (#1056, #1054).** The server now listens on a Unix socket in its project, `.barca/serve.sock` (`.barca/envs/<env>/serve.sock` for a named environment), and a command typed there finds it. Before, the command knew nothing of the server, opened the same metadata database and waited on its lock; behind a server recording runs that wait could end after 60 seconds in `timed out ... waiting for .barca/metadata.db.lock`. Now `get` and `run` wait for a run slot, the server executes its deployed files (not an edit it has not loaded), and the result prints as with `--server`; stderr says once `[barca] server .barca/serve.sock (this project's barca serve; --local runs on this machine)`. **Replacement: `--local`** runs the command in its own process as before (`barca get total --local`). `status`, `history`, `stats`, `logs`, `sql`, `queue`, `pause`, `resume`, `pin`, `unpin` and `cancel` are answered by the server the same way; with a `--read-only` server the reads are answered and a write is refused with a pointer to `--local`. With no server nothing changes and the check costs one or two `stat` calls. `barca docs server-mode` ("In the server's own project") has the table.
+
+### Features
+
+- **`barca serve` listens on a project socket, owner-only and without a token (#1056).** `.barca/serve.sock` serves the same HTTP API as the TCP address. The file is mode `0600`, and a request over it needs no `BARCA_SERVER_TOKEN` even with project tokens on: whoever can open it can already write the database beside it. The server removes it when it stops; a killed server's socket refuses connections, is ignored by commands and is replaced by the next server. A project path too long for a Unix socket leaves the server without one, with a warning at startup. Specified in `specs/behavior/execution.md` ("A command beside a server"), `specs/behavior/server-authentication.md` and `specs/interfaces/dot-barca-layout.md`.
+- **`POST /gc`, and `barca gc` beside a server is run by the server (#1054, #1056).** The eviction takes its turn with the server's own writes, and the server protects what its runs in flight hold result by result instead of holding back every current result. `barca gc --local` evicts in the command's own process; `barca gc --server URL` asks a server to evict its own cache. `--server` and `--local` are now accepted by `gc` (and named in the error for commands that take neither).
+
+### Bug Fixes
+
+- **The error after 60 seconds of waiting for the metadata database's lock names the process holding it (#1054).** `timed out after 60.0s waiting for .barca/metadata.db.lock: another barca process is holding the metadata DB (held now by pid 4312 (barca serve --port 8274))`, read from the kernel's lock table on Linux (elsewhere it says the holder could not be named), with a pointer to the server in the project. `BARCA_TRACE_TIMING` prints how many of a run's lock acquisitions waited, their total and the longest.
+
 ## 0.45.0 (2026-11-19)
 
 - Run counts reflect active worker steps. Queue and history rows summarize multi-target runs, the queue explains its extra requested-run slot, and run details distinguish attempts, steps, planned nodes and unreached work (#1042).

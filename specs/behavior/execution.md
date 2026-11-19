@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 6. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 7. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -107,6 +107,67 @@ in [operations](operations.md#invocation-retry-and-snapshots).
 Ordinary pool bounds must not be advertised as a bound on all nested parallel process counts.
 Remote transfer uses a separate helper. Worker pools are currently run-owned.
 
+### A command beside a server
+
+Approved 2026-11-19 (#1056 track A, #1054) and implemented. One process owns a project
+environment's metadata database while `barca serve` runs on it: the server. A `barca` command
+started in that project does not open the database beside it; it finds the server and sends its
+work there.
+
+The server announces itself with a Unix socket beside the environment's metadata database
+([layout](../interfaces/dot-barca-layout.md): `.barca/serve.sock`, or
+`.barca/envs/<env>/serve.sock`), on which it serves the same HTTP API as on its TCP address
+([OpenAPI](../interfaces/server-api.openapi.yaml), `x-project-socket`). Only the server that
+holds the environment's `serve.lock` opens it: a second server on the same environment (a
+read-only one beside a writer) serves on TCP only. The socket is removed when the server exits.
+Access is by file permission and needs no token ([authentication](server-authentication.md)).
+A path too long for a Unix socket (107 bytes on Linux, 103 on macOS and the BSDs) leaves the
+server without a socket: it says so in a warning at startup and serves on TCP only.
+
+A command checks for the socket after entering the project root, for the environment it uses
+(`--env`, `BARCA_ENV`, else barca.toml's `default_env`, else `default`). No socket file: nothing
+else happens. The check is one `stat` when the environment is named on the command line or in
+`BARCA_ENV`, and two otherwise (`.barca/envs`, then the socket); barca.toml is read for
+`default_env` only in a project that has a named environment. A socket nothing listens on (a
+killed server's) refuses the connection and is ignored without a word. A socket that accepts
+but does not answer `GET /health` within 5 seconds is ignored with a warning on stderr. In
+both cases the command runs on this machine as if there were no server.
+
+With a live socket, and neither `--local` nor `--server` on the command line:
+
+| Command | Where it runs |
+| --- | --- |
+| `status`, `history`, `stats`, `logs`, `queue`, `pause`, `resume`, `pin`, `unpin`, `cancel` | answered by, or sent to, the server over the socket, as with `--server` |
+| `sql` | the server resolves the views and answers a query over barca's own tables; a query over results runs in the command's process, over the artifacts in this project |
+| `get`, `run` | submitted to the server's run queue, as with `--server`: the server executes its deployed files, and the command follows the run and prints its result |
+| `gc` | run by the server (`POST /gc`), between its own writes |
+| `state restore`, `state reset` | refused (exit 3) while the server holds the environment, naming the server and what to do; this does not depend on the socket |
+| `list`, `plan`, `doctor`, `docs`, `tokens`, `state backups`, `history --reconcile`, `serve` | on this machine, as without a server |
+
+The command prints once on stderr that the project's server is used. A command that names no
+file uses every file the server has deployed; a file the server has not deployed is a usage
+error naming the deployed files. `--local` runs any of these on this machine as before the
+socket existed (and then waits on the database lock like any second process); `--server URL`
+names a server explicitly. The socket takes precedence over a configured server (`BARCA_SERVER`,
+`[server] url`): the server in this project owns this project's database.
+
+A `--read-only` server opens the socket as any other and answers on it exactly as on its TCP
+address: the reads are answered, and every write (`get`, `run`, `gc`, `pause`, `resume`, `pin`,
+`unpin`, `cancel`, `queue pause`) is refused with its read-only error (403, exit 2), whose
+remediation names `--local`. The command does not fall back to this machine on its own.
+
+There is no route for taking a metadata backup on request: no command takes one on demand, and
+the server takes its own (RFC-0015).
+
+#### The database lock
+
+The cross-process lock on a metadata database is `<db>.lock`, held for each operation. A
+process that waits 60 seconds for it fails with an infrastructure error that names the process
+holding it at that moment (pid and command line, read from the kernel's lock table; Linux
+only, and "could not be named" elsewhere) and points at the server. Nothing is written to disk
+to make the holder known. `BARCA_TRACE_TIMING` prints, at the end of a run, how many of the
+process's lock acquisitions had to wait, their total wait and the longest.
+
 ### Process storage overrides
 
 `BARCA_REMOTE=off` selects local artifacts and local history, overriding configured remote
@@ -135,6 +196,13 @@ The removed `BARCA_STATE=off` spelling and shared-history pull are not current a
 
 - **INV-BATCH-03:** A raised call fails all unfinished keys in that call. Worker death cannot
   silently count uncompleted keys as successful.
+
+- **INV-OWNER-01:** While a server holds an environment and its socket answers, a `get`, `run`
+  or `gc` started in that project without `--local` or `--server` is executed by the server; the
+  command's process writes nothing to that environment's metadata database.
+
+- **INV-OWNER-02:** A project with no server pays no more than two `stat` calls for the check,
+  and a socket that does not answer never fails a command: it runs on this machine.
 
 ## Failures and recovery
 
@@ -177,6 +245,16 @@ Conformance (cancellation records, #925): [token, reason and a queued cancellati
 [the same work already running](../../crates/barca-server/src/runs/tests.rs)
 (`a_queued_cancellation_names_the_same_work_already_running`).
 
+Conformance (a command beside a server): [project socket](../../python/tests/test_project_socket.py)
+(the socket is created owner-only and removed; a killed server's is ignored and replaced; every
+routed command reaches the server; `--local` does not; `gc` beside a recording run is run by the
+server; restore and reset refuse; a token-mode server asks no token on it; a read-only server
+refuses writes; named environments; a subdirectory),
+[the socket file](../../crates/barca-server/src/project_socket.rs), [`POST /gc`](../../crates/barca-server/tests/openapi.rs)
+and [the lock's holder and wait count](../../crates/barca-db/src/db/mod.rs). Not exercised: the
+5-second unanswered-socket warning (it needs a process that accepts and never answers), the
+path-length warning end to end (unit-tested only), and macOS.
+
 Conformance: [process storage overrides](../../python/tests/test_process_storage_overrides.py).
 Configuration details: [remote manual](../../crates/barca-cli/docs/remote.md).
 
@@ -202,6 +280,12 @@ owns a shared step stops it, and the waiting run executes it again from the star
 when its worker reports it, before the owner's row is durable; and a run that decided a step
 before another run finished it, and leases it after that run's claim ended, executes it again.
 Independent CLI processes, and local runs against a server's ledger, share nothing.
+
+A command beside a server: the lock itself is unchanged (#1056 A7, A8): `--local` beside a busy
+server, and `history --reconcile`, `doctor` and `state backups`, still take turns on it from
+outside. A step that itself starts `barca get` in the project (through `barca.get()`, say) now
+submits a second run to the server that is executing it; on a server with one run slot that
+run waits behind its own caller. Pass `--local` there.
 
 Full bootstrap and validation still retain work proportional to partition count:
 [#655](https://github.com/barca-orc/barca/issues/655). Bounded scheduling is an accepted target,

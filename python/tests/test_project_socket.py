@@ -230,6 +230,7 @@ def test_a_read_only_server_answers_reads_and_refuses_writes(project, serve):
         done = barca(project, *args)
         assert done.returncode == 2, f"{args}: {done.stderr}"
         assert "this server is read-only" in done.stderr
+        assert "pass --local" in done.stderr
     done = barca(project, "get", "total", "--json", "--local")
     assert done.returncode == 0, done.stderr
 

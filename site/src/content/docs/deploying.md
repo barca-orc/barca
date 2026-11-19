@@ -48,6 +48,31 @@ curl http://127.0.0.1:8274/runs/RETURNED_RUN_ID             # the run and its ou
 Replace `daily_report` with an asset in the deployed pipeline. Remote users reach the
 same API through the proxy described below.
 
+## Running commands on the server's own machine
+
+A `barca` command typed in the directory the server runs in goes to the server, with nothing
+configured. The server listens on a Unix socket inside the project, `.barca/serve.sock`, and
+the command finds it there:
+
+```bash
+# In the server's project directory, as the user the server runs as.
+barca get daily_report      # joins the server's run queue; the result prints here
+barca status                # the server's answer
+barca gc                    # the server evicts its cache, between its own writes
+barca get daily_report --local   # run in this process instead, beside the server
+```
+
+```
+[barca] server .barca/serve.sock (this project's barca serve; --local runs on this machine)
+```
+
+The server is the one process that writes its metadata database, so a second process beside
+it would wait on the database's lock; this is why the commands go through it. The socket is
+owner-only (mode `0600`) and asks for no token, even with project tokens on. `barca state
+restore` and `barca state reset` refuse while the server is up.
+[Server Mode](/reference/server-mode/) ("In the server's own project") lists what each command
+does, and what a killed server's leftover socket means (nothing: it is ignored and replaced).
+
 ## Running commands on the server from another machine
 
 The CLI runs `get`, `run`, `status`, `list`, `history` and `stats` on the server with
