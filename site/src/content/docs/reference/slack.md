@@ -4,7 +4,7 @@ description: "Post to Slack when a job starts failing, recovers, or is still fai
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/slack.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/slack.md (barca docs slack). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/slack.md (barca docs slack). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Set `BARCA_SLACK_WEBHOOK_URL` to a Slack [incoming webhook](https://api.slack.com/messaging/webhooks)
 and barca posts to its channel when a job **starts failing**, when it **recovers**, and **once a

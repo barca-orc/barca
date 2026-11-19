@@ -5,6 +5,8 @@ use super::follow::{Follow, Followed};
 use super::inspect::{here_instead, local_run, started_key};
 use super::{Server, encode, reconnect_window};
 use crate::error::{CliError, Context, ErrorKind};
+use crate::print::{follow_ended, follow_exit_code, name_run};
+use crate::request::LogsArgs;
 use barca_core::BarcaError;
 use barca_core::RunEvent;
 use barca_core::outcome::Outcome;
@@ -17,9 +19,8 @@ pub(crate) async fn logs(
     server: &Server,
     run_id: Option<&str>,
     env: Option<&str>,
-    args: crate::commands::logs::LogsArgs<'_>,
+    args: LogsArgs<'_>,
 ) -> Result<(), CliError> {
-    use crate::commands::logs::{follow_ended, follow_exit_code, name_run};
     let window = reconnect_window()?;
     server.health(env).await?;
     let run_id = match run_id {
@@ -97,7 +98,7 @@ pub(crate) async fn logs(
 async fn recorded_logs(
     server: &Server,
     run_id: &str,
-    args: crate::commands::logs::LogsArgs<'_>,
+    args: LogsArgs<'_>,
 ) -> Result<(String, Vec<barca_core::db::LogEntry>), CliError> {
     let mut query = Vec::new();
     if let Some(step) = args.step {
@@ -122,10 +123,7 @@ async fn recorded_logs(
 
 /// Read a live run's event stream to its end, printing the lines `args` selects as they arrive,
 /// through a server restart ([`Follow`]). Returns the run's final status.
-async fn follow_events(
-    follow: &mut Follow<'_>,
-    args: crate::commands::logs::LogsArgs<'_>,
-) -> Result<String, CliError> {
+async fn follow_events(follow: &mut Follow<'_>, args: LogsArgs<'_>) -> Result<String, CliError> {
     let mut seq = 0usize;
     // Lines printed of the run as the current server runs it.
     let mut printed = 0usize;

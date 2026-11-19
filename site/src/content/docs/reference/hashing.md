@@ -4,7 +4,7 @@ description: "Which project code a step's run hash follows from its function, wh
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/hashing.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/hashing.md (barca docs hashing). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/hashing.md (barca docs hashing). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 A step runs again when its run hash changes ([The Cache: At a glance](/reference/cache/#at-a-glance)). Here is the
 full rule for the part of that hash that comes from code. In short:

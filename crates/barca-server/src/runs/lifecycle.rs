@@ -4,7 +4,9 @@
 
 use super::{RunSpec, context, run_files, run_timeout};
 use crate::error::ApiError;
-use crate::state::{AppState, RunChannel, RunState, RunStatus};
+use crate::replay::RunChannel;
+use crate::run_model::{RunState, RunStatus};
+use crate::state::AppState;
 use barca_core::commands::{RunResult, ServedRun, serve_run};
 use barca_core::envelope::{Context, ErrorEnvelope, ErrorKind};
 use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunOptions};
@@ -12,19 +14,19 @@ use barca_core::time::now_secs_f64 as now_ts;
 use barca_core::{BarcaError, RunEvent, db, results::GetResult};
 use std::time::Duration;
 
-/// Accept a run ([`crate::queue::admit`]): it is recorded in the run queue and starts when the
+/// Accept a run ([`crate::runs::admit`]): it is recorded in the run queue and starts when the
 /// queue lets it. Returns its run id.
 pub(crate) async fn start(state: AppState, spec: RunSpec) -> Result<String, ApiError> {
-    crate::queue::admit(&state, spec).await.map(|a| a.run_id)
+    crate::runs::admit(&state, spec).await.map(|a| a.run_id)
 }
 
-/// [`start`] under a run id the caller allocated ([`crate::queue::admit_as`]).
+/// [`start`] under a run id the caller allocated ([`crate::runs::admit_as`]).
 pub(crate) async fn start_as(
     state: AppState,
     run_id: String,
     spec: RunSpec,
 ) -> Result<String, ApiError> {
-    crate::queue::admit_as(&state, spec, run_id)
+    crate::runs::admit_as(&state, spec, run_id)
         .await
         .map(|a| a.run_id)
 }
@@ -46,7 +48,7 @@ async fn record_tick_started(state: &AppState, run_id: &str, spec: &RunSpec) {
     let Some((schedule, slot)) = tick_of(spec) else {
         return;
     };
-    let Some(queued_at) = state.runs.get(run_id).map(|r| r.started_at) else {
+    let Some(queued_at) = state.runs.registry.get(run_id).map(|r| r.started_at) else {
         return;
     };
     let now = now_ts();
@@ -101,8 +103,8 @@ pub(crate) fn launch(
     permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let run_id = waiting.run_id;
-    let cancel = state.runs.get(&run_id).map(|r| r.cancel.clone());
-    let channel = state.events.get(&run_id).map(|c| c.clone());
+    let cancel = state.runs.registry.get(&run_id).map(|r| r.cancel.clone());
+    let channel = state.runs.events.get(&run_id).map(|c| c.clone());
     let (Some(cancel), Some(channel)) = (cancel, channel) else {
         // Forgotten meanwhile (it cannot be: a run is tracked until it finishes).
         return;
@@ -110,8 +112,8 @@ pub(crate) fn launch(
     // Tracked, so a drain waits for it; inside the server's cancel-reason scope, so a run the
     // server cancels records why (`server shutdown`). Boxed: the run's future is large, and
     // the scope must not hold it on the stack.
-    let reason = state.cancel_reason.clone();
-    let tasks = state.run_tasks.clone();
+    let reason = state.lifecycle.cancel_reason.clone();
+    let tasks = state.runs.tasks.clone();
     tasks.spawn(reason.scope(Box::pin(execute(
         state,
         run_id,
@@ -142,7 +144,7 @@ async fn execute(
         )
         .await;
         drop(permit);
-        crate::queue::dispatch(&state);
+        crate::runs::dispatch(&state);
         return;
     }
     if let Err(e) =
@@ -167,7 +169,7 @@ async fn execute(
             while let Some(event) = event_rx.recv().await {
                 if let RunEvent::RunStarted { run_id: id } = event {
                     recorded = true;
-                    if let Some(mut run) = state.runs.get_mut(&run_id) {
+                    if let Some(mut run) = state.runs.registry.get_mut(&run_id) {
                         run.db_run_id = Some(id);
                     }
                 } else {
@@ -188,7 +190,7 @@ async fn execute(
             // A request that names files reads only those, as `barca get x a.py` does.
             let files = run_files(&state, &spec.files);
             let dag = if spec.files.is_empty() {
-                state.current_dag().await?
+                state.reads.sources.current_dag().await?
             } else {
                 std::sync::Arc::new(barca_core::load::build_dag(files, &state.config.python).await?)
             };
@@ -206,8 +208,8 @@ async fn execute(
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
                     host: std::sync::Arc::new(barca_core::serve::ServeHost::new(
-                        state.capacity.clone(),
-                        state.shared_steps.clone(),
+                        state.runs.capacity.clone(),
+                        state.runs.shared_steps.clone(),
                         barca_core::serve::capacity::Origin::of(spec.trigger.triggered_by),
                     )),
                     batch: barca_core::batch::BatchOverride::parse(&spec.batch).unwrap_or_default(),
@@ -225,7 +227,7 @@ async fn execute(
             // Before the run is polled again: it reads the reason when it sees the cancel.
             biased;
             _ = cancel.cancelled() => {
-                if let Some(why) = state.cancel_reason.get() {
+                if let Some(why) = state.lifecycle.cancel_reason.get() {
                     run_reason.set(why);
                 }
                 fut.await
@@ -261,10 +263,15 @@ async fn execute(
     if matches!(result, Err(BarcaError::Cancelled))
         && !timed_out
         && state
+            .runs
             .queue
             .requeue
             .load(std::sync::atomic::Ordering::SeqCst)
-        && state.runs.get(&run_id).is_some_and(|r| !r.cancel_requested)
+        && state
+            .runs
+            .registry
+            .get(&run_id)
+            .is_some_and(|r| !r.cancel_requested)
     {
         requeue(&state, &run_id).await;
         return;
@@ -368,7 +375,7 @@ async fn execute(
     .await;
     // The run slot is released here, freeing capacity for a queued run.
     drop(permit);
-    crate::queue::dispatch(&state);
+    crate::runs::dispatch(&state);
 }
 
 /// Put a run the stopping server stopped back in the queue ([`barca_core::serve::run_queue::requeue`]):
@@ -382,7 +389,7 @@ async fn requeue(state: &AppState, run_id: &str) {
                 "[barca] run {run_id} stopped and put back in the queue: it starts again when \
                  the server restarts"
             );
-            if let Some(mut r) = state.runs.get_mut(run_id) {
+            if let Some(mut r) = state.runs.registry.get_mut(run_id) {
                 r.status = RunStatus::Pending;
             }
         }
@@ -396,8 +403,8 @@ async fn requeue(state: &AppState, run_id: &str) {
 /// names why: `run cancelled: server shutdown`.
 pub(super) fn cancelled(state: &AppState, ctx: &Context) -> Outcome {
     let mut envelope = barca_core::outcome::envelope_of(BarcaError::Cancelled, ctx);
-    if state.cancel_reason.get().is_some() {
-        envelope.error = state.cancelled_message();
+    if state.lifecycle.cancel_reason.get().is_some() {
+        envelope.error = state.lifecycle.cancelled_message();
     }
     Outcome::ended(OutcomeStatus::Cancelled, &envelope)
 }
@@ -435,7 +442,7 @@ pub(super) async fn finish(
         barca_core::errln!("[barca] warning: run {run_id}: {e}");
     }
     let error = outcome.envelope().map(|e| e.error);
-    if let Some(mut r) = state.runs.get_mut(run_id) {
+    if let Some(mut r) = state.runs.registry.get_mut(run_id) {
         r.finished_at = Some(now_ts());
         r.status = match status {
             OutcomeStatus::Success => RunStatus::Complete,
@@ -469,11 +476,11 @@ fn cancellation_of(
     state: &AppState,
     run_id: &str,
 ) -> Option<barca_core::run_explain::Cancellation> {
-    let run = state.runs.get(run_id)?;
+    let run = state.runs.registry.get(run_id)?;
     if let Some(cancellation) = &run.cancellation {
         return Some(cancellation.clone());
     }
-    state.cancel_reason.get()?;
+    state.lifecycle.cancel_reason.get()?;
     Some(barca_core::run_explain::Cancellation {
         by: barca_core::run_explain::CancelledBy::Shutdown,
         principal: None,
@@ -491,7 +498,7 @@ pub(crate) const FINISHED_RUNS_BUDGET: usize = 64 << 20;
 /// About how many bytes a finished run holds in memory: its outcome and its event backlog.
 fn retained_bytes(state: &AppState, handle: &str, run: &RunState) -> usize {
     run.outcome.as_ref().map_or(0, |o| o.text().len())
-        + state.events.get(handle).map_or(0, |c| c.bytes())
+        + state.runs.events.get(handle).map_or(0, |c| c.bytes())
 }
 
 /// Drop the oldest finished runs from memory until those left hold at most `budget` bytes.
@@ -500,6 +507,7 @@ fn retained_bytes(state: &AppState, handle: &str, run: &RunState) -> usize {
 pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
     let mut finished: Vec<(f64, String, usize)> = state
         .runs
+        .registry
         .iter()
         .filter(|r| {
             matches!(
@@ -523,8 +531,8 @@ pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
         if total <= budget {
             break;
         }
-        state.runs.remove(&handle);
-        state.events.remove(&handle);
+        state.runs.registry.remove(&handle);
+        state.runs.events.remove(&handle);
         total -= bytes;
     }
 }
@@ -571,7 +579,7 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
     loop {
         tokio::time::sleep(interval).await;
         let cutoff = now_ts() - max_age.as_secs_f64();
-        state.runs.retain(|handle, run| {
+        state.runs.registry.retain(|handle, run| {
             let keep = match run.status {
                 RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled => {
                     run.finished_at.is_none_or(|t| t > cutoff)
@@ -580,7 +588,7 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
             };
             if !keep {
                 // Drop the live event channel too; subscribers' streams end.
-                state.events.remove(handle);
+                state.runs.events.remove(handle);
             }
             keep
         });

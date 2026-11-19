@@ -3,7 +3,10 @@
 //! routes rather than in front of them, so API paths stay what the contract says.
 
 use crate::state::AppState;
-use crate::{asset_pauses, gc, handlers, inspect, ledger, pause, pins, queue, reset, runs, ui};
+use crate::{
+    asset_pauses, assets, fallback, gc, inspect, ledger, pins, queue_routes, reset, runs,
+    schedule_routes, state_routes, ui,
+};
 use axum::Router;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -13,10 +16,10 @@ pub fn router(state: AppState) -> Router {
     // The read routes answer a repeated request with `304 Not Modified` when the body would be
     // the same ([`etag`]): a poll that finds nothing changed transfers nothing.
     let reads = Router::new()
-        .route("/health", get(handlers::health))
+        .route("/health", get(state_routes::health))
         .route("/project", get(inspect::project))
-        .route("/plan", get(handlers::plan))
-        .route("/groups", get(handlers::groups))
+        .route("/plan", get(assets::plan))
+        .route("/groups", get(assets::groups))
         // Inspection in the CLI's `--json` shapes.
         .route("/list", get(inspect::list))
         .route("/nodes", get(inspect::nodes))
@@ -24,9 +27,9 @@ pub fn router(state: AppState) -> Router {
         .route("/stats/{name}", get(inspect::stats))
         .route("/sql/views", get(inspect::sql_views))
         .route("/materializations", get(inspect::materializations))
-        .route("/assets", get(handlers::assets))
-        .route("/assets/{name}", get(handlers::asset_detail))
-        .route("/assets/{name}/schema", get(handlers::asset_schema))
+        .route("/assets", get(assets::assets))
+        .route("/assets/{name}", get(assets::asset_detail))
+        .route("/assets/{name}/schema", get(assets::asset_schema))
         .route("/assets/{name}/partitions", get(inspect::partitions))
         .route(
             "/assets/{name}/partitions/grid",
@@ -47,14 +50,14 @@ pub fn router(state: AppState) -> Router {
         .route("/runs", get(runs::list).post(runs::create))
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
         .route("/runs/{run_id}/logs", get(runs::logs))
-        .route("/logs/{run_id}", get(handlers::logs))
+        .route("/logs/{run_id}", get(inspect::logs))
         // The run queue: what waits to start, and pausing it.
-        .route("/queue", get(queue::get))
-        .route("/queue/pause", post(queue::pause))
-        .route("/queue/resume", post(queue::resume))
-        .route("/state", get(handlers::state))
-        .route("/state/rollup", get(handlers::rollup))
-        .route("/schedule", get(handlers::schedule))
+        .route("/queue", get(queue_routes::get))
+        .route("/queue/pause", post(queue_routes::pause))
+        .route("/queue/resume", post(queue_routes::resume))
+        .route("/state", get(state_routes::state))
+        .route("/state/rollup", get(state_routes::rollup))
+        .route("/schedule", get(schedule_routes::schedule))
         .route_layer(axum::middleware::from_fn(etag));
     Router::new()
         .merge(reads)
@@ -90,8 +93,8 @@ pub fn router(state: AppState) -> Router {
         // `barca gc`, run by the server between its own writes.
         .route("/gc", post(gc::gc))
         // A schedule id is a node id: percent-encode a `/` in it.
-        .route("/schedule/{id}/pause", post(pause::pause))
-        .route("/schedule/{id}/resume", post(pause::resume))
+        .route("/schedule/{id}/pause", post(schedule_routes::pause))
+        .route("/schedule/{id}/resume", post(schedule_routes::resume))
         // Paused assets: scheduled ticks skip them until resumed (`barca pause`).
         .route("/pauses", get(asset_pauses::list).post(asset_pauses::pause))
         .route("/pauses/resume", post(asset_pauses::resume))
@@ -114,10 +117,10 @@ pub fn router(state: AppState) -> Router {
         .route("/ui/", get(ui::index))
         .route("/ui/{*path}", get(ui::asset))
         // Everything else is a JSON 404, like the errors of the routes above.
-        .fallback(handlers::no_route)
-        .method_not_allowed_fallback(handlers::wrong_method)
+        .fallback(fallback::no_route)
+        .method_not_allowed_fallback(fallback::wrong_method)
         .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
+            state.auth.clone(),
             crate::auth_http::authorize,
         ))
         .with_state(state)

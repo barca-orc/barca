@@ -85,7 +85,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
             args.fields.as_deref(),
         )
         .map_err(|e| server.unexpected("the run's outcome", &e))?;
-    crate::commands::emit(rendered);
+    crate::print::emit(rendered);
     match error {
         Some(envelope) => Err(with_typed_files(envelope, ctx)),
         None => Ok(()),
@@ -159,7 +159,7 @@ async fn print_dry_run(
         barca_core::errln!("{note}");
     }
     barca_core::warnings::print(&result.warnings);
-    crate::commands::emit(barca_core::report::render_explain(
+    crate::print::emit(barca_core::report::render_explain(
         &result,
         args.command.as_str(),
         // A `get` dry run prints its plan as `--json` or as text, as locally (`-o path` alone

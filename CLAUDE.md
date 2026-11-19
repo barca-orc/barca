@@ -79,6 +79,11 @@ checks every `crate::<module>` path against the layers; the exceptions are liste
 `module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there; an
 analysis module also gets a row (`ANALYSIS_ROWS`) and names only the rows before it.
 
+Inside barca-server the modules are in rows too (leaf, the stateful parts, `state`, views,
+`runs`, `scheduler`, route families, `routes`: `docs/engineering/server-layering.md`);
+`crates/barca-server/src/layering_tests.rs` checks them, and its `ALLOWED` list is empty. A new
+module gets a row there; a handler takes the sub-state it uses (`State<Reads>`), not `AppState`.
+
 ### How it works
 
 1. **Rust coordinator** (`barca get <file.py>`):

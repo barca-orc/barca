@@ -1,49 +1,50 @@
-//! Pausing one schedule (`POST /schedule/{id}/pause`, `POST /schedule/{id}/resume`). A paused
-//! job's due ticks are skipped with reason `paused` until it is resumed or its `until` time
-//! passes. Pauses are kept in `schedule_state`, so a restart (a deploy) does not resume a job
-//! someone paused.
+//! `GET /schedule`, and pausing one schedule (`POST /schedule/{id}/pause`,
+//! `POST /schedule/{id}/resume`). A paused job's due ticks are skipped with reason `paused`
+//! until it is resumed or its `until` time passes. Pauses are kept in `schedule_state`, so a
+//! restart (a deploy) does not resume a job someone paused.
 
 use crate::error::ApiError;
-use crate::handlers::{schedule_at, snapshot_db};
+use crate::read_cache::Reads;
+use crate::schedule_view::{pauses, published_ticks, schedule_at, schedule_items};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use barca_core::db::{self, SchedulePause};
-use barca_core::served::SchedulePauseAnswer;
+use barca_core::served::{ScheduleJob, SchedulePauseAnswer};
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::RwLock;
 
-/// The paused schedules, read from `schedule_state` on first use.
-pub(crate) async fn pauses(
-    state: &AppState,
-) -> Result<&RwLock<HashMap<String, SchedulePause>>, ApiError> {
-    if state.config.read_only
-        && let Some(pauses) = state.pauses.get()
-    {
-        let snapshot = snapshot_db(state).await?;
-        let saved = db::get_schedule_pauses(&snapshot.path).await?;
-        *pauses.write().unwrap() = saved;
-        return Ok(pauses);
+/// `GET /schedule` — list scheduled jobs with next fire time and last run status.
+/// Reads the scheduler's published registry; volatile fields (next fire, live
+/// status) are computed per request.
+pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<ScheduleJob>>, ApiError> {
+    crate::schedule_view::pauses(&state).await?;
+    if state.config.read_only || !state.config.schedule {
+        let dag = state.reads.loaded_dag().await?;
+        let jobs = barca_core::schedule::jobs_from_dag(&dag);
+        let snap = state.reads.snapshot_db().await?;
+        let facts = state
+            .reads
+            .cached_ticks(
+                &state.reads.db_state(),
+                &snap.path,
+                jobs.iter().map(|j| j.id.clone()).collect(),
+            )
+            .await?;
+        // No scheduler here: failed ticks are the recorded ones, in the recorded zone.
+        return Ok(Json(schedule_items(
+            &state,
+            chrono::Utc::now(),
+            &facts,
+            &[],
+            jobs,
+            barca_core::liveness::recorded(&snap.path)
+                .await?
+                .zone()
+                .unwrap_or_else(|| crate::config::zone_of(&state.config)),
+        )));
     }
-    state
-        .pauses
-        .get_or_try_init(|| async {
-            let snapshot = snapshot_db(state).await?;
-            let saved = db::get_schedule_pauses(&snapshot.path).await?;
-            Ok::<_, ApiError>(RwLock::new(saved))
-        })
-        .await
-}
-
-/// `node_id`'s pause, if it is paused at `now` (unix seconds). A pause whose `until` has
-/// passed is over.
-pub(crate) fn active(state: &AppState, node_id: &str, now: i64) -> Option<SchedulePause> {
-    let pauses = state.pauses.get()?.read().ok()?;
-    pauses
-        .get(node_id)
-        .copied()
-        .filter(|p| p.until.is_none_or(|until| until > now))
+    let facts = published_ticks(&state).await?;
+    Ok(Json(schedule_at(&state, chrono::Utc::now(), &facts)))
 }
 
 #[derive(Default, Deserialize)]
@@ -94,8 +95,8 @@ async fn set(
     pause: Option<SchedulePause>,
     now: i64,
 ) -> Result<Json<SchedulePauseAnswer>, ApiError> {
-    crate::runs::refuse_if_read_only(state)?;
-    let node = scheduled_node(state, id).await?;
+    crate::guards::refuse_if_read_only(&state.config)?;
+    let node = scheduled_node(&state.reads, id).await?;
     let cfg = &state.config.resolved;
     barca_core::queries::open_metadata(cfg).await?;
     db::set_schedule_pause(&cfg.db_path, &node, pause, now).await?;
@@ -114,7 +115,7 @@ async fn set(
             None => "resumed".to_string(),
         }
     );
-    let facts = crate::handlers::published_ticks(state).await?;
+    let facts = crate::schedule_view::published_ticks(state).await?;
     let entry = schedule_at(state, chrono::Utc::now(), &facts)
         .into_iter()
         .find(|job| job.id == node);
@@ -132,14 +133,13 @@ async fn set(
 
 /// The scheduled node `id` names: its full id or its name, as for a run target. Anything that
 /// is not a scheduled node is `404`.
-async fn scheduled_node(state: &AppState, id: &str) -> Result<String, ApiError> {
-    let dag = state.loaded_dag().await?;
+async fn scheduled_node(reads: &Reads, id: &str) -> Result<String, ApiError> {
+    let dag = reads.loaded_dag().await?;
     let jobs =
         barca_core::schedule::jobs_from_summaries(barca_core::queries::list_assets_from_dag(&dag));
-    let matches: Vec<&str> = jobs
-        .iter()
+    let matches: Vec<&str> = crate::resolve::matching(&jobs, |j| j.id.as_str(), id)
+        .into_iter()
         .map(|j| j.id.as_str())
-        .filter(|job| *job == id || job.ends_with(&format!(":{id}")))
         .collect();
     match matches.as_slice() {
         [one] => Ok(one.to_string()),

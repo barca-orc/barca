@@ -2,112 +2,11 @@
 //! and result rendering. Locally it reads the metadata DB, and the spool of a run still in
 //! progress (`barca_core::run_logs`); against a server, `client::logs`.
 
+use crate::print::{follow_ended, follow_exit_code, name_run};
+use crate::request::LogsArgs;
+use barca_core::BarcaError;
 use barca_core::db::LogEntry;
-use barca_core::{BarcaError, LogStream};
 use std::time::{Duration, Instant};
-
-/// What `barca logs` prints, wherever the lines come from.
-#[derive(Clone, Copy)]
-pub(crate) struct LogsArgs<'a> {
-    pub(crate) step: Option<&'a str>,
-    pub(crate) stream: Option<LogStream>,
-    pub(crate) follow: bool,
-    pub(crate) timestamps: bool,
-    pub(crate) json: bool,
-}
-
-impl LogsArgs<'_> {
-    /// Whether a line arriving while following is one to print. Nothing is checked against
-    /// the run's steps: a step that has not started yet has no lines.
-    pub(crate) fn selects(&self, node_id: &str, stream: LogStream) -> bool {
-        self.stream.is_none_or(|s| s == stream)
-            && self
-                .step
-                .is_none_or(|step| barca_core::queries::step_matches(node_id, step))
-    }
-
-    /// Print lines read all at once: a JSON array, or JSON Lines while following.
-    pub(crate) fn print_all(&self, lines: &[LogEntry]) -> Result<(), BarcaError> {
-        if self.json && !self.follow {
-            let entries: Vec<_> = lines.iter().map(entry_json).collect();
-            barca_core::outln!("[{}]", entries.join(","));
-        } else {
-            for line in lines {
-                self.print_one(line);
-            }
-        }
-        Ok(())
-    }
-
-    /// Print one line as it arrives: its text (after its time with --timestamps), or with
-    /// --json one object on a line of its own.
-    pub(crate) fn print_one(&self, entry: &LogEntry) {
-        if self.json {
-            barca_core::outln!("{}", entry_json(entry));
-        } else if self.timestamps {
-            barca_core::outln!(
-                "{} {}",
-                entry.ts.as_deref().unwrap_or(UNKNOWN_TS),
-                entry.line
-            );
-        } else {
-            barca_core::outln!("{}", entry.line);
-        }
-    }
-}
-
-/// The time column of a line recorded before barca stamped lines.
-const UNKNOWN_TS: &str = "-                       ";
-
-/// One line in `--json`: `{node_id, stream, ts, line}`, in that order.
-#[derive(serde::Serialize)]
-struct EntryJson<'a> {
-    node_id: &'a str,
-    stream: LogStream,
-    ts: Option<&'a str>,
-    line: &'a str,
-}
-
-fn entry_json(entry: &LogEntry) -> String {
-    serde_json::to_string(&EntryJson {
-        node_id: &entry.node_id,
-        stream: entry.stream,
-        ts: entry.ts.as_deref(),
-        line: &entry.line,
-    })
-    .unwrap_or_default()
-}
-
-/// The exit code `-f` ends with, from the run's status: 0 succeeded, 130 cancelled, 1 otherwise.
-pub(crate) fn follow_exit_code(status: &str) -> i32 {
-    match status {
-        "success" => 0,
-        "cancelled" => 130,
-        _ => 1,
-    }
-}
-
-/// The stderr line that ends `-f`.
-pub(crate) fn follow_ended(run_id: &str, status: &str) {
-    barca_core::errln!("barca: run {run_id} ended: {status}");
-}
-
-/// The stderr line naming the run read without a run id.
-pub(crate) fn name_run(run: &barca_core::db::RunRecord, follow: bool) {
-    let what = if follow && run.status == "running" {
-        "following the newest running run"
-    } else {
-        "logs of the most recent run"
-    };
-    barca_core::errln!(
-        "barca: {what}: {} ({} {}, {}, started {})",
-        run.run_id,
-        run.command,
-        barca_core::report::history_target(run),
-        run.status,
-        barca_core::report::utc_cell(&run.started_at)
-    );
-}
 
 /// How often `-f` looks for new lines and for the run's end.
 const POLL: Duration = Duration::from_millis(200);

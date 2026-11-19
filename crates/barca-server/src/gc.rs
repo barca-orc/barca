@@ -10,8 +10,8 @@
 //! hold back every current result (`restricted`).
 
 use crate::error::ApiError;
-use crate::runs::refuse_if_read_only;
-use crate::state::AppState;
+use crate::guards::refuse_if_read_only;
+use crate::read_cache::Reads;
 use axum::Json;
 use axum::extract::State;
 use barca_core::gc::{GcOptions, GcResult};
@@ -40,10 +40,10 @@ pub struct GcRequest {
 /// (it deletes nothing, a dry run included: its answer would describe a cache it does not
 /// manage).
 pub async fn gc(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     body: Option<Json<GcRequest>>,
 ) -> Result<Json<GcResult>, ApiError> {
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&reads.config)?;
     let Json(request) = body.unwrap_or_default();
     let max_size = request
         .max_size
@@ -51,7 +51,7 @@ pub async fn gc(
         .map(barca_core::gc::size::parse)
         .transpose()
         .map_err(|e| ApiError::BadRequest(format!("max_size: {e}")))?;
-    let cfg = &state.config.resolved;
+    let cfg = &reads.config.resolved;
     if let Some(env) = request.env.as_deref().filter(|env| *env != cfg.env) {
         return Err(ApiError::BadRequest(format!(
             "env: this server serves environment '{}', not '{env}'\nLeave out env, or name \

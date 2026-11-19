@@ -4,7 +4,7 @@ description: "The project root, the .barca/ directory, concurrent runs, killed r
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/layout.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/layout.md (barca docs layout). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/layout.md (barca docs layout). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Everything barca keeps is under `.barca/` in the project root. Below: where that root
 is and what the directory holds, what happens when several barca processes share one project,

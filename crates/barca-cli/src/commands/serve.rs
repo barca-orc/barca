@@ -1,24 +1,6 @@
 //! Serve command implementation.
 
-use std::path::PathBuf;
-
-/// `barca serve`'s flags, as typed.
-pub(crate) struct ServeArgs {
-    pub(crate) env: Option<String>,
-    pub(crate) auth: Option<barca_core::serve::AuthMode>,
-    pub(crate) files: Vec<PathBuf>,
-    pub(crate) host: std::net::IpAddr,
-    pub(crate) port: u16,
-    pub(crate) watch: bool,
-    /// `!--no-schedule`.
-    pub(crate) schedule: bool,
-    pub(crate) timezone: String,
-    pub(crate) read_only: bool,
-    pub(crate) drain_timeout: Option<u64>,
-    pub(crate) max_runs: Option<usize>,
-    pub(crate) capacity: Option<usize>,
-    pub(crate) run_timeout: Option<u64>,
-}
+use crate::request::ServeArgs;
 
 pub(crate) async fn serve_cmd(
     args: ServeArgs,

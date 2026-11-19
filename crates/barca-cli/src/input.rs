@@ -1,7 +1,7 @@
 //! Input validation, project roots, and output selection.
 
 use crate::{
-    args::{Cli, GetOutput, OutputMode},
+    args::{Cli, GetOutput, OutputMode, ServerFlags, StateCommand},
     error::{self, CliError, Context, ErrorKind, shell_quote},
     output::{self, Format, FormatFlags},
 };
@@ -206,42 +206,148 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
         | Cli::Doctor { format, .. }
         | Cli::Gc { format, .. } => is_json(*format),
         Cli::State { command } => match command {
-            crate::StateCommand::Backups { format, .. }
-            | crate::StateCommand::Restore { format, .. }
-            | crate::StateCommand::Reset { format, .. } => is_json(*format),
+            StateCommand::Backups { format, .. }
+            | StateCommand::Restore { format, .. }
+            | StateCommand::Reset { format, .. } => is_json(*format),
         },
         Cli::Serve { .. } | Cli::Tokens { .. } | Cli::Version => false,
+    }
+}
+
+/// The subcommand an invocation names, as typed.
+pub(crate) fn command_name(cli: &Cli) -> &'static str {
+    match cli {
+        Cli::Get { .. } => "get",
+        Cli::Run { .. } => "run",
+        Cli::Plan { .. } => "plan",
+        Cli::Doctor { .. } => "doctor",
+        Cli::Stats { .. } => "stats",
+        Cli::Pin { .. } => "pin",
+        Cli::Unpin { .. } => "unpin",
+        Cli::Serve { .. } => "serve",
+        Cli::List { .. } => "list",
+        Cli::Sql { .. } => "sql",
+        Cli::Status { .. } => "status",
+        Cli::History { .. } => "history",
+        Cli::Cancel { .. } => "cancel",
+        Cli::Queue { .. } => "queue",
+        Cli::Pause { .. } => "pause",
+        Cli::Resume { .. } => "resume",
+        Cli::Gc { .. } => "gc",
+        Cli::Logs { .. } => "logs",
+        Cli::State { .. } => "state",
+        Cli::Docs { .. } => "docs",
+        Cli::Version => "version",
+        Cli::Tokens { .. } => "tokens",
     }
 }
 
 /// The command name and files of an invocation, for remediation hints.
 pub(crate) fn context(cli: &Cli) -> Context {
     let paths = |files: &[PathBuf]| files.iter().map(|p| p.display().to_string()).collect();
-    let (command, files) = match cli {
-        Cli::Get { args, .. } => ("get", paths(&split_target_files(args.clone()).1)),
-        Cli::Run { args, .. } => ("run", paths(&split_target_files(args.clone()).1)),
-        Cli::Plan { files, .. } => ("plan", paths(files)),
-        Cli::Doctor { files, .. } => ("doctor", paths(files)),
-        Cli::Stats { files, .. } => ("stats", paths(files)),
-        Cli::Pin { files, .. } => ("pin", paths(files)),
-        Cli::Unpin { files, .. } => ("unpin", paths(files)),
-        Cli::Serve { files, .. } => ("serve", paths(files)),
-        Cli::List { files, .. } => ("list", paths(files)),
-        Cli::Sql { files, .. } => ("sql", paths(files)),
-        Cli::Status { args, .. } => ("status", paths(&split_target_files(args.clone()).1)),
-        Cli::History { .. } => ("history", Vec::new()),
-        Cli::Cancel { .. } => ("cancel", Vec::new()),
-        Cli::Queue { .. } => ("queue", Vec::new()),
-        Cli::Pause { .. } => ("pause", Vec::new()),
-        Cli::Resume { .. } => ("resume", Vec::new()),
-        Cli::Gc { .. } => ("gc", Vec::new()),
-        Cli::Logs { .. } => ("logs", Vec::new()),
-        Cli::State { .. } => ("state", Vec::new()),
-        Cli::Docs { .. } => ("docs", Vec::new()),
-        Cli::Version => ("version", Vec::new()),
-        Cli::Tokens { .. } => ("tokens", Vec::new()),
+    let files = match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            paths(&split_target_files(args.clone()).1)
+        }
+        Cli::Plan { files, .. }
+        | Cli::Doctor { files, .. }
+        | Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Serve { files, .. }
+        | Cli::List { files, .. }
+        | Cli::Sql { files, .. } => paths(files),
+        Cli::History { .. }
+        | Cli::Cancel { .. }
+        | Cli::Queue { .. }
+        | Cli::Pause { .. }
+        | Cli::Resume { .. }
+        | Cli::Gc { .. }
+        | Cli::Logs { .. }
+        | Cli::State { .. }
+        | Cli::Docs { .. }
+        | Cli::Version
+        | Cli::Tokens { .. } => Vec::new(),
     };
-    Context { command, files }
+    Context {
+        command: command_name(cli),
+        files,
+    }
+}
+
+/// `--env` of a command that may go to this project's server.
+pub(crate) fn env_of(cli: &Cli) -> Option<&str> {
+    match cli {
+        Cli::Get { env, .. }
+        | Cli::Run { env, .. }
+        | Cli::Status { env, .. }
+        | Cli::History { env, .. }
+        | Cli::Stats { env, .. }
+        | Cli::Logs { env, .. }
+        | Cli::Sql { env, .. }
+        | Cli::Queue { env, .. }
+        | Cli::Pause { env, .. }
+        | Cli::Resume { env, .. }
+        | Cli::Pin { env, .. }
+        | Cli::Unpin { env, .. }
+        | Cli::Cancel { env, .. }
+        | Cli::Gc { env, .. } => env.as_deref(),
+        _ => None,
+    }
+}
+
+/// Whether the command line named files (before discovery fills them in at the project root).
+pub(crate) fn files_given(cli: &Cli) -> bool {
+    match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            !split_target_files(args.clone()).1.is_empty()
+        }
+        Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Sql { files, .. } => !files.is_empty(),
+        _ => false,
+    }
+}
+
+/// Forget the files discovery found for a command that named none ([`files_given`]): a server
+/// then uses every file it has deployed.
+pub(crate) fn drop_discovered_files(cli: &mut Cli) {
+    match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            let (target, _) = split_target_files(std::mem::take(args));
+            args.extend(target);
+        }
+        Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Sql { files, .. } => files.clear(),
+        _ => {}
+    }
+}
+
+/// The `--server` / `--local` flags of the commands `dispatch` places by them: every command
+/// whose row in `route::ROUTES` takes the flags, except `doctor`, which reads its own (a test
+/// in `route` holds this to the table).
+pub(crate) fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
+    match cli {
+        Cli::Get { server, .. }
+        | Cli::Run { server, .. }
+        | Cli::Status { server, .. }
+        | Cli::List { server, .. }
+        | Cli::History { server, .. }
+        | Cli::Stats { server, .. }
+        | Cli::Pin { server, .. }
+        | Cli::Unpin { server, .. }
+        | Cli::Logs { server, .. }
+        | Cli::Cancel { server, .. }
+        | Cli::Queue { server, .. }
+        | Cli::Pause { server, .. }
+        | Cli::Resume { server, .. }
+        | Cli::Gc { server, .. }
+        | Cli::Sql { server, .. } => Some(server),
+        _ => None,
+    }
 }
 
 /// The get/run output mode. `--fields` trims JSON, so it implies JSON; combined with an

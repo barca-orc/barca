@@ -4,7 +4,7 @@ description: "Containing an incident: barca pause and barca resume, and what sch
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/incidents.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/incidents.md (barca docs incidents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/incidents.md (barca docs incidents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 When an asset is failing or producing bad data, an operator holds it back on the server so that
 scheduled runs stop computing it (and what reads it) until it is fixed. A pause names a node, a

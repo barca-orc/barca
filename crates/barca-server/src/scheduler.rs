@@ -4,7 +4,7 @@
 //! `Freshness::Schedule(CronExpr)`, but nothing in the executor ever acts on it.
 //! This module closes that gap: at startup it enumerates every scheduled node, and
 //! then on each live cron match it triggers a run through the same
-//! [`crate::handlers`] run pool the HTTP `/run` endpoints use — so scheduled
+//! [`crate::runs`] run pool the HTTP `/run` endpoints use — so scheduled
 //! runs are bounded the same way and land in the `runs` history table for free.
 //! A scheduled task reuses cached upstream assets; `POST /run/{task}` does not.
 //!
@@ -24,7 +24,8 @@
 //! is [`tick`], and the failing rule with the per-job bookkeeping is [`failures`].
 
 use crate::runs;
-use crate::state::{AppState, JobStatus};
+use crate::state::AppState;
+use crate::views::JobStatus;
 use barca_core::schedule::ScheduledJob;
 pub(crate) use barca_core::schedule::Zone;
 use barca_core::{NodeKind, db};
@@ -38,10 +39,6 @@ mod tick;
 
 use failures::*;
 use tick::*;
-
-pub(crate) fn zone_of(config: &crate::state::ServeConfig) -> Zone {
-    Zone::parse(&config.timezone).unwrap_or(Zone::Local)
-}
 
 /// Note a skipped tick of `job` at `epoch`: the line on stderr, the `/schedule` entry, and a
 /// `barca.run` span with status `skipped` when telemetry is on. `handle` is the run still in
@@ -372,7 +369,7 @@ fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping)
             }
         })
         .collect();
-    if let Ok(mut w) = state.schedule.write() {
+    if let Ok(mut w) = state.scheduling.jobs.write() {
         *w = snapshot;
     }
 }
@@ -380,7 +377,7 @@ fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping)
 /// Re-run static analysis to enumerate scheduled jobs. The parse itself runs
 /// on the blocking pool inside `barca_core::queries::list_assets`.
 async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
-    match state.loaded_dag().await {
+    match state.reads.loaded_dag().await {
         Ok(dag) => barca_core::schedule::jobs_from_dag(&dag),
         Err(error) => {
             barca_core::errln!("[barca] scheduler load failed: {error}");
@@ -441,7 +438,7 @@ pub async fn run_scheduler(state: AppState) {
 
     // Associate the initial jobs with the generation before loading them. Edits during
     // loading, DB initialization or catch-up must remain pending for the first tick.
-    let mut seen_gen = state.dag_generation.load(Ordering::Relaxed);
+    let mut seen_gen = state.reads.sources.generation.load(Ordering::Relaxed);
     let mut jobs = reload_jobs(&state).await;
 
     if jobs.is_empty() && !state.config.watch {
@@ -477,7 +474,7 @@ pub async fn run_scheduler(state: AppState) {
     };
 
     // Paused schedules, for the tick to skip. They are kept in step by the pause routes.
-    if let Err(e) = crate::pause::pauses(&state).await {
+    if let Err(e) = crate::schedule_view::pauses(&state).await {
         let (_, envelope) = e.parts();
         barca_core::errln!(
             "[barca] scheduler: cannot read paused schedules: {}",
@@ -486,7 +483,7 @@ pub async fn run_scheduler(state: AppState) {
     }
 
     // Handle issued, last-fired epoch and last skip per job, for the `/schedule` view;
-    // `last_fired` also powers durability. The overlap skip reads `state.runs` and the
+    // `last_fired` also powers durability. The overlap skip reads `state.runs.registry` and the
     // `running` rows of the metadata database, not these. Entries for jobs removed on reload are harmless.
     // Catch-up requires durability; it is skipped entirely if the DB is unavailable.
     let mut book = match &db_path {
@@ -533,15 +530,15 @@ pub async fn run_scheduler(state: AppState) {
         // caught up by the next server's startup catch-up.
         tokio::select! {
             _ = sleep_to_next_second(&zone) => {}
-            _ = state.draining.cancelled() => {}
+            _ = state.lifecycle.draining.cancelled() => {}
         }
-        if state.is_draining() {
+        if state.lifecycle.is_draining() {
             barca_core::errln!("[barca] scheduler stopped: the server is draining");
             return;
         }
 
         // `--watch`: re-read the job set when a source file changed.
-        let current_gen = state.dag_generation.load(Ordering::Relaxed);
+        let current_gen = state.reads.sources.generation.load(Ordering::Relaxed);
         if current_gen != seen_gen {
             seen_gen = current_gen;
             let fresh = reload_jobs(&state).await;
@@ -588,7 +585,7 @@ pub async fn run_scheduler(state: AppState) {
         let actions = plan_tick(
             &now,
             &jobs,
-            |job| crate::pause::active(&state, &job.id, epoch).is_some(),
+            |job| crate::schedule_view::active(&state, &job.id, epoch).is_some(),
             |job| any_run_in_flight_for(&state, &cli, job),
             |job| book.failures(job),
         );

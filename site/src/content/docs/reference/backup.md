@@ -4,7 +4,7 @@ description: "Backups of the metadata database in the store, barca state backups
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/backup.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/backup.md (barca docs backup). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/backup.md (barca docs backup). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 With a store configured, barca backs up its metadata database, the record of what is cached, so
 you can put it back after losing a disk or a machine. Below: when backups are taken, what one

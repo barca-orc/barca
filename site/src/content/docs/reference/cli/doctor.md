@@ -4,7 +4,7 @@ description: "Check project prerequisites, stores and credential identity withou
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/doctor.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/doctor.md (barca docs doctor). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/doctor.md (barca docs doctor). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `barca doctor` reports what a run would need (project root, Python, cache, metadata, stores,
 capacity, and a configured server) without executing a step, so a broken setup is found before

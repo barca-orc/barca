@@ -4,7 +4,7 @@ description: "duckdb 1.x and 2.x: what a pipeline must change for duckdb 2, and 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/duckdb.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/duckdb.md (barca docs duckdb). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/duckdb.md (barca docs duckdb). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `barca[sql]` accepts duckdb 1.4 up to (not including) 3, and barca's tests run on 1.x and 2.x.
 duckdb 1.1 to 1.3 are not supported (on 1.1, for one, dataset sinks fail).
