@@ -1,8 +1,7 @@
 //! Shared result rendering and JSON projection for frontends.
 //!
 //! Tables return their complete text, including newlines, so callers choose their output
-//! stream. JSON helpers preserve the CLI schema and field selection. Engine progress helpers
-//! format step reports and progress lines without emitting them.
+//! stream. JSON helpers preserve the CLI schema and field selection.
 
 mod commands;
 mod keys;
@@ -23,9 +22,9 @@ pub use keys::{
 };
 
 use crate::cache_state::CacheState;
+use crate::results::*;
 use crate::step_status::StepStatus;
 pub use crate::text::utc_cell;
-use crate::{dag::Dag, results::*};
 
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -703,167 +702,6 @@ impl Page {
     }
 }
 
-/// Format seconds as a fixed-width time string for progress display.
-/// Always 8 chars wide: "   5s   ", " 2m 30s ", " 1h 05m ", "2d 03h  "
-pub(crate) fn fmt_eta(secs: f64) -> String {
-    let s = secs.round() as u64;
-    if s < 60 {
-        format!("{s:>4}s   ")
-    } else if s < 3600 {
-        format!("{:>2}m {:02}s ", s / 60, s % 60)
-    } else if s < 86400 {
-        format!("{:>2}h {:02}m ", s / 3600, (s % 3600) / 60)
-    } else {
-        let d = s / 86400;
-        format!("{d:>2}d {:02}h  ", (s % 86400) / 3600)
-    }
-}
-
-/// The progress total, grown to cover steps the plan did not count (the children a `parallel()`
-/// call fans out to complete as extra steps). Keeps `completed <= total` for the counters and
-/// the ETA subtraction.
-pub(crate) fn reconcile_total(total_steps: usize, completed_steps: usize) -> usize {
-    total_steps.max(completed_steps)
-}
-
-/// The `--agent` step-line suffix for `node_id`'s declared env (empty when none is declared).
-pub(crate) fn env_suffix(dag: &Dag, node_id: &str) -> String {
-    dag.get_node(crate::StepId::parse(node_id).base_id())
-        .map(|n| crate::envdeps::agent_suffix(&crate::envdeps::resolve(&n.extracted.env)))
-        .unwrap_or_default()
-}
-
-/// What another run of the same server computed while this run waited for it (#654), as this
-/// run reports it: a cache hit. `display_id` is the step (with its partition key), `artifact`
-/// where its result is. Adjusts the report of its node made when the step was decided.
-pub(crate) fn computed_by_another_run(
-    reports: &mut [StepReport],
-    display_id: &str,
-    artifact: Option<&str>,
-) {
-    let id = crate::StepId::parse(display_id);
-    let base = id.base_id();
-    let key = (!id.partition.is_empty()).then(|| id.partition.suffix());
-    for r in reports.iter_mut().rev().filter(|r| r.id == base) {
-        match (&key, r.partitions.as_mut()) {
-            (Some(key), Some(p)) if p.will_run > 0 => {
-                p.will_run -= 1;
-                p.cached += 1;
-                p.will_run_keys.retain(|k| k != key);
-                if let Some(changed) = p.changed.as_mut() {
-                    changed.remove(key);
-                }
-                if p.will_run == 0 {
-                    r.reason = None;
-                    r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
-                    r.status = Some(
-                        if p.cached == p.total {
-                            StepStatus::Cached
-                        } else {
-                            StepStatus::Partial
-                        }
-                        .to_string(),
-                    );
-                }
-                return;
-            }
-            (None, None) if StepStatus::Ran.is(r.status.as_deref()) => {
-                r.status = Some(StepStatus::Cached.to_string());
-                r.reason = None;
-                r.changed = None;
-                r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
-                r.artifact = artifact.map(str::to_string);
-                return;
-            }
-            _ => {}
-        }
-    }
-}
-
-/// The detail of a step another run of the server computed for this one.
-pub(crate) const COMPUTED_BY_ANOTHER_RUN: &str =
-    "computed by another run of the server at the same time";
-
-/// How a run ended, for its last stderr line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RunOutcome {
-    Done,
-    Failed,
-    Cancelled,
-}
-
-/// A batched node's calls in a run, so its per-key `step:` lines read as one computation.
-pub(crate) fn batch_line(node: &str, b: &crate::results::BatchExecution) -> String {
-    let calls = if b.calls == 1 { "call" } else { "calls" };
-    let keys = if b.keys == 1 { "key" } else { "keys" };
-    format!(
-        "[barca] batch:{node} {} {calls}, {} {keys} | import {:.1}s, load {:.1}s, compute {:.1}s, split {:.1}s, write {:.1}s",
-        b.calls,
-        b.keys,
-        b.import_seconds,
-        b.load_seconds,
-        b.compute_seconds,
-        b.split_seconds,
-        b.write_seconds
-    )
-}
-
-/// The last progress line of a run that executed steps, with or without `--agent`:
-/// `[barca] N/M steps | done in Xs` (`failed in`, `cancelled after`).
-pub(crate) fn end_of_run_line(
-    completed: usize,
-    total: usize,
-    secs: f64,
-    outcome: RunOutcome,
-) -> String {
-    let how = match outcome {
-        RunOutcome::Done => "done in",
-        RunOutcome::Failed => "failed in",
-        RunOutcome::Cancelled => "cancelled after",
-    };
-    format!("[barca] {completed}/{total} steps | {how} {secs:.1}s")
-}
-
-/// The `--agent` line for a step served from cache: `[barca] step:<id> cached`, with its declared
-/// env.
-pub(crate) fn cached_step_line(dag: &Dag, display_id: &str) -> String {
-    format!(
-        "[barca] step:{display_id} cached{}",
-        env_suffix(dag, display_id)
-    )
-}
-
-/// The `--agent` line for a step that raised: `[barca] step:<id> failed: <first line of the
-/// error>`, beside the `completed` and `cached` lines.
-pub(crate) fn failed_step_line(node_id: &str, error: &str) -> String {
-    let first = error
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("unknown error");
-    format!("[barca] step:{node_id} failed: {first}")
-}
-
-#[cfg(test)]
-mod progress_tests {
-    use super::reconcile_total;
-
-    #[test]
-    fn total_grows_to_cover_steps_the_plan_did_not_count() {
-        // parallel() children complete as extra steps beyond the plan.
-        assert_eq!(reconcile_total(2, 4), 4);
-        assert_eq!(reconcile_total(4, 2), 4);
-        assert_eq!(reconcile_total(3, 3), 3);
-        assert_eq!(reconcile_total(0, 0), 0);
-    }
-
-    #[test]
-    fn remaining_never_underflows() {
-        // The ETA math subtracts usizes; this used to panic in debug and wrap in release.
-        assert_eq!(2usize.saturating_sub(4), 0);
-    }
-}
-
 #[cfg(test)]
 mod utc_tests {
     use super::utc_cell;
@@ -927,58 +765,6 @@ mod key_summary_output_tests {
         assert_eq!(out[super::KEY_SUMMARY]["truncated"], true);
         assert!(
             super::key_summary_note(&cold).contains(&format!("{} computed", 5000 - LISTED_KEYS))
-        );
-    }
-}
-
-#[cfg(test)]
-mod run_line_tests {
-    use super::{RunOutcome, batch_line, end_of_run_line, failed_step_line};
-
-    #[test]
-    fn a_batched_node_has_one_line_with_its_calls_keys_and_phases() {
-        let b = barca_model::reports::BatchExecution {
-            calls: 1,
-            keys: 3077,
-            import_seconds: 0.12,
-            load_seconds: 1.2,
-            compute_seconds: 8.44,
-            split_seconds: 3.1,
-            write_seconds: 14.2,
-        };
-        assert_eq!(
-            batch_line("p.py:orders", &b),
-            "[barca] batch:p.py:orders 1 call, 3077 keys | import 0.1s, load 1.2s, compute 8.4s, split 3.1s, write 14.2s"
-        );
-    }
-
-    #[test]
-    fn end_of_run_line_is_one_format_and_never_says_done_on_failure() {
-        assert_eq!(
-            end_of_run_line(3, 3, 1.26, RunOutcome::Done),
-            "[barca] 3/3 steps | done in 1.3s"
-        );
-        let failed = end_of_run_line(0, 3, 0.0, RunOutcome::Failed);
-        assert_eq!(failed, "[barca] 0/3 steps | failed in 0.0s");
-        assert!(!failed.contains("done"));
-        assert_eq!(
-            end_of_run_line(1, 3, 2.0, RunOutcome::Cancelled),
-            "[barca] 1/3 steps | cancelled after 2.0s"
-        );
-    }
-
-    #[test]
-    fn failed_step_line_names_the_step_and_the_first_error_line() {
-        assert_eq!(
-            failed_step_line(
-                "p.py:broken",
-                "\nValueError: boom\n  File \"p.py\", line 3, in broken"
-            ),
-            "[barca] step:p.py:broken failed: ValueError: boom"
-        );
-        assert_eq!(
-            failed_step_line("p.py:x", ""),
-            "[barca] step:p.py:x failed: unknown error"
         );
     }
 }

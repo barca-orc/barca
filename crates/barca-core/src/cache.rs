@@ -1303,7 +1303,9 @@ pub enum CachePolicy {
 pub(crate) use crate::store_sync::BLOCKED_ARTIFACT_PATH;
 
 mod step_report;
-pub(crate) use step_report::{env_report, merge_partition_reports, report_for, stale_warning};
+pub(crate) use step_report::{
+    computed_by_another_run, env_report, merge_partition_reports, report_for, stale_warning,
+};
 
 #[cfg(test)]
 mod lookup_tests;

@@ -1,6 +1,5 @@
 //! Static schedule analysis shared by the CLI and server.
 
-use crate::queries;
 use crate::results::AssetSummary;
 use crate::{CronExpr, Freshness, NodeKind};
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
@@ -96,21 +95,8 @@ impl ScheduledJob {
     }
 }
 
-/// Enumerate every node whose freshness is `Schedule(cron)` and parse each cron.
-/// A DAG-analysis failure disables the scheduler (returns empty); individual
-/// invalid/empty cron strings are logged and skipped rather than aborting.
-pub async fn collect_jobs(files: &[String], python: &std::path::Path) -> Vec<ScheduledJob> {
-    match queries::list_assets(files, python).await {
-        Ok(summaries) => jobs_from_summaries(summaries),
-        Err(e) => {
-            crate::errln!("[barca] scheduler disabled: failed to analyze DAG: {e}");
-            Vec::new()
-        }
-    }
-}
-
-/// Pure summary → job mapping (split out from [`collect_jobs`] so it is testable
-/// without a Python interpreter). Drops entries whose cron fails to parse.
+/// Every node whose freshness is `Schedule(cron)`, with its cron parsed. An invalid or empty
+/// cron string is logged and skipped. Takes the summaries, so it needs no Python interpreter.
 pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
     let mut jobs = Vec::new();
     for s in summaries {

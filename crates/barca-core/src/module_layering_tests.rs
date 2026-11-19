@@ -141,7 +141,7 @@ const STORAGE_ROWS: &[&[&str]] = &[
 /// (modules that all reach each other through `crate::` paths in non-test code). 38 before
 /// the cuts of #1056's C1, 29 after them, 19 with the storage layer out of it (C4), 16 with the prediction in the
 /// decisions layer (C2).
-const LARGEST_CYCLE: usize = 16;
+const LARGEST_CYCLE: usize = 6;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
 
