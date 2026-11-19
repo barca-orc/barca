@@ -604,7 +604,7 @@ pub fn line(node: &NodeStatus, now: i64) -> Option<String> {
             .as_deref()
             .and_then(crate::time::parse_rfc3339)
     {
-        return Some(format!("overdue {}", crate::report::span(now - since)));
+        return Some(format!("overdue {}", crate::text::span(now - since)));
     }
     node.recheck_at
         .as_deref()

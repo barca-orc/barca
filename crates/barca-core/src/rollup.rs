@@ -545,7 +545,7 @@ impl RollupEntry {
                     s if s < 86_400 => 3600,
                     _ => 86_400,
                 };
-                crate::report::span((left + unit - 1) / unit * unit)
+                crate::text::span((left + unit - 1) / unit * unit)
             });
         let mut said = Vec::new();
         if let (Some(within), true) = (within, estimated > 0) {
@@ -560,7 +560,7 @@ impl RollupEntry {
         if self.gap_seconds > 0 {
             line.push_str(&format!(
                 "; {} of gap across nodes (node-time)",
-                crate::report::span(self.gap_seconds)
+                crate::text::span(self.gap_seconds)
             ));
         }
         line
@@ -1315,7 +1315,7 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
             );
             let schedule = evidence.path.schedules.get(&root.node);
             let (detail, error_group) = detail(&root, &name, about, schedule, evidence);
-            let name = crate::envelope::shell_quote(&name);
+            let name = crate::text::shell_quote(&name);
             root.detail = detail;
             root.error_group = error_group;
             root.weight = root.causes.weight();
@@ -1345,7 +1345,7 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
                         targets.sort_unstable();
                         commands.push(format!(
                             "barca {verb} {}{refresh}{via}",
-                            crate::envelope::shell_quote(&targets.join(","))
+                            crate::text::shell_quote(&targets.join(","))
                         ));
                     }
                 }
@@ -1443,7 +1443,7 @@ fn detail(
     schedule: Option<&crate::refresh_path::PathSchedule>,
     evidence: Evidence<'_>,
 ) -> (String, Option<String>) {
-    use crate::report::span;
+    use crate::text::span;
     let standing = schedule.and_then(|s| s.standing.as_ref());
     let line = match root.kind {
         RootKind::Failure => {
@@ -1513,7 +1513,7 @@ fn detail(
 /// schedules that leaves unfired and how many of them have already missed a slot. Where a
 /// scheduler runs and does not serve some schedules, those.
 fn scheduler_detail(evidence: Evidence<'_>) -> String {
-    use crate::report::span;
+    use crate::text::span;
     let schedules = evidence.path.schedules;
     let off: Vec<(&String, &crate::refresh_path::PathSchedule)> =
         schedules.iter().filter(|(_, s)| s.off()).collect();

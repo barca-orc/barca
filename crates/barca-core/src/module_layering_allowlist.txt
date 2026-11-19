@@ -1,45 +1,19 @@
 # Edges between barca-core's modules that point the wrong way (see module_layering_tests.rs and
 # docs/engineering/layering.md). One edge per line: `from -> to: the items of `to` that `from`
 # names`. This list may only shrink: delete a line when its edge is cut.
-backup -> envelope: shell_quote
-commands -> outcome: RunCommand, RunOptions
-estimates -> report: span
-execution -> outcome: RunOptions, Trigger
-execution -> queries: filter_plan_to_subgraph
 execution -> report: RunOutcome, batch_line, cached_step_line, computed_by_another_run, end_of_run_line, env_suffix, failed_step_line, fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning
-execution -> status: trace_since
-health -> queries: list_assets_from_dag
-health -> report: ago
-health -> serve: run_queue::paused_at
-history_filter -> outcome: TriggeredBy
-history_filter -> queries: step_matches
 incremental -> report: env_report, kind_str
-key_query -> outcome: rfc3339
 ledger -> cache: CacheReader, checks_bytes, lookup_cached
 ledger -> envelope: ErrorEnvelope
 ledger -> outcome: API_VERSION
 ledger -> persist: record_post
-liveness -> outcome: TriggeredBy
-liveness -> serve: run_queue::QueueState, run_queue::list, run_queue::progress, run_queue::set_state_value, run_queue::state_value
 partition_grid -> execution: explain_dag_with_keys
-pauses -> queries: open_metadata
 pins -> cache: CacheReader
-recover -> report: key_preview
-results -> gc: CacheReport
-rollup -> envelope: shell_quote
-rollup -> report: span
-run_explanation -> outcome: RunView, TriggeredBy
-run_explanation -> report: KEY_SUMMARY
-run_list -> outcome: TriggeredBy
-schedule -> queries: list_assets, list_assets_from_dag
-schedule_standing -> report: span
-schedule_standing -> serve: run_queue, run_queue::QueueState
+run_explanation -> outcome: RunView
+schedule -> queries: list_assets
 status -> execution: HeldNodes, explain_dag_with_keys
-status -> report: utc_cell
 store_inspect -> cache: CacheReader, lookup_cached
 store_inspect -> status: NodeStatus
 store_sync -> cache: BLOCKED_ARTIFACT_PATH
 store_sync -> mismatch: describe
 store_sync -> recover: on_disk
-telemetry -> outcome: Trigger
-transfer -> execution: upload_pending

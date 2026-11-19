@@ -3,8 +3,8 @@
 
 use crate::cache::BLOCKED_ARTIFACT_PATH;
 use crate::dispatch;
-use crate::gc::size::human;
 use crate::recover;
+use crate::text::human;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use crate::verified_copies;
 use std::collections::{HashMap, HashSet};

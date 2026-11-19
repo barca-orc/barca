@@ -8,7 +8,8 @@
 //!   (plan, history, logs, stats, `open_metadata`), `status`, `report`, `results`, `values`,
 //!   `sql`, `gc`, `backup`, `transfer`, `ledger`, `freshness`, `pins`, `pauses`, `schedule`,
 //!   `partition_grid`, `history_filter`, `diagnostics`, `envelope`, `outcome`, `cache`, `http`,
-//!   `telemetry`, and `serve` (what exists only for `barca serve`: run queue, capacity, claims,
+//!   `telemetry`, `text` (sizes, spans and times as text), `run_queue` (the server's queue
+//!   rows) and `serve` (what exists only for `barca serve`: capacity, claims,
 //!   `record_unstarted_run`); `sizing` from the run orchestrator.
 //! - **Metadata reads and the server's own writes**: `db`, a listed subset of `barca_db::db`
 //!   (see that module). An operation of several database calls is a core function above, not a
@@ -25,6 +26,10 @@
 //!
 //! Everything else of the lower crates is re-exported `pub(crate)` or not at all: callers do
 //! not depend on `barca-model`, `barca-compile`, `barca-db` or `barca-engine` directly.
+//!
+//! The modules declared here are layered (`docs/engineering/layering.md`, #1056): leaf, storage,
+//! decisions, engine beside analysis, service. `module_layering_tests.rs` checks every
+//! `crate::<module>` path against that order; a new module gets a layer there.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
@@ -66,6 +71,7 @@ pub mod results;
 pub mod rollup;
 pub mod run_explanation;
 pub mod run_list;
+pub mod run_queue;
 pub mod schedule;
 pub mod schedule_standing;
 pub mod serve;

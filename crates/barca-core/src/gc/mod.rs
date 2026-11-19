@@ -73,23 +73,9 @@ pub(crate) const UNREFERENCED_GRACE: Duration = Duration::from_secs(60);
 /// What the last full walk found, kept in `.barca/gc-state.json`.
 const STATE_FILE: &str = "gc-state.json";
 
-/// The `cache` object of a `get`/`run` result: present when the check after the run found the
-/// cache over its limit (with nothing evicted when nothing more could go).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct CacheReport {
-    /// Bytes under `.barca/` after eviction.
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub size_bytes: u64,
-    /// The limit, in bytes.
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub limit_bytes: u64,
-    /// Files (and leftover directories) deleted.
-    pub evicted_files: usize,
-    /// Bytes deleted.
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub evicted_bytes: u64,
-}
+// `CacheReport`, the `cache` object of a `get`/`run` result, is declared with the results it
+// is part of.
+pub use crate::results::CacheReport;
 
 // ─── Pins: runs in flight in this process ───────────────────────────────────
 

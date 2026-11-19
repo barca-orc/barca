@@ -23,50 +23,7 @@ pub use crate::trigger::{MAX_REASON_CHARS, Trigger, TriggeredBy};
 // `time`.
 pub use crate::time::rfc3339;
 
-/// What a run is given besides its targets: the id to record it under (allocated by the
-/// caller, so the id a server answers with is the database id) and what started it.
-#[derive(Clone, Debug)]
-pub struct RunOptions {
-    /// The run id to use; a new one when `None`.
-    pub run_id: Option<String>,
-    pub trigger: Trigger,
-    /// What hosts the run: [`crate::run_host::LocalHost`] for a run on its own, a
-    /// [`crate::serve::ServeHost`] for a run of `barca serve`, whose runs share a capacity
-    /// (#628) and in-flight asset steps (#654) and whose end is routine (the server owns the
-    /// final shutdown backup).
-    pub host: std::sync::Arc<dyn crate::run_host::RunHost>,
-    /// `--batch` (RFC-0013): the run's override of the `batch=` of the nodes that declare one.
-    pub batch: crate::batch::BatchOverride,
-}
-
-impl Default for RunOptions {
-    fn default() -> Self {
-        Self {
-            run_id: None,
-            trigger: Trigger::default(),
-            host: crate::run_host::LocalHost::shared(),
-            batch: crate::batch::BatchOverride::default(),
-        }
-    }
-}
-
-/// `get` or `run`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-#[serde(rename_all = "snake_case")]
-pub enum RunCommand {
-    Get,
-    Run,
-}
-
-impl RunCommand {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RunCommand::Get => "get",
-            RunCommand::Run => "run",
-        }
-    }
-}
+pub use crate::execution::{RunCommand, RunOptions};
 
 fn yes() -> bool {
     true

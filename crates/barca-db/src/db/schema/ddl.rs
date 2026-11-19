@@ -189,7 +189,7 @@ pub(crate) const INDEXES: &[&str] = &[
 /// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.
 pub(crate) const FRESHNESS_PROOFS: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, snapshot TEXT NOT NULL)";
 
-/// The run queue of `barca serve` (`barca_core::serve::run_queue`).
+/// The run queue of `barca serve` (`barca_core::run_queue`).
 pub const RUN_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
     run_id TEXT PRIMARY KEY,
     seq INTEGER NOT NULL,
@@ -198,7 +198,7 @@ pub const RUN_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
     queued_at TEXT NOT NULL
 )";
 
-/// Settings `barca serve` keeps across restarts (`barca_core::serve::run_queue`).
+/// Settings `barca serve` keeps across restarts (`barca_core::run_queue`).
 pub const SERVER_STATE: &str = "CREATE TABLE IF NOT EXISTS server_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

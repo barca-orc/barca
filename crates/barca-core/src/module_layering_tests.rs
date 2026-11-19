@@ -35,6 +35,7 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
             "ledger",
             "pauses",
             "pins",
+            "run_queue",
             "store_inspect",
             "store_sync",
             "transfer",
@@ -96,8 +97,8 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
 
 /// The number of modules in the largest strongly connected component of the module graph
 /// (modules that all reach each other through `crate::` paths in non-test code). 38 before
-/// #1056's C1.
-const LARGEST_CYCLE: usize = 38;
+/// the cuts of #1056's C1.
+const LARGEST_CYCLE: usize = 29;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
 

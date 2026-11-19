@@ -218,7 +218,7 @@ pub(super) struct FinalizeRun<'a> {
     pub(super) python: &'a std::path::Path,
     pub(super) cfg: &'a crate::config::ResolvedConfig,
     pub(super) interrupt: &'a crate::interrupt::Interrupt,
-    pub(super) trigger: &'a crate::outcome::Trigger,
+    pub(super) trigger: &'a crate::trigger::Trigger,
     pub(super) server_owned: bool,
 }
 
@@ -796,7 +796,7 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
                 "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
-                crate::gc::size::human(report.bytes),
+                crate::text::human(report.bytes),
                 t_drain.elapsed().as_secs_f64()
             );
         }
@@ -921,7 +921,7 @@ pub(super) async fn final_backup(
             crate::run_line!(
                 Always,
                 "[barca] backed up the metadata DB ({}) to {at} in {:.2}s",
-                crate::gc::size::human(taken.size_bytes),
+                crate::text::human(taken.size_bytes),
                 started.elapsed().as_secs_f64()
             );
             Ok(None)

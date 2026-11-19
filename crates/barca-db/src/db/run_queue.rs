@@ -1,5 +1,5 @@
 //! Writes of the `barca serve` queue tables, `run_queue` and `server_state`
-//! (`barca_core::serve::run_queue` owns when each happens and the transaction around it).
+//! (`barca_core::run_queue` owns when each happens and the transaction around it).
 
 use libsql::Connection;
 

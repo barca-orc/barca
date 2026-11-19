@@ -565,7 +565,7 @@ pub(crate) fn mark_recomputed(
         let p: &mut PartitionSummary = r.partitions.as_mut().expect("matched on its partitions");
         p.cached -= 1;
         p.will_run += 1;
-        p.will_run_keys = crate::report::key_preview(
+        p.will_run_keys = crate::results::key_preview(
             std::mem::take(&mut p.will_run_keys)
                 .into_iter()
                 .chain([key.to_string()]),

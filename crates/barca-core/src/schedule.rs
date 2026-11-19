@@ -44,7 +44,7 @@ pub(crate) async fn describe_schedule_in(
 pub fn describe_schedule_from_dag(dag: Option<&crate::dag::Dag>, zone: &Zone) -> Vec<ScheduleInfo> {
     let now = Utc::now();
     let jobs = dag
-        .map(|dag| jobs_from_summaries(queries::list_assets_from_dag(dag)))
+        .map(|dag| jobs_from_summaries(crate::results::list_assets_from_dag(dag)))
         .unwrap_or_default();
     jobs.iter()
         .map(|j| {
@@ -142,7 +142,7 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
 /// `max_failures`. This is what `barca serve` schedules; it is computed when the DAG is loaded
 /// (and again on a `--watch` reload), not per tick.
 pub fn jobs_from_dag(dag: &crate::dag::Dag) -> Vec<ScheduledJob> {
-    let mut jobs = jobs_from_summaries(queries::list_assets_from_dag(dag));
+    let mut jobs = jobs_from_summaries(crate::results::list_assets_from_dag(dag));
     for job in &mut jobs {
         job.followers = crate::freshness::tick_targets(dag, &job.id)
             .into_iter()
