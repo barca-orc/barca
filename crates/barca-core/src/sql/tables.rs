@@ -206,7 +206,7 @@ pub const TICK_COLUMNS: &[(&str, &str)] = &[
     ("targets", "STRUCT(node VARCHAR, outcome VARCHAR)[]"),
 ];
 
-/// [`QueueRow`]'s keys.
+/// The columns of `barca.queue` ([`queue`]).
 pub const QUEUE_COLUMNS: &[(&str, &str)] = &[
     ("run_id", V),
     ("position", I),
@@ -222,24 +222,23 @@ pub const QUEUE_COLUMNS: &[(&str, &str)] = &[
     ("scheduled_at", V),
 ];
 
-/// One run of a server's run queue, as `GET /queue` lists it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct QueueRow {
-    pub run_id: String,
-    /// Its place among the waiting runs, 1 = next; `None` for a started run.
-    pub position: Option<usize>,
-    /// `queued`, `running` or `draining`, as `run_queue` records it.
-    pub state: &'static str,
-    pub queued_at: String,
-    pub started_at: Option<String>,
-    pub estimated_start_at: Option<String>,
-    pub wait_seconds: Option<u64>,
-    pub command: String,
-    pub target: Option<String>,
-    pub triggered_by: crate::trigger::TriggeredBy,
-    pub schedule_id: Option<String>,
-    /// For a tick's run: its slot (RFC 3339, UTC).
-    pub scheduled_at: Option<String>,
+/// One run of a server's run queue as a row of `barca.queue`: the columns of
+/// [`QUEUE_COLUMNS`], read from the entry `GET /queue` lists.
+fn queue_row(e: &crate::views::QueueEntry) -> Value {
+    json!({
+        "run_id": e.run_id,
+        "position": e.position,
+        "state": e.state.map(|s| s.as_str()),
+        "queued_at": e.queued_at,
+        "started_at": e.started_at,
+        "estimated_start_at": e.estimated_start_at,
+        "wait_seconds": e.wait_seconds,
+        "command": e.command,
+        "target": e.target,
+        "triggered_by": e.triggered_by,
+        "schedule_id": e.schedule_id,
+        "scheduled_at": e.scheduled_at,
+    })
 }
 
 /// A table of the `barca` schema over rows already in its columns' shape (`None`: a
@@ -438,8 +437,12 @@ fn tick_row(t: &TickRecord) -> Value {
 
 /// `barca.queue`: one row per run in a server's run queue, started runs first, then the
 /// waiting ones in order.
-pub fn queue(rows: Option<&[QueueRow]>) -> Table {
-    table(QUEUE, QUEUE_COLUMNS, rows.map(values))
+pub fn queue(rows: Option<&[crate::views::QueueEntry]>) -> Table {
+    table(
+        QUEUE,
+        QUEUE_COLUMNS,
+        rows.map(|rows| rows.iter().map(queue_row).collect()),
+    )
 }
 
 /// What stderr says when a query names `barca.queue` on a machine without a server.
@@ -695,24 +698,28 @@ mod tests {
 
     #[test]
     fn queue_columns_are_the_queue_row_keys() {
-        let row = QueueRow {
+        let row = crate::views::QueueEntry {
             run_id: "run-1".into(),
+            status: "pending".into(),
             position: Some(1),
-            state: "queued",
+            state: Some(crate::run_queue::QueueState::Queued),
             queued_at: "2026-11-17T15:00:00.000Z".into(),
             started_at: None,
             estimated_start_at: None,
             wait_seconds: None,
             command: "get".into(),
             target: None,
+            target_line: "all assets".into(),
             triggered_by: crate::trigger::TriggeredBy::Schedule,
             schedule_id: Some("pipeline.py:inbox".into()),
             scheduled_at: Some("2026-11-17T15:00:00Z".into()),
+            waiting_for: None,
         };
         let table = queue(Some(&[row]));
         let rows = table.rows.unwrap();
         assert_eq!(sorted_keys(&rows[0]), sorted_columns(QUEUE_COLUMNS));
         assert_eq!(rows[0]["triggered_by"], "schedule");
+        assert_eq!(rows[0]["state"], "queued");
     }
 
     #[test]

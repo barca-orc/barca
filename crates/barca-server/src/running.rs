@@ -41,20 +41,7 @@ pub struct NodeRunning {
 
 pub use barca_core::run_list::RunningStep;
 
-/// The keys of a partitioned node, while a run works on it.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct PartitionProgress {
-    /// Keys not done yet while the node's step is running; 0 while it waits.
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub running: usize,
-    /// Keys with a result: cached, or finished by this run.
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub done: usize,
-    /// Every key of the node.
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub total: usize,
-}
+pub use barca_core::views::PartitionProgress;
 
 /// One run in flight.
 #[derive(Clone, Debug)]

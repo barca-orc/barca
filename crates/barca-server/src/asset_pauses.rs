@@ -8,48 +8,21 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use barca_core::pauses;
-use serde::Deserialize;
-use serde_json::{Value, json};
 
-/// The body of `POST /pauses` and `POST /pauses/resume`.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PauseRequest {
-    /// A node, named as a run target is, or a source file (`pipeline.py`): every node of it.
-    #[serde(default)]
-    pub target: Option<String>,
-    /// Everything downstream of the target too.
-    #[serde(default)]
-    pub downstream: bool,
-    /// Resume only: every paused node.
-    #[serde(default)]
-    pub all: bool,
-}
+pub use barca_core::views::{PauseRequest, Pauses};
 
-/// `{paused: [{id, paused_at, via}], total, schedules: [{id, paused_at, until}]}`: every
-/// paused node, and every paused schedule (`POST /schedule/{id}/pause`).
-async fn body(
-    state: &AppState,
-    changed: Option<(&str, Vec<String>)>,
-) -> Result<Json<Value>, ApiError> {
+/// Every paused node, and every paused schedule (`POST /schedule/{id}/pause`).
+async fn body(state: &AppState) -> Result<Pauses, ApiError> {
     let db_path = &state.config.resolved.db_path;
     let paused = pauses::list(db_path).await?;
     let schedules = pauses::paused_schedules(db_path, chrono::Utc::now().timestamp()).await?;
-    let mut body = json!({
-        "total": paused.len(),
-        "paused": paused,
-        "schedules": schedules,
-    });
-    if let Some((key, ids)) = changed {
-        body[key] = json!(ids);
-    }
-    Ok(Json(body))
+    Ok(Pauses::of(paused, schedules))
 }
 
 /// `GET /pauses` — every paused node, with when and through what it was paused, and every
 /// paused schedule.
-pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    body(&state, None).await
+pub async fn list(State(state): State<AppState>) -> Result<Json<Pauses>, ApiError> {
+    Ok(Json(body(&state).await?))
 }
 
 async fn scope(state: &AppState, req: &PauseRequest) -> Result<Vec<String>, ApiError> {
@@ -67,7 +40,7 @@ async fn scope(state: &AppState, req: &PauseRequest) -> Result<Vec<String>, ApiE
 pub async fn pause(
     State(state): State<AppState>,
     Json(req): Json<PauseRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Pauses>, ApiError> {
     crate::runs::refuse_if_read_only(&state)?;
     if req.all {
         return Err(ApiError::BadRequest(
@@ -79,7 +52,10 @@ pub async fn pause(
     let via = req.target.clone().unwrap_or_default();
     pauses::pause(cfg, &ids, &via, chrono::Utc::now().timestamp()).await?;
     barca_core::errln!("[barca] paused {} node(s) via {via}", ids.len());
-    body(&state, Some(("added", ids))).await
+    Ok(Json(Pauses {
+        added: Some(ids),
+        ..body(&state).await?
+    }))
 }
 
 /// `POST /pauses/resume` — resume `target` (with `downstream`, everything below it too), or
@@ -87,7 +63,7 @@ pub async fn pause(
 pub async fn resume(
     State(state): State<AppState>,
     Json(req): Json<PauseRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Pauses>, ApiError> {
     crate::runs::refuse_if_read_only(&state)?;
     let db_path = &state.config.resolved.db_path;
     let removed = if req.all {
@@ -96,5 +72,8 @@ pub async fn resume(
         pauses::resume(db_path, Some(scope(&state, &req).await?)).await?
     };
     barca_core::errln!("[barca] resumed {} node(s)", removed.len());
-    body(&state, Some(("removed", removed))).await
+    Ok(Json(Pauses {
+        removed: Some(removed),
+        ..body(&state).await?
+    }))
 }

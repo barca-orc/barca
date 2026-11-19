@@ -227,52 +227,38 @@ pub async fn run_detail(
     python: &std::path::Path,
 ) -> Result<RunDetail, BarcaError> {
     open_metadata(cfg).await?;
-    let Some(run) = db::get_run(&cfg.db_path, run_id).await? else {
+    // The one definition of a run's detail ([`crate::views::run_view`]), with no server's
+    // overlay: what `GET /runs/{run_id}` answers for a run only the database knows.
+    let draft = crate::views::run_view(crate::views::RunViewRequest {
+        read_path: &cfg.db_path,
+        db_path: &cfg.db_path,
+        run_id,
+        limit,
+        offset: 0,
+        live: None,
+        events: None,
+        default_files: &[],
+        logs: false,
+    })
+    .await?;
+    let Some(mut draft) = draft else {
         return Err(BarcaError::Usage(format!(
             "run '{run_id}' was not found; use barca history --json to find a run id"
         )));
     };
-    let (steps, mut steps_page) = db::get_run_steps_page(&cfg.db_path, run_id, limit).await?;
-    if !matches!(run.status.as_str(), "pending" | "running")
-        && let Some(job) = &run.job
-        && !run.files.is_empty()
-        && let Ok(dag) = crate::load::build_dag(&run.files, python).await
+    // Planned over the files the run ran: no graph is deployed here.
+    if let Some(files) = draft.plans().map(|run| run.files.clone())
+        && !files.is_empty()
+        && let Ok(dag) = crate::load::build_dag(&files, python).await
     {
-        let targets: Vec<&str> = if job == "all" {
-            Vec::new()
-        } else {
-            job.split(',').collect()
-        };
-        let recorded = if steps_page.nodes.is_empty() {
-            db::run_node_summaries(&cfg.db_path, run_id).await?
-        } else {
-            steps_page.nodes.clone()
-        };
-        if let Some(nodes) = planned_run_nodes(
-            &dag,
-            &run.command,
-            &targets,
-            &run.status,
-            run.steps_total,
-            recorded,
-        ) {
-            steps_page.nodes = nodes;
-        }
+        draft.plan(&dag).await?;
     }
-    let outcome = db::get_run_outcome(&cfg.db_path, run_id)
-        .await?
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
-    let outputs = crate::run_explanation::run_outputs(
-        &run.status,
-        outcome.as_ref(),
-        &crate::run_explanation::output_targets(run.target.as_deref(), run.job.as_deref()),
-        &steps,
-    );
+    let crate::views::RunViewed { view, record } = draft.finish();
     Ok(RunDetail {
-        run,
-        steps,
-        steps_page,
-        outputs,
+        run: record.expect("a run read without an overlay is a recorded one"),
+        steps: view.steps,
+        steps_page: view.steps_page,
+        outputs: view.explanation.outputs,
     })
 }
 

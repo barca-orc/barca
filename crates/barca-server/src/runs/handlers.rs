@@ -3,10 +3,7 @@
 //! happens to a run once accepted is [`super::lifecycle`]'s.
 
 use super::lifecycle::{cancelled, finish, start};
-use super::projection::{
-    ActiveStep, RunList, RunSummary, RunsQuery, live_runs, live_status, live_summary, summary,
-    view, view_page,
-};
+use super::projection::{RunList, RunsQuery, live_of, live_runs, live_status, view, view_page};
 use super::{
     RunSpec, Wording, check_any_asset, check_files, check_target, check_target_as, context,
     json_text, refuse_if_read_only, run_files, stdout_of,
@@ -24,11 +21,13 @@ use barca_core::cache::CachePolicy;
 use barca_core::envelope::Context;
 use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunRequest, RunView, Trigger};
 use barca_core::run_explain::{Cancellation, CancelledBy};
+use barca_core::views::{
+    ActiveStep, LiveRun, RunCancelling, RunHandle, RunLogs, RunSummary, RunViewStatus,
+};
 use barca_core::{BarcaError, db};
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
 /// `POST /runs` — start a run on this server: `202 {"run_id"}`, or `200` with the `--dry-run`
 /// JSON when `dry_run` is set (nothing starts). The targets are checked first: no run is
@@ -138,12 +137,15 @@ async fn create_run(
     .await?;
     Ok((
         StatusCode::ACCEPTED,
-        Json(json!({
-            "run_id": admitted.run_id,
-            "status": live_status(admitted.status),
-            "position": admitted.position,
-            "waiting_for": admitted.waiting_for,
-        })),
+        Json(RunHandle {
+            run_id: admitted.run_id,
+            status: match admitted.status {
+                RunStatus::Pending => RunViewStatus::Pending,
+                _ => RunViewStatus::Running,
+            },
+            position: admitted.position,
+            waiting_for: admitted.waiting_for,
+        }),
     )
         .into_response())
 }
@@ -259,7 +261,7 @@ pub async fn cancel(
     State(state): State<AppState>,
     principal: Option<Extension<Principal>>,
     Path(run_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<RunCancelling>, ApiError> {
     refuse_if_read_only(&state)?;
     let principal = principal.map(|p| p.0.0);
     if let Some(waiting) = state.queue.take(&run_id) {
@@ -284,7 +286,7 @@ pub async fn cancel(
             )
             .await;
         }
-        return Ok(Json(json!({ "run_id": run_id, "status": "cancelling" })));
+        return Ok(Json(RunCancelling::of(run_id)));
     }
     let finished = match state.runs.get_mut(&run_id) {
         Some(mut run) => match run.status {
@@ -298,7 +300,7 @@ pub async fn cancel(
                     same_as: None,
                 });
                 run.cancel.cancel();
-                return Ok(Json(json!({ "run_id": run_id, "status": "cancelling" })));
+                return Ok(Json(RunCancelling::of(run_id)));
             }
             status => json!(status).as_str().unwrap_or("finished").to_string(),
         },
@@ -408,7 +410,7 @@ pub async fn logs(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<LogsQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<RunLogs>, ApiError> {
     let stream = match query.stream.as_deref() {
         None | Some("") => None,
         Some(text) => Some(barca_core::LogStream::parse(text).ok_or_else(|| {
@@ -422,7 +424,7 @@ pub async fn logs(
     let record = db::get_run(&snapshot.path, &id).await?;
     let mut status = match (&record, live) {
         (Some(record), _) => record.status.clone(),
-        (None, Some(live)) => live_status(live).to_string(),
+        (None, Some(live)) => live_status(live).as_str().to_string(),
         (None, None) => {
             return Err(ApiError::NotFound(format!(
                 "run '{id}' was not found on this server
@@ -434,7 +436,7 @@ A run recorded on another machine is \
     if let Some(live) = live
         && matches!(live, RunStatus::Pending | RunStatus::Running)
     {
-        status = live_status(live).to_string();
+        status = live_status(live).as_str().to_string();
     }
     let step = query.step.as_deref().filter(|s| !s.is_empty());
     let lines = if record.is_some() {
@@ -459,9 +461,11 @@ A run recorded on another machine is \
     } else {
         Vec::new()
     };
-    Ok(Json(
-        json!({ "run_id": id, "status": status, "logs": lines }),
-    ))
+    Ok(Json(RunLogs {
+        run_id: id,
+        status,
+        logs: lines,
+    }))
 }
 
 /// Attempt-scoped SSE from the beginning or strictly after Last-Event-ID. Retention is
@@ -586,8 +590,9 @@ pub async fn output(
 }
 
 /// `GET /runs` — durable run history joined with this server's live runs: the runs in
-/// progress first, whatever `limit` lists (#941), then the newest. The filters are the
-/// database's ([`RunsQuery`]): `total` counts the runs they keep.
+/// progress first, whatever `limit` lists (#941), then the newest
+/// ([`barca_core::views::run_list`]). The filters are the database's ([`RunsQuery`]): `total`
+/// counts the runs they keep.
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<RunsQuery>,
@@ -596,114 +601,27 @@ pub async fn list(
     let filter = query.filter().map_err(ApiError::BadRequest)?;
     let db_state = state.db_state();
     let snapshot = snapshot_db(&state).await?;
-    // Counted by the database over the window, whatever `limit` lists (#991).
-    let activity =
-        barca_core::queries::activity_at(&snapshot.path, &filter, chrono::Utc::now()).await?;
+    let now = chrono::Utc::now();
     if filter.statuses == ["running"] {
-        let mut runs: Vec<RunSummary> = in_flight(&state, &db_state, &snapshot)
-            .await?
-            .into_iter()
-            .filter(|run| {
-                filter.keeps_unrecorded(
-                    "running",
-                    run.triggered_by,
-                    &run.started_at,
-                    &searched(run),
-                )
-            })
-            .collect();
-        let total = runs.len();
-        runs.truncate(limit);
-        return Ok(Json(RunList {
-            truncated: total > runs.len(),
-            runs,
-            total,
-            activity: Some(activity),
-        }));
+        let rows = in_flight(&state, &db_state, &snapshot).await?;
+        return Ok(Json(
+            barca_core::views::in_flight_list(&snapshot.path, rows, &filter, limit, now).await?,
+        ));
     }
     // Clone after the snapshot: a new live run not yet in the snapshot stays visible.
     let live = live_runs(&state);
-    let by_id: HashMap<_, _> = live.iter().map(|r| (r.handle.as_str(), r)).collect();
-    let kept = filter.run_filter();
-    let records = db::get_runs_filtered(&snapshot.path, limit, &kept).await?;
-    let durable_total = db::count_runs_filtered(&snapshot.path, &kept).await?;
-    let mut runs: Vec<_> = records
-        .into_iter()
-        .map(|r| {
-            let handle = by_id.get(r.run_id.as_str()).copied();
-            summary(r, handle)
+    Ok(Json(
+        barca_core::views::run_list(barca_core::views::RunListRequest {
+            read_path: &snapshot.path,
+            db_path: &state.config.resolved.db_path,
+            limit,
+            filter: &filter,
+            live: &live,
+            default_files: &state.config.files,
+            now,
         })
-        .collect();
-    let mut extra = 0;
-    for run in &live {
-        if runs.iter().any(|r| r.id == run.handle) {
-            continue;
-        }
-        let in_progress = matches!(run.status, RunStatus::Pending | RunStatus::Running);
-        match db::get_run(&snapshot.path, &run.handle).await? {
-            // An older run than the page holds: listed while it is in progress (#941), and
-            // already counted.
-            Some(mut record) => {
-                record.status = "running".into();
-                if in_progress && filter.matches(&record) {
-                    runs.push(summary(record, Some(run)));
-                }
-            }
-            None => {
-                let row = live_summary(run, &state.config.files);
-                if filter.keeps_unrecorded(
-                    &row.status,
-                    row.triggered_by,
-                    &row.started_at,
-                    &searched(&row),
-                ) {
-                    runs.push(row);
-                    extra += 1;
-                }
-            }
-        }
-    }
-    // A CLI run on the same `.barca/` whose owner is alive, older than the page holds.
-    for alive in db::alive_running_runs_in(&snapshot.path, &state.config.resolved.db_path).await {
-        if runs.iter().any(|r| r.id == alive.run_id) {
-            continue;
-        }
-        if let Some(mut record) = db::get_run(&snapshot.path, &alive.run_id).await? {
-            record.status = "running".into();
-            if filter.matches(&record) {
-                runs.push(summary(record, None));
-            }
-        }
-    }
-    let live_first = |run: &RunSummary| !matches!(run.status.as_str(), "pending" | "running");
-    // Stable: runs started in the same second stay as the database listed them, the one
-    // recorded last first (a run id says nothing of the order).
-    runs.sort_by(|a, b| {
-        live_first(a)
-            .cmp(&live_first(b))
-            .then_with(|| b.started_at.cmp(&a.started_at))
-    });
-    let total = durable_total + extra;
-    let in_progress = runs.iter().filter(|r| !live_first(r)).count();
-    runs.truncate(limit.max(in_progress));
-    Ok(Json(RunList {
-        truncated: total > runs.len(),
-        runs,
-        total,
-        activity: Some(activity),
-    }))
-}
-
-/// What a search looks in for a run the database is not asked about: its ids and target.
-fn searched(run: &RunSummary) -> Vec<&str> {
-    [
-        Some(run.id.as_str()),
-        run.run_id.as_deref(),
-        run.target.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+        .await?,
+    ))
 }
 
 /// What each run in flight is working on now, by run id (a server run under its handle and
@@ -714,19 +632,14 @@ pub(crate) async fn in_flight_now(
     snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
 ) -> Result<barca_core::report::HistoryNow, ApiError> {
     let db_state = state.db_state();
-    let mut out = barca_core::report::HistoryNow::new();
-    for run in in_flight(state, &db_state, snapshot).await? {
-        let Some(now) = run.now else { continue };
-        if let Some(durable) = run.run_id.filter(|id| *id != run.id) {
-            out.insert(durable, now.clone());
-        }
-        out.insert(run.id, now);
-    }
-    Ok(out)
+    Ok(barca_core::views::in_flight_now(
+        in_flight(state, &db_state, snapshot).await?,
+    ))
 }
 
 /// The runs in flight, newest first, each with the nodes it is working on now
-/// ([`crate::running`]): `GET /runs?status=running`.
+/// ([`crate::running`]): the rows of `GET /runs?status=running`
+/// ([`barca_core::views::in_flight`]). This fills which nodes each run works on.
 async fn in_flight(
     state: &AppState,
     db_state: &crate::read_cache::Stamp,
@@ -734,54 +647,42 @@ async fn in_flight(
 ) -> Result<Vec<RunSummary>, ApiError> {
     let read_path = snapshot.path.as_str();
     let flights = crate::running::in_flight(state, Some(read_path)).await;
-    let mut runs = Vec::with_capacity(flights.len());
-    if !flights.is_empty() {
-        let dag = state.inspect_dag().await?;
-        let status = crate::handlers::whole_status(state, &dag, db_state, snapshot).await?;
-        for flight in &flights {
-            let mut row = match state.runs.get(&flight.run_id) {
-                Some(live) => live_summary(&live, &state.config.files),
-                None => match db::get_run(read_path, &flight.run_id).await? {
-                    Some(record) => {
-                        let mut row = summary(record, None);
-                        // The snapshot's owner diagnosis is not this machine's: the owner
-                        // was found alive.
-                        row.status = "running".into();
-                        row.worded()
-                    }
-                    None => continue,
-                },
-            };
+    if flights.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dag = state.inspect_dag().await?;
+    let status = crate::handlers::whole_status(state, &dag, db_state, snapshot).await?;
+    let live: Vec<Option<LiveRun>> = flights
+        .iter()
+        .map(|flight| {
+            state
+                .runs
+                .get(&flight.run_id)
+                .map(|run| live_of(state, &run))
+        })
+        .collect();
+    let rows = flights
+        .iter()
+        .zip(&live)
+        .map(|(flight, live)| {
             let by_node =
                 crate::running::by_node(std::slice::from_ref(flight), &status.nodes, &dag);
-            let active: Vec<ActiveStep> = status
-                .nodes
-                .iter()
-                .filter_map(|n| {
-                    by_node.get(&n.id).map(|r| ActiveStep {
-                        node_id: n.id.clone(),
-                        step: r.step,
-                        partitions: r.partitions.clone(),
+            barca_core::views::Flight {
+                run_id: &flight.run_id,
+                live: live.as_ref(),
+                active: status
+                    .nodes
+                    .iter()
+                    .filter_map(|n| {
+                        by_node.get(&n.id).map(|r| ActiveStep {
+                            node_id: n.id.clone(),
+                            step: r.step,
+                            partitions: r.partitions.clone(),
+                        })
                     })
-                })
-                .collect();
-            let facts: Vec<_> = active
-                .iter()
-                .map(|a| barca_core::run_list::ActiveNodeFacts {
-                    node_id: &a.node_id,
-                    running: a.step == crate::running::RunningStep::Running,
-                    keys: a.partitions.as_ref().map(|p| (p.done, p.total)),
-                })
-                .collect();
-            row.now = Some(barca_core::run_list::run_now(&facts, &dag.groups));
-            row.active_steps = Some(active);
-            runs.push(row);
-        }
-    }
-    runs.sort_by(|a, b| {
-        b.started_at
-            .cmp(&a.started_at)
-            .then_with(|| b.id.cmp(&a.id))
-    });
-    Ok(runs)
+                    .collect(),
+            }
+        })
+        .collect();
+    Ok(barca_core::views::in_flight(read_path, rows, &state.config.files, &dag.groups).await?)
 }

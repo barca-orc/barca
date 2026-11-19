@@ -90,6 +90,7 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
             "serve",
             "sql",
             "values",
+            "views",
         ],
     ),
 ];

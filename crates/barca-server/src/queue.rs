@@ -545,78 +545,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
 
 // ─── the routes ─────────────────────────────────────────────────────────────
 
-/// One run of `GET /queue`.
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct QueueEntry {
-    pub run_id: String,
-    /// `pending` (waiting to start) or `running`.
-    pub status: String,
-    /// Its place among the waiting runs, 1 = next; `null` for a running run.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub position: Option<usize>,
-    pub command: String,
-    /// The targets as given, comma-separated; `null` for every asset.
-    pub target: Option<String>,
-    /// `target` in a few words, as a row shows it (`barca_core::run_list::target_line`):
-    /// `all assets`, `billing.py:orders +21 more`.
-    pub target_line: String,
-    pub triggered_by: TriggeredBy,
-    pub schedule_id: Option<String>,
-    /// When the server accepted it.
-    pub queued_at: String,
-    /// When it started executing (RFC 3339, UTC); `null` while it waits, and from a
-    /// `--read-only` server (the recorded queue does not say).
-    pub started_at: Option<String>,
-    /// For a waiting run: when it is expected to start (RFC 3339, UTC), an estimate rounded
-    /// up to 5 seconds: when a run slot frees, from the typical run time of the runs ahead
-    /// of it over `max_runs` slots. `null` for a running run, while the queue is paused or
-    /// draining, and from a `--read-only` server.
-    pub estimated_start_at: Option<String>,
-    /// How long it waits for a run slot, whole seconds: from `queued_at` to `started_at` for
-    /// a running run, to `estimated_start_at` for a waiting one. `null` when neither is known.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub wait_seconds: Option<u64>,
-    /// Where `run_queue` has it: `queued`, `running`, or `draining` (in flight when its server
-    /// began to stop). Not served: a column of `barca.queue` ([`table_rows`]).
-    #[serde(skip)]
-    #[cfg_attr(feature = "ts", ts(skip))]
-    pub(crate) state: &'static str,
-    /// For a tick's run: its slot (RFC 3339, UTC). Not served: a column of `barca.queue`.
-    #[serde(skip)]
-    #[cfg_attr(feature = "ts", ts(skip))]
-    pub(crate) scheduled_at: Option<String>,
-    /// What else a waiting run waits for: `restart` while the server drains (it starts on the
-    /// next server); `null` otherwise. Experimental.
-    pub waiting_for: Option<barca_core::run_explain::WaitingFor>,
-}
-
-/// `GET /queue` (and the answer of pause and resume).
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct QueueView {
-    /// Paused by an operator: nothing new starts until it is resumed.
-    pub paused: bool,
-    /// When it was paused, RFC 3339; `null` when not paused.
-    pub paused_at: Option<String>,
-    /// The server is stopping: nothing new starts; the queue waits for the next start.
-    pub draining: bool,
-    /// How many runs execute at once.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub max_runs: Option<usize>,
-    /// The runs executing now, oldest first.
-    pub running: Vec<QueueEntry>,
-    /// The runs waiting to start, next first.
-    pub queued: Vec<QueueEntry>,
-    /// The run slots in use, in words (`barca_core::run_list::queue_slots_line`): `1 of 4
-    /// running`, or `1 of 1 running, plus 1 requested run` while a run someone asked for
-    /// executes in the extra slot past `max_runs`.
-    pub slots: String,
-    /// The capacity every run shares (`--capacity`, `[server] capacity`): the weight in use,
-    /// by run, and the steps waiting for it, in the order they are admitted. `null` when the
-    /// server has none (each run has only its own).
-    pub capacity: Option<barca_core::serve::capacity::CapacitySnapshot>,
-}
+pub use barca_core::views::{QueueEntry, QueueView};
 
 fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
     QueueEntry {
@@ -637,12 +566,11 @@ fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bo
         started_at: None,
         estimated_start_at: None,
         wait_seconds: None,
-        state: match (run.status == RunStatus::Running, draining) {
+        state: Some(match (run.status == RunStatus::Running, draining) {
             (false, _) => QueueState::Queued,
             (true, false) => QueueState::Running,
             (true, true) => QueueState::Draining,
-        }
-        .as_str(),
+        }),
         scheduled_at: run.trigger.scheduled_at.clone(),
         waiting_for: state.waiting_for(run.status),
     }
@@ -798,61 +726,23 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
         let dag = state.inspect_dag().await?;
         crate::handlers::recorded_queue(state, &dag, &snapshot.path, now).await?
     };
-    let (mut running, mut queued) = (Vec::new(), Vec::new());
-    for row in rows {
-        let Ok((spec, accepted_at)) = load(&row.spec) else {
-            continue;
-        };
-        let started = timing.started.contains_key(&row.run_id);
-        let start = timing.started.get(&row.run_id).copied();
-        let estimate = timing
-            .starts
-            .get(&row.run_id)
-            .map(|at| barca_core::estimates::rounded(*at, now));
-        let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
-        let item = QueueEntry {
-            run_id: row.run_id,
-            status: if started { "running" } else { "pending" }.into(),
-            position: (!started).then_some(queued.len() + 1),
-            command: spec.command.as_str().into(),
-            target_line: barca_core::run_list::target_line(target.as_deref()),
-            target,
-            triggered_by: spec.trigger.triggered_by,
-            schedule_id: spec.trigger.schedule_id.clone(),
-            queued_at: timestamp(accepted_at),
-            started_at: start.and_then(barca_core::time::rfc3339_secs),
-            estimated_start_at: estimate.and_then(barca_core::time::rfc3339_secs),
-            wait_seconds: start
-                .or(estimate)
-                .map(|at| (at - accepted_at as i64).max(0) as u64),
-            state: row.state.as_str(),
-            scheduled_at: spec.trigger.scheduled_at.clone(),
-            // A `--read-only` server does not know whether the server that writes drains.
-            waiting_for: None,
-        };
-        if started {
-            running.push(item);
-        } else {
-            queued.push(item);
-        }
-    }
-    queued.sort_by_key(|entry| entry.schedule_id.is_some());
-    for (i, entry) in queued.iter_mut().enumerate() {
-        entry.position = Some(i + 1);
-    }
-    let view = QueueView {
-        paused: paused_at.is_some(),
-        paused_at: paused_at.map(barca_core::outcome::rfc3339),
-        draining: state.is_draining(),
-        max_runs: timing.max_runs,
-        slots: timing.max_runs.map_or_else(
-            || format!("{} running · run slots unknown", running.len()),
-            |max| barca_core::run_list::queue_slots_line(running.len(), max),
-        ),
-        running,
-        queued,
-        capacity: None,
-    };
+    // What each row's description says: this server wrote it ([`store`]).
+    let rows = rows
+        .into_iter()
+        .filter_map(|row| {
+            let (spec, accepted_at) = load(&row.spec).ok()?;
+            Some(barca_core::views::RecordedRun {
+                run_id: row.run_id,
+                state: row.state,
+                accepted_at,
+                command: spec.command.as_str().into(),
+                targets: spec.targets,
+                trigger: spec.trigger,
+            })
+        })
+        .collect();
+    let view =
+        barca_core::views::recorded_queue(rows, paused_at, &timing, state.is_draining(), now);
     state.queue.note_recorded(&view);
     Ok(view)
 }
@@ -869,32 +759,12 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<QueueView>, ApiEr
 /// The rows of `barca.queue` (`POST /sql/query`): the entries of `GET /queue`, the started
 /// runs first, then the waiting ones in order. A `--read-only` server lists the recorded
 /// queue, without starts or estimates, as its `GET /queue` does.
-pub(crate) async fn table_rows(
-    state: &AppState,
-) -> Result<Vec<barca_core::sql::tables::QueueRow>, ApiError> {
+pub(crate) async fn table_rows(state: &AppState) -> Result<Vec<QueueEntry>, ApiError> {
     let view = match state.config.read_only {
         true => recorded_view(state).await?,
         false => view_with_starts(state).await,
     };
-    Ok(view
-        .running
-        .into_iter()
-        .chain(view.queued)
-        .map(|e| barca_core::sql::tables::QueueRow {
-            run_id: e.run_id,
-            position: e.position,
-            state: e.state,
-            queued_at: e.queued_at,
-            started_at: e.started_at,
-            estimated_start_at: e.estimated_start_at,
-            wait_seconds: e.wait_seconds,
-            command: e.command,
-            target: e.target,
-            triggered_by: e.triggered_by,
-            schedule_id: e.schedule_id,
-            scheduled_at: e.scheduled_at,
-        })
-        .collect())
+    Ok(view.running.into_iter().chain(view.queued).collect())
 }
 
 /// `POST /queue/pause` — hold every queued run back until `POST /queue/resume`; runs in flight
@@ -943,7 +813,7 @@ pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, Ap
 /// (what `GET /queue` lists), not its own empty one. `/health` never waits on a read: it reports
 /// the last recorded counts (read by `GET /queue`, or in the background when they are older than
 /// a few seconds) and its own counts until there are any.
-pub fn health(state: &AppState) -> serde_json::Value {
+pub fn health(state: &AppState) -> barca_core::views::HealthQueue {
     let mut max_runs = Some(state.queue.max_runs);
     let mut paused = state.queue.paused_at().is_some();
     let mut queued = state.queue.waiting_ids().len();
@@ -966,20 +836,20 @@ pub fn health(state: &AppState) -> serde_json::Value {
             });
         }
     }
-    serde_json::json!({
-        "paused": paused,
-        "queued": queued,
-        "running": running,
-        "max_runs": max_runs,
-        "capacity": state.capacity.as_ref().map(|c| {
+    barca_core::views::HealthQueue {
+        paused,
+        queued,
+        running,
+        max_runs,
+        capacity: state.capacity.as_ref().map(|c| {
             let s = c.snapshot();
-            serde_json::json!({
-                "total": s.total,
-                "in_use": s.in_use,
-                "waiting": s.waiting.len(),
-            })
+            barca_core::views::HealthCapacity {
+                total: s.total,
+                in_use: s.in_use,
+                waiting: s.waiting.len(),
+            }
         }),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1023,7 +893,7 @@ mod tests {
             let _ = health(&reader);
             let listed = get(State(reader.clone())).await.unwrap().0;
             assert_eq!(listed.queued.len(), 2);
-            let health = health(&reader);
+            let health = serde_json::json!(health(&reader));
             assert_eq!(health["queued"], 2, "/health and /queue agree: {health}");
             assert_eq!(health["paused"], true, "{health}");
             assert_eq!(health["running"], 0, "{health}");
