@@ -121,7 +121,10 @@ pub async fn rollup(
     let dag = state.reads.inspect_dag().await?;
     let db_state = state.reads.db_state();
     let snapshot = state.reads.snapshot_db().await?;
-    let status = state.reads.status_for_targets(&dag, &db_state, &snapshot, &targets).await?;
+    let status = state
+        .reads
+        .status_for_targets(&dag, &db_state, &snapshot, &targets)
+        .await?;
     let mut result = (*status).clone();
     let now = chrono::Utc::now();
     let as_of = if query.now {

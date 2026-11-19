@@ -25,7 +25,11 @@ mod tests {
 
     #[test]
     fn a_name_is_a_full_id_or_what_follows_the_file() {
-        let ids = ["a.py:orders".to_string(), "sub/b.py:orders".to_string(), "a.py:reorders".to_string()];
+        let ids = [
+            "a.py:orders".to_string(),
+            "sub/b.py:orders".to_string(),
+            "a.py:reorders".to_string(),
+        ];
         assert_eq!(matching(&ids, |id| id.as_str(), "orders").len(), 2);
         assert_eq!(matching(&ids, |id| id.as_str(), "a.py:orders"), [&ids[0]]);
         assert!(matching(&ids, |id| id.as_str(), "ders").is_empty());

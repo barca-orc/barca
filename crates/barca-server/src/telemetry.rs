@@ -44,7 +44,8 @@ fn report(state: &AppState, phase: ServerPhase) -> ServerReport {
     // Never wait for an inspection lock, parse files, or resolve dynamic partitions.
     let nodes = state.reads.sources.loaded_node_count();
     let schedules = state
-        .scheduling.jobs
+        .scheduling
+        .jobs
         .try_read()
         .map(|jobs| jobs.len())
         .unwrap_or(0);

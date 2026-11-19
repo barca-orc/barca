@@ -137,7 +137,11 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     )
     .unwrap();
     // This is the existing watch event signal, while startup still waits for the DB.
-    state.reads.sources.generation.fetch_add(1, Ordering::Relaxed);
+    state
+        .reads
+        .sources
+        .generation
+        .fetch_add(1, Ordering::Relaxed);
     assert_eq!(
         barca_core::queries::list_assets_from_dag(&state.reads.loaded_dag().await.unwrap()).len(),
         2
@@ -146,7 +150,8 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if state
-                .scheduling.jobs
+                .scheduling
+                .jobs
                 .read()
                 .unwrap()
                 .iter()
@@ -679,7 +684,10 @@ fn a_tick_run_counts_once_it_finished_and_not_when_cancelled() {
     finished(&st, "c", RunStatus::Cancelled, &[]);
     assert_eq!(tick_outcome(&st.runs.registry.get("c").unwrap(), &j), None);
     finished(&st, "ok", RunStatus::Complete, &[]);
-    assert_eq!(tick_outcome(&st.runs.registry.get("ok").unwrap(), &j), Some(vec![]));
+    assert_eq!(
+        tick_outcome(&st.runs.registry.get("ok").unwrap(), &j),
+        Some(vec![])
+    );
     finished(&st, "f", RunStatus::Failed, &["f.py:report"]);
     assert_eq!(
         tick_outcome(&st.runs.registry.get("f").unwrap(), &j),
@@ -1163,7 +1171,10 @@ async fn a_first_start_anchors_every_job_to_now_and_runs_nothing() {
         .unwrap();
 
     assert!(handles.is_empty());
-    assert!(st.runs.registry.is_empty(), "nothing may run on a first start");
+    assert!(
+        st.runs.registry.is_empty(),
+        "nothing may run on a first start"
+    );
     assert_eq!(
         fired,
         HashMap::from([("f.py:daily".to_string(), now.timestamp())])
@@ -1644,7 +1655,8 @@ async fn a_run_nobody_scheduled_writes_no_tick() {
         .unwrap();
     for _ in 0..600 {
         if st
-            .runs.registry
+            .runs
+            .registry
             .get(&handle)
             .is_some_and(|r| r.finished_at.is_some())
         {

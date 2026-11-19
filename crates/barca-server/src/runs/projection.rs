@@ -95,7 +95,8 @@ pub(crate) fn live_of(state: &AppState, run: &RunState) -> LiveRun {
 /// Every run this server holds, as the overlay of the run list.
 pub(super) fn live_runs(state: &AppState) -> Vec<LiveRun> {
     state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .map(|r| live_of(state, r.value()))
         .collect()

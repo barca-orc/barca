@@ -1,7 +1,7 @@
 //! What is running now, whoever started it (#534): the `running` field of `GET /state` and
 //! `GET /assets/{name}`, and `GET /runs?status=running`.
 //!
-//! Two sources. This server's runs in flight (`AppState::runs`: the scheduler's, `POST /runs`
+//! Two sources. This server's runs in flight (`Runs::registry`: the scheduler's, `POST /runs`
 //! and the older trigger routes, `barca get --server`), with their live step events. And the
 //! CLI runs on the same `.barca/`: `running` rows of the metadata database whose owner is
 //! alive ([`db::alive_running_runs_in`], the check the scheduler's overlap skip uses), read
@@ -12,13 +12,13 @@
 //! Cached steps are announced at the end of the run. Until then, cache state and completion
 //! events identify finished nodes and partition keys.
 
+use crate::progress::ProgressSnapshot;
 use crate::run_model::RunStatus;
 use crate::state::AppState;
+use crate::views::{NodeRunning, PartitionProgress, RunningStep};
+use barca_core::db;
 use barca_core::outcome::TriggeredBy;
 use barca_core::status::NodeStatus;
-use barca_core::db;
-use crate::progress::ProgressSnapshot;
-use crate::views::{NodeRunning, PartitionProgress, RunningStep};
 use std::collections::{HashMap, HashSet};
 
 /// One run in flight.
@@ -75,7 +75,8 @@ impl InFlight {
 /// snapshot at `read_path` whose owner is alive and that this server does not hold.
 pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<InFlight> {
     let mut runs: Vec<InFlight> = state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
         .map(|r| InFlight {
@@ -102,7 +103,12 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         return runs;
     };
     // The server's own runs have rows too; they are the ones above (or finished).
-    let mut held: HashSet<String> = state.runs.registry.iter().map(|r| r.handle.clone()).collect();
+    let mut held: HashSet<String> = state
+        .runs
+        .registry
+        .iter()
+        .map(|r| r.handle.clone())
+        .collect();
     if state.config.read_only
         && let Ok(recorded) = barca_core::liveness::recorded_runs(read_path).await
     {

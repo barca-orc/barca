@@ -26,7 +26,8 @@ pub async fn reset(State(state): State<AppState>) -> Result<Json<Reset>, ApiErro
         // Checked under the database's lock: a run admitted after this check writes nothing
         // until the swap is done, and then writes to the new database.
         let mut in_flight: Vec<String> = state
-            .runs.registry
+            .runs
+            .registry
             .iter()
             .filter(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
             .map(|r| r.handle.clone())
@@ -52,7 +53,8 @@ pub async fn reset(State(state): State<AppState>) -> Result<Json<Reset>, ApiErro
     }
     if state.runs.writer_recorded.get().is_some() {
         let schedules = state
-            .scheduling.jobs
+            .scheduling
+            .jobs
             .read()
             .unwrap()
             .iter()
@@ -65,9 +67,13 @@ pub async fn reset(State(state): State<AppState>) -> Result<Json<Reset>, ApiErro
     // The finished runs this server still remembers go with the history they were part of
     // (`GET /runs` joins them in). One admitted after the check above stays.
     state
-        .runs.registry
+        .runs
+        .registry
         .retain(|_, r| matches!(r.status, RunStatus::Pending | RunStatus::Running));
-    state.runs.events.retain(|id, _| state.runs.registry.contains_key(id));
+    state
+        .runs
+        .events
+        .retain(|id, _| state.runs.registry.contains_key(id));
     barca_core::errln!(
         "[barca] reset the metadata database{}",
         match &reset.moved_to {

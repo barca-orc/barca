@@ -9,6 +9,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ## Pending
 
 - Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
+- Internal: barca-server's modules have a checked dependency order (`docs/engineering/server-layering.md`, #1056): the 13-module cycle is gone, the server's state is seven sub-states in place of 26 fields and a handler takes the one it uses, and `handlers.rs` is split by route family. Its unit tests no longer create `.barca` in the crate's source directory. No behavior change.
 
 - Internal: the web UI's unit tests and kit page read what the server computes from files a Rust test generates from a fixture project (`ui/src/lib/testdata/served/`, regenerate with `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`) instead of from values typed by hand, and the fixtures' own table from a health to a reason and a cause is gone (#1056); no behavior change.
 

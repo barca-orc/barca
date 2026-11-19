@@ -1,6 +1,5 @@
 //! HTTP adapter for project tokens. Authorization surrounds routing and ETag handling.
 use crate::{auth, error::ApiError};
-use std::sync::Arc;
 use axum::{
     Json,
     body::Body,
@@ -17,6 +16,7 @@ use barca_core::{
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::Deserialize;
+use std::sync::Arc;
 
 pub(crate) struct Access {
     store: Option<Result<auth::Store, auth::Error>>,

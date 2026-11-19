@@ -1,4 +1,4 @@
-//! Dev-mode file watcher (`--watch`). Bumps [`AppState::dag_generation`] and reloads the
+//! Dev-mode file watcher (`--watch`). Bumps [`crate::sources::Sources::generation`] and reloads the
 //! graph whenever a source file changes, so the read routes ([`crate::read_cache`]) and the
 //! scheduler reflect edits without a restart.
 //!
@@ -51,7 +51,7 @@ pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
         }
 
         // The scheduler re-reads its job set on its next tick, and the read cache loads the
-        // graph again ([`AppState::inspect_dag`]).
+        // graph again ([`crate::read_cache::Reads::inspect_dag`]).
         generation.fetch_add(1, Ordering::Relaxed);
         changed.send_replace(());
     })?;

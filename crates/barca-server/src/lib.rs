@@ -62,6 +62,25 @@ mod layering_tests;
 pub(crate) mod test_support {
     use std::time::Duration;
 
+    /// Move this test process out of the crate's source directory, once, into a directory of
+    /// its own under the build directory. `.barca` is created in the working directory whatever
+    /// `db_path` says (`barca_core::db::ensure_env_dirs`), so a test that opens metadata, starts
+    /// the scheduler or executes a run used to create `crates/barca-server/.barca`. Every unit
+    /// test's state comes from `AppState::new`, which calls this first, so no test reads the
+    /// working directory before it has moved.
+    pub fn leave_source_tree() {
+        static LEFT: std::sync::Once = std::sync::Once::new();
+        LEFT.call_once(|| {
+            // `<target>/<profile>/deps/<test binary>`: beside `deps`, removed with the build.
+            let dir = std::env::current_exe()
+                .ok()
+                .and_then(|exe| Some(exe.parent()?.parent()?.join("barca-server-test-cwd")))
+                .unwrap_or_else(|| std::env::temp_dir().join("barca-server-test-cwd"));
+            std::fs::create_dir_all(&dir).expect("a working directory for the tests");
+            std::env::set_current_dir(&dir).expect("the tests' working directory");
+        });
+    }
+
     /// How long a bounded test may take.
     pub const LIMIT: Duration = Duration::from_secs(30);
 
@@ -695,7 +714,8 @@ pub const REQUEUE_REASON: &str = "server restart (requeued)";
 /// Runs executing now.
 fn runs_in_flight(state: &AppState) -> usize {
     state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| r.status == run_model::RunStatus::Running)
         .count()
@@ -705,7 +725,8 @@ fn runs_in_flight(state: &AppState) -> usize {
 fn runs_queued(state: &AppState) -> usize {
     // Waiting in the queue, or put back in it by this drain.
     state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| r.status == run_model::RunStatus::Pending)
         .count()
@@ -744,7 +765,8 @@ async fn drain_then_stop(
     // drain ends, the next server puts these runs back in the queue instead of recording them
     // interrupted (#628).
     let flying: Vec<String> = state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| r.status == run_model::RunStatus::Running)
         .map(|r| r.handle.clone())
@@ -809,7 +831,8 @@ async fn drain_then_stop(
                 if n == 1 { "it starts" } else { "they start" },
             );
             state
-                .runs.queue
+                .runs
+                .queue
                 .requeue
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             state.lifecycle.cancel_reason.set(REQUEUE_REASON);
@@ -834,7 +857,8 @@ async fn drain_then_stop(
         );
     }
     if state
-        .runs.queue
+        .runs
+        .queue
         .requeue
         .load(std::sync::atomic::Ordering::SeqCst)
     {

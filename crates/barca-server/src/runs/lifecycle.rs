@@ -263,10 +263,15 @@ async fn execute(
     if matches!(result, Err(BarcaError::Cancelled))
         && !timed_out
         && state
-            .runs.queue
+            .runs
+            .queue
             .requeue
             .load(std::sync::atomic::Ordering::SeqCst)
-        && state.runs.registry.get(&run_id).is_some_and(|r| !r.cancel_requested)
+        && state
+            .runs
+            .registry
+            .get(&run_id)
+            .is_some_and(|r| !r.cancel_requested)
     {
         requeue(&state, &run_id).await;
         return;
@@ -501,7 +506,8 @@ fn retained_bytes(state: &AppState, handle: &str, run: &RunState) -> usize {
 /// still read its events.
 pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
     let mut finished: Vec<(f64, String, usize)> = state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| {
             matches!(

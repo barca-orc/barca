@@ -8,11 +8,11 @@ use super::{
     RunSpec, Wording, check_any_asset, check_files, check_target, check_target_as, context,
     run_files,
 };
-use crate::guards::refuse_if_read_only;
-use crate::respond::{json_text, stdout_of};
 use crate::auth_http::Principal;
 use crate::error::ApiError;
+use crate::guards::refuse_if_read_only;
 use crate::replay::RunChannel;
+use crate::respond::{json_text, stdout_of};
 use crate::run_model::{RunState, RunStatus};
 use crate::state::AppState;
 use axum::Extension;
@@ -248,7 +248,8 @@ pub async fn status(
     Path(run_id): Path<String>,
 ) -> Result<Json<RunState>, ApiError> {
     state
-        .runs.registry
+        .runs
+        .registry
         .get(&run_id)
         .map(|r| Json(r.clone()))
         .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))
@@ -339,7 +340,8 @@ pub(super) fn queued_cancellation(
         )
     });
     let mut running: Vec<(f64, String, bool)> = state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| r.status == RunStatus::Running && r.handle != run_id)
         .map(|r| {
@@ -541,7 +543,8 @@ pub async fn output(
         ))
     };
     let live = state
-        .runs.registry
+        .runs
+        .registry
         .get(&run_id)
         .and_then(|r| r.result.as_ref().and_then(|r| r.final_output.clone()));
     let (path, format) = match live {
@@ -659,7 +662,8 @@ async fn in_flight(
         .iter()
         .map(|flight| {
             state
-                .runs.registry
+                .runs
+                .registry
                 .get(&flight.run_id)
                 .map(|run| live_of(state, &run))
         })

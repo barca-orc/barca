@@ -44,7 +44,8 @@ impl Schedules {
 /// The paused schedules this server holds ([`crate::schedule_view::pauses`] reads them first).
 fn held_pauses(state: &AppState) -> std::collections::HashMap<String, db::SchedulePause> {
     state
-        .scheduling.pauses
+        .scheduling
+        .pauses
         .get()
         .and_then(|pauses| pauses.read().ok().map(|held| held.clone()))
         .unwrap_or_default()
@@ -97,7 +98,12 @@ pub(crate) async fn schedules(
     crate::schedule_view::pauses(state).await?;
     let ids = jobs.iter().map(|j| j.id.clone()).collect();
     let ticks = state.reads.cached_ticks(db_state, db_path, ids).await?;
-    let published = state.scheduling.jobs.read().map(|g| g.clone()).unwrap_or_default();
+    let published = state
+        .scheduling
+        .jobs
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     let observed = if state.config.read_only || !state.config.schedule {
         let record = barca_core::liveness::recorded(db_path).await?;
         zone = record.zone().unwrap_or(zone);
@@ -117,12 +123,13 @@ pub(crate) async fn schedules(
 }
 
 /// The recorded ticks of the schedules the scheduler has published, read once per database
-/// state and shared with `GET /state` ([`AppState::cached_ticks`]).
+/// state and shared with `GET /state` ([`crate::read_cache::Reads::cached_ticks`]).
 pub(crate) async fn published_ticks(
     state: &AppState,
 ) -> Result<std::sync::Arc<crate::read_cache::ScheduleFacts>, ApiError> {
     let ids: Vec<String> = state
-        .scheduling.jobs
+        .scheduling
+        .jobs
         .read()
         .map(|jobs| jobs.iter().map(|j| j.id.clone()).collect())
         .unwrap_or_default();
@@ -131,7 +138,10 @@ pub(crate) async fn published_ticks(
     }
     let db_state = state.reads.db_state();
     let snapshot = state.reads.snapshot_db().await?;
-    Ok(state.reads.cached_ticks(&db_state, &snapshot.path, ids).await?)
+    Ok(state
+        .reads
+        .cached_ticks(&db_state, &snapshot.path, ids)
+        .await?)
 }
 
 pub(crate) async fn recorded_queue(
@@ -152,7 +162,8 @@ pub(crate) async fn recorded_queue(
         &rec,
     );
     let facts = state
-        .reads.cached_ticks(
+        .reads
+        .cached_ticks(
             &state.reads.db_state(),
             path,
             jobs.iter().map(|j| j.id.clone()).collect(),
@@ -179,7 +190,12 @@ pub(crate) fn schedule_at(
     now: chrono::DateTime<chrono::Utc>,
     ticks: &crate::read_cache::ScheduleFacts,
 ) -> Vec<ScheduleJob> {
-    let published = state.scheduling.jobs.read().map(|g| g.clone()).unwrap_or_default();
+    let published = state
+        .scheduling
+        .jobs
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     // The jobs as the scheduler published them: it parsed each cron before publishing.
     let jobs = published
         .iter()
@@ -263,7 +279,8 @@ pub(crate) async fn pauses(
         return Ok(pauses);
     }
     state
-        .scheduling.pauses
+        .scheduling
+        .pauses
         .get_or_try_init(|| async {
             let snapshot = state.reads.snapshot_db().await?;
             let saved = db::get_schedule_pauses(&snapshot.path).await?;

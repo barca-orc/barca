@@ -4,8 +4,8 @@
 //! restart (a deploy) does not resume a job someone paused.
 
 use crate::error::ApiError;
-use crate::schedule_view::{pauses, published_ticks, schedule_at, schedule_items};
 use crate::read_cache::Reads;
+use crate::schedule_view::{pauses, published_ticks, schedule_at, schedule_items};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -23,7 +23,8 @@ pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<Schedule
         let jobs = barca_core::schedule::jobs_from_dag(&dag);
         let snap = state.reads.snapshot_db().await?;
         let facts = state
-            .reads.cached_ticks(
+            .reads
+            .cached_ticks(
                 &state.reads.db_state(),
                 &snap.path,
                 jobs.iter().map(|j| j.id.clone()).collect(),

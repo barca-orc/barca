@@ -170,6 +170,9 @@ impl FromRef<AppState> for Arc<crate::auth_http::Access> {
 
 impl AppState {
     pub fn new(config: ServeConfig) -> Self {
+        // Unit tests never write `.barca` into the crate's source directory.
+        #[cfg(test)]
+        crate::test_support::leave_source_tree();
         let run_slot_count = config
             .resolved
             .server_max_runs

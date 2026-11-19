@@ -210,13 +210,23 @@ fn finished_runs_past_the_memory_budget_are_dropped_oldest_first() {
     assert_eq!(state.runs.registry.len(), 6);
     // About two runs' worth: the oldest go, the newest and the running run stay.
     evict_over_budget(&state, 25_000);
-    let mut kept: Vec<String> = state.runs.registry.iter().map(|r| r.key().clone()).collect();
+    let mut kept: Vec<String> = state
+        .runs
+        .registry
+        .iter()
+        .map(|r| r.key().clone())
+        .collect();
     kept.sort();
     assert_eq!(kept, ["r4", "r5", "running"]);
     assert!(!state.runs.events.contains_key("r1") && state.runs.events.contains_key("r4"));
     // Even a budget of nothing keeps the run that finished last.
     evict_over_budget(&state, 0);
-    let mut kept: Vec<String> = state.runs.registry.iter().map(|r| r.key().clone()).collect();
+    let mut kept: Vec<String> = state
+        .runs
+        .registry
+        .iter()
+        .map(|r| r.key().clone())
+        .collect();
     kept.sort();
     assert_eq!(kept, ["r5", "running"]);
 }
@@ -308,11 +318,7 @@ fn a_queued_run_revalidates_source_before_any_worker_starts() {
             read_only: false,
         });
         state.runs.slots = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-        assert!(
-            check_target(&state, "target", "get")
-                .await
-                .is_ok()
-        );
+        assert!(check_target(&state, "target", "get").await.is_ok());
         // Every slot taken: the run waits in the queue.
         let held = state.runs.slots.clone().try_acquire_owned().unwrap();
         let handle = start(
@@ -325,7 +331,10 @@ fn a_queued_run_revalidates_source_before_any_worker_starts() {
         )
         .await
         .unwrap();
-        assert_eq!(state.runs.registry.get(&handle).unwrap().status, RunStatus::Pending);
+        assert_eq!(
+            state.runs.registry.get(&handle).unwrap().status,
+            RunStatus::Pending
+        );
         std::fs::write(&file, "from barca import asset\ndef broken(: pass\n").unwrap();
         drop(held);
         dispatch(&state);

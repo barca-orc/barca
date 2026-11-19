@@ -4,8 +4,8 @@
 //! snapshot of the metadata DB.
 
 use crate::error::ApiError;
-use crate::respond::{json_text, stdout_of};
 use crate::read_cache::Reads;
+use crate::respond::{json_text, stdout_of};
 use crate::state::{AppState, Lifecycle};
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -281,7 +281,7 @@ async fn kept_partition_grid(
 ) -> Result<std::sync::Arc<barca_core::partition_grid::PartitionGrid>, ApiError> {
     let dag = reads.loaded_dag().await?;
     let id = barca_core::partition_grid::partitioned_target(&dag, name)
-        .map_err(|e| ApiError::run(e, context("status", &reads)))?;
+        .map_err(|e| ApiError::run(e, context("status", reads)))?;
     let db = reads.db_state();
     if let Some(grid) = reads.kept_grid(&dag, &db, &id) {
         return Ok(grid);
@@ -292,7 +292,7 @@ async fn kept_partition_grid(
     let grid = std::sync::Arc::new(
         barca_core::partition_grid::partition_grid(&cfg, &dag, &id)
             .await
-            .map_err(|e| ApiError::run(e, context("partitions grid", &reads)))?,
+            .map_err(|e| ApiError::run(e, context("partitions grid", reads)))?,
     );
     reads.keep_grid(&dag, &db, grid.clone());
     Ok(grid)

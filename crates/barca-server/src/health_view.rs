@@ -42,7 +42,10 @@ pub(crate) async fn state_rows_for_targets(
         );
         (status?, durations?)
     } else {
-        let status = state.reads.status_for_targets(&dag, &db_state, &snapshot, targets).await?;
+        let status = state
+            .reads
+            .status_for_targets(&dag, &db_state, &snapshot, targets)
+            .await?;
         let ids = status
             .nodes
             .iter()
@@ -95,7 +98,8 @@ async fn queue_of(
         cfg.capacity,
         cfg.pool_size,
         state
-            .runs.capacity
+            .runs
+            .capacity
             .as_ref()
             .map(|c| (c.total() as usize, c.source())),
     )
@@ -232,7 +236,8 @@ pub(crate) async fn health_facts(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<HealthFacts, ApiError> {
     let durations = state
-        .reads.cached_durations(dag, db_state, {
+        .reads
+        .cached_durations(dag, db_state, {
             let (dag, db_path) = (dag.clone(), db_path.to_string());
             move || async move {
                 let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
@@ -258,7 +263,10 @@ async fn gather(
 ) -> Result<HealthFacts, ApiError> {
     let ages = state.reads.cached_ages(db_state, db_path).await?;
     let pinned = state.reads.cached_pinned(db_state, db_path).await?;
-    let checks = state.reads.cached_checks(dag, db_state, db_path, &ages).await?;
+    let checks = state
+        .reads
+        .cached_checks(dag, db_state, db_path, &ages)
+        .await?;
     let paused = state.reads.cached_paused_nodes(db_state, db_path).await?;
     let paths = state.reads.cached_paths(dag).await?;
     let runs = crate::running::in_flight(state, Some(db_path)).await;
@@ -297,20 +305,24 @@ pub(crate) async fn node_status(
     // Kept until the sources or the database change ([`crate::read_cache`]); the live schedule
     // state and the filter are applied to each answer.
     let kept = state
-        .reads.cached_status(dag, db_state, (targets, sample, true), move || async move {
+        .reads
+        .cached_status(dag, db_state, (targets, sample, true), move || async move {
             let _snapshot = kept_snapshot;
             barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true).await
         })
         .await
-        .map_err(|e| ApiError::run(e, barca_core::envelope::Context {
-            command: "status",
-            files: state.config.files.clone(),
-        }))?;
+        .map_err(|e| {
+            ApiError::run(
+                e,
+                barca_core::envelope::Context {
+                    command: "status",
+                    files: state.config.files.clone(),
+                },
+            )
+        })?;
     let mut result = (*kept).clone();
     let now = chrono::Utc::now();
-    let running =
-        attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now)
-            .await?;
+    let running = attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now).await?;
     // `as_of` is in the body, so the clock to the second would change the `ETag` every second
     // and an unchanged poll would never be a `304`. It is the start of the minute, the instant
     // `gap_seconds` is read at; nothing else in the body moves with the second.
@@ -333,7 +345,6 @@ pub(crate) async fn node_status(
     }
     Ok(result)
 }
-
 
 /// How often [`keep_warm`] looks for a change.
 const WARM_EVERY: Duration = Duration::from_secs(1);
@@ -359,19 +370,15 @@ pub(crate) async fn keep_warm(state: AppState) {
         if state.lifecycle.is_draining() || state.lifecycle.shutdown.is_cancelled() {
             return;
         }
-        let busy = state.runs.registry.iter().any(|r| {
-            matches!(
-                r.status,
-                RunStatus::Pending | RunStatus::Running
-            )
-        });
+        let busy = state
+            .runs
+            .registry
+            .iter()
+            .any(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running));
         if busy
             || (started && !state.reads.cache.polled_within(WARM_WHILE_POLLED))
             || ((started || !state.config.read_only)
-                && !state
-                    .reads
-                    .db_state()
-                    .still_for(WARM_AFTER_STILL))
+                && !state.reads.db_state().still_for(WARM_AFTER_STILL))
         {
             continue;
         }
@@ -379,4 +386,3 @@ pub(crate) async fn keep_warm(state: AppState) {
         let _ = state_rows(&state).await;
     }
 }
-

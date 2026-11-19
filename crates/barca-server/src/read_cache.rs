@@ -337,7 +337,10 @@ pub struct Reads {
 }
 
 impl Reads {
-    pub fn new(config: Arc<ServeConfig>, scheduler_stopped: Arc<std::sync::atomic::AtomicBool>) -> Self {
+    pub fn new(
+        config: Arc<ServeConfig>,
+        scheduler_stopped: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
         Self {
             sources: Sources::new(config.clone()),
             config,
@@ -397,17 +400,16 @@ impl Reads {
         cfg.db_path = snapshot.path.clone();
         let python = self.config.python.clone();
         let (graph, snapshot, names) = (dag.clone(), snapshot.clone(), targets.to_vec());
-        Ok(self
-            .cached_status(
-                dag,
-                db_state,
-                (targets.to_vec(), 0, false),
-                move || async move {
-                    let _snapshot = snapshot;
-                    barca_core::status::status_from_dag(&cfg, &names, &graph, &python, 0, false).await
-                },
-            )
-            .await?)
+        self.cached_status(
+            dag,
+            db_state,
+            (targets.to_vec(), 0, false),
+            move || async move {
+                let _snapshot = snapshot;
+                barca_core::status::status_from_dag(&cfg, &names, &graph, &python, 0, false).await
+            },
+        )
+        .await
     }
 
     /// The graph to decide cache states with: the sources as they are now, helper modules
@@ -869,9 +871,8 @@ impl Reads {
     ) -> Result<Arc<HashMap<String, Durations>>, BarcaError>
     where
         F: FnOnce() -> Fut + Send + 'static,
-        Fut: std::future::Future<
-                Output = Result<HashMap<String, Durations>, BarcaError>,
-            > + Send
+        Fut: std::future::Future<Output = Result<HashMap<String, Durations>, BarcaError>>
+            + Send
             + 'static,
     {
         let key = StatusKey {
@@ -929,11 +930,7 @@ impl Reads {
 
     /// Keep `durations`, read for `key`: as the latest, and as the result for `key` when the
     /// database had settled.
-    fn keep_durations(
-        &self,
-        key: &StatusKey,
-        durations: &Arc<HashMap<String, Durations>>,
-    ) {
+    fn keep_durations(&self, key: &StatusKey, durations: &Arc<HashMap<String, Durations>>) {
         if key.db.settled(SystemTime::now(), DB_SETTLED) {
             let mut kept = self.cache.status.lock().unwrap();
             renew(&mut kept, key);
@@ -1018,10 +1015,12 @@ mod tests {
         std::fs::create_dir_all(dir.join(".barca")).unwrap();
         resolved.db_path = dir.join(".barca/metadata.db").display().to_string();
         // The graph's sources include the working directory (imports resolve from the project
-        // root), which every test of this binary shares. Tests that open the metadata create
-        // `.barca` in it, whatever `db_path` says, and a tree's first run has none yet: created
-        // while a test here polls, it is an edit of a source directory, and the graph is
-        // rightly not kept. Create it before any test here waits for its sources to be still.
+        // root), which every test of this binary shares (`test_support::leave_source_tree`).
+        // Tests that open the metadata create `.barca` in it, whatever `db_path` says, and a
+        // build directory's first run has none yet: created while a test here polls, it is an
+        // edit of a source directory, and the graph is rightly not kept. Create it before any
+        // test here waits for its sources to be still.
+        crate::test_support::leave_source_tree();
         barca_core::db::ensure_env_dirs(&resolved.env).unwrap();
         AppState::new(crate::ServeConfig {
             files: vec![file.display().to_string()],
@@ -1235,7 +1234,9 @@ mod tests {
         barca_core::db::init_db(&db_path).await.unwrap();
         let dag = state.reads.inspect_dag().await.unwrap();
         let snapshot = state.reads.read_snapshot().await.unwrap();
-        let base = (*state.reads.whole_status(&dag, &state.reads.db_state(), &snapshot)
+        let base = (*state
+            .reads
+            .whole_status(&dag, &state.reads.db_state(), &snapshot)
             .await
             .unwrap())
         .clone();
@@ -1251,7 +1252,8 @@ mod tests {
             async move {
                 let db = state.reads.db_state();
                 state
-                    .reads.cached_status(&dag, &db, query, move || async move {
+                    .reads
+                    .cached_status(&dag, &db, query, move || async move {
                         tokio::time::sleep(delay).await;
                         compute()
                     })
@@ -1346,11 +1348,7 @@ mod tests {
                     .set_modified(SystemTime::now() + Duration::from_secs(3600)),
             )
             .unwrap();
-        assert!(
-            !state
-                .reads.db_state()
-                .still_for(Duration::from_secs(1))
-        );
+        assert!(!state.reads.db_state().still_for(Duration::from_secs(1)));
         let warming = tokio::spawn(crate::health_view::keep_warm(state.clone()));
         let warmed = tokio::time::timeout(Duration::from_secs(5), async {
             while loads(&state).1 == 0 {

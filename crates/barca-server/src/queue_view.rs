@@ -70,12 +70,14 @@ pub(crate) fn estimate(
     };
     let mut started = std::collections::HashMap::new();
     let mut runs: Vec<QueueRun> = state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| r.status == RunStatus::Running)
         .map(|r| {
             let at = state
-                .runs.events
+                .runs
+                .events
                 .get(&r.handle)
                 .and_then(|c| c.progress().started)
                 .unwrap_or(r.started_at) as i64;
@@ -86,7 +88,8 @@ pub(crate) fn estimate(
     let running = runs.len();
     runs.extend(
         state
-            .runs.queue
+            .runs
+            .queue
             .waiting_ids()
             .iter()
             .filter_map(|id| state.runs.registry.get(id).map(|r| of(&r, None))),
@@ -141,19 +144,22 @@ pub(crate) async fn view_with_starts(state: &AppState) -> QueueView {
 pub fn view(state: &AppState) -> QueueView {
     let draining = state.lifecycle.is_draining();
     let queued = state
-        .runs.queue
+        .runs
+        .queue
         .waiting_ids()
         .iter()
         .enumerate()
         .filter_map(|(at, id)| {
             state
-                .runs.registry
+                .runs
+                .registry
                 .get(id)
                 .map(|r| entry(state, &r, Some(at + 1), draining))
         })
         .collect();
     let mut running: Vec<QueueEntry> = state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| r.status == RunStatus::Running)
         .map(|r| entry(state, &r, None, draining))
@@ -205,8 +211,13 @@ pub(crate) async fn recorded_view(state: &AppState) -> Result<QueueView, ApiErro
             })
         })
         .collect();
-    let view =
-        barca_core::served::recorded_queue(rows, paused_at, &timing, state.lifecycle.is_draining(), now);
+    let view = barca_core::served::recorded_queue(
+        rows,
+        paused_at,
+        &timing,
+        state.lifecycle.is_draining(),
+        now,
+    );
     state.runs.queue.note_recorded(&view);
     Ok(view)
 }
@@ -232,7 +243,8 @@ pub fn health(state: &AppState) -> barca_core::served::HealthQueue {
     let mut paused = state.runs.queue.paused_at().is_some();
     let mut queued = state.runs.queue.waiting_ids().len();
     let mut running = state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .filter(|r| r.status == RunStatus::Running)
         .count();

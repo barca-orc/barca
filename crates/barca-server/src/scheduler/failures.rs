@@ -114,7 +114,12 @@ pub(super) async fn count_outcomes(
         if book.counted.contains(&handle) {
             continue;
         }
-        let Some(failed) = state.runs.registry.get(&handle).and_then(|r| tick_outcome(&r, job)) else {
+        let Some(failed) = state
+            .runs
+            .registry
+            .get(&handle)
+            .and_then(|r| tick_outcome(&r, job))
+        else {
             continue;
         };
         book.counted.insert(handle);

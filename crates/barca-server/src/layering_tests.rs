@@ -510,7 +510,10 @@ fn no_stateful_part_is_above_the_state_that_composes_it() {
     let (state_row, _) = row_of("state").unwrap();
     for (row, (layer, modules)) in LAYERS.iter().enumerate() {
         if matches!(layer, Layer::Leaf | Layer::Part) {
-            assert!(row < state_row, "{modules:?} must stay above `state` in LAYERS");
+            assert!(
+                row < state_row,
+                "{modules:?} must stay above `state` in LAYERS"
+            );
         }
     }
 }

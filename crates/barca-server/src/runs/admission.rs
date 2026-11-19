@@ -75,11 +75,13 @@ pub async fn admit_as(
     }
     dispatch(state);
     let status = state
-        .runs.registry
+        .runs
+        .registry
         .get(&run_id)
         .map_or(RunStatus::Pending, |r| r.status);
     let position = state
-        .runs.queue
+        .runs
+        .queue
         .waiting_ids()
         .iter()
         .position(|id| *id == run_id)
@@ -95,7 +97,8 @@ pub async fn admit_as(
 /// Whether a scheduled run is executing now.
 fn scheduled_running(state: &AppState) -> bool {
     state
-        .runs.registry
+        .runs
+        .registry
         .iter()
         .any(|r| r.status == RunStatus::Running && r.trigger.triggered_by == TriggeredBy::Schedule)
 }

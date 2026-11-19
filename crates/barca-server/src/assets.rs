@@ -69,7 +69,8 @@ pub async fn asset_schema(
     let snapshot = reads.snapshot_db().await?;
     let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let mut nodes = reads.whole_status(&dag, &db_state, &snapshot)
+    let mut nodes = reads
+        .whole_status(&dag, &db_state, &snapshot)
         .await?
         .nodes
         .clone();

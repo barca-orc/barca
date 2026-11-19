@@ -36,7 +36,8 @@ pub async fn pause(State(state): State<AppState>) -> Result<Json<QueueView>, Api
              running)",
             state.runs.queue.waiting_ids().len(),
             state
-                .runs.registry
+                .runs
+                .registry
                 .iter()
                 .filter(|r| r.status == RunStatus::Running)
                 .count()
@@ -305,4 +306,3 @@ mod tests {
         assert!(load("{\"command\": \"get\"}").is_err());
     }
 }
-

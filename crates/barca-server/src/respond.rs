@@ -28,4 +28,3 @@ pub(crate) fn json_text(status: StatusCode, text: String) -> Response {
     )
         .into_response()
 }
-

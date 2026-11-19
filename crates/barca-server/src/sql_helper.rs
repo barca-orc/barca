@@ -56,7 +56,6 @@ pub(crate) const ENV_KEPT: &[&str] = &[
     "DYLD_LIBRARY_PATH",
 ];
 
-
 /// What a loaded table was loaded for.
 pub(crate) struct Loaded {
     pub(crate) db: Stamp,
@@ -67,16 +66,19 @@ pub(crate) struct Loaded {
 }
 
 impl Loaded {
-    pub(crate) fn current(&self, graph: bool, live: bool, db: &Stamp, dag: Option<&Arc<Dag>>) -> bool {
+    pub(crate) fn current(
+        &self,
+        graph: bool,
+        live: bool,
+        db: &Stamp,
+        dag: Option<&Arc<Dag>>,
+    ) -> bool {
         let same_graph = match (&self.dag, dag) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
             _ => false,
         };
-        !live
-            && self.db == *db
-            && same_graph
-            && !(graph && self.at.elapsed() >= STATUS_MAX_AGE)
+        !live && self.db == *db && same_graph && !(graph && self.at.elapsed() >= STATUS_MAX_AGE)
     }
 }
 
@@ -312,7 +314,7 @@ fn private_paths(python: &std::path::Path, helper_home: &std::path::Path) -> Vec
     paths
 }
 
-/// The server's one query helper ([`AppState::sql`]).
+/// The server's one query helper (`AppState::sql`).
 pub struct QueryHelper {
     /// Held for a whole query: one at a time.
     pub(crate) process: tokio::sync::Mutex<Option<Process>>,
@@ -392,5 +394,4 @@ impl QueryHelper {
             self.timeout().as_secs_f64()
         ))
     }
-
 }

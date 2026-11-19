@@ -23,8 +23,8 @@
 //!
 //! **Tables.** [`SOURCES`] lists them. A table is handed to the helper when a query names it
 //! and it is not loaded for the current state: the metadata database on disk
-//! ([`AppState::db_state`]) and, for a table computed from the graph, the inspected graph
-//! ([`AppState::inspect_dag`]). A query on an unchanged server sends the helper nothing but
+//! ([`crate::read_cache::Reads::db_state`]) and, for a table computed from the graph, the inspected graph
+//! ([`crate::read_cache::Reads::inspect_dag`]). A query on an unchanged server sends the helper nothing but
 //! the query. A new table is one more entry in [`SOURCES`].
 //!
 //! **Time.** A query has [`TIMEOUT`], waiting for the helper and loading tables included. Past
@@ -346,7 +346,9 @@ impl QueryHelper {
                 let Rows { rows, total } =
                     (source.load)(inputs.as_ref().expect("just set")).await?;
                 process.loaded.remove(source.name);
-                process.load((source.name, source.columns), Some(&rows)).await?;
+                process
+                    .load((source.name, source.columns), Some(&rows))
+                    .await?;
                 self.loads.fetch_add(1, Ordering::Relaxed);
                 let note = (total > rows.len()).then(|| {
                     format!(
@@ -1266,4 +1268,3 @@ mod tests {
         }
     }
 }
-

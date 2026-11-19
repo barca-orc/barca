@@ -75,9 +75,7 @@ impl ApiError {
                     ErrorKind::Infra,
                     match error {
                         CursorError::Invalid => "invalid event cursor",
-                        CursorError::Mismatch => {
-                            "event cursor belongs to another run attempt"
-                        }
+                        CursorError::Mismatch => "event cursor belongs to another run attempt",
                         CursorError::Expired => {
                             "event replay is incomplete; read the existing run outcome and recorded logs"
                         }
