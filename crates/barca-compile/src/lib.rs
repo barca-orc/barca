@@ -27,6 +27,8 @@ mod file_names;
 pub mod groups;
 #[doc(hidden)]
 pub mod input_params;
+#[cfg(test)]
+mod layering_tests;
 pub mod load;
 mod names;
 mod node_refs;
