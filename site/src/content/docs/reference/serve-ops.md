@@ -12,6 +12,23 @@ queue and `barca queue`, what each signal does and the exit code it ends with, t
 supervisor must allow, memory limits in containers, a capacity shared by every run, and the run
 timeout. What a schedule does is [Scheduling With Cron](/scheduling/).
 
+## Commands typed in the server's project
+
+The server listens on a Unix socket in its project, `.barca/serve.sock`, beside its metadata
+database, and says so when it starts:
+
+```
+[barca] project socket .barca/serve.sock (barca commands in this project use this server; --local runs them here)
+```
+
+A `barca` command run in that directory (by an operator over SSH, a cron job, a deploy script)
+goes to the server through it: `get` and `run` join the run queue below, `status`, `history`,
+`logs` and the rest are answered by the server, and `gc` runs inside it. The socket is
+owner-only (mode `0600`) and asks no token, so run those commands as the user the server runs
+as.
+`barca state restore` and `barca state reset` refuse while the server is up. The whole table,
+`--local`, and what a killed server's leftover socket does: [Server Mode: a Shared Ledger and --server: In the server's own project](/reference/server-mode/#in-the-servers-own-project-the-project-socket).
+
 ## The run queue
 
 Every run the server accepts joins its run queue: `POST /runs` and the older trigger routes, a

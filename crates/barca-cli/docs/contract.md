@@ -98,21 +98,21 @@ command is experimental with it):
 | `barca get --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use |
 | `barca run --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use |
 | `barca get --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca get --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca get --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca run --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca run --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca run --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca status --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca status --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca status --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca list --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca list --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca list --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca history --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca history --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca history --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca stats --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca stats --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca stats --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca logs --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca logs --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca logs --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca sql --server` | new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows and 4MB an answer, four queries at once) and its errors may change |
-| `barca sql --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca sql --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca logs --follow` | new in 0.29.2: how the end of a followed run is reported may change after field use |
 <!-- END GENERATED experimental -->
 
@@ -333,7 +333,7 @@ default, and any aliases.
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca run
@@ -355,7 +355,7 @@ default, and any aliases.
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca plan
@@ -393,7 +393,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca history
@@ -417,7 +417,7 @@ default, and any aliases.
 | `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`, `line`, `now` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca gc
@@ -429,6 +429,8 @@ default, and any aliases.
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca stats
@@ -442,7 +444,7 @@ default, and any aliases.
 | `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`, `max_rss_bytes`, `rows`, `empty_keys`, `keys`, `failed_keys` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca pin
@@ -461,7 +463,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca unpin
@@ -474,7 +476,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca serve
@@ -505,7 +507,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Check the server's environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca queue
@@ -517,7 +519,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca pause
@@ -532,7 +534,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca resume
@@ -547,7 +549,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca list
@@ -562,7 +564,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire`, `file`, `line` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca status
@@ -596,7 +598,7 @@ default, and any aliases.
 | `--key` | `KEY` | - | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca sql
@@ -611,7 +613,7 @@ default, and any aliases.
 | `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows and 4MB an answer, four queries at once) and its errors may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca state

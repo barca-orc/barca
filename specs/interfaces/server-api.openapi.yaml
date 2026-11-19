@@ -2428,7 +2428,7 @@ paths:
         max_size of the request), or with the limit off every leftover and superseded result. The eviction
         takes its turn with the server''s own writes to the metadata database, so it does not wait on the
         database lock from outside as a second process does; a barca gc typed in the server''s project is
-        sent here over the project socket. What this server's runs in flight hold is left alone, result by result; restricted is set only when another process has a run in progress on this project.
+        sent here over the project socket. What this server''s runs in flight hold is left alone, result by result; restricted is set only when another process has a run in progress on this project.
         The body is optional: without one the configured limit applies and files are deleted. An unknown
         field is refused. The answer is barca gc --json.'
       requestBody:

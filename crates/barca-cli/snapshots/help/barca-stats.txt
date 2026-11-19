@@ -12,7 +12,7 @@ Options:
       --fields <FIELDS>  Select JSON fields as a comma-separated list; implies --json [possible values: elapsed_seconds, status, created_at, error_message, attempts, run_id, cpu_seconds, max_rss_bytes, rows, empty_keys, keys, failed_keys]
       --env <ENV>        Use a separate cache and history for this environment
       --server [<URL>]   Use a server (URL or configured); get/run execute its deployed code
-      --local            Use independent local state; ignore the configured server
+      --local            Run on this machine; ignore a configured server and this project's barca serve
   -h, --help             Show concise command help
       --examples         Show all command examples without running anything
 
