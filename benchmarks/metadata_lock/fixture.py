@@ -29,9 +29,9 @@ PIPELINE = """\
 from barca import asset, partitions
 
 
-@asset(partitions={{"key": partitions([str(i) for i in range({keys})])}})
+@asset(partitions={"key": partitions([str(i) for i in range(KEYS)])})
 def a(key: str) -> dict:
-    return {{"key": key}}
+    return {"key": key}
 """
 
 
@@ -46,9 +46,11 @@ def main() -> None:
     binary = os.environ.get("BARCA_BIN", "barca")
     root: Path = args.dir
     root.mkdir(parents=True, exist_ok=True)
-    (root / "pipeline.py").write_text(PIPELINE.format(keys=args.keys))
+    (root / "pipeline.py").write_text(PIPELINE.replace("KEYS", str(args.keys)))
     (root / "barca.toml").write_text("")
-    subprocess.run([binary, "get", "pipeline.py", "--local"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        [binary, "get", "pipeline.py", "--local"], cwd=root, check=True, capture_output=True
+    )
     db = root / ".barca" / "metadata.db"
     started = time.monotonic()
     conn = sqlite3.connect(db)

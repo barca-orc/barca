@@ -367,6 +367,7 @@ struct Owned {
     /// has open. `None` while the database has none.
     wal: Option<FileId>,
     /// Which connection this is, of all this process kept: tests tell a kept one from a new.
+    #[cfg(test)]
     serial: u64,
 }
 
@@ -376,6 +377,7 @@ pub(crate) fn kept_serial(path: &str) -> Option<u64> {
     OWNED.lock().unwrap().get(path).map(|entry| entry.serial)
 }
 
+#[cfg(test)]
 static KEPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The owner's connection in the hands of one operation.
@@ -444,6 +446,7 @@ fn keep(path: &str, main: FileId, db: libsql::Database, conn: libsql::Connection
         _db: db,
         main,
         wal: wal_id(path),
+        #[cfg(test)]
         serial: KEPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     };
     let stale: Vec<Owned> = {
