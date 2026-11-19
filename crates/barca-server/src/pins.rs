@@ -10,7 +10,7 @@ use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use barca_core::pins::{Choice, Pinned, Unpinned, Versions};
-use barca_core::views::Pins;
+use barca_core::served::Pins;
 use serde::Deserialize;
 
 /// `GET /pins` — every pinned asset: `{pins: [...]}`.

@@ -12,7 +12,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use barca_core::envelope::Context;
-use barca_core::views::{Project, ProjectFile, ProjectTelemetry};
+use barca_core::served::{Project, ProjectFile, ProjectTelemetry};
 use serde::Deserialize;
 use serde_json::{Value, json};
 

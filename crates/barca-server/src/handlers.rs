@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use barca_core::health::DURATION_WINDOW;
 use barca_core::queries;
 use barca_core::results::PlanResult;
-use barca_core::views::{CacheSize, Capabilities, HealthStatus, ScheduleJob, ServerHealth};
+use barca_core::served::{CacheSize, Capabilities, HealthStatus, ScheduleJob, ServerHealth};
 use barca_core::{BarcaError, db};
 use serde_json::{Value, json};
 
@@ -920,7 +920,7 @@ pub(crate) fn schedule_at(
 }
 
 /// One `GET /schedule` entry per job of `jobs`, in their order
-/// ([`barca_core::views::schedule_jobs`]), from the walk every surface reads: the `schedule`
+/// ([`barca_core::served::schedule_jobs`]), from the walk every surface reads: the `schedule`
 /// block of `GET /state` and a node's `refresh_path` carry the same state. `published`: the
 /// scheduler's own jobs (failed ticks, the last skip); none where no scheduler runs here.
 fn schedule_items(
@@ -937,17 +937,17 @@ fn schedule_items(
         .map(|job| {
             (
                 job.id.clone(),
-                barca_core::views::JobSkips {
+                barca_core::served::JobSkips {
                     last_skipped: job.last_skipped,
                     skipped_for: job.skipped_for.clone(),
                     skip_reason: job
                         .skip_reason
-                        .and_then(barca_core::views::SkipReason::parse),
+                        .and_then(barca_core::served::SkipReason::parse),
                 },
             )
         })
         .collect();
-    barca_core::views::schedule_jobs(
+    barca_core::served::schedule_jobs(
         barca_core::refresh_path::ScheduleInputs {
             jobs: &jobs,
             zone: &zone,

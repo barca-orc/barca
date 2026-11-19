@@ -184,11 +184,11 @@ pub(crate) async fn authorize(
 }
 pub(crate) async fn status(State(state): State<AppState>) -> Response {
     no_store(
-        Json(barca_core::views::AuthStatus {
+        Json(barca_core::served::AuthStatus {
             mode: if state.auth.store.is_none() {
-                barca_core::views::AuthMode::Off
+                barca_core::served::AuthMode::Off
             } else {
-                barca_core::views::AuthMode::Token
+                barca_core::served::AuthMode::Token
             },
         })
         .into_response(),

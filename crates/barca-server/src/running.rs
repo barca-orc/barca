@@ -41,7 +41,7 @@ pub struct NodeRunning {
 
 pub use barca_core::run_list::RunningStep;
 
-pub use barca_core::views::PartitionProgress;
+pub use barca_core::served::PartitionProgress;
 
 /// One run in flight.
 #[derive(Clone, Debug)]

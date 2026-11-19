@@ -418,7 +418,7 @@ fn tick_row(t: &TickRecord) -> Value {
 
 /// `barca.queue`: one row per run in a server's run queue, started runs first, then the
 /// waiting ones in order. A row is an entry of `GET /queue` in the table's columns
-/// (`views::QueueEntry::table_row`).
+/// (`served::QueueEntry::table_row`).
 pub fn queue(rows: Option<Vec<Value>>) -> Table {
     table(QUEUE, QUEUE_COLUMNS, rows)
 }
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn queue_columns_are_the_queue_row_keys() {
-        let row = crate::views::QueueEntry {
+        let row = crate::served::QueueEntry {
             run_id: "run-1".into(),
             status: "pending".into(),
             position: Some(1),

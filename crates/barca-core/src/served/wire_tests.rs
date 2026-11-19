@@ -1,4 +1,4 @@
-//! The structs of [`crate::views`] against the `json!` bodies the routes answered with before
+//! The structs of [`crate::served`] against the `json!` bodies the routes answered with before
 //! they were typed (#1056, B3): the same bytes. `serde_json` writes a `json!` object's keys in
 //! sorted order, so each struct declares its fields in that order; a field added out of order,
 //! renamed or retyped fails here.

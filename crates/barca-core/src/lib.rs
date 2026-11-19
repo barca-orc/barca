@@ -75,6 +75,7 @@ pub mod run_queue;
 pub mod schedule;
 pub mod schedule_standing;
 pub mod serve;
+pub mod served;
 #[cfg(test)]
 mod source_scan;
 pub mod sql;
@@ -86,7 +87,6 @@ pub mod text;
 pub mod transfer;
 pub mod values;
 mod verified_copies;
-pub mod views;
 
 // The model layer lives in `barca-model` (#905 step 4); its modules and root items keep their
 // `barca_core::` paths.

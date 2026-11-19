@@ -6,7 +6,7 @@ use super::{Server, encode, in_files};
 use crate::error::{CliError, Context, ErrorKind};
 use barca_core::BarcaError;
 use barca_core::cache_state::CacheState;
-use barca_core::views::{Pauses, QueueView, SchedulePauseAnswer};
+use barca_core::served::{Pauses, QueueView, SchedulePauseAnswer};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 

@@ -18,7 +18,7 @@ count of wrong-way edges from growing.
 | 2 | decisions | `cache`, `changes`, `freshness`, `plan_reasons`, `schedule` | run hash, cache and freshness verdicts, why a step runs, when a schedule fires |
 | 3 | engine | `commands`, `execution`, `incremental`, `mismatch`, `persist`, `recover`, `telemetry` | executes a plan and records what happened |
 | 3 | analysis | `causes`, `estimates`, `health`, `history_filter`, `key_query`, `liveness`, `partition_grid`, `refresh_path`, `rollup`, `run_explanation`, `run_list`, `schedule_standing`, `status` | read models over what was recorded |
-| 4 | service | `diagnostics`, `outcome`, `queries`, `report`, `serve`, `sql`, `values`, `views` | one operation per command, its typed result, its text |
+| 4 | service | `diagnostics`, `outcome`, `queries`, `report`, `serve`, `sql`, `values`, `served` | one operation per command, its typed result, its text |
 
 ## The rule
 
@@ -91,16 +91,16 @@ line to the allowlist is not.
 
 ## The typed views (B2, B3)
 
-`views` is a service module: the structs a host answers with and the functions that compute
+`served` is a service module: the structs a host answers with and the functions that compute
 them, one definition per view. It imports analysis types (`refresh_path::ScheduleInputs`,
 `liveness::RecordedTiming`, `run_list::RunNow`) and moves none of them.
 
 | View | Computed by | A server adds |
 |---|---|---|
-| one run (`RunView`) | `views::run_view`, then `RunDraft::plan` over the graph the host has | its run in memory (`LiveRun`) and the events it streamed |
-| the run list (`RunList`) | `views::run_list` over `queries::history_at`; `views::in_flight` for the runs in flight | its runs in memory; which nodes each run in flight works on |
-| the queue (`QueueView`) | `views::recorded_queue` for the queue the database records; the live queue is the server's own | each row's decoded description (`RecordedRun`) |
-| a schedule (`ScheduleJob`) | `views::schedule_jobs` over `refresh_path::schedule_views` | its scheduler's last skipped tick (`JobSkips`) |
+| one run (`RunView`) | `served::run_view`, then `RunDraft::plan` over the graph the host has | its run in memory (`LiveRun`) and the events it streamed |
+| the run list (`RunList`) | `served::run_list` over `queries::history_at`; `served::in_flight` for the runs in flight | its runs in memory; which nodes each run in flight works on |
+| the queue (`QueueView`) | `served::recorded_queue` for the queue the database records; the live queue is the server's own | each row's decoded description (`RecordedRun`) |
+| a schedule (`ScheduleJob`) | `served::schedule_jobs` over `refresh_path::schedule_views` | its scheduler's last skipped tick (`JobSkips`) |
 | pauses, pins | `Pauses::of`, `Pins` over `pauses::list` and `pins::list` | nothing |
 | a server's health, `GET /project`, `GET /auth/status` | filled by the host; nothing is computed | every field |
 

@@ -9,7 +9,7 @@ use axum::Json;
 use axum::extract::State;
 use barca_core::pauses;
 
-pub use barca_core::views::{PauseRequest, Pauses};
+pub use barca_core::served::{PauseRequest, Pauses};
 
 /// Every paused node, and every paused schedule (`POST /schedule/{id}/pause`).
 async fn body(state: &AppState) -> Result<Pauses, ApiError> {

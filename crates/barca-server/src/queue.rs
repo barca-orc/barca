@@ -545,7 +545,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
 
 // ─── the routes ─────────────────────────────────────────────────────────────
 
-pub use barca_core::views::{QueueEntry, QueueView};
+pub use barca_core::served::{QueueEntry, QueueView};
 
 fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
     QueueEntry {
@@ -731,7 +731,7 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
         .into_iter()
         .filter_map(|row| {
             let (spec, accepted_at) = load(&row.spec).ok()?;
-            Some(barca_core::views::RecordedRun {
+            Some(barca_core::served::RecordedRun {
                 run_id: row.run_id,
                 state: row.state,
                 accepted_at,
@@ -742,7 +742,7 @@ async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
         })
         .collect();
     let view =
-        barca_core::views::recorded_queue(rows, paused_at, &timing, state.is_draining(), now);
+        barca_core::served::recorded_queue(rows, paused_at, &timing, state.is_draining(), now);
     state.queue.note_recorded(&view);
     Ok(view)
 }
@@ -813,7 +813,7 @@ pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, Ap
 /// (what `GET /queue` lists), not its own empty one. `/health` never waits on a read: it reports
 /// the last recorded counts (read by `GET /queue`, or in the background when they are older than
 /// a few seconds) and its own counts until there are any.
-pub fn health(state: &AppState) -> barca_core::views::HealthQueue {
+pub fn health(state: &AppState) -> barca_core::served::HealthQueue {
     let mut max_runs = Some(state.queue.max_runs);
     let mut paused = state.queue.paused_at().is_some();
     let mut queued = state.queue.waiting_ids().len();
@@ -836,14 +836,14 @@ pub fn health(state: &AppState) -> barca_core::views::HealthQueue {
             });
         }
     }
-    barca_core::views::HealthQueue {
+    barca_core::served::HealthQueue {
         paused,
         queued,
         running,
         max_runs,
         capacity: state.capacity.as_ref().map(|c| {
             let s = c.snapshot();
-            barca_core::views::HealthCapacity {
+            barca_core::served::HealthCapacity {
                 total: s.total,
                 in_use: s.in_use,
                 waiting: s.waiting.len(),

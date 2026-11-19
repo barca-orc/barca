@@ -9,7 +9,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use barca_core::db::{self, SchedulePause};
-use barca_core::views::SchedulePauseAnswer;
+use barca_core::served::SchedulePauseAnswer;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::RwLock;

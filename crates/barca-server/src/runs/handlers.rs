@@ -21,7 +21,7 @@ use barca_core::cache::CachePolicy;
 use barca_core::envelope::Context;
 use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunRequest, RunView, Trigger};
 use barca_core::run_explain::{Cancellation, CancelledBy};
-use barca_core::views::{
+use barca_core::served::{
     ActiveStep, LiveRun, RunCancelling, RunHandle, RunLogs, RunSummary, RunViewStatus,
 };
 use barca_core::{BarcaError, db};
@@ -591,7 +591,7 @@ pub async fn output(
 
 /// `GET /runs` — durable run history joined with this server's live runs: the runs in
 /// progress first, whatever `limit` lists (#941), then the newest
-/// ([`barca_core::views::run_list`]). The filters are the database's ([`RunsQuery`]): `total`
+/// ([`barca_core::served::run_list`]). The filters are the database's ([`RunsQuery`]): `total`
 /// counts the runs they keep.
 pub async fn list(
     State(state): State<AppState>,
@@ -605,13 +605,13 @@ pub async fn list(
     if filter.statuses == ["running"] {
         let rows = in_flight(&state, &db_state, &snapshot).await?;
         return Ok(Json(
-            barca_core::views::in_flight_list(&snapshot.path, rows, &filter, limit, now).await?,
+            barca_core::served::in_flight_list(&snapshot.path, rows, &filter, limit, now).await?,
         ));
     }
     // Clone after the snapshot: a new live run not yet in the snapshot stays visible.
     let live = live_runs(&state);
     Ok(Json(
-        barca_core::views::run_list(barca_core::views::RunListRequest {
+        barca_core::served::run_list(barca_core::served::RunListRequest {
             read_path: &snapshot.path,
             db_path: &state.config.resolved.db_path,
             limit,
@@ -632,14 +632,14 @@ pub(crate) async fn in_flight_now(
     snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
 ) -> Result<barca_core::report::HistoryNow, ApiError> {
     let db_state = state.db_state();
-    Ok(barca_core::views::in_flight_now(
+    Ok(barca_core::served::in_flight_now(
         in_flight(state, &db_state, snapshot).await?,
     ))
 }
 
 /// The runs in flight, newest first, each with the nodes it is working on now
 /// ([`crate::running`]): the rows of `GET /runs?status=running`
-/// ([`barca_core::views::in_flight`]). This fills which nodes each run works on.
+/// ([`barca_core::served::in_flight`]). This fills which nodes each run works on.
 async fn in_flight(
     state: &AppState,
     db_state: &crate::read_cache::Stamp,
@@ -667,7 +667,7 @@ async fn in_flight(
         .map(|(flight, live)| {
             let by_node =
                 crate::running::by_node(std::slice::from_ref(flight), &status.nodes, &dag);
-            barca_core::views::Flight {
+            barca_core::served::Flight {
                 run_id: &flight.run_id,
                 live: live.as_ref(),
                 active: status
@@ -684,5 +684,5 @@ async fn in_flight(
             }
         })
         .collect();
-    Ok(barca_core::views::in_flight(read_path, rows, &state.config.files, &dag.groups).await?)
+    Ok(barca_core::served::in_flight(read_path, rows, &state.config.files, &dag.groups).await?)
 }
