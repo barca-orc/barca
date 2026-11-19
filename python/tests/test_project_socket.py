@@ -42,6 +42,17 @@ def hold() -> None:
     while not Path("release").exists() and time.time() < deadline:
         print("still holding", flush=True)
         time.sleep(0.02)
+
+
+@task()
+def nested() -> None:
+    import subprocess
+    import sys
+
+    barca = Path(sys.executable).parent / "barca"
+    done = subprocess.run([str(barca), "get", "total", "--json"], capture_output=True, text=True, timeout=90)
+    Path("nested.stderr").write_text(done.stderr)
+    assert done.returncode == 0, done.stderr
 """
 
 ANNOUNCED = "[barca] server .barca/serve.sock (this project's barca serve"
@@ -130,6 +141,7 @@ def test_every_routed_command_reaches_the_server(project, serve):
     assert [r["id"] for r in rows["rows"]] == [
         "pipeline.py:base",
         "pipeline.py:hold",
+        "pipeline.py:nested",
         "pipeline.py:total",
     ]
     # A query over results runs here, over the artifacts the server wrote in this project.
@@ -163,6 +175,15 @@ def test_local_runs_on_this_machine_beside_the_server(project, serve):
         assert "serve.sock" not in done.stderr
     # The queue, pauses and cancelling are a server's: --local has nothing to answer with.
     assert barca(project, "queue", "--local").returncode == 2
+
+
+def test_a_command_a_step_starts_runs_in_the_step_not_on_the_server(project, serve):
+    # One run slot: sent to the server, the nested run would wait behind the run that started it.
+    (project / "barca.toml").write_text("[server]\nmax_runs = 1\n")
+    server = serve("--no-schedule")
+    run = server.submit("nested")
+    assert server.finished(run["run_id"])["status"] == "success"
+    assert "serve.sock" not in (project / "nested.stderr").read_text()
 
 
 def test_gc_beside_a_server_with_a_run_recording_is_run_by_the_server(project, serve):

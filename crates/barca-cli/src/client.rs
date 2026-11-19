@@ -181,6 +181,12 @@ pub(crate) fn project_server(flags: &ServerFlags, env: Option<&str>) -> Option<S
     if flags.local || flags.server.is_some() {
         return None;
     }
+    // A command a step starts (`barca.get()` inside a task) runs in that step's process, as it
+    // did before the socket. Sent to the server that is executing the step, it would wait for
+    // a run slot its own caller holds.
+    if std::env::var_os("BARCA_WORKER").is_some() {
+        return None;
+    }
     let path = barca_core::config::project_server_socket(env)?;
     #[cfg(unix)]
     {

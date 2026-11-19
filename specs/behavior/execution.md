@@ -282,9 +282,9 @@ Independent CLI processes, and local runs against a server's ledger, share nothi
 
 A command beside a server: the lock itself is unchanged (#1056 A7, A8): `--local` beside a busy
 server, and `history --reconcile`, `doctor` and `state backups`, still take turns on it from
-outside. A step that itself starts `barca get` in the project (through `barca.get()`, say) now
-submits a second run to the server that is executing it; on a server with one run slot that
-run waits behind its own caller. Pass `--local` there.
+outside. A command a step starts in the project (through `barca.get()`, say) is not sent to the
+server: it runs in the step's process, since on the server it would wait for a run slot its own
+caller holds.
 
 Full bootstrap and validation still retain work proportional to partition count:
 [#655](https://github.com/barca-orc/barca/issues/655). Bounded scheduling is an accepted target,

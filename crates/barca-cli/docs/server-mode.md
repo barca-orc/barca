@@ -68,9 +68,9 @@ What that means for `get` and `run`:
 - The run waits for a run slot like any other (`barca queue`), and Ctrl-C cancels it on the
   server.
 - `-o url` is not available on a server yet; pass `--local` for it.
-- A step that itself starts `barca get` in the project (`barca.get(...)` inside a task) submits
-  a second run to the server executing it. On a server with one run slot (`[server] max_runs =
-  1`) that run waits behind its own caller: pass `--local` (`barca get ... --local`) there.
+- A command a step starts (`barca.get(...)` inside a task) does not go to the server: it runs
+  in the step's own process, as it did before the socket, so it never waits for a run slot its
+  caller holds.
 
 `--local` runs any of these in the command's own process, as before the socket existed. It
 still shares the database lock with the server, so behind a busy server it can wait.
