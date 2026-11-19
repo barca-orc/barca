@@ -1405,6 +1405,9 @@ pub enum CachePolicy {
 /// fault of the step that was writing there.
 pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
 
+mod step_report;
+pub(crate) use step_report::{env_report, merge_partition_reports, report_for, stale_warning};
+
 #[cfg(test)]
 mod lookup_tests;
 

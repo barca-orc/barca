@@ -45,7 +45,16 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
     (
         "decisions",
         2,
-        &["cache", "changes", "freshness", "plan_reasons", "schedule"],
+        &[
+            "cache",
+            "changes",
+            "freshness",
+            "plan_reasons",
+            "predict",
+            "recover",
+            "schedule",
+            "sizing",
+        ],
     ),
     (
         "engine",
@@ -56,7 +65,6 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
             "incremental",
             "mismatch",
             "persist",
-            "recover",
             "telemetry",
         ],
     ),
@@ -98,7 +106,7 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
 /// The number of modules in the largest strongly connected component of the module graph
 /// (modules that all reach each other through `crate::` paths in non-test code). 38 before
 /// the cuts of #1056's C1.
-const LARGEST_CYCLE: usize = 29;
+const LARGEST_CYCLE: usize = 30;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
 

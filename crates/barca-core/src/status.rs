@@ -2,7 +2,7 @@
 //! materialization and artifact shape.
 //!
 //! Nothing here is new logic. Cache state comes from the same decision `--dry-run` makes
-//! ([`crate::execution::explain_dag`]), history from the metadata DB, and artifact shape from
+//! ([`crate::predict::explain_dag`]), history from the metadata DB, and artifact shape from
 //! `python -m barca._inspect`, which opens artifact files only: user code is never imported.
 //! The ledger is read-only; bounded disposable inspection evidence is cached separately.
 
@@ -932,7 +932,7 @@ pub(crate) async fn status_from_dag_with_membership(
     // The rules a run follows (#985): each node is decided on its own, and what reads a
     // `Manual` or pinned node is decided against the result a run reads, not against a
     // recompute of it.
-    let (explained, membership, _, held) = crate::execution::explain_dag_with_keys(
+    let (explained, membership, _, held) = crate::predict::explain_dag_with_keys(
         dag,
         cfg,
         &target_names,
@@ -1241,7 +1241,7 @@ fn cache_status(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
-    held: &crate::execution::HeldNodes,
+    held: &crate::predict::HeldNodes,
     held_note: Option<String>,
 ) -> CacheStatus {
     let Some(r) = report else {
@@ -1318,7 +1318,7 @@ fn not_cached(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
-    held: &crate::execution::HeldNodes,
+    held: &crate::predict::HeldNodes,
 ) -> CacheStatus {
     let state = if history.ever_succeeded {
         CacheState::Stale
@@ -1535,7 +1535,7 @@ mod tests {
     #[test]
     fn states_and_reasons() {
         let none = HashMap::new();
-        let no_held = crate::execution::HeldNodes::new();
+        let no_held = crate::predict::HeldNodes::new();
         let h = history(None, false);
         let c = cache_status(
             Some(&report("run", Some("not_materialized"))),
@@ -1649,7 +1649,7 @@ mod tests {
         // A held input (a `Manual` or pinned node a run reads as it is) is not what makes a
         // node stale, whatever its own state (#985): the node reads its current result.
         let h = history(Some("success"), true);
-        let held: crate::execution::HeldNodes = [(
+        let held: crate::predict::HeldNodes = [(
             "p.py:u".to_string(),
             crate::cache::ReadAsIs {
                 pinned: false,

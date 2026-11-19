@@ -13,8 +13,8 @@
 //! same dimension names and the input is not collected.
 
 use crate::dag::Dag;
+use crate::model::kind_str;
 use crate::planner::Phase;
-use crate::report::kind_str;
 use crate::results::StepReport;
 use crate::step_status::StepStatus;
 use crate::targets::{blocking_failure, short_name};

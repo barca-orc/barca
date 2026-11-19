@@ -1,17 +1,14 @@
 # Edges between barca-core's modules that point the wrong way (see module_layering_tests.rs and
 # docs/engineering/layering.md). One edge per line: `from -> to: the items of `to` that `from`
 # names`. This list may only shrink: delete a line when its edge is cut.
-execution -> report: RunOutcome, batch_line, cached_step_line, computed_by_another_run, end_of_run_line, env_suffix, failed_step_line, fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning
-incremental -> report: env_report, kind_str
+execution -> report: RunOutcome, batch_line, cached_step_line, computed_by_another_run, end_of_run_line, env_suffix, failed_step_line, fmt_eta, reconcile_total
 ledger -> cache: CacheReader, checks_bytes, lookup_cached
 ledger -> envelope: ErrorEnvelope
 ledger -> outcome: API_VERSION
 ledger -> persist: record_post
-partition_grid -> execution: explain_dag_with_keys
 pins -> cache: CacheReader
 run_explanation -> outcome: RunView
 schedule -> queries: list_assets
-status -> execution: HeldNodes, explain_dag_with_keys
 store_inspect -> cache: CacheReader, lookup_cached
 store_inspect -> status: NodeStatus
 store_sync -> cache: BLOCKED_ARTIFACT_PATH

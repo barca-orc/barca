@@ -331,7 +331,7 @@ impl Incremental {
                 let partitioned = node.is_some_and(|n| !n.extracted.partitions.is_empty());
                 reports.push(StepReport {
                     id: id.to_owned(),
-                    kind: crate::report::kind_str(node.map(|n| n.kind())),
+                    kind: crate::model::kind_str(node.map(|n| n.kind())),
                     status: Some(StepStatus::Cached.to_string()),
                     run_hash: if partitioned {
                         None
@@ -343,7 +343,7 @@ impl Incremental {
                     } else {
                         self.next.nodes[id].output.as_ref().map(|o| o.path.clone())
                     },
-                    env: crate::report::env_report(dag, id),
+                    env: crate::cache::env_report(dag, id),
                     undeclared_env: node
                         .map(|n| n.extracted.undeclared_env())
                         .filter(|v| !v.is_empty()),
