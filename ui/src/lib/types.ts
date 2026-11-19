@@ -84,53 +84,28 @@ export type { QueueEntry } from './generated/QueueEntry'
 export type { CapacitySnapshot } from './generated/CapacitySnapshot'
 export type { WaitingStep } from './generated/WaitingStep'
 export type { ErrorKind } from './generated/ErrorKind'
+export type { ServerHealth } from './generated/ServerHealth'
+export type { HealthQueue } from './generated/HealthQueue'
+export type { RunViewStatus } from './generated/RunViewStatus'
+export type { RunHandle } from './generated/RunHandle'
+export type { RunsQuery } from './generated/RunsQuery'
+export type { ScheduleJob } from './generated/ScheduleJob'
+export type { SchedulePauseAnswer } from './generated/SchedulePauseAnswer'
+export type { Pauses } from './generated/Pauses'
+export type { AssetPause } from './generated/AssetPause'
+export type { PauseRequest } from './generated/PauseRequest'
+export type { Pins } from './generated/Pins'
+export type { AuthStatus } from './generated/AuthStatus'
+export type { Project } from './generated/Project'
+export type { RunCancelling } from './generated/RunCancelling'
+export type { TokenList } from './generated/TokenList'
 
-import type { LoadError } from './generated/LoadError'
 import type { ErrorKind } from './generated/ErrorKind'
 
 import type { ListNode } from './generated/ListNode'
 import type { AssetStats } from './generated/AssetStats'
-import type { NodeKind } from './generated/NodeKind'
 
 // ── Frontend-only / ad-hoc-JSON types (not 1:1 Rust structs) ──────────────────
-
-/** GET /health — ad-hoc JSON, not a Rust struct. */
-export interface Health {
-  capabilities?: { event_resume?: number }
-  status: string
-  version: string
-  /** `barca serve --read-only`: run and cancel endpoints are refused. */
-  read_only: boolean
-  /** Whether this server fires `Schedule(...)` nodes. */
-  scheduler: boolean
-  /** `scheduler`, and false once the scheduler stopped on an error. */
-  scheduler_enabled: boolean
-  /** Why the metadata DB cannot be used, while it cannot; null otherwise. */
-  metadata_error: string | null
-  /** Unloaded sources and graph-invalid definitions; healthy node routes remain available. */
-  graph_stale?: boolean | null
-  load_errors: LoadError[]
-  /** Major version of the HTTP API; a client refuses another. */
-  api_version: number
-  /** The environment this server runs (`barca serve --env`). */
-  env: string
-  /** The artifact store this server writes to; null when artifacts stay on its machine. */
-  store_uri: string | null
-  /** When this server started (RFC 3339). */
-  started_at: string
-  /** The run queue in brief; `GET /queue` has the runs. */
-  queue: HealthQueue
-}
-
-/** `GET /health`'s `queue`. */
-export interface HealthQueue {
-  paused: boolean
-  queued: number
-  running: number
-  max_runs: number | null
-  /** The capacity every run shares (`--capacity`); null when the server has none. */
-  capacity?: { total: number; in_use: number; waiting: number } | null
-}
 
 /**
  * Every error body: the CLI's stderr error envelope (`barca docs contract`).
@@ -156,59 +131,6 @@ export interface ErrorEnvelope {
 export type RunOutcome =
   | { status: 'success'; run_id: string; final_output?: unknown; targets?: Record<string, unknown> }
   | { status: 'failed' | 'cancelled' | 'error'; envelope: ErrorEnvelope }
-
-/** `RunView.status`: live while `pending`/`running`, terminal otherwise. */
-export type RunViewStatus =
-  | 'pending'
-  | 'running'
-  | 'success'
-  | 'failed'
-  | 'cancelled'
-  | 'error'
-  | 'interrupted'
-
-/** One `GET /schedule` entry (ad-hoc JSON, not a ts-rs type). */
-export interface ScheduleJob {
-  state: import('./generated/ScheduleState').ScheduleState
-  state_detail: string | null
-  id: string
-  cron: string
-  kind: NodeKind
-  next_fire: number | null
-  /** The newest tick the scheduler fired (unix seconds). */
-  last_fired: number | null
-  /** The run that tick started; `last_run` is the same id under its older name. */
-  last_run_id: string | null
-  last_run: string | null
-  /** That run's status, in the run list's words (`pending` while it waits in the run queue). */
-  last_status: string | null
-  /** The server's one answer to "is it late" (`barca docs scheduling`). */
-  late: boolean
-  /** The first slot after `last_fired` that has passed (unix seconds); null while on time or paused. */
-  late_since: number | null
-  last_skipped: number | null
-  skipped_for: string | null
-  /** Why the last due tick was skipped. */
-  skip_reason: 'in_flight' | 'paused' | null
-  paused: boolean
-  /** Unix seconds when a timed pause ends; null for an open-ended pause. */
-  paused_until: number | null
-  /** Consecutive failed ticks (RFC-0008); kept across restarts. */
-  failures: number
-  /** `Schedule(cron, max_failures=N)`, default 5. */
-  max_failures: number
-  /** `failures >= max_failures`: ticks are skipped until an explicit request or an input change. */
-  failing: boolean
-}
-
-/** POST /runs — `202 { run_id, status, position }`: the database run id, and whether it started or waits. */
-export interface RunHandle {
-  run_id: string
-  /** `running` when it started at once, `pending` while it waits in the queue. */
-  status: 'pending' | 'running'
-  /** Its place in the queue, 1 = next; null when it started. */
-  position: number | null
-}
 
 /** `barca stats --json`: the generated `AssetStats` with `id` in place of `node_id`. */
 type NodeStats = Omit<AssetStats, 'node_id'> & { id: string }

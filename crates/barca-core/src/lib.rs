@@ -76,6 +76,7 @@ pub mod run_queue;
 pub mod schedule;
 pub mod schedule_standing;
 pub mod serve;
+pub mod served;
 pub(crate) mod sizing;
 #[cfg(test)]
 mod source_scan;

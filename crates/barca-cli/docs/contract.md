@@ -3540,7 +3540,10 @@ hex digits) and `span_id` (its root `barca.step` span, decimal); the two keys ar
 every other step (experimental, additive, 0.41.0; `barca docs telemetry`).
 Cached steps are not listed: `run.steps_cached` counts them. `steps_page` is `{total,
 truncated}`: how many steps the run recorded and whether `steps` lists fewer (the table
-prints a note on stderr). `run.retries` (experimental, #925) counts the attempts that retried a
+prints a note on stderr). When `--limit` cut the list short it also has `next_offset`, the
+position of the first step not listed, as `GET /runs/{run_id}` gives it (experimental; a run
+read from this machine's database once lacked it); `barca history` has no flag that reads from an
+offset, `--all` lists every step. `run.retries` (experimental, #925) counts the attempts that retried a
 step (`attempts` minus one per recorded step), so `attempts` = steps recorded + `retries`.
 `run.plan_reasons` (experimental, #925), absent for a run that executed nothing and in the
 `barca history` list, says why the run executed the steps it did instead of serving them from

@@ -5,33 +5,7 @@
 
 import { consumersOf, downstreamIds } from './health'
 import type { GraphLink } from './health'
-import type { ScheduleJob } from './types'
-
-/** One paused node of `GET /pauses`. */
-export interface AssetPause {
-  id: string
-  /** Unix seconds. */
-  paused_at: number
-  /** What the pause named: the node, the node a downstream pause started from, or a file. */
-  via: string
-}
-
-/** `GET /pauses`, and the answer of `POST /pauses` (`added`) and `POST /pauses/resume` (`removed`). */
-export interface Pauses {
-  total: number
-  paused: AssetPause[]
-  /** Every paused schedule (`barca pause --schedule`); `until` in unix seconds, null until resumed. */
-  schedules?: Array<{ id: string; paused_at: number; until: number | null }>
-  added?: string[]
-  removed?: string[]
-}
-
-/** The body of `POST /pauses` and `POST /pauses/resume`. */
-export interface PauseRequest {
-  target?: string
-  downstream?: boolean
-  all?: boolean
-}
+import type { Pauses, ScheduleJob } from './types'
 
 /** The source file of a node id (`dir/pipeline.py:name` → `dir/pipeline.py`). */
 export function fileOf(id: string): string {

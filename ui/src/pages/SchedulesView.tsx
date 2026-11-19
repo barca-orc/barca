@@ -7,7 +7,7 @@ import type { Remote } from "@/lib/remote";
 import { QUEUE_BOUND_HINT, lastStatusLabel, scheduleRows, type ScheduleRow } from "@/lib/schedules";
 import { nodeKindLabel } from "@/lib/status";
 import { formatInstant, formatSlot } from "@/lib/time";
-import type { Health, ListNode, NodeState } from "@/lib/types";
+import type { ServerHealth, ListNode, NodeState } from "@/lib/types";
 
 export interface SchedulesViewProps {
   title: string;
@@ -18,7 +18,7 @@ export interface SchedulesViewProps {
   states: NodeState[] | undefined;
   /** When `states` was fetched: what "in 5m" is relative to. */
   dataUpdatedAt: number;
-  health: Health | undefined;
+  health: ServerHealth | undefined;
   /** The server did not answer the last health poll: `health` is what it last said. */
   offline: boolean;
   toggle: {

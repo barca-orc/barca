@@ -9,7 +9,7 @@
 
 import { match } from 'ts-pattern'
 import { shortName } from './graph'
-import type { RunsQuery } from './api'
+import type { RunsQuery } from './types'
 import { only, type Next } from './program'
 import { parseRunStatus, runNodeIdle } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone, formatSeconds } from './time'
@@ -83,7 +83,7 @@ export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', q
 
 /** The newest `limit` runs, unfiltered: what `GET /runs` answers without a filter. */
 export function everyRun(limit: number): RunsQuery {
-  return { limit, status: null, not_triggered_by: null, since: null, until: null, search: null }
+  return { limit, status: null, triggered_by: null, not_triggered_by: null, since: null, until: null, search: null }
 }
 
 /** What the page asks the server for: the model's filters as `GET /runs` names them. */
@@ -95,6 +95,7 @@ export function runsQuery(model: RunsModel): RunsQuery {
       .with('live', () => 'running' as const)
       .with('all', () => null)
       .exhaustive(),
+    triggered_by: null,
     not_triggered_by: model.hideSchedule ? 'schedule' : null,
     since: model.window?.since ?? null,
     until: model.window?.until ?? null,

@@ -10,14 +10,14 @@ use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use barca_core::pins::{Choice, Pinned, Unpinned, Versions};
+use barca_core::served::Pins;
 use serde::Deserialize;
-use serde_json::{Value, json};
 
 /// `GET /pins` — every pinned asset: `{pins: [...]}`.
-pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+pub async fn list(State(state): State<AppState>) -> Result<Json<Pins>, ApiError> {
     let snapshot = snapshot_db(&state).await?;
     let pins = barca_core::pins::list(&snapshot.path).await?;
-    Ok(Json(json!({ "pins": pins })))
+    Ok(Json(Pins { pins }))
 }
 
 #[derive(Default, Deserialize)]
