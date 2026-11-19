@@ -676,6 +676,10 @@ fn du(path: &Path) -> (u64, u64) {
 
 /// Walk `.barca/`; the artifact directories only when `artifacts` is set.
 fn walk(project: &Project, artifacts: bool) -> Walk {
+    // The log of a database this process has open is not disk use: it is folded into the main
+    // file, and gone, once the connection closes. Measured with it, the size moved by
+    // megabytes between a measurement and the eviction planned from it.
+    crate::db::close_connections();
     let trees: HashSet<PathBuf> = project.artifact_trees().into_iter().collect();
     let mut out = Walk::default();
     fn visit(

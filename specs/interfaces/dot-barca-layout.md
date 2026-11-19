@@ -39,9 +39,9 @@ Everything else is shared by the project's environments.
 | --- | --- | --- | --- | --- | --- |
 | `.gitignore` | Rust (`layout::ensure_env_dirs`); Python (`_sql.py`) writes it too when it is missing | `*`, so git ignores `.barca/` | never | no | yes |
 | `metadata.db` | Rust (`db/`) | the local libSQL metadata database | the user (`barca state reset` moves it aside) | no | yes |
-| `metadata.db-wal` | Rust (libSQL) | the database's write-ahead log | libSQL; `barca state reset` | no | yes |
+| `metadata.db-wal` | Rust (libSQL) | the database's write-ahead log; a process keeps it while it has the database open and folds it into `metadata.db` when its command ends | libSQL, when the last process with the database open closes it; `barca state reset` | no | yes |
 | `metadata.db-shm` | Rust (libSQL) | the write-ahead log's shared-memory index | libSQL; `barca state reset` | no | yes |
-| `metadata.db.lock` | Rust (`db::acquire_file_lock`) | cross-process lock file, held while a process uses the DB | never (empty) | no | yes |
+| `metadata.db.lock` | Rust (`db::acquire_file_lock`) | cross-process lock file, held for each operation a process makes on the DB (the read commands and a server's read routes read without it); a process waiting for it sets its modification time, which is how the holder knows to give way (#1056) | never (empty) | no | yes |
 | `metadata.db.pre-restore` | Rust (`barca state restore`) | the database a restore replaced | the user | no | yes |
 | `metadata.db.reset-<UTC>` | Rust (`barca state reset`) | a database a reset moved aside, with its `-wal` and `-shm` | the user | no | yes |
 | `artifacts/` | Rust names and records paths; Python writes the files | `<node>/<run_hash><ext>` (`<node><ext>` for a step without a run hash), `*.moved-aside*` directories, and a batched call's `.batch-<pid>-<call>/` split directory | eviction; `barca gc` | yes: results by tier, unreferenced files and moved-aside directories as leftovers | yes |

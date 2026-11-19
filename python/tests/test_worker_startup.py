@@ -77,7 +77,8 @@ def test_a_warm_run_starts_no_worker_and_bounds_metadata_connections(tmp_path):
     assert worker_lines(warm) == [], warm
     phases = len(re.findall(r"phase\d+_cache_check_done", warm))
     opens = int(re.search(r"metadata db opens (\d+)", warm).group(1))
-    # Start + one cache visit per phase + the ledger. Each visit checks the format
-    # read-only before opening a writer: SQLite must not checkpoint an unsupported DB.
+    # One connection for the whole run (#1056, A8), opened once: the format is checked
+    # read-only before the writer is opened, because SQLite must not checkpoint an
+    # unsupported DB. Before, every visit opened both: 2 * (phases + 2).
     assert phases >= 1
-    assert opens == 2 * (phases + 2), warm
+    assert opens == 2, warm

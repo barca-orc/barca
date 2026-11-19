@@ -546,32 +546,33 @@ fn handle_of_kept(path: &str, conn: &libsql::Connection, lock: FileLock) -> DbHa
 /// Close the connections this process keeps ([`OWNED`]), each under its database's lock when
 /// that is free right now: the last connection to close folds the log into the main file and
 /// deletes it, which is what every operation's close did. The CLI calls this as a command
-/// ends. A connection whose lock is held by another process is left to the exit: that process
-/// has the database open, and the log is its to fold.
+/// ends, and `gc` before it measures `.barca/` (a log that comes and goes is not disk use to
+/// evict for). A connection whose lock is held (an operation of this process is using it, or
+/// another process is at work on the database) stays as it is: at exit that leaves the log
+/// to the next process to open the database, as after a crash.
 pub fn close_connections() {
     close_kept(|_| true);
 }
 
 /// [`close_connections`] for the databases `which` picks.
 fn close_kept(which: impl Fn(&str) -> bool) {
-    let kept: Vec<(String, Owned)> = {
-        let mut owned = OWNED.lock().unwrap();
-        let paths: Vec<String> = owned.keys().filter(|path| which(path)).cloned().collect();
-        paths
-            .into_iter()
-            .filter_map(|path| owned.remove(&path).map(|entry| (path, entry)))
-            .collect()
+    let paths: Vec<String> = {
+        let owned = OWNED.lock().unwrap();
+        owned.keys().filter(|path| which(path)).cloned().collect()
     };
-    for (path, entry) in kept {
-        let lock = fs::OpenOptions::new()
+    for path in paths {
+        // The lock first: while it is held no operation has the connection, and none can
+        // open another before this one has closed.
+        let Some(_lock) = fs::OpenOptions::new()
             .write(true)
             .open(format!("{path}.lock"))
             .ok()
-            .filter(|file| file.try_lock().is_ok());
-        match lock {
-            Some(_lock) => drop(entry),
-            None => std::mem::forget(entry),
-        }
+            .filter(|file| file.try_lock().is_ok())
+        else {
+            continue;
+        };
+        let entry = OWNED.lock().unwrap().remove(&path);
+        drop(entry);
     }
 }
 

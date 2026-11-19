@@ -47,9 +47,15 @@ format version and refuses a database it does not support rather than rebuilding
 ## Concurrent runs
 
 Several barca processes can run in one project at once (parallel scripts or agents, `barca serve`
-alongside the CLI). The metadata DB is a single-file database that one process opens at a time,
-so each process holds a short lock on it (`.barca/metadata.db.lock`) only while it reads or
-writes, and releases it while your Python runs. Processes queue instead of failing. If a
+alongside the CLI). The metadata DB is a single-file database that one process writes at a time,
+so each process holds a short lock on it (`.barca/metadata.db.lock`) for each of its operations
+on it, and releases it while your Python runs. Processes queue instead of failing, and take
+turns: a process that finds the lock held marks the lock file (its modification time), and the
+process holding it lets the next one in before its own next operation. The read commands
+(`status`, `history`, `stats`, `logs`, `doctor`, and what `sql` reads) do not take the lock at
+all: they read the database in place, beside a run's writes, and neither wait for one nor hold
+one up. A process keeps one connection to the database for as long as it runs and folds the
+write-ahead log (`metadata.db-wal`) into `metadata.db` when its command ends. If a
 process waits more than 60 seconds for the lock you get an error that names the lock file and
 the process holding it at that moment (`held now by pid 4312 (barca serve ...)`, read from the
 kernel's lock table on Linux; elsewhere the error says the holder could not be named);
@@ -62,7 +68,10 @@ finds the server by its socket, `.barca/serve.sock`, and the server does the wor
 project"). `--local` runs the command in its own process, and then it waits on the lock like
 any second process. `BARCA_TRACE_TIMING=1` prints, at the end of a `get` or `run`, how often the
 process had to wait for the lock, for how long in total and at most:
-`[trace] metadata db opens 14, lock waits 2 (total 31.5ms, longest 20.1ms)`.
+`[trace] metadata db opens 2, lock waits 2 (total 31.5ms, longest 20.1ms)`. Every command also
+prints how often it held the lock itself, for how long in total and at most (the longest
+another process can have waited for it):
+`[trace] metadata lock holds 9 (total 2.4ms, longest 0.9ms)`.
 
 If a required database write fails, the command reports an infrastructure error (exit 3) and
 records no new outcome; what was already recorded stays. With an artifact store, a refresh in
