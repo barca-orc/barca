@@ -911,17 +911,7 @@ pub(crate) async fn attach_live_schedules(
 /// in scope: called before a filter cuts `nodes`. Lateness is each schedule's standing
 /// ([`live_schedules`]): read on the server's clock and in its `--timezone`, never for a
 /// paused schedule, and the value `GET /schedule` and the `schedule` block report.
-pub(crate) async fn attach_health(
-    state: &AppState,
-    result: &mut barca_core::status::StatusResult,
-    dag: &std::sync::Arc<barca_core::dag::Dag>,
-    db_state: &crate::read_cache::Stamp,
-    db_path: &str,
-) -> Result<std::collections::HashSet<String>, ApiError> {
-    attach_health_at(state, result, dag, db_state, db_path, chrono::Utc::now()).await
-}
-
-/// [`attach_health`] as of `now`.
+/// Classified as of `now`.
 pub(crate) async fn attach_health_at(
     state: &AppState,
     result: &mut barca_core::status::StatusResult,
