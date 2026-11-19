@@ -20,12 +20,10 @@ stdout only, for the coordinator; errors never contain one.
 import base64
 import datetime
 import decimal
-import json
 import math
-import sys
 from typing import Any
 
-from barca import _artifacts
+from barca import _artifacts, _helper
 
 
 def _pyarrow_reader_if_available(fmt: str) -> str | None:
@@ -123,21 +121,25 @@ def sign(obj: dict) -> dict:
     return answer
 
 
-def main() -> None:
-    request = json.load(sys.stdin)
+def answers(request: dict) -> list[dict]:
+    """The answer to one request: an entry per object or artifact, in order."""
     if request.get("op") == "sign":
         if request.get("version") != SIGN_VERSION:
             raise SystemExit(
                 f"barca._value: sign request version {request.get('version')!r} is not "
                 f"{SIGN_VERSION}; reinstall matching barca packages"
             )
-        answers = [sign(o) for o in request.get("objects", [])]
-    elif request.get("op") == "check":
-        answers = [check(a["path"], a["format"]) for a in request.get("artifacts", [])]
-    else:
-        answers = [value(a["path"], a["format"]) for a in request.get("artifacts", [])]
-    json.dump(answers, sys.stdout)
+        return [sign(o) for o in request.get("objects", [])]
+    if request.get("op") == "check":
+        return [check(a["path"], a["format"]) for a in request.get("artifacts", [])]
+    return [value(a["path"], a["format"]) for a in request.get("artifacts", [])]
+
+
+def main() -> None:
+    request = _helper.stdin_request()
+    # Unpickling runs the pickled classes' code: what it prints must not reach the answer.
+    _helper.answer(lambda: answers(request))
 
 
 if __name__ == "__main__":
-    main()
+    _helper.run(main)

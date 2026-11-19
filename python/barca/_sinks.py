@@ -931,17 +931,16 @@ def main(argv: list[str]) -> int:
     if len(argv) != 1 or argv[0] not in commands:
         print("usage: python -m barca._sinks prune|republish < request.json", file=sys.stderr)
         return 2
-    request = json.load(sys.stdin)
+    # Imported here: the worker imports this module for `write_sinks`, never the envelope.
+    from barca import _helper
+
+    request = _helper.stdin_request()
     # The answer is the only thing on stdout: what user code or a library prints goes to stderr.
-    answer_to = sys.stdout
-    sys.stdout = sys.stderr
-    try:
-        answer = commands[argv[0]](request)
-    finally:
-        sys.stdout = answer_to
-    json.dump(answer, sys.stdout)
+    _helper.answer(lambda: commands[argv[0]](request))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    from barca import _helper
+
+    _helper.run(lambda: main(sys.argv[1:]))

@@ -29,30 +29,21 @@ or {"error": {"kind": "missing_table" | "sql" | "no_duckdb", "message": str, "ta
 
 from __future__ import annotations
 
-import datetime as _dt
-import decimal
 import json
-import math
 import os
 import re
-import sys
 import tempfile
-import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 
-from barca import _storage
+from barca import _helper, _sql_tables, _storage
 from barca._duckdb import _quote
+from barca._sql_tables import jsonable as _jsonable
+from barca._sql_tables import quote_str as _quote_str
 
-_MISSING_TABLE = re.compile(r"Table with name (.+?) does not exist")
 _QUERYABLE = ("parquet", "json", "csv")
 DEFAULT_CACHE_DIR = os.path.join(".barca", "sql-cache")
 # Remote artifacts fetched at once.
 MAX_FETCHERS = 8
-
-
-def _quote_str(s: str) -> str:
-    return "'" + s.replace("'", "''") + "'"
 
 
 def _source(fmt: str, path: str) -> str:
@@ -98,39 +89,17 @@ def _register(con, view: dict) -> str | None:
 
 # ─── barca's tables ───────────────────────────────────────────────────────────
 
-_SHOW_TABLES = re.compile(r"^\s*show\s+tables\s*$", re.IGNORECASE)
-
-# `show tables` over every schema: views by their name, barca's tables as `barca.<name>`.
-_ALL_TABLES = """
-SELECT CASE WHEN schema_name = 'main' THEN name ELSE schema_name || '.' || name END AS name
-FROM (
-    SELECT schema_name, view_name AS name FROM duckdb_views() WHERE NOT internal
-    UNION ALL
-    SELECT schema_name, table_name AS name FROM duckdb_tables() WHERE NOT internal
-)
-WHERE schema_name NOT IN ('information_schema', 'pg_catalog')
-ORDER BY schema_name = 'barca', name
-"""
-
 
 def _table(con, table: dict) -> None:
     """Create one of barca's tables: its rows, or (rows null) a placeholder with its columns."""
-    qualified = f"{_quote(table['schema'])}.{_quote(table['name'])}"
-    columns = table["columns"]
+    not_loaded = (
+        f"barca: {table['schema']}.{table['name']} was not loaded for this query; "
+        "name it in the query"
+    )
     rows = table.get("rows")
-    if rows is None:
-        why = (
-            f"barca: {table['schema']}.{table['name']} was not loaded for this query; "
-            "name it in the query"
-        )
-        nulls = ", ".join(f"CAST(NULL AS {ty}) AS {_quote(c)}" for c, ty in columns)
-        con.execute(
-            f"CREATE VIEW {qualified} AS SELECT {nulls} WHERE error({_quote_str(why)}) IS NULL"
-        )
+    if not _sql_tables.create(con, table, not_loaded) or not rows:
         return
-    con.execute(f"CREATE TABLE {qualified} ({', '.join(f'{_quote(c)} {ty}' for c, ty in columns)})")
-    if not rows:
-        return
+    columns = table["columns"]
     spec = "{" + ", ".join(f"{_quote_str(c)}: {_quote_str(ty)}" for c, ty in columns) + "}"
     fd, path = tempfile.mkstemp(prefix="barca-sql-", suffix=".ndjson")
     try:
@@ -139,8 +108,8 @@ def _table(con, table: dict) -> None:
                 f.write(json.dumps({c: row.get(c) for c, _ in columns}))
                 f.write("\n")
         con.execute(
-            f"INSERT INTO {qualified} SELECT * FROM read_json({_quote_str(path)}, "
-            f"format='newline_delimited', columns={spec})"
+            f"INSERT INTO {_sql_tables.qualified(table)} SELECT * FROM "
+            f"read_json({_quote_str(path)}, format='newline_delimited', columns={spec})"
         )
     finally:
         os.remove(path)
@@ -273,26 +242,6 @@ def _localize(views: list[dict], query: str, cache_dir: str) -> tuple[list[dict]
     return keep, unreachable, fetched
 
 
-def _jsonable(v: Any) -> Any:
-    if isinstance(v, float):
-        return None if math.isnan(v) or math.isinf(v) else v
-    if isinstance(v, decimal.Decimal):
-        return float(v)
-    if isinstance(v, _dt.date | _dt.datetime | _dt.time):
-        return v.isoformat()
-    if isinstance(v, _dt.timedelta):
-        return v.total_seconds()
-    if isinstance(v, uuid.UUID):
-        return str(v)
-    if isinstance(v, bytes | bytearray | memoryview):
-        return bytes(v).hex()
-    if isinstance(v, dict):
-        return {str(k): _jsonable(x) for k, x in v.items()}
-    if isinstance(v, list | tuple):
-        return [_jsonable(x) for x in v]
-    return v
-
-
 def run(request: dict) -> dict:
     try:
         import duckdb
@@ -308,15 +257,15 @@ def run(request: dict) -> dict:
     views, unreachable, fetched = _localize(
         request["views"], query, request.get("cache_dir") or DEFAULT_CACHE_DIR
     )
-    con = duckdb.connect(":memory:")
+    con = _sql_tables.connect(duckdb)
     unavailable: dict[str, str] = {}
     for view in views:
         why = _register(con, view)
         if why:
             unavailable[view["name"]] = why
     _tables(con, request.get("tables") or [])
-    if _SHOW_TABLES.match(query):
-        query = _ALL_TABLES
+    if _sql_tables.SHOW_TABLES.match(query):
+        query = _sql_tables.ALL_TABLES
     remote = {"unreachable": unreachable, "fetched": fetched}
     try:
         rel = con.sql(query)
@@ -341,10 +290,10 @@ def run(request: dict) -> dict:
             total = len(fetched)
     except duckdb.Error as e:
         message = str(e)
-        m = _MISSING_TABLE.search(message)
-        if m and isinstance(e, duckdb.CatalogException):
+        table = _sql_tables.missing_table(duckdb, e)
+        if table is not None:
             return {
-                "error": {"kind": "missing_table", "message": message, "table": m.group(1)},
+                "error": {"kind": "missing_table", "message": message, "table": table},
                 "unavailable": unavailable,
                 **remote,
             }
@@ -365,9 +314,9 @@ def run(request: dict) -> dict:
 
 
 def main() -> None:
-    request = json.load(sys.stdin)
-    json.dump(run(request), sys.stdout)
+    request = _helper.stdin_request()
+    _helper.answer(lambda: run(request))
 
 
 if __name__ == "__main__":
-    main()
+    _helper.run(main)
