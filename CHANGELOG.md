@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
+
 ### Breaking
 
 - **In a project where `barca serve` is running, `barca get` and `barca run` are submitted to that server's run queue instead of running in the command's own process (#1056, #1054).** The server now listens on a Unix socket in its project, `.barca/serve.sock` (`.barca/envs/<env>/serve.sock` for a named environment), and a command typed there finds it. Before, the command knew nothing of the server, opened the same metadata database and waited on its lock; behind a server recording runs that wait could end after 60 seconds in `timed out ... waiting for .barca/metadata.db.lock`. Now `get` and `run` wait for a run slot, the server executes its deployed files (not an edit it has not loaded), and the result prints as with `--server`; stderr says once `[barca] server .barca/serve.sock (this project's barca serve; --local runs on this machine)`. **Replacement: `--local`** runs the command in its own process as before (`barca get total --local`). `status`, `history`, `stats`, `logs`, `sql`, `queue`, `pause`, `resume`, `pin`, `unpin` and `cancel` are answered by the server the same way; with a `--read-only` server the reads are answered and a write is refused with a pointer to `--local`. With no server nothing changes and the check costs one or two `stat` calls. `barca docs server-mode` ("In the server's own project") has the table.

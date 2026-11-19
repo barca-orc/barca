@@ -153,7 +153,7 @@ def normalize(rows)
     return rows
 ";
     let error = ruff_python_parser::parse_module(source).unwrap_err();
-    let problem = crate::parse::SyntaxProblem::of(source, &error);
+    let problem = crate::syntax_problem::SyntaxProblem::of(source, &error);
     assert_eq!((problem.line, problem.column), (2, 20));
     assert_eq!(
         problem.excerpt(),

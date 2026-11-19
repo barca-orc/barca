@@ -24,7 +24,7 @@
 use ruff_python_ast::{self as ast, Expr, Number};
 use ruff_text_size::Ranged;
 
-use crate::parse::{is_unsafe_decorator, match_node_decorator, try_extract_sink};
+use crate::decorators::{is_unsafe_decorator, match_node_decorator, try_extract_sink};
 
 /// Whether a part of a node's decorators is part of its definition hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
