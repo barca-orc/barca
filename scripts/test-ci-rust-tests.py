@@ -42,9 +42,7 @@ CRATES = mod["parse_metadata"](
             package("barca-compile", ["barca-model"], dev=["barca-python"]),
             package("barca-db", ["barca-model"], ts=True),
             package("barca-proc", ["barca-model"]),
-            package(
-                "barca-engine", ["barca-model", "barca-python", "barca-compile", "barca-proc"]
-            ),
+            package("barca-engine", ["barca-model", "barca-python", "barca-compile", "barca-proc"]),
             package(
                 "barca-store",
                 ["barca-model", "barca-python", "barca-compile", "barca-db", "barca-proc"],
