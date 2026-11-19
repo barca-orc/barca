@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type RunsQuery } from '@/lib/api'
+import { api } from '@/lib/api'
+import type { RunsQuery } from '@/lib/types'
 import { runIsLive, runsPollInterval } from '@/lib/runs'
 import { recovering } from './polling'
 import type { RunList, RunView } from '@/lib/types'

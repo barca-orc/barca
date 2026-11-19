@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use barca_core::health::DURATION_WINDOW;
 use barca_core::queries;
 use barca_core::results::PlanResult;
+use barca_core::served::{CacheSize, Capabilities, HealthStatus, ScheduleJob, ServerHealth};
 use barca_core::{BarcaError, db};
 use serde_json::{Value, json};
 
@@ -16,38 +17,45 @@ use serde_json::{Value, json};
 /// environment and artifact store this server uses, whether it is read-only, whether it runs
 /// the scheduler (and whether it is still running), why the metadata DB cannot be used if it
 /// cannot, and the cache size against its limit. No core work, and no wait on a read.
-pub async fn health(State(state): State<AppState>) -> Json<Value> {
+pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
     let cfg = &state.config.resolved;
-    Json(json!({
+    Json(ServerHealth {
         // `draining` once the server was told to stop: it finishes its runs and starts none.
-        "status": if state.is_draining() { "draining" } else { "ok" },
+        status: if state.is_draining() {
+            HealthStatus::Draining
+        } else {
+            HealthStatus::Ok
+        },
         // When this server started: a client that reconnects tells a restart by it.
-        "started_at": state.started,
+        started_at: state.started.clone(),
         // The run queue: paused or not, how many runs wait and how many execute.
-        "queue": crate::queue::health(&state),
-        "version": env!("CARGO_PKG_VERSION"),
-        "api_version": barca_core::outcome::API_VERSION,
-        "capabilities": { "event_resume": 1 },
-        "env": cfg.env,
+        queue: crate::queue::health(&state),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        api_version: barca_core::outcome::API_VERSION,
+        capabilities: Capabilities { event_resume: 1 },
+        env: cfg.env.clone(),
         // The artifact store this server writes to, so a client can refuse a mismatched
         // `[remote]`; null when artifacts stay on this machine.
-        "store_uri": cfg.remote_artifacts().then(|| cfg.artifact_root.clone()),
-        "read_only": state.config.read_only,
-        "graph_stale": state.graph_stale(),
-        "load_errors": *state.load_errors.read().unwrap(),
+        store_uri: cfg.remote_artifacts().then(|| cfg.artifact_root.clone()),
+        read_only: state.config.read_only,
+        graph_stale: state.graph_stale(),
+        load_errors: state.load_errors.read().unwrap().clone(),
         // Whether this server fires `Schedule(...)` nodes: the same rule `serve`
         // uses to start the scheduler (on unless --no-schedule or --read-only).
-        "scheduler": state.config.schedule && !state.config.read_only,
+        scheduler: state.config.schedule && !state.config.read_only,
         // `scheduler`, and false once the scheduler stopped on an error.
-        "scheduler_enabled": state.scheduler_enabled(),
+        scheduler_enabled: state.scheduler_enabled(),
         // Why the metadata DB cannot be used, while it cannot; null otherwise.
-        "metadata_error": *state.metadata_error.read().unwrap(),
+        metadata_error: state.metadata_error.read().unwrap().clone(),
         // `.barca/` against its size limit, as last measured after a run or on the minute
         // checkpoint (RFC-0012); null before the first measurement or with the limit off.
-        "cache": barca_core::gc::last_measured()
+        cache: barca_core::gc::last_measured()
             .filter(|_| !state.config.read_only)
-            .map(|(size, limit)| json!({"size_bytes": size, "limit_bytes": limit})),
-    }))
+            .map(|(size_bytes, limit_bytes)| CacheSize {
+                size_bytes,
+                limit_bytes,
+            }),
+    })
 }
 
 /// A metadata DB a read-only request may query: the real one read in place
@@ -576,7 +584,7 @@ fn rows(
                 last_success_at: age.last_success_at,
                 failing_since: age.failing_since,
                 consecutive_failures: age.consecutive_failures,
-                last_run: age.last_run.map(Into::into),
+                last_run: age.last_run,
             }
         })
         .collect()
@@ -732,7 +740,7 @@ async fn running_node(
 /// `GET /schedule` — list scheduled jobs with next fire time and last run status.
 /// Reads the scheduler's published registry; volatile fields (next fire, live
 /// status) are computed per request.
-pub async fn schedule(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<ScheduleJob>>, ApiError> {
     crate::pause::pauses(&state).await?;
     if state.config.read_only || !state.config.schedule {
         let dag = state.loaded_dag().await?;
@@ -883,7 +891,7 @@ pub(crate) fn schedule_at(
     state: &AppState,
     now: chrono::DateTime<chrono::Utc>,
     ticks: &crate::read_cache::ScheduleFacts,
-) -> Value {
+) -> Vec<ScheduleJob> {
     let published = state.schedule.read().map(|g| g.clone()).unwrap_or_default();
     // The jobs as the scheduler published them: it parsed each cron before publishing.
     let jobs = published
@@ -911,10 +919,10 @@ pub(crate) fn schedule_at(
     )
 }
 
-/// One `GET /schedule` entry per job of `jobs`, in their order, from the walk every surface
-/// reads ([`barca_core::refresh_path::schedule_views`]): the `schedule` block of `GET /state`
-/// and a node's `refresh_path` carry the same state. `published`: the scheduler's own jobs
-/// (failed ticks, the last skip); none where no scheduler runs here.
+/// One `GET /schedule` entry per job of `jobs`, in their order
+/// ([`barca_core::served::schedule_jobs`]), from the walk every surface reads: the `schedule`
+/// block of `GET /state` and a node's `refresh_path` carry the same state. `published`: the
+/// scheduler's own jobs (failed ticks, the last skip); none where no scheduler runs here.
 fn schedule_items(
     state: &AppState,
     now: chrono::DateTime<chrono::Utc>,
@@ -922,10 +930,25 @@ fn schedule_items(
     published: &[crate::state::JobStatus],
     jobs: Vec<barca_core::schedule::ScheduledJob>,
     zone: barca_core::schedule::Zone,
-) -> Value {
+) -> Vec<ScheduleJob> {
     let pauses = held_pauses(state);
-    let views =
-        barca_core::refresh_path::schedule_views(barca_core::refresh_path::ScheduleInputs {
+    let skips = published
+        .iter()
+        .map(|job| {
+            (
+                job.id.clone(),
+                barca_core::served::JobSkips {
+                    last_skipped: job.last_skipped,
+                    skipped_for: job.skipped_for.clone(),
+                    skip_reason: job
+                        .skip_reason
+                        .and_then(barca_core::served::SkipReason::parse),
+                },
+            )
+        })
+        .collect();
+    barca_core::served::schedule_jobs(
+        barca_core::refresh_path::ScheduleInputs {
             jobs: &jobs,
             zone: &zone,
             now,
@@ -935,48 +958,9 @@ fn schedule_items(
             firing: &firing_of(published),
             // `live` is not served here.
             observed: &Default::default(),
-        });
-    let items: Vec<Value> = jobs
-        .iter()
-        .filter_map(|job| {
-            let view = views.get(&job.id)?;
-            let (standing, block) = (&view.standing, &view.block);
-            let published = published.iter().find(|p| p.id == job.id);
-            Some(json!({
-                // The one word for where it stands, and the fact behind it.
-                "state": block.state,
-                "state_detail": block.state_detail,
-                "id": job.id,
-                "cron": job.cron_str,
-                "kind": job.kind,
-                "next_fire": standing.next_fire,
-                "last_fired": standing.last_fired,
-                "last_run_id": standing.last_run_id,
-                // The same id under its older name.
-                "last_run": standing.last_run_id,
-                "last_status": standing.last_status,
-                "late": standing.late,
-                "late_since": standing.late_since,
-                // How long its ticks' runs typically wait for a run slot and take, whole
-                // seconds, and whether the wait exceeds its interval (#962).
-                "typical_queue_wait_seconds": block.typical_queue_wait_seconds,
-                "typical_run_seconds": block.typical_run_seconds,
-                "queue_bound": standing.queue_bound,
-                "last_skipped": published.and_then(|p| p.last_skipped),
-                "skipped_for": published.and_then(|p| p.skipped_for.clone()),
-                "skip_reason": published.and_then(|p| p.skip_reason),
-                "paused": block.paused,
-                "paused_until": pauses
-                    .get(&job.id)
-                    .filter(|_| block.paused)
-                    .and_then(|p| p.until),
-                "failures": block.failures,
-                "max_failures": block.max_failures,
-                "failing": block.failing,
-            }))
-        })
-        .collect();
-    json!(items)
+        },
+        &skips,
+    )
 }
 
 /// `GET /logs/{run_id}` — persisted stdout lines for a run (durable history).

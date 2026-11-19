@@ -370,7 +370,11 @@ fn get_schedule_reports_next_fire_in_the_servers_zone() {
             &[job("f.py:daily", NodeKind::Task, "0 5 * * *")],
             &Bookkeeping::default(),
         );
-        let body = crate::handlers::schedule_at(&st, an_instant(), &Default::default());
+        let body = serde_json::json!(crate::handlers::schedule_at(
+            &st,
+            an_instant(),
+            &Default::default()
+        ));
         let want = DateTime::parse_from_rfc3339(want).unwrap().timestamp();
         assert_eq!(body[0]["next_fire"], want, "{zone}: {body}");
         assert_eq!(body[0]["id"], "f.py:daily");
@@ -573,13 +577,21 @@ async fn a_skip_is_published_to_get_schedule() {
     let jobs = [job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
     let mut book = Bookkeeping::default();
     publish_registry(&st, &jobs, &book);
-    let body = crate::handlers::schedule_at(&st, an_instant(), &Default::default());
+    let body = serde_json::json!(crate::handlers::schedule_at(
+        &st,
+        an_instant(),
+        &Default::default()
+    ));
     assert_eq!(body[0]["last_skipped"], serde_json::Value::Null);
     assert_eq!(body[0]["skipped_for"], serde_json::Value::Null);
 
     record_skip(&mut book, &jobs[0], Some("api"), 1_234, "scheduled run");
     publish_registry(&st, &jobs, &book);
-    let body = crate::handlers::schedule_at(&st, an_instant(), &Default::default());
+    let body = serde_json::json!(crate::handlers::schedule_at(
+        &st,
+        an_instant(),
+        &Default::default()
+    ));
     assert_eq!(body[0]["last_skipped"], 1_234);
     assert_eq!(body[0]["skipped_for"], "api");
     assert_eq!(body[0]["skip_reason"], "in_flight");

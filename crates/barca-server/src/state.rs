@@ -264,36 +264,7 @@ pub struct NodeState {
     /// recorded a row for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
-    pub last_run: Option<LastRun>,
-}
-
-/// What a node's newest run cost on it as a whole: `last_materialization.elapsed_seconds` is
-/// one key's share, this is every key of the run added up, over the batched calls they ran in.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct LastRun {
-    pub run_id: String,
-    /// Wall time summed over the rows that recorded one; `null` when none did (every key failed
-    /// before finishing).
-    pub elapsed_seconds: Option<f64>,
-    /// Rows the run recorded for the node: its keys, or 1.
-    pub keys: u32,
-    /// Batched calls (RFC-0013) those keys ran in; `0` when each ran on its own.
-    pub calls: u32,
-    /// Keys that failed.
-    pub failed: u32,
-}
-
-impl From<barca_core::db::RunTotals> for LastRun {
-    fn from(t: barca_core::db::RunTotals) -> Self {
-        LastRun {
-            run_id: t.run_id,
-            elapsed_seconds: t.elapsed_seconds,
-            keys: t.keys,
-            calls: t.calls,
-            failed: t.failed,
-        }
-    }
+    pub last_run: Option<barca_core::db::RunTotals>,
 }
 
 pub use barca_core::health::Durations;
