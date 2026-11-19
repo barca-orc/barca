@@ -121,7 +121,7 @@ enforced quota.
 ## Acceptance and evidence
 
 Requested runs first (#1003) is checked by the
-[shared capacity's unit tests and simulation](../../crates/barca-core/src/serve/capacity.rs)
+[shared capacity's unit tests and simulation](../../crates/barca-service/src/serve/capacity.rs)
 (order, aging bound, first-come opt-out, weights above 1, the handoff race), the
 [engine's handoff test](../../crates/barca-engine/src/io_loop/tests.rs)
 (`a_step_that_ends_gives_its_weight_back_with_the_next_ask`) and

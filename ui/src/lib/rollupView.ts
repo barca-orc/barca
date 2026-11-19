@@ -1,7 +1,7 @@
 /**
  * The rollup as the UI draws it: `GET /state/rollup` indexed by id, and the layout of the health
  * map over it. Nothing here counts, sums or classifies: every count shown is an entry's own
- * (`barca-core`'s `rollup`, the same response `barca status --rollup` prints), in nodes
+ * (`barca-service`'s `rollup`, the same response `barca status --rollup` prints), in nodes
  * (`nodes`, `health`, `causes`) and in assets (`assets`, `asset_health`). What stays here is
  * geometry (which angle a segment gets, from the entry's served `weight`), the path to an
  * entry, and words.
@@ -159,7 +159,7 @@ type Weighed = Pick<RollupEntry, 'weight' | 'weights'>
 /**
  * The served weight of each colour inside an entry (`weights`), in stacking order, the empty
  * ones left out. How much room an entry takes is its `weight`: its distance from fresh in
- * weighted nodes, which `barca-core` computes ("Distance from fresh": every node counts 1, a
+ * weighted nodes, which `barca-service` computes ("Distance from fresh": every node counts 1, a
  * node that is not fresh its cause's weight) and `barca status --rollup` prints. A level's is
  * exactly the sum of its children's. No weight is decided here.
  */

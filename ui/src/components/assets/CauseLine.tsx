@@ -21,7 +21,7 @@ export interface CauseLineProps {
  * Why the node is not fresh and what explains it: its cause in the health map's word and
  * colour, then its root, the one upstream fact that holds it (`code change in prices`), with
  * a link to the root's node and the fact in a line. Both are fields of the row; the walk that
- * finds the root is `barca-core`'s.
+ * finds the root is `barca-service`'s.
  */
 export function CauseLine({ node, cause, root, held = null, onSelect }: CauseLineProps) {
   const action = held ? actionWords(held) : null

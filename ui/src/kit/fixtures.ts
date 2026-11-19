@@ -259,7 +259,7 @@ export const resetPhases = {
 
 /**
  * A run in the state of `name` (`run-explanations.json`): the facts the Rust test states for
- * it, the explanation `barca-core` gives for them, and the rest of a `RunView` (ids, steps,
+ * it, the explanation `barca-service` gives for them, and the rest of a `RunView` (ids, steps,
  * logs) spelled here. No count, line or reason of the explanation is written in this file.
  */
 function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunView {
@@ -360,7 +360,7 @@ const runManyKeys: RunView = {
   })),
 }
 
-/** The list row of a scenario's run: its facts, and the `line` `barca-core` words them with. */
+/** The list row of a scenario's run: its facts, and the `line` `barca-service` words them with. */
 function summary(name: RunScenarioName, id: string, overrides: Partial<RunSummary> = {}): RunSummary {
   const view = runView(name)
   const { run, line } = scenario(name)
@@ -482,7 +482,7 @@ const rebuildNow: RunNow = {
 
 /**
  * The run overview (`RunOverviewView`) in each state it says something different in: each is a
- * scenario of `run-explanations.json`, its facts and its explanation from `barca-core`.
+ * scenario of `run-explanations.json`, its facts and its explanation from `barca-service`.
  */
 export const runOverviews: Record<string, { run: RunView; now: RunNow | null; nowMs: number }> = {
   'full rebuild in flight': {

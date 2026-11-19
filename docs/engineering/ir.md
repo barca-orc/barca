@@ -105,7 +105,7 @@ A `DagParts`: for each node an id, a `NodeDecl`, its inputs as node ids, a `Fing
 computes however its language allows (the only requirement is that the hash changes when the
 step's result could), an `Invocation`, and the edges. `Dag::from_parts` validates it; planning,
 hashing, the dry run and status then work unchanged, which is what
-`crates/barca-core/src/ir_roundtrip_tests.rs` shows for a graph that went through JSON.
+`crates/barca-service/src/ir_roundtrip_tests.rs` shows for a graph that went through JSON.
 
 What it could not supply today, because the field's meaning is Python:
 

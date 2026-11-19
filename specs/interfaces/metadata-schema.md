@@ -331,7 +331,7 @@ Conformance: `a_format_1_database_from_before_bytes_changed_gains_it_in_place` a
 `a_format_1_database_from_0_24_3_gains_everything_added_since` and
 `a_format_1_database_from_before_an_added_column_gets_it_and_keeps_its_rows` in `db/schema/ddl.rs`,
 `the_table_list_is_exactly_the_schema_init_db_creates` in `state_validate.rs`, the job history
-tests in `crates/barca-core/src/telemetry/history.rs`, and
+tests in `crates/barca-run/src/telemetry/history.rs`, and
 `python/tests/test_upgrade_format1_columns.py`, and `python/tests/test_metadata_compat.py`, which
 opens a database written by a release of every minor from 0.20 (legacy format 0) to the newest
 (committed fixtures, rebuilt by `scripts/make-metadata-fixtures.py`) with `barca serve
@@ -367,4 +367,4 @@ this release (these, or `bytes_changed`) gains them when it is opened for writin
 (`db::init_schema`): the missing columns and indexes are added and the schema validated in one
 transaction, rolled back on error, with every row preserved and the version left at 1. A
 database that already has them is only read. Conformance: the schema tests in
-`crates/barca-core/src/gc/tests.rs` and `db/schema/ddl.rs`.
+`crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.

@@ -99,7 +99,7 @@ pnpm --dir ui dev                   # then /ui/#/kit: every component and page v
 ## The UI only renders
 
 The UI derives nothing: a node's health, what blocks it, a group's counts, a run's words are
-computed in `barca-core` and arrive on the wire, the same JSON the CLI prints. `ui/src/lib`
+computed in `barca-service` and arrive on the wire, the same JSON the CLI prints. `ui/src/lib`
 holds fetching, generated types, display mapping (an enum value to its word, tone and glyph),
 formatting, layout and page state, and nothing else. `scripts/check-ui-layering.py` (a prek
 hook, run in CI on every pull request) checks it against `crates/barca-cli/ui-layering.json`:
@@ -109,9 +109,9 @@ hook, run in CI on every pull request) checks it against `crates/barca-cli/ui-la
 - a new module in `lib/` needs a line in `modules` with its kind;
 - comparing against a health or cache-state word (`=== 'stale'`), or producing one, outside a
   display module (`healthDisplay.ts`, `causeDisplay.ts`, `cacheStateDisplay.ts`, `glyph.ts`, ...) fails: compute it
-  in `barca-core` and read the field;
+  in `barca-service` and read the field;
 - test fixtures take what the server computes from files a Rust test generates
-  (`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`): a whole project as served
+  (`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture`): a whole project as served
   in `lib/testdata/served/` (read through `lib/testdata/project.ts`), and the health of a row
   spelled by hand from `lib/testdata/health-alone.json`.
 

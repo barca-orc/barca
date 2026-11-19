@@ -419,7 +419,7 @@ def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
     assert {n["id"]: n["inputs"] for n in nodes}["pipeline.py:report"] == ["pipeline.py:raw"]
 
     # The table against the stubs a type checker reads (the Rust list is held to both by
-    # `cargo test -p barca-core decorator_args`).
+    # `cargo test -p barca-service decorator_args`).
     rows = re.findall(r"^\| `@?(\w+)(?:\(\))?` \| (\w+) \| (.*) \|$", body, re.M)
     assert [r[0] for r in rows] == [
         "group", "asset", "sensor", "task", "sink",

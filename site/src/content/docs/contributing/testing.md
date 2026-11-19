@@ -8,7 +8,7 @@ description: The test suites in the barca repository, how to run each, and what 
 
 | Suite | Where | Run with |
 |---|---|---|
-| Rust tests | inline `#[test]` modules in `crates/*/src/`, plus `crates/barca-core/tests/` and `crates/barca-server/tests/` | `cargo test` |
+| Rust tests | inline `#[test]` modules in `crates/*/src/`, plus `crates/barca-service/tests/` and `crates/barca-server/tests/` | `cargo test` |
 | Python tests | `python/tests/` | `pytest python/tests -q` |
 | Storage backend tests | part of `python/tests/`, against local emulators | `pytest python/tests -q` with the emulators running |
 | Shell integration tests | `tests/integration/*.sh` | `bash tests/integration/<script>.sh` |
@@ -30,9 +30,9 @@ coordinator, scheduler, config). The separate test files are:
 
 | File | What it covers |
 |---|---|
-| `crates/barca-core/tests/grammar_spec.rs` | Parsing of decorator syntax |
-| `crates/barca-core/tests/socket_stress.rs` | The worker socket protocol under load |
-| `crates/barca-core/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs, and that none of them passes a decorator an argument barca does not define |
+| `crates/barca-service/tests/grammar_spec.rs` | Parsing of decorator syntax |
+| `crates/barca-service/tests/socket_stress.rs` | The worker socket protocol under load |
+| `crates/barca-service/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs, and that none of them passes a decorator an argument barca does not define |
 | `crates/barca-server/tests/api.rs` | The HTTP endpoints of `barca serve` |
 
 ## Python
@@ -53,7 +53,7 @@ threads, so a hang costs minutes instead of the CI job's own limit. A test that 
 jsonschema) skips without them through `pytest.importorskip`, so the suite collects without
 the `test` extra.
 
-barca prints through `barca_core::outln!` and `errln!`, which do not panic when the reader of
+barca prints through `barca_service::outln!` and `errln!`, which do not panic when the reader of
 stdout or stderr has gone; clippy denies `println!` and `eprintln!` in the three crates.
 Workers do not hold barca's stderr when it is a pipe: they write to a pipe barca reads and
 forwards (`crates/barca-model/src/term.rs`), so a step's child processes cannot meet a closed
@@ -256,7 +256,7 @@ the diff can affect, chosen by `scripts/ci-rust-tests.py`. Each changed file sel
 | The file | Selects |
 | --- | --- |
 | Is inside a crate (`crates/<dir>/`) | Every test of that crate and of every crate that depends on it, directly or not. The crates and their dependencies (normal, dev and build) are read from `cargo metadata`, so a new crate needs no entry anywhere |
-| Is read by a test in another crate | That test alone, in its own crate. The script's `READERS` table lists them: the guards in `barca-core` and `barca-engine` that scan every crate's sources and manifests, the CLI crate's tests of the site, `README.md` and `SKILL.md`, the tests of `specs/interfaces/artifact-formats.md` and `specs/interfaces/server-api.openapi.yaml`, the UI fixtures in `ui/src/lib/testdata/`, and the unused-input sweep over every pipeline in `examples/`, `benchmarks/`, `python/`, the manual and the site |
+| Is read by a test in another crate | That test alone, in its own crate. The script's `READERS` table lists them: the guards in `barca-service` and `barca-engine` that scan every crate's sources and manifests, the CLI crate's tests of the site, `README.md` and `SKILL.md`, the tests of `specs/interfaces/artifact-formats.md` and `specs/interfaces/server-api.openapi.yaml`, the UI fixtures in `ui/src/lib/testdata/`, and the unused-input sweep over every pipeline in `examples/`, `benchmarks/`, `python/`, the manual and the site |
 | Is the root `Cargo.toml`, `Cargo.lock`, a toolchain file, `.cargo/`, anything under `.depot/` (the CI workflow and its actions), the selection or tier scripts and their tests, `python/barca/` or `pyproject.toml` | The whole workspace |
 | Is known to affect no Rust test (the rest of `site/`, `ui/`, `specs/`, `docs/`, `scripts/`, `python/tests/`, the root documents) | Nothing |
 | Is anything else: a new top-level directory, a file under `crates/` that no crate owns, a workflow the script does not list | The whole workspace |
@@ -317,7 +317,7 @@ script's `--base` mode, which picks parts from the changed paths, is kept for lo
   on the real one-minute metadata backup timer. Outside the full tier the shards set
   `BARCA_TEST_MINUTE_CHECKPOINT=0` and it skips. Locally, with the variable unset, it runs. The
   checkpoint's logic is also covered in seconds by a Rust unit test in
-  `crates/barca-core/src/persist.rs` on a short interval.
+  `crates/barca-run/src/persist.rs` on a short interval.
 
 `scripts/ci-test-durations.json` holds each test file's duration, with and without the
 emulators, and the shard split balances on the map that matches the run (counting the minute

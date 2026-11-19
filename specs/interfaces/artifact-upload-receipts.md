@@ -8,8 +8,8 @@ immutable historical objects or isolation of concurrent readers of the shared lo
 Conformance: [controlled CLI overlap, primitive storage and cleanup tests](../../python/tests/test_upload_snapshot_receipts.py),
 [transfer lifecycle tests](../../python/tests/test_remote_cancel.py),
 [drain/requeue with an upload in flight](../../python/tests/test_drain_keeps_computed_steps.py),
-[transfer confirmation tests](../../crates/barca-core/src/transfer.rs), and
-[checkpoint/terminal persistence](../../crates/barca-core/src/persist.rs).
+[transfer confirmation tests](../../crates/barca-store/src/transfer.rs), and
+[checkpoint/terminal persistence](../../crates/barca-run/src/persist.rs).
 
 ## Successful uploads
 

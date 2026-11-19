@@ -14,7 +14,7 @@ export TS_RS_EXPORT_DIR="$OUT"
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-model --features ts export_bindings
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-compile --features ts export_bindings
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-db --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-core --features ts export_bindings
+cargo test --manifest-path "$REPO/Cargo.toml" -p barca-service --features ts export_bindings
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-server --features ts export_bindings
 
 # ts-rs leaves trailing whitespace, which the repo's trailing-whitespace hook strips

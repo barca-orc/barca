@@ -41,7 +41,7 @@ export interface FileDisplay {
 /**
  * A file's one state, for its header in the table and its line in the sidebar, in the health
  * map's words: the words of its sums in the rollup (`files` of `GET /state/rollup`, summed in
- * `barca-core`). A run working on some of its nodes leads; else the first cause, in the served
+ * `barca-service`). A run working on some of its nodes leads; else the first cause, in the served
  * order, that the file has a node of (`causes`), or `fresh` when it has none. Nothing here
  * counts or ranks.
  */

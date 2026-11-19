@@ -46,7 +46,7 @@ then the names here are the ones those PRs use. Each rule names its implementing
 | Layer | Owner | Does | Never does |
 | --- | --- | --- | --- |
 | Records | the scheduler and run recorder (`barca-server`, `barca-db`) | writes what was decided: runs, materializations, ticks, the queue | computes health, causes, estimates or aggregates |
-| Classification | `barca-core` (a `health` module beside `status.rs`) | derives `health`, `cause`, `root`, `refresh_path`, the times and the rollup from records and the DAG | writes to the metadata database |
+| Classification | `barca-service` (a `health` module beside `status.rs`) | derives `health`, `cause`, `root`, `refresh_path`, the times and the rollup from records and the DAG | writes to the metadata database |
 | Aggregation | `barca sql` tables in the `barca` schema, queried with DuckDB | trends, rankings and drill-downs over rows Rust hands to DuckDB | reads `metadata.db` through DuckDB's sqlite extension |
 | Presentation | the CLI and the web UI | render fields and query results: layout, formatting, fetching | derive a state word, a count, a cause, a time or a sum |
 
@@ -55,7 +55,7 @@ that reads two fields to produce a third is classification and lives in Rust.
 
 ### Vocabulary
 
-Health words are barca vocabulary, defined once in `barca-core` and shown by the CLI and the UI
+Health words are barca vocabulary, defined once in `barca-service` and shown by the CLI and the UI
 alike. They sit beside the cache state (`cache.state`), never replace it.
 
 `health` (string enum, most severe first; this order sorts and ranks everywhere):
@@ -99,7 +99,7 @@ happens at one instant, `as_of`, carried by every response that holds a derived 
 
 ### Health from existing state (#954)
 
-Implemented in `crates/barca-core/src/health.rs` (`classify`), ported from the web UI's
+Implemented in `crates/barca-analysis/src/health.rs` (`classify`), ported from the web UI's
 TypeScript without change of meaning. Inputs: the node's
 `NodeStatus`, the graph, the node's data signals, and whether its schedule is late.
 
@@ -144,7 +144,7 @@ separate fact shown beside its health; it does not change it.
   seconds, or half the interval for a schedule more frequent than every two minutes. Typical
   queue wait is the median `queue_wait_seconds` of its newest 20 fired ticks (0 with none).
   `GET /schedule`, `GET /state` and `barca status` read this one function.
-  Implemented (#958) as `barca_core::schedule_standing::standing`, with these fields on
+  Implemented (#958) as `barca_service::schedule_standing::standing`, with these fields on
   `GET /schedule` entries and in the `schedule` block of `GET /state`, `GET /nodes` and `barca
   status --json`: `last_fired`, `last_run_id`, `last_status`, `next_fire`, `late`,
   `late_since`. As implemented, a tick is one whose run was started or queued, so
@@ -162,7 +162,7 @@ separate fact shown beside its health; it does not change it.
 
 ### Last check (#964)
 
-Implemented in `crates/barca-core/src/health.rs` (`checks`, `verdict_stands`).
+Implemented in `crates/barca-analysis/src/health.rs` (`checks`, `verdict_stands`).
 
 **Why the read path cannot decide.** `cache.state` predicts what a request would do, without
 running anything ([inspection](inspection.md)), by the rules a run follows: a `Manual` or
@@ -229,7 +229,7 @@ which the next tick recomputes), and a new value of a declared environment varia
 
 ### Refresh path (#961)
 
-Implemented in `crates/barca-core/src/refresh_path.rs` (`Paths`, `path_schedule`,
+Implemented in `crates/barca-analysis/src/refresh_path.rs` (`Paths`, `path_schedule`,
 `refresh_path`). `refresh_path` is the schedule whose tick reaches the node, or `null`.
 
 ```json
@@ -301,12 +301,12 @@ a walk of the edges alone says a schedule above a `Manual` asset reconciles it, 
 scheduler does not. Like the reach it is static: a pinned or already paused node, which stops
 a tick's walk at run time, is not accounted for. Evidence:
 `a_pause_covers_the_schedules_whose_ticks_reach_it_by_the_schedulers_walk`
-(`crates/barca-core/src/refresh_path.rs`), `asset_pauses_match_contract`
+(`crates/barca-analysis/src/refresh_path.rs`), `asset_pauses_match_contract`
 (`crates/barca-server/tests/openapi.rs`) and `python/tests/test_health_parity.py`.
 
 ### Cause (#963, #973)
 
-Implemented in `crates/barca-core/src/causes.rs` (`attribute`), called by `health::classify`.
+Implemented in `crates/barca-analysis/src/causes.rs` (`attribute`), called by `health::classify`.
 Every node that is not fresh gets exactly one cause: the first matching row.
 
 | # | Condition | `cause` |
@@ -345,11 +345,11 @@ As implemented:
 
 Conformance: `the_first_matching_row_of_the_cause_table_decides` and
 `the_tick_record_says_whether_a_scheduler_is_firing_where_none_runs_here`
-(`crates/barca-core/src/causes.rs`).
+(`crates/barca-analysis/src/causes.rs`).
 
 ### Root (#963)
 
-Implemented in `crates/barca-core/src/causes.rs` (`attribute`, `origin`). Every node with a
+Implemented in `crates/barca-analysis/src/causes.rs` (`attribute`, `origin`). Every node with a
 cause has one `root`: the upstream fact that explains it.
 
 ```json
@@ -417,7 +417,7 @@ The list of roots (in the rollup, below) carries what each holds and what clears
  "action": {"kind": "add_schedule", "command": null, "estimated_seconds": 420}}
 ```
 
-As implemented (`crates/barca-core/src/rollup.rs`, `roots`):
+As implemented (`crates/barca-analysis/src/rollup.rs`, `roots`):
 
 - `action.command` is a runnable `barca` command when one clears the root, else `null`:
 
@@ -460,7 +460,7 @@ Conformance: `a_root_is_the_change_the_walk_up_stops_at`,
 `a_node_nothing_refreshes_roots_where_a_schedule_is_missing_paused_or_not_fired`,
 `ticks_that_missed_what_a_root_holds_make_its_action_a_run` and
 `on_the_audit_shape_actionable_roots_lead`
-(`crates/barca-core/src/causes.rs`); `python/tests/test_causes.py` runs the commands of a
+(`crates/barca-analysis/src/causes.rs`); `python/tests/test_causes.py` runs the commands of a
 `run` and a `resume_schedule` action and sees their roots clear.
 
 ### Ticks waiting on a run slot (#973)
@@ -471,7 +471,7 @@ and its action is `raise_max_runs`. A transient wait preserves the target's chan
 What a run costs outside its steps is measured
 in [#951](https://github.com/barca-orc/barca/issues/951) and not repeated here. Conformance:
 `ticks_that_wait_longer_than_they_are_apart_name_the_queue`
-(`crates/barca-core/src/causes.rs`) and, on a real server with one run slot and two
+(`crates/barca-analysis/src/causes.rs`) and, on a real server with one run slot and two
 overlapping schedules, `test_ticks_waiting_on_one_run_slot_name_the_queue_as_the_cause`
 (`python/tests/test_causes.py`), which also reads the same cause from a `--read-only` server.
 
@@ -510,7 +510,7 @@ typical duration alone, on every surface: no surface works either out from `dura
 - A queue entry's `estimated_start_at` is `as_of` plus the typical run time of the runs ahead
   of it, divided over `max_runs` slots.
 
-As implemented (#962), in `crates/barca-core/src/estimates.rs` (`times`, `queue_starts`),
+As implemented (#962), in `crates/barca-analysis/src/estimates.rs` (`times`, `queue_starts`),
 called by `health::classify` once per status result:
 
 - **`stale_since`**, a node's own time by what made it not fresh: a failure is
@@ -560,7 +560,7 @@ called by `health::classify` once per status result:
   `not_promised` (a tick will look, and a result above may come out unchanged or a node
   above is read as it is). Every node that is not fresh has an estimate or a reason, never
   neither, so no surface shows a blank. Conformance: `a_node_with_no_estimate_says_why`
-  (`crates/barca-core/src/causes.rs`).
+  (`crates/barca-analysis/src/causes.rs`).
 - **Queue entries** (`GET /queue`): each of `max_runs` slots frees when its run ends (its
   start plus its typical run time, never before `as_of`), and a waiting run takes the slot
   that frees first, in queue order. A run's typical time is its schedule's
@@ -618,7 +618,7 @@ estimate has gap 0 and is counted by `unbounded`.
 ### Distance from fresh (#1028)
 
 One served measure of how far a scope is from a fresh DAG, in weighted nodes, computed in
-`crates/barca-core/src/rollup.rs` (`Cause::weight`, `FRESH_WEIGHT`, `Weights`) and read by the
+`crates/barca-analysis/src/rollup.rs` (`Cause::weight`, `FRESH_WEIGHT`, `Weights`) and read by the
 root list, the health map and `barca status --rollup` alike.
 
 | A node that is | Weighs | Why |
@@ -647,9 +647,9 @@ root list, the health map and `barca status --rollup` alike.
 
 The three weights are chosen, not measured: 6 to 2 makes one node that needs someone count as
 three that do not. Conformance: `roots_rank_by_weight_then_failures_first` and INV-HEALTH-03
-with the weight on every fixture (`crates/barca-core/src/rollup.rs`);
+with the weight on every fixture (`crates/barca-analysis/src/rollup.rs`);
 `roots_rank_by_weight_and_a_failure_with_blocked_nodes_is_among_the_first_three` and the audit
-shape (`crates/barca-core/src/causes.rs`).
+shape (`crates/barca-analysis/src/causes.rs`).
 
 ### Node fields and where they appear
 
@@ -744,7 +744,7 @@ targets) and never collides with `GET /health`, which is liveness.
   cause, in the served order, that the file has a node of, or fresh (#1036).
 - `roots` is the root list above, scoped to the nodes in the response.
 
-As implemented (#955), in `crates/barca-core/src/rollup.rs` (`build`), which the route, the
+As implemented (#955), in `crates/barca-analysis/src/rollup.rs` (`build`), which the route, the
 CLI and the web UI all read:
 
 - Served on an entry: `id`, `kind`, `label`, `parent` (`null` on the root), `children`,
@@ -892,7 +892,7 @@ for the newest 20 fired ticks of each schedule, counts only for older ones. Trim
 write, inside the write's transaction; the ticks of a schedule that no longer fires are trimmed
 by age at scheduler startup and about hourly while ticks are recorded.
 
-Reads (`barca_core::db`): `ticks_for_schedule(db_path, schedule_id, limit)`, newest first;
+Reads (`barca_service::db`): `ticks_for_schedule(db_path, schedule_id, limit)`, newest first;
 `tick_outcomes_for_node(db_path, node_id, limit)`, what the newest finished fired ticks that
 still hold their target list did with one node, across schedules; and `latest_ticks(db_path)`,
 the newest such outcome of every node at once with the runs of the ticks still in flight
@@ -913,7 +913,7 @@ with the same rules (read when named, text times that sort, a read-only copy).
 gap (`select sum(gap_seconds), count(*) filter (where cause is not null and expected_fresh_at is null) from barca.nodes`),
 the rollup by group, and the top roots.
 
-As implemented (#965), in `crates/barca-core/src/sql/tables.rs` (the columns and the row
+As implemented (#965), in `crates/barca-service/src/sql/tables.rs` (the columns and the row
 builders, which `barca sql` on a machine and the server's query route both call):
 
 - **`barca.schedules`** is the `schedule` block of each scheduled node's status
@@ -1092,7 +1092,7 @@ cut at the row limit below.
 ## Acceptance and evidence
 
 Each issue lands its scenario with the code and replaces the matching source link. Passing
-today (with the #961, #962, #963, #966, #967, #968, #973, #992 and #1028 rows): #954 ([health rules](../../crates/barca-core/src/health.rs): the twelve rows, the walk
+today (with the #961, #962, #963, #966, #967, #968, #973, #992 and #1028 rows): #954 ([health rules](../../crates/barca-analysis/src/health.rs): the twelve rows, the walk
 through `unknown` nodes and past pins, the signal rules), #957 (the same file's coverage
 test, the [CLI contract snapshot](../../python/tests/snapshots/cli_contract/status.txt), and
 the web UI's [coverage line](../../ui/src/lib/dataSignals.test.ts)), the #959 row, the #960
@@ -1101,32 +1101,32 @@ row, the #964 row, the #965 row, the #972 row and the #985 row. The rest do not 
 | Scenario | Issue |
 | --- | --- |
 | The twelve health rows, `blocked_by` through `unknown` nodes and past pins, as Rust tests ported from the TypeScript ones | #954 |
-| The map, the bars and `barca status --rollup` print the same counts from one response; asset and node units both present | #955: [rollup rules](../../crates/barca-core/src/rollup.rs) (INV-HEALTH-03 on every fixture, one parent per node, both units, the failure roots), [the route against `GET /state`](../../crates/barca-server/tests/openapi.rs), [no second status computation](../../crates/barca-server/src/read_cache.rs), [the CLI contract snapshot](../../python/tests/snapshots/cli_contract/status_rollup.txt), [the map's layout over the response](../../ui/src/lib/rollupView.test.ts), [the bar, the map and a group row against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
+| The map, the bars and `barca status --rollup` print the same counts from one response; asset and node units both present | #955: [rollup rules](../../crates/barca-analysis/src/rollup.rs) (INV-HEALTH-03 on every fixture, one parent per node, both units, the failure roots), [the route against `GET /state`](../../crates/barca-server/tests/openapi.rs), [no second status computation](../../crates/barca-server/src/read_cache.rs), [the CLI contract snapshot](../../python/tests/snapshots/cli_contract/status_rollup.txt), [the map's layout over the response](../../ui/src/lib/rollupView.test.ts), [the bar, the map and a group row against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
 | A project with 7 of 556 assets counted reads "7 of 556 measured" in status JSON and the UI | #957 |
 | A fixture with a queued tick: `GET /schedule`, `GET /state` and `barca status` agree on last tick, last run and late (passes: `a_queued_tick_reads_the_same_on_every_surface`) | #958 |
-| Re-adding a derived word in TypeScript fails CI | #959: [the check](../../scripts/check-ui-layering.py) (a prek hook, so every tier; it seeds violations into a small tree on each run and fails if one passes), [its table](../../crates/barca-cli/ui-layering.json) (every route the UI calls with its CLI command, every module of `ui/src/lib` with its kind, the named exemptions), [the table against the CLI and the router](../../crates/barca-cli/src/ui_layering_tests.rs), [the fixtures' health words from `classify`](../../crates/barca-core/src/ui_fixture_tests.rs) |
-| A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-core/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
-| A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961: [the shapes, a paused schedule, no live scheduler, paused and pinned nodes, missed ticks](../../crates/barca-core/src/refresh_path.rs) ("membership is the scheduler's own target list"), [the batched misses](../../crates/barca-db/src/db/ticks.rs), [the walk once per graph](../../crates/barca-server/src/read_cache.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a scheduling and a read-only server](../../python/tests/test_refresh_path.py) |
-| Estimates within the stated error on a real server (one run slot, two schedules); a node below a pending cutoff has `recheck_at` only | #962: [the rules](../../crates/barca-core/src/estimates.rs) (the start, the workers, what is only rechecked, `stale_since` by cause, the queue), [the tick timings in one read](../../crates/barca-db/src/db/ticks.rs), [measured on a server; CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, a read-only server](../../python/tests/test_estimates.py), [the node panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx) |
-| On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963: [the cause rows, the walk, the roots where nothing refreshes, the audit shape (698 nodes, 422 not fresh, five roots, the top three hold 392)](../../crates/barca-core/src/causes.rs), [the root list, its actions and INV-HEALTH-03 with causes and the gap](../../crates/barca-core/src/rollup.rs), [the routes against each other](../../crates/barca-server/tests/openapi.rs), [CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, the commands of two actions run](../../python/tests/test_causes.py), [the causes list over the served roots](../../ui/src/lib/causesView.test.ts) |
+| Re-adding a derived word in TypeScript fails CI | #959: [the check](../../scripts/check-ui-layering.py) (a prek hook, so every tier; it seeds violations into a small tree on each run and fails if one passes), [its table](../../crates/barca-cli/ui-layering.json) (every route the UI calls with its CLI command, every module of `ui/src/lib` with its kind, the named exemptions), [the table against the CLI and the router](../../crates/barca-cli/src/ui_layering_tests.rs), [the fixtures' health words from `classify`](../../crates/barca-service/src/ui_fixture_tests.rs) |
+| A fired, paused, skipped and failing tick each leave one row; the perf gate is unchanged | #960: [owner tests](../../crates/barca-db/src/db/ticks.rs), [scheduler tests](../../crates/barca-server/src/scheduler/tests.rs) ("the tick record"), [outcomes](../../crates/barca-service/src/serve/ticks.rs), [a served pipeline](../../python/tests/test_serve_schedule.py) |
+| A scheduled sensor with `Always` assets below, an unscheduled chain and a `Manual` node: refresh paths equal the tick's targets | #952, #961: [the shapes, a paused schedule, no live scheduler, paused and pinned nodes, missed ticks](../../crates/barca-analysis/src/refresh_path.rs) ("membership is the scheduler's own target list"), [the batched misses](../../crates/barca-db/src/db/ticks.rs), [the walk once per graph](../../crates/barca-server/src/read_cache.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a scheduling and a read-only server](../../python/tests/test_refresh_path.py) |
+| Estimates within the stated error on a real server (one run slot, two schedules); a node below a pending cutoff has `recheck_at` only | #962: [the rules](../../crates/barca-analysis/src/estimates.rs) (the start, the workers, what is only rechecked, `stale_since` by cause, the queue), [the tick timings in one read](../../crates/barca-db/src/db/ticks.rs), [measured on a server; CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, a read-only server](../../python/tests/test_estimates.py), [the node panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx) |
+| On the audit fixture the top three roots hold at least 90% of not-fresh nodes; every not-fresh node is under one root | #963: [the cause rows, the walk, the roots where nothing refreshes, the audit shape (698 nodes, 422 not fresh, five roots, the top three hold 392)](../../crates/barca-analysis/src/causes.rs), [the root list, its actions and INV-HEALTH-03 with causes and the gap](../../crates/barca-analysis/src/rollup.rs), [the routes against each other](../../crates/barca-server/tests/openapi.rs), [CLI, `GET /state`, `GET /nodes`, `GET /state/rollup`, `barca.nodes`, the commands of two actions run](../../python/tests/test_causes.py), [the causes list over the served roots](../../ui/src/lib/causesView.test.ts) |
 | A group with 13% of its nodes overdue is drawn 13 parts overdue by weight, not solid; grey has one word; the map and the bars state nodes | #966: [the weight, the stacked colours, a fresh group kept, the keys ring](../../ui/src/lib/rollupView.test.ts), [the centre in the terms of the gap and the one word for grey](../../ui/src/components/CausesList.test.tsx), [the map against one response of a served project](../../ui/e2e-groups/groups.spec.ts) |
-| With a failing node that blocks 20 added to the audit shape, the first three roots all need action and include the failure | #1041: [audit fixture](../../crates/barca-core/src/causes.rs) |
-| A node with no estimate says why on every surface; a group row says when it is fresh from its entry; a schedule is late only by the server's word | #968: [the reason, and an estimate or a reason on every not-fresh node](../../crates/barca-core/src/causes.rs), [the words and the rounding](../../ui/src/lib/estimates.test.ts), [the panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx), [the bar in the map's vocabulary](../../ui/src/components/HealthBar.test.tsx), [late, queue-bound and the typical wait](../../ui/src/lib/schedules.test.ts), [a queue entry's start](../../ui/src/lib/queue.test.ts), [a served project's panel, rows and bar](../../ui/e2e-groups/groups.spec.ts), [the Schedules page over the server's words](../../ui/e2e/estimates.spec.ts), [CLI, `GET /state`, `barca.nodes`](../../python/tests/test_estimates.py) |
-| `barca status` and a server say the same of every node: health, cause, root, estimate, `schedule` block, a root's cost, with one typical duration | #1056: [one inputs type and one computation](../../crates/barca-core/src/health.rs) (`Inputs`, `Assembled`), [one schedule walk](../../crates/barca-core/src/refresh_path.rs) (`schedule_views`), [CLI against `GET /state`, `GET /nodes` and `GET /state/rollup`, with and without a scheduler](../../python/tests/test_health_parity.py) |
-| The assets table's chips, row order and key words come from served fields; no #992 exemption is left in the guard's table | #992: [`kinds` and `keys.cause` on every fixture](../../crates/barca-core/src/rollup.rs), [the blocked keys as counts, CLI and server](../../python/tests/test_batched_partitions.py), [chips by served cause, unfiltered counts from the rollup](../../ui/src/lib/assetFilters.test.ts), [the served order](../../ui/src/lib/assetTable.test.ts), [the key bar from the counts](../../ui/src/components/assets/NodeKeys.test.tsx), [a served page: chip counts against the rollup, a chip lists its cause](../../ui/e2e/estimates.spec.ts), [the table](../../crates/barca-cli/ui-layering.json) |
-| Every not-fresh node of a scope is under one root of its list; "more" holds the rest; a root's command can be copied | #967: [a scope's roots, their order and running total, and their sums on every fixture](../../crates/barca-core/src/rollup.rs), [the audit shape's list and the line the CLI prints](../../crates/barca-core/src/causes.rs), [the list's join and words](../../ui/src/lib/causesView.test.ts), [the list rendered](../../ui/src/components/CausesList.test.tsx), [a served project: every root listed once, more in place, a picked root lit, its node opened](../../ui/e2e-groups/groups.spec.ts) |
-| An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-core/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
+| With a failing node that blocks 20 added to the audit shape, the first three roots all need action and include the failure | #1041: [audit fixture](../../crates/barca-analysis/src/causes.rs) |
+| A node with no estimate says why on every surface; a group row says when it is fresh from its entry; a schedule is late only by the server's word | #968: [the reason, and an estimate or a reason on every not-fresh node](../../crates/barca-analysis/src/causes.rs), [the words and the rounding](../../ui/src/lib/estimates.test.ts), [the panel's lines](../../ui/src/components/assets/EstimateLine.test.tsx), [the bar in the map's vocabulary](../../ui/src/components/HealthBar.test.tsx), [late, queue-bound and the typical wait](../../ui/src/lib/schedules.test.ts), [a queue entry's start](../../ui/src/lib/queue.test.ts), [a served project's panel, rows and bar](../../ui/e2e-groups/groups.spec.ts), [the Schedules page over the server's words](../../ui/e2e/estimates.spec.ts), [CLI, `GET /state`, `barca.nodes`](../../python/tests/test_estimates.py) |
+| `barca status` and a server say the same of every node: health, cause, root, estimate, `schedule` block, a root's cost, with one typical duration | #1056: [one inputs type and one computation](../../crates/barca-analysis/src/health.rs) (`Inputs`, `Assembled`), [one schedule walk](../../crates/barca-analysis/src/refresh_path.rs) (`schedule_views`), [CLI against `GET /state`, `GET /nodes` and `GET /state/rollup`, with and without a scheduler](../../python/tests/test_health_parity.py) |
+| The assets table's chips, row order and key words come from served fields; no #992 exemption is left in the guard's table | #992: [`kinds` and `keys.cause` on every fixture](../../crates/barca-analysis/src/rollup.rs), [the blocked keys as counts, CLI and server](../../python/tests/test_batched_partitions.py), [chips by served cause, unfiltered counts from the rollup](../../ui/src/lib/assetFilters.test.ts), [the served order](../../ui/src/lib/assetTable.test.ts), [the key bar from the counts](../../ui/src/components/assets/NodeKeys.test.tsx), [a served page: chip counts against the rollup, a chip lists its cause](../../ui/e2e/estimates.spec.ts), [the table](../../crates/barca-cli/ui-layering.json) |
+| Every not-fresh node of a scope is under one root of its list; "more" holds the rest; a root's command can be copied | #967: [a scope's roots, their order and running total, and their sums on every fixture](../../crates/barca-analysis/src/rollup.rs), [the audit shape's list and the line the CLI prints](../../crates/barca-analysis/src/causes.rs), [the list's join and words](../../ui/src/lib/causesView.test.ts), [the list rendered](../../ui/src/components/CausesList.test.tsx), [a served project: every root listed once, more in place, a picked root lit, its node opened](../../ui/e2e-groups/groups.spec.ts) |
+| An asset a tick checks every 5 minutes and finds up to date reads "checked 3m ago, up to date" on a read-only server | #964: [the rule](../../crates/barca-analysis/src/health.rs) ("a node the read path cannot decide takes the verdict of the tick that checked it"), [the batched read](../../crates/barca-db/src/db/ticks.rs), [CLI, `GET /state`, `GET /nodes`, `barca.nodes`, a read-only server and a live tick](../../python/tests/test_last_check.py), [the node panel's line](../../ui/src/components/assets/LastCheckLine.test.tsx) |
 | A stale `Manual` node above `Always` assets, with and without a cutoff asset in between, and a pinned asset: `barca status`, `barca get --dry-run` and a tick's recorded outcome say the same of every node below it | #985: [status against the dry run, a run and live ticks](../../python/tests/test_status_run_rules.py) |
-| `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965: [the columns against the JSON keys](../../crates/barca-core/src/sql/tables.rs), [every tick in one read](../../crates/barca-db/src/db/ticks.rs), [the manual's eight queries on a machine and a read-only server](../../python/tests/test_docs_examples.py) (the rollup as the gap by file), [a live scheduler's schedules and ticks, the run queue, and a query run on the client](../../python/tests/test_sql_query_route.py) |
+| `python/tests/test_docs_examples.py` runs the gap, rollup and top-roots queries | #965: [the columns against the JSON keys](../../crates/barca-service/src/sql/tables.rs), [every tick in one read](../../crates/barca-db/src/db/ticks.rs), [the manual's eight queries on a machine and a read-only server](../../python/tests/test_docs_examples.py) (the rollup as the gap by file), [a live scheduler's schedules and ticks, the run queue, and a query run on the client](../../python/tests/test_sql_query_route.py) |
 | A query naming a result view is refused with a usage error; a 6-second query answers `408` | #972: [the refusals (INV-HEALTH-09), the time limit, a killed helper, no DuckDB, an unchanged server loading nothing](../../crates/barca-server/src/sql_query.rs), [a served project, read-only and behind a token, and the CLI](../../python/tests/test_sql_query_route.py), [the wire shape](../../crates/barca-server/tests/openapi.rs) |
-| One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973: [the rule](../../crates/barca-core/src/causes.rs) ("ticks that wait longer than they are apart name the queue"), [a real server with one slot, and a read-only server beside it](../../python/tests/test_causes.py) |
+| One run slot and overlapping schedules: status names the queue as the cause, with the wait | #973: [the rule](../../crates/barca-analysis/src/causes.rs) ("ticks that wait longer than they are apart name the queue"), [a real server with one slot, and a read-only server beside it](../../python/tests/test_causes.py) |
 
 Sources the rules are ported from, until each is deleted by its issue (node health and the
-data signals are deleted: their rules are `crates/barca-core/src/health.rs`; the health tree,
+data signals are deleted: their rules are `crates/barca-analysis/src/health.rs`; the health tree,
 the causes list's grouping and the failures list's impact are deleted: their rules are
-`crates/barca-core/src/rollup.rs`):
-[tick targets](../../crates/barca-core/src/freshness.rs),
-[status](../../crates/barca-core/src/status.rs), [tables](../../crates/barca-core/src/sql/tables.rs).
+`crates/barca-analysis/src/rollup.rs`):
+[tick targets](../../crates/barca-decide/src/freshness.rs),
+[status](../../crates/barca-analysis/src/status.rs), [tables](../../crates/barca-service/src/sql/tables.rs).
 
 ## Open questions and gaps
 

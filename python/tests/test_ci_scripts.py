@@ -76,21 +76,21 @@ def test_store_and_duckdb_paths_turn_their_part_on(monkeypatch):
         "base",
         [
             "python/barca/_storage.py",
-            "crates/barca-core/src/transfer.rs",
+            "crates/barca-store/src/transfer.rs",
             "python/barca/_duckdb.py",
-            "crates/barca-core/src/sql/tables.rs",
+            "crates/barca-service/src/sql/tables.rs",
             "python/tests/test_state_backends.py",  # uses the emulators
             "python/tests/test_sql.py",  # mentions duckdb
         ],
     )
     assert why["emulators"] == [
         "python/barca/_storage.py",
-        "crates/barca-core/src/transfer.rs",
+        "crates/barca-store/src/transfer.rs",
         "python/tests/test_state_backends.py",
     ]
     assert why["duckdb1"] == [
         "python/barca/_duckdb.py",
-        "crates/barca-core/src/sql/tables.rs",
+        "crates/barca-service/src/sql/tables.rs",
         "python/tests/test_sql.py",
     ]
 
@@ -122,8 +122,8 @@ def test_checkpoint_paths_turn_the_minute_test_on(monkeypatch):
         ci_changes, "changed_lines_mention", lambda base, path, pattern, head="HEAD": False
     )
     files = [
-        "crates/barca-core/src/persist.rs",
-        "crates/barca-core/src/backup.rs",
+        "crates/barca-run/src/persist.rs",
+        "crates/barca-store/src/backup.rs",
         "python/barca/_state.py",
         "python/tests/test_minute_checkpoints.py",
         "crates/barca-compile/src/dag.rs",

@@ -1,6 +1,6 @@
 """Artifact transfer helper — moves artifact files between local disk and the store.
 
-Spawned once per run by the Rust coordinator (crates/barca-core/src/transfer.rs)
+Spawned once per run by the Rust coordinator (crates/barca-store/src/transfer.rs)
 when the artifact store is not the local artifact directory. Workers only ever
 read and write local files; this process uploads finished artifacts in the
 background and fetches cached artifacts from other machines, so object-store

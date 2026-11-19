@@ -67,14 +67,14 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)
 ```
 
-Crate dependencies point one way (`crates/barca-core/src/layering_tests.rs` checks the
+Crate dependencies point one way (`crates/barca-service/src/layering_tests.rs` checks the
 manifests): barca-compile and barca-db use barca-model and not each other; barca-engine uses
 barca-model and barca-compile, never barca-db; barca-core uses all four; barca-cli and
 barca-server use only barca-core, which re-exports the lower crates' modules under their old
 paths (`barca_core::config`). Only barca-db and barca-core link libsql.
 
 Inside barca-core the modules are layered too (leaf, storage, decisions, engine beside
-analysis, service: `docs/engineering/layering.md`). `crates/barca-core/src/module_layering_tests.rs`
+analysis, service: `docs/engineering/layering.md`). `crates/barca-service/src/module_layering_tests.rs`
 checks every `crate::<module>` path against the layers; the exceptions are listed in
 `module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there; an
 analysis module also gets a row (`ANALYSIS_ROWS`) and names only the rows before it.

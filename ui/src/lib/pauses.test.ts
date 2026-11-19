@@ -11,7 +11,7 @@ const job = (id: string, next_fire: number | null): ScheduleJob => ({
 })
 
 describe('affectedSchedules', () => {
-  // What a pause of `orders` covers is the server's answer (the scheduler's walk in barca-core).
+  // What a pause of `orders` covers is the server's answer (the scheduler's walk in barca-service).
   const cover = pauseCover('orders')
   const [feed, hourly] = cover.schedules.map((s) => s.id) as [string, string]
 

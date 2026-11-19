@@ -11,7 +11,7 @@ Conformance: `python/tests/test_dot_barca_layout.py` (the top-level entries a pi
 `barca sql`, `barca status` and `barca gc` leave are a subset of the table below),
 `python/tests/test_project_socket.py` (`serve.sock`: created owner-only, nothing left of its
 `.serve-<pid>/`, removed on exit),
-`crates/barca-core/src/gc/tests.rs` (what `barca gc` evicts and measures).
+`crates/barca-store/src/gc/tests.rs` (what `barca gc` evicts and measures).
 
 `.barca/` is in the project root (`barca docs layout`). The default
 environment uses `.barca/` itself; a named environment `<env>` keeps its own `metadata.db*`,

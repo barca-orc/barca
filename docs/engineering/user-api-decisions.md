@@ -43,7 +43,7 @@ Underscore-prefixed declared inputs express ordering without data; those paramet
 
 Normative owners: [declaration model](../../specs/interfaces/user-api.allium),
 [cache provenance/completeness](../../specs/behavior/cache-decisions.md),
-[decorator grammar tests](../../crates/barca-core/tests/grammar_spec.rs).
+[decorator grammar tests](../../crates/barca-service/tests/grammar_spec.rs).
 
 ## Get data, run actions
 

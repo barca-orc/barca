@@ -48,7 +48,7 @@ A run (`get`, `run`, a scheduled tick) reads a held node as it is and never comp
 `Manual` asset or task that is not named in `--refresh`, and an asset pinned with `barca pin`
 ([freshness](freshness.md), "Freshness policy"). The status prediction (`barca status`,
 `GET /state`, `GET /nodes`, `barca.nodes`, a node's partition grid;
-`RunRules::status` in `crates/barca-core/src/freshness.rs`) decides by the same rules:
+`RunRules::status` in `crates/barca-decide/src/freshness.rs`) decides by the same rules:
 
 - **Every node in scope is decided**, the held ones and what is above them included. A run
   plans nothing above a held node; status still reports those nodes.
@@ -303,7 +303,7 @@ propagation, invalid/missing proofs, repeated progress batches, terminal rollbac
 versus proven-live/gone owners. The existing conformance sources below cover their stated
 implemented boundaries; ordered publication and shared ownership have separate obligations.
 
-Conformance: cache decision tests in [cache.rs](../../crates/barca-core/src/cache.rs)
+Conformance: cache decision tests in [cache.rs](../../crates/barca-decide/src/cache.rs)
 (`partial_upstream_cannot_hit_a_persisted_partial_cache_row`,
 `complete_decisions_retain_hashes_across_worker_chunks`,
 `aligned_key_present_does_not_allow_another_expanded_chunk_to_be_missing`),
@@ -314,14 +314,14 @@ Conformance: cache decision tests in [cache.rs](../../crates/barca-core/src/cach
 [progress recording](../../python/tests/test_incremental_persist.py),
 [progress counts](../../python/tests/test_progress_counts.py),
 [terminal outcomes](../../python/tests/test_terminal_persist.py),
-early cutoff in [cache.rs](../../crates/barca-core/src/cache.rs) (`cutoff_tests`),
+early cutoff in [cache.rs](../../crates/barca-decide/src/cache.rs) (`cutoff_tests`),
 [cone.rs](../../crates/barca-compile/src/cone.rs)
 (`a_cutoff_asset_reached_by_name_adds_a_marker_not_its_code`) and
 [test_asset_cutoff.py](../../python/tests/test_asset_cutoff.py),
-persistence tests in [persist.rs](../../crates/barca-core/src/persist.rs),
+persistence tests in [persist.rs](../../crates/barca-run/src/persist.rs),
 run owners in [run_owner.rs](../../crates/barca-db/src/run_owner.rs) and
 [reconciliation](../../python/tests/test_history_reconcile.py).
-Plan reasons: the tally in [plan_reasons.rs](../../crates/barca-core/src/plan_reasons.rs) (bounded
+Plan reasons: the tally in [plan_reasons.rs](../../crates/barca-decide/src/plan_reasons.rs) (bounded
 entries, nodes counted once) and [real runs](../../python/tests/test_plan_reasons.py) (never run,
 a changed helper and input, new keys, a failed retry, `--refresh-all`, a cached run recording
 none).

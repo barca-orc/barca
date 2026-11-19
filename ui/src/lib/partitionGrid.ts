@@ -3,7 +3,7 @@
  * (`GET /assets/{id}/partitions/overview`, what `barca status NODE --overview` prints) cut into
  * as many columns as fit, and the key a column of one value stands for. Layout only: which
  * keys exist, each key's state, what is wrong and where, and which keys a filter keeps are
- * served (`barca-core`, `key_query`).
+ * served (`barca-service`, `key_query`).
  */
 
 import { KEY_STATES, keyStateOfCode, type KeyState } from './keyStateDisplay'

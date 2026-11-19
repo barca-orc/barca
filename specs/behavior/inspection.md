@@ -182,7 +182,7 @@ Exercise pre-poll predictions, current membership after removal, historical succ
 current reuse, stale Manual pins, remote mismatch/availability and read-route revalidation.
 Cold/post-run inspection still needs the #656 scaling evidence.
 
-Conformance: [status](../../crates/barca-core/src/status.rs),
+Conformance: [status](../../crates/barca-analysis/src/status.rs),
 [cache/execution predictions](../../python/tests/test_sensor_freshness.py),
 [current SQL membership](../../python/tests/test_sql_current_partitions.py),
 [server ledger status](../../python/tests/test_server_ledger.py),
@@ -190,9 +190,9 @@ Conformance: [status](../../crates/barca-core/src/status.rs),
 [inspection evidence](../../python/tests/test_inspection_cache.py), the
 [real CLI payload-read regression](../../python/tests/test_store_inspection_cost.py),
 [recorded row counts and signals](../../python/tests/test_row_counts.py), the
-[signal rules](../../crates/barca-core/src/health.rs), the
+[signal rules](../../crates/barca-analysis/src/health.rs), the
 [per-key row facts](../../crates/barca-db/src/db/history.rs) and
-[schedule slots](../../crates/barca-core/src/schedule.rs).
+[schedule slots](../../crates/barca-decide/src/schedule.rs).
 
 ## Open questions and gaps
 

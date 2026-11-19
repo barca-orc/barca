@@ -28,7 +28,7 @@ a pre-commit hook.
    Cargo.lock
    README.md
    crates/barca-cli/Cargo.toml
-   crates/barca-core/Cargo.toml
+   crates/barca-service/Cargo.toml
    crates/barca-server/Cargo.toml
    pyproject.toml
    python/barca/__init__.py

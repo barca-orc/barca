@@ -14,7 +14,7 @@ export function CopyButton({ label, text }: { label: string; text: string }) {
 /** A partitioned node's keys as parts of a whole, each counted; a few failed keys of thousands still show. */
 export function PartitionBar({ partitions }: { partitions: PartitionState }) {
   // Every count is the row's own (`partitions`): which keys failed, which wait on an input's
-  // failed keys and which a run computes is counted in `barca-core`.
+  // failed keys and which a run computes is counted in `barca-service`.
   const parts = keyParts(partitions)
   const { cached, failed, blocked, behind, total } = parts
   const widths = barSegments(parts)

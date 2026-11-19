@@ -122,7 +122,7 @@ in `barca-cli`'s output would silently break `barca.history()`/`barca.stats()`.
 
 `barca-cli` (`crates/barca-cli/src/main.rs`) is a thin `clap` dispatcher: it parses
 arguments and calls straight into `barca_core::commands::*`
-(`crates/barca-core/src/commands.rs`), which does the real work (parse → DAG → plan →
+(`crates/barca-run/src/commands.rs`), which does the real work (parse → DAG → plan →
 dispatch → persist). `serve` is the one subcommand that hands off to a different crate
 (`barca-server`) instead of a `commands::*` function — see
 [RFC-0004](/rfcs/0004-http-server-api/).

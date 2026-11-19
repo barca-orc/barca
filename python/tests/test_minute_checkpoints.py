@@ -5,7 +5,7 @@ The test waits about two minutes on the real fixed timer, so CI runs it only in 
 `BARCA_TEST_MINUTE_CHECKPOINT=0` and it skips. Unset, as on a laptop, it runs. The checkpoint
 logic itself (backs up only new progress, retries an outage once a tick) is also covered in
 seconds by `the_checkpoint_backs_up_new_progress_and_retries_an_outage` in
-`crates/barca-core/src/persist.rs`, on a short private interval.
+`crates/barca-run/src/persist.rs`, on a short private interval.
 """
 
 import json

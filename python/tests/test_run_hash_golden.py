@@ -179,7 +179,7 @@ FILES = {
 # Nothing else moved. The dependency cones of these steps are pinned separately and still have
 # their 0.17.0 values (`cone_hashes_from_0_17_0_are_unchanged` in `crates/barca-compile/src/cone.rs`),
 # and `run_hash_unchanged_for_pipelines_without_module_attribute_helpers` in
-# `crates/barca-core/src/cache.rs` recomputes the old values from the old decorator text.
+# `crates/barca-decide/src/cache.rs` recomputes the old values from the old decorator text.
 RUN_HASHES_0_19_0 = {
     "jobs/nightly.py:nightly": "a11455419b8b32ec9afb231a1d7d15eb23a8d157cbf7c01efbe7fa123586306b",
     "pipeline.py:dotted": "31677379d8ef231b6758257598610cd5b1c5a01fa5082c690c26bf11af94f0a0",

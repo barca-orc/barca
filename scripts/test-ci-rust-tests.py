@@ -284,7 +284,7 @@ class Rules(unittest.TestCase):
         self.assertEqual(out["rust_doc"], "")
 
     def test_a_whole_crate_drops_its_readers(self):
-        sel, out = run("site/src/content/docs/guide.md", "crates/barca-core/src/health.rs")
+        sel, out = run("site/src/content/docs/guide.md", "crates/barca-analysis/src/health.rs")
         self.assertNotIn("barca-core", sel["readers"])
         self.assertIn("package(=barca-core)", out["rust_filter"])
         self.assertNotIn("unused_input_repo_sweep", out["rust_filter"])

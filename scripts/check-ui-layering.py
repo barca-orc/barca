@@ -2,7 +2,7 @@
 """The web UI only renders (#959, DIRECTION.md "The UI", specs/behavior/health.md).
 
 Every derived answer (health, cause, rollup, run explanation, lateness, data signals) is computed
-once in `barca-core`; TypeScript derives nothing, and an agent on the CLI can get everything the
+once in `barca-service`; TypeScript derives nothing, and an agent on the CLI can get everything the
 UI shows. This check holds the UI's sources to that, against the table in
 `crates/barca-cli/ui-layering.json`:
 
@@ -34,7 +34,7 @@ UI shows. This check holds the UI's sources to that, against the table in
 4. Derivations. A file the check can see computing something is registered: under `derives`
    of its module, or, outside `lib`, under the table's own `derives` by file. An entry says
    `what`, why it stays (`reason`), which of the signals below it accounts for (`sees`) and
-   either `kept: true` (presentation) or the `issue` that moves it to barca-core. The signals,
+   either `kept: true` (presentation) or the `issue` that moves it to barca-service. The signals,
    each a heuristic over one line of source:
    - `count`: `.filter(…).length`, `.reduce(`, `name += 1` (a name of two letters or more);
    - `order`: `.sort(`, `.toSorted(`;
@@ -364,7 +364,7 @@ def check_modules(table: dict, files: dict[str, str]) -> list[str]:
         if name not in modules:
             problems.append(
                 f"lib/{name}.ts is not in `modules`. Give it a kind ({', '.join(sorted(KINDS))}); a module that "
-                "derives a barca answer belongs in barca-core"
+                "derives a barca answer belongs in barca-service"
             )
     for name, entry in modules.items():
         kind = entry.get("kind")
@@ -466,7 +466,7 @@ def check_derives(table: dict, files: dict[str, str], type_names: list[str]) -> 
             if name not in claimed:
                 problems.append(
                     f"{rel}:{number}: computes {SIGNAL_WORDS[name]} and no `derives` entry of the file "
-                    f"sees it. If it is of served rows, compute it in barca-core and serve it; if it "
+                    f"sees it. If it is of served rows, compute it in barca-service and serve it; if it "
                     f'is presentation, register it: `what`, `reason`, `sees: ["{name}"]`, `kept: true`'
                 )
         for name in sorted(claimed - set(seen)):
@@ -595,7 +595,7 @@ def check_vocabulary(table: dict, files: dict[str, str], vocab: Vocabulary) -> l
             if word not in exempt.get(rel, {}).get("words", []):
                 problems.append(
                     f"{rel}:{number}: decides on '{word}', a word of barca's vocabulary. TypeScript derives "
-                    "nothing: read the answer from the server (compute it in barca-core), or map the word "
+                    "nothing: read the answer from the server (compute it in barca-service), or map the word "
                     "to its display in a display module"
                 )
     for rel, entry in exempt.items():
@@ -884,7 +884,7 @@ def main() -> int:
     problems = check(table, files, vocabulary(table, UI / "lib" / "generated"))
     if problems:
         print(
-            "ui-layering (#959): the web UI only renders; every derived answer is computed in barca-core.",
+            "ui-layering (#959): the web UI only renders; every derived answer is computed in barca-service.",
             *problems,
             sep="\n  ",
             file=sys.stderr,

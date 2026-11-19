@@ -65,7 +65,7 @@ barca/
 │   ├── barca-compile/        # parser, DAG, planning
 │   ├── barca-db/             # the metadata database
 │   ├── barca-engine/         # coordinator, worker pool and wire protocol
-│   ├── barca-core/           # run orchestration, cache, stores, commands; wires the others
+│   ├── barca-service/           # run orchestration, cache, stores, commands; wires the others
 │   ├── barca-cli/            # the `barca` command
 │   │   ├── docs/             # the manual (`barca docs`), compiled into the binary
 │   │   └── snapshots/help/   # `--help` snapshots checked by the contract test

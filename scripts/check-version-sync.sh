@@ -13,7 +13,7 @@ extract() {
     echo "$val"
 }
 
-CORE=$(extract crates/barca-core/Cargo.toml '^version')
+CORE=$(extract crates/barca-service/Cargo.toml '^version')
 CLI=$(extract crates/barca-cli/Cargo.toml '^version')
 SERVER=$(extract crates/barca-server/Cargo.toml '^version')
 MODEL=$(extract crates/barca-model/Cargo.toml '^version')

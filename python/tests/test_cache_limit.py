@@ -1,6 +1,6 @@
 """The size limit for `.barca/` (RFC-0012, #457), end to end on the real binary.
 
-The eviction order itself is a pure function with its own tests (`crates/barca-core/src/gc/`);
+The eviction order itself is a pure function with its own tests (`crates/barca-store/src/gc/`);
 these check what a user sees: which files go, which stay, what comes back and what is said.
 """
 

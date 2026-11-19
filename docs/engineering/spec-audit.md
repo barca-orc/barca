@@ -76,8 +76,8 @@ background work and children, while allowing explicit overrides. It does not say
 budget wins when two live invocations supply different overrides, how a live budget changes,
 or whether environments and canonical/symlinked project roots share an owner.
 
-Current [execution settings](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/config.rs#L35) resolve environment
-and file settings per caller. [Shared capacity](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/capacity.rs#L1)
+Current [execution settings](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/config.rs#L35) resolve environment
+and file settings per caller. [Shared capacity](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/capacity.rs#L1)
 is an in-server ledger, not that project-wide authority. This audit does not choose a lock,
 daemon or quota mechanism. Acceptance needs conflicting overrides and equivalent project
 paths, not only two requests with the same configuration. General enforcement/accounting
@@ -90,8 +90,8 @@ preview. [Agents](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavio
 does not execute work to resolve unknown sensors. The [declaration owner](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/interfaces/user-api.allium#L176)
 permits explicit resolver imports for nonliteral partitions and computed grouping.
 
-[Explain](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/queries.rs#L472) builds the DAG, and
-[dynamic resolution](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/load.rs#L442) imports the module and evaluates
+[Explain](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/queries.rs#L472) builds the DAG, and
+[dynamic resolution](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/load.rs#L442) imports the module and evaluates
 its expression. The probe's `--dry-run` creates an import-time side-effect file, while the
 node-body marker remains absent. Thus the experiment does **not** show a node or sensor
 was executed by preview. It shows that “read-only” needs an explicit boundary: orchestration
@@ -123,11 +123,11 @@ snapshot boundaries. They remain in the owners and [discussion handoff](requirem
 
 New confirmed implemented-contract mismatch; high confidence; resolve before merging a
 truthful contract. [Task output](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/interfaces/task-output.md#L54) says at most
-16 MiB of line text, then a marker. [Recorder::push](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/run_logs.rs#L109)
+16 MiB of line text, then a marker. [Recorder::push](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/run_logs.rs#L109)
 records the whole crossing line before checking the cap; `push_note` can append afterward.
 
 Executed: one 17 MiB print succeeds and the database retains a line of **17,825,792 bytes**,
-exceeding **16,777,216**. The [existing cap test](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/run_logs.rs#L275)
+exceeding **16,777,216**. The [existing cap test](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/run_logs.rs#L275)
 uses two exactly half-cap lines, so it misses overshoot. Decide between an explicit soft
 crossing-line limit and a real byte bound, including marker/framework notes. Do not silently
 truncate user lines or redefine the promise as part of this audit.
@@ -138,7 +138,7 @@ Known implemented correctness defect #657 at the audited commit; reproduced; hig
 Fixed since 0.34.0 (the sequential fix; [behavior conformance](behavior-conformance.md)); the
 PR open at the time, #658, was closed unmerged on 2026-10-26.
 [Freshness INV-SELECT-01](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/freshness.md#L88) requires the current identity,
-not the latest historical row. [Incremental lookup](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/incremental.rs#L807)
+not the latest historical row. [Incremental lookup](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-run/src/incremental.rs#L807)
 selects `MAX(id)` per node. Inputs `1,2,1,1` produce `2,4,2,4`, where the last result must
 remain 2. The probe records this independently of the previously cited audit.
 
@@ -161,8 +161,8 @@ configuration/environment dependency. Keep it separate from artifact-byte isolat
 
 Known approved process-tree requirement, newly reproduced concrete case; high confidence.
 [Operations](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/operations.md#L79) requires entire owned-process-tree
-cleanup and one-off execution cleanup. [Worker shutdown](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/io_loop.rs#L1073)
-signals worker PIDs; [graceful termination](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/io_loop.rs#L1892) also
+cleanup and one-off execution cleanup. [Worker shutdown](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/io_loop.rs#L1073)
+signals worker PIDs; [graceful termination](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/io_loop.rs#L1892) also
 addresses a direct child PID. This is not a general descendant ownership/reaping boundary.
 
 Executed: an ordinary task starts a Python child with redirected standard streams, without
@@ -174,12 +174,12 @@ infer safety for unrelated processes or deliberately detached services from this
 
 Approved implementation gap; high confidence from source, no new load benchmark performed.
 [Resources](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/resources.md#L21) requires aggregate CPU/memory budgets and
-truthful enforcement across processes. [Configuration](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/config.rs#L23)
-has pool/capacity controls, and [SharedCapacity](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/capacity.rs#L10)
+truthful enforcement across processes. [Configuration](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/config.rs#L23)
+has pool/capacity controls, and [SharedCapacity](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/capacity.rs#L10)
 shares weights within one server; neither establishes aggregate CPU use or job memory.
 
-[Run state](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/execution.rs#L357) retains per-key maps and
-[StepRecorder](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/persist.rs#L210) uses an unbounded sender. In
+[Run state](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-run/src/execution.rs#L357) retains per-key maps and
+[StepRecorder](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-run/src/persist.rs#L210) uses an unbounded sender. In
 addition to the already tracked cold execution/inspection gaps (#655/#656), live
 [RunChannel](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-server/src/state.rs#L259) retains every event in a vector and
 [ordinary log reads](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-cli/src/commands/logs.rs#L135) materialize a complete
@@ -205,7 +205,7 @@ Change admission, durable transitions and task retry semantics together in a beh
 
 Known approved implementation gap; high confidence. [Operations](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/operations.md#L50)
 requires immutable invocation target/arguments and distinguishable response recovery versus
-explicit retry. [RunRequest](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/outcome.rs#L132) supplies execution
+explicit retry. [RunRequest](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/outcome.rs#L132) supplies execution
 options, while [admission](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-server/src/queue.rs#L220) generates a new run ID.
 A completed-result ledger's `client_run_id` is not a submission idempotency mechanism.
 
@@ -217,7 +217,7 @@ validation, retry/retrieve actions and retention before adding automatic transpo
 Known approved implementation gap; high confidence from source, no source-outage runtime
 suite run here. [Operations](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/operations.md#L33) specifies a one-minute
 managed default, exponential polling backoff capped at 15 minutes and immediate direct-check
-sharing. [Scheduled jobs](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/schedule.rs#L102) include explicit
+sharing. [Scheduled jobs](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-decide/src/schedule.rs#L102) include explicit
 Schedule declarations only; [scheduler eligibility](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-server/src/scheduler.rs#L105)
 can stop a repeatedly failing job under `max_failures`. This is not the proposed sensor
 backoff/recovery policy. Existing per-step linear retry delay is a separate mechanism.
@@ -229,8 +229,8 @@ alternative. Its selection/deadline contract remains openly unresolved.
 
 Known approved implementation gap; high confidence. [Operations](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/operations.md#L99)
 requires three retained versions by default and cleanup by requested reclaimed space with
-selected/active protection. [GC](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/gc/mod.rs#L1) enforces a cache
-size threshold and eviction tiers. [Cache configuration](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/config.rs#L108)
+selected/active protection. [GC](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-store/src/gc/mod.rs#L1) enforces a cache
+size threshold and eviction tiers. [Cache configuration](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/config.rs#L108)
 contains a size limit, not retained-version identity or count.
 
 History preservation and pinning are useful existing pieces, not evidence of the proposed
@@ -241,7 +241,7 @@ retention policy. Resolve version recurrence/shared-byte/remote-scope questions 
 Known approved gaps, not newly introduced runtime failures. The
 [ownership owner](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/current-state-and-execution.md#L21) requires matching
 identity sharing, revision-safe publication, independent checking and bounded state.
-[RunSession](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/execution.rs#L395) still owns its own worker pool;
+[RunSession](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-run/src/execution.rs#L395) still owns its own worker pool;
 [artifact paths](https://github.com/barca-orc/barca/blob/bb5d5f08/python/barca/_artifacts.py#L545) name computations and can be overwritten
 on recompute. The [receipt owner](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/interfaces/artifact-upload-receipts.md#L63)
 explicitly demonstrates existing input-byte isolation limits. The finite model assumes stable
@@ -280,8 +280,8 @@ unconfirmed requests never produce success rows, but the
 [next paragraph](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/interfaces/artifact-upload-receipts.md#L51) correctly allows a
 successful computation with failed upload to produce a terminal success and pending upload.
 
-[Receipt checkpoint handling](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/persist.rs#L332) and
-[terminal persistence](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/persist.rs#L722) are different paths.
+[Receipt checkpoint handling](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-run/src/persist.rs#L332) and
+[terminal persistence](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-run/src/persist.rs#L722) are different paths.
 [Fail-soft upload controls](https://github.com/barca-orc/barca/blob/bb5d5f08/python/tests/test_fail_soft_uploads.py#L99) expect success
 and pending uploads. Narrow the first guarantee to confirmed receipt-driven checkpoint
 publication; preserve the fail-soft exception. This is not a recommendation to fail successful
@@ -292,7 +292,7 @@ computations whenever their backup upload fails.
 New stale-contract finding; fix before merge. The
 [digest owner](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/interfaces/materialization-digests.md#L22) warns for changed assets
 and exempts Manual assets, but omits `deterministic=False`.
-[checks_bytes](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/cache.rs#L426), the
+[checks_bytes](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-decide/src/cache.rs#L426), the
 [manual](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-cli/docs/cache.md#L711) and
 [existing regression](https://github.com/barca-orc/barca/blob/bb5d5f08/python/tests/test_asset_cutoff.py#L424) agree on the exemption.
 This is a spec omission, not a bug in warning suppression. Include both warning/report and
@@ -305,7 +305,7 @@ New cross-owner ambiguity; resolve wording or record an explicit policy decision
 requested, including after crashes; a new attempt captures current code/configuration.
 [Execution](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/behavior/execution.md#L69),
 [RetryPolicy](https://github.com/barca-orc/barca/blob/bb5d5f08/specs/interfaces/user-api.allium#L29) and the
-[coordinator](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-core/src/coordinator.rs#L650) describe configured automatic
+[coordinator](https://github.com/barca-orc/barca/blob/bb5d5f08/crates/barca-service/src/coordinator.rs#L650) describe configured automatic
 physical attempts with linear backoff and worker replacement.
 
 A `retries=N` declaration might itself count as explicit authorization, or the new operations

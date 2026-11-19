@@ -1,7 +1,7 @@
 /**
  * How a key's state is shown: its word, glyph and meaning, the order the states are listed in,
  * and the state a character of a served row stands for. Display only: a key's state is decided
- * in `barca-core` (`partition_grid`) and arrives on every row of `GET /assets/{id}/partitions/keys`,
+ * in `barca-service` (`partition_grid`) and arrives on every row of `GET /assets/{id}/partitions/keys`,
  * in the rows of `.../partitions/overview` and on `.../partitions/key`.
  */
 

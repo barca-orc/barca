@@ -10,7 +10,7 @@ Conformance: `python/tests/test_artifact_extensions.py`, `crates/barca-model/src
 (`format_of_agrees_with_the_spec_table`), `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
 `python/tests/test_sink_republish.py`, `python/tests/test_sink_copies_artifact.py`,
 `crates/barca-db/src/sink_publications.rs`,
-`crates/barca-compile/src/sink_args.rs`, `crates/barca-core/tests/grammar_spec.rs`.
+`crates/barca-compile/src/sink_args.rs`, `crates/barca-service/tests/grammar_spec.rs`.
 
 Frames continue to default to Parquet. A literal `serializer="csv"` on an asset,
 sensor or task selects CSV, and the coordinator preserves that selection through

@@ -283,7 +283,7 @@ def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path, serve):
 
 
 # How old a checked file must be before the check for barca serve to remember it
-# (`verified_copies::SETTLED` in barca-core), with a margin.
+# (`verified_copies::SETTLED` in barca-service), with a margin.
 SETTLED = 2.5
 
 

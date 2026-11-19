@@ -30,7 +30,7 @@ failed on every scheduled run for over a week (#434). They found them in Datadog
 already had; a team without an observability stack would not have found them at all. Slack is
 where a small data team already looks.
 
-**The telemetry layer already does the hard parts.** `crates/barca-core/src/telemetry/mod.rs`
+**The telemetry layer already does the hard parts.** `crates/barca-run/src/telemetry/mod.rs`
 builds one `RunReport` per finished run for every command and every `serve` run, switches
 integrations on by name, bounds each delivery to 3 seconds, never fails a run on a delivery
 error, and reports a broken backend once when it starts failing and once when it recovers,

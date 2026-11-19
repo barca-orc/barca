@@ -182,7 +182,7 @@ span over it, and reports it on the step in run JSON and history. A file sink in
 format is a copy of the artifact's bytes ([artifact formats](artifact-formats.md)), so its time is
 a file copy or upload, not an encode. Both fields are additive optional metadata within version 5.
 Conformance: [sink copies and sink time](../../python/tests/test_sink_copies_artifact.py) and the
-`SinkOutcome` round trip in [protocol tests](../../crates/barca-engine/src/protocol/tests.rs).
+`SinkOutcome` round trip in [protocol tests](../../crates/barca-proc/src/protocol/tests.rs).
 
 ## A worker after a failed step
 
@@ -245,7 +245,7 @@ runs use, and answered with `{"ok": true, "type"}` (the loaded value's Python ty
 `{"error"}`.
 Conformance: [signed URL tests](../../python/tests/test_signed_urls.py), the
 [upload tests](../../python/tests/test_pin_upload.py) and the answer
-parser tests in [values.rs](../../crates/barca-core/src/values.rs).
+parser tests in [values.rs](../../crates/barca-service/src/values.rs).
 
 ## Version policy and conformance
 
@@ -269,10 +269,10 @@ cover wrong versions, cancellation and reaping. The worker-pool shutdown test in
 [io_loop.rs](../../crates/barca-engine/src/io_loop.rs) holds a kill/wait job behind a gate
 and requires shutdown to wait for it. Runtime framing tests cover size limits. Frame
 continuity is tested at three levels: a read abandoned at every byte of a frame resumes
-([protocol tests](../../crates/barca-engine/src/protocol/tests.rs)), and the worker and
+([protocol tests](../../crates/barca-proc/src/protocol/tests.rs)), and the worker and
 transfer loops are sent a message while each incoming frame is split inside its header and
 its payload, and lose none ([io_loop tests](../../crates/barca-engine/src/io_loop/tests.rs),
-[transfer tests](../../crates/barca-core/src/transfer/tests.rs)). The transfer tests also
+[transfer tests](../../crates/barca-store/src/transfer/tests.rs)). The transfer tests also
 write a request and read a reply each larger than the socket's buffers against a helper that
 reads nothing while it writes, and the [helper tests](../../python/tests/test_transfer.py)
 require requests to be accepted while a reply's send is blocked.
