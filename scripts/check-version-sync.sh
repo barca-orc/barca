@@ -13,27 +13,24 @@ extract() {
     echo "$val"
 }
 
-CORE=$(extract crates/barca-service/Cargo.toml '^version')
-CLI=$(extract crates/barca-cli/Cargo.toml '^version')
-SERVER=$(extract crates/barca-server/Cargo.toml '^version')
-MODEL=$(extract crates/barca-model/Cargo.toml '^version')
-COMPILE=$(extract crates/barca-compile/Cargo.toml '^version')
-DB=$(extract crates/barca-db/Cargo.toml '^version')
-ENGINE=$(extract crates/barca-engine/Cargo.toml '^version')
 PY_TOML=$(extract pyproject.toml '^version')
 PY_INIT=$(extract python/barca/__init__.py '__version__')
 
+# Every crate under crates/ must carry the version of pyproject.toml.
 ERRORS=0
-for name_ver in "barca-cli:$CLI" "barca-server:$SERVER" "barca-model:$MODEL" "barca-compile:$COMPILE" "barca-db:$DB" "barca-engine:$ENGINE" "pyproject.toml:$PY_TOML" "__init__.py:$PY_INIT"; do
-    name="${name_ver%%:*}"
-    ver="${name_ver#*:}"
-    if [ "$ver" != "$CORE" ]; then
-        echo "Version mismatch: barca-core=$CORE but $name=$ver"
+for manifest in crates/*/Cargo.toml; do
+    ver=$(extract "$manifest" '^version')
+    if [ "$ver" != "$PY_TOML" ]; then
+        echo "Version mismatch: pyproject.toml=$PY_TOML but $manifest=$ver"
         ERRORS=1
     fi
 done
+if [ "$PY_INIT" != "$PY_TOML" ]; then
+    echo "Version mismatch: pyproject.toml=$PY_TOML but __init__.py=$PY_INIT"
+    ERRORS=1
+fi
 if [ "$ERRORS" -eq 1 ]; then exit 1; fi
-echo "All versions consistent: $CORE"
+echo "All versions consistent: $PY_TOML"
 
 # The linter pins: prek.toml runs ruff and ty at the versions pyproject.toml's `dev` group pins.
 RUFF_HOOK=$(sed -n 's/^rev = "v\(.*\)"/\1/p' prek.toml | head -1)

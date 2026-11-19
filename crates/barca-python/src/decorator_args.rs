@@ -1290,7 +1290,7 @@ mod tests {
             assert_eq!(
                 keywords, sig.keywords,
                 "keyword arguments of `{name}` in python/barca/__init__.py differ from \
-                 SIGNATURES in crates/barca-compile/src/decorator_args.rs"
+                 SIGNATURES in crates/barca-python/src/decorator_args.rs"
             );
             assert_eq!(
                 positional, sig.positional,

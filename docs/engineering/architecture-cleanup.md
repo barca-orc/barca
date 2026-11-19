@@ -77,7 +77,7 @@ in structural refactors; change them explicitly to meet the approved operations 
 
 ### Preparation, decisions and execution
 
-[Loading](../../crates/barca-compile/src/load.rs), [project import analysis](../../crates/barca-compile/src/project_modules.rs),
+[Loading](../../crates/barca-python/src/load.rs), [project import analysis](../../crates/barca-python/src/project_modules.rs),
 [target resolution](../../crates/barca-compile/src/targets.rs) and [planning](../../crates/barca-compile/src/planner.rs)
 prepare a dependency cone. [Cache decisions](../../crates/barca-decide/src/cache.rs) and
 [incremental proofs](../../crates/barca-run/src/incremental.rs) decide which work can be reused.

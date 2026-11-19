@@ -315,7 +315,7 @@ Conformance: cache decision tests in [cache.rs](../../crates/barca-decide/src/ca
 [progress counts](../../python/tests/test_progress_counts.py),
 [terminal outcomes](../../python/tests/test_terminal_persist.py),
 early cutoff in [cache.rs](../../crates/barca-decide/src/cache.rs) (`cutoff_tests`),
-[cone.rs](../../crates/barca-compile/src/cone.rs)
+[cone.rs](../../crates/barca-python/src/cone.rs)
 (`a_cutoff_asset_reached_by_name_adds_a_marker_not_its_code`) and
 [test_asset_cutoff.py](../../python/tests/test_asset_cutoff.py),
 persistence tests in [persist.rs](../../crates/barca-run/src/persist.rs),

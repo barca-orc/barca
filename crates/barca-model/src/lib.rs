@@ -1,7 +1,7 @@
 //! The model layer of barca (#905): shared vocabulary every other barca crate uses. Values,
-//! ids, hashes, time, the terminal (`outln!` / `errln!`), the config file and the crate-root
-//! error type. It depends on no other barca crate; `barca-service` re-exports it, so its items keep
-//! their `barca_service::` paths.
+//! ids, the graph (`ir`, the node types; `dag`, the validated container), hashes, time, the
+//! terminal (`outln!` / `errln!`), the config file and the crate-root error type. It depends on
+//! no other barca crate; `barca-service` re-exports what the hosts name.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]

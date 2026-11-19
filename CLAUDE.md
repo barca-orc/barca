@@ -14,11 +14,17 @@ stubs for decorators.
 ```
 Cargo.toml              ← Rust workspace root
 crates/
-  barca-model/          ← Shared vocabulary: ids, values, the graph's node types (`ir`), hashes, time, `term` (outln!/errln!), barca.toml config
-  barca-compile/        ← Source in, `Dag` and `ExecutionPlan` out: parser, decorator args, DAG, planner
+  barca-model/          ← Shared vocabulary: ids, values, the graph (`ir` node types, the `dag` container), hashes, time, `term` (outln!/errln!), barca.toml config
+  barca-python/         ← The Python frontend: project files in, a `Dag` out: parser, decorator args, fingerprints, link, load
+  barca-compile/        ← Planning: a `Dag` in, an `ExecutionPlan` out: targets, selection, planner, partition expansion (`dispatch`)
   barca-db/             ← The metadata database (`.barca/metadata.db`, libSQL): schema, owners of every write
-  barca-engine/         ← The per-step scheduler and worker loop: coordinator, dispatch, wire protocol
-  barca-core/           ← Wires them: run orchestration (`execution`: cache, freshness, publication), stores, commands
+  barca-proc/           ← Child processes (`helper_proc`) and the framed socket protocol they speak (`protocol`)
+  barca-engine/         ← The per-step scheduler and worker loop: coordinator, I/O loop, wire tables. No database
+  barca-store/          ← Storage: transfer, gc, backup, ledger, pins, pauses, the run queue's rows; the leaf types (`results`, `envelope`, `text`, `http`)
+  barca-decide/         ← Decisions: cache and freshness verdicts, plan reasons, the dry-run prediction, sizing, schedules
+  barca-run/            ← The run orchestrator (`execution`, `persist`, `commands`, `telemetry`): the one crate that drives barca-engine and records a run
+  barca-analysis/       ← Read models over what was recorded: status, health, causes, estimates, rollup, run explanations
+  barca-service/        ← One operation per command (`queries`, `loaded`, `served`, `report`, `outcome`, `sql`); the one crate the hosts import
   barca-cli/            ← CLI binary (the `barca` command)
     docs/               ← The manual: markdown topics embedded in the binary (`barca docs`)
   barca-server/         ← `barca serve`: axum HTTP API, cron scheduler, file watcher, embedded UI
@@ -68,16 +74,23 @@ pyproject.toml          ← Maturin build config (binary + Python stubs in one w
 ```
 
 Crate dependencies point one way (`crates/barca-service/src/layering_tests.rs` checks the
-manifests): barca-compile and barca-db use barca-model and not each other; barca-engine uses
-barca-model and barca-compile, never barca-db; barca-core uses all four; barca-cli and
-barca-server use only barca-core, which re-exports the lower crates' modules under their old
-paths (`barca_core::config`). Only barca-db and barca-core link libsql.
+manifests; `docs/engineering/crate-split-2.md` has the graph): barca-python, barca-compile,
+barca-db and barca-proc use barca-model and not each other; barca-engine uses barca-compile and
+barca-proc, never barca-db; barca-store is above barca-db and never uses barca-engine;
+barca-decide is above barca-store; barca-run (drives the engine, records the run) and
+barca-analysis (reads) are above barca-decide and never use each other; barca-service uses all
+of them; barca-cli and barca-server use only barca-service, which re-exports what they name
+under its own paths (`barca_service::config`). The lower crates do not re-export each other: a
+module of barca-run names `barca_decide::cache`. barca-db, barca-store and barca-run link
+libsql; barca-decide and barca-service only in tests. barca-decide, barca-analysis and
+barca-compile take a `Dag` and use the Python frontend in tests only; a command that starts from
+files loads it in barca-service (`loaded`).
 
-Inside barca-core the modules are layered too (leaf, storage, decisions, engine beside
-analysis, service: `docs/engineering/layering.md`). `crates/barca-service/src/module_layering_tests.rs`
-checks every `crate::<module>` path against the layers; the exceptions are listed in
-`module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there; an
-analysis module also gets a row (`ANALYSIS_ROWS`) and names only the rows before it.
+Cargo checks nothing between the modules of one crate, so each crate with an order keeps it in
+a test built on `barca_model::source_scan::module_graph`: rows in barca-store, barca-analysis,
+barca-compile and barca-python (`src/layering_tests.rs`: a module names only the rows before
+its own; a new module gets a row), and the size of the largest module cycle, which may only
+shrink, in barca-decide, barca-run and barca-service.
 
 Inside barca-server the modules are in rows too (leaf, the stateful parts, `state`, views,
 `runs`, `scheduler`, route families, `routes`: `docs/engineering/server-layering.md`);
@@ -206,7 +219,7 @@ computing it over some keys) rather than describing intended behavior.
 
 ## Output and decorator arguments
 
-`crates/barca-compile/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
+`crates/barca-python/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
 Its tests keep Python stubs and documentation tables in sync. Use `outln!` / `errln!` for
 lines, or `term::stdout_str` / `stderr_str` for rendered chunks; direct print macros are denied
 by Clippy. Use `term::child_output()` for uncaptured child streams and `term::exit` to drain

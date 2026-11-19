@@ -4,7 +4,8 @@ version = "0.45.0"
 edition = "2024"
 description = "Engine layer — plan in, results out: the coordinator, the worker pool, the wire protocol"
 
-# Only barca-model and barca-compile among barca crates; no metadata database (#905).
+# barca-model, barca-compile and barca-proc, and barca-python for `batch` alone; no metadata
+# database (#905, #1056).
 [dependencies]
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }

@@ -19,42 +19,55 @@ This page describes the current source layout. The reasons behind the main choic
 crates/
   barca-model/src/            shared vocabulary: no other barca crate, no database
     model.rs, step_status.rs  node, step and plan values; the step status vocabulary
+    ir/, dag.rs               the graph: node types, and the petgraph container with its validation
     hash.rs, envdeps.rs       run hash pieces; declared env= variables
     config.rs, layout.rs      project root, barca.toml, environment, flags; the .barca/ paths
     term.rs, lines.rs         ordered output (`outln!`, `errln!`) and child streams that tolerate closed pipes
-  barca-compile/src/          source in, DAG and plan out (no database)
+  barca-python/src/           the Python frontend: project files in, a graph out (no database)
     parse.rs, discover.rs     read decorated functions from source with ruff's parser; find the project's .py files
     load.rs                   from source files to a DAG, with dynamic partitions resolved
-    link.rs, dag.rs           parsed functions to graph nodes (references resolved); petgraph graph, validation
-    planner.rs                phases and streams of the plan
+    link.rs                   parsed functions to graph nodes (references resolved, fingerprints computed)
     cone.rs                   the helper code a function reaches (part of its run hash)
     definition.rs             which decorator arguments are part of the hash, and their canonical form
-    targets.rs                target resolution, refresh-name checks and target planning
     decorator_args.rs         accepted decorator/helper arguments and static validation
+  barca-compile/src/          planning: a graph in, a plan out (no database, no Python parser)
+    planner.rs                phases and streams of the plan
+    targets.rs                target resolution, refresh-name checks and target planning
+    dispatch.rs               what a planned phase expands to: partition keys, the inputs it provides
   barca-db/src/               the metadata database (libSQL)
     db/                       schema, migrations and the owner of every write
     recording.rs              a run's run and step rows
     run_owner.rs              conservative process-liveness evidence for interrupted runs
+  barca-proc/src/             child processes and the socket protocol they speak
+    helper_proc.rs            Python command construction, serialized spawning and helper lifetime
+    protocol.rs               length-prefixed JSON frames over a Unix socket; worker and transfer messages
   barca-engine/src/           plan in, step results out (no database)
     coordinator.rs            ready queue, dependencies, retries, parallel groups (no I/O)
-    io_loop.rs, protocol.rs   worker pool, leased batches, length-prefixed JSON over a Unix socket
-    dispatch.rs, wire.rs      what a step is sent; compact wire tables
+    io_loop.rs, wire.rs       worker pool, leased batches; compact wire tables
     cost.rs                   measured step cost and batch sizing
-    helper_proc.rs            Python command construction, serialized spawning and helper lifetime
-  barca-core/src/             wires the crates above; no HTTP dependencies
-    commands.rs               get and run entry points
-    execution.rs              prepare, decide, dispatch and finalize a run
-    cache.rs, recover.rs      cache lookups; recompute a cached step whose artifact file is gone
-    freshness.rs              what Always and Manual freshness do at run time
+  barca-store/src/            what is kept on disk, in the store and in one feature's tables
     transfer.rs, backup.rs    remote store: artifact transfer, and backups of the metadata DB
     store_sync.rs             a run's link to the store: upload results, fetch remote inputs, wait at the end
-    persist.rs                recording a run: drives the final write and the minute backup
-    queries.rs, status.rs, sql.rs   read-only commands: plan, history, stats, list; status; sql
+    gc/, ledger.rs, pins.rs   the cache limit; a server's ledger; pinned inputs
     results.rs                what a command returns (serde types shared by the CLI and the server)
-    report.rs, report/        shared result formatting, field projection and progress lines
     envelope.rs               error classification, remediation and error envelopes
+  barca-decide/src/           decisions: the same whether a run executes them or a dry run predicts them
+    cache.rs, recover.rs      cache lookups; recompute a cached step whose artifact file is gone
+    freshness.rs              what Always and Manual freshness do at run time
+    predict.rs, sizing.rs     what a run would do; its pool size and capacity
     schedule.rs               schedule discovery and next-fire descriptions
+  barca-run/src/              the run orchestrator: drives the engine and records the run
+    commands.rs               get and run entry points
+    execution.rs              prepare, decide, dispatch and finalize a run
+    persist.rs                recording a run: drives the final write and the minute backup
     telemetry/                run reports; Datadog traces, one per step and one per run
+  barca-analysis/src/         read models over what was recorded (never the engine)
+    status.rs, health.rs      a node's cache state; its health, cause and refresh path
+    estimates.rs, rollup.rs   when a node is fresh again; the sums `barca status --rollup` prints
+  barca-service/src/          one operation per command; the one crate the CLI and the server import
+    queries.rs, loaded.rs, sql.rs   read-only commands: plan, history, stats, list; status from files; sql
+    served.rs                 the typed views a host answers with
+    report.rs, report/        shared result formatting, field projection and progress lines
   barca-server/src/           axum HTTP API, cron scheduler, file watcher, embedded web UI
   barca-cli/                  the `barca` binary; only `serve` calls barca-server
     src/args.rs               clap argument definitions
@@ -75,12 +88,14 @@ ui/                           web UI (TypeScript, Vite); its build output is com
 pyproject.toml                maturin build: binary and Python package in one wheel
 ```
 
-The crate dependencies point one way. `barca-compile` and `barca-db` use `barca-model` and not
-each other; `barca-engine` uses `barca-model` and `barca-compile` and never the database;
-`barca-core` uses all four; `barca-cli` and `barca-server` use only `barca-core`, which
-re-exports the lower crates' modules under its own paths. A test in `barca-core`
-(`layering_tests.rs`) checks the manifests keep this shape and that only `barca-db` and
-`barca-core` link libsql.
+The crate dependencies point one way. `barca-python`, `barca-compile`, `barca-db` and
+`barca-proc` use `barca-model` and not each other; `barca-engine` uses the plan and the process
+layer and never the database; `barca-store` is above the database and never uses the engine;
+`barca-decide` is above the store; `barca-run` (which drives the engine) and `barca-analysis`
+(which only reads) are above the decisions and never use each other; `barca-service` uses all
+of them, and `barca-cli` and `barca-server` use only `barca-service`, which re-exports what
+they name under its own paths. A test in `barca-service` (`layering_tests.rs`) checks the
+manifests keep this shape and which crates link libsql.
 
 ## A run
 

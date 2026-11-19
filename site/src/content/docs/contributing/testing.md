@@ -199,7 +199,7 @@ These keep the documentation and the command line in agreement.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
   what the text says about them.
 - `cargo test -p barca-compile decorator_args` compares the arguments each decorator and helper
-  accepts (`SIGNATURES` in `crates/barca-compile/src/decorator_args.rs`) with the signatures in
+  accepts (`SIGNATURES` in `crates/barca-python/src/decorator_args.rs`) with the signatures in
   `python/barca/__init__.py` and with the "Accepted arguments" tables in `barca docs assets`
   and on the decorators page. Adding an argument means changing all four.
 

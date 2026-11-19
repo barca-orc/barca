@@ -61,11 +61,17 @@ cd examples/basic_app
 barca/
 ├── Cargo.toml                # Rust workspace root
 ├── crates/
-│   ├── barca-model/          # shared values, hashes, terminal output, barca.toml config
-│   ├── barca-compile/        # parser, DAG, planning
+│   ├── barca-model/          # shared values, the graph, hashes, terminal output, barca.toml config
+│   ├── barca-python/         # the Python frontend: parser, fingerprints, linker, loader
+│   ├── barca-compile/        # planning: targets, selection, the planner
 │   ├── barca-db/             # the metadata database
-│   ├── barca-engine/         # coordinator, worker pool and wire protocol
-│   ├── barca-service/           # run orchestration, cache, stores, commands; wires the others
+│   ├── barca-proc/           # child processes and the socket protocol
+│   ├── barca-engine/         # coordinator, worker pool and wire tables
+│   ├── barca-store/          # transfer, gc, backups, the ledger, pins, pauses
+│   ├── barca-decide/         # cache and freshness decisions, the dry run, schedules
+│   ├── barca-run/            # the run orchestrator: executes a plan and records it
+│   ├── barca-analysis/       # read models: status, health, estimates, the rollup
+│   ├── barca-service/        # one operation per command; what the CLI and the server import
 │   ├── barca-cli/            # the `barca` command
 │   │   ├── docs/             # the manual (`barca docs`), compiled into the binary
 │   │   └── snapshots/help/   # `--help` snapshots checked by the contract test
