@@ -9,6 +9,7 @@
 // Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
+mod arg_values;
 #[doc(hidden)]
 pub mod batch_spec;
 #[doc(hidden)]
@@ -16,16 +17,23 @@ pub mod cone;
 pub mod dag;
 #[doc(hidden)]
 pub mod decorator_args;
+mod decorators;
 #[doc(hidden)]
 pub mod definition;
 pub mod discover;
 #[doc(hidden)]
 pub mod env_reads;
+mod file_names;
 pub mod groups;
 #[doc(hidden)]
 pub mod input_params;
+#[cfg(test)]
+mod layering_tests;
 pub mod load;
+mod names;
+mod node_refs;
 pub mod parse;
+mod partition_selection;
 #[doc(hidden)]
 pub mod planner;
 #[doc(hidden)]
@@ -33,6 +41,7 @@ pub mod project_modules;
 pub mod selection;
 #[doc(hidden)]
 pub mod sink_args;
+mod syntax_problem;
 pub mod targets;
 #[doc(hidden)]
 pub mod unrelated_modules;

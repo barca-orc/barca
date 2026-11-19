@@ -63,7 +63,7 @@ pub(crate) struct Module {
     star_exports: OnceCell<Option<Vec<String>>>,
     imported_stars: OnceCell<Vec<String>>,
     /// Where the source stops parsing, if it does; known once it has been parsed.
-    syntax_error: OnceCell<Option<crate::parse::SyntaxProblem>>,
+    syntax_error: OnceCell<Option<crate::syntax_problem::SyntaxProblem>>,
 }
 
 impl Module {
@@ -132,7 +132,10 @@ impl Module {
             Err(e) => {
                 let _ = self
                     .syntax_error
-                    .set(Some(crate::parse::SyntaxProblem::of(&self.source, &e)));
+                    .set(Some(crate::syntax_problem::SyntaxProblem::of(
+                        &self.source,
+                        &e,
+                    )));
             }
         }
         imports.names
@@ -140,12 +143,12 @@ impl Module {
 
     /// Where the module's source stops parsing; `None` when it parses. Parsed at most once,
     /// shared with [`Module::import_modules`].
-    pub(crate) fn syntax_error(&self) -> Option<&crate::parse::SyntaxProblem> {
+    pub(crate) fn syntax_error(&self) -> Option<&crate::syntax_problem::SyntaxProblem> {
         self.syntax_error
             .get_or_init(|| {
                 parse_module(&self.source)
                     .err()
-                    .map(|e| crate::parse::SyntaxProblem::of(&self.source, &e))
+                    .map(|e| crate::syntax_problem::SyntaxProblem::of(&self.source, &e))
             })
             .as_ref()
     }
@@ -833,7 +836,7 @@ fn collect_definitions(source: &str, package: Option<&str>) -> HashMap<String, M
                         Code {
                             source_text: definition.text.into(),
                             uses: uses.uses,
-                            cutoff: crate::parse::is_cutoff_asset(func, &barca),
+                            cutoff: crate::decorators::is_cutoff_asset(func, &barca),
                         }
                     }
                     None => {

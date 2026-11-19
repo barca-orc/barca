@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
+
 ## 0.45.0 (2026-11-19)
 
 - Run counts reflect active worker steps. Queue and history rows summarize multi-target runs, the queue explains its extra requested-run slot, and run details distinguish attempts, steps, planned nodes and unreached work (#1042).

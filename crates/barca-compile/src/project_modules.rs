@@ -298,7 +298,7 @@ pub(crate) struct BrokenImport {
     pub file: String,
     /// The file whose `import` reaches it: the pipeline file or another project module.
     pub imported_by: String,
-    pub problem: crate::parse::SyntaxProblem,
+    pub problem: crate::syntax_problem::SyntaxProblem,
 }
 
 impl ProjectCones {

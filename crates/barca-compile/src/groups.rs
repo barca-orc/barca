@@ -1,5 +1,5 @@
 //! Static organizational metadata, kept separate from dependency edges and hashes.
-use crate::parse::FileNames;
+use crate::file_names::FileNames;
 use barca_model::{
     BarcaError,
     model::{ExtractedNode, NodeRef},
@@ -177,7 +177,7 @@ pub(crate) fn resolve(
             ));
         }
     }
-    let resolver = crate::dag::Resolver::new(nodes);
+    let resolver = crate::node_refs::Resolver::new(nodes);
     let mut groups = Vec::new();
     for d in declarations {
         let reference = |r: &NodeRef| -> Result<String, BarcaError> {

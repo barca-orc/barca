@@ -370,30 +370,6 @@ impl BatchOverride {
         out
     }
 
-    /// Every named node must be in the graph and declare `batch=`. A usage error otherwise.
-    pub fn check(&self, dag: &crate::dag::Dag) -> Result<(), String> {
-        for (name, _) in &self.nodes {
-            let found: Vec<&barca_model::model::DagNode> = dag
-                .graph
-                .node_weights()
-                .filter(|n| names_node(n, name))
-                .collect();
-            let Some(node) = found.first() else {
-                return Err(format!(
-                    "--batch {name}=...: no node named '{name}' in the loaded pipeline"
-                ));
-            };
-            if node.extracted.batch.is_none() {
-                return Err(format!(
-                    "--batch {name}=...: '{name}' does not declare batch=, so its function takes \
-                     a single key; add batch= to it to batch it (barca docs partitions, \
-                     \"Processing many keys per call\")"
-                ));
-            }
-        }
-        Ok(())
-    }
-
     pub fn value_for(&self, node: &barca_model::model::DagNode) -> Option<OverrideValue> {
         self.nodes
             .iter()
@@ -404,11 +380,11 @@ impl BatchOverride {
     }
 }
 
-fn names_node(node: &barca_model::model::DagNode, name: &str) -> bool {
+pub(crate) fn names_node(node: &barca_model::model::DagNode, name: &str) -> bool {
     node.id == name
         || node.extracted.function_name == name
         || node.extracted.explicit_name.as_deref() == Some(name)
-        || crate::targets::short_name(&node.id) == name
+        || crate::names::short_name(&node.id) == name
 }
 
 // ─── Python evaluation ───────────────────────────────────────────────────────
