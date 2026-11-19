@@ -880,7 +880,8 @@ fn pauses_need_a_server(command: &str) -> CliError {
         ErrorKind::Usage,
         format!(
             "error: barca {command} pauses a barca server's scheduled runs, and no server is given\n\
-             Pass --server URL, set BARCA_SERVER, or add `[server] url = \"...\"` to barca.toml \
+             Run it in the project a `barca serve` is running in (without --local), pass \
+             --server URL, set BARCA_SERVER, or add `[server] url = \"...\"` to barca.toml \
              (barca docs incidents). This machine runs nothing on a schedule."
         ),
     )
@@ -891,8 +892,9 @@ fn queue_needs_a_server() -> CliError {
     CliError::from_prose(
         ErrorKind::Usage,
         "error: barca queue reads a barca server's run queue, and no server is given\n\
-         Pass --server URL, set BARCA_SERVER, or add `[server] url = \"...\"` to barca.toml \
-         (barca docs server-mode). This machine's own runs have no queue.",
+         Run it in the project a `barca serve` is running in (without --local), pass --server \
+         URL, set BARCA_SERVER, or add `[server] url = \"...\"` to barca.toml (barca docs \
+         server-mode). This machine's own runs have no queue.",
     )
 }
 
@@ -941,7 +943,8 @@ async fn run_cli(
 
     match cli {
         Cli::Cancel { .. } => Err(usage_error(
-            "cancel needs a server; pass --server URL or configure a server",
+            "cancel needs a server; run it in the project a `barca serve` is running in, pass \
+             --server URL or configure a server",
         )),
         Cli::Queue { .. } => Err(queue_needs_a_server()),
         Cli::Pause { .. } => Err(pauses_need_a_server("pause")),
