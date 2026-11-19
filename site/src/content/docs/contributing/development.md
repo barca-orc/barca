@@ -38,9 +38,10 @@ measuring performance or reproducing a wheel.
 `cargo build --release` builds only the binary, at `target-local/release/barca` in a worktree.
 
 `scripts/check-fast.sh` runs what CI's always-on gates run (changelog, specs, the prek hooks
-including the pinned ruff and ty, clippy with `-D warnings`, the Rust tests, a rebuild of the
-venv's barca when Rust changed, and the Python tests picked from the diff) and prints a pass/fail
-summary; `--python-all` runs the whole Python suite.
+including the pinned ruff and ty, clippy with `-D warnings`, the Rust tests the diff can
+affect, a rebuild of the venv's barca when Rust changed, and the Python tests picked from the
+diff) and prints a pass/fail summary; `--python-all` runs the whole Python suite and
+`--rust-all` every Rust test ([which Rust tests run](/contributing/testing/#which-rust-tests-run)).
 
 ## Run an example
 

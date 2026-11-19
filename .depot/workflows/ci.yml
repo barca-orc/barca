@@ -27,11 +27,20 @@ concurrency:
 # plus rust-tests, which read the site's pages, in a merge group (`site-merge`): no clippy,
 # wheel, Python tests or perf. Mixed changes retain the normal tiers; releases/ci-full override.
 #
+# In a merge group, `rust-tests` runs the Rust tests the diff can affect, not the workspace
+# (scripts/ci-rust-tests.py): the crates that own a changed file, the crates that depend on
+# them (from `cargo metadata`), and the tests that read a changed file from outside their
+# crate (a site page, a specification, a UI fixture, another crate's sources). The job is
+# skipped when the diff can affect none, and it also runs for a UI-only merge group whose diff
+# a Rust test reads. The `changes` job's log and summary say which crates were selected and
+# why. The full tier runs the whole workspace.
+#
 # - fast (a pull request): `checks` (the CHANGELOG and specification checks, the prek hooks:
 #   ruff, ruff format, ty, cargo fmt, version sync, uv lock), `clippy`, `changes` only, so a
 #   PR can enter the merge queue about a minute after a push. Everything else is skipped, and
 #   the aggregators accept those skips.
-# - merge (a merge group): the fast set plus `rust-tests`, the wheel `build`, one `python`
+# - merge (a merge group): the fast set plus `rust-tests` (the affected crates' tests, see
+#   above), the wheel `build`, one `python`
 #   job running the quick subset in scripts/fast-tests.txt and `perf`, the performance
 #   budgets (scripts/perf-gate.py). About two minutes; this is the gate every merge to main
 #   passes.
@@ -64,6 +73,9 @@ env:
         "fast": {"checks", "clippy", "changes"},
         "merge": {"checks", "clippy", "changes", "rust-tests", "build", "python", "perf"},
     }.get(tier)  # None: full, every job runs
+    if runs is not None:
+        # `rust-tests` runs when the diff can affect a Rust test (the changes job's rust_job).
+        (runs.add if os.environ.get("RUST_JOB") == "true" else runs.discard)("rust-tests")
     results = {job: v["result"] for job, v in json.loads(os.environ["RESULTS"]).items()}
     for job, result in results.items():
         print(f"{job}: {result}")
@@ -210,8 +222,9 @@ jobs:
 
   rust-tests:
     needs: [changes]
-    # Tier merge and up, and a site-only merge group (the tests read site pages).
-    if: ${{ needs.changes.outputs.tier == 'merge' || needs.changes.outputs.tier == 'full' || needs.changes.outputs.tier == 'site-merge' }}
+    # Tier full, and a merge group whose diff can affect a Rust test or the UI's generated
+    # types (the changes job decides: rust_job).
+    if: ${{ needs.changes.outputs.rust_job == 'true' }}
     runs-on: depot-ubuntu-24.04-8
     # See clippy (#637).
     timeout-minutes: 30
@@ -240,15 +253,27 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.cachekey }}
       # nextest runs each test in its own process. The crates have no runnable doctests (their
       # code blocks are `text`/`json`), so there is no `cargo test --doc` step.
+      #
+      # The filter is the affected crates' tests (scripts/ci-rust-tests.py; empty in the full
+      # tier: every test). The build stays `--workspace`: cargo does not rebuild a crate
+      # nothing changed under, and `-p` would resolve features for the named packages alone
+      # and rebuild their dependencies. A filter that matches no test fails the step.
       - name: Run unit tests
+        if: ${{ needs.changes.outputs.rust_tests != 'none' }}
         # Includes building the test binaries; the tests themselves take under a minute.
         timeout-minutes: 20
-        run: cargo nextest run --workspace --no-fail-fast
+        env:
+          RUST_FILTER: ${{ needs.changes.outputs.rust_filter }}
+        run: |
+          echo "filter: ${RUST_FILTER:-every test in the workspace}"
+          cargo nextest run --workspace --no-fail-fast ${RUST_FILTER:+-E "$RUST_FILTER"}
 
       # The web UI's wire types are generated from Rust by ts-rs (ui/ARCHITECTURE.md). This is
       # what `pnpm gen:types` runs; any difference from the committed ui/src/lib/generated,
       # a new file included, fails the build.
       - name: The UI's generated types match Rust
+        # When a crate with a `ts` feature, the generated files or the script changed.
+        if: ${{ needs.changes.outputs.rust_types == 'true' }}
         timeout-minutes: 15
         run: |
           bash ui/scripts/regen-types.sh
@@ -331,6 +356,7 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           TIER: ${{ needs.changes.outputs.tier }}
+          RUST_JOB: ${{ needs.changes.outputs.rust_job }}
         run: python3 -c "$CHECK_NEEDS"
 
   # ---- CI / backends ---------------------------------------------------------------------
@@ -350,6 +376,10 @@ jobs:
     timeout-minutes: 10
     outputs:
       tier: ${{ steps.decide.outputs.tier }}
+      rust_job: ${{ steps.decide.outputs.rust_job }}
+      rust_tests: ${{ steps.decide.outputs.rust_tests }}
+      rust_filter: ${{ steps.decide.outputs.rust_filter }}
+      rust_types: ${{ steps.decide.outputs.rust_types }}
       emulators: ${{ steps.decide.outputs.emulators }}
       duckdb1: ${{ steps.decide.outputs.duckdb1 }}
       checkpoint: ${{ steps.decide.outputs.checkpoint }}
@@ -376,6 +406,26 @@ jobs:
             printf 'emulators=false\nduckdb1=false\ncheckpoint=false\n' >> "$GITHUB_OUTPUT"
             echo "tier $TIER: the optional parts run in the full tier (a release)" > why.txt
           fi
+          # The Rust tests the diff can affect (the whole workspace in the full tier, and when
+          # the selection cannot be computed), and whether this tier runs `rust-tests` at all:
+          # always in the full tier, never on a pull request, otherwise when the diff selects
+          # a test or the UI's generated types.
+          python3 scripts/test-ci-rust-tests.py
+          if [ "$TIER" = full ] || [ -z "$CI_BASE_SHA" ]; then
+            python3 scripts/ci-rust-tests.py --all > rust.txt 2>> why.txt
+          else
+            python3 scripts/ci-rust-tests.py --base "$CI_BASE_SHA" > rust.txt 2>> why.txt
+          fi
+          cat rust.txt >> "$GITHUB_OUTPUT"
+          RUST_JOB=false
+          if [ "$TIER" = full ]; then
+            RUST_JOB=true
+          elif [ "$GITHUB_EVENT_NAME" = merge_group ] && ! grep -qx 'rust_tests=none' rust.txt; then
+            RUST_JOB=true
+          elif [ "$GITHUB_EVENT_NAME" = merge_group ] && grep -qx 'rust_types=true' rust.txt; then
+            RUST_JOB=true
+          fi
+          echo "rust_job=$RUST_JOB" >> "$GITHUB_OUTPUT"
           cat why.txt "$GITHUB_OUTPUT"
           { echo '```'; cat why.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
