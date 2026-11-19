@@ -127,8 +127,14 @@ pub(crate) async fn node_status(
         .map_err(|e| ApiError::run(e, context("status", state)))?;
     let mut result = (*kept).clone();
     crate::handlers::attach_live_schedules(state, &mut result.nodes, dag, &snapshot.path).await?;
+    let now = chrono::Utc::now();
     let running =
-        crate::handlers::attach_health(state, &mut result, dag, db_state, &snapshot.path).await?;
+        crate::handlers::attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now)
+            .await?;
+    // `as_of` is in the body, so the clock to the second would change the `ETag` every second
+    // and an unchanged poll would never be a `304`. It is the start of the minute, the instant
+    // `gap_seconds` is read at; nothing else in the body moves with the second.
+    result.as_of = barca_core::time::rfc3339_secs(barca_core::causes::gap_instant(now.timestamp()));
     if let Some(files) = files {
         let files: std::collections::HashSet<_> = files.split(',').collect();
         result.nodes.retain(|n| {
