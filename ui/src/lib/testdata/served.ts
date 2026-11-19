@@ -62,5 +62,8 @@ export function blockedBy(by: string): Pick<NodeState, Verdict | 'root'> {
   return { ...verdict(served_row('sales_report')), root: { id: `failure:${by}`, kind: 'failure', node: by } }
 }
 
-/** What the server says of a node whose schedule is late: the generated project's `revenue_hourly`. */
-export const LATE_SCHEDULE: Pick<NodeState, Verdict> = verdict(served_row('revenue_hourly'))
+/** What the server says of a node whose schedule is late: the generated project's `nightly_export`. */
+export const LATE_SCHEDULE: Pick<NodeState, Verdict> = verdict(served_row('nightly_export'))
+if (LATE_SCHEDULE.health_reason !== 'schedule_late' || served_row('sales_report').health !== 'blocked') {
+  throw new Error('the generated project no longer has a late schedule (nightly_export) or a blocked node (sales_report): point LATE_SCHEDULE and blockedBy at rows that are')
+}

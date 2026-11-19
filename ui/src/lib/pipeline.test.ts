@@ -19,8 +19,8 @@ describe('pipelineSummaries', () => {
   const served = (...files: FileRollup[]) => new Map(files.map((f) => [f.file, f]))
   const files = served(
     fileSums('other/p01_dims.py', 'ok'),
-    fileSums('pipeline/p01_dims.py', 'behind', { nodes: 2 }),
-    fileSums('pipeline/p02_reconcile.py', 'failing', { nodes: 2 }),
+    fileSums('pipeline/p01_dims.py', 'behind', { nodes: 2, causes: causeCounts({ catching_up: 2 }) }),
+    fileSums('pipeline/p02_reconcile.py', 'failing', { nodes: 2, causes: causeCounts({ failing: 2 }) }),
   )
 
   it('one entry per source file, in file order, with its node count', () => {
@@ -41,9 +41,9 @@ describe('pipelineSummaries', () => {
   it('shows each file in the health map\'s words: the first cause its sums in the rollup have a node of, fresh, or its run work', () => {
     const byFile = Object.fromEntries(pipelineSummaries(files, nodes, 'asset').map((p) => [p.file, p.shown?.label]))
     expect(byFile).toEqual({ 'other/p01_dims.py': 'fresh', 'pipeline/p01_dims.py': 'catching up', 'pipeline/p02_reconcile.py': 'failing' })
-    expect(fileShown(fileSums('a.py', 'failing', { running: 2 }))).toEqual({ glyph: 'running', label: '2 running', part: null, live: true })
+    expect(fileShown(fileSums('a.py', 'failing', { running: 2, causes: causeCounts({ failing: 1 }) }))).toEqual({ glyph: 'running', label: '2 running', part: null, live: true })
     // A file a failure holds reads failing, as the map counts it; the first cause in the served order leads.
-    expect(fileShown(fileSums('a.py', 'blocked'))).toMatchObject({ glyph: 'failed', label: 'failing', part: 'failing', live: false })
+    expect(fileShown(fileSums('a.py', 'blocked', { causes: causeCounts({ failing: 1 }) }))).toMatchObject({ glyph: 'failed', label: 'failing', part: 'failing', live: false })
     expect(fileShown(fileSums('a.py', 'behind', { nodes: 5, causes: causeCounts({ catching_up: 3, overdue: 1 }) }))).toMatchObject({ label: 'overdue', part: 'overdue' })
   })
 
@@ -64,7 +64,7 @@ describe('pipelineSummaries', () => {
     expect(pending.map((p) => p.total)).toEqual([1, 2, 2])
     expect(pending.every((p) => p.shown === null)).toBe(true)
     // A file the rollup has no sums for (out of its scope) has no state either.
-    const partial = pipelineSummaries(served(fileSums('pipeline/p02_reconcile.py', 'failing')), nodes, 'asset')
+    const partial = pipelineSummaries(served(fileSums('pipeline/p02_reconcile.py', 'failing', { causes: causeCounts({ failing: 1 }) })), nodes, 'asset')
     expect(partial.find((p) => p.file === 'pipeline/p02_reconcile.py')?.shown?.label).toBe('failing')
     expect(partial.find((p) => p.file === 'pipeline/p01_dims.py')?.shown).toBeNull()
   })
