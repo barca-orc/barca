@@ -54,7 +54,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a word a log line's severity is read from",
     ),
     (
-        "report.rs",
+        "results.rs",
         "cached",
         "also the `cached` count key of a partitioned target's summary",
     ),
