@@ -300,7 +300,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let mut resolved = barca_core::config::resolve_in(None, root.path()).unwrap();
             resolved.server_auth = AuthMode::Token;
-            let state = AppState::new(crate::ServeConfig {
+            let state = crate::state::AppState::new(crate::ServeConfig {
                 files: Vec::new(),
                 host: "127.0.0.1".parse().unwrap(),
                 port: 0,

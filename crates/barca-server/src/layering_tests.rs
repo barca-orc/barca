@@ -1,23 +1,24 @@
-//! The module graph inside this crate (#1056, track D). Cargo checks nothing between the modules
-//! of one crate, so this test does: every module has a row in [`LAYERS`], and non-test code may
+//! The module graph inside this crate (#1056, E1). Cargo checks nothing between the modules of
+//! one crate, so this test does: every module has a row in [`LAYERS`], and non-test code may
 //! name another module (`crate::<module>`) only when that module is in a row above its own.
 //! Because a row never uses itself or a row below, the modules cannot form a dependency cycle.
 //!
 //! ```text
-//! leaf  <  frontend (Python source to extracted nodes)  <  graph  <  planning  <  load
+//! leaf  <  parts (each owns its state, none knows `AppState`)  <  state  <  views  <  runs
+//!       <  scheduler  <  route families  <  routes
 //! ```
 //!
-//! One rule on top of the order: a planning module does not use a frontend module. It reads what
-//! the frontend found from the graph, which is what lets the frontend become its own crate.
-//!
 //! A failure is fixed by moving the item down (a helper or a type to a module below both of its
-//! users) or by passing it in as a value. [`ALLOWED`] lists the edges that break a rule today; it
-//! only shrinks: an entry whose edge is gone, or no longer breaks a rule, fails the test until it
-//! is deleted. `docs/engineering/compile-layering.md` has the table in prose and what is left.
+//! users) or by passing it in as a value. [`ALLOWED`] lists the edges that break the order
+//! today; it only shrinks: an entry whose edge is gone, or no longer breaks it, fails the test
+//! until it is deleted. `docs/engineering/server-layering.md` has the table in prose.
 //!
 //! What counts as an edge: a `crate::<module>` path (or `super::<module>`, which is the same
 //! thing in a top-level module file) outside comments, string literals and `#[cfg(test)]` items,
 //! in `src/<module>.rs` or `src/<module>/`. Files named `tests.rs` or `*_tests.rs` are test code.
+//! `lib.rs` wires the modules and is not one of them.
+//!
+//! The scan is the one in `crates/barca-compile/src/layering_tests.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -25,61 +26,77 @@ use std::path::Path;
 /// The layer of each row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Layer {
-    /// Vocabulary with no Python in it, shared by every layer.
+    /// Vocabulary and helpers that hold no server state.
     Leaf,
-    /// Python source in, extracted nodes and their fingerprints out.
-    Frontend,
-    /// The validated graph.
-    Graph,
-    /// From a graph to an execution plan, for the targets and keys a command names.
-    Planning,
-    /// Drives the others: project files in, a graph out.
-    Load,
+    /// One stateful part each: a struct of its own that knows nothing of `AppState`.
+    Part,
+    /// `AppState`: the parts composed, and the sub-states handlers take.
+    State,
+    /// What several parts say together, read by more than one route family.
+    View,
+    /// A run's life: admission, the queue's dispatch, execution, its record.
+    Runs,
+    /// The cron scheduler, which starts runs.
+    Scheduler,
+    /// The handlers of one route family each, and the background tasks.
+    Routes,
+    /// The router.
+    Router,
 }
 
 /// Every module, top row first. A module may use the modules of the rows above its own.
 const LAYERS: &[(Layer, &[&str])] = &[
-    (Layer::Leaf, &["names", "partition_selection"]),
     (
-        Layer::Frontend,
+        Layer::Leaf,
         &[
-            "arg_values",
-            "decorator_args",
-            "env_reads",
-            "syntax_problem",
-            "unrelated_modules",
+            "auth",
+            "config",
+            "error",
+            "progress",
+            "project_socket",
+            "resolve",
+            "respond",
+            "run_model",
+            "snapshot",
+            "ui",
+            "views",
         ],
     ),
+    (Layer::Part, &["auth_http", "queue", "replay", "sources"]),
+    (Layer::Part, &["read_cache"]),
+    (Layer::Part, &["sql_helper"]),
+    (Layer::State, &["state"]),
+    (Layer::View, &["guards", "running"]),
+    (Layer::View, &["schedule_view"]),
+    (Layer::View, &["queue_view"]),
+    (Layer::View, &["health_view"]),
+    (Layer::Runs, &["runs"]),
+    (Layer::Scheduler, &["scheduler"]),
     (
-        Layer::Frontend,
+        Layer::Routes,
         &[
-            "batch_spec",
-            "file_names",
-            "input_params",
-            "node_refs",
-            "sink_args",
-            "unused_inputs",
+            "asset_pauses",
+            "assets",
+            "fallback",
+            "gc",
+            "inspect",
+            "ledger",
+            "pins",
+            "queue_routes",
+            "reset",
+            "schedule_routes",
+            "sql_query",
+            "state_routes",
+            "telemetry",
+            "watch",
         ],
     ),
-    (Layer::Frontend, &["decorators"]),
-    (Layer::Frontend, &["definition", "groups"]),
-    (Layer::Frontend, &["cone"]),
-    (Layer::Frontend, &["parse", "project_modules"]),
-    (Layer::Graph, &["dag"]),
-    (Layer::Planning, &["planner"]),
-    (Layer::Planning, &["selection", "warnings"]),
-    (Layer::Planning, &["targets"]),
-    (Layer::Load, &["discover", "load"]),
+    (Layer::Router, &["routes"]),
 ];
 
-/// Today's edges that break a rule: `(from, to, the symbols behind it)`. Delete an entry when
-/// its edge is cut; never add one.
-const ALLOWED: &[(&str, &str, &str)] = &[
-    // `--batch` is a per-run value kept beside the reader of `batch=`, because the parser
-    // validates `Schedule(batch=...)` with the same grammar. Splitting the value from the
-    // reader is part of giving planning an IR of its own (D2).
-    ("targets", "batch_spec", "BatchOverride, names_node"),
-];
+/// Today's edges that break the order: `(from, to, the symbols behind it)`. Delete an entry
+/// when its edge is cut; never add one.
+const ALLOWED: &[(&str, &str, &str)] = &[];
 
 /// `source` with comments and the contents of string and char literals removed, so that a path
 /// in a doc comment or a message is not read as code. Line structure is kept.
@@ -419,22 +436,15 @@ fn row_of(module: &str) -> Option<(usize, Layer)> {
 fn broken_rule(from: &str, to: &str) -> Option<String> {
     let (from_row, from_layer) = row_of(from)?;
     let (to_row, to_layer) = row_of(to)?;
-    if to_row >= from_row {
-        return Some(if to_row == from_row {
+    (to_row >= from_row).then(|| {
+        if to_row == from_row {
             format!("both are in row {from_row} of LAYERS ({from_layer:?})")
         } else {
             format!(
                 "{to} ({to_layer:?}, row {to_row}) is below {from} ({from_layer:?}, row {from_row})"
             )
-        });
-    }
-    if from_layer == Layer::Planning && to_layer == Layer::Frontend {
-        return Some(
-            "planning reads the frontend's results from the graph, not from the frontend"
-                .to_string(),
-        );
-    }
-    None
+        }
+    })
 }
 
 #[test]
@@ -486,11 +496,37 @@ fn modules_use_only_the_rows_above_them() {
 
     assert!(
         problems.is_empty(),
-        "barca-compile's module layering (crates/barca-compile/src/layering_tests.rs, \
-         docs/engineering/compile-layering.md):\n{}\nMove the item to a module below both of \
+        "barca-server's module layering (crates/barca-server/src/layering_tests.rs, \
+         docs/engineering/server-layering.md):\n{}\nMove the item to a module below both of \
          its users, or pass it in as a value. ALLOWED only shrinks.",
         problems.join("\n")
     );
+}
+
+/// The stateful parts are below `state`, so none of them can name `AppState`: checked by the
+/// order, and said here so that a reordering that lifts one above `state` is a decision.
+#[test]
+fn no_stateful_part_is_above_the_state_that_composes_it() {
+    let (state_row, _) = row_of("state").unwrap();
+    for (row, (layer, modules)) in LAYERS.iter().enumerate() {
+        if matches!(layer, Layer::Leaf | Layer::Part) {
+            assert!(row < state_row, "{modules:?} must stay above `state` in LAYERS");
+        }
+    }
+}
+
+#[test]
+fn a_wrong_way_edge_is_named() {
+    // Up the table and within a row.
+    assert!(broken_rule("read_cache", "state").is_some());
+    assert!(broken_rule("queue", "runs").is_some());
+    assert!(broken_rule("inspect", "assets").is_some());
+    assert!(broken_rule("runs", "scheduler").is_some());
+    // Down the table.
+    assert!(broken_rule("state", "read_cache").is_none());
+    assert!(broken_rule("runs", "queue").is_none());
+    assert!(broken_rule("scheduler", "runs").is_none());
+    assert!(broken_rule("routes", "inspect").is_none());
 }
 
 #[test]
@@ -540,28 +576,4 @@ fn after() { crate::eta::last() }
         crate_paths("use super::delta::D;", false),
         Vec::<String>::new()
     );
-}
-
-#[test]
-fn a_wrong_way_edge_is_named() {
-    // Up the table, within a row, and from planning straight into the frontend.
-    assert!(broken_rule("parse", "dag").is_some());
-    assert!(broken_rule("definition", "groups").is_some());
-    assert!(broken_rule("planner", "parse").is_some());
-    // Down the table, and planning on a leaf and on the graph.
-    assert!(broken_rule("dag", "definition").is_none());
-    assert!(broken_rule("selection", "partition_selection").is_none());
-    assert!(broken_rule("targets", "dag").is_none());
-    assert!(broken_rule("load", "parse").is_none());
-}
-
-#[test]
-#[ignore]
-fn dump_edges() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let (modules, edges) = edges(&src);
-    println!("MODULES {}", modules.iter().cloned().collect::<Vec<_>>().join(" "));
-    for ((from, to), symbols) in &edges {
-        println!("EDGE {from} {to} {}", symbols.iter().cloned().collect::<Vec<_>>().join(","));
-    }
 }

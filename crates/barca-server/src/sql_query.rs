@@ -48,7 +48,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::io::AsyncBufReadExt;
 use tokio::time::Instant;
 
 /// Rows answered when the request names no `limit`.
@@ -180,7 +179,7 @@ fn nodes(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
             .dag
             .as_ref()
             .expect("a graph table is given the graph");
-        let status = crate::inspect::node_status(
+        let status = crate::health_view::node_status(
             &inputs.state,
             dag,
             &inputs.db,
@@ -203,7 +202,7 @@ fn schedules(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
             .dag
             .as_ref()
             .expect("a graph table is given the graph");
-        let status = crate::inspect::node_status(
+        let status = crate::health_view::node_status(
             &inputs.state,
             dag,
             &inputs.db,
@@ -1011,7 +1010,7 @@ mod tests {
              for _ in range(4096):\n    sys.stdout.write(chunk)\n",
         );
         let started = std::time::Instant::now();
-        let Err(lost) = Process::start(&python).await else {
+        let Err(lost) = Process::start(&python, &shapes()).await else {
             panic!("a helper that sends 4GB on one line was accepted");
         };
         let Lost::Dead(why) = lost else {
@@ -1031,7 +1030,7 @@ mod tests {
             "import time\nprint('{\"ready\": true}', flush=True)\ntime.sleep(600)\n",
         );
         let started = std::time::Instant::now();
-        let Err(Lost::Dead(why)) = Process::start(&python).await else {
+        let Err(Lost::Dead(why)) = Process::start(&python, &shapes()).await else {
             panic!("a helper that never loads was accepted");
         };
         assert!(why.contains("did not load barca.runs within"), "{why}");

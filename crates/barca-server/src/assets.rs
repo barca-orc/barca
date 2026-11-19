@@ -2,9 +2,10 @@
 //! and schema.
 
 use crate::error::ApiError;
+use crate::read_cache::Reads;
 use crate::schedule_view::next_fires;
 use crate::snapshot::SnapshotDb;
-use crate::state::AppState;
+use crate::state::{AppState, Runs};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use barca_core::db;
@@ -13,25 +14,21 @@ use barca_core::results::PlanResult;
 use serde_json::{Value, json};
 
 /// `GET /plan` — execution plan for the server's files (cache-aware).
-pub async fn plan(State(state): State<AppState>) -> Result<Json<PlanResult>, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
-    let cfg = &state.config.resolved;
-    let sizing = barca_core::sizing(
-        cfg.capacity,
-        cfg.pool_size,
-        state
-            .runs.capacity
-            .as_ref()
-            .map(|c| (c.total() as usize, c.source())),
-    );
+pub async fn plan(
+    State(reads): State<Reads>,
+    State(runs): State<Runs>,
+) -> Result<Json<PlanResult>, ApiError> {
+    let dag = reads.loaded_dag().await?;
+    let cfg = &reads.config.resolved;
+    let sizing = barca_core::sizing(cfg.capacity, cfg.pool_size, runs.server_capacity());
     Ok(Json(queries::plan_from_dag(&dag, sizing)))
 }
 
 /// `GET /assets` — every node as `barca list --json` shows it: `freshness` a lowercase
 /// word, the cron expression in `schedule` and the next fire time (this machine's local
 /// time) in `next_fire` for a scheduled node.
-pub async fn assets(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+pub async fn assets(State(reads): State<Reads>) -> Result<Json<Vec<Value>>, ApiError> {
+    let dag = reads.loaded_dag().await?;
     let result = queries::list_assets_from_dag(&dag);
     let next_fires = next_fires(&dag);
     let nodes = result
@@ -54,11 +51,11 @@ pub struct SchemaQuery {
 /// Reads artifact shapes on demand rather than on every `/state` poll. Uses the
 /// same safe inspector as `barca status`: parquet footers, JSON, pickle opcodes.
 pub async fn asset_schema(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<SchemaQuery>,
 ) -> Result<Json<Vec<barca_core::status::NodeStatus>>, ApiError> {
-    let dag = state.reads.inspect_dag().await?;
+    let dag = reads.inspect_dag().await?;
     let summaries = queries::list_assets_from_dag(&dag);
     let matches = crate::resolve::matching(&summaries, |s| s.id.as_str(), &name);
     let summary = match matches.len() {
@@ -68,17 +65,17 @@ pub async fn asset_schema(
     };
     let id = summary.id.clone();
     let inputs = &summary.inputs;
-    let db_state = state.reads.db_state();
-    let snapshot = state.reads.snapshot_db().await?;
-    let mut cfg = state.config.resolved.clone();
+    let db_state = reads.db_state();
+    let snapshot = reads.snapshot_db().await?;
+    let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let mut nodes = state.reads.whole_status(&dag, &db_state, &snapshot)
+    let mut nodes = reads.whole_status(&dag, &db_state, &snapshot)
         .await?
         .nodes
         .clone();
     nodes.retain(|n| n.id == id || inputs.contains(&n.id));
     barca_core::status::read_schemas(
-        &state.config.python,
+        &reads.config.python,
         &cfg,
         &mut nodes,
         query.sample.unwrap_or(0).min(MAX_SCHEMA_SAMPLE),
@@ -146,8 +143,8 @@ async fn running_node(
 
 /// Organizational metadata; never part of the execution graph.
 pub async fn groups(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
 ) -> Result<Json<Vec<barca_core::groups::NodeGroup>>, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+    let dag = reads.loaded_dag().await?;
     Ok(Json(dag.groups.clone()))
 }

@@ -5,7 +5,8 @@
 
 use crate::error::ApiError;
 use crate::respond::{json_text, stdout_of};
-use crate::state::AppState;
+use crate::read_cache::Reads;
+use crate::state::{AppState, Lifecycle};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -24,8 +25,8 @@ fn root() -> Option<String> {
 }
 
 /// `GET /list` — `barca list --json --all` (the client applies `--limit` and `--fields`).
-pub async fn list(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+pub async fn list(State(reads): State<Reads>) -> Result<Response, ApiError> {
+    let dag = reads.loaded_dag().await?;
     let assets = barca_core::queries::list_assets_from_dag(&dag);
     let next_fires = crate::schedule_view::next_fires(&dag);
     let rendered = barca_core::report::render_list(
@@ -81,7 +82,7 @@ pub async fn nodes(
     let db_state = state.reads.db_state();
     let snapshot = state.reads.snapshot_db().await?;
     let sample = query.sample.unwrap_or(0);
-    let mut result = node_status(
+    let mut result = crate::health_view::node_status(
         &state,
         &dag,
         &db_state,
@@ -100,63 +101,10 @@ pub async fn nodes(
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }
 
-/// `barca status` for `targets` (none: every node) over `dag` and the database in state
-/// `db_state`, each scheduled node with its scheduler's view and every node with its health:
-/// the nodes of `GET /nodes` and the rows of `barca.nodes` (`POST /sql/query`).
-pub(crate) async fn node_status(
-    state: &AppState,
-    dag: &std::sync::Arc<barca_core::dag::Dag>,
-    db_state: &crate::read_cache::Stamp,
-    snapshot: &std::sync::Arc<crate::snapshot::SnapshotDb>,
-    targets: Vec<String>,
-    sample: usize,
-    files: Option<&str>,
-) -> Result<barca_core::status::StatusResult, ApiError> {
-    let mut cfg = state.config.resolved.clone();
-    cfg.db_path = snapshot.path.clone();
-    let python = state.config.python.clone();
-    let (graph, names, kept_snapshot) = (dag.clone(), targets.clone(), snapshot.clone());
-    // Kept until the sources or the database change ([`crate::read_cache`]); the live schedule
-    // state and the filter are applied to each answer.
-    let kept = state
-        .reads.cached_status(dag, db_state, (targets, sample, true), move || async move {
-            let _snapshot = kept_snapshot;
-            barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true).await
-        })
-        .await
-        .map_err(|e| ApiError::run(e, context("status", state)))?;
-    let mut result = (*kept).clone();
-    let now = chrono::Utc::now();
-    let running =
-        crate::health_view::attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now)
-            .await?;
-    // `as_of` is in the body, so the clock to the second would change the `ETag` every second
-    // and an unchanged poll would never be a `304`. It is the start of the minute, the instant
-    // `gap_seconds` is read at; nothing else in the body moves with the second.
-    result.as_of = barca_core::time::rfc3339_secs(barca_core::causes::gap_instant(now.timestamp()));
-    if let Some(files) = files {
-        let files: std::collections::HashSet<_> = files.split(',').collect();
-        result.nodes.retain(|n| {
-            n.id.rsplit_once(':')
-                .is_some_and(|(f, _)| files.contains(f))
-        });
-        result.data_coverage = barca_core::health::DataCoverage::of(&result.nodes);
-        let actions = result
-            .rollup
-            .iter()
-            .flat_map(|entry| &entry.held_by)
-            .map(|held| (held.root.clone(), held.action_kind))
-            .collect();
-        result.rollup = Some(barca_core::rollup::total(&result.nodes, &running, &actions));
-        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
-    }
-    Ok(result)
-}
-
-fn context(command: &'static str, state: &AppState) -> Context {
+fn context(command: &'static str, reads: &Reads) -> Context {
     Context {
         command,
-        files: state.config.files.clone(),
+        files: reads.config.files.clone(),
     }
 }
 
@@ -233,7 +181,7 @@ pub struct SqlViewsQuery {
 /// over those store paths. The server runs no SQL over results or files
 /// ([`crate::sql_query`] answers queries over barca's own tables).
 pub async fn sql_views(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Query(query): Query<SqlViewsQuery>,
 ) -> Result<Json<barca_core::sql::Catalog>, ApiError> {
     let files: Vec<String> = query
@@ -244,19 +192,19 @@ pub async fn sql_views(
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect();
-    let dag = state.reads.inspect_dag().await?;
-    let snapshot = state.reads.snapshot_db().await?;
-    let mut cfg = state.config.resolved.clone();
+    let dag = reads.inspect_dag().await?;
+    let snapshot = reads.snapshot_db().await?;
+    let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let catalog =
-        barca_core::sql::catalog_from_dag(&cfg, &dag, &state.config.python, |id: &str| {
+        barca_core::sql::catalog_from_dag(&cfg, &dag, &reads.config.python, |id: &str| {
             files.is_empty()
                 || id
                     .split_once(':')
                     .is_some_and(|(file, _)| files.iter().any(|f| f == file))
         })
         .await
-        .map_err(|e| ApiError::run(e, context("sql", &state)))?;
+        .map_err(|e| ApiError::run(e, context("sql", &reads)))?;
     Ok(Json(catalog))
 }
 
@@ -274,12 +222,12 @@ pub struct MaterializationsQuery {
 /// `GET /materializations?limit=N&offset=M` — step results, newest first, one page at a time:
 /// `barca sql`'s `barca.materializations`.
 pub async fn materializations(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Query(query): Query<MaterializationsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let limit = query.limit.unwrap_or(1000).min(MATERIALIZATIONS_MAX);
     let offset = query.offset.unwrap_or(0);
-    let snapshot = state.reads.snapshot_db().await?;
+    let snapshot = reads.snapshot_db().await?;
     let (rows, total) = barca_core::db::read_step_rows(&snapshot.path, limit, offset).await?;
     Ok(Json(json!({
         "materializations": rows,
@@ -305,14 +253,14 @@ pub struct PartitionsQuery {
 
 /// `GET /assets/{name}/partitions` — a node's keys with a recorded attempt, each with its latest.
 pub async fn partitions(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<PartitionsQuery>,
 ) -> Result<Json<barca_core::db::PartitionKeys>, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+    let dag = reads.loaded_dag().await?;
     let id = barca_core::targets::find_target_id(&dag, &name)
-        .map_err(|e| ApiError::run(e, context("partitions", &state)))?;
-    let snapshot = state.reads.snapshot_db().await?;
+        .map_err(|e| ApiError::run(e, context("partitions", &reads)))?;
+    let snapshot = reads.snapshot_db().await?;
     let filter = barca_core::db::PartitionKeysFilter {
         status: query.status,
         query: query.q.filter(|q| !q.is_empty()),
@@ -328,35 +276,35 @@ pub async fn partitions(
 /// keys and the overview routes all read, so a filter costs a pass over the grid and no
 /// database read.
 async fn kept_partition_grid(
-    state: &AppState,
+    reads: &Reads,
     name: &str,
 ) -> Result<std::sync::Arc<barca_core::partition_grid::PartitionGrid>, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+    let dag = reads.loaded_dag().await?;
     let id = barca_core::partition_grid::partitioned_target(&dag, name)
-        .map_err(|e| ApiError::run(e, context("status", state)))?;
-    let db = state.reads.db_state();
-    if let Some(grid) = state.reads.kept_grid(&dag, &db, &id) {
+        .map_err(|e| ApiError::run(e, context("status", &reads)))?;
+    let db = reads.db_state();
+    if let Some(grid) = reads.kept_grid(&dag, &db, &id) {
         return Ok(grid);
     }
-    let snapshot = state.reads.snapshot_db().await?;
-    let mut cfg = state.config.resolved.clone();
+    let snapshot = reads.snapshot_db().await?;
+    let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let grid = std::sync::Arc::new(
         barca_core::partition_grid::partition_grid(&cfg, &dag, &id)
             .await
-            .map_err(|e| ApiError::run(e, context("partitions grid", state)))?,
+            .map_err(|e| ApiError::run(e, context("partitions grid", &reads)))?,
     );
-    state.reads.keep_grid(&dag, &db, grid.clone());
+    reads.keep_grid(&dag, &db, grid.clone());
     Ok(grid)
 }
 
 /// `GET /assets/{name}/partitions/grid` — every key of a partitioned node: its state as the
 /// dry run decides it, across the node's chain, and its latest attempt, in columns.
 pub async fn partition_grid(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
 ) -> Result<Json<std::sync::Arc<barca_core::partition_grid::PartitionGrid>>, ApiError> {
-    Ok(Json(kept_partition_grid(&state, &name).await?))
+    Ok(Json(kept_partition_grid(&reads, &name).await?))
 }
 
 /// The most keys one `GET /assets/{name}/partitions/keys` lists.
@@ -368,7 +316,7 @@ pub const KEYS_PAGE_MAX: usize = 1000;
 /// [`KEYS_PAGE_MAX`]). `value` repeats, one per dimension. A filter the node does not have (a
 /// dimension, a range value, an error group) is a 400 saying what it has.
 pub async fn partition_keys_page(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(params): Query<Vec<(String, String)>>,
 ) -> Result<Json<barca_core::key_query::KeysPage>, ApiError> {
@@ -407,7 +355,7 @@ pub async fn partition_keys_page(
         limit: Some(number("limit")?.unwrap_or(100).min(KEYS_PAGE_MAX)),
     })
     .map_err(ApiError::BadRequest)?;
-    let grid = kept_partition_grid(&state, &name).await?;
+    let grid = kept_partition_grid(&reads, &name).await?;
     // A pass over every key of the node, and a sort when an order is asked for: off the
     // async threads.
     let page = tokio::task::spawn_blocking(move || grid.keys_page(&query))
@@ -426,11 +374,11 @@ pub struct PartitionOverviewQuery {
 /// `GET /assets/{name}/partitions/overview?limit=N` — `barca status NODE --overview --json`:
 /// the node's keys in one picture: counts, what is wrong and where, and the grid's rows.
 pub async fn partition_overview(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<PartitionOverviewQuery>,
 ) -> Result<Json<barca_core::key_query::KeysOverview>, ApiError> {
-    let grid = kept_partition_grid(&state, &name).await?;
+    let grid = kept_partition_grid(&reads, &name).await?;
     let overview = tokio::task::spawn_blocking(move || grid.overview(query.limit))
         .await
         .map_err(|e| ApiError::BadRequest(format!("the overview did not finish: {e}")))?;
@@ -448,20 +396,20 @@ pub struct PartitionKeyQuery {
 /// `GET /assets/{name}/partitions/key?key=...` — one key: its state in each node of the chain,
 /// its latest attempts, and the shape of its result and of what it read.
 pub async fn partition_key(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<PartitionKeyQuery>,
 ) -> Result<Json<barca_core::partition_grid::PartitionKeyDetail>, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+    let dag = reads.loaded_dag().await?;
     let id = barca_core::targets::find_target_id(&dag, &name)
-        .map_err(|e| ApiError::run(e, context("partition key", &state)))?;
-    let snapshot = state.reads.snapshot_db().await?;
-    let mut cfg = state.config.resolved.clone();
+        .map_err(|e| ApiError::run(e, context("partition key", &reads)))?;
+    let snapshot = reads.snapshot_db().await?;
+    let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let detail = barca_core::partition_grid::partition_key_detail(
         &cfg,
         &dag,
-        &state.config.python,
+        &reads.config.python,
         &id,
         &query.key,
         query
@@ -470,7 +418,7 @@ pub async fn partition_key(
             .min(barca_core::partition_grid::KEY_SAMPLE_MAX),
     )
     .await
-    .map_err(|e| ApiError::run(e, context("partition key", &state)))?;
+    .map_err(|e| ApiError::run(e, context("partition key", &reads)))?;
     detail.map(Json).ok_or_else(|| {
         ApiError::NotFound(barca_core::partition_grid::no_such_key(&name, &query.key))
     })
@@ -478,13 +426,13 @@ pub async fn partition_key(
 
 /// `GET /stats/{name}` — `barca stats --json`.
 pub async fn stats(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
 ) -> Result<Response, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+    let dag = reads.loaded_dag().await?;
     let id = barca_core::targets::find_target_id(&dag, &name)
-        .map_err(|e| ApiError::run(e, context("stats", &state)))?;
-    let snapshot = state.reads.snapshot_db().await?;
+        .map_err(|e| ApiError::run(e, context("stats", &reads)))?;
+    let snapshot = reads.snapshot_db().await?;
     let stats = barca_core::db::get_asset_stats(&snapshot.path, &id).await?;
     let rendered = barca_core::report::render_stats(&stats, true, None);
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
@@ -493,10 +441,13 @@ pub async fn stats(
 /// `GET /project` — the deployed tree: `{api_version, root, env, deployed_at, commit,
 /// files: [{path, sha256}]}`. The files are hashed on each request, so an edit (or a
 /// `--watch` reload) shows at once.
-pub async fn project(State(state): State<AppState>) -> Result<Json<Project>, ApiError> {
+pub async fn project(
+    State(reads): State<Reads>,
+    State(lifecycle): State<Lifecycle>,
+) -> Result<Json<Project>, ApiError> {
     let root = root();
     let mut files = Vec::new();
-    for file in &state.config.files {
+    for file in &reads.config.files {
         let bytes = std::fs::read(file).map_err(|e| {
             ApiError::Barca(barca_core::BarcaError::Io(std::io::Error::new(
                 e.kind(),
@@ -517,8 +468,8 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Project>, Api
     }
     Ok(Json(Project {
         api_version: barca_core::outcome::API_VERSION,
-        env: state.config.resolved.env.clone(),
-        deployed_at: barca_core::outcome::rfc3339(state.lifecycle.started_at),
+        env: reads.config.resolved.env.clone(),
+        deployed_at: barca_core::outcome::rfc3339(lifecycle.started_at),
         commit: root.as_deref().and_then(git_commit),
         root,
         files,
@@ -526,7 +477,7 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Project>, Api
         // when no Datadog site is configured and the integration is off.
         telemetry: ProjectTelemetry {
             datadog_url: barca_core::config::datadog_app_url(
-                &state.config.resolved.project_root,
+                &reads.config.resolved.project_root,
                 barca_core::telemetry::is_on("datadog"),
             )
             .ok()
@@ -577,10 +528,10 @@ fn git_commit(root: &str) -> Option<String> {
 }
 /// `GET /logs/{run_id}` — persisted stdout lines for a run (durable history).
 pub async fn logs(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(run_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let snap = state.reads.snapshot_db().await?;
+    let snap = reads.snapshot_db().await?;
     let entries = barca_core::db::get_logs(&snap.path, &run_id).await?;
     Ok(Json(json!({ "logs": entries })))
 }

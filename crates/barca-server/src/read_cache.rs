@@ -1349,9 +1349,9 @@ mod tests {
         assert!(
             !state
                 .reads.db_state()
-                .settled(SystemTime::now(), WARM_AFTER_STILL)
+                .still_for(Duration::from_secs(1))
         );
-        let warming = tokio::spawn(keep_warm(state.clone()));
+        let warming = tokio::spawn(crate::health_view::keep_warm(state.clone()));
         let warmed = tokio::time::timeout(Duration::from_secs(5), async {
             while loads(&state).1 == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;

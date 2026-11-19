@@ -278,6 +278,63 @@ async fn gather(
     })
 }
 
+/// `barca status` for `targets` (none: every node) over `dag` and the database in state
+/// `db_state`, each scheduled node with its scheduler's view and every node with its health:
+/// the nodes of `GET /nodes` and the rows of `barca.nodes` (`POST /sql/query`).
+pub(crate) async fn node_status(
+    state: &AppState,
+    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    db_state: &crate::read_cache::Stamp,
+    snapshot: &std::sync::Arc<crate::snapshot::SnapshotDb>,
+    targets: Vec<String>,
+    sample: usize,
+    files: Option<&str>,
+) -> Result<barca_core::status::StatusResult, ApiError> {
+    let mut cfg = state.config.resolved.clone();
+    cfg.db_path = snapshot.path.clone();
+    let python = state.config.python.clone();
+    let (graph, names, kept_snapshot) = (dag.clone(), targets.clone(), snapshot.clone());
+    // Kept until the sources or the database change ([`crate::read_cache`]); the live schedule
+    // state and the filter are applied to each answer.
+    let kept = state
+        .reads.cached_status(dag, db_state, (targets, sample, true), move || async move {
+            let _snapshot = kept_snapshot;
+            barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true).await
+        })
+        .await
+        .map_err(|e| ApiError::run(e, barca_core::envelope::Context {
+            command: "status",
+            files: state.config.files.clone(),
+        }))?;
+    let mut result = (*kept).clone();
+    let now = chrono::Utc::now();
+    let running =
+        attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now)
+            .await?;
+    // `as_of` is in the body, so the clock to the second would change the `ETag` every second
+    // and an unchanged poll would never be a `304`. It is the start of the minute, the instant
+    // `gap_seconds` is read at; nothing else in the body moves with the second.
+    result.as_of = barca_core::time::rfc3339_secs(barca_core::causes::gap_instant(now.timestamp()));
+    if let Some(files) = files {
+        let files: std::collections::HashSet<_> = files.split(',').collect();
+        result.nodes.retain(|n| {
+            n.id.rsplit_once(':')
+                .is_some_and(|(f, _)| files.contains(f))
+        });
+        result.data_coverage = barca_core::health::DataCoverage::of(&result.nodes);
+        let actions = result
+            .rollup
+            .iter()
+            .flat_map(|entry| &entry.held_by)
+            .map(|held| (held.root.clone(), held.action_kind))
+            .collect();
+        result.rollup = Some(barca_core::rollup::total(&result.nodes, &running, &actions));
+        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
+    }
+    Ok(result)
+}
+
+
 /// How often [`keep_warm`] looks for a change.
 const WARM_EVERY: Duration = Duration::from_secs(1);
 

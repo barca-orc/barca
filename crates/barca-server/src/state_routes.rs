@@ -2,6 +2,7 @@
 
 use crate::error::ApiError;
 use crate::health_view::{health_facts, state_rows_for_targets};
+use crate::read_cache::Reads;
 use crate::state::AppState;
 use crate::views::NodeState;
 use axum::Json;
@@ -76,12 +77,12 @@ pub async fn state(
     Query(query): Query<StateQuery>,
 ) -> Result<Json<Vec<NodeState>>, ApiError> {
     state.reads.cache.polled();
-    let targets = scope_targets(&state, &query).await?;
+    let targets = scope_targets(&state.reads, &query).await?;
     Ok(Json(state_rows_for_targets(&state, &targets).await?))
 }
 
 /// The targets a `GET /state` or `GET /state/rollup` query names, sorted: empty for every node.
-async fn scope_targets(state: &AppState, query: &StateQuery) -> Result<Vec<String>, ApiError> {
+async fn scope_targets(reads: &Reads, query: &StateQuery) -> Result<Vec<String>, ApiError> {
     let split = |list: &Option<String>| -> Vec<String> {
         list.iter()
             .flat_map(|s| s.split(','))
@@ -94,7 +95,7 @@ async fn scope_targets(state: &AppState, query: &StateQuery) -> Result<Vec<Strin
     // A group or a file stands for its nodes, so a client scopes a view of thousands of
     // nodes with one short query instead of a URL listing every id.
     let mut targets = if targets.iter().any(|t| t.starts_with("group:")) || !files.is_empty() {
-        expand_targets(&*state.reads.inspect_dag().await?, targets, &files)?
+        expand_targets(&*reads.inspect_dag().await?, targets, &files)?
     } else {
         targets
     };
@@ -116,7 +117,7 @@ pub async fn rollup(
     Query(query): Query<StateQuery>,
 ) -> Result<Json<barca_core::rollup::Rollup>, ApiError> {
     state.reads.cache.polled();
-    let targets = scope_targets(&state, &query).await?;
+    let targets = scope_targets(&state.reads, &query).await?;
     let dag = state.reads.inspect_dag().await?;
     let db_state = state.reads.db_state();
     let snapshot = state.reads.snapshot_db().await?;

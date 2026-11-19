@@ -93,7 +93,7 @@ pub(crate) struct Process {
     /// Server paths that an error message must not carry ([`Process::scrub`]).
     private: Vec<String>,
     /// The helper's working directory and `HOME`: empty, removed when the helper is dropped.
-    _home: tempfile::TempDir,
+    pub(crate) _home: tempfile::TempDir,
 }
 
 /// Why a request to the helper has no answer.

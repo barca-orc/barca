@@ -5,6 +5,7 @@
 
 use crate::error::ApiError;
 use crate::schedule_view::{pauses, published_ticks, schedule_at, schedule_items};
+use crate::read_cache::Reads;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -94,7 +95,7 @@ async fn set(
     now: i64,
 ) -> Result<Json<SchedulePauseAnswer>, ApiError> {
     crate::guards::refuse_if_read_only(&state.config)?;
-    let node = scheduled_node(state, id).await?;
+    let node = scheduled_node(&state.reads, id).await?;
     let cfg = &state.config.resolved;
     barca_core::queries::open_metadata(cfg).await?;
     db::set_schedule_pause(&cfg.db_path, &node, pause, now).await?;
@@ -131,8 +132,8 @@ async fn set(
 
 /// The scheduled node `id` names: its full id or its name, as for a run target. Anything that
 /// is not a scheduled node is `404`.
-async fn scheduled_node(state: &AppState, id: &str) -> Result<String, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+async fn scheduled_node(reads: &Reads, id: &str) -> Result<String, ApiError> {
+    let dag = reads.loaded_dag().await?;
     let jobs =
         barca_core::schedule::jobs_from_summaries(barca_core::queries::list_assets_from_dag(&dag));
     let matches: Vec<&str> = crate::resolve::matching(&jobs, |j| j.id.as_str(), id)
