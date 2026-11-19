@@ -249,11 +249,10 @@ Conformance (a command beside a server): [project socket](../../python/tests/tes
 (the socket is created owner-only and removed; a killed server's is ignored and replaced; every
 routed command reaches the server; `--local` does not; `gc` beside a recording run is run by the
 server; restore and reset refuse; a token-mode server asks no token on it; a read-only server
-refuses writes; named environments; a subdirectory),
+refuses writes; named environments; a subdirectory; a socket that accepts and never answers),
 [the socket file](../../crates/barca-server/src/project_socket.rs), [`POST /gc`](../../crates/barca-server/tests/openapi.rs)
 and [the lock's holder and wait count](../../crates/barca-db/src/db/mod.rs). Not exercised: the
-5-second unanswered-socket warning (it needs a process that accepts and never answers), the
-path-length warning end to end (unit-tested only), and macOS.
+path-length warning end to end (unit-tested only), a second local user, and macOS.
 
 Conformance: [process storage overrides](../../python/tests/test_process_storage_overrides.py).
 Configuration details: [remote manual](../../crates/barca-cli/docs/remote.md).

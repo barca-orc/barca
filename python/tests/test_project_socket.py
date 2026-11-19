@@ -275,3 +275,19 @@ def test_a_command_in_a_subdirectory_finds_the_projects_server(project, serve):
     done = barca(project / "sub", "get", "total", "--json")
     assert done.returncode == 0, done.stderr
     assert done.stderr.count(ANNOUNCED) == 1
+
+
+def test_a_socket_that_accepts_and_never_answers_is_ignored_with_a_warning(project):
+    assert barca(project, "get", "total", "--local").returncode == 0
+    path = sock(project)
+    with socket.socket(socket.AF_UNIX) as silent:
+        silent.bind(str(path))
+        silent.listen(4)
+        began = time.monotonic()
+        done = barca(project, "status", "--json")
+        took = time.monotonic() - began
+    assert done.returncode == 0, done.stderr
+    assert "this project's server did not answer on .barca/serve.sock" in done.stderr
+    assert "running on this machine" in done.stderr
+    assert json.loads(done.stdout)["summary"]["cached"] == 2
+    assert 4 < took < 15, took
