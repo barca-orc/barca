@@ -4,16 +4,17 @@
 //! Because a row never uses itself or a row below, the modules cannot form a dependency cycle.
 //!
 //! ```text
-//! leaf  <  frontend (Python source to extracted nodes)  <  graph  <  planning  <  load
+//! leaf  <  graph (the IR)  <  frontend (Python source to a graph)  <  planning  <  load
 //! ```
 //!
-//! One rule on top of the order: a planning module does not use a frontend module. It reads what
-//! the frontend found from the graph, which is what lets the frontend become its own crate.
+//! The graph is above the frontend, so it cannot name it: the frontend produces the values the
+//! graph stores. One rule on top of the order: a planning module does not use a frontend
+//! module either. Graph and planning read `barca_model::ir` and nothing of Python's, which is
+//! what lets the frontend become its own crate and a second one be written.
 //!
 //! A failure is fixed by moving the item down (a helper or a type to a module below both of its
 //! users) or by passing it in as a value. [`ALLOWED`] lists the edges that break a rule today; it
-//! only shrinks: an entry whose edge is gone, or no longer breaks a rule, fails the test until it
-//! is deleted. `docs/engineering/compile-layering.md` has the table in prose and what is left.
+//! is empty and stays empty. `docs/engineering/compile-layering.md` has the table in prose.
 //!
 //! What counts as an edge: a `crate::<module>` path (or `super::<module>`, which is the same
 //! thing in a top-level module file) outside comments, string literals and `#[cfg(test)]` items,
@@ -27,10 +28,10 @@ use std::path::Path;
 enum Layer {
     /// Vocabulary with no Python in it, shared by every layer.
     Leaf,
-    /// Python source in, extracted nodes and their fingerprints out.
-    Frontend,
-    /// The validated graph.
+    /// The validated graph: the IR's nodes (`barca_model::ir`), their edges and the groups.
     Graph,
+    /// Python source in, a graph out: extracted nodes, their fingerprints, and linking them.
+    Frontend,
     /// From a graph to an execution plan, for the targets and keys a command names.
     Planning,
     /// Drives the others: project files in, a graph out.
@@ -40,12 +41,15 @@ enum Layer {
 /// Every module, top row first. A module may use the modules of the rows above its own.
 const LAYERS: &[(Layer, &[&str])] = &[
     (Layer::Leaf, &["names", "partition_selection"]),
+    (Layer::Leaf, &["batch_override"]),
+    (Layer::Graph, &["dag"]),
     (
         Layer::Frontend,
         &[
             "arg_values",
             "decorator_args",
             "env_reads",
+            "extracted",
             "syntax_problem",
             "unrelated_modules",
         ],
@@ -65,21 +69,16 @@ const LAYERS: &[(Layer, &[&str])] = &[
     (Layer::Frontend, &["definition", "groups"]),
     (Layer::Frontend, &["cone"]),
     (Layer::Frontend, &["parse", "project_modules"]),
-    (Layer::Graph, &["dag"]),
+    (Layer::Frontend, &["link"]),
     (Layer::Planning, &["planner"]),
     (Layer::Planning, &["selection", "warnings"]),
     (Layer::Planning, &["targets"]),
     (Layer::Load, &["discover", "load"]),
 ];
 
-/// Today's edges that break a rule: `(from, to, the symbols behind it)`. Delete an entry when
-/// its edge is cut; never add one.
-const ALLOWED: &[(&str, &str, &str)] = &[
-    // `--batch` is a per-run value kept beside the reader of `batch=`, because the parser
-    // validates `Schedule(batch=...)` with the same grammar. Splitting the value from the
-    // reader is part of giving planning an IR of its own (D2).
-    ("targets", "batch_spec", "BatchOverride, names_node"),
-];
+/// Edges that break a rule: `(from, to, the symbols behind it)`. Empty since D2 (the last one
+/// was `targets -> batch_spec`); never add one.
+const ALLOWED: &[(&str, &str, &str)] = &[];
 
 /// `source` with comments and the contents of string and char literals removed, so that a path
 /// in a doc comment or a message is not read as code. Line structure is kept.
@@ -545,12 +544,21 @@ fn after() { crate::eta::last() }
 #[test]
 fn a_wrong_way_edge_is_named() {
     // Up the table, within a row, and from planning straight into the frontend.
-    assert!(broken_rule("parse", "dag").is_some());
+    assert!(broken_rule("parse", "link").is_some());
     assert!(broken_rule("definition", "groups").is_some());
     assert!(broken_rule("planner", "parse").is_some());
-    // Down the table, and planning on a leaf and on the graph.
-    assert!(broken_rule("dag", "definition").is_none());
+    assert!(broken_rule("targets", "batch_spec").is_some());
+    // The graph names no frontend module, whatever the frontend's row.
+    for (_, modules) in LAYERS.iter().filter(|(layer, _)| *layer == Layer::Frontend) {
+        for module in *modules {
+            assert!(broken_rule("dag", module).is_some(), "dag -> {module}");
+        }
+    }
+    // Down the table: the frontend on the graph it fills, planning on a leaf and on the graph.
+    assert!(broken_rule("link", "dag").is_none());
+    assert!(broken_rule("link", "definition").is_none());
     assert!(broken_rule("selection", "partition_selection").is_none());
     assert!(broken_rule("targets", "dag").is_none());
+    assert!(broken_rule("targets", "batch_override").is_none());
     assert!(broken_rule("load", "parse").is_none());
 }
