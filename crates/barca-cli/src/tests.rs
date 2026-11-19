@@ -1,5 +1,7 @@
 use super::*;
+use crate::input::*;
 use clap::CommandFactory;
+use std::path::PathBuf;
 
 /// Subcommands that must carry runnable examples in help or --examples.
 const DOCUMENTED: &[&str] = &[
@@ -316,7 +318,7 @@ fn clap_error_json(argv: &str) -> serde_json::Value {
     let Err(e) = Cli::try_parse_from(&argv) else {
         panic!("`{argv:?}` must not parse");
     };
-    let err = CliError::from_clap(&e, &argv);
+    let err = CliError::from_clap(&e, &argv, Cli::command());
     assert_eq!(err.code(), 2, "a suggestion never changes the exit code");
     serde_json::from_str(&err.render(true)).unwrap()
 }
@@ -342,7 +344,7 @@ fn a_mistyped_flag_or_subcommand_gets_did_you_mean() {
         let Err(e) = Cli::try_parse_from(&argv) else {
             unreachable!()
         };
-        let human = CliError::from_clap(&e, &argv).render(false);
+        let human = CliError::from_clap(&e, &argv, Cli::command()).render(false);
         assert!(human.contains(&format!("\n\n{meant}\n")), "{human}");
     }
 }

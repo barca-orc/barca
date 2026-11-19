@@ -4,7 +4,7 @@ description: "Fan-out over keys and fan-in with collect: updating only what chan
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/partitions.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/partitions.md (barca docs partitions). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/partitions.md (barca docs partitions). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Partitions split one asset into independent steps, one per key; the keys run in parallel.
 Each key is cached on its own: it has its own run hash, so a re-run serves unchanged keys from

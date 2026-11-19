@@ -4,7 +4,7 @@ description: "@sink exports results to local or remote paths, as one file or a p
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/sinks.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/sinks.md (barca docs sinks). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/sinks.md (barca docs sinks). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `@sink` writes an asset's output to an extra location whenever the asset materializes, for
 example to export a file for another system. It is stacked on top of `@asset`.

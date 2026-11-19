@@ -4,7 +4,7 @@ description: "One barca serve as the team's ledger: laptops read its cache hits 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/server-mode.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/server-mode.md (barca docs server-mode). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/server-mode.md (barca docs server-mode). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 One `barca serve` can do two things for a team. It runs commands on its own deployed copy of
 the project (`--server`, first below), and it can be the ledger every laptop reads cache hits
@@ -181,7 +181,8 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
 - `--local` ignores the configured server for one command; `--local` with `--server` is a usage
   error.
 - `--server` and `--local` apply to `get`, `run`, `status`, `list`, `history`, `stats`, `logs`,
-  `sql` and `doctor`. `serve`, `plan`, `docs` and `version` always run on this machine;
+  `sql`, `queue`, `pause`, `resume`, `cancel`, `pin`, `unpin`, `gc` and `doctor`. `plan`,
+  `state`, `serve`, `tokens`, `docs` and `version` always run on this machine;
   `--server` or `--local` on them is a usage error. `barca list` without `--server` reads this
   machine's files. `barca sql` runs a query over results on this machine: a server only says
   which results its views read ([barca sql: With a server](/reference/cli/sql/#with-a-server)). The server never runs SQL

@@ -88,7 +88,7 @@ const fn local(name: &'static str) -> Route {
 
 /// Every command. The commands that take `--server` come first, in the order the usage error
 /// for the others names them.
-pub(crate) const ROUTES: &[Route] = &[
+pub(crate) static ROUTES: &[Route] = &[
     route("get", Named::Runs, true, Configured::Ledger, true),
     route("run", Named::Runs, true, Configured::Ledger, true),
     route("status", Named::Runs, true, Configured::Answers, true),

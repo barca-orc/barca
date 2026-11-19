@@ -4,7 +4,7 @@ description: "json, pickle, parquet and CSV artifacts, and how annotations pick 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/types.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/types.md (barca docs types). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/types.md (barca docs types). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 How barca stores each step's output and how it hands values to downstream steps.
 

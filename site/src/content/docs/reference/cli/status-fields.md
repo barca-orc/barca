@@ -4,7 +4,7 @@ description: "What barca status reports for each node beyond its state (last mat
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/status-fields.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/status-fields.md (barca docs status-fields). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/status-fields.md (barca docs status-fields). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 What `barca status` reports for each node beyond its cache state: the last materialization, the
 last changed bytes, the artifact's shape, run timing and attempts, and what started a run; the

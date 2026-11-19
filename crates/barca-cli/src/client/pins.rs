@@ -1,9 +1,9 @@
 //! `barca pin` and `barca unpin` with a server: the `/pins` and `/assets/{name}/pin` routes.
 
 use super::{Server, encode};
+use crate::error::CliError;
 use crate::print::{print_pinned, print_pins, print_unpinned, print_versions};
 use crate::request::{PinAction, read_supplied};
-use crate::error::CliError;
 use barca_core::pins::Choice;
 use serde_json::{Value, json};
 use std::path::PathBuf;

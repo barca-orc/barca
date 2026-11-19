@@ -201,7 +201,14 @@ pub(crate) async fn perform(
         .await
         .map_err(engine),
         Request::Pin(pin) => {
-            pin::pin_cmd(pin.env.as_deref(), &pin.action, pin.files, pin.json, &python).await
+            pin::pin_cmd(
+                pin.env.as_deref(),
+                &pin.action,
+                pin.files,
+                pin.json,
+                &python,
+            )
+            .await
         }
         Request::Unpin(unpin) => {
             pin::unpin_cmd(

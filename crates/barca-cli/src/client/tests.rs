@@ -1,6 +1,5 @@
 use super::follow::dropped;
 use super::*;
-use crate::error::ErrorKind;
 use barca_core::cache_state::CacheState;
 use serde_json::json;
 

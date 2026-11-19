@@ -4,7 +4,7 @@ description: "The output contract for scripts and AI agents: JSON on stdout, the
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/agents.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/agents.md (barca docs agents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/agents.md (barca docs agents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Conventions that make barca easy to drive programmatically. Everything here is stable CLI
 behavior. When stdout is not a terminal (a pipe, a subprocess, an agent) every result is JSON

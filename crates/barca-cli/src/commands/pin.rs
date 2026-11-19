@@ -1,7 +1,7 @@
 //! `barca pin` and `barca unpin`: hold an asset at an earlier materialization (`barca docs pins`).
 
 use crate::error::CliError;
-use crate::print::{print_pins, print_pinned, print_unpinned, print_versions};
+use crate::print::{print_pinned, print_pins, print_unpinned, print_versions};
 use crate::request::{PinAction, read_supplied};
 use std::path::PathBuf;
 

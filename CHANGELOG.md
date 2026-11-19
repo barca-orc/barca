@@ -9,6 +9,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ## Pending
 
 - Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
+- Internal: the CLI turns a command into one checked request and decides in one place where it runs (this machine, a named or configured server, this project's `barca serve`), from one table of where each command can run that the `--server`/`--local` usage errors and `barca docs server-mode` are held to; its modules have a checked order with no cycle (`docs/engineering/cli-layering.md`, #1056). No behavior change; `barca docs server-mode` now lists every command `--server` and `--local` apply to (`queue`, `pause`, `resume`, `cancel`, `pin`, `unpin` and `gc` were missing).
 
 - Internal: the web UI's unit tests and kit page read what the server computes from files a Rust test generates from a fixture project (`ui/src/lib/testdata/served/`, regenerate with `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`) instead of from values typed by hand, and the fixtures' own table from a health to a reason and a cause is gone (#1056); no behavior change.
 

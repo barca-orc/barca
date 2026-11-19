@@ -128,8 +128,7 @@ pub fn json_mode_from_argv_with(argv: &[String], env: Option<&str>, stdout_is_tt
         }
     }
     // An invalid BARCA_OUTPUT is reported separately; here it falls back to the terminal.
-    decide(None, env, stdout_is_tty)
-        .map_or(!stdout_is_tty, |f| f == Format::Json)
+    decide(None, env, stdout_is_tty).map_or(!stdout_is_tty, |f| f == Format::Json)
 }
 
 #[cfg(test)]

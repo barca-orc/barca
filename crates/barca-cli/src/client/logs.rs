@@ -123,10 +123,7 @@ async fn recorded_logs(
 
 /// Read a live run's event stream to its end, printing the lines `args` selects as they arrive,
 /// through a server restart ([`Follow`]). Returns the run's final status.
-async fn follow_events(
-    follow: &mut Follow<'_>,
-    args: LogsArgs<'_>,
-) -> Result<String, CliError> {
+async fn follow_events(follow: &mut Follow<'_>, args: LogsArgs<'_>) -> Result<String, CliError> {
     let mut seq = 0usize;
     // Lines printed of the run as the current server runs it.
     let mut printed = 0usize;

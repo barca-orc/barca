@@ -4,7 +4,7 @@ description: "The size limit for .barca/, what barca gc evicts and in which orde
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/disk.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/disk.md (barca docs disk). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/disk.md (barca docs disk). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `.barca/` has a size limit, and barca deletes old artifacts to stay under it. Below: what the
 limit counts, what is evicted first and what never is, and how the metadata database keeps to

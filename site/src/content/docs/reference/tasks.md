@@ -4,7 +4,7 @@ description: "@task and barca run: steps that always run, ordering-only dependen
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/tasks.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/tasks.md (barca docs tasks). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/tasks.md (barca docs tasks). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 A task is a workflow step that *does* something (deploy, notify, migrate, warm a cache). Tasks
 always re-run and are never cached.

@@ -37,7 +37,7 @@ pub(crate) enum Target {
         ledger: Option<barca_core::ledger::Ledger>,
     },
     /// On a server: named, configured, or this project's own.
-    Server(Server),
+    Server(Box<Server>),
 }
 
 /// A command and where it runs, after [`place`].
@@ -69,7 +69,7 @@ pub(crate) fn place(
             Some(server) => {
                 return Ok(Placed {
                     cli,
-                    target: Target::Server(server),
+                    target: Target::Server(Box::new(server)),
                 });
             }
             None => {}
@@ -101,7 +101,7 @@ pub(crate) fn place(
                 }
                 return Ok(Placed {
                     cli,
-                    target: Target::Server(server),
+                    target: Target::Server(Box::new(server)),
                 });
             }
             // Something holds the socket and does not answer: as with no server at all.
@@ -130,7 +130,7 @@ pub(crate) fn place(
             server.announce();
             return Ok(Placed {
                 cli,
-                target: Target::Server(server),
+                target: Target::Server(Box::new(server)),
             });
         }
         (Some(_), Configured::No | Configured::Checks) | (None, _) => {}
@@ -142,7 +142,7 @@ pub(crate) fn place(
         }
         return Ok(Placed {
             cli,
-            target: Target::Server(server),
+            target: Target::Server(Box::new(server)),
         });
     }
 

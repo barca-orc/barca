@@ -20,6 +20,8 @@ mod print;
 mod request;
 mod route;
 mod runtime;
+#[cfg(test)]
+mod snapshot;
 
 use args::{Cli, TokenCommand};
 use error::{CliError, CliErrorExt, Context, ErrorKind};
@@ -60,7 +62,9 @@ fn main() {
         Ok(cli) => cli,
         // `--help` / `--version` are not errors: clap prints them to stdout and exits 0.
         Err((e, _)) if !e.use_stderr() => e.exit(),
-        Err((e, argv)) => CliError::from_clap(&e, &argv, Cli::command()).emit(output::json_mode_from_argv(&args)),
+        Err((e, argv)) => {
+            CliError::from_clap(&e, &argv, Cli::command()).emit(output::json_mode_from_argv(&args))
+        }
     };
     let json = input::json_output(&cli);
 
@@ -148,3 +152,9 @@ mod ui_layering_tests;
 
 #[cfg(test)]
 mod layering_tests;
+
+#[cfg(test)]
+mod site_pages_tests;
+
+#[cfg(test)]
+mod env_vars_tests;

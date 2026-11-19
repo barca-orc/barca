@@ -487,12 +487,7 @@ impl Request {
                         StatusView::Rollup { now }
                     } else {
                         StatusView::Nodes {
-                            limit: inspection_limit(
-                                limit,
-                                all,
-                                json,
-                                bounded::LIST_DEFAULT_LIMIT,
-                            ),
+                            limit: inspection_limit(limit, all, json, bounded::LIST_DEFAULT_LIMIT),
                             fields,
                             sample: sample.unwrap_or(0),
                             filter,

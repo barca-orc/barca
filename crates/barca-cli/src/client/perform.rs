@@ -145,15 +145,8 @@ pub(crate) async fn perform(
                     // Refused for a server before it gets here (`Request::of`).
                     reconcile: _,
                 } => {
-                    super::history(
-                        server,
-                        limit,
-                        &filter,
-                        history.json,
-                        fields.as_deref(),
-                        env,
-                    )
-                    .await
+                    super::history(server, limit, &filter, history.json, fields.as_deref(), env)
+                        .await
                 }
             }
         }
