@@ -81,7 +81,7 @@ def sign_url(
     SignError with the URI (never a signed URL) in its message.
     """
     seconds = expiry_seconds(expires)
-    scheme = _storage._scheme(uri)
+    scheme = _storage.scheme_of(uri)
     where = _storage.safe_error(str(uri))
     if scheme not in _SIGNABLE:
         raise SignError(

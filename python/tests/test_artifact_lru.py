@@ -22,7 +22,7 @@ import pytest
 from barca import _artifacts, _lru, _runtime, _storage, _worker
 from barca._artifacts import serialize
 from barca._lru import _LRU_MAX_ARTIFACT_BYTES, _ArtifactLRU, _isolated_copy
-from barca._worker import _load_artifact, _load_collected_artifacts
+from barca._worker import _load_collected_artifacts
 
 MB = 1024 * 1024
 
@@ -354,10 +354,10 @@ def test_two_loads_of_a_frame_with_list_and_struct_columns_are_independent(tmp_p
     pytest.importorskip("pyarrow")
     path = _list_and_struct_parquet(tmp_path / "t.parquet")
     lru = _ArtifactLRU()
-    first = _load_artifact(path, lru, frame_type="pandas")
+    first = lru.read(path, frame_type="pandas")
     assert lru.get(path, "pandas") is None  # declined: the next load reads the file
     first["s"].iloc[0]["a"] = 99  # the list cells arrive as read-only arrays
-    second = _load_artifact(path, lru, frame_type="pandas")
+    second = lru.read(path, frame_type="pandas")
     assert second["l"].iloc[0].tolist() == [1, 2]
     assert second["s"].iloc[0] == {"a": 1}
     assert second["l"].iloc[0] is not first["l"].iloc[0]
@@ -383,9 +383,9 @@ def test_step_result_with_mutable_cells_reaches_the_next_step_from_its_file(proj
         lru,
     )
     assert lru.get(path, "pandas") is None
-    first = _load_artifact(path, lru, frame_type="pandas")
+    first = lru.read(path, frame_type="pandas")
     first["meta"].iloc[1]["k"] = 99
-    second = _load_artifact(path, lru, frame_type="pandas")
+    second = lru.read(path, frame_type="pandas")
     assert second["meta"].tolist() == [{"k": 1}, {"k": 2}]
     assert [list(tags) for tags in second["tags"]] == [["a"], ["b"]]
 
@@ -601,7 +601,7 @@ class TestAdmission:
         root = str(project) if root == "local" else root
         path = _write_json(f"{root}/n/big.json", OVER)
         lru = _ArtifactLRU()
-        value = _load_artifact(path, lru)
+        value = lru.read(path)
         assert len(value["blob"]) == OVER
         assert lru.get(path) is None
         assert len(lru._entries) == 0
@@ -611,7 +611,7 @@ class TestAdmission:
         root = str(project) if root == "local" else root
         path = _write_json(f"{root}/n/small.json", SMALL)
         lru = _ArtifactLRU()
-        _load_artifact(path, lru)
+        lru.read(path)
         assert lru.get(path) == {"blob": "x" * SMALL}
 
     def test_artifact_exactly_at_the_limit_is_held(self):

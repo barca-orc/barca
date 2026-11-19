@@ -57,8 +57,9 @@ import sys
 import threading
 from typing import Any
 
+from barca import _helper, _sql_tables
 from barca._duckdb import _quote
-from barca._sql import _ALL_TABLES, _MISSING_TABLE, _SHOW_TABLES, _jsonable, _quote_str
+from barca._sql_tables import jsonable as _jsonable
 
 # The most memory DuckDB uses for the tables and a query over them.
 MEMORY_LIMIT = "1GB"
@@ -156,7 +157,7 @@ class Refused(Exception):
 class Helper:
     def __init__(self, duckdb: Any):
         self.duckdb = duckdb
-        self.con = duckdb.connect(":memory:")
+        self.con = _sql_tables.connect(duckdb)
         for statement in _LOCKDOWN:
             try:
                 self.con.execute(statement)
@@ -190,9 +191,10 @@ class Helper:
     def load(self, table: dict) -> None:
         """Replace one of barca's tables with `rows`, or (rows null) with a placeholder."""
         con = self.con
-        qualified = f"{_quote(table['schema'])}.{_quote(table['name'])}"
+        qualified = _sql_tables.qualified(table)
         columns = table["columns"]
         rows = table.get("rows")
+        not_loaded = f"barca: {table['schema']}.{table['name']} is not loaded; name it in the query"
         con.execute("BEGIN")
         try:
             con.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote(table['schema'])}")
@@ -203,20 +205,8 @@ class Helper:
                 [table["schema"], table["name"]],
             ).fetchall()[0][0]
             con.execute(f"DROP {'VIEW' if is_view else 'TABLE'} IF EXISTS {qualified}")
-            if rows is None:
-                why = (
-                    f"barca: {table['schema']}.{table['name']} is not loaded; name it in the query"
-                )
-                nulls = ", ".join(f"CAST(NULL AS {ty}) AS {_quote(c)}" for c, ty in columns)
-                con.execute(
-                    f"CREATE VIEW {qualified} AS SELECT {nulls} "
-                    f"WHERE error({_quote_str(why)}) IS NULL"
-                )
-            else:
-                con.execute(
-                    f"CREATE TABLE {qualified} "
-                    f"({', '.join(f'{_quote(c)} {ty}' for c, ty in columns)})"
-                )
+            _sql_tables.create(con, table, not_loaded)
+            if rows is not None:
                 # The rows as one JSON parameter per batch: a file would need the file access
                 # this database does not have.
                 spec = json.dumps([{c: ty for c, ty in columns}])
@@ -266,8 +256,8 @@ class Helper:
     def query(self, request: int, query: str, limit: int) -> str:
         """The answer to `query`, as the JSON line to send: rows are encoded once."""
         query = self._select(query.strip())
-        if _SHOW_TABLES.match(query.rstrip(";").strip()):
-            query = _ALL_TABLES
+        if _sql_tables.SHOW_TABLES.match(query.rstrip(";").strip()):
+            query = _sql_tables.ALL_TABLES
         con = self.con
         self._check(request)
         con.execute("BEGIN TRANSACTION READ ONLY")
@@ -335,10 +325,10 @@ class Helper:
             return _error(request, "refused", str(e))
         except duckdb.Error as e:
             text = str(e)
-            m = _MISSING_TABLE.search(text)
-            if m and isinstance(e, duckdb.CatalogException):
+            table = _sql_tables.missing_table(duckdb, e)
+            if table is not None:
                 answer = _error(request, "missing_table", text)
-                answer["error"]["table"] = m.group(1)
+                answer["error"]["table"] = table
                 return answer
             return _error(request, "sql", text)
         finally:
@@ -360,8 +350,7 @@ def _say(out, document: dict | str) -> None:
 
 def main() -> None:
     # The protocol owns stdout: nothing else (a library's print) may write to it.
-    out = os.fdopen(os.dup(1), "w")
-    os.dup2(2, 1)
+    out = _helper.protocol_stdout()
     try:
         import duckdb
     except ImportError:

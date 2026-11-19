@@ -52,6 +52,7 @@ EMULATORS = ALWAYS + [
     "python/barca/_identity.py",
     "python/barca/_sinks.py",
     "python/barca/_inspect.py",
+    "python/barca/_helper.py",
     # Rust side: the transfer client and run sync, backups and restore, the server ledger,
     # unsynced uploads, dataset sinks, store garbage collection.
     "crates/barca-core/src/transfer.rs",
@@ -76,6 +77,7 @@ DUCKDB1 = ALWAYS + [
     "python/barca/_duckdb.py",
     "python/barca/_sql.py",
     "python/barca/_sql_server.py",
+    "python/barca/_sql_tables.py",
     "crates/barca-server/src/sql_query.rs",
     "python/barca/_sinks.py",
     "python/barca/_batch.py",
@@ -102,6 +104,7 @@ CHECKPOINT = ALWAYS + [
     "crates/barca-engine/src/helper_proc.rs",
     "crates/barca-cli/src/commands/state.rs",
     "python/barca/_state.py",
+    "python/barca/_helper.py",
     "python/barca/_storage.py",
     "python/tests/test_minute_checkpoints.py",
     "python/tests/test_incremental_persist.py",

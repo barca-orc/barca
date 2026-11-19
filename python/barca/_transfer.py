@@ -332,7 +332,7 @@ def serve(
     from barca._inspection_cache import TransferObserver
 
     observer = TransferObserver(inspection_cache) if inspection_cache else None
-    _runtime._socket = sock
+    _runtime.adopt(sock)
     requests = _Requests(timeout)
     stop = threading.Event()
     if timeout is not None:

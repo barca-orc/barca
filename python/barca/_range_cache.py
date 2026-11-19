@@ -57,8 +57,8 @@ _range_fs_lock = threading.Lock()
 
 def range_read_uri(path: str) -> str:
     """``path`` (a remote artifact URI) under the private scheme of its range-read view."""
-    scheme, rest = str(path).split("://", 1)
-    return f"{_RANGE_SCHEME_PREFIX}{_storage._SCHEMES[scheme.lower()][0]}://{rest}"
+    _, rest = str(path).split("://", 1)
+    return f"{_RANGE_SCHEME_PREFIX}{_storage.protocol_of(path)}://{rest}"
 
 
 def range_read_fs(path: str) -> Any:
@@ -69,7 +69,7 @@ def range_read_fs(path: str) -> Any:
     filesystem's own stripped paths (what pyarrow passes).
     """
     inner = _storage.get_fs(path)  # validates the scheme
-    protocol = _storage._SCHEMES[str(_storage._scheme(path))][0]
+    protocol = _storage.protocol_of(path)
     with _range_fs_lock:
         fs = _range_fs_cache.get(protocol)
         if fs is None or fs.inner is not inner:
