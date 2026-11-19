@@ -353,43 +353,107 @@ pub fn refresh_path(node: &str, missed: u32, evidence: PathEvidence<'_>) -> Opti
     })
 }
 
-/// Each schedule of `dag` as this machine's metadata records it, as of `now`. No scheduler
-/// runs here: a schedule is `live`, with a next tick, when the records show a scheduler
-/// firing it (`observed`: [`crate::liveness::observe`]). For `barca status` and `barca sql`
-/// without a server.
-pub fn recorded_schedules(
-    jobs: &[crate::schedule::ScheduledJob],
-    ticks: &HashMap<String, crate::schedule_standing::Ticks>,
-    failures: &HashMap<String, crate::db::ScheduleFailures>,
-    pauses: &HashMap<String, crate::db::SchedulePause>,
-    observed: &crate::liveness::Observed,
-    zone: &Zone,
-    now: chrono::DateTime<chrono::Utc>,
-) -> PathSchedules {
-    jobs.iter()
+/// What a scheduler running in the answering process says of one schedule it fires: its own
+/// count of failed ticks and why it skipped the last due one. A host without a scheduler
+/// (`barca status`, a read-only server) has none, and the records are read instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Firing {
+    pub failures: u32,
+    pub max_failures: u32,
+    /// Why the last due tick was skipped (`in_flight`, `paused`).
+    pub skip_reason: Option<String>,
+}
+
+/// What every schedule of a graph is read from, as of `now`: plain data, filled by the host
+/// answering. `barca status` reads all of it from the metadata database; a server fills it
+/// from its read cache, its pauses and its scheduler. Where the hosts differ, they differ
+/// here and nowhere else.
+#[derive(Clone, Copy)]
+pub struct ScheduleInputs<'a> {
+    /// The scheduled nodes ([`crate::schedule::jobs_from_dag`]).
+    pub jobs: &'a [crate::schedule::ScheduledJob],
+    /// The zone cron is evaluated in: the one the firing scheduler uses.
+    pub zone: &'a Zone,
+    pub now: chrono::DateTime<chrono::Utc>,
+    /// Each schedule's recorded ticks ([`crate::schedule_standing::recorded`]).
+    pub ticks: &'a HashMap<String, crate::schedule_standing::Ticks>,
+    /// Each schedule's recorded failed ticks: read for a schedule absent from `firing`.
+    pub failures: &'a HashMap<String, crate::db::ScheduleFailures>,
+    /// The paused schedules; one whose `until` has passed is over.
+    pub pauses: &'a HashMap<String, crate::db::SchedulePause>,
+    /// The schedules a scheduler in this process fires; empty where none runs.
+    pub firing: &'a HashMap<String, Firing>,
+    /// What the records say of a scheduler elsewhere ([`crate::liveness::observe`]); the
+    /// default where this process runs the scheduler.
+    pub observed: &'a crate::liveness::Observed,
+}
+
+/// One schedule as every surface reports it: where it stands, its `schedule` block and what
+/// a refresh path through it reads.
+#[derive(Clone, Debug)]
+pub struct ScheduleView {
+    pub standing: Standing,
+    pub block: ScheduleStatus,
+    pub path: PathSchedule,
+}
+
+/// Every schedule of `inputs`, by scheduled node id: the one walk from a schedule's pause,
+/// failed ticks and recorded ticks to its standing ([`crate::schedule_standing::standing`]),
+/// its `schedule` block and its refresh-path state. A schedule is `live` when a scheduler
+/// here fires it or the records show one firing it; paused, or held after `max_failures`
+/// failed ticks, no tick is expected of it.
+pub fn schedule_views(inputs: ScheduleInputs<'_>) -> HashMap<String, ScheduleView> {
+    let ScheduleInputs { zone, now, .. } = inputs;
+    inputs
+        .jobs
+        .iter()
         .map(|job| {
-            let pause = pauses
+            let pause = inputs
+                .pauses
                 .get(&job.id)
                 .filter(|p| p.until.is_none_or(|until| until > now.timestamp()));
-            let failed = (
-                failures.get(&job.id).map_or(0, |f| f.failures),
-                job.max_failures,
-            );
+            let firing = inputs.firing.get(&job.id);
+            let failed = match firing {
+                Some(firing) => (firing.failures, firing.max_failures),
+                None => (
+                    inputs.failures.get(&job.id).map_or(0, |f| f.failures),
+                    job.max_failures,
+                ),
+            };
             let standing = crate::schedule_standing::standing(
                 &job.cron,
                 zone,
                 now,
                 pause.is_some() || failed.0 >= failed.1,
-                ticks.get(&job.id),
+                inputs.ticks.get(&job.id),
             );
             let mut block = ScheduleStatus::of(job, standing.clone(), failed, pause);
-            let seen = observed.schedules.get(&job.id).copied().unwrap_or_default();
-            block.live = seen.live;
+            block.skip_reason = firing.and_then(|f| f.skip_reason.clone());
+            let seen = inputs
+                .observed
+                .schedules
+                .get(&job.id)
+                .copied()
+                .unwrap_or_default();
+            block.live = firing.is_some() || seen.live;
+            let path = PathSchedule::of(job, zone, &standing, &block).seen(&seen);
             (
                 job.id.clone(),
-                PathSchedule::of(job, zone, &standing, &block).seen(&seen),
+                ScheduleView {
+                    standing,
+                    block,
+                    path,
+                },
             )
         })
+        .collect()
+}
+
+/// [`schedule_views`] as a refresh path reads them ([`PathEvidence::schedules`]).
+pub fn path_schedules(views: &HashMap<String, ScheduleView>) -> PathSchedules {
+    views
+        .iter()
+        .map(|(id, view)| (id.clone(), view.path.clone()))
         .collect()
 }
 
@@ -609,15 +673,16 @@ def plain(rows): ...
     fn a_schedule_no_scheduler_fires_is_a_path_with_no_next_tick() {
         let d = dag(SHAPES);
         // No scheduler published anything (this machine, a read-only server).
-        let recorded = recorded_schedules(
-            &jobs_from_dag(&d),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &crate::liveness::Observed::default(),
-            &Zone::Utc,
-            chrono::DateTime::from_timestamp(NOW, 0).unwrap(),
-        );
+        let recorded = path_schedules(&schedule_views(ScheduleInputs {
+            jobs: &jobs_from_dag(&d),
+            zone: &Zone::Utc,
+            now: chrono::DateTime::from_timestamp(NOW, 0).unwrap(),
+            ticks: &HashMap::new(),
+            failures: &HashMap::new(),
+            pauses: &HashMap::new(),
+            firing: &HashMap::new(),
+            observed: &crate::liveness::Observed::default(),
+        }));
         assert_eq!(
             paths_of(&d, &recorded, (&[], &[]), &["orders", "loose"]),
             [Some(("inbox".to_string(), None, false, false)), None]

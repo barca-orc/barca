@@ -280,20 +280,11 @@ impl ScheduleStatus {
 pub use crate::time::rfc3339_secs;
 
 /// Give every scheduled node in `nodes` its [`ScheduleStatus`] from the metadata DB at
-/// `db_path` (none yet: no failures, no pauses), with next fire times evaluated in `zone`.
-pub async fn attach_schedules(
-    nodes: &mut [NodeStatus],
-    dag: &crate::dag::Dag,
-    db_path: Option<&str>,
-    zone: &crate::schedule::Zone,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), BarcaError> {
-    let jobs = crate::schedule::jobs_from_dag(dag);
-    attach_schedules_of(nodes, &jobs, db_path, zone, now).await
-}
-
-/// [`attach_schedules`] for jobs already collected from the graph
-/// ([`crate::schedule::jobs_from_dag`]).
+/// `db_path` (none yet: no failures, no pauses), with next fire times evaluated in `zone`
+/// (the recorded scheduler's, when one recorded it), for `jobs`
+/// ([`crate::schedule::jobs_from_dag`]). No scheduler runs here: `live` is what the records
+/// show (`crate::liveness`). The walk is [`crate::refresh_path::schedule_views`], the one
+/// every surface reads.
 pub async fn attach_schedules_of(
     nodes: &mut [NodeStatus],
     jobs: &[crate::schedule::ScheduledJob],
@@ -316,51 +307,22 @@ pub async fn attach_schedules_of(
     };
     let recorded_zone = seen.zone();
     let zone = recorded_zone.as_ref().unwrap_or(zone);
-    attach_standings(nodes, jobs, &ticks, &failures, &pauses, zone, now);
-    // No scheduler runs here: `live` is what the records show (`crate::liveness`).
-    let observed = crate::liveness::observe(jobs, zone, now, &seen);
+    let mut views = crate::refresh_path::schedule_views(crate::refresh_path::ScheduleInputs {
+        jobs,
+        zone,
+        now,
+        ticks: &ticks,
+        failures: &failures,
+        pauses: &pauses,
+        firing: &HashMap::new(),
+        observed: &crate::liveness::observe(jobs, zone, now, &seen),
+    });
     for node in nodes.iter_mut() {
-        if let (Some(block), Some(seen)) = (&mut node.schedule, observed.schedules.get(&node.id)) {
-            block.live = seen.live;
+        if let Some(view) = views.remove(&node.id) {
+            node.schedule = Some(view.block);
         }
     }
     Ok(())
-}
-
-/// [`attach_schedules`] over ticks, failures and pauses already read: each scheduled node's
-/// [`ScheduleStatus`] from the one definition of where its schedule stands
-/// ([`crate::schedule_standing::standing`]).
-pub fn attach_standings(
-    nodes: &mut [NodeStatus],
-    jobs: &[crate::schedule::ScheduledJob],
-    ticks: &HashMap<String, crate::schedule_standing::Ticks>,
-    failures: &HashMap<String, db::ScheduleFailures>,
-    pauses: &HashMap<String, db::SchedulePause>,
-    zone: &crate::schedule::Zone,
-    now: chrono::DateTime<chrono::Utc>,
-) {
-    for node in nodes.iter_mut() {
-        let Some(job) = jobs.iter().find(|j| j.id == node.id) else {
-            continue;
-        };
-        let failures = failures.get(&job.id).map_or(0, |f| f.failures);
-        let pause = pauses
-            .get(&job.id)
-            .filter(|p| p.until.is_none_or(|until| until > now.timestamp()));
-        let standing = crate::schedule_standing::standing(
-            &job.cron,
-            zone,
-            now,
-            pause.is_some() || failures >= job.max_failures,
-            ticks.get(&job.id),
-        );
-        node.schedule = Some(ScheduleStatus::of(
-            job,
-            standing,
-            (failures, job.max_failures),
-            pause,
-        ));
-    }
 }
 
 impl ScheduleStatus {
@@ -847,17 +809,14 @@ pub async fn status(
             .await?
             .0;
     // No scheduler runs here: a schedule's state is what the metadata DB holds.
-    let now = chrono::Utc::now();
-    attach_schedules(
-        &mut result.nodes,
+    crate::health::attach_from_db_with_schedules(
+        &mut result,
         &dag,
-        Some(&cfg.db_path),
+        cfg,
         &crate::schedule::Zone::Local,
-        now,
+        chrono::Utc::now(),
     )
     .await?;
-    crate::health::attach_from_db(&mut result, &dag, cfg, &crate::schedule::Zone::Local, now)
-        .await?;
     Ok(result)
 }
 
