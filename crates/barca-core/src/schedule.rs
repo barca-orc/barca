@@ -134,15 +134,13 @@ pub fn jobs_from_dag(dag: &crate::dag::Dag) -> Vec<ScheduledJob> {
             .into_iter()
             .skip(1)
             .collect();
-        if let Some(n) = dag.get_node(&job.id).and_then(|n| n.extracted.max_failures) {
+        if let Some(n) = dag.get_node(&job.id).and_then(|n| n.decl.max_failures) {
             job.max_failures = n;
         }
-        job.timeout_seconds = dag
-            .get_node(&job.id)
-            .and_then(|n| n.extracted.schedule_timeout);
+        job.timeout_seconds = dag.get_node(&job.id).and_then(|n| n.decl.schedule_timeout);
         job.batch = dag
             .get_node(&job.id)
-            .and_then(|n| n.extracted.schedule_batch.clone());
+            .and_then(|n| n.decl.schedule_batch.clone());
     }
     jobs
 }

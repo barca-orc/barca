@@ -23,7 +23,7 @@ use crate::model::{PartitionKey, PartitionSpec, PartitionValue};
 pub fn chain(dag: &Dag, id: &str) -> Vec<String> {
     let dims = |id: &str| -> Option<BTreeSet<String>> {
         let node = dag.get_node(id)?;
-        let names: BTreeSet<String> = node.extracted.partitions.keys().cloned().collect();
+        let names: BTreeSet<String> = node.decl.partitions.keys().cloned().collect();
         (!names.is_empty()).then_some(names)
     };
     let Some(own) = dims(id) else {
@@ -151,7 +151,7 @@ pub(crate) async fn chain_states(
 fn dimensions(dag: &Dag, id: &str, keys: &[PartitionKey]) -> Vec<GridDimension> {
     let specs = dag
         .get_node(id)
-        .map(|n| n.extracted.partitions.clone())
+        .map(|n| n.decl.partitions.clone())
         .unwrap_or_default();
     let mut names: Vec<&String> = specs.keys().collect();
     names.sort();
@@ -353,7 +353,7 @@ pub fn partitioned_target(dag: &Dag, name: &str) -> Result<String, BarcaError> {
     let id = crate::targets::find_target_id(dag, name)?;
     if dag
         .get_node(&id)
-        .is_none_or(|n| n.extracted.partitions.is_empty())
+        .is_none_or(|n| n.decl.partitions.is_empty())
     {
         return Err(BarcaError::Usage(not_partitioned(name)));
     }

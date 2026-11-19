@@ -936,7 +936,7 @@ fn renew(kept: &mut StatusResults, key: &StatusKey) {
 fn has_dynamic_keys(dag: &Dag) -> bool {
     dag.topo_order().into_iter().any(|id| {
         dag.get_node(id).is_some_and(|n| {
-            n.extracted
+            n.decl
                 .partitions
                 .values()
                 .any(|p| matches!(p, barca_core::model::PartitionSpec::Dynamic { .. }))

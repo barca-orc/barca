@@ -375,7 +375,7 @@ impl ProjectCones {
     /// provide no evidence that an ordinary installed/stdlib import is invalid.
     pub(crate) fn validate_imports(
         &mut self,
-        nodes: &[Vec<barca_model::model::ExtractedNode>],
+        nodes: &[Vec<crate::extracted::ExtractedNode>],
     ) -> std::collections::BTreeMap<PathBuf, String> {
         let mut errors = std::collections::BTreeMap::new();
         let mut broken = std::collections::BTreeMap::new();

@@ -451,22 +451,22 @@ pub fn final_output_of(
 }
 
 /// `--batch node=V` against the graph, as [`validate_refresh_names`] is for `--refresh`: the
-/// value is the frontend's ([`crate::batch_spec`]), the check needs the graph.
-impl crate::batch_spec::BatchOverride {
+/// value is a leaf's ([`crate::batch_override`]), the check needs the graph.
+impl crate::batch_override::BatchOverride {
     /// Every named node must be in the graph and declare `batch=`. A usage error otherwise.
     pub fn check(&self, dag: &Dag) -> Result<(), String> {
         for (name, _) in &self.nodes {
             let found: Vec<&barca_model::model::DagNode> = dag
                 .graph
                 .node_weights()
-                .filter(|n| crate::batch_spec::names_node(n, name))
+                .filter(|n| crate::batch_override::names_node(n, name))
                 .collect();
             let Some(node) = found.first() else {
                 return Err(format!(
                     "--batch {name}=...: no node named '{name}' in the loaded pipeline"
                 ));
             };
-            if node.extracted.batch.is_none() {
+            if node.decl.batch.is_none() {
                 return Err(format!(
                     "--batch {name}=...: '{name}' does not declare batch=, so its function takes \
                      a single key; add batch= to it to batch it (barca docs partitions, \

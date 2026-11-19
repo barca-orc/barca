@@ -286,14 +286,14 @@ impl Explainer<'_> {
             return crate::changes::diff(recorded, &current);
         };
         let mut changed = Vec::new();
-        if definition != node.definition_hash {
+        if definition != node.fingerprint.definition_hash {
             let key = (base, definition);
             if !self.definitions.contains_key(&key) {
                 let diff = crate::db::definition_components(self.cache, &key.1)
                     .await
                     .map(|old| {
                         let current: BTreeMap<String, String> =
-                            node.components.iter().cloned().collect();
+                            node.fingerprint.components.iter().cloned().collect();
                         crate::changes::diff(&old, &current).unwrap_or_default()
                     });
                 self.definitions.insert(key.clone(), diff);

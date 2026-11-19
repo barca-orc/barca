@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 
+use crate::extracted::ExtractedNode;
 use barca_model::dag_error::DagError;
-use barca_model::model::ExtractedNode;
 
 /// Resolves a reference written in one file (`inputs=`, `collect(...)`, `partitions_from(...)`)
 /// to the node it means. In order:

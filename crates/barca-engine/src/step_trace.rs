@@ -94,7 +94,7 @@ pub fn node_contexts(
             continue;
         };
         let short = short_name(id);
-        let (freshness, schedule) = match &node.extracted.freshness {
+        let (freshness, schedule) = match &node.decl.freshness {
             Freshness::Always => ("always", None),
             Freshness::Manual => ("manual", None),
             Freshness::Schedule(cron) => ("schedule", Some(cron.0.clone())),

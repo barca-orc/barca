@@ -168,6 +168,8 @@ pub use sizing::sizing;
 #[cfg(test)]
 mod helper_launch_tests;
 #[cfg(test)]
+mod ir_roundtrip_tests;
+#[cfg(test)]
 mod layering_tests;
 #[cfg(test)]
 mod module_layering_tests;

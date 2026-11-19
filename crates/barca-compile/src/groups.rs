@@ -1,22 +1,11 @@
 //! Static organizational metadata, kept separate from dependency edges and hashes.
+use crate::extracted::ExtractedNode;
 use crate::file_names::FileNames;
-use barca_model::{
-    BarcaError,
-    model::{ExtractedNode, NodeRef},
-};
+use barca_model::{BarcaError, model::NodeRef};
 use ruff_python_ast::{Expr, Stmt};
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct NodeGroup {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub members: Vec<String>,
-    pub output: String,
-}
+pub use barca_model::ir::NodeGroup;
 
 pub(crate) struct Declaration {
     pub(crate) file: String,

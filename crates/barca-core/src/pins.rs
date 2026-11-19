@@ -65,7 +65,7 @@ fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
         let node = dag.get_node(&id).expect("resolved node exists");
         return Ok((
             id,
-            node.kind() == crate::NodeKind::Asset && node.extracted.partitions.is_empty(),
+            node.kind() == crate::NodeKind::Asset && node.decl.partitions.is_empty(),
         ));
     }
     let step = crate::StepId::parse(name);
@@ -74,15 +74,14 @@ fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
     if !step.partition.is_empty() {
         // The same dimension names, whatever order either map holds them in.
         let named: std::collections::BTreeSet<&String> = step.partition.0.keys().collect();
-        let declared: std::collections::BTreeSet<&String> =
-            node.extracted.partitions.keys().collect();
+        let declared: std::collections::BTreeSet<&String> = node.decl.partitions.keys().collect();
         if !name.ends_with(']') || named != declared {
             return Err(BarcaError::Usage(
                 "name exactly one key with every partition dimension".into(),
             ));
         }
         for (dim, value) in &step.partition.0 {
-            if let crate::PartitionSpec::Static { values } = &node.extracted.partitions[dim] {
+            if let crate::PartitionSpec::Static { values } = &node.decl.partitions[dim] {
                 let known = values.iter().any(|v| match v {
                     crate::PartitionValue::Str(s) => s == value,
                     crate::PartitionValue::Int(n) => n.to_string() == *value,
@@ -101,7 +100,7 @@ fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
     }
     Ok((
         id,
-        node.kind() == crate::NodeKind::Asset && node.extracted.partitions.is_empty(),
+        node.kind() == crate::NodeKind::Asset && node.decl.partitions.is_empty(),
     ))
 }
 
@@ -332,8 +331,7 @@ async fn check_runtime_key(
     }
     let node = dag.get_node(step.base_id()).expect("resolved node exists");
     for (dim, value) in &step.partition.0 {
-        let crate::PartitionSpec::DerivedFrom { source_ref } = &node.extracted.partitions[dim]
-        else {
+        let crate::PartitionSpec::DerivedFrom { source_ref } = &node.decl.partitions[dim] else {
             continue;
         };
         let source = dag
@@ -563,7 +561,7 @@ pub(crate) fn prune_partition_inputs(
             for up in dag.upstream(id) {
                 let Some(all) = members.get(up) else { continue };
                 let upstream = dag.get_node(up).expect("input node exists");
-                let dims = &upstream.extracted.partitions;
+                let dims = &upstream.decl.partitions;
                 let wanted = needed.entry(up.to_string()).or_default();
                 if dims.is_empty() {
                     wanted.insert(up.to_string());
@@ -651,7 +649,7 @@ pub(crate) fn prune_expanded_inputs(
                     let node = self.dag.get_node(down).expect("downstream node exists");
                     // A dimension not carried by this input may fan out to unpinned keys.
                     if !node
-                        .extracted
+                        .decl
                         .partitions
                         .keys()
                         .all(|dim| key.0.contains_key(dim))
@@ -659,7 +657,7 @@ pub(crate) fn prune_expanded_inputs(
                         return true;
                     }
                     let projected = crate::PartitionKey(
-                        node.extracted
+                        node.decl
                             .partitions
                             .keys()
                             .map(|dim| (dim.clone(), key.0[dim].clone()))

@@ -238,11 +238,11 @@ pub fn list_assets_from_dag(dag: &crate::dag::Dag) -> Vec<AssetSummary> {
             AssetSummary {
                 id: node.id.clone(),
                 kind: node.kind(),
-                freshness: node.extracted.freshness.clone(),
+                freshness: node.decl.freshness.clone(),
                 inputs,
-                env: node.extracted.env.clone(),
-                file: node.extracted.source_file.clone(),
-                line: node.extracted.line,
+                env: node.decl.env.clone(),
+                file: node.invoke.python().source_file.clone(),
+                line: node.invoke.python().line,
             }
         })
         .collect()
