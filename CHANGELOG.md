@@ -16,6 +16,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Internal: the dry-run prediction and run sizing moved out of the run orchestrator into barca-core's decisions layer, and the read models (status, health, rollup, estimates) now depend on each other in one checked order with their shared types in one module (#1056); no behavior change.
 - Internal: barca-core's storage modules (`backup`, `gc`, `ledger`, `pins`, `store_inspect`, `store_sync`, `transfer` and the rest) name no higher layer and have a checked order among themselves (#1056); the wrong-way edges go from 16 to 6 and the largest dependency cycle from 29 modules to 19. No behavior change.
 
+- Internal: barca-core's renderer (`report`) is named by no layer below it: a run's progress lines live with the run orchestrator, the JSON form of a result with the result types, and a test lists what the storage and decisions layers still take from barca-engine (#1056); the wrong-way edges go from 3 to 1 and the largest dependency cycle from 16 modules to 5. No behavior change.
+
 - Internal: the Python helpers Rust starts share one envelope (request, stdout guard, lifeline, exit), `barca sql` and the server's query helper share one tables module, and the worker's single-step and batched runners share one step lifecycle; no behavior change (#1056).
 
 ### Bug Fixes

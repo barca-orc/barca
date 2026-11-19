@@ -7,10 +7,10 @@ mod commands;
 mod keys;
 pub use commands::{
     GetShape, HistoryExtras, HistoryNow, OutputChunk, RenderedOutput, ResultFormat, Returned,
-    Shown, first_multi_failure, history_json, history_target, render_activity, render_explain,
-    render_failed_get, render_failed_run, render_get, render_get_multi, render_history,
-    render_list, render_multi, render_plan, render_rollup, render_run, render_run_detail,
-    render_sql, render_stats, render_status,
+    Shown, history_json, history_target, render_activity, render_explain, render_failed_get,
+    render_failed_run, render_get, render_get_multi, render_history, render_list, render_multi,
+    render_plan, render_rollup, render_run, render_run_detail, render_sql, render_stats,
+    render_status,
 };
 pub(crate) use commands::{
     failed_run_body, multi_json, multi_parts, render_failed_get_returned, render_get_body,
@@ -499,94 +499,11 @@ pub fn stats_json(stats: &crate::db::AssetStats) -> serde_json::Value {
     out
 }
 
-pub fn artifact_metadata(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
-    serde_json::json!({
-        "_barca_artifact": {
-            "path": oref.path,
-            "format": oref.format,
-            "size_bytes": oref.size_bytes,
-        }
-    })
-}
-
-/// What `barca get --json` returns by default (#404): the artifact pointer, or for a
-/// partitioned target an object of pointers keyed by partition key ([`keyed_output`]). `None`
-/// when the run returned nothing (a `get` of every asset).
-pub fn pointer_output(
-    single: Option<&crate::dispatch::OutputRef>,
-    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
-    summary: Option<&crate::results::KeySummary>,
-) -> Option<serde_json::Value> {
-    output_with(single, keys, summary, artifact_metadata)
-}
-
-/// A task's JSON results, preserving its keys; binary formats remain artifact references.
-/// The command layer reads tabular partition values with `values::task_output`.
-pub(crate) fn read_task_output(
-    single: Option<&crate::dispatch::OutputRef>,
-    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
-    summary: Option<&crate::results::KeySummary>,
-) -> Option<serde_json::Value> {
-    output_with(single, keys, summary, read_final_output)
-}
-
-fn output_with(
-    single: Option<&crate::dispatch::OutputRef>,
-    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
-    summary: Option<&crate::results::KeySummary>,
-    read: impl Fn(&crate::dispatch::OutputRef) -> serde_json::Value,
-) -> Option<serde_json::Value> {
-    match crate::results::KeySummary::listed(summary, keys) {
-        Some(keys) => Some(keyed_output(
-            keys.iter()
-                .map(|(key, oref)| (key.clone(), read(oref)))
-                .collect(),
-            summary,
-        )),
-        None => single.map(read),
-    }
-}
-
-pub(crate) use crate::results::KEY_SUMMARY;
-
-/// A partitioned target's `final_output`: `entries` (key to pointer or value) as they are, or,
-/// with a summary (more than [`crate::results::LISTED_KEYS`] keys), `{"_barca_partitions":
-/// {"keys", "computed", "cached", "outputs", "truncated", "hint"}}`, where `outputs` holds the
-/// entries of the keys the run computed.
-pub fn keyed_output(
-    entries: serde_json::Map<String, serde_json::Value>,
-    summary: Option<&crate::results::KeySummary>,
-) -> serde_json::Value {
-    let Some(s) = summary else {
-        return serde_json::Value::Object(entries);
-    };
-    let truncated = entries.len() < s.computed;
-    serde_json::json!({
-        KEY_SUMMARY: {
-            "keys": s.keys,
-            "computed": s.computed,
-            "cached": s.keys - s.computed,
-            "outputs": entries,
-            "truncated": truncated,
-            "hint": key_summary_hint(s),
-        }
-    })
-}
-
-/// Why a partitioned output is summarized, and how to see the keys it leaves out.
-fn key_summary_hint(s: &crate::results::KeySummary) -> String {
-    format!(
-        "{} keys, more than {}: outputs lists only the keys this run computed{}; select keys \
-         with --partition to list their paths, or read every key with barca sql",
-        s.keys,
-        crate::results::LISTED_KEYS,
-        if s.computed > crate::results::LISTED_KEYS {
-            format!(" (the first {})", crate::results::LISTED_KEYS)
-        } else {
-            String::new()
-        }
-    )
-}
+// The JSON form of a result's `final_output` is the result's own (`results`), and reading a
+// task's JSON artifacts is `values`; these keep the paths the CLI and the server name.
+pub(crate) use crate::results::{KEY_SUMMARY, parse_key_summary};
+pub use crate::results::{artifact_metadata, first_multi_failure, keyed_output, pointer_output};
+pub(crate) use crate::values::read_task_output;
 
 /// The stderr note under the paths of a summarized partitioned output.
 pub(crate) fn key_summary_note(s: &crate::results::KeySummary) -> String {
@@ -602,34 +519,6 @@ pub(crate) fn key_summary_note(s: &crate::results::KeySummary) -> String {
         },
         crate::results::LISTED_KEYS
     )
-}
-
-/// The counts of a summarized partitioned `final_output` ([`keyed_output`]); `None` for any
-/// other value.
-pub(crate) fn parse_key_summary(output: &serde_json::Value) -> Option<crate::results::KeySummary> {
-    let s = output.get(KEY_SUMMARY)?;
-    let n = |k: &str| {
-        s.get(k)
-            .and_then(serde_json::Value::as_u64)
-            .map(|n| n as usize)
-    };
-    Some(crate::results::KeySummary {
-        keys: n("keys")?,
-        computed: n("computed")?,
-        listed: Vec::new(),
-    })
-}
-
-/// Read an artifact for display: a JSON artifact's value inline, metadata for binary formats.
-pub(crate) fn read_final_output(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
-    if oref.format == "json" {
-        std::fs::read_to_string(&oref.path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| artifact_metadata(oref))
-    } else {
-        artifact_metadata(oref)
-    }
 }
 
 /// Keep only `fields` on each object in `items` (non-objects are left alone).
