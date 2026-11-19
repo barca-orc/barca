@@ -85,7 +85,7 @@ fn insert_run(
     node: Option<&str>,
     started_at: f64,
 ) {
-    state.runs.insert(
+    state.runs.registry.insert(
         handle.to_string(),
         RunState {
             handle: handle.to_string(),
@@ -124,7 +124,7 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     let task = tokio::spawn(run_scheduler(state.clone()));
     // The initial selected graph is published before scheduler DB admission.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while state.loaded.lock().await.is_none() {
+        while state.reads.sources.loaded.lock().await.is_none() {
             tokio::task::yield_now().await;
         }
     })
@@ -136,16 +136,16 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     )
     .unwrap();
     // This is the existing watch event signal, while startup still waits for the DB.
-    state.dag_generation.fetch_add(1, Ordering::Relaxed);
+    state.reads.sources.generation.fetch_add(1, Ordering::Relaxed);
     assert_eq!(
-        barca_core::queries::list_assets_from_dag(&state.loaded_dag().await.unwrap()).len(),
+        barca_core::queries::list_assets_from_dag(&state.reads.loaded_dag().await.unwrap()).len(),
         2
     );
     drop(held);
     let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if state
-                .schedule
+                .scheduling.jobs
                 .read()
                 .unwrap()
                 .iter()
@@ -644,7 +644,7 @@ fn finished(state: &AppState, handle: &str, status: RunStatus, failed: &[&str]) 
             ..Default::default()
         })
         .collect();
-    state.runs.get_mut(handle).unwrap().result = Some(barca_core::results::GetResult {
+    state.runs.registry.get_mut(handle).unwrap().result = Some(barca_core::results::GetResult {
         run_id: "r".into(),
         elapsed_seconds: 0.0,
         steps_executed: 0,
@@ -1597,7 +1597,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     // The next server: the killed run is not started again, and its tick ends with it, no
     // target reached. The start it recorded stays.
     let st = state_at(&path);
-    crate::queue::resume_at_startup(&st).await.unwrap();
+    crate::runs::resume_at_startup(&st).await.unwrap();
     let row = &ticks(&path, &killed).await[0];
     assert_eq!(row.run_status.as_deref(), Some("error"));
     assert_eq!(

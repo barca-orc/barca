@@ -4,8 +4,7 @@
 //! snapshot of the metadata DB.
 
 use crate::error::ApiError;
-use crate::handlers::snapshot_db;
-use crate::runs::{json_text, stdout_of};
+use crate::respond::{json_text, stdout_of};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -26,9 +25,9 @@ fn root() -> Option<String> {
 
 /// `GET /list` — `barca list --json --all` (the client applies `--limit` and `--fields`).
 pub async fn list(State(state): State<AppState>) -> Result<Response, ApiError> {
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let assets = barca_core::queries::list_assets_from_dag(&dag);
-    let next_fires = crate::handlers::next_fires(&dag);
+    let next_fires = crate::schedule_view::next_fires(&dag);
     let rendered = barca_core::report::render_list(
         &assets,
         assets.len(),
@@ -78,9 +77,9 @@ pub async fn nodes(
             .is_some_and(|v| !matches!(v, "" | "0" | "false")),
         ..Default::default()
     };
-    let dag = state.inspect_dag().await?;
-    let db_state = state.db_state();
-    let snapshot = snapshot_db(&state).await?;
+    let dag = state.reads.inspect_dag().await?;
+    let db_state = state.reads.db_state();
+    let snapshot = state.reads.snapshot_db().await?;
     let sample = query.sample.unwrap_or(0);
     let mut result = node_status(
         &state,
@@ -108,7 +107,7 @@ pub(crate) async fn node_status(
     state: &AppState,
     dag: &std::sync::Arc<barca_core::dag::Dag>,
     db_state: &crate::read_cache::Stamp,
-    snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
+    snapshot: &std::sync::Arc<crate::snapshot::SnapshotDb>,
     targets: Vec<String>,
     sample: usize,
     files: Option<&str>,
@@ -120,7 +119,7 @@ pub(crate) async fn node_status(
     // Kept until the sources or the database change ([`crate::read_cache`]); the live schedule
     // state and the filter are applied to each answer.
     let kept = state
-        .cached_status(dag, db_state, (targets, sample, true), move || async move {
+        .reads.cached_status(dag, db_state, (targets, sample, true), move || async move {
             let _snapshot = kept_snapshot;
             barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true).await
         })
@@ -129,7 +128,7 @@ pub(crate) async fn node_status(
     let mut result = (*kept).clone();
     let now = chrono::Utc::now();
     let running =
-        crate::handlers::attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now)
+        crate::health_view::attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now)
             .await?;
     // `as_of` is in the body, so the clock to the second would change the `ETag` every second
     // and an unchanged poll would never be a `304`. It is the start of the minute, the instant
@@ -208,7 +207,7 @@ pub async fn history(
         chrono::Utc::now(),
     )
     .map_err(ApiError::BadRequest)?;
-    let snapshot = snapshot_db(&state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let (runs, total) = barca_core::queries::history_at(&snapshot.path, limit, &filter).await?;
     // Asked for the runs in progress: each with what it is working on now (#991).
     let now = if filter.statuses.iter().any(|s| s == "running")
@@ -245,8 +244,8 @@ pub async fn sql_views(
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect();
-    let dag = state.inspect_dag().await?;
-    let snapshot = snapshot_db(&state).await?;
+    let dag = state.reads.inspect_dag().await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let catalog =
@@ -280,7 +279,7 @@ pub async fn materializations(
 ) -> Result<Json<Value>, ApiError> {
     let limit = query.limit.unwrap_or(1000).min(MATERIALIZATIONS_MAX);
     let offset = query.offset.unwrap_or(0);
-    let snapshot = snapshot_db(&state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let (rows, total) = barca_core::db::read_step_rows(&snapshot.path, limit, offset).await?;
     Ok(Json(json!({
         "materializations": rows,
@@ -310,10 +309,10 @@ pub async fn partitions(
     Path(name): Path<String>,
     Query(query): Query<PartitionsQuery>,
 ) -> Result<Json<barca_core::db::PartitionKeys>, ApiError> {
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let id = barca_core::targets::find_target_id(&dag, &name)
         .map_err(|e| ApiError::run(e, context("partitions", &state)))?;
-    let snapshot = snapshot_db(&state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let filter = barca_core::db::PartitionKeysFilter {
         status: query.status,
         query: query.q.filter(|q| !q.is_empty()),
@@ -332,14 +331,14 @@ async fn kept_partition_grid(
     state: &AppState,
     name: &str,
 ) -> Result<std::sync::Arc<barca_core::partition_grid::PartitionGrid>, ApiError> {
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let id = barca_core::partition_grid::partitioned_target(&dag, name)
         .map_err(|e| ApiError::run(e, context("status", state)))?;
-    let db = state.db_state();
-    if let Some(grid) = state.kept_grid(&dag, &db, &id) {
+    let db = state.reads.db_state();
+    if let Some(grid) = state.reads.kept_grid(&dag, &db, &id) {
         return Ok(grid);
     }
-    let snapshot = snapshot_db(state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let grid = std::sync::Arc::new(
@@ -347,7 +346,7 @@ async fn kept_partition_grid(
             .await
             .map_err(|e| ApiError::run(e, context("partitions grid", state)))?,
     );
-    state.keep_grid(&dag, &db, grid.clone());
+    state.reads.keep_grid(&dag, &db, grid.clone());
     Ok(grid)
 }
 
@@ -453,10 +452,10 @@ pub async fn partition_key(
     Path(name): Path<String>,
     Query(query): Query<PartitionKeyQuery>,
 ) -> Result<Json<barca_core::partition_grid::PartitionKeyDetail>, ApiError> {
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let id = barca_core::targets::find_target_id(&dag, &name)
         .map_err(|e| ApiError::run(e, context("partition key", &state)))?;
-    let snapshot = snapshot_db(&state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let detail = barca_core::partition_grid::partition_key_detail(
@@ -482,10 +481,10 @@ pub async fn stats(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Response, ApiError> {
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let id = barca_core::targets::find_target_id(&dag, &name)
         .map_err(|e| ApiError::run(e, context("stats", &state)))?;
-    let snapshot = snapshot_db(&state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let stats = barca_core::db::get_asset_stats(&snapshot.path, &id).await?;
     let rendered = barca_core::report::render_stats(&stats, true, None);
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
@@ -519,7 +518,7 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Project>, Api
     Ok(Json(Project {
         api_version: barca_core::outcome::API_VERSION,
         env: state.config.resolved.env.clone(),
-        deployed_at: barca_core::outcome::rfc3339(state.started_at),
+        deployed_at: barca_core::outcome::rfc3339(state.lifecycle.started_at),
         commit: root.as_deref().and_then(git_commit),
         root,
         files,
@@ -575,4 +574,13 @@ fn git_commit(root: &str) -> Option<String> {
         let (id, name) = line.split_once(' ')?;
         (name == reference).then(|| id.to_string())
     })
+}
+/// `GET /logs/{run_id}` — persisted stdout lines for a run (durable history).
+pub async fn logs(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let snap = state.reads.snapshot_db().await?;
+    let entries = barca_core::db::get_logs(&snap.path, &run_id).await?;
+    Ok(Json(json!({ "logs": entries })))
 }

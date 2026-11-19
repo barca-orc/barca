@@ -2,7 +2,8 @@
 //! failing, or its node already has a run in flight (the server's or a CLI run on the same
 //! project).
 
-use crate::state::{AppState, RunStatus};
+use crate::run_model::RunStatus;
+use crate::state::AppState;
 use barca_core::schedule::{ScheduledJob, Zone};
 use barca_core::{NodeKind, db};
 use chrono::{DateTime, TimeZone, Timelike};
@@ -104,7 +105,7 @@ pub(super) fn run_covers(command: &str, nodes: &[String], job: &ScheduledJob) ->
 /// whoever started it: the scheduler or an HTTP request.
 pub(super) fn run_in_flight_for(state: &AppState, job: &ScheduledJob) -> Option<String> {
     state
-        .runs
+        .runs.registry
         .iter()
         .filter(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
         .filter(|r| run_covers(&r.command, &r.nodes, job))

@@ -4,8 +4,7 @@
 //! anything from it is recorded. The logic is `barca_core::ledger`'s; this is its HTTP face.
 
 use crate::error::ApiError;
-use crate::handlers::snapshot_db;
-use crate::runs::refuse_if_read_only;
+use crate::guards::refuse_if_read_only;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -31,7 +30,7 @@ async fn lookup_inner(state: AppState, body: &[u8]) -> Result<Response, ApiError
     })?;
     let response = if state.config.read_only {
         // A read-only server never opens the database itself.
-        let snapshot = snapshot_db(&state).await?;
+        let snapshot = state.reads.snapshot_db().await?;
         let mut cfg = state.config.resolved.clone();
         cfg.db_path = snapshot.path.clone();
         ledger::lookup(&cfg, &request).await?
@@ -54,16 +53,16 @@ pub async fn post_run(State(state): State<AppState>, body: axum::body::Bytes) ->
 async fn post_inner(state: AppState, body: &[u8]) -> Result<Response, ApiError> {
     // A draining server records no new runs (#190): the poster keeps the run and sends it
     // again with its next command, to the server that replaces this one.
-    if state.is_draining() || state.shutdown.is_cancelled() {
+    if state.lifecycle.is_draining() || state.lifecycle.shutdown.is_cancelled() {
         return Err(ApiError::Unavailable {
             message: "this server is shutting down and records no new runs\nThe run stays on \
                       the machine that posted it, and its next command against the server sends \
                       it again."
                 .to_string(),
-            retry_after: state.retry_after_secs(),
+            retry_after: crate::guards::retry_after_secs(&state.config),
         });
     }
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&state.config)?;
     let post: LedgerPost = serde_json::from_slice(body).map_err(|e| {
         ApiError::BadRequest(format!(
             "the request body is not a ledger post: {e}\nSend {{\"run\": {{...}}, \"steps\": \

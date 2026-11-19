@@ -4,8 +4,8 @@
 //! streamed.
 
 use crate::error::ApiError;
-use crate::handlers::snapshot_db;
-use crate::state::{AppState, RunState, RunStatus};
+use crate::run_model::{RunState, RunStatus};
+use crate::state::AppState;
 use barca_core::db;
 use barca_core::outcome::RunView;
 use barca_core::served::{LiveRun, LiveStatus, LiveSteps};
@@ -24,11 +24,11 @@ pub(crate) async fn view_page(
     limit: Option<usize>,
     offset: usize,
 ) -> Result<RunView, ApiError> {
-    let snapshot = snapshot_db(state).await?;
-    let live = state.runs.get(id).map(|r| live_of(state, &r));
+    let snapshot = state.reads.snapshot_db().await?;
+    let live = state.runs.registry.get(id).map(|r| live_of(state, &r));
     let events = live
         .as_ref()
-        .and_then(|run| state.events.get(&run.handle))
+        .and_then(|run| state.runs.events.get(&run.handle))
         .map(|channel| channel.snapshot());
     let draft = barca_core::served::run_view(barca_core::served::RunViewRequest {
         read_path: &snapshot.path,
@@ -47,7 +47,7 @@ pub(crate) async fn view_page(
     };
     // Planned over the deployed graph, when today's sources still plan what it ran (#758).
     if draft.plans().is_some()
-        && let Ok(dag) = state.inspect_dag().await
+        && let Ok(dag) = state.reads.inspect_dag().await
     {
         draft.plan(&dag).await?;
     }
@@ -79,7 +79,7 @@ pub(crate) fn live_of(state: &AppState, run: &RunState) -> LiveRun {
         outcome: run.outcome.clone(),
         error: run.error.clone(),
         cancellation: run.cancellation.clone(),
-        waiting_for: state.waiting_for(run.status),
+        waiting_for: state.lifecycle.waiting_for(run.status),
         steps: run.result.as_ref().map(|r| LiveSteps {
             total: r.steps.len() as i64,
             executed: r.steps_executed as i64,
@@ -95,7 +95,7 @@ pub(crate) fn live_of(state: &AppState, run: &RunState) -> LiveRun {
 /// Every run this server holds, as the overlay of the run list.
 pub(super) fn live_runs(state: &AppState) -> Vec<LiveRun> {
     state
-        .runs
+        .runs.registry
         .iter()
         .map(|r| live_of(state, r.value()))
         .collect()

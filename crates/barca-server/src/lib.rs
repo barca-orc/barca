@@ -15,29 +15,48 @@
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 mod asset_pauses;
+mod assets;
 pub mod auth;
 mod auth_http;
+mod config;
 mod error;
+mod fallback;
 mod gc;
-mod handlers;
+mod guards;
+mod health_view;
 mod inspect;
 mod ledger;
-mod pause;
 mod pins;
+mod progress;
 mod project_socket;
 mod queue;
+mod queue_routes;
+mod queue_view;
 mod read_cache;
 mod replay;
 mod reset;
+mod resolve;
+mod respond;
 mod routes;
+mod run_model;
 mod running;
 mod runs;
+mod schedule_routes;
+mod schedule_view;
 mod scheduler;
+mod snapshot;
+mod sources;
+mod sql_helper;
 mod sql_query;
 mod state;
+mod state_routes;
 mod telemetry;
 mod ui;
+mod views;
 mod watch;
+
+#[cfg(test)]
+mod layering_tests;
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -78,8 +97,8 @@ pub(crate) mod test_support {
     }
 }
 
-pub use running::{NodeRunning, PartitionProgress, RunningStep};
-pub use state::{NodeState, ServeConfig};
+pub use config::ServeConfig;
+pub use views::{NodeRunning, NodeState, PartitionProgress, RunningStep};
 
 use state::AppState;
 
@@ -118,7 +137,7 @@ pub fn app(config: ServeConfig) -> axum::Router {
 #[doc(hidden)]
 pub fn draining_app(config: ServeConfig) -> axum::Router {
     let state = AppState::new(config);
-    state.draining.cancel();
+    state.lifecycle.draining.cancel();
     routes::router(state)
 }
 
@@ -207,17 +226,17 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // Before the sources load and before anything binds: a writer whose metadata DB cannot be
     // set up stops here (exit 3), instead of serving with its scheduler off (#513).
     metadata_startup(&state).await?;
-    state.loaded_dag().await?;
+    state.reads.loaded_dag().await?;
     // The runs the last server accepted and did not start, in their order. Before the
     // scheduler's catch-up, which skips a job whose node has one.
     if !read_only {
         if std::path::Path::new(&state.config.resolved.db_path).exists() {
             state.record_writer().await.map_err(ServeError::Metadata)?;
         }
-        queue::resume_at_startup(&state)
+        runs::resume_at_startup(&state)
             .await
             .map_err(ServeError::Metadata)?;
-        queue::dispatch(&state);
+        runs::dispatch(&state);
     }
 
     // Routine timers and served-run ends share the configured backup policy (RFC-0015).
@@ -276,7 +295,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     };
 
     // `GET /state` computed ahead of the web UI's polls (`read_cache`).
-    tokio::spawn(read_cache::keep_warm(state.clone()));
+    tokio::spawn(health_view::keep_warm(state.clone()));
 
     let app = routes::router(state.clone());
 
@@ -348,7 +367,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
             // response stays open after its run finished (a browser tab on a run page holds
             // one), and the server waits for open connections: one such stream used to
             // keep a stopped server alive for ever.
-            state.events.clear();
+            state.runs.events.clear();
             stopped
         }
     }
@@ -428,7 +447,7 @@ async fn metadata_startup(state: &AppState) -> Result<(), ServeError> {
                 "[barca] warning: {e}; serving read-only without its history (GET /health \
                  metadata_error).{fix}"
             );
-            *state.metadata_error.write().unwrap() = Some(e.to_string());
+            *state.reads.metadata_error.write().unwrap() = Some(e.to_string());
             Ok(())
         }
     }
@@ -462,7 +481,7 @@ async fn cache_checkpoint(state: AppState) {
     loop {
         tokio::select! {
             _ = every.tick() => {}
-            _ = state.shutdown.cancelled() => return,
+            _ = state.lifecycle.shutdown.cancelled() => return,
         }
         barca_core::gc::checkpoint(&state.config.resolved).await;
     }
@@ -676,9 +695,9 @@ pub const REQUEUE_REASON: &str = "server restart (requeued)";
 /// Runs executing now.
 fn runs_in_flight(state: &AppState) -> usize {
     state
-        .runs
+        .runs.registry
         .iter()
-        .filter(|r| r.status == state::RunStatus::Running)
+        .filter(|r| r.status == run_model::RunStatus::Running)
         .count()
 }
 
@@ -686,9 +705,9 @@ fn runs_in_flight(state: &AppState) -> usize {
 fn runs_queued(state: &AppState) -> usize {
     // Waiting in the queue, or put back in it by this drain.
     state
-        .runs
+        .runs.registry
         .iter()
-        .filter(|r| r.status == state::RunStatus::Pending)
+        .filter(|r| r.status == run_model::RunStatus::Pending)
         .count()
 }
 
@@ -710,9 +729,9 @@ async fn drain_then_stop(
     budget: StopBudget,
 ) -> Stopped {
     let secs = state.config.resolved.drain_timeout_secs;
-    state.draining.cancel();
-    state.run_tasks.close();
-    if state.writer_recorded.get().is_some()
+    state.lifecycle.draining.cancel();
+    state.runs.tasks.close();
+    if state.runs.writer_recorded.get().is_some()
         && let Err(e) = barca_core::liveness::record_stopped(
             &state.config.resolved.db_path,
             chrono::Utc::now().timestamp(),
@@ -725,9 +744,9 @@ async fn drain_then_stop(
     // drain ends, the next server puts these runs back in the queue instead of recording them
     // interrupted (#628).
     let flying: Vec<String> = state
-        .runs
+        .runs.registry
         .iter()
-        .filter(|r| r.status == state::RunStatus::Running)
+        .filter(|r| r.status == run_model::RunStatus::Running)
         .map(|r| r.handle.clone())
         .collect();
     if !state.config.read_only
@@ -761,7 +780,7 @@ async fn drain_then_stop(
         Cancel(String),
     }
     let stop = tokio::select! {
-        _ = state.run_tasks.wait() => None,
+        _ = state.runs.tasks.wait() => None,
         _ = tokio::time::sleep(std::time::Duration::from_secs(secs)) => Some(Stop::Requeue),
         name = again => Some(Stop::Cancel(format!("{name} received again"))),
     };
@@ -790,10 +809,10 @@ async fn drain_then_stop(
                 if n == 1 { "it starts" } else { "they start" },
             );
             state
-                .queue
+                .runs.queue
                 .requeue
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            state.cancel_reason.set(REQUEUE_REASON);
+            state.lifecycle.cancel_reason.set(REQUEUE_REASON);
             n
         }
         Some(Stop::Cancel(why)) => {
@@ -801,12 +820,12 @@ async fn drain_then_stop(
             if n > 0 {
                 barca_core::errln!("[barca] {why}: cancelling {} ({SHUTDOWN_REASON})", runs(n));
             }
-            state.cancel_reason.set(SHUTDOWN_REASON);
+            state.lifecycle.cancel_reason.set(SHUTDOWN_REASON);
             n
         }
     };
-    state.shutdown.cancel();
-    let _ = tokio::time::timeout(budget.runs, state.run_tasks.wait()).await;
+    state.lifecycle.shutdown.cancel();
+    let _ = tokio::time::timeout(budget.runs, state.runs.tasks.wait()).await;
     let queued = runs_queued(state);
     if queued > 0 {
         barca_core::errln!(
@@ -815,7 +834,7 @@ async fn drain_then_stop(
         );
     }
     if state
-        .queue
+        .runs.queue
         .requeue
         .load(std::sync::atomic::Ordering::SeqCst)
     {

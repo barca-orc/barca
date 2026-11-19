@@ -1,5 +1,6 @@
 //! HTTP adapter for project tokens. Authorization surrounds routing and ETag handling.
-use crate::{auth, error::ApiError, state::AppState};
+use crate::{auth, error::ApiError};
+use std::sync::Arc;
 use axum::{
     Json,
     body::Body,
@@ -81,11 +82,10 @@ async fn blocking<T: Send + 'static>(
 pub(crate) struct Principal(pub(crate) String);
 
 pub(crate) async fn authorize(
-    State(state): State<AppState>,
+    State(access): State<Arc<Access>>,
     request: Request,
     next: Next,
 ) -> Response {
-    let access = state.auth.clone();
     if access.store.is_none() {
         return next.run(request).await;
     }
@@ -182,10 +182,10 @@ pub(crate) async fn authorize(
     );
     Response::from_parts(parts, Body::from_stream(stream))
 }
-pub(crate) async fn status(State(state): State<AppState>) -> Response {
+pub(crate) async fn status(State(access): State<Arc<Access>>) -> Response {
     no_store(
         Json(barca_core::served::AuthStatus {
-            mode: if state.auth.store.is_none() {
+            mode: if access.store.is_none() {
                 barca_core::served::AuthMode::Off
             } else {
                 barca_core::served::AuthMode::Token
@@ -210,21 +210,21 @@ fn json<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
         .map_err(|_| ApiError::BadRequest("expected a valid JSON authentication request".into()))
 }
 pub(crate) async fn bootstrap(
-    State(state): State<AppState>,
+    State(access): State<Arc<Access>>,
     body: Result<Json<Bootstrap>, JsonRejection>,
 ) -> Response {
     let result = async {
-        let store = state.auth.store()?;
+        let store = access.store()?;
         let body = json(body)?;
         blocking(move || store.redeem(&body.code)).await
     }
     .await;
     match result {
         Ok(issued) => {
-            state.auth.notify();
+            access.notify();
             no_store(Json(issued).into_response())
         }
-        Err(ApiError::Forbidden(_)) if state.auth.store.is_some() => unauthorized("invalid_token"),
+        Err(ApiError::Forbidden(_)) if access.store.is_some() => unauthorized("invalid_token"),
         Err(error) => no_store(error.into_response()),
     }
 }
@@ -235,9 +235,9 @@ pub struct TokenList {
     pub tokens: Vec<crate::auth::Metadata>,
 }
 
-pub(crate) async fn list(State(state): State<AppState>) -> Response {
+pub(crate) async fn list(State(access): State<Arc<Access>>) -> Response {
     let result = async {
-        let store = state.auth.store()?;
+        let store = access.store()?;
         blocking(move || store.list()).await
     }
     .await;
@@ -247,11 +247,11 @@ pub(crate) async fn list(State(state): State<AppState>) -> Response {
     })
 }
 pub(crate) async fn create(
-    State(state): State<AppState>,
+    State(access): State<Arc<Access>>,
     body: Result<Json<Create>, JsonRejection>,
 ) -> Response {
     let result = async {
-        let store = state.auth.store()?;
+        let store = access.store()?;
         let body = json(body)?;
         blocking(move || store.create(&body.name, body.expires_at)).await
     }
@@ -261,15 +261,15 @@ pub(crate) async fn create(
         Err(error) => error.into_response(),
     })
 }
-pub(crate) async fn revoke(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+pub(crate) async fn revoke(State(access): State<Arc<Access>>, Path(id): Path<String>) -> Response {
     let result = async {
-        let store = state.auth.store()?;
+        let store = access.store()?;
         blocking(move || store.revoke(&id)).await
     }
     .await;
     no_store(match result {
         Ok(()) => {
-            state.auth.notify();
+            access.notify();
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => error.into_response(),
@@ -316,7 +316,7 @@ mod tests {
                 (scenario == "expiry").then(|| Utc::now() + chrono::Duration::milliseconds(100));
             let issued = store.create("stream", expiry).unwrap();
             let router = Router::new().route("/events", get(streaming)).layer(
-                axum::middleware::from_fn_with_state(state.clone(), authorize),
+                axum::middleware::from_fn_with_state(state.auth.clone(), authorize),
             );
             let request = Request::builder()
                 .uri("/events")

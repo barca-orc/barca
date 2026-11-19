@@ -31,7 +31,7 @@ async fn scope(state: &AppState, req: &PauseRequest) -> Result<Vec<String>, ApiE
             "a target is required\nSend {\"target\": \"<node or file.py>\"}.".into(),
         ));
     };
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     Ok(pauses::scope(&dag, target, req.downstream)?)
 }
 
@@ -41,7 +41,7 @@ pub async fn pause(
     State(state): State<AppState>,
     Json(req): Json<PauseRequest>,
 ) -> Result<Json<Pauses>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
+    crate::guards::refuse_if_read_only(&state.config)?;
     if req.all {
         return Err(ApiError::BadRequest(
             "`all` is for resuming\nPause a target, or a file to pause every node of it.".into(),
@@ -64,7 +64,7 @@ pub async fn resume(
     State(state): State<AppState>,
     Json(req): Json<PauseRequest>,
 ) -> Result<Json<Pauses>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
+    crate::guards::refuse_if_read_only(&state.config)?;
     let db_path = &state.config.resolved.db_path;
     let removed = if req.all {
         pauses::resume(db_path, None).await?

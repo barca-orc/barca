@@ -1,4 +1,5 @@
 //! Attempt-scoped serialized event windows. The hub owns eviction; readers hold one frame.
+use crate::error::CursorError;
 use barca_core::{BarcaError, RunEvent};
 use futures::{StreamExt, stream::BoxStream};
 use std::{
@@ -32,21 +33,6 @@ pub(crate) struct Frame {
 impl Frame {
     pub fn id(&self) -> String {
         format!("{}:{}", self.epoch, self.sequence)
-    }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CursorError {
-    Invalid,
-    Mismatch,
-    Expired,
-}
-impl CursorError {
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::Invalid => "invalid_event_cursor",
-            Self::Mismatch => "event_cursor_mismatch",
-            Self::Expired => "event_cursor_expired",
-        }
     }
 }
 pub(crate) fn parse(text: &str) -> Result<(&str, u64), CursorError> {
@@ -169,7 +155,7 @@ impl ReplayHub {
     }
 }
 struct Lease {
-    progress: Mutex<crate::running::Progress>,
+    progress: Mutex<crate::progress::Progress>,
     hub: ReplayHub,
     id: u64,
     emitted: tokio::sync::watch::Sender<u64>,
@@ -195,7 +181,7 @@ impl RunChannel {
     pub fn bytes(&self) -> usize {
         self.lease.hub.inner.lock().unwrap().windows[&self.lease.id].bytes
     }
-    pub fn progress(&self) -> crate::running::ProgressSnapshot {
+    pub fn progress(&self) -> crate::progress::ProgressSnapshot {
         self.lease.progress.lock().unwrap().snapshot()
     }
     pub fn emit(&self, event: RunEvent) {
@@ -643,7 +629,7 @@ mod http_tests {
     async fn http_resume_statuses_and_ids_match_the_retained_window() {
         let root = tempfile::tempdir().unwrap();
         let state = state(root.path());
-        let channel = state.replay.channel().unwrap();
+        let channel = state.runs.replay.channel().unwrap();
         channel.emit(RunEvent::RunStarted {
             run_id: "run".into(),
         });
@@ -652,7 +638,7 @@ mod http_tests {
             ok: true,
             outcome: None,
         });
-        state.events.insert("run".into(), channel.clone());
+        state.runs.events.insert("run".into(), channel.clone());
         let router = crate::routes::router(state);
         let response = request(&router, None).await;
         assert_eq!(response.status(), StatusCode::OK);

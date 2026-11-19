@@ -50,7 +50,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let state = state(dir.path());
     let mut run = live("durable");
-    state.runs.insert(run.handle.clone(), run.clone());
+    state.runs.registry.insert(run.handle.clone(), run.clone());
     let Json(queued) = list(State(state.clone()), Query(RunsQuery::default()))
         .await
         .unwrap();
@@ -67,7 +67,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
         .unwrap();
     run.db_run_id = Some("durable".into());
     run.status = RunStatus::Running;
-    state.runs.insert(run.handle.clone(), run.clone());
+    state.runs.registry.insert(run.handle.clone(), run.clone());
     let wrapping_up = view(&state, "durable").await.unwrap();
     assert_eq!(
         wrapping_up.status, "running",
@@ -75,7 +75,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     );
     run.status = RunStatus::Failed;
     run.error = Some("boom".into());
-    state.runs.insert(run.handle.clone(), run);
+    state.runs.registry.insert(run.handle.clone(), run);
     let Json(history) = list(State(state.clone()), Query(RunsQuery::default()))
         .await
         .unwrap();
@@ -110,7 +110,7 @@ async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
     run.db_run_id = Some("long".into());
     run.target = Some("backfill".into());
     run.status = RunStatus::Running;
-    state.runs.insert(run.handle.clone(), run);
+    state.runs.registry.insert(run.handle.clone(), run);
     let query = |limit, search: Option<&str>, status: Option<&str>| RunsQuery {
         limit: Some(limit),
         search: search.map(str::to_string),
@@ -156,7 +156,7 @@ async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
         triggered_by: barca_core::outcome::TriggeredBy::Schedule,
         ..Trigger::api()
     };
-    state.runs.insert(queued.handle.clone(), queued);
+    state.runs.registry.insert(queued.handle.clone(), queued);
     let hidden = RunsQuery {
         not_triggered_by: Some("schedule".into()),
         ..query(10, None, None)
@@ -193,29 +193,29 @@ fn finished_runs_past_the_memory_budget_are_dropped_oldest_first() {
         let mut run = live(handle);
         run.status = RunStatus::Complete;
         run.finished_at = Some(1000.0 + i as f64);
-        state.runs.insert(handle.to_string(), run);
+        state.runs.registry.insert(handle.to_string(), run);
         let channel = RunChannel::new();
         channel.emit(RunEvent::Line {
             line: "x".repeat(10_000),
             when: barca_core::lines::LineWhen::Always,
         });
-        state.events.insert(handle.to_string(), channel);
+        state.runs.events.insert(handle.to_string(), channel);
     }
     let mut running = live("running");
     running.status = RunStatus::Running;
-    state.runs.insert("running".into(), running);
+    state.runs.registry.insert("running".into(), running);
     // Under the budget: nothing is dropped.
     evict_over_budget(&state, 1 << 20);
-    assert_eq!(state.runs.len(), 6);
+    assert_eq!(state.runs.registry.len(), 6);
     // About two runs' worth: the oldest go, the newest and the running run stay.
     evict_over_budget(&state, 25_000);
-    let mut kept: Vec<String> = state.runs.iter().map(|r| r.key().clone()).collect();
+    let mut kept: Vec<String> = state.runs.registry.iter().map(|r| r.key().clone()).collect();
     kept.sort();
     assert_eq!(kept, ["r4", "r5", "running"]);
-    assert!(!state.events.contains_key("r1") && state.events.contains_key("r4"));
+    assert!(!state.runs.events.contains_key("r1") && state.runs.events.contains_key("r4"));
     // Even a budget of nothing keeps the run that finished last.
     evict_over_budget(&state, 0);
-    let mut kept: Vec<String> = state.runs.iter().map(|r| r.key().clone()).collect();
+    let mut kept: Vec<String> = state.runs.registry.iter().map(|r| r.key().clone()).collect();
     kept.sort();
     assert_eq!(kept, ["r5", "running"]);
 }
@@ -272,9 +272,9 @@ fn a_queued_cancellation_names_the_same_work_already_running() {
     other.status = RunStatus::Running;
     other.target = Some("second".into());
     other.started_at = 0.5;
-    state.runs.insert("same".into(), same);
-    state.runs.insert("other".into(), other);
-    state.runs.insert("queued".into(), live("queued"));
+    state.runs.registry.insert("same".into(), same);
+    state.runs.registry.insert("other".into(), other);
+    state.runs.registry.insert("queued".into(), live("queued"));
     let c = super::handlers::queued_cancellation(&state, "queued", Some("token:a".into()));
     assert!(!c.started);
     assert_eq!(c.waiting_behind, ["other", "same"]);

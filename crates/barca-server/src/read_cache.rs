@@ -4,29 +4,31 @@
 //!
 //! Three things are kept, each with the evidence that it is still right:
 //!
-//! - **The inspected graph** ([`AppState::inspect_dag`]): the graph `GET /state`, `GET /nodes`
+//! - **The inspected graph** ([`Reads::inspect_dag`]): the graph `GET /state`, `GET /nodes`
 //!   and the schema route decide cache states with. It is loaded again when a pipeline file, a
 //!   helper module its steps read, or a path an import was looked up at changes, when `--watch`
 //!   sees an edit, and, for a graph with dynamic partition keys (`partitions(<expression>)`,
 //!   which can read anything), at least every [`DYNAMIC_KEYS_MAX_AGE`].
-//! - **The metadata DB to read** ([`AppState::read_snapshot`]): the database itself, read in
+//! - **The metadata DB to read** ([`Reads::read_snapshot`]): the database itself, read in
 //!   place beside the runs writing it ([`barca_core::db::ReadView`]), or for a
 //!   database this release would migrate first, one private copy shared by every
 //!   request until the database or its WAL changes on disk.
-//! - **Status results** ([`AppState::cached_status`]): what `barca status` computes, per graph,
+//! - **Status results** ([`Reads::cached_status`]): what `barca status` computes, per graph,
 //!   database state and request. One older than [`STATUS_MAX_AGE`] is computed again in the
 //!   background, which bounds how long an artifact deleted by hand (outside barca) can still
 //!   show as cached. After a change, a request waits up to [`STATUS_WAIT`] for the new result
-//!   and is otherwise answered with the last one ([`AppState::cached_status`]).
+//!   and is otherwise answered with the last one ([`Reads::cached_status`]).
 //!
 //! A state of files is only trusted once it has been still for a moment: a file can be written
 //! twice within the resolution of its timestamps, with the same size, and the second write
 //! would not show ([`Stamp::settled`]). Until then nothing is kept.
 
-use crate::handlers::SnapshotDb;
-use crate::state::AppState;
+use crate::config::ServeConfig;
+use crate::snapshot::SnapshotDb;
+use crate::sources::{SOURCES_SETTLED, Sources};
 use barca_core::BarcaError;
 use barca_core::dag::Dag;
+use barca_core::health::Durations;
 use barca_core::status::StatusResult;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,10 +42,6 @@ pub(crate) const STATUS_MAX_AGE: Duration = Duration::from_secs(30);
 /// How long a graph with dynamic partition keys is used at most before they are evaluated
 /// again.
 pub(crate) const DYNAMIC_KEYS_MAX_AGE: Duration = Duration::from_secs(30);
-
-/// How long source files must have been still before their state is trusted. Source files are
-/// written by people and editors, rarely twice in a second.
-pub(crate) const SOURCES_SETTLED: Duration = Duration::from_secs(2);
 
 /// The same for the metadata DB, which barca writes many times a second during a run: longer
 /// than the timestamp resolution of any filesystem barca runs on, short enough that the cache
@@ -113,6 +111,11 @@ impl Stamp {
         self.settled(SystemTime::now(), DB_SETTLED)
     }
 
+    /// True when no path was modified or changed within the last `still`.
+    pub(crate) fn still_for(&self, still: Duration) -> bool {
+        self.settled(SystemTime::now(), still)
+    }
+
     /// True when no path was modified or changed within `still` before `now`.
     fn settled(&self, now: SystemTime, still: Duration) -> bool {
         self.0.iter().filter_map(|(_, s)| s.as_ref()).all(|s| {
@@ -153,7 +156,7 @@ fn source_paths(files: &[String], dag: &Dag) -> Vec<PathBuf> {
 struct InspectedDag {
     dag: Arc<Dag>,
     sources: Stamp,
-    /// [`AppState::dag_generation`] when it was loaded: `--watch` bumps it on every edit.
+    /// [`Reads::dag_generation`] when it was loaded: `--watch` bumps it on every edit.
     generation: u64,
     loaded_at: Instant,
     dynamic_keys: bool,
@@ -209,7 +212,7 @@ struct StatusResults {
     /// Requests whose result is being computed again in the background.
     refreshing: std::collections::HashSet<StatusQuery>,
     /// Typical durations, `GET /state`'s other expensive part, with when they were read.
-    durations: Option<(Instant, Arc<HashMap<String, crate::state::Durations>>)>,
+    durations: Option<(Instant, Arc<HashMap<String, Durations>>)>,
 }
 
 /// The last result computed for a request, whatever the graph and database were: what a poll
@@ -219,7 +222,7 @@ struct Behind {
     result: Arc<StatusResult>,
 }
 
-/// The latest results and the recomputations under way ([`AppState::cached_status`]).
+/// The latest results and the recomputations under way ([`Reads::cached_status`]).
 #[derive(Default)]
 struct Latest {
     results: HashMap<StatusQuery, Behind>,
@@ -237,9 +240,9 @@ struct Latest {
 pub(crate) const STATUS_WAIT: Duration = Duration::from_secs(1);
 
 /// Typical durations and what they were read from.
-type DurationsFor = (StatusKey, Arc<HashMap<String, crate::state::Durations>>);
+type DurationsFor = (StatusKey, Arc<HashMap<String, Durations>>);
 
-/// What [`AppState::cached_status`] finds kept for a request.
+/// What [`Reads::cached_status`] finds kept for a request.
 enum Kept {
     Fresh(Arc<StatusResult>),
     /// Older than [`STATUS_MAX_AGE`]: answered, and computed again in the background.
@@ -247,7 +250,7 @@ enum Kept {
     Nothing,
 }
 
-/// The kept reads. One per server, shared by every handler (`AppState::reads`).
+/// The kept reads. One per server, shared by every handler ([`Reads::cache`]).
 #[derive(Default)]
 pub struct ReadCache {
     dag: Mutex<Option<InspectedDag>>,
@@ -255,31 +258,31 @@ pub struct ReadCache {
     status: Mutex<StatusResults>,
     latest: Mutex<Latest>,
     /// The last typical durations read, whatever the database was, and whether they are being
-    /// read again for a newer one ([`AppState::cached_durations`]).
+    /// read again for a newer one ([`Reads::cached_durations`]).
     latest_durations: Mutex<Option<DurationsFor>>,
     durations_catching_up: std::sync::atomic::AtomicBool,
-    /// The last node ages read, and the database state they are of ([`AppState::cached_ages`]).
+    /// The last node ages read, and the database state they are of ([`Reads::cached_ages`]).
     /// An async lock, held while they are read, so that concurrent polls read them once.
     ages: tokio::sync::Mutex<Option<(Stamp, NodeAges)>>,
     /// The pinned assets last read, and the database state they are of
-    /// ([`AppState::cached_pinned`]).
+    /// ([`Reads::cached_pinned`]).
     pinned: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
     /// The paused nodes last read, and the database state they are of
-    /// ([`AppState::cached_paused_nodes`]).
+    /// ([`Reads::cached_paused_nodes`]).
     paused_nodes: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
     /// Which schedules reach each node of the inspected graph as a target
-    /// ([`AppState::cached_paths`]): the scheduler's walk, kept for as long as the graph is.
+    /// ([`Reads::cached_paths`]): the scheduler's walk, kept for as long as the graph is.
     paths: tokio::sync::Mutex<Option<(Arc<Dag>, Arc<barca_core::refresh_path::Paths>)>>,
     /// When each source file of the loaded graph was last modified
-    /// ([`AppState::cached_source_times`]).
+    /// ([`Reads::cached_source_times`]).
     source_times: Mutex<Option<(Arc<Dag>, SourceTimes)>>,
     /// How many times that walk ran (tests).
     pub(crate) paths_walks: std::sync::atomic::AtomicUsize,
     /// The last recorded ticks read, the database state they are of and the schedules they
-    /// were read for ([`AppState::cached_ticks`]).
+    /// were read for ([`Reads::cached_ticks`]).
     ticks: tokio::sync::Mutex<Option<KeptScheduleFacts>>,
     /// What the newest ticks found, with the graph and the database state it is of
-    /// ([`AppState::cached_checks`]).
+    /// ([`Reads::cached_checks`]).
     checks: tokio::sync::Mutex<Option<(StatusKey, Checks)>>,
     /// What node ages are folded from, kept so that a read after a run recorded a few rows
     /// reads those rows only ([`barca_core::db::NodeAgesIndex`]).
@@ -297,7 +300,7 @@ pub struct ReadCache {
     /// How many times a graph was loaded for inspection and a status was computed (tests).
     pub(crate) dag_loads: std::sync::atomic::AtomicUsize,
     pub(crate) status_computes: std::sync::atomic::AtomicUsize,
-    /// How many times the tick record was read ([`AppState::cached_checks`]; tests).
+    /// How many times the tick record was read ([`Reads::cached_checks`]; tests).
     pub(crate) checks_reads: std::sync::atomic::AtomicUsize,
 }
 
@@ -308,64 +311,112 @@ impl ReadCache {
             .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
     }
 
-    fn polled_within(&self, window: Duration) -> bool {
+    pub(crate) fn polled_within(&self, window: Duration) -> bool {
         let last = self.last_poll.load(Ordering::Relaxed);
         last > 0 && chrono::Utc::now().timestamp() - last <= window.as_secs() as i64
     }
 }
 
-/// How often [`keep_warm`] looks for a change.
-const WARM_EVERY: Duration = Duration::from_secs(1);
-
-/// [`keep_warm`] works while a client asked for `GET /state` within this long (the web UI asks
-/// every 10 seconds while it is open).
-const WARM_WHILE_POLLED: Duration = Duration::from_secs(60);
-
-/// How long the metadata DB must have been still before [`keep_warm`] computes for it: a run
-/// writes it many times a second, and its polls compute what they need.
-const WARM_AFTER_STILL: Duration = Duration::from_secs(1);
-
-/// `barca serve`'s background task: compute `GET /state` once the server is up (and its
-/// database still), and again
-/// whenever the sources or the database changed and have settled, while someone is polling and
-/// no run of this server is going, so a poll finds it computed instead of waiting for it. With
-/// nothing changed, a check is a few `stat` calls.
-pub(crate) async fn keep_warm(state: AppState) {
-    // The first time without waiting for a client, once start-up's own writes have settled.
-    let mut started = false;
-    loop {
-        tokio::time::sleep(WARM_EVERY).await;
-        if state.is_draining() || state.shutdown.is_cancelled() {
-            return;
-        }
-        let busy = state.runs.iter().any(|r| {
-            matches!(
-                r.status,
-                crate::state::RunStatus::Pending | crate::state::RunStatus::Running
-            )
-        });
-        if busy
-            || (started && !state.reads.polled_within(WARM_WHILE_POLLED))
-            || ((started || !state.config.read_only)
-                && !state
-                    .db_state()
-                    .settled(SystemTime::now(), WARM_AFTER_STILL))
-        {
-            continue;
-        }
-        started = true;
-        let _ = crate::handlers::state_rows(&state).await;
-    }
+/// The read side of the server's state: what it was started with, the graph it loaded, and
+/// what the read routes keep between requests. A route that only reads takes this
+/// (`State<Reads>`) and reaches nothing else.
+#[derive(Clone)]
+pub struct Reads {
+    pub config: Arc<ServeConfig>,
+    /// The graph loaded from the configured files, shared with execution.
+    pub sources: Sources,
+    /// The kept reads.
+    pub cache: Arc<ReadCache>,
+    /// Why the metadata DB cannot be used, while it cannot: set when a read-only server finds
+    /// it unusable (it keeps serving) or the scheduler stops on a metadata error, cleared when a
+    /// read-only request reads it again. `GET /health` `metadata_error`.
+    pub metadata_error: Arc<std::sync::RwLock<Option<String>>>,
+    /// Set when the scheduler stopped on a metadata error: the error then stays reported
+    /// whatever a read finds.
+    scheduler_stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl AppState {
+impl Reads {
+    pub fn new(config: Arc<ServeConfig>, scheduler_stopped: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            sources: Sources::new(config.clone()),
+            config,
+            cache: Arc::default(),
+            metadata_error: Arc::default(),
+            scheduler_stopped,
+        }
+    }
+
+    /// The graph as loaded, read again only when a configured file changed.
+    pub async fn loaded_dag(&self) -> Result<Arc<Dag>, BarcaError> {
+        self.sources.loaded_dag().await
+    }
+
+    /// Record what reading the metadata DB found: an unusable database is reported on
+    /// `/health` until a read succeeds again. Other errors (a lock, I/O) leave it as it was.
+    pub fn note_metadata<T>(&self, read: Result<T, BarcaError>) -> Result<T, BarcaError> {
+        match &read {
+            Ok(_) if !self.scheduler_stopped.load(Ordering::Relaxed) => {
+                *self.metadata_error.write().unwrap() = None;
+            }
+            Err(e @ BarcaError::MetadataUnusable { .. }) => {
+                *self.metadata_error.write().unwrap() = Some(e.to_string());
+            }
+            _ => {}
+        }
+        read
+    }
+
+    /// The shared snapshot of the metadata DB ([`Reads::read_snapshot`]): a copy taken when
+    /// the database last changed, shared by every request until it changes again. What it
+    /// finds is noted for `/health` ([`Reads::note_metadata`]).
+    pub(crate) async fn snapshot_db(&self) -> Result<Arc<SnapshotDb>, BarcaError> {
+        self.note_metadata(self.read_snapshot().await)
+    }
+
+    /// `barca status` of every node without artifact shapes, against `snapshot` of the database in
+    /// state `db_state`: what `GET /state` and the `running` fields are built from, kept like every
+    /// status result.
+    pub(crate) async fn whole_status(
+        &self,
+        dag: &Arc<Dag>,
+        db_state: &Stamp,
+        snapshot: &Arc<SnapshotDb>,
+    ) -> Result<Arc<StatusResult>, BarcaError> {
+        self.status_for_targets(dag, db_state, snapshot, &[]).await
+    }
+
+    pub(crate) async fn status_for_targets(
+        &self,
+        dag: &Arc<Dag>,
+        db_state: &Stamp,
+        snapshot: &Arc<SnapshotDb>,
+        targets: &[String],
+    ) -> Result<Arc<StatusResult>, BarcaError> {
+        let mut cfg = self.config.resolved.clone();
+        cfg.db_path = snapshot.path.clone();
+        let python = self.config.python.clone();
+        let (graph, snapshot, names) = (dag.clone(), snapshot.clone(), targets.to_vec());
+        Ok(self
+            .cached_status(
+                dag,
+                db_state,
+                (targets.to_vec(), 0, false),
+                move || async move {
+                    let _snapshot = snapshot;
+                    barca_core::status::status_from_dag(&cfg, &names, &graph, &python, 0, false).await
+                },
+            )
+            .await?)
+    }
+
     /// The graph to decide cache states with: the sources as they are now, helper modules
     /// included. Loaded again only when something it was loaded from changed (see the module
     /// documentation); otherwise the kept one.
     pub async fn inspect_dag(&self) -> Result<Arc<Dag>, BarcaError> {
-        let generation = self.dag_generation.load(Ordering::Relaxed);
+        let generation = self.sources.generation.load(Ordering::Relaxed);
         let kept = {
-            let kept = self.reads.dag.lock().unwrap();
+            let kept = self.cache.dag.lock().unwrap();
             kept.as_ref().and_then(|k| {
                 let fresh = k.generation == generation
                     && !(k.dynamic_keys && k.loaded_at.elapsed() >= DYNAMIC_KEYS_MAX_AGE);
@@ -377,12 +428,12 @@ impl AppState {
         {
             return Ok(dag);
         }
-        let dag = self.current_dag().await?;
-        self.reads.dag_loads.fetch_add(1, Ordering::Relaxed);
+        let dag = self.sources.current_dag().await?;
+        self.cache.dag_loads.fetch_add(1, Ordering::Relaxed);
         let sources = Stamp::of(source_paths(&self.config.files, &dag));
         // An edit within the last moment may not show in the stamp yet: keep nothing.
         let keep = sources.settled(SystemTime::now(), SOURCES_SETTLED);
-        let mut kept = self.reads.dag.lock().unwrap();
+        let mut kept = self.cache.dag.lock().unwrap();
         *kept = keep.then(|| InspectedDag {
             dynamic_keys: has_dynamic_keys(&dag),
             dag: dag.clone(),
@@ -393,18 +444,18 @@ impl AppState {
         Ok(dag)
     }
 
-    /// The metadata DB to read ([`crate::handlers::snapshot_of`]), shared with every other
+    /// The metadata DB to read ([`crate::snapshot::snapshot_of`]), shared with every other
     /// request until the database changes on disk.
     pub(crate) async fn read_snapshot(&self) -> Result<Arc<SnapshotDb>, BarcaError> {
         let db_path = &self.config.resolved.db_path;
-        let mut shared = self.reads.snapshot.lock().await;
+        let mut shared = self.cache.snapshot.lock().await;
         let now = db_stamp(db_path);
         if let Some(s) = shared.as_ref()
             && s.db == now
         {
             return Ok(s.snapshot.clone());
         }
-        let snapshot = Arc::new(crate::handlers::snapshot_of(db_path).await?);
+        let snapshot = Arc::new(crate::snapshot::snapshot_of(db_path).await?);
         // Taken after the stamp: a write in between makes the next request take another copy.
         *shared = now
             .settled(SystemTime::now(), DB_SETTLED)
@@ -431,7 +482,7 @@ impl AppState {
             dag: dag.clone(),
             db: db.clone(),
         };
-        let grids = self.reads.grids.lock().unwrap();
+        let grids = self.cache.grids.lock().unwrap();
         grids
             .get(id)
             .filter(|(k, _)| k.same(&key))
@@ -453,7 +504,7 @@ impl AppState {
             dag: dag.clone(),
             db: db.clone(),
         };
-        let mut grids = self.reads.grids.lock().unwrap();
+        let mut grids = self.cache.grids.lock().unwrap();
         // A grid of an older graph or database is never answered again.
         grids.retain(|_, (k, _)| k.same(&key));
         grids.insert(grid.id.clone(), (key, grid));
@@ -491,15 +542,15 @@ impl AppState {
                 let state = self.clone();
                 let db = db.clone();
                 tokio::spawn(async move {
-                    let _computing = state.reads.computing.lock().await;
+                    let _computing = state.cache.computing.lock().await;
                     let fresh = off_the_workers(compute).await;
-                    let mut kept = state.reads.status.lock().unwrap();
+                    let mut kept = state.cache.status.lock().unwrap();
                     kept.refreshing.remove(&query);
                     if let Ok(result) = fresh
                         && kept.key.as_ref().is_some_and(|k| k.same(&key))
                         && db.settled(SystemTime::now(), DB_SETTLED)
                     {
-                        state.reads.status_computes.fetch_add(1, Ordering::Relaxed);
+                        state.cache.status_computes.fetch_add(1, Ordering::Relaxed);
                         kept.results
                             .insert(query, (Instant::now(), Arc::new(result)));
                     }
@@ -509,7 +560,7 @@ impl AppState {
             Kept::Nothing => {}
         }
         let has_latest = {
-            let latest = self.reads.latest.lock().unwrap();
+            let latest = self.cache.latest.lock().unwrap();
             latest.results.get(&query).is_some_and(|previous| {
                 !self.config.read_only || Arc::ptr_eq(&previous.key.dag, dag)
             }) && !latest.failed.contains(&query)
@@ -517,28 +568,28 @@ impl AppState {
         if has_latest {
             return Ok(self.catch_up(key, query, compute).await);
         }
-        let _computing = self.reads.computing.lock().await;
+        let _computing = self.cache.computing.lock().await;
         if let Kept::Fresh(result) | Kept::Old(result) = self.kept_status(&key, &query) {
             return Ok(result);
         }
         let result = Arc::new(off_the_workers(compute).await?);
         self.keep_status(&key, &query, &result);
         // Recomputed in the background again from now on.
-        self.reads.latest.lock().unwrap().failed.remove(&query);
+        self.cache.latest.lock().unwrap().failed.remove(&query);
         Ok(result)
     }
 
     /// Keep `result`, computed for `key`: as the latest for `query`, and as its result for
     /// `key` when the database had settled.
     fn keep_status(&self, key: &StatusKey, query: &StatusQuery, result: &Arc<StatusResult>) {
-        self.reads.status_computes.fetch_add(1, Ordering::Relaxed);
+        self.cache.status_computes.fetch_add(1, Ordering::Relaxed);
         if key.db.settled(SystemTime::now(), DB_SETTLED) {
-            let mut kept = self.reads.status.lock().unwrap();
+            let mut kept = self.cache.status.lock().unwrap();
             renew(&mut kept, key);
             kept.results
                 .insert(query.clone(), (Instant::now(), result.clone()));
         }
-        self.reads.latest.lock().unwrap().results.insert(
+        self.cache.latest.lock().unwrap().results.insert(
             query.clone(),
             Behind {
                 key: key.clone(),
@@ -559,9 +610,9 @@ impl AppState {
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<StatusResult, BarcaError>> + Send + 'static,
     {
-        let mut caught_up = self.reads.caught_up.subscribe();
+        let mut caught_up = self.cache.caught_up.subscribe();
         let start = {
-            let mut latest = self.reads.latest.lock().unwrap();
+            let mut latest = self.cache.latest.lock().unwrap();
             // Computed for these already (kept as the latest only: the database had not
             // settled).
             if let Some(behind) = latest.results.get(&query)
@@ -576,17 +627,17 @@ impl AppState {
             let (key, query) = (key.clone(), query.clone());
             tokio::spawn(async move {
                 let fresh = {
-                    let _computing = state.reads.computing.lock().await;
+                    let _computing = state.cache.computing.lock().await;
                     off_the_workers(compute).await
                 };
                 match fresh {
                     Ok(result) => {
                         state.keep_status(&key, &query, &Arc::new(result));
-                        state.reads.latest.lock().unwrap().failed.remove(&query);
+                        state.cache.latest.lock().unwrap().failed.remove(&query);
                     }
                     Err(_) => {
                         state
-                            .reads
+                            .cache
                             .latest
                             .lock()
                             .unwrap()
@@ -595,19 +646,19 @@ impl AppState {
                     }
                 }
                 state
-                    .reads
+                    .cache
                     .latest
                     .lock()
                     .unwrap()
                     .catching_up
                     .remove(&query);
-                state.reads.caught_up.send_modify(|n| *n += 1);
+                state.cache.caught_up.send_modify(|n| *n += 1);
             });
         }
         let deadline = tokio::time::Instant::now() + STATUS_WAIT;
         loop {
             {
-                let latest = self.reads.latest.lock().unwrap();
+                let latest = self.cache.latest.lock().unwrap();
                 let behind = latest.results.get(&query).expect("a latest result is kept");
                 if behind.key.same(&key) || !latest.catching_up.contains(&query) {
                     return behind.result.clone();
@@ -617,7 +668,7 @@ impl AppState {
                 .await
                 .is_err()
             {
-                let latest = self.reads.latest.lock().unwrap();
+                let latest = self.cache.latest.lock().unwrap();
                 return latest.results[&query].result.clone();
             }
         }
@@ -630,13 +681,13 @@ impl AppState {
         db: &Stamp,
         db_path: &str,
     ) -> Result<NodeAges, BarcaError> {
-        let mut kept = self.reads.ages.lock().await;
+        let mut kept = self.cache.ages.lock().await;
         if let Some((stamp, ages)) = kept.as_ref()
             && stamp == db
         {
             return Ok(ages.clone());
         }
-        let (index, db_path) = (self.reads.ages_index.clone(), db_path.to_string());
+        let (index, db_path) = (self.cache.ages_index.clone(), db_path.to_string());
         let ages = Arc::new(
             off_the_workers(move || async move { index.lock().await.read(&db_path).await }).await?,
         );
@@ -651,7 +702,7 @@ impl AppState {
         db: &Stamp,
         db_path: &str,
     ) -> Result<Pinned, BarcaError> {
-        let mut kept = self.reads.pinned.lock().await;
+        let mut kept = self.cache.pinned.lock().await;
         if let Some((stamp, pinned)) = kept.as_ref()
             && stamp == db
         {
@@ -676,7 +727,7 @@ impl AppState {
         db: &Stamp,
         db_path: &str,
     ) -> Result<Pinned, BarcaError> {
-        let mut kept = self.reads.paused_nodes.lock().await;
+        let mut kept = self.cache.paused_nodes.lock().await;
         if let Some((stamp, paused)) = kept.as_ref()
             && stamp == db
         {
@@ -701,13 +752,13 @@ impl AppState {
         &self,
         dag: &Arc<Dag>,
     ) -> Result<Arc<barca_core::refresh_path::Paths>, BarcaError> {
-        let mut kept = self.reads.paths.lock().await;
+        let mut kept = self.cache.paths.lock().await;
         if let Some((of, paths)) = kept.as_ref()
             && Arc::ptr_eq(of, dag)
         {
             return Ok(paths.clone());
         }
-        self.reads
+        self.cache
             .paths_walks
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let graph = dag.clone();
@@ -722,7 +773,7 @@ impl AppState {
     /// When each source file of `dag` was last modified (`barca_core::estimates`: what dates
     /// a code change), read once per loaded graph: an edit loads a new graph.
     pub(crate) fn cached_source_times(&self, dag: &Arc<Dag>) -> SourceTimes {
-        let mut kept = self.reads.source_times.lock().unwrap();
+        let mut kept = self.cache.source_times.lock().unwrap();
         if let Some((of, times)) = kept.as_ref()
             && Arc::ptr_eq(of, dag)
         {
@@ -748,7 +799,7 @@ impl AppState {
         }
         schedules.sort();
         schedules.dedup();
-        let mut kept = self.reads.ticks.lock().await;
+        let mut kept = self.cache.ticks.lock().await;
         if let Some((stamp, ids, ticks)) = kept.as_ref()
             && stamp == db
             && *ids == schedules
@@ -784,16 +835,16 @@ impl AppState {
             dag: dag.clone(),
             db: db.clone(),
         };
-        let mut kept = self.reads.checks.lock().await;
+        let mut kept = self.cache.checks.lock().await;
         if let Some((of, checks)) = kept.as_ref()
             && of.same(&key)
         {
             return Ok(checks.clone());
         }
-        self.reads
+        self.cache
             .checks_reads
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let zone = crate::scheduler::zone_of(&self.config);
+        let zone = crate::config::zone_of(&self.config);
         let (graph, ages, db_path) = (dag.clone(), ages.clone(), db_path.to_string());
         let checks = Arc::new(
             off_the_workers(move || async move {
@@ -815,11 +866,11 @@ impl AppState {
         dag: &Arc<Dag>,
         db: &Stamp,
         compute: F,
-    ) -> Result<Arc<HashMap<String, crate::state::Durations>>, BarcaError>
+    ) -> Result<Arc<HashMap<String, Durations>>, BarcaError>
     where
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<
-                Output = Result<HashMap<String, crate::state::Durations>, BarcaError>,
+                Output = Result<HashMap<String, Durations>, BarcaError>,
             > + Send
             + 'static,
     {
@@ -828,7 +879,7 @@ impl AppState {
             db: db.clone(),
         };
         {
-            let kept = self.reads.status.lock().unwrap();
+            let kept = self.cache.status.lock().unwrap();
             if kept.key.as_ref().is_some_and(|k| k.same(&key))
                 && let Some((born, d)) = &kept.durations
                 && born.elapsed() < STATUS_MAX_AGE
@@ -836,8 +887,8 @@ impl AppState {
                 return Ok(d.clone());
             }
         }
-        let mut caught_up = self.reads.caught_up.subscribe();
-        let latest = self.reads.latest_durations.lock().unwrap().clone();
+        let mut caught_up = self.cache.caught_up.subscribe();
+        let latest = self.cache.latest_durations.lock().unwrap().clone();
         let Some(latest) = latest else {
             let durations = Arc::new(off_the_workers(compute).await?);
             self.keep_durations(&key, &durations);
@@ -847,7 +898,7 @@ impl AppState {
             return Ok(latest.1);
         }
         if !self
-            .reads
+            .cache
             .durations_catching_up
             .swap(true, Ordering::AcqRel)
         {
@@ -857,22 +908,22 @@ impl AppState {
                     state.keep_durations(&key, &Arc::new(durations));
                 }
                 state
-                    .reads
+                    .cache
                     .durations_catching_up
                     .store(false, Ordering::Release);
-                state.reads.caught_up.send_modify(|n| *n += 1);
+                state.cache.caught_up.send_modify(|n| *n += 1);
             });
         }
         let deadline = tokio::time::Instant::now() + STATUS_WAIT;
         let _ = tokio::time::timeout_at(deadline, async {
-            while self.reads.durations_catching_up.load(Ordering::Acquire) {
+            while self.cache.durations_catching_up.load(Ordering::Acquire) {
                 if caught_up.changed().await.is_err() {
                     break;
                 }
             }
         })
         .await;
-        let now = self.reads.latest_durations.lock().unwrap().clone();
+        let now = self.cache.latest_durations.lock().unwrap().clone();
         Ok(now.map_or(latest.1, |(_, d)| d))
     }
 
@@ -881,20 +932,20 @@ impl AppState {
     fn keep_durations(
         &self,
         key: &StatusKey,
-        durations: &Arc<HashMap<String, crate::state::Durations>>,
+        durations: &Arc<HashMap<String, Durations>>,
     ) {
         if key.db.settled(SystemTime::now(), DB_SETTLED) {
-            let mut kept = self.reads.status.lock().unwrap();
+            let mut kept = self.cache.status.lock().unwrap();
             renew(&mut kept, key);
             kept.durations = Some((Instant::now(), durations.clone()));
         }
-        *self.reads.latest_durations.lock().unwrap() = Some((key.clone(), durations.clone()));
+        *self.cache.latest_durations.lock().unwrap() = Some((key.clone(), durations.clone()));
     }
 
     /// What is kept for `query` under `key`; an old result is handed out for one background
     /// recomputation at a time, and fresh-looking until it lands.
     fn kept_status(&self, key: &StatusKey, query: &StatusQuery) -> Kept {
-        let mut kept = self.reads.status.lock().unwrap();
+        let mut kept = self.cache.status.lock().unwrap();
         if !kept.key.as_ref().is_some_and(|k| k.same(key)) {
             return Kept::Nothing;
         }
@@ -947,6 +998,7 @@ fn has_dynamic_keys(dag: &Dag) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::AppState;
 
     const PIPELINE: &str = "from barca import asset\nfrom helpers import compute\n\n\
         @asset()\ndef first() -> dict:\n    return {\"n\": compute()}\n\n\
@@ -984,8 +1036,8 @@ mod tests {
         })
     }
 
-    async fn poll(state: &AppState) -> Vec<crate::state::NodeState> {
-        crate::handlers::state(
+    async fn poll(state: &AppState) -> Vec<crate::views::NodeState> {
+        crate::state_routes::state(
             axum::extract::State(state.clone()),
             axum::extract::Query(Default::default()),
         )
@@ -997,8 +1049,8 @@ mod tests {
 
     fn loads(state: &AppState) -> (usize, usize) {
         (
-            state.reads.dag_loads.load(Ordering::Relaxed),
-            state.reads.status_computes.load(Ordering::Relaxed),
+            state.reads.cache.dag_loads.load(Ordering::Relaxed),
+            state.reads.cache.status_computes.load(Ordering::Relaxed),
         )
     }
 
@@ -1024,11 +1076,11 @@ mod tests {
             (1, 1),
             "nothing changed: nothing is parsed or decided again"
         );
-        let walks = |state: &AppState| state.reads.paths_walks.load(Ordering::Relaxed);
+        let walks = |state: &AppState| state.reads.cache.paths_walks.load(Ordering::Relaxed);
         assert_eq!(walks(&state), 1, "the tick walk runs once per loaded graph");
 
         // The rollup sums the status result the poll computed: none is computed for it.
-        let rollup = crate::handlers::rollup(
+        let rollup = crate::state_routes::rollup(
             axum::extract::State(state.clone()),
             axum::extract::Query(Default::default()),
         )
@@ -1068,7 +1120,7 @@ mod tests {
         let state = state_in(dir.path());
         let db = state.config.resolved.db_path.clone();
         barca_core::db::init_db(&db).await.unwrap();
-        let dag = state.inspect_dag().await.unwrap();
+        let dag = state.reads.inspect_dag().await.unwrap();
         let id = dag
             .topo_order()
             .into_iter()
@@ -1101,7 +1153,7 @@ mod tests {
                 .unwrap();
             }
         };
-        let reads = |state: &AppState| state.reads.checks_reads.load(Ordering::Relaxed);
+        let reads = |state: &AppState| state.reads.cache.checks_reads.load(Ordering::Relaxed);
         let now = chrono::Utc::now().timestamp();
         tick(now - 120, "run-1").await;
         std::thread::sleep(SOURCES_SETTLED + Duration::from_millis(100));
@@ -1181,9 +1233,9 @@ mod tests {
         let state = state_in(dir.path());
         let db_path = state.config.resolved.db_path.clone();
         barca_core::db::init_db(&db_path).await.unwrap();
-        let dag = state.inspect_dag().await.unwrap();
-        let snapshot = state.read_snapshot().await.unwrap();
-        let base = (*crate::handlers::whole_status(&state, &dag, &state.db_state(), &snapshot)
+        let dag = state.reads.inspect_dag().await.unwrap();
+        let snapshot = state.reads.read_snapshot().await.unwrap();
+        let base = (*state.reads.whole_status(&dag, &state.reads.db_state(), &snapshot)
             .await
             .unwrap())
         .clone();
@@ -1197,9 +1249,9 @@ mod tests {
                    delay: Duration| {
             let (state, dag, query) = (state.clone(), dag.clone(), query.clone());
             async move {
-                let db = state.db_state();
+                let db = state.reads.db_state();
                 state
-                    .cached_status(&dag, &db, query, move || async move {
+                    .reads.cached_status(&dag, &db, query, move || async move {
                         tokio::time::sleep(delay).await;
                         compute()
                     })
@@ -1271,7 +1323,7 @@ mod tests {
             barca_core::db::init_db(&state.config.resolved.db_path)
                 .await
                 .unwrap();
-            let snapshot = state.read_snapshot().await.unwrap();
+            let snapshot = state.reads.read_snapshot().await.unwrap();
             assert!(
                 barca_core::db::is_read_view(&snapshot.path),
                 "read_only = {read_only}"
@@ -1296,7 +1348,7 @@ mod tests {
             .unwrap();
         assert!(
             !state
-                .db_state()
+                .reads.db_state()
                 .settled(SystemTime::now(), WARM_AFTER_STILL)
         );
         let warming = tokio::spawn(keep_warm(state.clone()));
@@ -1307,7 +1359,7 @@ mod tests {
         })
         .await;
         if warmed.is_err() {
-            state.shutdown.cancel();
+            state.lifecycle.shutdown.cancel();
             warming.await.unwrap();
             panic!("the first status was not computed without a client or a settled DB");
         }
@@ -1326,7 +1378,7 @@ mod tests {
             }
         })
         .await;
-        state.shutdown.cancel();
+        state.lifecycle.shutdown.cancel();
         warming.await.unwrap();
         refreshed.expect("a settled change is warmed again while a client polls");
     }
@@ -1346,13 +1398,15 @@ mod tests {
             .unwrap();
         let computing = tokio::spawn({
             let state = state.clone();
-            async move { crate::handlers::state_rows(&state).await.unwrap() }
+            async move { crate::health_view::state_rows(&state).await.unwrap() }
         });
         tokio::task::yield_now().await;
         for _ in 0..3 {
             let started = Instant::now();
-            let _ = crate::handlers::health(State(state.clone())).await;
-            let _ = crate::handlers::assets(State(state.clone())).await.unwrap();
+            let _ = crate::state_routes::health(State(state.clone())).await;
+            let _ = crate::assets::assets(State(state.reads.clone()))
+                .await
+                .unwrap();
             assert!(started.elapsed() < Duration::from_secs(1));
             tokio::task::yield_now().await;
         }

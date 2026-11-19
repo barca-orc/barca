@@ -5,7 +5,6 @@
 
 use crate::auth_http::Principal;
 use crate::error::ApiError;
-use crate::handlers::snapshot_db;
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
@@ -15,7 +14,7 @@ use serde::Deserialize;
 
 /// `GET /pins` — every pinned asset: `{pins: [...]}`.
 pub async fn list(State(state): State<AppState>) -> Result<Json<Pins>, ApiError> {
-    let snapshot = snapshot_db(&state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let pins = barca_core::pins::list(&snapshot.path).await?;
     Ok(Json(Pins { pins }))
 }
@@ -32,8 +31,8 @@ pub async fn versions(
     Path(name): Path<String>,
     Query(query): Query<VersionsQuery>,
 ) -> Result<Json<Versions>, ApiError> {
-    let dag = state.loaded_dag().await?;
-    let snapshot = snapshot_db(&state).await?;
+    let dag = state.reads.loaded_dag().await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let limit = query
         .limit
         .unwrap_or(barca_core::pins::DEFAULT_VERSIONS)
@@ -62,7 +61,7 @@ pub async fn pin(
     principal: Option<Extension<Principal>>,
     Json(body): Json<PinBody>,
 ) -> Result<Json<Pinned>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
+    crate::guards::refuse_if_read_only(&state.config)?;
     let choice = match (body.run_hash, body.previous) {
         (Some(_), true) => {
             return Err(ApiError::BadRequest(
@@ -77,7 +76,7 @@ pub async fn pin(
             )));
         }
     };
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let cfg = &state.config.resolved;
     barca_core::queries::open_metadata(cfg).await?;
     let pinned = barca_core::pins::pin(
@@ -117,7 +116,7 @@ pub async fn upload(
     principal: Option<Extension<Principal>>,
     body: axum::body::Bytes,
 ) -> Result<Json<Pinned>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
+    crate::guards::refuse_if_read_only(&state.config)?;
     let file_name = query
         .file_name
         .as_deref()
@@ -128,7 +127,7 @@ pub async fn upload(
             "say what the body is: ?format=json|parquet|csv|pickle or ?file_name=<name.ext>".into(),
         ));
     }
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let cfg = &state.config.resolved;
     barca_core::queries::open_metadata(cfg).await?;
     let supplied = barca_core::pins::Supplied {
@@ -159,8 +158,8 @@ pub async fn unpin(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Unpinned>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
-    let dag = state.loaded_dag().await?;
+    crate::guards::refuse_if_read_only(&state.config)?;
+    let dag = state.reads.loaded_dag().await?;
     let cfg = &state.config.resolved;
     let unpinned = barca_core::pins::unpin(&cfg.db_path, &dag, &name).await?;
     if unpinned.removed.is_some() {

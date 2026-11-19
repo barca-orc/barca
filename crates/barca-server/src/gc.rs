@@ -10,7 +10,7 @@
 //! hold back every current result (`restricted`).
 
 use crate::error::ApiError;
-use crate::runs::refuse_if_read_only;
+use crate::guards::refuse_if_read_only;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -43,7 +43,7 @@ pub async fn gc(
     State(state): State<AppState>,
     body: Option<Json<GcRequest>>,
 ) -> Result<Json<GcResult>, ApiError> {
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&state.config)?;
     let Json(request) = body.unwrap_or_default();
     let max_size = request
         .max_size

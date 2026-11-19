@@ -6,12 +6,15 @@ use super::lifecycle::{cancelled, finish, start};
 use super::projection::{RunList, RunsQuery, live_of, live_runs, live_status, view, view_page};
 use super::{
     RunSpec, Wording, check_any_asset, check_files, check_target, check_target_as, context,
-    json_text, refuse_if_read_only, run_files, stdout_of,
+    run_files,
 };
+use crate::guards::refuse_if_read_only;
+use crate::respond::{json_text, stdout_of};
 use crate::auth_http::Principal;
 use crate::error::ApiError;
-use crate::handlers::snapshot_db;
-use crate::state::{AppState, RunChannel, RunState, RunStatus};
+use crate::replay::RunChannel;
+use crate::run_model::{RunState, RunStatus};
+use crate::state::AppState;
 use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, KeepAlive};
@@ -94,7 +97,7 @@ async fn create_run(
     if request.dry_run {
         return dry_run(&state, &request, &files).await;
     }
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&state.config)?;
     let verb = request.command.as_str();
     let mut nodes = Vec::new();
     for target in &request.targets {
@@ -116,7 +119,7 @@ async fn create_run(
             ));
         }
     }
-    let admitted = crate::queue::admit(
+    let admitted = crate::runs::admit(
         &state,
         RunSpec {
             command: request.command,
@@ -172,7 +175,7 @@ async fn dry_run(
     request: &RunRequest,
     files: &[String],
 ) -> Result<Response, ApiError> {
-    let snapshot = snapshot_db(state).await?;
+    let snapshot = state.reads.snapshot_db().await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let result = barca_core::queries::explain(
@@ -203,7 +206,7 @@ pub async fn run_all(
     State(state): State<AppState>,
     principal: Option<Extension<Principal>>,
 ) -> Result<Json<Value>, ApiError> {
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&state.config)?;
     check_any_asset(&state).await?;
     let mut spec = RunSpec::api(RunCommand::Get, vec![], vec![]);
     spec.trigger = api_trigger(principal.map(|p| p.0.0), None);
@@ -218,7 +221,7 @@ pub async fn run_target(
     principal: Option<Extension<Principal>>,
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&state.config)?;
     let node = check_target_as(&state, &target, "run", Wording::Route).await?;
     let mut spec = RunSpec::api(RunCommand::Run, vec![target], vec![node]);
     spec.policy = CachePolicy::RefreshAll;
@@ -232,7 +235,7 @@ pub async fn get_target(
     principal: Option<Extension<Principal>>,
     Path(target): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&state.config)?;
     let node = check_target_as(&state, &target, "get", Wording::Route).await?;
     let mut spec = RunSpec::api(RunCommand::Get, vec![target], vec![node]);
     spec.trigger = api_trigger(principal.map(|p| p.0.0), None);
@@ -245,7 +248,7 @@ pub async fn status(
     Path(run_id): Path<String>,
 ) -> Result<Json<RunState>, ApiError> {
     state
-        .runs
+        .runs.registry
         .get(&run_id)
         .map(|r| Json(r.clone()))
         .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))
@@ -262,18 +265,18 @@ pub async fn cancel(
     principal: Option<Extension<Principal>>,
     Path(run_id): Path<String>,
 ) -> Result<Json<RunCancelling>, ApiError> {
-    refuse_if_read_only(&state)?;
+    refuse_if_read_only(&state.config)?;
     let principal = principal.map(|p| p.0.0);
-    if let Some(waiting) = state.queue.take(&run_id) {
+    if let Some(waiting) = state.runs.queue.take(&run_id) {
         let cancellation = queued_cancellation(&state, &run_id, principal);
-        if let Some(mut run) = state.runs.get_mut(&run_id) {
+        if let Some(mut run) = state.runs.registry.get_mut(&run_id) {
             run.cancel_requested = true;
             run.cancellation = Some(cancellation);
             run.cancel.cancel();
         }
         let ctx = context(waiting.spec.command, &waiting.spec.files);
         let outcome = cancelled(&state, &ctx);
-        if let Some(channel) = state.events.get(&run_id).map(|c| c.clone()) {
+        if let Some(channel) = state.runs.events.get(&run_id).map(|c| c.clone()) {
             finish(
                 &state,
                 &run_id,
@@ -288,7 +291,7 @@ pub async fn cancel(
         }
         return Ok(Json(RunCancelling::of(run_id)));
     }
-    let finished = match state.runs.get_mut(&run_id) {
+    let finished = match state.runs.registry.get_mut(&run_id) {
         Some(mut run) => match run.status {
             RunStatus::Pending | RunStatus::Running => {
                 run.cancel_requested = true;
@@ -305,7 +308,7 @@ pub async fn cancel(
             status => json!(status).as_str().unwrap_or("finished").to_string(),
         },
         None => {
-            let snapshot = snapshot_db(&state).await?;
+            let snapshot = state.reads.snapshot_db().await?;
             match db::get_run(&snapshot.path, &run_id).await? {
                 Some(record) => record.status,
                 None => return Err(ApiError::NotFound(format!("run '{run_id}' not found"))),
@@ -327,7 +330,7 @@ pub(super) fn queued_cancellation(
     run_id: &str,
     principal: Option<String>,
 ) -> Cancellation {
-    let this = state.runs.get(run_id).map(|r| {
+    let this = state.runs.registry.get(run_id).map(|r| {
         (
             r.command.clone(),
             r.nodes.clone(),
@@ -336,7 +339,7 @@ pub(super) fn queued_cancellation(
         )
     });
     let mut running: Vec<(f64, String, bool)> = state
-        .runs
+        .runs.registry
         .iter()
         .filter(|r| r.status == RunStatus::Running && r.handle != run_id)
         .map(|r| {
@@ -419,8 +422,8 @@ pub async fn logs(
             ))
         })?),
     };
-    let snapshot = snapshot_db(&state).await?;
-    let live = state.runs.get(&id).map(|r| r.status);
+    let snapshot = state.reads.snapshot_db().await?;
+    let live = state.runs.registry.get(&id).map(|r| r.status);
     let record = db::get_run(&snapshot.path, &id).await?;
     let mut status = match (&record, live) {
         (Some(record), _) => record.status.clone(),
@@ -482,17 +485,17 @@ pub async fn events(
         .map(|header| {
             header
                 .to_str()
-                .map_err(|_| ApiError::EventCursor(crate::replay::CursorError::Invalid))
+                .map_err(|_| ApiError::EventCursor(crate::error::CursorError::Invalid))
         })
         .transpose()?;
     if cursor_headers.next().is_some() {
-        return Err(ApiError::EventCursor(crate::replay::CursorError::Invalid));
+        return Err(ApiError::EventCursor(crate::error::CursorError::Invalid));
     }
     if let Some(cursor) = cursor {
         crate::replay::parse(cursor).map_err(ApiError::EventCursor)?;
     }
     let channel: RunChannel = state
-        .events
+        .runs.events
         .get(&run_id)
         .map(|c| c.clone())
         .ok_or_else(|| {
@@ -538,7 +541,7 @@ pub async fn output(
         ))
     };
     let live = state
-        .runs
+        .runs.registry
         .get(&run_id)
         .and_then(|r| r.result.as_ref().and_then(|r| r.final_output.clone()));
     let (path, format) = match live {
@@ -558,7 +561,7 @@ pub async fn output(
                 .find(|s| {
                     s["id"]
                         .as_str()
-                        .is_some_and(|id| id == target || id.ends_with(&format!(":{target}")))
+                        .is_some_and(|id| crate::resolve::names(id, &target))
                 })
                 .ok_or_else(no_output)?;
             let node = step["id"].as_str().unwrap_or_default().to_string();
@@ -568,7 +571,7 @@ pub async fn output(
                     barca_core::artifact_format::format_of(path).to_string(),
                 ),
                 None => {
-                    let snapshot = snapshot_db(&state).await?;
+                    let snapshot = state.reads.snapshot_db().await?;
                     db::run_artifact(&snapshot.path, &run_id, &node)
                         .await?
                         .ok_or_else(no_output)?
@@ -599,8 +602,8 @@ pub async fn list(
 ) -> Result<Json<RunList>, ApiError> {
     let limit = query.limit.unwrap_or(100).clamp(1, 1000);
     let filter = query.filter().map_err(ApiError::BadRequest)?;
-    let db_state = state.db_state();
-    let snapshot = snapshot_db(&state).await?;
+    let db_state = state.reads.db_state();
+    let snapshot = state.reads.snapshot_db().await?;
     let now = chrono::Utc::now();
     if filter.statuses == ["running"] {
         let rows = in_flight(&state, &db_state, &snapshot).await?;
@@ -629,9 +632,9 @@ pub async fn list(
 /// `GET /runs?status=running`.
 pub(crate) async fn in_flight_now(
     state: &AppState,
-    snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
+    snapshot: &std::sync::Arc<crate::snapshot::SnapshotDb>,
 ) -> Result<barca_core::report::HistoryNow, ApiError> {
-    let db_state = state.db_state();
+    let db_state = state.reads.db_state();
     Ok(barca_core::served::in_flight_now(
         in_flight(state, &db_state, snapshot).await?,
     ))
@@ -643,20 +646,20 @@ pub(crate) async fn in_flight_now(
 async fn in_flight(
     state: &AppState,
     db_state: &crate::read_cache::Stamp,
-    snapshot: &std::sync::Arc<crate::handlers::SnapshotDb>,
+    snapshot: &std::sync::Arc<crate::snapshot::SnapshotDb>,
 ) -> Result<Vec<RunSummary>, ApiError> {
     let read_path = snapshot.path.as_str();
     let flights = crate::running::in_flight(state, Some(read_path)).await;
     if flights.is_empty() {
         return Ok(Vec::new());
     }
-    let dag = state.inspect_dag().await?;
-    let status = crate::handlers::whole_status(state, &dag, db_state, snapshot).await?;
+    let dag = state.reads.inspect_dag().await?;
+    let status = state.reads.whole_status(&dag, db_state, snapshot).await?;
     let live: Vec<Option<LiveRun>> = flights
         .iter()
         .map(|flight| {
             state
-                .runs
+                .runs.registry
                 .get(&flight.run_id)
                 .map(|run| live_of(state, &run))
         })
