@@ -584,8 +584,8 @@ computed in barca from facts the metadata DB holds, never by reading an
 artifact, and are the same on every surface: `barca docs status-fields`, "Health", "Cause",
 "Root" and "Data signals and coverage", has the tables. `GET /nodes` also has
 `data_coverage`, `as_of` and `rollup` (the scope summed) beside `summary`; its `as_of` is the
-start of the current minute on the server's clock, so an unchanged poll within a minute is a
-`304`.
+start of the current minute on the server's clock (the instant `gap_seconds` is read at), so
+an unchanged poll within a minute is a `304`.
 
 The server classifies per answer, on its clock and in its `--timezone`, so a schedule that
 misses its slot turns its node `behind` (`health_reason: "schedule_late"`) without a change to
