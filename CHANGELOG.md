@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
+
 - Internal: the Python helpers Rust starts share one envelope (request, stdout guard, lifeline, exit), `barca sql` and the server's query helper share one tables module, and the worker's single-step and batched runners share one step lifecycle; no behavior change (#1056).
 
 ## 0.45.0 (2026-11-19)

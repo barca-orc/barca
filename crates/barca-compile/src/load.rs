@@ -64,7 +64,7 @@ pub fn source_dir(file: &std::path::Path) -> PathBuf {
 ///
 /// Naming files on the command line selects what is read, but such an input cannot be resolved
 /// without reading the file that defines it. Each candidate is the file the DAG resolver would
-/// look in (`dag::Resolver::module_files`: a packaged file's absolute import from the root;
+/// look in (`node_refs::Resolver::module_files`: a packaged file's absolute import from the root;
 /// otherwise its own directory, then the root), kept only when it defines an
 /// `@asset`/`@task`/`@sensor` of that name. With the whole project loaded every candidate is
 /// already in `loaded`, so nothing is read from disk. Paths are root-relative (the working
@@ -105,7 +105,7 @@ fn imported_sources(
             for r in refs {
                 let (candidates, name) = match r {
                     NodeRef::Imported { module, name } => (
-                        crate::dag::Resolver::module_files(&file, module),
+                        crate::node_refs::Resolver::module_files(&file, module),
                         name.as_str(),
                     ),
                     NodeRef::Canonical(value) => match value.rsplit_once(':') {
