@@ -189,10 +189,11 @@ These keep the documentation and the command line in agreement.
   manual topics against the real argument parser, and requires help text on every flag and
   examples on every documented command.
 - `cargo test -p barca contract::` compares each command's `--help` with
-  `crates/barca-cli/snapshots/help/`, checks the generated tables in
-  `crates/barca-cli/docs/contract.md`, and checks that each site reference page generated from a
-  manual topic (`SITE_PAGES` in `crates/barca-cli/src/contract.rs`: `reference/cli-contract`,
-  `sql`, `remote-storage`, ...) is what its topic produces and is in the sidebar.
+  `crates/barca-cli/snapshots/help/` and checks the generated tables in
+  `crates/barca-cli/docs/contract.md`; `cargo test -p barca site_pages_tests::` checks that each
+  site reference page generated from a manual topic (`SITE_PAGES` in
+  `crates/barca-cli/src/site_pages_tests.rs`: `reference/cli-contract`, `sql`,
+  `remote-storage`, ...) is what its topic produces and is in the sidebar.
 - `python/tests/test_cli_contract.py` compares the JSON output schemas and the error envelope
   with `python/tests/snapshots/cli_contract/`.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks

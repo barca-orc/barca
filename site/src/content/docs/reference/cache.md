@@ -4,7 +4,7 @@ description: "What the run hash covers, artifacts, --refresh and --refresh-all, 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/cache.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/cache.md (barca docs cache). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/cache.md (barca docs cache). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Barca skips a step when it has already computed the same thing. Below: what "the
 same" means (the run hash), what the hash does and does not see, the states a cached result

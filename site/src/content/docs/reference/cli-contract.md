@@ -4,7 +4,7 @@ description: "Every barca command, flag, environment variable, exit code and JSO
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/contract.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 This page is the written-down CLI surface of this version of barca: every command, argument,
 environment variable, exit code, JSON output schema, the stderr error envelope and the

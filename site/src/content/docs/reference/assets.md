@@ -4,7 +4,7 @@ description: "@asset and @sensor: inputs, freshness, retries, environment variab
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/assets.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/assets.md (barca docs assets). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/assets.md (barca docs assets). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 An asset is a function whose output barca caches and tracks.
 

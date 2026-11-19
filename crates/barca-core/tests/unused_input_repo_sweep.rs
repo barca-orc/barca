@@ -124,7 +124,7 @@ const REJECTED_ARGUMENTS: &[(&str, &str, &str)] = &[
     // bare-name discovery).
     ("crates/barca-cli/docs/assets.md", "report", "raw"),
     ("crates/barca-cli/docs/assets.md", "amounts", "row"),
-    // The site page generated from that topic (SITE_PAGES in barca-cli's contract.rs) carries
+    // The site page generated from that topic (SITE_PAGES in barca-cli's site_pages_tests.rs) carries
     // the same examples.
     ("site/src/content/docs/reference/assets.md", "report", "raw"),
     (

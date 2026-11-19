@@ -84,8 +84,9 @@ impl From<LogStreamArg> for barca_core::LogStream {
 }
 
 /// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1; the project socket,
-/// #1056). On `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `queue`,
-/// `pause`, `resume`, `cancel`, `pin`, `unpin` and `gc` only; the other commands always run here.
+/// #1056). On the commands whose row in `route::ROUTES` takes them (`doctor` declares its own
+/// pair, with its own help); the other commands always run here. A test in `route` holds the
+/// table and these flags to each other.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct ServerFlags {
     /// Run this command on a barca server (`barca serve`) and print its result here: the URL

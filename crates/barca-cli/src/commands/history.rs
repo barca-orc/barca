@@ -1,32 +1,7 @@
 //! History command implementation: the run table (filtered as asked), one run in detail, or
 //! `--reconcile`.
 
-use crate::error::{CliError, ErrorKind};
 use barca_core::history_filter::HistoryFilter;
-
-/// The filter flags of `barca history`, checked here (also before a server sees them).
-pub(crate) fn history_filter(
-    flags: barca_core::history_filter::HistoryFlags<'_>,
-) -> Result<HistoryFilter, CliError> {
-    HistoryFilter::parse(flags, chrono::Utc::now())
-        .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
-}
-
-/// What a hint's command adds so it reads the same history as this one: `--server URL`,
-/// `--server`, `--local` and `--env NAME`, as given.
-pub(crate) fn same_history(server: &crate::args::ServerFlags, env: Option<&str>) -> String {
-    let mut out = String::new();
-    match server.server.as_deref() {
-        Some("") => out.push_str(" --server"),
-        Some(url) => out.push_str(&format!(" --server {url}")),
-        None if server.local => out.push_str(" --local"),
-        None => {}
-    }
-    if let Some(env) = env {
-        out.push_str(&format!(" --env {env}"));
-    }
-    out
-}
 
 pub(crate) struct HistoryArgs<'a> {
     pub(crate) limit: Option<usize>,

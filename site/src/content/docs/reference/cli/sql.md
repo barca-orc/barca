@@ -4,7 +4,7 @@ description: "barca sql: query cached results with DuckDB while debugging, witho
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/sql.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/sql.md (barca docs sql). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/sql.md (barca docs sql). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `barca sql` runs a DuckDB query over the results barca already has on disk. Use it to look at
 data while debugging, for example to see which keys a validation counted as failing, without

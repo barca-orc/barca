@@ -1,10 +1,9 @@
 //! `barca pin` and `barca unpin` with a server: the `/pins` and `/assets/{name}/pin` routes.
 
 use super::{Server, encode};
-use crate::commands::pin::{
-    PinAction, render_list, render_pinned, render_unpinned, render_versions,
-};
 use crate::error::CliError;
+use crate::print::{print_pinned, print_pins, print_unpinned, print_versions};
+use crate::request::{PinAction, read_supplied};
 use barca_core::pins::Choice;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -31,13 +30,13 @@ pub(crate) async fn pin(
             let body = server.get_json("/pins").await?;
             let pins: Vec<barca_core::db::AssetPin> =
                 parse(server, "GET /pins", body["pins"].clone())?;
-            render_list(&pins, json);
+            print_pins(&pins, json);
         }
         PinAction::Versions { target, limit } => {
             let path = format!("/assets/{}/versions?limit={limit}", encode(target));
             let body = server.get_json(&path).await?;
             let versions = parse(server, "GET /assets/{name}/versions", body)?;
-            render_versions(&versions, json);
+            print_versions(&versions, json);
         }
         PinAction::Pin {
             target,
@@ -54,14 +53,14 @@ pub(crate) async fn pin(
             let value: Value = serde_json::from_str(&text)
                 .map_err(|e| server.unexpected("POST /assets/{name}/pin", &e.to_string()))?;
             let pinned = parse(server, "POST /assets/{name}/pin", value)?;
-            render_pinned(&pinned, json);
+            print_pinned(&pinned, json);
         }
         PinAction::Upload {
             target,
             path,
             reason,
         } => {
-            let supplied = crate::commands::pin::read_supplied(path)?;
+            let supplied = read_supplied(path)?;
             let mut route = format!(
                 "/assets/{}/pin/upload?file_name={}",
                 encode(target),
@@ -80,7 +79,7 @@ pub(crate) async fn pin(
             let value: Value = serde_json::from_slice(&body)
                 .map_err(|e| server.unexpected(&what, &e.to_string()))?;
             let pinned = parse(server, &what, value)?;
-            render_pinned(&pinned, json);
+            print_pinned(&pinned, json);
         }
     }
     Ok(())
@@ -102,6 +101,6 @@ pub(crate) async fn unpin(
     let value: Value =
         serde_json::from_slice(&body).map_err(|e| server.unexpected(&what, &e.to_string()))?;
     let unpinned = parse(server, &what, value)?;
-    render_unpinned(&unpinned, json);
+    print_unpinned(&unpinned, json);
     Ok(())
 }
