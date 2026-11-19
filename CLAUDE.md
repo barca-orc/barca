@@ -14,7 +14,7 @@ stubs for decorators.
 ```
 Cargo.toml              ← Rust workspace root
 crates/
-  barca-model/          ← Shared vocabulary: ids, values, hashes, time, `term` (outln!/errln!), barca.toml config
+  barca-model/          ← Shared vocabulary: ids, values, the graph's node types (`ir`), hashes, time, `term` (outln!/errln!), barca.toml config
   barca-compile/        ← Source in, `Dag` and `ExecutionPlan` out: parser, decorator args, DAG, planner
   barca-db/             ← The metadata database (`.barca/metadata.db`, libSQL): schema, owners of every write
   barca-engine/         ← The per-step scheduler and worker loop: coordinator, dispatch, wire protocol

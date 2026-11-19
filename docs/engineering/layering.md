@@ -131,6 +131,7 @@ Where two shapes of one concept still differ, on purpose (typed as served, not u
 | after C1 | 16 | 29 modules |
 | after C4 (stores) | 6 | 19 modules |
 | after C2 and C3 | 3 | 16 modules |
+| after C5 (rendering) | 1 | 5 modules |
 
 Under the plan's original table (`results` in service, no leaf) the same v0.45.0 source has
 more wrong-way edges, since every engine module that returns a result names `results`.
@@ -159,11 +160,9 @@ more wrong-way edges, since every engine module that returns a result names `res
 
 Each line of the allowlist, grouped by the item of the plan that removes it.
 
-- **C5, rendering.** `execution -> report` (9 items: the progress and end-of-run lines).
-  `run_explanation -> outcome` (`RunView`) waits on the typed views
-  of B3.
-- **Needs a decision.** `schedule -> queries` (`list_assets`): only
-  `schedule::collect_jobs` uses it, and only a server test calls that; delete it or move it.
+- **B3, the typed views.** `run_explanation -> outcome` (`RunView`) is the one line left. It
+  closes the last cycle (`outcome`, `queries`, `report`, `run_explanation`, `run_list`); with
+  it gone no group of modules reaches itself.
 
 Inside one layer, so not on the allowlist, but part of the cycle:
 
@@ -297,3 +296,68 @@ up to the service layer, `execution -> report` does the same for the engine, and
 `run_explanation -> outcome` for the run views. With those three gone no cycle crosses a
 layer. So the number falls with C5 and the decision on `schedule::collect_jobs`, not with
 more moves here.
+
+## What C5 moved: rendering depends on values
+
+`report` is the text and JSON renderer of the service layer. Nothing below the service layer
+names it, and it names no function of `outcome`, `sql` or `values`.
+
+- **A run's progress lines are the run's.** `execution::progress` (new, a file of `execution`):
+  `fmt_eta`, `reconcile_total`, `env_suffix`, `RunOutcome`, `batch_line`, `end_of_run_line`,
+  `cached_step_line` and `failed_step_line` from `report`. They are what the orchestrator
+  prints while it executes (the bar, the `--agent` lines, the last line), not a view of a
+  result, and no other module called them. The alternative, typed events that the service
+  layer renders, would put a channel or a callback between a step finishing and its line on
+  the hot path for no second consumer; the functions already return text and the caller emits
+  it, so the move changes no byte and no timing.
+- **`cache::step_report::computed_by_another_run`** from `report`: it rewrites the
+  `StepReport` of a step another run of the server computed, beside `report_for`, which made
+  it.
+- **The JSON form of a result's output is the result's.** `results`: `artifact_metadata`,
+  `pointer_output`, `keyed_output` (with its hint), `parse_key_summary` and the helper they
+  share, from `report`; `first_multi_failure` (the error a multi-target run ends with) from
+  `report::commands`; `SqlResult` from `sql`. They decide which keys a result lists, whether it
+  is truncated and what a run's failure is, and the server stores `pointer_output` in a run's
+  record. `report` and `sql` still export the names the CLI and the server use.
+- **Reading an artifact is `values`.** `read_task_output` and `read_final_output` (a task's JSON
+  results read from disk) from `report`. `values` no longer names `report`.
+- `report` names `crate::trigger::TriggeredBy` where it is defined, not through `outcome`.
+- `schedule::collect_jobs` is gone: only a test of `barca-server` called it, and that test now
+  calls `queries::list_assets` and `schedule::jobs_from_summaries` itself.
+
+What stays in `report` is formatting: tables and their column widths, the JSON envelope of a
+page (`Page`, `--fields` projection), key order, hints and notes, and the rows of a batched
+call in `barca history RUN_ID` (`history_rows` sums a call's keys for one table row; the JSON
+lists every key). Two things in it are not formatting and wait on the typed views, which own
+the files they would move to: `render_run_detail` calls `run_explanation::explain` with the
+clock (the explanation belongs in `queries::RunDetail`), and `ListNode`, `HistoryItem` and
+`HistoryExtras::of_server_runs` are wire types of `barca list` and `barca history`.
+
+## What the lower layers take from barca-engine
+
+The module scan reads `crate::<module>` paths of this crate. `crate::dispatch`,
+`crate::helper_proc` and the other modules re-exported from `barca-engine` are below it for
+Cargo, but a crate made of the leaf, storage, decisions or analysis layer must not depend on
+the engine. `the_layers_below_the_engine_name_barca_engine_only_where_listed` reads those paths
+too, and `crates/barca-core/src/engine_uses_allowlist.txt` is what is left (it only shrinks).
+15 module pairs before, 7 now; the analysis layer names none.
+
+Cut, because the item was a value:
+
+- `OutputRef` and `ErrorPhase` were already `barca_model::step_result`'s; `envelope`,
+  `results`, `ledger`, `cache`, `freshness`, `predict` and `recover` name them there
+  (`crate::step_result`) instead of through `dispatch`.
+- `ProvidedInput` moved to `barca_model::step_result` (`dispatch` re-exports it); `store_sync`
+  and `recover` name it there.
+- `sizing_for` takes the shared capacity as a value (`Option<(usize, &'static str)>`) instead
+  of a `&dyn RunHost`: the run reads it from its host, a prediction passes `None`. So `sizing`
+  and `predict` name no `run_host`.
+
+Left, because it is behaviour:
+
+| Layer | Module | Takes | To cut it |
+|---|---|---|---|
+| storage | `backup`, `pins`, `store_inspect`, `transfer` | `helper_proc` (start a `python -m barca._x` helper, its lifeline, its exit as an error) | `helper_proc` names only `barca-model` and tokio: it moves below the engine as it is (into `barca-model` beside `process` and `spawn_lock`, or a crate of its own) |
+| storage | `transfer` | `protocol` (`FrameReader`, `encode_message`, `accept_hello`, `socket_path`, `PROTOCOL_VERSION`, `TransferRequest`, `TransferReply`) | the framing and the transfer messages are shared with the worker protocol; they move below with `helper_proc`, or `barca-store` depends on `barca-engine` |
+| decisions | `predict` | `dispatch::{partition_sources, expand_pending_partitions_filtered, selected_source, build_provided_inputs}` | `dispatch` names only `barca-compile` and `barca-model` (it expands a planned phase); it moves to `barca-compile` beside `planner`, which `barca-decide` takes anyway |
+| decisions | `recover` | `dispatch::build_provided_inputs` | the same |

@@ -157,7 +157,7 @@ pub(super) async fn seed_fresh_inputs(
         {
             if dag
                 .get_node(up)
-                .is_some_and(|n| n.extracted.partitions.is_empty())
+                .is_some_and(|n| n.decl.partitions.is_empty())
             {
                 needed.push((up.to_owned(), None));
             } else if dag
@@ -198,7 +198,7 @@ pub(super) async fn seed_fresh_targets(
     for target in targets {
         if dag
             .get_node(target)
-            .is_some_and(|n| n.extracted.partitions.is_empty())
+            .is_some_and(|n| n.decl.partitions.is_empty())
         {
             needed.push((target.clone(), None));
         } else if incremental.count_for(target) <= crate::results::LISTED_KEYS
@@ -390,14 +390,14 @@ pub(super) async fn expand_and_decide<'p>(
     if let Some(incremental) = &session.state.incremental {
         for base in incremental.cached.keys() {
             if let Some(node) = session.prepared.dag.get_node(base)
-                && node.extracted.sinks.iter().any(|s| s.is_dataset())
+                && node.decl.sinks.iter().any(|s| s.is_dataset())
                 && incremental.membership_changed(&session.prepared.dag, base)
                 && let Some(keys) = incremental.target_keys(&session.prepared.dag, base)
             {
                 crate::dataset_sinks::collect_membership(
                     &mut session.state.dataset_keys,
                     base,
-                    &node.extracted.sinks,
+                    &node.decl.sinks,
                     keys,
                 );
             }

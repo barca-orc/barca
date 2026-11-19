@@ -952,7 +952,11 @@ pub async fn checks(
     let recorded = db::components_of_rows(db_path, &rows).await?;
     for (row, node) in newest {
         if !recorded.get(&row).is_some_and(|recorded| {
-            same_definition(recorded, &node.definition_hash, &node.components)
+            same_definition(
+                recorded,
+                &node.fingerprint.definition_hash,
+                &node.fingerprint.components,
+            )
         }) {
             redefined.insert(node.id.clone());
         }

@@ -79,12 +79,12 @@ pub async fn returned_values(
                      returned instead",
                     oref.path
                 );
-                crate::report::artifact_metadata(oref)
+                crate::results::artifact_metadata(oref)
             })
         })
         .collect();
     match keys {
-        Some(_) => Some(crate::report::keyed_output(
+        Some(_) => Some(crate::results::keyed_output(
             items
                 .iter()
                 .zip(values)
@@ -108,7 +108,7 @@ pub async fn task_output(
     if keys.is_some() {
         returned_values(python, cfg, single, keys, summary).await
     } else {
-        single.map(crate::report::read_final_output)
+        single.map(read_final_output)
     }
 }
 
@@ -220,6 +220,28 @@ fn answer(item: Value) -> Result<Value, String> {
             _ => Err("the value reader returned an unexpected result".to_string()),
         },
         _ => Err("the value reader returned an unexpected result".to_string()),
+    }
+}
+
+/// A task's JSON results, preserving its keys; binary formats remain artifact references.
+/// The command layer reads tabular partition values with `values::task_output`.
+pub(crate) fn read_task_output(
+    single: Option<&crate::dispatch::OutputRef>,
+    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
+    summary: Option<&crate::results::KeySummary>,
+) -> Option<serde_json::Value> {
+    crate::results::output_with(single, keys, summary, read_final_output)
+}
+
+/// Read an artifact for display: a JSON artifact's value inline, metadata for binary formats.
+fn read_final_output(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
+    if oref.format == "json" {
+        std::fs::read_to_string(&oref.path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| crate::results::artifact_metadata(oref))
+    } else {
+        crate::results::artifact_metadata(oref)
     }
 }
 

@@ -190,7 +190,7 @@ impl RunResults {
             let Some(node) = dag.get_node(crate::StepId::parse(id).base_id()) else {
                 continue;
             };
-            for sink in &node.extracted.sinks {
+            for sink in &node.decl.sinks {
                 self.publications
                     .push(crate::sink_publications::Publication {
                         node_id: id.clone(),

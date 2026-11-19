@@ -43,7 +43,7 @@ impl PartitionSelection {
             .into_iter()
             .filter(|id| planned_set.contains(id))
             .collect();
-        let dims_of = |id: &str| dag.get_node(id).map(|n| &n.extracted.partitions);
+        let dims_of = |id: &str| dag.get_node(id).map(|n| &n.decl.partitions);
 
         // Every named dimension must be a dimension of something this run plans.
         let cone_dims: BTreeSet<&str> = planned
@@ -99,7 +99,7 @@ impl PartitionSelection {
                     below.get_or_insert(up);
                 } else if narrowed.contains(up) {
                     let aligned = !collected && {
-                        let mine: BTreeSet<&String> = node.extracted.partitions.keys().collect();
+                        let mine: BTreeSet<&String> = node.decl.partitions.keys().collect();
                         let theirs: BTreeSet<&String> =
                             dims_of(up).map(|d| d.keys().collect()).unwrap_or_default();
                         !mine.is_empty() && mine == theirs
@@ -250,7 +250,7 @@ impl PartitionSelection {
             let have: BTreeSet<String> = narrowed
                 .iter()
                 .filter_map(|id| dag.get_node(id))
-                .filter_map(|n| match n.extracted.partitions.get(dim) {
+                .filter_map(|n| match n.decl.partitions.get(dim) {
                     Some(barca_model::model::PartitionSpec::Static { values }) => Some(values),
                     _ => None,
                 })
@@ -345,7 +345,7 @@ fn value_string(v: &barca_model::model::PartitionValue) -> String {
 /// How many keys a node with only static dimensions declares (the product of their sizes).
 fn static_key_count(dag: &Dag, id: &str) -> usize {
     dag.get_node(id).map_or(0, |n| {
-        n.extracted
+        n.decl
             .partitions
             .values()
             .map(|spec| match spec {
@@ -520,7 +520,7 @@ pub fn partition_outputs(
     selection: Option<&PartitionSelection>,
 ) -> Option<Vec<(String, OutputRef)>> {
     let node = dag.get_node(node_id)?;
-    if node.extracted.partitions.is_empty() {
+    if node.decl.partitions.is_empty() {
         return None;
     }
     let prefix = format!("{node_id}[");

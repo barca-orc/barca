@@ -559,16 +559,11 @@ pub(crate) async fn status_from_dag_with_membership(
         }
         let held_note = held_above.map(|above| held_note(dag, above, held[above].pinned));
         let mut cache = cache_status(report, &inputs, &states, &history, &held, held_note);
-        local_only(
-            &mut cache,
-            id,
-            !node.extracted.partitions.is_empty(),
-            &pending,
-        );
+        local_only(&mut cache, id, !node.decl.partitions.is_empty(), &pending);
         // Keys that wait on the same keys of an input, which failed, are blocked (#764): a run
         // computes the node's other keys and skips these. Its own failed keys come first.
         if let Some(p) = partitions.as_ref().filter(|p| p.failed == 0)
-            && !node.extracted.partitions.is_empty()
+            && !node.decl.partitions.is_empty()
             && matches!(
                 cache.state,
                 CacheState::Stale | CacheState::NeverRun | CacheState::Partial
@@ -607,7 +602,7 @@ pub(crate) async fn status_from_dag_with_membership(
         nodes.push(NodeStatus {
             id: id.to_string(),
             name: node
-                .extracted
+                .decl
                 .explicit_name
                 .as_deref()
                 .unwrap_or(node.function_name())
@@ -617,7 +612,7 @@ pub(crate) async fn status_from_dag_with_membership(
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_else(|| "unknown".to_string()),
             inputs,
-            partitioned: !node.extracted.partitions.is_empty(),
+            partitioned: !node.decl.partitions.is_empty(),
             cache,
             // Filled by `health::attach`, once the whole scope is known.
             health: Default::default(),
@@ -633,15 +628,15 @@ pub(crate) async fn status_from_dag_with_membership(
             expected_fresh_at: None,
             recheck_at: None,
             no_estimate: None,
-            partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
+            partitions: partitions.filter(|_| !node.decl.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
             last_bytes_change: history
                 .last_bytes_change
                 .filter(|_| crate::cache::checks_bytes(node)),
             shape: None,
-            env: node.extracted.env.clone(),
-            undeclared_env: node.extracted.undeclared_env(),
+            env: node.decl.env.clone(),
+            undeclared_env: node.undeclared_env(),
             local: None,
             schedule: None,
         });
@@ -689,7 +684,7 @@ fn blocked_by(
     blocked: &HashMap<String, (usize, String)>,
     missing: usize,
 ) -> Option<(usize, String)> {
-    let mine: std::collections::BTreeSet<&String> = node.extracted.partitions.keys().collect();
+    let mine: std::collections::BTreeSet<&String> = node.decl.partitions.keys().collect();
     let mut reads: Vec<&String> = node.resolved_inputs.values().collect();
     reads.sort();
     reads.dedup();
@@ -698,7 +693,7 @@ fn blocked_by(
         .filter(|up| {
             dag.get_node(up).is_some_and(|u| {
                 let theirs: std::collections::BTreeSet<&String> =
-                    u.extracted.partitions.keys().collect();
+                    u.decl.partitions.keys().collect();
                 theirs == mine
             })
         })

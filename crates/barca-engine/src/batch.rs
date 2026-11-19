@@ -54,7 +54,7 @@ impl Grouping {
 /// The grouping of `node` in a run with `over`: `None` for a node that does not declare
 /// `batch=` (one key per call, and its function takes a single key).
 pub fn effective(node: &barca_model::model::DagNode, over: &BatchOverride) -> Option<Grouping> {
-    let spec = node.extracted.batch.as_ref()?;
+    let spec = node.decl.batch.as_ref()?;
     if let Some(v) = over.value_for(node) {
         return Some(match v {
             OverrideValue::One => Grouping::One,
@@ -230,7 +230,7 @@ pub fn annotate(
             let labels = match &grouping {
                 Grouping::By { source_text, .. } => evaluate_labels(
                     python,
-                    &node.extracted.source_file,
+                    &node.invoke.python().source_file,
                     source_text,
                     &parts.will_run_keys,
                 )

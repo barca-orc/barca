@@ -166,7 +166,8 @@ def test_history_of_one_run_pages_its_steps_failed_ones_first(tmp_path):
     run_id = json.loads(failed.stdout)["run_id"]
 
     page = json.loads(barca(tmp_path, "history", run_id, "--limit", "5", "--json").stdout)
-    assert paged(page) == {"total": 30, "truncated": True}
+    # A page `--limit` cut short says where the next one starts, read here or through a server.
+    assert paged(page) == {"total": 30, "truncated": True, "next_offset": 5}
     keys = [s["partition_key"] for s in page["steps"]]
     assert len(keys) == 5 and "n=17" in keys, keys
     assert [s["status"] for s in page["steps"] if s["partition_key"] == "n=17"] == ["failed"]

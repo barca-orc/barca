@@ -9,6 +9,7 @@ change those contracts.
 - [Crate split](crate-split.md): the November 2026 split of `barca-core` into five crates (#905), its decisions, measurements and follow-ups.
 - [Layers inside `barca-compile`](compile-layering.md): the module rows the layering test enforces (#1056, track D), the cuts made and what is left.
 - [Layers inside `barca-server`](server-layering.md): the module rows the layering test enforces (#1056, E1), the sub-states of `AppState`, which handlers take which, and what is left.
+- [The intermediate representation](ir.md): what the graph barca plans is made of, which fields are declaration, fingerprint, invocation and Python by-product, and what a second frontend would supply (#1056, D2 and D3). No external format exists.
 - [Layers inside barca-core](layering.md): the layer of every module of `barca-core`, the rule, the test that holds it and the edges still listed as exceptions (#1056 track C).
 - [Requirements discussion handoff](requirements-handoff.md): unanswered proposals and remaining decisions.
 - [User API rationale](user-api-decisions.md): reasons behind declaration choices.

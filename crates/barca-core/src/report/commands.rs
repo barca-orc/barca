@@ -614,7 +614,7 @@ struct HistoryItem<'a> {
     steps_total: &'a Option<i64>,
     target: &'a Option<String>,
     trigger_reason: &'a Option<String>,
-    triggered_by: &'a Option<crate::outcome::TriggeredBy>,
+    triggered_by: &'a Option<crate::trigger::TriggeredBy>,
 }
 
 #[derive(serde::Serialize)]
@@ -1408,7 +1408,7 @@ pub fn render_stats(
     rendered
 }
 
-pub fn render_sql(result: crate::sql::SqlResult, json: bool) -> RenderedOutput {
+pub fn render_sql(result: crate::results::SqlResult, json: bool) -> RenderedOutput {
     let mut rendered = RenderedOutput::default();
     for note in &result.notes {
         note!(rendered, "barca: {note}");
@@ -1882,31 +1882,6 @@ pub fn render_explain(
         }
     }
     rendered
-}
-
-pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
-    // The first failed target becomes the run's error: exit 1 with the error envelope.
-    if let Some((name, t)) = result.targets.iter().find(|(_, t)| t.failed()) {
-        return Some(crate::BarcaError::WorkerFailed(Box::new(
-            crate::FailedStep {
-                node: t.failed_node.clone().unwrap_or_else(|| name.clone()),
-                message: t.error.clone().unwrap_or_else(|| "unknown error".into()),
-                phase: t.failed_phase,
-                artifact_dir: None,
-                run: Some(Box::new(crate::PartialRun {
-                    run_id: result.run_id.clone(),
-                    elapsed_seconds: result.elapsed_seconds,
-                    steps_executed: result.steps_executed,
-                    phases: result.phases,
-                    steps: result.steps.clone(),
-                    warnings: result.warnings.clone(),
-                    partitions: t.partitions.clone(),
-                    key_summary: t.key_summary.clone(),
-                })),
-            },
-        )));
-    }
-    None
 }
 
 /// The run's own keys of a multi-target run's JSON (everything but `targets`).
@@ -2438,7 +2413,7 @@ mod history_json_tests {
             started_at: "2026-11-13T10:00:00Z".into(),
             finished_at: Some("2026-11-13T10:01:00Z".into()),
             elapsed_seconds: Some(60.25),
-            triggered_by: Some(crate::outcome::TriggeredBy::Schedule),
+            triggered_by: Some(crate::trigger::TriggeredBy::Schedule),
             scheduled_at: Some("2026-11-13T10:00:00Z".into()),
             schedule_id: Some("a.py:kpis".into()),
             client_run_id: Some("laptop-run".into()),
