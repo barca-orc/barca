@@ -1,7 +1,7 @@
 //! What is running now, whoever started it (#534): the `running` field of `GET /state` and
 //! `GET /assets/{name}`, and `GET /runs?status=running`.
 //!
-//! Two sources. This server's runs in flight (`AppState::runs`: the scheduler's, `POST /runs`
+//! Two sources. This server's runs in flight (`Runs::registry`: the scheduler's, `POST /runs`
 //! and the older trigger routes, `barca get --server`), with their live step events. And the
 //! CLI runs on the same `.barca/`: `running` rows of the metadata database whose owner is
 //! alive ([`db::alive_running_runs_in`], the check the scheduler's overlap skip uses), read
@@ -12,36 +12,14 @@
 //! Cached steps are announced at the end of the run. Until then, cache state and completion
 //! events identify finished nodes and partition keys.
 
-use crate::state::{AppState, RunStatus};
+use crate::progress::ProgressSnapshot;
+use crate::run_model::RunStatus;
+use crate::state::AppState;
+use crate::views::{NodeRunning, PartitionProgress, RunningStep};
+use barca_core::db;
 use barca_core::outcome::TriggeredBy;
 use barca_core::status::NodeStatus;
-use barca_core::{RunEvent, StepId, db};
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-
-/// A run in flight that has a node in it: executing it, about to reach it, or waiting in the
-/// queue with it among its nodes (`step`).
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct NodeRunning {
-    /// The run (`GET /runs/{run_id}`).
-    pub run_id: String,
-    /// What started the run; `null` for a CLI run recorded by a barca that did not record it.
-    pub triggered_by: Option<TriggeredBy>,
-    /// When the run started (RFC 3339, UTC).
-    pub started_at: String,
-    /// `running`: the run is executing it now. `waiting`: the run is executing and will still
-    /// reach it. `queued`: the run waits in the queue.
-    pub step: RunningStep,
-    /// `step` in the words every surface prints: `running`, `in this run`, `in a queued run`.
-    pub label: String,
-    /// For a partitioned node: how many of its keys are done.
-    pub partitions: Option<PartitionProgress>,
-}
-
-pub use barca_core::run_list::RunningStep;
-
-pub use barca_core::served::PartitionProgress;
 
 /// One run in flight.
 #[derive(Clone, Debug)]
@@ -98,6 +76,7 @@ impl InFlight {
 pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<InFlight> {
     let mut runs: Vec<InFlight> = state
         .runs
+        .registry
         .iter()
         .filter(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
         .map(|r| InFlight {
@@ -111,9 +90,9 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
             from_queue: true,
             nodes: r.nodes.clone(),
             pending: r.status == RunStatus::Pending,
-            progress: state.events.get(&r.handle).map(|c| {
+            progress: state.runs.events.get(&r.handle).map(|c| {
                 let mut p = c.progress();
-                p.executing = state.shared_steps.executing(&r.handle);
+                p.executing = state.runs.shared_steps.executing(&r.handle);
                 p
             }),
             schedule_id: r.trigger.schedule_id.clone(),
@@ -124,7 +103,12 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         return runs;
     };
     // The server's own runs have rows too; they are the ones above (or finished).
-    let mut held: HashSet<String> = state.runs.iter().map(|r| r.handle.clone()).collect();
+    let mut held: HashSet<String> = state
+        .runs
+        .registry
+        .iter()
+        .map(|r| r.handle.clone())
+        .collect();
     if state.config.read_only
         && let Ok(recorded) = barca_core::liveness::recorded_runs(read_path).await
     {
@@ -185,74 +169,6 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         });
     }
     runs
-}
-
-/// What one run's events say about its steps.
-#[derive(Default)]
-pub(crate) struct Progress {
-    /// Nodes that printed a line or finished a step (any key).
-    touched: HashSet<String>,
-    /// Unpartitioned nodes whose step finished.
-    finished: HashSet<String>,
-    /// Partitioned nodes: the keys this run finished with a result.
-    keys_done: HashMap<String, HashSet<String>>,
-    /// When the run started executing (its `RunStarted` event), unix seconds.
-    started: Option<f64>,
-    /// When its latest step finished, unix seconds.
-    last_step: Option<f64>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ProgressSnapshot {
-    pub executing: HashMap<String, usize>,
-    pub touched: HashSet<String>,
-    pub finished: HashSet<String>,
-    pub keys_done: HashMap<String, usize>,
-    pub started: Option<f64>,
-    pub last_step: Option<f64>,
-}
-impl Progress {
-    pub(crate) fn observe(&mut self, event: &RunEvent) {
-        match event {
-            RunEvent::RunStarted { .. } => {
-                self.started = Some(barca_core::time::now_secs_f64());
-            }
-            RunEvent::Log { node_id, .. } => {
-                self.touched
-                    .insert(StepId::parse(node_id).base_id().to_string());
-            }
-            RunEvent::StepFinished { node_id, ok, .. } => {
-                let id = StepId::parse(node_id);
-                // A `parallel()` child is not a step of the plan.
-                if id.partition.0.contains_key("_branch") {
-                    return;
-                }
-                let base = id.base_id().to_string();
-                self.last_step = Some(barca_core::time::now_secs_f64());
-                self.touched.insert(base.clone());
-                if id.partition.0.is_empty() {
-                    self.finished.insert(base);
-                } else if *ok {
-                    self.keys_done.entry(base).or_default().insert(id.display());
-                }
-            }
-            _ => {}
-        }
-    }
-    pub(crate) fn snapshot(&self) -> ProgressSnapshot {
-        ProgressSnapshot {
-            executing: HashMap::new(),
-            touched: self.touched.clone(),
-            finished: self.finished.clone(),
-            keys_done: self
-                .keys_done
-                .iter()
-                .map(|(node, keys)| (node.clone(), keys.len()))
-                .collect(),
-            started: self.started,
-            last_step: self.last_step,
-        }
-    }
 }
 
 /// The nodes `run` works on: every asset and sensor for a run of everything, else the

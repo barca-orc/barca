@@ -2,7 +2,8 @@
 //! rule (RFC-0008 rule 9): consecutive failed ticks are counted, a job at its `max_failures`
 //! is skipped until something it failed on succeeds again.
 
-use crate::state::{AppState, RunStatus};
+use crate::run_model::RunStatus;
+use crate::state::AppState;
 use barca_core::db;
 use barca_core::schedule::ScheduledJob;
 use barca_core::step_status::StepStatus;
@@ -39,7 +40,7 @@ impl Bookkeeping {
 /// cancelled (which is not a failure of the job); otherwise the nodes that failed, empty on
 /// success. A failed run with no failed step (it could not start) failed on the scheduled node.
 pub(super) fn tick_outcome(
-    run: &crate::state::RunState,
+    run: &crate::run_model::RunState,
     job: &ScheduledJob,
 ) -> Option<Vec<String>> {
     match run.status {
@@ -58,7 +59,7 @@ pub(super) fn tick_outcome(
 
 /// The ids of the steps that failed in a finished run: from its outcome (`steps`, and each
 /// failed target's `failed_node` of a multi-target run), or from its single-target result.
-pub(super) fn failed_steps(run: &crate::state::RunState) -> Vec<String> {
+pub(super) fn failed_steps(run: &crate::run_model::RunState) -> Vec<String> {
     let mut nodes: Vec<String> = Vec::new();
     let outcome: Option<serde_json::Value> = run
         .outcome
@@ -113,7 +114,12 @@ pub(super) async fn count_outcomes(
         if book.counted.contains(&handle) {
             continue;
         }
-        let Some(failed) = state.runs.get(&handle).and_then(|r| tick_outcome(&r, job)) else {
+        let Some(failed) = state
+            .runs
+            .registry
+            .get(&handle)
+            .and_then(|r| tick_outcome(&r, job))
+        else {
             continue;
         };
         book.counted.insert(handle);
@@ -165,7 +171,7 @@ pub(super) async fn failing_reset(
 ) -> bool {
     let mut watch: Vec<String> = vec![job.id.clone()];
     watch.extend(failures.failed_nodes.iter().cloned());
-    if let Ok(dag) = state.loaded_dag().await {
+    if let Ok(dag) = state.reads.loaded_dag().await {
         for node in &failures.failed_nodes {
             watch.extend(dag.upstream(node).into_iter().map(str::to_string));
         }

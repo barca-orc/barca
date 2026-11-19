@@ -1,14 +1,25 @@
-//! Shared server state and in-memory run tracking.
+//! The server's state: the parts each route family uses, composed into one [`AppState`].
+//!
+//! Each part is a struct of shared handles that knows nothing of [`AppState`]: [`Reads`] (the
+//! config, the loaded graph, what the read routes keep), [`Runs`] (the run registry, the queue,
+//! the slots), [`Scheduling`] (the scheduler's published jobs, the pauses), [`Lifecycle`]
+//! (start, drain, shutdown), the auth store and the SQL helper. A handler takes the parts it
+//! uses (`State<Reads>`, `State<Lifecycle>`: axum's [`FromRef`]), so a route that only reads
+//! the graph cannot reach the run registry; one that needs several takes `State<AppState>`.
+//! What needs several parts at once is a method here or a function in a module above this one
+//! (`docs/engineering/server-layering.md`).
 
+use crate::config::ServeConfig;
+use crate::read_cache::Reads;
+use crate::replay::{ReplayHub, RunChannel};
+use crate::run_model::{RunState, RunStatus};
+use crate::views::JobStatus;
+use axum::extract::FromRef;
 use barca_core::CancellationToken;
 use barca_core::db;
-use barca_core::results::GetResult;
 use dashmap::DashMap;
-use serde::Serialize;
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::Semaphore;
 
@@ -19,301 +30,21 @@ fn default_run_concurrency() -> usize {
         .unwrap_or(4)
 }
 
-/// Configuration for a `barca serve` instance. Built by the CLI and handed to
-/// [`crate::serve`].
-#[derive(Clone, Debug)]
-pub struct ServeConfig {
-    /// Python source files that define the DAG this server operates on.
-    pub files: Vec<String>,
-    /// Bind address (`--host`, default 127.0.0.1 — local only). There is no auth.
-    pub host: IpAddr,
-    /// Bind port (default 8274).
-    pub port: u16,
-    /// Dev-mode hot reload: re-parse the DAG when source files change.
-    /// Off by default; has no effect on the production serving path.
-    pub watch: bool,
-    /// Whether the cron scheduler fires `Schedule(...)` assets. On by default;
-    /// disabled with `barca serve --no-schedule`.
-    pub schedule: bool,
-    /// Timezone cron expressions are evaluated in: `local` (default), `utc`, or
-    /// an IANA name like `America/New_York`. Set via `--timezone`.
-    pub timezone: String,
-    /// Python interpreter used for execution (and dynamic-partition resolution).
-    pub python: PathBuf,
-    /// Resolved barca configuration (environment, DB path, artifact root, state).
-    pub resolved: barca_core::config::ResolvedConfig,
-    /// Inspect-only mode (`--read-only`): endpoints that run or cancel work
-    /// return 403, the scheduler never starts, and every DB read goes through a
-    /// private snapshot — the metadata DB is never opened, locked, created, or
-    /// written. Safe to point at a project another process is running.
-    pub read_only: bool,
-}
-
-/// Lifecycle of an async run tracked by the server.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-#[serde(rename_all = "snake_case")]
-pub enum RunStatus {
-    /// Accepted, not yet started.
-    Pending,
-    /// Executing in a background task.
-    Running,
-    /// Finished successfully.
-    Complete,
-    /// Finished with an error.
-    Failed,
-    /// Stopped mid-flight via `DELETE /runs/{id}` or server shutdown.
-    Cancelled,
-}
-
-/// In-memory record of a single run, kept while it runs and for a while after. `handle` is
-/// the database run id, allocated when the run is accepted.
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct RunState {
-    /// The run id (see `/runs/{run_id}`); the older `/status/{run_id}` calls it the handle.
-    pub handle: String,
-    /// The same id, once the run has written its database row.
-    #[serde(skip)]
-    pub db_run_id: Option<String>,
-    #[serde(skip)]
-    pub command: String,
-    /// The targets as given, comma-separated (`None`: every asset and sensor).
-    #[serde(skip)]
-    pub target: Option<String>,
-    /// The full node ids the targets resolved to when the run was accepted; empty for a run of
-    /// every asset and sensor. The scheduler matches a due job against them, so a run counts
-    /// as in flight for its node however the target was spelled.
-    #[serde(skip)]
-    pub nodes: Vec<String>,
-    /// What started the run.
-    #[serde(skip)]
-    pub trigger: barca_core::outcome::Trigger,
-    /// The run was asked to compute again what is cached (`--refresh`, `--refresh-all`): a
-    /// cached node of it is not one it will serve from cache.
-    #[serde(skip)]
-    pub refreshes: bool,
-    /// The files the request named (`[]`: the deployed set).
-    #[serde(skip)]
-    pub files: Vec<String>,
-    pub status: RunStatus,
-    /// Populated when `status == Complete` for a single-target run. Carries the DB run id,
-    /// timing, output.
-    pub result: Option<GetResult>,
-    /// Populated when the run did not succeed.
-    pub error: Option<String>,
-    /// Unix epoch seconds when the run was accepted.
-    pub started_at: f64,
-    /// Unix epoch seconds when the run finished (success or failure).
-    pub finished_at: Option<f64>,
-    /// The run's full result once it finished.
-    #[serde(skip)]
-    pub outcome: Option<barca_core::outcome::Outcome>,
-    /// Cancels this run's execution future. `DELETE /runs/{id}` triggers it;
-    /// the run task observes it, terminates workers, and marks the run
-    /// cancelled. Not part of the JSON status payload.
-    #[serde(skip)]
-    pub cancel: CancellationToken,
-    /// `DELETE /runs/{id}` asked for it: a stopping server does not put it back in the queue.
-    #[serde(skip)]
-    pub cancel_requested: bool,
-    /// Who cancelled it and whether it had started (#925), recorded with its outcome.
-    #[serde(skip)]
-    pub cancellation: Option<barca_core::run_explain::Cancellation>,
-}
-
-/// The size, modification time and change time of each source file, in the order of
-/// `ServeConfig::files`. The change time is the one a program cannot set: an edit that keeps
-/// the size and puts the old modification time back (`touch -r`, some sync tools) still
-/// moves it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceStamp(Vec<FileStamp>);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct FileStamp {
-    modified: std::time::SystemTime,
-    changed: std::time::SystemTime,
-    len: u64,
-}
-
-impl SourceStamp {
-    /// The current state of `files`. `None` when one of them is not a readable regular file
-    /// (a directory's own time says nothing about the files in it): then nothing is cached.
-    pub fn of(files: &[String]) -> Option<Self> {
-        files
-            .iter()
-            .map(|f| {
-                use std::os::unix::fs::MetadataExt;
-                let meta = std::fs::metadata(f).ok().filter(|m| m.is_file())?;
-                let changed = std::time::UNIX_EPOCH
-                    + std::time::Duration::new(
-                        u64::try_from(meta.ctime()).ok()?,
-                        u32::try_from(meta.ctime_nsec()).ok()?,
-                    );
-                Some(FileStamp {
-                    modified: meta.modified().ok()?,
-                    changed,
-                    len: meta.len(),
-                })
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(Self)
-    }
-
-    /// True when every file was last modified or changed more than
-    /// [`crate::read_cache::SOURCES_SETTLED`] before `now`, the same wait the read cache
-    /// gives the sources before it keeps a graph.
-    ///
-    /// A file's times are only as fine as the filesystem's clock (a few milliseconds on
-    /// Linux). A file read just after it was written can be written again
-    /// within the same instant with the same size, and its stamp would not show it. So a
-    /// stamp that recent is not kept: the files are read again next time, until they have
-    /// been still for a moment.
-    pub fn settled(&self, now: std::time::SystemTime) -> bool {
-        self.0.iter().all(|file| {
-            [file.modified, file.changed].iter().all(|at| {
-                now.duration_since(*at)
-                    .is_ok_and(|age| age > crate::read_cache::SOURCES_SETTLED)
-            })
-        })
-    }
-}
-
-#[cfg(test)]
-mod stamp_tests {
-    use super::SourceStamp;
-    use std::time::{Duration, SystemTime};
-
-    #[test]
-    fn a_stamp_is_kept_only_once_its_files_have_been_still_for_a_moment() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("p.py").display().to_string();
-        std::fs::write(&file, "x = 1\n").unwrap();
-        let stamp = SourceStamp::of(std::slice::from_ref(&file)).unwrap();
-        let now = SystemTime::now();
-        assert!(!stamp.settled(now), "just written");
-        assert!(!stamp.settled(now + Duration::from_secs(1)));
-        assert!(stamp.settled(now + Duration::from_secs(5)));
-        // A clock that went backwards proves nothing either.
-        assert!(!stamp.settled(now - Duration::from_secs(60)));
-        // An edit that keeps the size and puts the old modification time back is another
-        // stamp too: the change time moved. (The times are a few milliseconds coarse, so
-        // the edit is made a moment later.)
-        let before = SourceStamp::of(std::slice::from_ref(&file)).unwrap();
-        let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
-        std::thread::sleep(Duration::from_millis(30));
-        std::fs::write(&file, "x = 2\n").unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&file)
-            .unwrap()
-            .set_modified(modified)
-            .unwrap();
-        let after = SourceStamp::of(std::slice::from_ref(&file)).unwrap();
-        assert_eq!(
-            std::fs::metadata(&file).unwrap().modified().unwrap(),
-            modified
-        );
-        assert_ne!(
-            after, before,
-            "same size, same modification time, other content"
-        );
-        // A change of size or time is another stamp; a directory or a missing file has none.
-        std::fs::write(&file, "x = 12\n").unwrap();
-        assert_ne!(SourceStamp::of(std::slice::from_ref(&file)).unwrap(), stamp);
-        assert!(SourceStamp::of(&[dir.path().display().to_string()]).is_none());
-        assert!(SourceStamp::of(&[format!("{file}.missing")]).is_none());
-    }
-}
-
-/// One row of `GET /state`: the node's `barca status` entry plus what the
-/// table needs beyond it — typical durations and the next cron fire time.
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct NodeState {
-    #[serde(flatten)]
-    #[cfg_attr(feature = "ts", ts(flatten))]
-    pub status: barca_core::status::NodeStatus,
-    /// Typical wall time over the most recent successful materializations.
-    pub durations: Option<Durations>,
-    /// Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub next_run: Option<i64>,
-    /// The most recent cron fire time at or before now (unix epoch seconds) in the server's
-    /// `--timezone`, if scheduled: the slot it last had.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub prev_run: Option<i64>,
-    /// For a scheduled node that missed a slot: the first slot (unix epoch seconds) after its
-    /// schedule's newest fired tick, when that slot is at or before now. `null` while on time,
-    /// while paused, and when no tick is recorded. The same value as `late_since` of
-    /// `GET /schedule` and of its `schedule` block, which also says whether it is `late`
-    /// (`barca_core::schedule_standing::standing`).
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub late_since: Option<i64>,
-    /// The run working on this node now, whoever started it (`null` when none is).
-    pub running: Option<crate::running::NodeRunning>,
-    /// When its newest successful result was written (UTC `YYYY-MM-DD HH:MM:SS`, like
-    /// `last_materialization.created_at`); `null` if it never succeeded.
-    pub last_success_at: Option<String>,
-    /// The first failed attempt after its last clean run; `null` unless its latest attempts
-    /// failed.
-    pub failing_since: Option<String>,
-    /// How many runs in a row failed it, up to now (`0` when its latest attempt did not fail).
-    pub consecutive_failures: u32,
-    /// Its newest run as a whole, the run `last_materialization` is from; absent until a run
-    /// recorded a row for it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(optional))]
-    pub last_run: Option<barca_core::db::RunTotals>,
-}
-
-pub use barca_core::health::Durations;
-
-pub(crate) use crate::replay::RunChannel;
-
-/// Durable, mutable view of one scheduled job, published by the scheduler and
-/// read by `GET /schedule`. Where the schedule stands (its last tick and run, its next slot,
-/// whether it is late) is not here: it is computed at request time from the recorded ticks
-/// (`barca_core::schedule_standing::standing`), as every other surface computes it.
-#[derive(Clone, Debug, Serialize)]
-pub struct JobStatus {
-    /// Full node id (the run target).
-    pub id: String,
-    /// The node's cron expression.
-    pub cron: String,
-    /// Node kind (asset / sensor / task).
-    pub kind: barca_core::NodeKind,
-    /// Last time a due tick of this job was skipped (unix epoch seconds) because a run of
-    /// its node was already in flight. Kept in memory only; a restart clears it.
-    pub last_skipped: Option<i64>,
-    /// Handle of the in-flight run that caused `last_skipped` (`None` for a paused job).
-    pub skipped_for: Option<String>,
-    /// Why the last due tick was skipped: `in_flight` or `paused`.
-    pub skip_reason: Option<&'static str>,
-    /// Consecutive failed ticks (RFC-0008 rule 9); persisted in `schedule_failures`.
-    pub failures: u32,
-    /// `Schedule(..., max_failures=N)`: at this many consecutive failed ticks the job is
-    /// skipped and reported `failing`.
-    pub max_failures: u32,
-}
-
-/// Cloneable application state shared across all axum handlers.
+/// The runs this server holds and what bounds them.
 #[derive(Clone)]
-pub struct AppState {
-    pub replay: crate::replay::ReplayHub,
-    pub auth: Arc<crate::auth_http::Access>,
-    pub loaded: Arc<tokio::sync::Mutex<Option<LoadedSources>>>,
-    pub load_errors: Arc<RwLock<Vec<barca_core::load::LoadError>>>,
-    pub config: Arc<ServeConfig>,
-    pub runs: Arc<DashMap<String, RunState>>,
+pub struct Runs {
+    /// Every run accepted and not yet evicted, by run id.
+    pub registry: Arc<DashMap<String, RunState>>,
     /// Live event channels per run handle (logs + step/run lifecycle).
-    pub events: Arc<DashMap<String, RunChannel>>,
+    pub(crate) events: Arc<DashMap<String, RunChannel>>,
+    pub(crate) replay: ReplayHub,
     /// Bounds how many runs execute concurrently (`--max-runs`). Runs execute Python in
     /// parallel; the shared metadata.db is kept race-free by a process-wide DB
     /// lock in `barca-core`, not by serializing whole runs.
-    pub run_slots: Arc<Semaphore>,
+    pub slots: Arc<Semaphore>,
     /// One more slot that only a run someone asked for (not a cron tick) may take while a
-    /// scheduled run holds one of `run_slots` and they are full: an API `get` never waits behind a schedule.
+    /// scheduled run holds one of `slots` and they are full: an API `get` never waits behind
+    /// a schedule.
     pub interactive_slot: Arc<Semaphore>,
     /// The capacity every run shares (`--capacity`, `[server] capacity`, #628): a step of any
     /// run is admitted against it as well as against its run's own. `None`: not set.
@@ -323,6 +54,38 @@ pub struct AppState {
     pub shared_steps: Arc<barca_core::serve::claims::SharedSteps>,
     /// The runs accepted and not started, in order, and whether the queue is paused.
     pub queue: Arc<crate::queue::Queue>,
+    /// Every run task, so a drain can wait for them to end.
+    pub tasks: tokio_util::task::TaskTracker,
+    /// Set once the writer's settings are published ([`AppState::record_writer`]).
+    pub(crate) writer_recorded: Arc<tokio::sync::OnceCell<()>>,
+}
+
+impl Runs {
+    /// The shared capacity as `barca_core::sizing` takes it: its total and the setting that
+    /// gave it.
+    pub(crate) fn server_capacity(&self) -> Option<(usize, &'static str)> {
+        self.capacity
+            .as_ref()
+            .map(|c| (c.total() as usize, c.source()))
+    }
+}
+
+/// What the scheduler publishes and what holds a schedule back.
+#[derive(Clone)]
+pub struct Scheduling {
+    /// Live scheduler view, published by the scheduler and read by `GET /schedule`.
+    pub jobs: Arc<RwLock<Vec<JobStatus>>>,
+    /// Paused schedules by node id, read from `schedule_state` on first use and kept in step
+    /// with it by the pause and resume routes.
+    pub pauses: Arc<tokio::sync::OnceCell<RwLock<HashMap<String, db::SchedulePause>>>>,
+    /// Set when the scheduler stopped on an error; `GET /health` `scheduler_enabled`. The
+    /// read side holds the same flag ([`Reads::note_metadata`]).
+    pub stopped: Arc<AtomicBool>,
+}
+
+/// When the server started, and how it stops.
+#[derive(Clone)]
+pub struct Lifecycle {
     /// Cancelled when a drain ends without the runs finishing (its deadline, or a second
     /// SIGTERM/SIGINT); every run token is a child of this, so in-flight runs stop (workers
     /// terminated, runs marked cancelled with [`Self::cancel_reason`]).
@@ -333,114 +96,14 @@ pub struct AppState {
     /// Why the server cancelled its runs (`server shutdown`), set before [`Self::shutdown`]
     /// is cancelled. Every run executes inside its scope, so the run records the reason.
     pub cancel_reason: barca_core::interrupt::CancelReason,
-    /// Every run task, so a drain can wait for them to end.
-    pub run_tasks: tokio_util::task::TaskTracker,
-    /// Live scheduler view, published by the scheduler and read by `GET /schedule`.
-    pub schedule: Arc<RwLock<Vec<JobStatus>>>,
-    /// Bumped by the `--watch` file watcher on every DAG invalidation, so the
-    /// scheduler can re-read its job set without a restart.
-    pub dag_generation: Arc<AtomicU64>,
-    /// Paused schedules by node id, read from `schedule_state` on first use and kept in step
-    /// with it by the pause and resume routes.
-    pub(crate) writer_recorded: Arc<tokio::sync::OnceCell<()>>,
-    pub pauses: Arc<tokio::sync::OnceCell<RwLock<HashMap<String, db::SchedulePause>>>>,
     /// When this server started (unix seconds), for `GET /project`'s `deployed_at`.
     pub started_at: i64,
     /// The same, RFC 3339 with milliseconds (`GET /health` `started_at`): a client that
     /// reconnects tells a restarted server from the one it was following.
     pub started: String,
-    /// Why the metadata DB cannot be used, while it cannot: set when a read-only server finds
-    /// it unusable (it keeps serving) or the scheduler stops on a metadata error, cleared when a
-    /// read-only request reads it again. `GET /health` `metadata_error`.
-    pub metadata_error: Arc<RwLock<Option<String>>>,
-    /// Set when the scheduler stopped on an error; `GET /health` `scheduler_enabled`.
-    pub scheduler_stopped: Arc<AtomicBool>,
-    /// What the read routes keep between requests ([`crate::read_cache`]).
-    pub reads: Arc<crate::read_cache::ReadCache>,
-    /// The query helper of `POST /sql/query` ([`crate::sql_query`]): started by the first
-    /// query, killed when the server's state is dropped.
-    pub sql: Arc<crate::sql_query::QueryHelper>,
 }
 
-impl AppState {
-    pub fn new(config: ServeConfig) -> Self {
-        let run_slot_count = config
-            .resolved
-            .server_max_runs
-            .unwrap_or_else(default_run_concurrency)
-            .max(1);
-        let now = chrono::Utc::now();
-        let admission =
-            barca_core::serve::capacity::Admission::from(config.resolved.server_admission);
-        let capacity = config.resolved.server_capacity.map(|(total, source)| {
-            Arc::new(barca_core::serve::capacity::SharedCapacity::with_admission(
-                total, source, admission,
-            ))
-        });
-        Self {
-            auth: Arc::new(crate::auth_http::Access::new(&config.resolved)),
-            capacity,
-            shared_steps: Arc::new(barca_core::serve::claims::SharedSteps::new()),
-            replay: Default::default(),
-            loaded: Arc::new(tokio::sync::Mutex::new(None)),
-            load_errors: Arc::new(RwLock::new(Vec::new())),
-            config: Arc::new(config),
-            runs: Arc::new(DashMap::new()),
-            events: Arc::new(DashMap::new()),
-            run_slots: Arc::new(Semaphore::new(run_slot_count)),
-            interactive_slot: Arc::new(Semaphore::new(1)),
-            queue: Arc::new(crate::queue::Queue::new(run_slot_count)),
-            shutdown: CancellationToken::new(),
-            draining: CancellationToken::new(),
-            cancel_reason: barca_core::interrupt::CancelReason::new(),
-            run_tasks: tokio_util::task::TaskTracker::new(),
-            schedule: Arc::new(RwLock::new(Vec::new())),
-            dag_generation: Arc::new(AtomicU64::new(0)),
-            writer_recorded: Default::default(),
-            pauses: Arc::new(tokio::sync::OnceCell::new()),
-            started_at: now.timestamp(),
-            started: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            metadata_error: Arc::new(RwLock::new(None)),
-            scheduler_stopped: Arc::new(AtomicBool::new(false)),
-            reads: Arc::default(),
-            sql: Arc::default(),
-        }
-    }
-}
-
-impl AppState {
-    /// Whether this server fires `Schedule(...)` nodes: configured to (not `--no-schedule`,
-    /// not `--read-only`) and the scheduler has not stopped on an error.
-    pub fn scheduler_enabled(&self) -> bool {
-        self.config.schedule
-            && !self.config.read_only
-            && !self.scheduler_stopped.load(Ordering::Relaxed)
-    }
-
-    /// The scheduler stopped for `why`, a metadata DB error: `/health` says so.
-    pub fn scheduler_failed(&self, why: String) {
-        self.scheduler_stopped.store(true, Ordering::Relaxed);
-        *self.metadata_error.write().unwrap() = Some(why);
-    }
-
-    /// Record what reading the metadata DB found: an unusable database is reported on
-    /// `/health` until a read succeeds again. Other errors (a lock, I/O) leave it as it was.
-    pub fn note_metadata<T>(
-        &self,
-        read: Result<T, barca_core::BarcaError>,
-    ) -> Result<T, barca_core::BarcaError> {
-        match &read {
-            Ok(_) if !self.scheduler_stopped.load(Ordering::Relaxed) => {
-                *self.metadata_error.write().unwrap() = None;
-            }
-            Err(e @ barca_core::BarcaError::MetadataUnusable { .. }) => {
-                *self.metadata_error.write().unwrap() = Some(e.to_string());
-            }
-            _ => {}
-        }
-        read
-    }
-
+impl Lifecycle {
     /// Whether the server is draining (or past it): no queued run starts.
     pub fn is_draining(&self) -> bool {
         self.draining.is_cancelled()
@@ -461,33 +124,122 @@ impl AppState {
             None => "run cancelled".to_string(),
         }
     }
+}
 
-    /// The seconds a client refused during a drain is told to wait (`Retry-After`): the drain
-    /// timeout, by when this server is gone and its replacement is likely up. At least 1.
-    pub fn retry_after_secs(&self) -> u64 {
-        self.config.resolved.drain_timeout_secs.max(1)
+/// Cloneable application state shared across all axum handlers: the parts, each a struct of
+/// shared handles.
+#[derive(Clone)]
+pub struct AppState {
+    /// What the server was started with. Every part that needs it holds the same one.
+    pub config: Arc<ServeConfig>,
+    /// The loaded graph and what the read routes keep between requests
+    /// ([`crate::read_cache`]).
+    pub reads: Reads,
+    pub runs: Runs,
+    pub scheduling: Scheduling,
+    pub lifecycle: Lifecycle,
+    pub(crate) auth: Arc<crate::auth_http::Access>,
+    /// The query helper of `POST /sql/query` ([`crate::sql_helper`]): started by the first
+    /// query, killed when the server's state is dropped.
+    pub sql: Arc<crate::sql_helper::QueryHelper>,
+}
+
+impl FromRef<AppState> for Reads {
+    fn from_ref(state: &AppState) -> Self {
+        state.reads.clone()
     }
 }
 
-/// The single selected graph owner for inspection, schedule and execution.
-pub struct LoadedSources {
-    stamp: Vec<Option<SourceStamp>>,
-    dag: Arc<barca_core::dag::Dag>,
+impl FromRef<AppState> for Runs {
+    fn from_ref(state: &AppState) -> Self {
+        state.runs.clone()
+    }
+}
+
+impl FromRef<AppState> for Lifecycle {
+    fn from_ref(state: &AppState) -> Self {
+        state.lifecycle.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<crate::auth_http::Access> {
+    fn from_ref(state: &AppState) -> Self {
+        state.auth.clone()
+    }
 }
 
 impl AppState {
-    fn source_stamp(&self) -> Vec<Option<SourceStamp>> {
-        self.config
-            .files
-            .iter()
-            .map(|file| SourceStamp::of(std::slice::from_ref(file)))
-            .collect()
+    pub fn new(config: ServeConfig) -> Self {
+        // Unit tests never write `.barca` into the crate's source directory.
+        #[cfg(test)]
+        crate::test_support::leave_source_tree();
+        let run_slot_count = config
+            .resolved
+            .server_max_runs
+            .unwrap_or_else(default_run_concurrency)
+            .max(1);
+        let now = chrono::Utc::now();
+        let admission =
+            barca_core::serve::capacity::Admission::from(config.resolved.server_admission);
+        let capacity = config.resolved.server_capacity.map(|(total, source)| {
+            Arc::new(barca_core::serve::capacity::SharedCapacity::with_admission(
+                total, source, admission,
+            ))
+        });
+        let auth = Arc::new(crate::auth_http::Access::new(&config.resolved));
+        let config = Arc::new(config);
+        let scheduler_stopped = Arc::new(AtomicBool::new(false));
+        Self {
+            auth,
+            reads: Reads::new(config.clone(), scheduler_stopped.clone()),
+            runs: Runs {
+                registry: Arc::new(DashMap::new()),
+                events: Arc::new(DashMap::new()),
+                replay: Default::default(),
+                slots: Arc::new(Semaphore::new(run_slot_count)),
+                interactive_slot: Arc::new(Semaphore::new(1)),
+                capacity,
+                shared_steps: Arc::new(barca_core::serve::claims::SharedSteps::new()),
+                queue: Arc::new(crate::queue::Queue::new(run_slot_count)),
+                tasks: tokio_util::task::TaskTracker::new(),
+                writer_recorded: Default::default(),
+            },
+            scheduling: Scheduling {
+                jobs: Arc::new(RwLock::new(Vec::new())),
+                pauses: Arc::new(tokio::sync::OnceCell::new()),
+                stopped: scheduler_stopped,
+            },
+            lifecycle: Lifecycle {
+                shutdown: CancellationToken::new(),
+                draining: CancellationToken::new(),
+                cancel_reason: barca_core::interrupt::CancelReason::new(),
+                started_at: now.timestamp(),
+                started: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            },
+            config,
+            sql: Arc::default(),
+        }
+    }
+
+    /// Whether this server fires `Schedule(...)` nodes: configured to (not `--no-schedule`,
+    /// not `--read-only`) and the scheduler has not stopped on an error.
+    pub fn scheduler_enabled(&self) -> bool {
+        self.config.schedule
+            && !self.config.read_only
+            && !self.scheduling.stopped.load(Ordering::Relaxed)
+    }
+
+    /// The scheduler stopped for `why`, a metadata DB error: `/health` says so.
+    pub fn scheduler_failed(&self, why: String) {
+        self.scheduling.stopped.store(true, Ordering::Relaxed);
+        *self.reads.metadata_error.write().unwrap() = Some(why);
     }
 
     /// Publish the writer's settings on its first metadata write. An idle server can
     /// inspect a project with no database without creating one.
     pub(crate) async fn record_writer(&self) -> Result<(), barca_core::BarcaError> {
-        self.writer_recorded
+        self.runs
+            .writer_recorded
             .get_or_try_init(|| self.publish_writer(vec![]))
             .await?;
         Ok(())
@@ -498,97 +250,12 @@ impl AppState {
         schedules: Vec<String>,
     ) -> Result<(), barca_core::BarcaError> {
         let cfg = &self.config.resolved;
-        let workers = barca_core::sizing(
-            cfg.capacity,
-            cfg.pool_size,
-            self.capacity
-                .as_ref()
-                .map(|c| (c.total() as usize, c.source())),
-        )
-        .pool_size;
+        let workers =
+            barca_core::sizing(cfg.capacity, cfg.pool_size, self.runs.server_capacity()).pool_size;
         let now = chrono::Utc::now().timestamp();
-        barca_core::liveness::record_serving(&cfg.db_path, now, self.queue.max_runs, workers)
+        barca_core::liveness::record_serving(&cfg.db_path, now, self.runs.queue.max_runs, workers)
             .await?;
         barca_core::liveness::record_scheduler(&cfg.db_path, now, schedules, &self.config.timezone)
             .await
-    }
-
-    pub(crate) fn graph_stale(&self) -> Option<bool> {
-        let loaded = self.loaded.try_lock().ok()?;
-        loaded
-            .as_ref()
-            .map(|current| current.stamp != self.source_stamp())
-    }
-
-    /// Observe the selected graph without refreshing sources or waiting for loading.
-    pub(crate) fn loaded_node_count(&self) -> Option<usize> {
-        self.loaded
-            .try_lock()
-            .ok()
-            .and_then(|loaded| loaded.as_ref().map(|sources| sources.dag.node_count()))
-    }
-
-    pub async fn loaded_dag(&self) -> Result<Arc<barca_core::dag::Dag>, barca_core::BarcaError> {
-        self.refresh_dag(false).await
-    }
-
-    /// Execution/status must reread helper cones too; configured-file stamps alone
-    /// cannot prove the result hash is unchanged after a helper module edit.
-    pub async fn current_dag(&self) -> Result<Arc<barca_core::dag::Dag>, barca_core::BarcaError> {
-        self.refresh_dag(true).await
-    }
-
-    async fn refresh_dag(
-        &self,
-        force: bool,
-    ) -> Result<Arc<barca_core::dag::Dag>, barca_core::BarcaError> {
-        let mut loaded = self.loaded.lock().await;
-        let stamp = self.source_stamp();
-        if !force
-            && let Some(current) = loaded.as_ref()
-            && current.stamp == stamp
-            && stamp
-                .iter()
-                .flatten()
-                .all(|stamp| stamp.settled(std::time::SystemTime::now()))
-        {
-            return Ok(current.dag.clone());
-        }
-        for _ in 0..3 {
-            let before = self.source_stamp();
-            let (dag, errors) =
-                barca_core::load::build_partial_dag(&self.config.files, &self.config.python)
-                    .await?;
-            if before != self.source_stamp() {
-                continue;
-            }
-            {
-                let mut old_errors = self.load_errors.write().unwrap();
-                if *old_errors != errors {
-                    for error in &errors {
-                        barca_core::errln!(
-                            "[barca] not loaded: {}: {}{}",
-                            error.file,
-                            error.error,
-                            if error.affected_nodes.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" ({})", error.affected_nodes.join(", "))
-                            }
-                        );
-                    }
-                }
-                *old_errors = errors;
-            }
-            let dag = Arc::new(dag);
-            *loaded = Some(LoadedSources {
-                stamp: before,
-                dag: dag.clone(),
-            });
-            return Ok(dag);
-        }
-        Err(barca_core::BarcaError::Usage(
-            "source files changed during loading; retry after the edit completes".into(),
-        ))
     }
 }

@@ -1,5 +1,6 @@
 use super::*;
-use crate::state::{RunState, RunStatus, ServeConfig};
+use crate::ServeConfig;
+use crate::run_model::{RunState, RunStatus};
 use barca_core::results::AssetSummary;
 use barca_core::schedule::{describe_schedule, jobs_from_summaries, next_fire};
 use barca_core::{CronExpr, Freshness, NodeKind, db};
@@ -85,7 +86,7 @@ fn insert_run(
     node: Option<&str>,
     started_at: f64,
 ) {
-    state.runs.insert(
+    state.runs.registry.insert(
         handle.to_string(),
         RunState {
             handle: handle.to_string(),
@@ -124,7 +125,7 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     let task = tokio::spawn(run_scheduler(state.clone()));
     // The initial selected graph is published before scheduler DB admission.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while state.loaded.lock().await.is_none() {
+        while state.reads.sources.loaded.lock().await.is_none() {
             tokio::task::yield_now().await;
         }
     })
@@ -136,16 +137,21 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     )
     .unwrap();
     // This is the existing watch event signal, while startup still waits for the DB.
-    state.dag_generation.fetch_add(1, Ordering::Relaxed);
+    state
+        .reads
+        .sources
+        .generation
+        .fetch_add(1, Ordering::Relaxed);
     assert_eq!(
-        barca_core::queries::list_assets_from_dag(&state.loaded_dag().await.unwrap()).len(),
+        barca_core::queries::list_assets_from_dag(&state.reads.loaded_dag().await.unwrap()).len(),
         2
     );
     drop(held);
     let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if state
-                .schedule
+                .scheduling
+                .jobs
                 .read()
                 .unwrap()
                 .iter()
@@ -370,7 +376,7 @@ fn get_schedule_reports_next_fire_in_the_servers_zone() {
             &[job("f.py:daily", NodeKind::Task, "0 5 * * *")],
             &Bookkeeping::default(),
         );
-        let body = serde_json::json!(crate::handlers::schedule_at(
+        let body = serde_json::json!(crate::schedule_view::schedule_at(
             &st,
             an_instant(),
             &Default::default()
@@ -577,7 +583,7 @@ async fn a_skip_is_published_to_get_schedule() {
     let jobs = [job("f.py:daily", NodeKind::Asset, "0 5 * * *")];
     let mut book = Bookkeeping::default();
     publish_registry(&st, &jobs, &book);
-    let body = serde_json::json!(crate::handlers::schedule_at(
+    let body = serde_json::json!(crate::schedule_view::schedule_at(
         &st,
         an_instant(),
         &Default::default()
@@ -587,7 +593,7 @@ async fn a_skip_is_published_to_get_schedule() {
 
     record_skip(&mut book, &jobs[0], Some("api"), 1_234, "scheduled run");
     publish_registry(&st, &jobs, &book);
-    let body = serde_json::json!(crate::handlers::schedule_at(
+    let body = serde_json::json!(crate::schedule_view::schedule_at(
         &st,
         an_instant(),
         &Default::default()
@@ -644,7 +650,7 @@ fn finished(state: &AppState, handle: &str, status: RunStatus, failed: &[&str]) 
             ..Default::default()
         })
         .collect();
-    state.runs.get_mut(handle).unwrap().result = Some(barca_core::results::GetResult {
+    state.runs.registry.get_mut(handle).unwrap().result = Some(barca_core::results::GetResult {
         run_id: "r".into(),
         elapsed_seconds: 0.0,
         steps_executed: 0,
@@ -674,14 +680,17 @@ fn a_tick_run_counts_once_it_finished_and_not_when_cancelled() {
         Some("f.py:s"),
         1.0,
     );
-    assert_eq!(tick_outcome(&st.runs.get("p").unwrap(), &j), None);
+    assert_eq!(tick_outcome(&st.runs.registry.get("p").unwrap(), &j), None);
     finished(&st, "c", RunStatus::Cancelled, &[]);
-    assert_eq!(tick_outcome(&st.runs.get("c").unwrap(), &j), None);
+    assert_eq!(tick_outcome(&st.runs.registry.get("c").unwrap(), &j), None);
     finished(&st, "ok", RunStatus::Complete, &[]);
-    assert_eq!(tick_outcome(&st.runs.get("ok").unwrap(), &j), Some(vec![]));
+    assert_eq!(
+        tick_outcome(&st.runs.registry.get("ok").unwrap(), &j),
+        Some(vec![])
+    );
     finished(&st, "f", RunStatus::Failed, &["f.py:report"]);
     assert_eq!(
-        tick_outcome(&st.runs.get("f").unwrap(), &j),
+        tick_outcome(&st.runs.registry.get("f").unwrap(), &j),
         Some(vec!["f.py:report".to_string()])
     );
     // A multi-target tick's failed steps come from its outcome.
@@ -694,20 +703,20 @@ fn a_tick_run_counts_once_it_finished_and_not_when_cancelled() {
         Some("f.py:s"),
         1.0,
     );
-    st.runs.get_mut("m").unwrap().outcome = Some(
+    st.runs.registry.get_mut("m").unwrap().outcome = Some(
         barca_core::outcome::Outcome::from_text(
             r#"{"status":"failed","steps":[{"id":"f.py:s","status":"success"},{"id":"f.py:publish","status":"failed"}],"targets":{"f.py:s":{"status":"success"},"f.py:publish":{"status":"failed","failed_node":"f.py:publish"},"f.py:late":{"status":"blocked","failed_node":"f.py:baseline"}}}"#,
         )
         .unwrap(),
     );
     assert_eq!(
-        tick_outcome(&st.runs.get("m").unwrap(), &j),
+        tick_outcome(&st.runs.registry.get("m").unwrap(), &j),
         Some(vec!["f.py:publish".to_string()])
     );
     // A failed run with no failed step (it could not start) failed on the scheduled node.
     finished(&st, "x", RunStatus::Failed, &[]);
     assert_eq!(
-        tick_outcome(&st.runs.get("x").unwrap(), &j),
+        tick_outcome(&st.runs.registry.get("x").unwrap(), &j),
         Some(vec!["f.py:s".to_string()])
     );
 }
@@ -785,7 +794,7 @@ fn plan_tick_skips_for_a_run_started_over_http() {
     assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
 
     // Once it finishes, the next due tick fires.
-    st.runs.get_mut("api").unwrap().status = RunStatus::Complete;
+    st.runs.registry.get_mut("api").unwrap().status = RunStatus::Complete;
     let plan = plan_tick(
         &at(5, 0),
         &jobs,
@@ -851,7 +860,7 @@ async fn a_missed_tick_is_skipped_at_startup_while_its_node_is_running() {
         .await
         .unwrap();
     assert!(book.last_handle.is_empty());
-    assert_eq!(st.runs.len(), 1, "no second run of the node");
+    assert_eq!(st.runs.registry.len(), 1, "no second run of the node");
     assert_eq!(
         book.last_skip["f.py:daily"],
         (back.timestamp(), "in_flight", Some("api".to_string()))
@@ -997,7 +1006,7 @@ async fn a_missed_tick_is_skipped_at_startup_while_a_cli_run_of_its_node_is_goin
     let book = catch_up(&st, &cli, &jobs, &Zone::Utc, &back, &db_path)
         .await
         .unwrap();
-    assert!(st.runs.is_empty(), "no second run of the node");
+    assert!(st.runs.registry.is_empty(), "no second run of the node");
     assert_eq!(
         book.last_skip["f.py:daily"],
         (back.timestamp(), "in_flight", Some("cli".to_string()))
@@ -1072,7 +1081,7 @@ async fn a_paused_job_is_not_caught_up_and_its_skip_says_paused() {
     let book = catch_up(&st, &[], &jobs, &Zone::Utc, &back, &db_path)
         .await
         .unwrap();
-    assert!(st.runs.is_empty(), "a paused job does not run");
+    assert!(st.runs.registry.is_empty(), "a paused job does not run");
     assert_eq!(
         book.last_skip["f.py:daily"],
         (back.timestamp(), "paused", None)
@@ -1106,7 +1115,7 @@ async fn a_paused_job_is_not_caught_up_and_its_skip_says_paused() {
         .await
         .unwrap();
     assert!(
-        st.runs.is_empty(),
+        st.runs.registry.is_empty(),
         "no tick between the end of the pause and now"
     );
     assert!(book.last_skip.is_empty());
@@ -1142,8 +1151,8 @@ async fn unreadable_schedule_history_never_becomes_an_empty_first_start() {
         matches!(error, barca_core::BarcaError::MetadataUnusable { path, .. }
         if path == dir.path().to_string_lossy())
     );
-    assert!(st.runs.is_empty());
-    assert!(st.schedule.read().unwrap().is_empty());
+    assert!(st.runs.registry.is_empty());
+    assert!(st.scheduling.jobs.read().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1162,7 +1171,10 @@ async fn a_first_start_anchors_every_job_to_now_and_runs_nothing() {
         .unwrap();
 
     assert!(handles.is_empty());
-    assert!(st.runs.is_empty(), "nothing may run on a first start");
+    assert!(
+        st.runs.registry.is_empty(),
+        "nothing may run on a first start"
+    );
     assert_eq!(
         fired,
         HashMap::from([("f.py:daily".to_string(), now.timestamp())])
@@ -1190,7 +1202,7 @@ async fn catch_up_does_not_fire_early_across_the_autumn_offset_change() {
     } = catch_up(&st, &[], &jobs, &zone, &early, &db_path)
         .await
         .unwrap();
-    assert!(handles.is_empty() && st.runs.is_empty());
+    assert!(handles.is_empty() && st.runs.registry.is_empty());
     assert_eq!(fired["f.py:daily"], before.timestamp());
     let due = zone.at(Utc.with_ymd_and_hms(2026, 11, 1, 10, 0, 0).unwrap());
     let Bookkeeping {
@@ -1225,7 +1237,7 @@ async fn a_tick_missed_while_the_server_was_down_runs_once_when_it_comes_back() 
     } = catch_up(&st, &[], &jobs, &Zone::Utc, &early, &db_path)
         .await
         .unwrap();
-    assert!(handles.is_empty() && st.runs.is_empty());
+    assert!(handles.is_empty() && st.runs.registry.is_empty());
     assert_eq!(
         fired["f.py:daily"],
         stopped.timestamp(),
@@ -1245,12 +1257,12 @@ async fn a_tick_missed_while_the_server_was_down_runs_once_when_it_comes_back() 
         .unwrap();
     assert_eq!(handles.len(), 2);
     assert_eq!(
-        st.runs.len(),
+        st.runs.registry.len(),
         2,
         "one run per job, however many ticks were missed"
     );
     for id in ["f.py:daily", "f.py:hourly"] {
-        assert!(st.runs.contains_key(&handles[id]), "{id}");
+        assert!(st.runs.registry.contains_key(&handles[id]), "{id}");
         assert_eq!(fired[id], back.timestamp(), "{id}");
     }
     assert_eq!(db::get_schedule_state(&db_path).await.unwrap(), fired);
@@ -1265,7 +1277,7 @@ async fn a_tick_missed_while_the_server_was_down_runs_once_when_it_comes_back() 
     } = catch_up(&st, &[], &jobs, &Zone::Utc, &again, &db_path)
         .await
         .unwrap();
-    assert!(handles.is_empty() && st.runs.is_empty());
+    assert!(handles.is_empty() && st.runs.registry.is_empty());
     assert_eq!(fired["f.py:hourly"], back.timestamp());
 }
 
@@ -1296,7 +1308,7 @@ async fn a_job_added_while_the_server_was_down_is_anchored_not_run() {
         .unwrap();
 
     assert_eq!(handles.keys().collect::<Vec<_>>(), ["f.py:daily"]);
-    assert_eq!(st.runs.len(), 1);
+    assert_eq!(st.runs.registry.len(), 1);
     assert_eq!(fired["f.py:new"], back.timestamp());
 }
 
@@ -1313,8 +1325,8 @@ async fn trigger_registers_a_tracked_run_for_asset_and_task() {
         .await
         .unwrap();
     let ht = trigger(&st, &task, 0, db::generate_run_id()).await.unwrap();
-    assert!(st.runs.contains_key(&ha));
-    assert!(st.runs.contains_key(&ht));
+    assert!(st.runs.registry.contains_key(&ha));
+    assert!(st.runs.registry.contains_key(&ht));
     assert_ne!(ha, ht);
 }
 
@@ -1540,11 +1552,11 @@ async fn queue_wait_runs_from_joining_the_queue_to_the_runs_start() {
     let (_dir, st, path) = recording_state().await;
     let j = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
     // A paused queue: the run joins it and waits.
-    let _ = crate::queue::pause(axum::extract::State(st.clone()))
+    let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
         .await
         .unwrap();
     let handle = fire(&st, &j, 240, Some(&path)).await.unwrap();
-    let queued_at = st.runs.get(&handle).unwrap().started_at;
+    let queued_at = st.runs.registry.get(&handle).unwrap().started_at;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let waiting = &ticks(&path, &j).await[0];
     assert_eq!(waiting.run_id.as_deref(), Some(handle.as_str()));
@@ -1554,7 +1566,7 @@ async fn queue_wait_runs_from_joining_the_queue_to_the_runs_start() {
         "nothing about a start until it starts"
     );
 
-    let _ = crate::queue::resume(axum::extract::State(st.clone()))
+    let _ = crate::queue_routes::resume(axum::extract::State(st.clone()))
         .await
         .unwrap();
     let done = finished_tick(&path, &j).await;
@@ -1571,7 +1583,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     let (_dir, st, path) = recording_state().await;
     let queued = job("f.py:queued", NodeKind::Asset, "0 6 * * *");
     let killed = job("f.py:killed", NodeKind::Asset, "0 6 * * *");
-    let _ = crate::queue::pause(axum::extract::State(st.clone()))
+    let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
         .await
         .unwrap();
     let q = fire(&st, &queued, 240, Some(&path)).await.unwrap();
@@ -1599,7 +1611,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     // The next server: the killed run is not started again, and its tick ends with it, no
     // target reached. The start it recorded stays.
     let st = state_at(&path);
-    crate::queue::resume_at_startup(&st).await.unwrap();
+    crate::runs::resume_at_startup(&st).await.unwrap();
     let row = &ticks(&path, &killed).await[0];
     assert_eq!(row.run_status.as_deref(), Some("error"));
     assert_eq!(
@@ -1613,7 +1625,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     );
     // The queued run starts under its id when the queue is resumed, and ends on the same row.
     assert!(ticks(&path, &queued).await[0].started_at.is_none());
-    let _ = crate::queue::resume(axum::extract::State(st.clone()))
+    let _ = crate::queue_routes::resume(axum::extract::State(st.clone()))
         .await
         .unwrap();
     let done = finished_tick(&path, &queued).await;
@@ -1646,6 +1658,7 @@ async fn a_run_nobody_scheduled_writes_no_tick() {
     for _ in 0..600 {
         if st
             .runs
+            .registry
             .get(&handle)
             .is_some_and(|r| r.finished_at.is_some())
         {
@@ -1653,6 +1666,6 @@ async fn a_run_nobody_scheduled_writes_no_tick() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    assert!(st.runs.get(&handle).unwrap().finished_at.is_some());
+    assert!(st.runs.registry.get(&handle).unwrap().finished_at.is_some());
     assert!(ticks(&path, &j).await.is_empty());
 }

@@ -1,4 +1,4 @@
-//! Dev-mode file watcher (`--watch`). Bumps [`AppState::dag_generation`] and reloads the
+//! Dev-mode file watcher (`--watch`). Bumps [`crate::sources::Sources::generation`] and reloads the
 //! graph whenever a source file changes, so the read routes ([`crate::read_cache`]) and the
 //! scheduler reflect edits without a restart.
 //!
@@ -30,7 +30,7 @@ impl Drop for SourceWatcher {
 
 /// Watch original configured sources, including files currently excluded from the graph.
 pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
-    let generation = state.dag_generation.clone();
+    let generation = state.reads.sources.generation.clone();
     // A watch channel stores one pending refresh, regardless of editor event volume.
     let (changed, mut changes) = tokio::sync::watch::channel(());
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -51,7 +51,7 @@ pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
         }
 
         // The scheduler re-reads its job set on its next tick, and the read cache loads the
-        // graph again ([`AppState::inspect_dag`]).
+        // graph again ([`crate::read_cache::Reads::inspect_dag`]).
         generation.fetch_add(1, Ordering::Relaxed);
         changed.send_replace(());
     })?;
@@ -71,7 +71,7 @@ pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
     let task = tokio::spawn(async move {
         while changes.changed().await.is_ok() {
             tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_MS)).await;
-            if let Err(error) = state.loaded_dag().await {
+            if let Err(error) = state.reads.loaded_dag().await {
                 barca_core::errln!("[barca] source reload failed: {error}");
             }
         }
