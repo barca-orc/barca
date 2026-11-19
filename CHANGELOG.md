@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- **`barca status` and a server compute health, schedule standing and estimates from one implementation, and agree on a typical duration (#1056).** The server rebuilt what `barca status` builds, and the two took a node's typical duration differently: over an even number of recent successful runs the server took the lower of the two middle values, `barca status` their mean. For a node with runs of 0 s and 12 s, `GET /state` estimated it fresh 5 s after its schedule's next tick and `barca status` 10 s after. Both now fill one inputs type in barca-core and read the mean of the two middle values, as schedules' typical times already did. What changes on a server for a node with an even number of samples (at most 20): `durations.median_seconds` of `GET /state`, and what is made of it there and in `GET /nodes`, `GET /state/rollup` and `barca.nodes` (`expected_fresh_at`, a root's `action.estimated_seconds`). `durations.p95_seconds` is unchanged (nearest rank), and so is everything `barca status` printed. No key or type changes.
+
 ## 0.45.0 (2026-11-19)
 
 - Run counts reflect active worker steps. Queue and history rows summarize multi-target runs, the queue explains its extra requested-run slot, and run details distinguish attempts, steps, planned nodes and unreached work (#1042).
