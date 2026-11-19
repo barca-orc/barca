@@ -3,14 +3,14 @@
 //! row, [`crate::health`] the rest.
 
 use super::ScheduleStatus;
-use crate::cache_state::CacheState;
+use barca_model::cache_state::CacheState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResult {
     /// Project-wide maintained cache accounting, filled by status entry points only.
     #[serde(default)]
-    pub disk_usage: crate::gc::DiskUsage,
+    pub disk_usage: barca_store::gc::DiskUsage,
     /// The target name, when status was scoped to one node's upstream cone (`null` for the
     /// whole DAG or for several targets).
     pub target: Option<String>,
@@ -143,7 +143,7 @@ pub struct NodeStatus {
     pub last_materialization: Option<LastMaterialization>,
     /// Last recompute whose bytes differed for unchanged code and inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_bytes_change: Option<crate::db::BytesChange>,
+    pub last_bytes_change: Option<barca_db::db::BytesChange>,
     /// Shape of `last_materialization`'s artifact (`null` when there is none).
     #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub shape: Option<serde_json::Value>,

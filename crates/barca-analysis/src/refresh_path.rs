@@ -6,7 +6,7 @@
 //! Two layers:
 //!
 //! - [`Paths`] is static: which schedules reach each node as a target. It is the scheduler's
-//!   own walk ([`crate::freshness::tick_reach`]), computed once per loaded graph and kept
+//!   own walk ([`barca_decide::freshness::tick_reach`]), computed once per loaded graph and kept
 //!   (seconds on a graph of thousands of nodes and dozens of schedules), never per poll.
 //! - [`PathSchedule`] is each schedule as of one instant: its next tick, whether it is paused
 //!   and whether a scheduler fires it. It moves with the clock, so it is built per answer
@@ -16,13 +16,13 @@
 //! (#962, #963) read; [`refresh_path`] adds the missed ticks and is the field every surface
 //! carries.
 
-use crate::dag::Dag;
-use crate::freshness::{Reach, tick_reach};
-use crate::schedule::{Zone, next_fire};
 use crate::schedule_standing::Standing;
 pub use crate::views::RefreshPath;
 use crate::views::ScheduleStatus;
 pub use crate::views::{CoveredSchedule, PauseCover, PauseRelation};
+use barca_compile::dag::Dag;
+use barca_decide::freshness::{Reach, tick_reach};
+use barca_decide::schedule::{Zone, next_fire};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -47,8 +47,9 @@ impl Paths {
             .topo_order()
             .into_iter()
             .filter(|id| {
-                dag.get_node(id)
-                    .is_some_and(|n| matches!(n.decl.freshness, crate::Freshness::Schedule(_)))
+                dag.get_node(id).is_some_and(|n| {
+                    matches!(n.decl.freshness, barca_model::Freshness::Schedule(_))
+                })
             })
             .collect();
         let manual: HashSet<String> = dag
@@ -56,7 +57,7 @@ impl Paths {
             .into_iter()
             .filter(|id| {
                 dag.get_node(id)
-                    .is_some_and(|n| matches!(n.decl.freshness, crate::Freshness::Manual))
+                    .is_some_and(|n| matches!(n.decl.freshness, barca_model::Freshness::Manual))
             })
             .map(str::to_string)
             .collect();
@@ -91,18 +92,18 @@ impl Paths {
     }
 }
 
-/// What a pause of `target` would cover ([`PauseCover`]): the nodes [`crate::pauses::scope`]
+/// What a pause of `target` would cover ([`PauseCover`]): the nodes [`barca_store::pauses::scope`]
 /// resolves it to, what is below them when `downstream`, and every schedule whose tick
 /// reaches one of those nodes ([`tick_reach`], as a target or as an input).
 pub fn pause_cover(
     dag: &Dag,
     target: &str,
     downstream: bool,
-) -> Result<PauseCover, crate::BarcaError> {
-    let targets = crate::pauses::scope(dag, target, false)?;
+) -> Result<PauseCover, barca_model::BarcaError> {
+    let targets = barca_store::pauses::scope(dag, target, false)?;
     let named: HashSet<&str> = targets.iter().map(String::as_str).collect();
     let below: Vec<String> = if downstream {
-        crate::pauses::below(dag, &targets)
+        barca_store::pauses::below(dag, &targets)
             .into_iter()
             .filter(|id| !named.contains(id.as_str()))
             .collect()
@@ -114,7 +115,7 @@ pub fn pause_cover(
         .into_iter()
         .filter(|id| {
             dag.get_node(id)
-                .is_some_and(|n| matches!(n.decl.freshness, crate::Freshness::Schedule(_)))
+                .is_some_and(|n| matches!(n.decl.freshness, barca_model::Freshness::Schedule(_)))
         })
         .collect();
     let reach = tick_reach(dag, scheduled);
@@ -194,7 +195,7 @@ impl PathSchedule {
     /// From where `job`'s schedule stands and its `schedule` block, as the surface answering
     /// reports them (`block.live` is the scheduler's own word), with cron evaluated in `zone`.
     pub fn of(
-        job: &crate::schedule::ScheduledJob,
+        job: &barca_decide::schedule::ScheduledJob,
         zone: &Zone,
         standing: &Standing,
         block: &ScheduleStatus,
@@ -206,7 +207,7 @@ impl PathSchedule {
             block
                 .paused_until
                 .as_deref()
-                .and_then(crate::time::parse_rfc3339)
+                .and_then(barca_model::time::parse_rfc3339)
                 .and_then(|until| chrono::DateTime::from_timestamp(until, 0))
                 .and_then(|until| next_fire(&job.cron, zone, until))
                 .map(|slot| slot.timestamp())
@@ -308,7 +309,7 @@ pub fn path_schedule<'a>(
 
 /// How many of `misses` (a node's finished ticks that did not leave it fresh, as
 /// `(schedule, when the run ended)`, back to the last tick that did:
-/// [`crate::db::LatestTicks::misses`]) count for `node`: those of a schedule of its path that
+/// [`barca_db::db::LatestTicks::misses`]) count for `node`: those of a schedule of its path that
 /// ended after `last_success` (unix seconds), its newest successful result, and not before
 /// the latest recovery above it. Once an input recovers, earlier ticks that could not
 /// compute the node cease to count. Later healthy polls do not clear genuine misses.
@@ -338,7 +339,7 @@ pub fn refresh_path(node: &str, missed: u32, evidence: PathEvidence<'_>) -> Opti
     let (schedule, state) = path_schedule(node, evidence)?;
     Some(RefreshPath {
         schedule: schedule.to_string(),
-        next_tick: state.next_tick.and_then(crate::time::rfc3339_secs),
+        next_tick: state.next_tick.and_then(barca_model::time::rfc3339_secs),
         paused: state.paused,
         live: state.live,
         state: state.state,
@@ -363,17 +364,17 @@ pub struct Firing {
 /// here and nowhere else.
 #[derive(Clone, Copy)]
 pub struct ScheduleInputs<'a> {
-    /// The scheduled nodes ([`crate::schedule::jobs_from_dag`]).
-    pub jobs: &'a [crate::schedule::ScheduledJob],
+    /// The scheduled nodes ([`barca_decide::schedule::jobs_from_dag`]).
+    pub jobs: &'a [barca_decide::schedule::ScheduledJob],
     /// The zone cron is evaluated in: the one the firing scheduler uses.
     pub zone: &'a Zone,
     pub now: chrono::DateTime<chrono::Utc>,
     /// Each schedule's recorded ticks ([`crate::schedule_standing::recorded`]).
     pub ticks: &'a HashMap<String, crate::schedule_standing::Ticks>,
     /// Each schedule's recorded failed ticks: read for a schedule absent from `firing`.
-    pub failures: &'a HashMap<String, crate::db::ScheduleFailures>,
+    pub failures: &'a HashMap<String, barca_db::db::ScheduleFailures>,
     /// The paused schedules; one whose `until` has passed is over.
-    pub pauses: &'a HashMap<String, crate::db::SchedulePause>,
+    pub pauses: &'a HashMap<String, barca_db::db::SchedulePause>,
     /// The schedules a scheduler in this process fires; empty where none runs.
     pub firing: &'a HashMap<String, Firing>,
     /// What the records say of a scheduler elsewhere ([`crate::liveness::observe`]); the
@@ -453,16 +454,17 @@ pub fn path_schedules(views: &HashMap<String, ScheduleView>) -> PathSchedules {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::jobs_from_dag;
+    use barca_decide::schedule::jobs_from_dag;
 
     fn dag(source: &str) -> Dag {
-        Dag::build(&crate::parse::extract_nodes(source, "p.py").unwrap()).expect("valid dag")
+        Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
+            .expect("valid dag")
     }
 
     fn id(dag: &Dag, name: &str) -> String {
         dag.topo_order()
             .into_iter()
-            .find(|id| crate::targets::short_name(id) == name)
+            .find(|id| barca_compile::targets::short_name(id) == name)
             .unwrap_or_else(|| panic!("no node {name}"))
             .to_string()
     }
@@ -476,8 +478,8 @@ mod tests {
             .map(|job| {
                 let pause = paused
                     .iter()
-                    .find(|(name, _)| crate::targets::short_name(&job.id) == *name)
-                    .map(|(_, until)| crate::db::SchedulePause {
+                    .find(|(name, _)| barca_compile::targets::short_name(&job.id) == *name)
+                    .map(|(_, until)| barca_db::db::SchedulePause {
                         paused_at: 0,
                         until: *until,
                     });
@@ -524,10 +526,10 @@ mod tests {
             .map(|name| {
                 refresh_path(&id(dag, name), 0, evidence).map(|path| {
                     (
-                        crate::targets::short_name(&path.schedule).to_string(),
+                        barca_compile::targets::short_name(&path.schedule).to_string(),
                         path.next_tick
                             .as_deref()
-                            .and_then(crate::time::parse_rfc3339),
+                            .and_then(barca_model::time::parse_rfc3339),
                         path.paused,
                         path.live,
                     )
@@ -792,7 +794,7 @@ def both(slow, fast): ...
             ];
             let ages = HashMap::from([(
                 orders.clone(),
-                crate::db::NodeAge {
+                barca_db::db::NodeAge {
                     last_success_at: last_success.map(str::to_string),
                     ..Default::default()
                 },
@@ -859,7 +861,7 @@ def both(slow, fast): ...
     /// `pause_cover` of `target`: its downstream by name and its schedules as `(name, word)`.
     fn cover(d: &Dag, target: &str, downstream: bool) -> (Vec<String>, Vec<(String, String)>) {
         let cover = pause_cover(d, target, downstream).unwrap();
-        let name = |id: &String| crate::targets::short_name(id).to_string();
+        let name = |id: &String| barca_compile::targets::short_name(id).to_string();
         (
             cover.downstream.iter().map(name).collect(),
             cover

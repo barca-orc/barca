@@ -8,12 +8,12 @@
 //!
 //! This reads what a run recorded and writes nothing.
 
-use crate::groups::NodeGroup;
 use crate::rollup::headline;
 use crate::run_explanation::count;
 pub use crate::run_explanation::{target_ids, target_line};
-use crate::targets::short_name;
-use crate::trigger::TriggeredBy;
+use barca_compile::groups::NodeGroup;
+use barca_compile::targets::short_name;
+use barca_model::trigger::TriggeredBy;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -104,8 +104,8 @@ pub struct RunLineFacts<'a> {
     pub target: Option<&'a str>,
 }
 
-impl<'a> From<&'a crate::db::RunRecord> for RunLineFacts<'a> {
-    fn from(r: &'a crate::db::RunRecord) -> Self {
+impl<'a> From<&'a barca_db::db::RunRecord> for RunLineFacts<'a> {
+    fn from(r: &'a barca_db::db::RunRecord) -> Self {
         RunLineFacts {
             status: &r.status,
             steps_total: r.steps_total,
@@ -552,7 +552,7 @@ impl ActivityHour {
 
 /// The runs started in the last [`ACTIVITY_HOURS`] hours, hour by hour: the activity strip of
 /// the Runs page, `activity` of `GET /runs` and `barca history --activity`. Counted by the
-/// database over every run of the window ([`crate::db::run_activity`]), never over the runs a
+/// database over every run of the window ([`barca_db::db::run_activity`]), never over the runs a
 /// list happens to hold.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -595,7 +595,7 @@ pub struct ActivityFilter {
     pub statuses: Vec<String>,
     pub triggered_by: Vec<TriggeredBy>,
     pub not_triggered_by: Vec<TriggeredBy>,
-    /// Applied by the database ([`crate::db::run_activity`]); said back in the answer.
+    /// Applied by the database ([`barca_db::db::run_activity`]); said back in the answer.
     pub search: Option<String>,
 }
 
@@ -658,7 +658,7 @@ fn median(times: &mut [f64]) -> Option<f64> {
 }
 
 /// What an unsuccessful run says went wrong, as [`LeadingFailure::text`] groups runs by it.
-fn failure_text(run: &crate::db::ActivityFailure) -> String {
+fn failure_text(run: &barca_db::db::ActivityFailure) -> String {
     match &run.failure {
         Some(f) => format!("{}: {}", short_name(&f.node), line_of(&f.error)),
         None if run.status == "failed" => "failed: no failed step recorded".to_string(),
@@ -689,7 +689,7 @@ fn leading(texts: &[String]) -> Option<LeadingFailure> {
 /// [`RunActivity`] at `now` from what the database read of the window, keeping the runs
 /// `filter` keeps. A row outside the window is left out.
 pub fn run_activity(
-    facts: &crate::db::RunActivityFacts,
+    facts: &barca_db::db::RunActivityFacts,
     filter: &ActivityFilter,
     now: chrono::DateTime<chrono::Utc>,
 ) -> RunActivity {
@@ -1004,8 +1004,8 @@ mod tests {
         status: &str,
         triggered_by: Option<TriggeredBy>,
         runs: usize,
-    ) -> crate::db::ActivityRow {
-        crate::db::ActivityRow {
+    ) -> barca_db::db::ActivityRow {
+        barca_db::db::ActivityRow {
             hour: hour.into(),
             status: status.into(),
             triggered_by,
@@ -1035,7 +1035,7 @@ mod tests {
             // A clock ahead of this one: past the window.
             counted("2026-10-22 15", "success", Some(Schedule), 5),
         ];
-        let facts = crate::db::RunActivityFacts {
+        let facts = barca_db::db::RunActivityFacts {
             counts: counts.to_vec(),
             durations: [
                 ("2026-10-21 15", 1.0),
@@ -1043,7 +1043,7 @@ mod tests {
                 ("2026-10-22 00", 90.0),
             ]
             .iter()
-            .map(|(hour, seconds)| crate::db::ActivityDuration {
+            .map(|(hour, seconds)| barca_db::db::ActivityDuration {
                 hour: hour.to_string(),
                 status: "success".into(),
                 triggered_by: Some(Schedule),
@@ -1065,11 +1065,11 @@ mod tests {
                 ("2026-10-22 14", "error", None),
             ]
             .iter()
-            .map(|(hour, status, failure)| crate::db::ActivityFailure {
+            .map(|(hour, status, failure)| barca_db::db::ActivityFailure {
                 hour: hour.to_string(),
                 status: status.to_string(),
                 triggered_by: Some(Schedule),
-                failure: failure.map(|(node, error)| crate::db::RunFailure {
+                failure: failure.map(|(node, error)| barca_db::db::RunFailure {
                     node: node.into(),
                     error: error.into(),
                 }),
@@ -1178,7 +1178,7 @@ mod tests {
             counted("2026-10-22 13", "success", Some(Api), 1),
             counted("2026-10-22 13", "success", None, 4),
         ];
-        let facts = crate::db::RunActivityFacts {
+        let facts = barca_db::db::RunActivityFacts {
             counts: counts.to_vec(),
             ..Default::default()
         };

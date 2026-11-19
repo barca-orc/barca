@@ -1,10 +1,10 @@
 //! The filters of `barca history` (`--status`, `--target`, `--triggered-by`,
 //! `--not-triggered-by`, `--since`, `--until`, `--search`), and of the server's `GET /history`
 //! and `GET /runs` (the same names as query parameters). They combine with AND, the database
-//! keeps the runs ([`crate::db::RunFilter`]), and a limit applies to the runs they keep.
+//! keeps the runs ([`barca_db::db::RunFilter`]), and a limit applies to the runs they keep.
 
-use crate::db::{RunFilter, RunRecord};
-use crate::trigger::TriggeredBy;
+use barca_db::db::{RunFilter, RunRecord};
+use barca_model::trigger::TriggeredBy;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
 /// The statuses a recorded run can have: how it ended, `running` while it is in progress, and
@@ -307,12 +307,12 @@ fn names_node(run: &RunRecord, node: &str) -> bool {
 /// Whether `--step <step>` selects the line of node `id`: its exact id, its base id (every
 /// partition key), or its function name.
 pub fn step_matches(id: &str, step: &str) -> bool {
-    let parsed = crate::StepId::parse(id);
+    let parsed = barca_model::StepId::parse(id);
     if id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step) {
         return true;
     }
     // One key by function name: `scored[retailer=r7]`.
-    let wanted = crate::StepId::parse(step);
+    let wanted = barca_model::StepId::parse(step);
     !wanted.partition.is_empty()
         && wanted.partition == parsed.partition
         && parsed.base_id().rsplit(':').next() == Some(wanted.base_id())

@@ -36,6 +36,16 @@ const ALLOWED: &[(&str, &[&str])] = &[
         &["barca-model", "barca-compile", "barca-db", "barca-store"],
     ),
     (
+        "barca-analysis",
+        &[
+            "barca-model",
+            "barca-compile",
+            "barca-db",
+            "barca-store",
+            "barca-decide",
+        ],
+    ),
+    (
         "barca-core",
         &[
             "barca-model",
@@ -45,6 +55,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "barca-engine",
             "barca-store",
             "barca-decide",
+            "barca-analysis",
         ],
     ),
     ("barca-server", &["barca-core"]),

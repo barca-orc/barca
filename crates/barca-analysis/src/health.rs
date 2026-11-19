@@ -18,17 +18,17 @@
 //!
 //! Health sits beside the cache state (`cache.state`) and never replaces it.
 
-use crate::BarcaError;
-use crate::cache_state::CacheState;
-use crate::db::{self, NodeAge, TickTargetOutcome};
 pub use crate::estimates::Evidence;
-use crate::schedule::Zone;
 pub(crate) use crate::views::recorded_at;
 pub use crate::views::{
     Cause, Check, Checks, DataCoverage, DataSignal, Health, HealthReason, LastCheck, NoEstimate,
     Root, RootKind, last_attempt_failed,
 };
 use crate::views::{NodeStatus, StatusResult, keys_failed, last_materialization_failed};
+use barca_db::db::{self, NodeAge, TickTargetOutcome};
+use barca_decide::schedule::Zone;
+use barca_model::BarcaError;
+use barca_model::cache_state::CacheState;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -513,7 +513,7 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
 pub fn attach(result: &mut StatusResult, evidence: Evidence<'_>, running: &HashSet<String>) {
     classify(&mut result.nodes, evidence);
     result.data_coverage = DataCoverage::of(&result.nodes);
-    result.as_of = crate::time::rfc3339_secs(evidence.now);
+    result.as_of = barca_model::time::rfc3339_secs(evidence.now);
     let roots = crate::rollup::roots(&result.nodes, evidence, false);
     result.rollup = Some(crate::rollup::total(
         &result.nodes,
@@ -599,7 +599,7 @@ impl Queue {
 /// ticks. A database that does not exist records an open, empty queue.
 pub async fn recorded_queue(
     db_path: &str,
-    dag: &crate::dag::Dag,
+    dag: &barca_compile::dag::Dag,
     ticks: &HashMap<String, crate::schedule_standing::Ticks>,
     recorded: &crate::liveness::Recorded,
     observed: &crate::liveness::Observed,
@@ -608,7 +608,7 @@ pub async fn recorded_queue(
     let (runs, paused) = if Path::new(db_path).exists() {
         (
             crate::liveness::recorded_runs(db_path).await?,
-            crate::run_queue::paused_at(db_path).await?.is_some(),
+            barca_store::run_queue::paused_at(db_path).await?.is_some(),
         )
     } else {
         Default::default()
@@ -733,7 +733,7 @@ impl Assembled<'_> {
     pub fn rollup(
         &self,
         result: &StatusResult,
-        groups: &[crate::groups::NodeGroup],
+        groups: &[barca_compile::groups::NodeGroup],
         running: &HashSet<String>,
         as_of: chrono::DateTime<chrono::Utc>,
         server: bool,
@@ -754,8 +754,8 @@ impl Assembled<'_> {
 /// `zone`; a paused schedule is not late.
 pub async fn attach_from_db(
     result: &mut StatusResult,
-    dag: &crate::dag::Dag,
-    cfg: &crate::config::ResolvedConfig,
+    dag: &barca_compile::dag::Dag,
+    cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
@@ -768,8 +768,8 @@ pub async fn attach_from_db(
 /// (`barca status`).
 pub async fn attach_from_db_with_schedules(
     result: &mut StatusResult,
-    dag: &crate::dag::Dag,
-    cfg: &crate::config::ResolvedConfig,
+    dag: &barca_compile::dag::Dag,
+    cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
@@ -782,8 +782,8 @@ pub async fn attach_from_db_with_schedules(
 /// tracked here, so `running` is 0 everywhere.
 pub async fn rollup_from_db(
     result: &mut StatusResult,
-    dag: &crate::dag::Dag,
-    cfg: &crate::config::ResolvedConfig,
+    dag: &barca_compile::dag::Dag,
+    cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<crate::rollup::Rollup, BarcaError> {
@@ -797,8 +797,8 @@ pub async fn rollup_from_db(
 /// recorded (`crate::liveness`), in the zone it recorded.
 async fn from_db(
     result: &mut StatusResult,
-    dag: &crate::dag::Dag,
-    cfg: &crate::config::ResolvedConfig,
+    dag: &barca_compile::dag::Dag,
+    cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
     rollup: bool,
@@ -806,18 +806,18 @@ async fn from_db(
 ) -> Result<Option<crate::rollup::Rollup>, BarcaError> {
     let db_path = cfg.db_path.as_str();
     let exists = Path::new(db_path).exists();
-    let jobs = crate::schedule::jobs_from_dag(dag);
+    let jobs = barca_decide::schedule::jobs_from_dag(dag);
     let ids: Vec<String> = jobs.iter().map(|job| job.id.clone()).collect();
     let (seen, ages, pinned, paused, pauses, failures, ticks) = if exists {
         (
             crate::liveness::recorded(db_path).await?,
             db::node_ages(db_path).await?,
-            crate::pins::list(db_path)
+            barca_store::pins::list(db_path)
                 .await?
                 .into_iter()
                 .map(|pin| pin.node_id)
                 .collect::<HashSet<String>>(),
-            crate::pauses::list(db_path)
+            barca_store::pauses::list(db_path)
                 .await?
                 .into_iter()
                 .map(|pause| pause.id)
@@ -889,7 +889,7 @@ async fn from_db(
 /// server keeps it until one of them changes.
 pub async fn checks(
     db_path: &str,
-    dag: &crate::dag::Dag,
+    dag: &barca_compile::dag::Dag,
     ages: &HashMap<String, NodeAge>,
     zone: &Zone,
 ) -> Result<Checks, BarcaError> {
@@ -898,14 +898,15 @@ pub async fn checks(
         return Ok(Checks::default());
     }
     let misses = ticks.misses;
-    let crons: HashMap<String, _> =
-        crate::schedule::jobs_from_summaries(crate::results::list_assets_from_dag(dag))
-            .into_iter()
-            .map(|job| (job.id, job.cron))
-            .collect();
+    let crons: HashMap<String, _> = barca_decide::schedule::jobs_from_summaries(
+        barca_store::results::list_assets_from_dag(dag),
+    )
+    .into_iter()
+    .map(|job| (job.id, job.cron))
+    .collect();
     let mut by_node = HashMap::with_capacity(ticks.outcomes.len());
     // The newest successful row of each asset a tick's verdict could decide.
-    let mut newest: HashMap<i64, &crate::model::DagNode> = HashMap::new();
+    let mut newest: HashMap<i64, &barca_model::model::DagNode> = HashMap::new();
     let mut redefined = HashSet::new();
     for (id, outcome) in ticks.outcomes {
         let (Some(node), Some(finished_at)) = (dag.get_node(&id), outcome.finished_at) else {
@@ -916,8 +917,11 @@ pub async fn checks(
         };
         let slot = outcome.scheduled_at;
         let trusted_until = crons.get(&outcome.schedule_id).and_then(|cron| {
-            let next =
-                crate::schedule::next_fire(cron, zone, chrono::DateTime::from_timestamp(slot, 0)?)?;
+            let next = barca_decide::schedule::next_fire(
+                cron,
+                zone,
+                chrono::DateTime::from_timestamp(slot, 0)?,
+            )?;
             let interval = next.timestamp() - slot;
             // The grace a late schedule gets (`crate::schedule_standing`).
             let grace = crate::schedule_standing::grace_seconds(Some(slot), Some(next.timestamp()));
@@ -926,7 +930,7 @@ pub async fn checks(
         if matches!(
             outcome.outcome,
             TickTargetOutcome::UpToDate | TickTargetOutcome::Rebuilt
-        ) && node.kind() == crate::NodeKind::Asset
+        ) && node.kind() == barca_model::NodeKind::Asset
         {
             match ages.get(&id).and_then(|age| age.rows.as_ref()) {
                 Some(rows) => {
@@ -980,10 +984,10 @@ fn same_definition(recorded: &str, definition_hash: &str, components: &[(String,
     let Ok(recorded) = serde_json::from_str::<HashMap<String, String>>(recorded) else {
         return false;
     };
-    if let Some(definition) = recorded.get(crate::changes::DEFINITION_KEY) {
+    if let Some(definition) = recorded.get(barca_decide::changes::DEFINITION_KEY) {
         return definition == definition_hash;
     }
-    // The components of a run hash that are not its definition's (`crate::changes`).
+    // The components of a run hash that are not its definition's (`barca_decide::changes`).
     let own = |key: &str| {
         ["input ", "sensor ", "value ", "env "]
             .iter()
@@ -1004,8 +1008,8 @@ fn same_definition(recorded: &str, definition_hash: &str, components: &[(String,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{RowChange, RowFacts};
     use crate::status::{LastMaterialization, PartitionState};
+    use barca_db::db::{RowChange, RowFacts};
 
     fn node(id: &str, inputs: &[&str], state: CacheState) -> NodeStatus {
         let mut n: NodeStatus = serde_json::from_value(serde_json::json!({
@@ -1718,7 +1722,7 @@ mod tests {
             (
                 id.to_string(),
                 NodeAge {
-                    last_run: Some(crate::db::RunTotals {
+                    last_run: Some(barca_db::db::RunTotals {
                         run_id: "run-next".to_string(),
                         elapsed_seconds: None,
                         keys: 1,

@@ -2,7 +2,7 @@
 //! plain data every read model of the analysis layer shares. [`crate::health`] decides them.
 
 use super::NodeStatus;
-use crate::db::TickTargetOutcome;
+use barca_db::db::TickTargetOutcome;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -511,7 +511,7 @@ impl LastCheck {
     /// `checked 3m ago, up to date`, as of `now` (unix seconds).
     pub fn line(&self, now: i64) -> String {
         let ago = chrono::DateTime::parse_from_rfc3339(&self.at)
-            .map(|at| crate::text::ago(now - at.timestamp()))
+            .map(|at| barca_store::text::ago(now - at.timestamp()))
             .unwrap_or_else(|_| self.at.clone());
         format!("checked {ago}, {}", Self::outcome_word(self.outcome))
     }

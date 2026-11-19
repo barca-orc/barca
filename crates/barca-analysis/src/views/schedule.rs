@@ -116,7 +116,7 @@ impl ScheduleStatus {
     pub fn cell(&self) -> String {
         let state = if self.paused {
             match &self.paused_until {
-                Some(until) => format!("paused until {}", crate::text::utc_cell(until)),
+                Some(until) => format!("paused until {}", barca_store::text::utc_cell(until)),
                 None => "paused".to_string(),
             }
         } else if self.failing {
@@ -125,10 +125,10 @@ impl ScheduleStatus {
             let next = self
                 .next_fire
                 .as_deref()
-                .map(|t| format!("next {}", crate::text::utc_cell(t)))
+                .map(|t| format!("next {}", barca_store::text::utc_cell(t)))
                 .unwrap_or_else(|| "no next fire".to_string());
             let next = match self.late_since.as_deref().filter(|_| self.late) {
-                Some(since) => format!("late since {}, {next}", crate::text::utc_cell(since)),
+                Some(since) => format!("late since {}, {next}", barca_store::text::utc_cell(since)),
                 None if self.state == super::ScheduleState::Overrunning => {
                     format!("overrunning, {next}")
                 }
@@ -177,11 +177,11 @@ impl RefreshPath {
     /// `inbox is paused`, `inbox is not firing`; with `, missed 2 ticks` when it has. `now`
     /// (unix seconds) decides whether the day is named.
     pub fn line(&self, now: i64) -> String {
-        let by = crate::targets::short_name(&self.schedule);
+        let by = barca_compile::targets::short_name(&self.schedule);
         let next = self
             .next_tick
             .as_deref()
-            .and_then(crate::time::parse_rfc3339)
+            .and_then(barca_model::time::parse_rfc3339)
             .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
             .map(|at| {
                 let today = chrono::DateTime::from_timestamp(now, 0)
@@ -244,7 +244,7 @@ pub struct CoveredSchedule {
 
 /// What a pause of one target would cover (`barca pause TARGET --dry-run`, `GET
 /// /pauses?target=`), from the graph alone: nothing is paused and no state is read. The
-/// schedules are found by the scheduler's own walk ([`crate::freshness::tick_reach`]), so
+/// schedules are found by the scheduler's own walk ([`barca_decide::freshness::tick_reach`]), so
 /// this lists a schedule exactly when one of its ticks would plan a covered node. A node
 /// that is pinned or already paused stops that walk at run time and is not accounted for
 /// here.

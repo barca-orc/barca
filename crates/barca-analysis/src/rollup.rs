@@ -20,7 +20,6 @@
 //! that clears it.
 
 use crate::estimates::Evidence;
-use crate::groups::NodeGroup;
 pub use crate::views::{
     ActionKind, CauseCounts, EntryKind, FRESH_WEIGHT, HealthCounts, HeldBy, HeldSplit, KeyCounts,
     KindCounts, KindRollup, ROOT_ID, RollupEntry, Weights,
@@ -28,6 +27,7 @@ pub use crate::views::{
 use crate::views::{
     DataCoverage, Health, NodeStatus, RootKind, Sums, last_attempt_failed, latest, oldest,
 };
+use barca_compile::groups::NodeGroup;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -638,12 +638,12 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
         .map(|Held { mut root, rows }| {
             let about = by_id.get(root.node.as_str()).copied();
             let name = about.map_or_else(
-                || crate::targets::short_name(&root.node).to_string(),
+                || barca_compile::targets::short_name(&root.node).to_string(),
                 |n| target(n, &names).to_string(),
             );
             let schedule = evidence.path.schedules.get(&root.node);
             let (detail, error_group) = detail(&root, &name, about, schedule, evidence);
-            let name = crate::text::shell_quote(&name);
+            let name = barca_store::text::shell_quote(&name);
             root.detail = detail;
             root.error_group = error_group;
             root.weight = root.causes.weight();
@@ -673,7 +673,7 @@ pub fn roots(nodes: &[NodeStatus], evidence: Evidence<'_>, server: bool) -> Vec<
                         targets.sort_unstable();
                         commands.push(format!(
                             "barca {verb} {}{refresh}{via}",
-                            crate::text::shell_quote(&targets.join(","))
+                            barca_store::text::shell_quote(&targets.join(","))
                         ));
                     }
                 }
@@ -771,7 +771,7 @@ fn detail(
     schedule: Option<&crate::refresh_path::PathSchedule>,
     evidence: Evidence<'_>,
 ) -> (String, Option<String>) {
-    use crate::text::span;
+    use barca_store::text::span;
     let standing = schedule.and_then(|s| s.standing.as_ref());
     let line = match root.kind {
         RootKind::Failure => {
@@ -841,7 +841,7 @@ fn detail(
 /// schedules that leaves unfired and how many of them have already missed a slot. Where a
 /// scheduler runs and does not serve some schedules, those.
 fn scheduler_detail(evidence: Evidence<'_>) -> String {
-    use crate::text::span;
+    use barca_store::text::span;
     let schedules = evidence.path.schedules;
     let off: Vec<(&String, &crate::refresh_path::PathSchedule)> =
         schedules.iter().filter(|(_, s)| s.off()).collect();
@@ -856,7 +856,7 @@ fn scheduler_detail(evidence: Evidence<'_>) -> String {
     if schedules.values().any(|s| s.live) {
         let mut names: Vec<&str> = off
             .iter()
-            .map(|(id, _)| crate::targets::short_name(id))
+            .map(|(id, _)| barca_compile::targets::short_name(id))
             .collect();
         names.sort_unstable();
         let more = names.len().saturating_sub(3);
@@ -942,10 +942,10 @@ pub fn error_group(headline: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache_state::CacheState;
     use crate::health::{Checks, Evidence, Root, classify};
     use crate::status::{LastMaterialization, PartitionState};
     use crate::views::Cause;
+    use barca_model::cache_state::CacheState;
 
     fn node(id: &str, kind: &str, inputs: &[&str], state: CacheState) -> NodeStatus {
         let name = id.rsplit(':').next().unwrap();

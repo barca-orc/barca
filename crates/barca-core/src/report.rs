@@ -592,6 +592,11 @@ impl Page {
 }
 
 #[cfg(test)]
+mod audit_rollup_tests;
+#[cfg(test)]
+mod status_table_tests;
+
+#[cfg(test)]
 mod utc_tests {
     use super::utc_cell;
 

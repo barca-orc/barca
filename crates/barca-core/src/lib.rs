@@ -37,35 +37,21 @@
 // Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
-pub mod causes;
 pub mod commands;
 pub mod db;
 pub mod diagnostics;
-pub mod estimates;
 pub(crate) mod execution;
-pub mod health;
-pub mod history_filter;
 mod incremental;
-pub mod key_query;
-pub mod liveness;
 mod mismatch;
 pub mod outcome;
-pub mod partition_grid;
 mod persist;
 pub mod queries;
-pub mod refresh_path;
 pub mod report;
-pub mod rollup;
-pub mod run_explanation;
-pub mod run_list;
-pub mod schedule_standing;
 pub mod serve;
 pub mod served;
 pub mod sql;
-pub mod status;
 pub mod telemetry;
 pub mod values;
-pub(crate) mod views;
 
 // The model layer lives in `barca-model` (#905 step 4); its modules and root items keep their
 // `barca_core::` paths.
@@ -181,3 +167,19 @@ pub(crate) use barca_decide::predict;
 use barca_decide::recover;
 pub use barca_decide::schedule;
 pub(crate) use barca_decide::sizing;
+
+// The analysis layer lives in `barca-analysis` (#1056, C6).
+pub use barca_analysis::causes;
+pub use barca_analysis::estimates;
+pub use barca_analysis::health;
+pub use barca_analysis::history_filter;
+pub use barca_analysis::key_query;
+pub use barca_analysis::liveness;
+pub use barca_analysis::partition_grid;
+pub use barca_analysis::refresh_path;
+pub use barca_analysis::rollup;
+pub use barca_analysis::run_explanation;
+pub use barca_analysis::run_list;
+pub use barca_analysis::schedule_standing;
+pub use barca_analysis::status;
+pub(crate) use barca_analysis::views;

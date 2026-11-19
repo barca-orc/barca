@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::PartitionErrorGroup;
+use barca_db::db::PartitionErrorGroup;
 
 /// The most keys or values a served run selection spells out. A larger set that is not a
 /// rectangle of the dimensions has no selection: it is named by narrowing the filter.
@@ -659,7 +659,7 @@ impl PartitionGrid {
                 .collect(),
             state: name.to_string(),
             attempted_at: at(&self.attempted_at)
-                .map(|offset| crate::time::rfc3339(self.attempted_base + offset)),
+                .map(|offset| barca_model::time::rfc3339(self.attempted_base + offset)),
             elapsed_seconds: self
                 .elapsed_ms
                 .get(cell)
@@ -979,7 +979,7 @@ impl PartitionGrid {
                 .iter()
                 .flatten()
                 .max()
-                .map(|offset| crate::time::rfc3339(self.attempted_base + offset)),
+                .map(|offset| barca_model::time::rfc3339(self.attempted_base + offset)),
         }
     }
 }

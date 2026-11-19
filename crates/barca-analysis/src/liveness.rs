@@ -12,9 +12,9 @@
 //! must also have decided its due slots within its grace. Without a writer record, only a
 //! schedule's own decisions establish liveness.
 
-use crate::BarcaError;
-use crate::run_queue::{set_state_value, state_value};
-use crate::schedule::{ScheduledJob, Zone, next_fire, prev_fire};
+use barca_decide::schedule::{ScheduledJob, Zone, next_fire, prev_fire};
+use barca_model::BarcaError;
+use barca_store::run_queue::{set_state_value, state_value};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -177,9 +177,9 @@ pub async fn recorded(db_path: &str) -> Result<Recorded, BarcaError> {
     if std::fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
         return Ok(Recorded::default());
     }
-    let mut decided = crate::db::newest_decided(db_path).await?;
+    let mut decided = barca_db::db::newest_decided(db_path).await?;
     // A database from before the table has no anchors: not an error on a read path.
-    for (schedule, at) in crate::db::get_schedule_state(db_path)
+    for (schedule, at) in barca_db::db::get_schedule_state(db_path)
         .await
         .unwrap_or_default()
     {
@@ -343,7 +343,7 @@ pub struct RecordedRun {
     pub refreshes: bool,
     /// The scheduled node whose tick started it; `None` for a run someone asked for.
     pub schedule: Option<String>,
-    pub triggered_by: Option<crate::trigger::TriggeredBy>,
+    pub triggered_by: Option<barca_model::trigger::TriggeredBy>,
     /// Its resolved target node ids; empty for a run of everything.
     pub targets: Vec<String>,
     /// It started executing (`run_queue` state `running` or `draining`).
@@ -364,12 +364,12 @@ pub async fn recorded_runs(db_path: &str) -> Result<Vec<RecordedRun>, BarcaError
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    let rows = crate::run_queue::list(db_path).await?;
+    let rows = barca_store::run_queue::list(db_path).await?;
     let progress = if rows
         .iter()
-        .any(|r| r.state != crate::run_queue::QueueState::Queued)
+        .any(|r| r.state != barca_store::run_queue::QueueState::Queued)
     {
-        crate::run_queue::progress(db_path).await?
+        barca_store::run_queue::progress(db_path).await?
     } else {
         HashMap::new()
     };
@@ -377,7 +377,7 @@ pub async fn recorded_runs(db_path: &str) -> Result<Vec<RecordedRun>, BarcaError
         let Ok(spec) = serde_json::from_str::<serde_json::Value>(&row.spec) else {
             continue;
         };
-        let started = row.state != crate::run_queue::QueueState::Queued;
+        let started = row.state != barca_store::run_queue::QueueState::Queued;
         let progress = progress.get(&row.run_id);
         out.push(RecordedRun {
             refreshes: spec["policy"]["kind"]
@@ -396,7 +396,7 @@ pub async fn recorded_runs(db_path: &str) -> Result<Vec<RecordedRun>, BarcaError
                 })
                 .unwrap_or_default(),
             started,
-            queued_at: crate::time::parse_rfc3339(&row.queued_at),
+            queued_at: barca_model::time::parse_rfc3339(&row.queued_at),
             started_at: progress.map(|p| p.0),
             last_step: progress.and_then(|p| p.1),
             run_id: row.run_id,
@@ -516,7 +516,7 @@ pub fn recorded_timing(
     recorded: &Recorded,
     paused: bool,
     gone: bool,
-    dag: &crate::dag::Dag,
+    dag: &barca_compile::dag::Dag,
     now: i64,
 ) -> RecordedTiming {
     let serving = recorded.serving.as_ref();
@@ -590,7 +590,7 @@ pub fn recorded_timing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dag::Dag;
+    use barca_compile::dag::Dag;
 
     fn jobs() -> Vec<ScheduledJob> {
         let source = r#"
@@ -605,9 +605,9 @@ def daily(): return 1
 @sensor(freshness=Schedule("*/5 * * * *"))
 def unclaimed(): return 1
 "#;
-        let dag =
-            Dag::build(&crate::parse::extract_nodes(source, "p.py").unwrap()).expect("valid dag");
-        crate::schedule::jobs_from_dag(&dag)
+        let dag = Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
+            .expect("valid dag");
+        barca_decide::schedule::jobs_from_dag(&dag)
     }
 
     fn at(text: &str) -> DateTime<Utc> {
@@ -759,7 +759,7 @@ def unclaimed(): return 1
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("metadata.db").display().to_string();
         assert_eq!(super::recorded(&path).await.unwrap(), Recorded::default());
-        crate::db::init_db(&path).await.unwrap();
+        barca_db::db::init_db(&path).await.unwrap();
         // Nothing recorded yet: a stop writes nothing.
         record_stopped(&path, 5).await.unwrap();
         assert_eq!(super::recorded(&path).await.unwrap(), Recorded::default());
@@ -768,15 +768,15 @@ def unclaimed(): return 1
         record_scheduler(&path, 11, vec!["p.py:a".into()], "utc")
             .await
             .unwrap();
-        crate::db::upsert_schedule_state(&path, "p.py:a", 60)
+        barca_db::db::upsert_schedule_state(&path, "p.py:a", 60)
             .await
             .unwrap();
-        crate::db::record_tick(
+        barca_db::db::record_tick(
             &path,
-            crate::db::NewTick {
+            barca_db::db::NewTick {
                 schedule_id: "p.py:a",
                 scheduled_at: 120,
-                action: crate::db::TickDecision::Skipped,
+                action: barca_db::db::TickDecision::Skipped,
                 skipped_for: Some("r1"),
                 run_id: None,
             },

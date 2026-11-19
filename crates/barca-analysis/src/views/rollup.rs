@@ -514,7 +514,7 @@ impl RollupEntry {
         let within = self
             .fresh_by
             .as_deref()
-            .and_then(crate::time::parse_rfc3339)
+            .and_then(barca_model::time::parse_rfc3339)
             .map(|at| {
                 // Rounded up to the unit shown: an estimate is never said to be sooner.
                 let left = (at - now).max(0);
@@ -524,7 +524,7 @@ impl RollupEntry {
                     s if s < 86_400 => 3600,
                     _ => 86_400,
                 };
-                crate::text::span((left + unit - 1) / unit * unit)
+                barca_store::text::span((left + unit - 1) / unit * unit)
             });
         let mut said = Vec::new();
         if let (Some(within), true) = (within, estimated > 0) {
@@ -539,7 +539,7 @@ impl RollupEntry {
         if self.gap_seconds > 0 {
             line.push_str(&format!(
                 "; {} of gap across nodes (node-time)",
-                crate::text::span(self.gap_seconds)
+                barca_store::text::span(self.gap_seconds)
             ));
         }
         line

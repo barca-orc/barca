@@ -2,41 +2,41 @@
 //! materialization and artifact shape.
 //!
 //! Nothing here is new logic. Cache state comes from the same decision `--dry-run` makes
-//! ([`crate::predict::explain_dag`]), history from the metadata DB, and artifact shape from
+//! ([`barca_decide::predict::explain_dag`]), history from the metadata DB, and artifact shape from
 //! `python -m barca._inspect`, which opens artifact files only: user code is never imported.
 //! The ledger is read-only; bounded disposable inspection evidence is cached separately.
 
-use crate::BarcaError;
-use crate::cache::CachePolicy;
-use crate::cache_state::CacheState;
-use crate::db;
-use crate::results::StepReport;
-use crate::step_status::StepStatus;
-use crate::targets::short_name;
-use crate::text::trace_since;
 pub use crate::views::{
     CacheStatus, LastMaterialization, NodeStatus, PartitionState, ScheduleStatus, StatusFilter,
     StatusResult, StatusSummary,
 };
+use barca_compile::targets::short_name;
+use barca_db::db;
+use barca_decide::cache::CachePolicy;
+use barca_model::BarcaError;
+use barca_model::cache_state::CacheState;
+use barca_model::step_status::StepStatus;
+use barca_store::results::StepReport;
+use barca_store::text::trace_since;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 mod store_check;
 
 // barca-server names this path (`handlers.rs`); the helper lives in `time`.
-pub use crate::time::rfc3339_secs;
+pub use barca_model::time::rfc3339_secs;
 
 /// Give every scheduled node in `nodes` its [`ScheduleStatus`] from the metadata DB at
 /// `db_path` (none yet: no failures, no pauses), with next fire times evaluated in `zone`
 /// (the recorded scheduler's, when one recorded it), for `jobs`
-/// ([`crate::schedule::jobs_from_dag`]). No scheduler runs here: `live` is what the records
+/// ([`barca_decide::schedule::jobs_from_dag`]). No scheduler runs here: `live` is what the records
 /// show (`crate::liveness`). The walk is [`crate::refresh_path::schedule_views`], the one
 /// every surface reads.
 pub async fn attach_schedules_of(
     nodes: &mut [NodeStatus],
-    jobs: &[crate::schedule::ScheduledJob],
+    jobs: &[barca_decide::schedule::ScheduledJob],
     db_path: Option<&str>,
-    zone: &crate::schedule::Zone,
+    zone: &barca_decide::schedule::Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
     if jobs.is_empty() {
@@ -237,7 +237,7 @@ pub(crate) fn needs_attention(node: &NodeStatus) -> bool {
 
 /// The first line of a failure's message, at most `max` characters: `ZeroDivisionError:
 /// division by zero` out of a traceback.
-pub(crate) fn short_error(error: &str, max: usize) -> String {
+pub fn short_error(error: &str, max: usize) -> String {
     let lines: Vec<&str> = error
         .lines()
         .map(str::trim)
@@ -297,7 +297,7 @@ pub fn not_in_ledger(node: &mut NodeStatus, pending: &[PendingPost]) -> bool {
 
 /// The pending post of `node_id` that [`not_in_ledger`] counts: one of its steps (any key of a
 /// partitioned node), at the run hash the server's code gives it now when that is known.
-pub(crate) fn pending_for<'a>(
+pub fn pending_for<'a>(
     node_id: &str,
     partitioned: bool,
     run_hash: Option<&str>,
@@ -314,14 +314,14 @@ pub(crate) fn pending_for<'a>(
 /// `target_names` is empty). `sample` > 0 adds up to that many sample rows to json/parquet
 /// shapes; `shape` = false skips the artifact reader entirely.
 pub async fn status(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
     python: &std::path::Path,
     sample: usize,
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
-    let dag = crate::load::build_dag(file_args, python).await?;
+    let dag = barca_compile::load::build_dag(file_args, python).await?;
     let mut result =
         status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape)
             .await?
@@ -331,7 +331,7 @@ pub async fn status(
         &mut result,
         &dag,
         cfg,
-        &crate::schedule::Zone::Local,
+        &barca_decide::schedule::Zone::Local,
         chrono::Utc::now(),
     )
     .await?;
@@ -339,8 +339,8 @@ pub async fn status(
 }
 
 /// SQL reuses this prediction instead of loading the DAG or interpreting keys again.
-pub(crate) async fn status_with_membership(
-    cfg: &crate::config::ResolvedConfig,
+pub async fn status_with_membership(
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
     python: &std::path::Path,
@@ -349,13 +349,13 @@ pub(crate) async fn status_with_membership(
 ) -> Result<
     (
         StatusResult,
-        crate::cache::ExpandedMembership,
-        crate::dag::Dag,
+        barca_decide::cache::ExpandedMembership,
+        barca_compile::dag::Dag,
     ),
     BarcaError,
 > {
     let t0 = std::time::Instant::now();
-    let dag = crate::load::build_dag(file_args, python).await?;
+    let dag = barca_compile::load::build_dag(file_args, python).await?;
     trace_since("status: load", t0);
     let (mut result, membership) =
         status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape).await?;
@@ -363,7 +363,7 @@ pub(crate) async fn status_with_membership(
         &mut result,
         &dag,
         cfg,
-        &crate::schedule::Zone::Local,
+        &barca_decide::schedule::Zone::Local,
         chrono::Utc::now(),
     )
     .await?;
@@ -372,9 +372,9 @@ pub(crate) async fn status_with_membership(
 
 /// Inspect a validated graph; shares cache decisions with strict status.
 pub async fn status_from_dag(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
-    dag: &crate::dag::Dag,
+    dag: &barca_compile::dag::Dag,
     python: &std::path::Path,
     sample: usize,
     shape: bool,
@@ -387,7 +387,10 @@ pub async fn status_from_dag(
 }
 
 /// Expand status group selectors into their leaf nodes before planning the upstream cones.
-pub fn group_targets(dag: &crate::dag::Dag, targets: &[String]) -> Result<Vec<String>, BarcaError> {
+pub fn group_targets(
+    dag: &barca_compile::dag::Dag,
+    targets: &[String],
+) -> Result<Vec<String>, BarcaError> {
     if targets.is_empty() || dag.groups.is_empty() {
         return Ok(targets.to_vec());
     }
@@ -435,27 +438,27 @@ pub fn group_targets(dag: &crate::dag::Dag, targets: &[String]) -> Result<Vec<St
 }
 
 /// Preserve the given graph and move the prediction's private membership to SQL.
-pub(crate) async fn status_from_dag_with_membership(
-    cfg: &crate::config::ResolvedConfig,
+pub async fn status_from_dag_with_membership(
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
-    dag: &crate::dag::Dag,
+    dag: &barca_compile::dag::Dag,
     python: &std::path::Path,
     sample: usize,
     shape: bool,
-) -> Result<(StatusResult, crate::cache::ExpandedMembership), BarcaError> {
+) -> Result<(StatusResult, barca_decide::cache::ExpandedMembership), BarcaError> {
     let t0 = std::time::Instant::now();
     let target_names = group_targets(dag, target_names)?;
     // The rules a run follows (#985): each node is decided on its own, and what reads a
     // `Manual` or pinned node is decided against the result a run reads, not against a
     // recompute of it.
-    let (explained, membership, _, held) = crate::predict::explain_dag_with_keys(
+    let (explained, membership, _, held) = barca_decide::predict::explain_dag_with_keys(
         dag,
         cfg,
         &target_names,
         CachePolicy::CacheAware,
         "status",
         None,
-        &crate::freshness::RunRules::status(),
+        &barca_decide::freshness::RunRules::status(),
         &[],
     )
     .await?;
@@ -487,7 +490,7 @@ pub(crate) async fn status_from_dag_with_membership(
     let t0 = std::time::Instant::now();
     // Results computed here whose upload to the store is still pending (#390).
     let pending = if cfg.remote_artifacts() {
-        crate::pending_uploads::list(&cfg.db_path).await?
+        barca_db::pending_uploads::list(&cfg.db_path).await?
     } else {
         Vec::new()
     };
@@ -635,7 +638,7 @@ pub(crate) async fn status_from_dag_with_membership(
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
             last_bytes_change: history
                 .last_bytes_change
-                .filter(|_| crate::cache::checks_bytes(node)),
+                .filter(|_| barca_decide::cache::checks_bytes(node)),
             shape: None,
             env: node.decl.env.clone(),
             undeclared_env: node.undeclared_env(),
@@ -680,8 +683,8 @@ pub(crate) async fn status_from_dag_with_membership(
 /// input key for key (both have exactly the same dimension names and the input is not
 /// collected) whose keys failed, or are blocked in turn. Names the node whose keys failed.
 fn blocked_by(
-    dag: &crate::dag::Dag,
-    node: &crate::model::DagNode,
+    dag: &barca_compile::dag::Dag,
+    node: &barca_model::model::DagNode,
     failed_keys: &HashMap<String, db::FailedKeys>,
     blocked: &HashMap<String, (usize, String)>,
     missing: usize,
@@ -715,7 +718,7 @@ fn local_only(
     cache: &mut CacheStatus,
     id: &str,
     partitioned: bool,
-    pending: &[crate::pending_uploads::PendingUpload],
+    pending: &[barca_db::pending_uploads::PendingUpload],
 ) {
     if cache.state != CacheState::Cached {
         return;
@@ -754,7 +757,7 @@ fn cache_status(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
-    held: &crate::predict::HeldNodes,
+    held: &barca_decide::predict::HeldNodes,
     held_note: Option<String>,
 ) -> CacheStatus {
     let Some(r) = report else {
@@ -831,7 +834,7 @@ fn not_cached(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
-    held: &crate::predict::HeldNodes,
+    held: &barca_decide::predict::HeldNodes,
 ) -> CacheStatus {
     let state = if history.ever_succeeded {
         CacheState::Stale
@@ -887,7 +890,7 @@ fn not_cached(
         Some(changed) => cache(
             state,
             "changed",
-            format!("changed: {}", crate::changes::summary(changed)),
+            format!("changed: {}", barca_decide::changes::summary(changed)),
         ),
         None => cache(
             state,
@@ -902,7 +905,7 @@ fn not_cached(
 
 /// The `detail` of a cached node below `above`, a stale node a run reads as it is: what it is
 /// up to date against, and how that node is recomputed.
-fn held_note(dag: &crate::dag::Dag, above: &str, pinned: bool) -> String {
+fn held_note(dag: &barca_compile::dag::Dag, above: &str, pinned: bool) -> String {
     let name = short_name(above);
     if pinned {
         format!(
@@ -913,13 +916,15 @@ fn held_note(dag: &crate::dag::Dag, above: &str, pinned: bool) -> String {
         format!(
             "up to date against '{name}' as it is: '{name}' is Manual and stale, and a run reads \
              its last result without recomputing it; `{}` recomputes it",
-            crate::freshness::refresh_command(dag, above, &[])
+            barca_decide::freshness::refresh_command(dag, above, &[])
         )
     }
 }
 
 fn causes(changed: Option<&[String]>, upstream_stale: bool) -> Option<Vec<String>> {
-    let mut out = changed.map(crate::changes::causes).unwrap_or_default();
+    let mut out = changed
+        .map(barca_decide::changes::causes)
+        .unwrap_or_default();
     if upstream_stale {
         out.push("upstream_stale".to_string());
     }
@@ -936,7 +941,7 @@ fn partition_of(node_id: &str) -> Option<String> {
 /// This richer on-demand view leaves the CLI's existing shape contract unchanged.
 pub async fn read_schemas(
     python: &Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     nodes: &mut [NodeStatus],
     sample: usize,
 ) {
@@ -952,19 +957,19 @@ pub async fn read_schemas(
 /// whole graph without targets), classified with the evidence the metadata DB holds, summed.
 /// No run is tracked here, so `running` is 0 everywhere.
 pub async fn rollup(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
     python: &std::path::Path,
 ) -> Result<crate::rollup::Rollup, BarcaError> {
-    let dag = crate::load::build_dag(file_args, python).await?;
+    let dag = barca_compile::load::build_dag(file_args, python).await?;
     let mut result =
         crate::status::status_from_dag(cfg, target_names, &dag, python, 0, false).await?;
     crate::health::rollup_from_db(
         &mut result,
         &dag,
         cfg,
-        &crate::schedule::Zone::Local,
+        &barca_decide::schedule::Zone::Local,
         chrono::Utc::now(),
     )
     .await
@@ -1072,7 +1077,7 @@ mod tests {
     #[test]
     fn states_and_reasons() {
         let none = HashMap::new();
-        let no_held = crate::predict::HeldNodes::new();
+        let no_held = barca_decide::predict::HeldNodes::new();
         let h = history(None, false);
         let c = cache_status(
             Some(&report("run", Some("not_materialized"))),
@@ -1186,9 +1191,9 @@ mod tests {
         // A held input (a `Manual` or pinned node a run reads as it is) is not what makes a
         // node stale, whatever its own state (#985): the node reads its current result.
         let h = history(Some("success"), true);
-        let held: crate::predict::HeldNodes = [(
+        let held: barca_decide::predict::HeldNodes = [(
             "p.py:u".to_string(),
-            crate::cache::ReadAsIs {
+            barca_decide::cache::ReadAsIs {
                 pinned: false,
                 stale: true,
             },
@@ -1440,65 +1445,5 @@ mod tests {
             s.cell(),
             "*/5 * * * *; overrunning, next 2026-10-23 06:00:00 UTC"
         );
-    }
-
-    #[test]
-    fn the_table_shows_the_error_the_schedule_and_the_filter() {
-        let mut task = failed(
-            node("always_runs", None),
-            "RuntimeError: 503\n  File \"p.py\"",
-        );
-        task.name = "sync".into();
-        task.kind = "task".into();
-        task.cache.reason = "task".into();
-        task.schedule = Some(ScheduleStatus {
-            cron: "* * * * *".into(),
-            failures: 2,
-            max_failures: 2,
-            failing: true,
-            ..Default::default()
-        });
-        let mut asset = failed(
-            node("never_run", None),
-            "ZeroDivisionError: division by zero",
-        );
-        asset.cache.reason = "failed".into();
-        let nodes = vec![task, asset, node("cached", None)];
-        let mut result = StatusResult {
-            disk_usage: Default::default(),
-            target: None,
-            targets: vec![],
-            summary: StatusSummary::of(&nodes),
-            data_coverage: Default::default(),
-            as_of: None,
-            rollup: None,
-            nodes,
-            filter: None,
-        };
-        StatusFilter {
-            problems: true,
-            ..Default::default()
-        }
-        .apply(&mut result);
-        let table = crate::report::render_status_table(&result);
-        assert!(table.contains("SCHEDULE"), "{table}");
-        assert!(
-            table.contains("last run failed: RuntimeError: 503"),
-            "{table}"
-        );
-        assert!(table.contains("* * * * *; held, failing 2/2"), "{table}");
-        assert!(
-            table.contains("failed: ZeroDivisionError: division by zero"),
-            "{table}"
-        );
-        assert!(
-            table.contains("2 of 3 nodes match --problems; the counts below are for every node"),
-            "{table}"
-        );
-        assert!(table.contains("1 cached, 0 stale, 1 never run"), "{table}");
-
-        result.nodes.clear();
-        let table = crate::report::render_status_table(&result);
-        assert!(table.contains("No node matches --problems."), "{table}");
     }
 }

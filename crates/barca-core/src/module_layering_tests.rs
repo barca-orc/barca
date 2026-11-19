@@ -1,7 +1,6 @@
 //! The layers still inside `barca-core` while it is being dissolved (#1056, C6): each layer
 //! leaves for a crate of its own, where Cargo checks what this test checks here. A module may
-//! name a module of its own layer or of a layer below it; `engine` and `analysis` sit side by
-//! side and never name each other; an analysis module names only the rows before its own.
+//! name a module of its own layer or of a layer below it.
 
 use barca_model::source_scan::module_graph::{cycle_problem, line_of, scan};
 use std::path::Path;
@@ -22,26 +21,6 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
         ],
     ),
     (
-        "analysis",
-        3,
-        &[
-            "causes",
-            "estimates",
-            "health",
-            "history_filter",
-            "key_query",
-            "liveness",
-            "partition_grid",
-            "refresh_path",
-            "rollup",
-            "run_explanation",
-            "run_list",
-            "schedule_standing",
-            "status",
-            "views",
-        ],
-    ),
-    (
         "service",
         4,
         &[
@@ -57,18 +36,6 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
     ),
 ];
 
-const ANALYSIS_ROWS: &[&[&str]] = &[
-    &["views", "history_filter", "key_query", "run_explanation"],
-    &["schedule_standing", "partition_grid"],
-    &["liveness"],
-    &["refresh_path"],
-    &["estimates"],
-    &["causes"],
-    &["rollup"],
-    &["health", "run_list"],
-    &["status"],
-];
-
 const LARGEST_CYCLE: usize = 2;
 
 fn layer_of(module: &str) -> Option<(&'static str, u8)> {
@@ -78,18 +45,8 @@ fn layer_of(module: &str) -> Option<(&'static str, u8)> {
         .map(|(name, rank, _)| (*name, *rank))
 }
 
-fn analysis_row(module: &str) -> Option<usize> {
-    ANALYSIS_ROWS.iter().position(|row| row.contains(&module))
-}
-
 fn allowed(from: &str, to: &str) -> bool {
     match (layer_of(from), layer_of(to)) {
-        (Some(("analysis", _)), Some(("analysis", _))) => {
-            match (analysis_row(from), analysis_row(to)) {
-                (Some(a), Some(b)) => b < a,
-                _ => false,
-            }
-        }
         (Some((a, ra)), Some((b, rb))) => a == b || rb < ra,
         _ => false,
     }

@@ -11,12 +11,13 @@
 //! (`schedule_ticks`, #960) for how long its runs waited and took ([`Ticks::queue_waits`],
 //! [`Ticks::run_seconds`]; #962).
 
-use crate::run_queue::{self, QueueState};
-use crate::schedule::{Zone, next_fire, prev_fire};
-use crate::time::rfc3339_secs;
 pub use crate::views::ScheduleState;
 use crate::views::ScheduleStatus;
-use crate::{BarcaError, db};
+use barca_db::db;
+use barca_decide::schedule::{Zone, next_fire, prev_fire};
+use barca_model::BarcaError;
+use barca_model::time::rfc3339_secs;
+use barca_store::run_queue::{self, QueueState};
 use chrono::{DateTime, Utc};
 use croner::Cron;
 use std::collections::HashMap;
@@ -112,7 +113,7 @@ impl ScheduleState {
             ScheduleState::Late => standing.late_since.map(|since| {
                 format!(
                     "no tick has been decided since the {} slot: no scheduler is firing it",
-                    crate::time::rfc3339_secs(since).unwrap_or_default()
+                    barca_model::time::rfc3339_secs(since).unwrap_or_default()
                 )
             }),
             ScheduleState::Overrunning => Some(format!(
@@ -123,8 +124,8 @@ impl ScheduleState {
                 match (standing.typical_run_seconds, standing.interval_seconds) {
                     (Some(run), Some(interval)) => format!(
                         " (a run takes about {}, a slot comes every {})",
-                        crate::text::span(run.round() as i64),
-                        crate::text::span(interval)
+                        barca_store::text::span(run.round() as i64),
+                        barca_store::text::span(interval)
                     ),
                     _ => String::new(),
                 }
@@ -180,14 +181,14 @@ pub async fn recorded(
             trigger["schedule_id"].as_str(),
             trigger["scheduled_at"]
                 .as_str()
-                .and_then(crate::time::parse_rfc3339),
+                .and_then(barca_model::time::parse_rfc3339),
         ) else {
             continue;
         };
         if !schedules.iter().any(|s| s == schedule) {
             continue;
         }
-        let queued_at = crate::time::parse_rfc3339(&row.queued_at);
+        let queued_at = barca_model::time::parse_rfc3339(&row.queued_at);
         let ticks = out.entry(schedule.to_string()).or_default();
         match &mut ticks.newest {
             Some(run) if run.run_id == row.run_id => run.queued_at = queued_at,
@@ -364,7 +365,7 @@ impl ScheduleStatus {
     /// max_failures)` and its pause when one is on. Not `live`: the caller says whether a
     /// scheduler fires it (its own, or [`crate::liveness::observe`]).
     pub fn of(
-        job: &crate::schedule::ScheduledJob,
+        job: &barca_decide::schedule::ScheduledJob,
         standing: crate::schedule_standing::Standing,
         (failures, max_failures): (u32, u32),
         pause: Option<&db::SchedulePause>,
@@ -377,10 +378,10 @@ impl ScheduleStatus {
         Self {
             state,
             state_detail: state.detail(
-                crate::targets::short_name(&job.id),
+                barca_compile::targets::short_name(&job.id),
                 &standing,
                 (failures, max_failures),
-                job.kind == crate::NodeKind::Task,
+                job.kind == barca_model::NodeKind::Task,
             ),
             cron: job.cron_str.clone(),
             next_fire: standing.next_fire.and_then(rfc3339_secs),
@@ -406,7 +407,7 @@ impl ScheduleStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CronExpr;
+    use barca_model::CronExpr;
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)

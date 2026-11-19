@@ -213,6 +213,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "barca-analysis"
+version = "0.45.0"
+dependencies = [
+ "barca-compile",
+ "barca-db",
+ "barca-decide",
+ "barca-model",
+ "barca-store",
+ "chrono",
+ "croner",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "ts-rs",
+]
+
+[[package]]
 name = "barca-compile"
 version = "0.45.0"
 dependencies = [
@@ -235,6 +253,7 @@ dependencies = [
 name = "barca-core"
 version = "0.45.0"
 dependencies = [
+ "barca-analysis",
  "barca-compile",
  "barca-db",
  "barca-decide",

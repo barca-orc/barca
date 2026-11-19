@@ -4,9 +4,9 @@
 //! nothing of a status row.
 
 use super::NodeStatus;
-use crate::cache::{CacheReader, lookup_cached};
-use crate::cache_state::CacheState;
-use crate::store_inspect::{self, Copies};
+use barca_decide::cache::{CacheReader, lookup_cached};
+use barca_model::cache_state::CacheState;
+use barca_store::store_inspect::{self, Copies};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -16,11 +16,12 @@ use std::path::Path;
 /// do not agree. A store that cannot be asked leaves the states as they are, with a note.
 pub(crate) async fn check_store_copies(
     python: &Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     nodes: &mut [NodeStatus],
 ) -> HashSet<usize> {
     let mut verified_local = HashSet::new();
-    let layout = crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+    let layout =
+        barca_store::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
     let Ok(cache) = CacheReader::for_config(cfg).await else {
         return verified_local;
     };
@@ -79,7 +80,7 @@ pub(crate) async fn check_store_copies(
             &object,
             recorded.as_deref(),
         );
-        let at = crate::transfer::diagnostic_uri(&store);
+        let at = barca_store::transfer::diagnostic_uri(&store);
         let c = &mut nodes[i].cache;
         let (state, reason, detail) = match copies {
             Copies::InSync => {
@@ -124,7 +125,7 @@ pub(crate) async fn check_store_copies(
 /// `fields`: also JSON object field and list element types (`read_schemas`).
 pub(crate) async fn read_shapes(
     python: &Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     nodes: &mut [NodeStatus],
     sample: usize,
     fields: bool,
@@ -179,8 +180,10 @@ pub(crate) async fn read_shapes(
             && n.cache.artifact.as_deref() == Some(path.as_str())
         {
             // Use the selected, verified local copy instead of reopening remote payloads.
-            let layout =
-                crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+            let layout = barca_store::transfer::ArtifactLayout::new(
+                &cfg.local_artifact_dir,
+                &cfg.artifact_root,
+            );
             let local = layout.local_for(path).filter(|path| path.is_file());
             wanted.push((
                 i,
@@ -190,8 +193,10 @@ pub(crate) async fn read_shapes(
         } else if n.cache.state == CacheState::Unsynced && n.cache.reason != "store_only" {
             // Not in the store, or not the same there (#390, RFC-0009): read this machine's
             // copy. A `store_only` result is read from the store like a cached one.
-            let layout =
-                crate::transfer::ArtifactLayout::new(&cfg.local_artifact_dir, &cfg.artifact_root);
+            let layout = barca_store::transfer::ArtifactLayout::new(
+                &cfg.local_artifact_dir,
+                &cfg.artifact_root,
+            );
             let local = layout
                 .local_for(path)
                 .map_or_else(|| path.clone(), |p| p.to_string_lossy().into_owned());

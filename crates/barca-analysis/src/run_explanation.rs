@@ -4,15 +4,17 @@
 //! it runs, how far it is. One implementation: the CLI prints it and the web UI renders it, and
 //! neither derives it again.
 //!
-//! It is derived from what the run recorded ([`crate::run_explain::PlanReasons`],
-//! [`crate::run_explain::Cancellation`], its counters and its per-node summary); nothing here is
+//! It is derived from what the run recorded ([`barca_model::run_explain::PlanReasons`],
+//! [`barca_model::run_explain::Cancellation`], its counters and its per-node summary); nothing here is
 //! recorded, so the wording can change without a migration. Experimental.
 
-use crate::db::{RunNodeSummary, RunRecord, RunStep};
-use crate::run_explain::{Cancellation, CancelledBy, PlanReason, PlanReasons, ReasonCategory};
-use crate::step_status::StepStatus;
-use crate::targets::short_name;
-use crate::trigger::TriggeredBy;
+use barca_compile::targets::short_name;
+use barca_db::db::{RunNodeSummary, RunRecord, RunStep};
+use barca_model::run_explain::{
+    Cancellation, CancelledBy, PlanReason, PlanReasons, ReasonCategory,
+};
+use barca_model::step_status::StepStatus;
+use barca_model::trigger::TriggeredBy;
 use serde::{Deserialize, Serialize};
 
 /// How many nodes [`RunExplanation::slowest`] lists.
@@ -535,7 +537,7 @@ fn run_counts(run: RunFacts<'_>, nodes: &[RunNodeSummary], steps: &[RunStep]) ->
 
 /// The size of an artifact in words, as `barca status` prints sizes.
 fn size_label(bytes: u64) -> String {
-    crate::text::human(bytes)
+    barca_store::text::human(bytes)
 }
 
 /// One target's output from the pointer its run returned. `value`: the target's
@@ -563,7 +565,7 @@ fn output_of(node_id: &str, value: &serde_json::Value, steps: &[RunStep]) -> Opt
         (format, size, path, None, rows_of(node_id))
     } else {
         // A partitioned target: pointers by key, or the summary of a node with many keys.
-        let summary = object.get(crate::results::KEY_SUMMARY);
+        let summary = object.get(barca_store::results::KEY_SUMMARY);
         let listed = match summary {
             Some(s) => s.get("outputs").and_then(|o| o.as_object())?,
             None => object,
@@ -610,7 +612,7 @@ pub fn output_targets(target: Option<&str>, job: Option<&str>) -> Vec<String> {
 fn output_of_steps(node_id: &str, steps: &[RunStep]) -> Option<RunOutput> {
     let mine: Vec<&RunStep> = steps
         .iter()
-        .filter(|s| crate::StepId::parse(&s.node_id).base_id() == node_id)
+        .filter(|s| barca_model::StepId::parse(&s.node_id).base_id() == node_id)
         .filter(|s| StepStatus::Success.is(Some(s.status.as_str())) && s.artifact_path.is_some())
         .collect();
     let first = mine.first()?;
@@ -982,8 +984,8 @@ fn progress(run: RunFacts<'_>, now: f64) -> RunProgress {
     let done = executed + cached;
     let total = run.steps_total.map(|n| n.max(0) as u64);
     let percent = total.filter(|t| *t > 0).map(|t| (done * 100 / t).min(100));
-    let started = crate::time::parse_db_utc(run.started_at)
-        .or_else(|| crate::time::parse_rfc3339(run.started_at));
+    let started = barca_model::time::parse_db_utc(run.started_at)
+        .or_else(|| barca_model::time::parse_rfc3339(run.started_at));
     let elapsed = started.map_or(0.0, |s| (now - s as f64).max(0.0));
     let left = total.map_or(0, |t| t.saturating_sub(done));
     let eta_seconds = (executed > 0 && elapsed > 0.0 && left > 0)

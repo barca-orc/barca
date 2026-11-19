@@ -357,14 +357,14 @@ pub fn attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dag::Dag;
-    use crate::db::NodeAge;
     use crate::health::{Checks, classify};
     use crate::refresh_path::{PathSchedules, Paths};
     use crate::rollup::{ActionKind, Rollup};
-    use crate::schedule::Zone;
     use crate::schedule_standing::{TickRun, Ticks};
     use crate::status::ScheduleStatus;
+    use barca_compile::dag::Dag;
+    use barca_db::db::NodeAge;
+    use barca_decide::schedule::Zone;
     use std::collections::HashSet;
 
     // 2026-11-17 14:57:00 UTC.
@@ -388,18 +388,18 @@ mod tests {
 
     impl World {
         fn new(source: &str) -> Self {
-            let dag = Dag::build(&crate::parse::extract_nodes(source, "p.py").unwrap())
+            let dag = Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
                 .expect("valid dag");
-            let nodes = crate::results::list_assets_from_dag(&dag)
+            let nodes = barca_store::results::list_assets_from_dag(&dag)
                 .into_iter()
                 .map(|n| {
                     let kind = match n.kind {
-                        crate::NodeKind::Asset => "asset",
-                        crate::NodeKind::Sensor => "sensor",
-                        crate::NodeKind::Task => "task",
+                        barca_model::NodeKind::Asset => "asset",
+                        barca_model::NodeKind::Sensor => "sensor",
+                        barca_model::NodeKind::Task => "task",
                     };
                     serde_json::from_value(serde_json::json!({
-                        "id": n.id, "name": crate::targets::short_name(&n.id), "kind": kind,
+                        "id": n.id, "name": barca_compile::targets::short_name(&n.id), "kind": kind,
                         "inputs": n.inputs, "partitioned": false,
                         "cache": {
                             "state": if kind == "asset" { "cached" } else { "always_runs" },
@@ -426,8 +426,13 @@ mod tests {
                 runs: Vec::new(),
                 max_runs: Some(1),
             };
-            for job in crate::schedule::jobs_from_dag(&world.dag) {
-                world.schedule(crate::targets::short_name(&job.id), true, false, None);
+            for job in barca_decide::schedule::jobs_from_dag(&world.dag) {
+                world.schedule(
+                    barca_compile::targets::short_name(&job.id),
+                    true,
+                    false,
+                    None,
+                );
             }
             world
         }
@@ -445,11 +450,11 @@ mod tests {
         /// recorded, paused until resumed or not, over the recorded `ticks`.
         fn schedule(&mut self, name: &str, live: bool, paused: bool, ticks: Option<Ticks>) {
             let now = chrono::DateTime::from_timestamp(NOW, 0).unwrap();
-            let job = crate::schedule::jobs_from_dag(&self.dag)
+            let job = barca_decide::schedule::jobs_from_dag(&self.dag)
                 .into_iter()
-                .find(|job| crate::targets::short_name(&job.id) == name)
+                .find(|job| barca_compile::targets::short_name(&job.id) == name)
                 .unwrap_or_else(|| panic!("no schedule {name}"));
-            let pause = paused.then_some(crate::db::SchedulePause {
+            let pause = paused.then_some(barca_db::db::SchedulePause {
                 paused_at: 0,
                 until: None,
             });
@@ -482,7 +487,7 @@ mod tests {
             }
             if !changed.is_empty() {
                 let changed: Vec<String> = changed.iter().map(|c| c.to_string()).collect();
-                node.cache.change_causes = Some(crate::changes::causes(&changed));
+                node.cache.change_causes = Some(barca_decide::changes::causes(&changed));
                 node.cache.changed = Some(changed);
             }
         }
@@ -1391,31 +1396,27 @@ def pulse(): ...
             rollup.root().weight,
             "the roots' weights and one per fresh node are the scope's"
         );
-        // The whole to-do list, as `barca status --rollup` prints it.
-        let text: String = crate::report::render_rollup(&rollup, false)
-            .chunks
-            .iter()
-            .map(|chunk| match chunk {
-                crate::report::OutputChunk::Stdout(text)
-                | crate::report::OutputChunk::Stderr(text) => text.as_str(),
-            })
-            .collect();
-        println!("{text}");
-        assert!(text.contains("What holds the 422 nodes that are not fresh, and what clears it:"));
-        assert!(text.contains("The first 3 hold 338 of them."));
-        assert!(text.contains("1. no schedule: ledger"));
-        assert!(
-            text.contains(
-                "Distance from fresh: 1728 (weighted nodes); 698 when every node is fresh"
-            )
+        // The whole to-do list, as `barca status --rollup` prints it, is asserted where the
+        // renderer is (`report::audit_rollup_tests`, in the service crate), over this rollup as
+        // recorded here, without the node entries (the text goes down to groups and files; a
+        // node's own row is `barca status`). `BARCA_UPDATE_SNAPSHOTS=1` writes the record.
+        let recorded =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/audit_rollup.json");
+        let mut printed = rollup.clone();
+        printed
+            .entries
+            .retain(|e| e.kind != crate::views::EntryKind::Node);
+        let json = serde_json::to_string_pretty(&printed).unwrap() + "\n";
+        if std::env::var("BARCA_UPDATE_SNAPSHOTS").is_ok_and(|v| !v.is_empty() && v != "0") {
+            std::fs::create_dir_all(recorded.parent().unwrap()).unwrap();
+            std::fs::write(&recorded, &json).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&recorded).unwrap_or_default(),
+            json,
+            "the audit shape's rollup changed: review it, then record it with \
+             BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-analysis on_the_audit_shape"
         );
-        assert!(text.contains(
-            "do:   add a schedule: freshness=Schedule(...) on it or on a node above it (about 7m of compute)"
-        ));
-        assert!(text.contains(
-            "Gap: 152 no refresh path · 6 queued · 247 undecided · 17 catching up (nodes); \
-             about 23 fresh within 4m, 399 with no estimate"
-        ));
     }
 
     /// #1041: a failure and a queue-bound schedule both outrank a larger waiting chain.
@@ -1614,7 +1615,7 @@ def pulse(): ...
                 .node("orders")
                 .stale_since
                 .as_deref()
-                .and_then(crate::time::parse_rfc3339)
+                .and_then(barca_model::time::parse_rfc3339)
                 .map(|at| at - NOW)
         };
         // The observation changed 20 minutes ago (and once, long before the node's own

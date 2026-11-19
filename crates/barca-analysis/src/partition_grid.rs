@@ -12,11 +12,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::BarcaError;
-use crate::dag::Dag;
-use crate::db::{LatestAttempt, PartitionErrorGroup};
 pub use crate::key_query::{GridCounts, GridDimension, PartitionGrid, state};
-use crate::model::{PartitionKey, PartitionSpec, PartitionValue};
+use barca_compile::dag::Dag;
+use barca_db::db::{LatestAttempt, PartitionErrorGroup};
+use barca_model::BarcaError;
+use barca_model::model::{PartitionKey, PartitionSpec, PartitionValue};
 
 /// The partitioned nodes sharing `id`'s keys: connected to it through input edges between
 /// nodes with the same dimension names, in topological order.
@@ -57,19 +57,19 @@ pub(crate) struct ChainStates {
 }
 
 pub(crate) async fn chain_states(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     dag: &Dag,
     id: &str,
 ) -> Result<ChainStates, BarcaError> {
     let chain = chain(dag, id);
-    let (explained, members, will_run, _) = crate::predict::explain_dag_with_keys(
+    let (explained, members, will_run, _) = barca_decide::predict::explain_dag_with_keys(
         dag,
         cfg,
         &chain,
-        crate::cache::CachePolicy::CacheAware,
+        barca_decide::cache::CachePolicy::CacheAware,
         "status",
         None,
-        &crate::freshness::RunRules::status(),
+        &barca_decide::freshness::RunRules::status(),
         &[],
     )
     .await?;
@@ -84,11 +84,11 @@ pub(crate) async fn chain_states(
         for node in &chain {
             attempts.insert(
                 node.clone(),
-                crate::db::latest_attempts(&cfg.db_path, node).await?,
+                barca_db::db::latest_attempts(&cfg.db_path, node).await?,
             );
         }
     }
-    let pins: HashSet<String> = crate::db::get_pins(&cfg.db_path)
+    let pins: HashSet<String> = barca_db::db::get_pins(&cfg.db_path)
         .await?
         .into_iter()
         .map(|p| p.node_id)
@@ -108,7 +108,7 @@ pub(crate) async fn chain_states(
             .collect();
         let mut own = BTreeMap::new();
         for display in members.get(node).unwrap_or(&empty) {
-            let step = crate::StepId::parse(display);
+            let step = barca_model::StepId::parse(display);
             let key = step.partition.suffix();
             let state = if pins.contains(display) {
                 state::PINNED
@@ -190,7 +190,7 @@ fn dimensions(dag: &Dag, id: &str, keys: &[PartitionKey]) -> Vec<GridDimension> 
 
 /// `GET /assets/{name}/partitions/grid`: every key of `id`.
 pub async fn partition_grid(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     dag: &Dag,
     id: &str,
 ) -> Result<PartitionGrid, BarcaError> {
@@ -208,7 +208,7 @@ pub(crate) fn grid_of(dag: &Dag, id: &str, chain: &ChainStates) -> PartitionGrid
         .unwrap_or_default();
     let parsed: Vec<PartitionKey> = own
         .keys()
-        .map(|suffix| crate::StepId::parse(&format!("x[{suffix}]")).partition)
+        .map(|suffix| barca_model::StepId::parse(&format!("x[{suffix}]")).partition)
         .collect();
     let dims = dimensions(dag, id, &parsed);
     let cells: usize = if dims.is_empty() {
@@ -258,7 +258,7 @@ pub(crate) fn grid_of(dag: &Dag, id: &str, chain: &ChainStates) -> PartitionGrid
         grid.states.push(state);
         let attempt = attempts.get(&suffix);
         grid.attempted_at
-            .push(attempt.and_then(|a| crate::time::parse_db_utc(&a.created_at)));
+            .push(attempt.and_then(|a| barca_model::time::parse_db_utc(&a.created_at)));
         grid.elapsed_ms.push(
             attempt
                 .and_then(|a| a.elapsed_seconds)
@@ -273,7 +273,7 @@ pub(crate) fn grid_of(dag: &Dag, id: &str, chain: &ChainStates) -> PartitionGrid
         }
         grid.rows.push(rows);
         if let Some(a) = attempt.filter(|a| state == state::FAILED && a.status == "failed") {
-            let shape = crate::db::error_shape(a.error.as_deref(), &a.key);
+            let shape = barca_db::db::error_shape(a.error.as_deref(), &a.key);
             let next = error_index.len() as u32;
             let i = *error_index.entry(shape).or_insert(next);
             if i as usize == error_keys.len() {
@@ -350,7 +350,7 @@ pub fn no_such_key(name: &str, key: &str) -> String {
 
 /// The partitioned node `name` names in `dag`: its id, or a usage error.
 pub fn partitioned_target(dag: &Dag, name: &str) -> Result<String, BarcaError> {
-    let id = crate::targets::find_target_id(dag, name)?;
+    let id = barca_compile::targets::find_target_id(dag, name)?;
     if dag
         .get_node(&id)
         .is_none_or(|n| n.decl.partitions.is_empty())
@@ -363,26 +363,26 @@ pub fn partitioned_target(dag: &Dag, name: &str) -> Result<String, BarcaError> {
 /// `barca status NODE --keys` / `--grid` on this machine: every key of the node `name` names
 /// in the project's files.
 pub async fn grid_for_target(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     name: &str,
     file_args: &[String],
     python: &std::path::Path,
 ) -> Result<PartitionGrid, BarcaError> {
-    let dag = crate::load::build_dag(file_args, python).await?;
+    let dag = barca_compile::load::build_dag(file_args, python).await?;
     let id = partitioned_target(&dag, name)?;
     partition_grid(cfg, &dag, &id).await
 }
 
 /// `barca status NODE --key KEY` on this machine; `None` when the node has no such key.
 pub async fn key_for_target(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     name: &str,
     file_args: &[String],
     python: &std::path::Path,
     key: &str,
     sample: usize,
 ) -> Result<Option<PartitionKeyDetail>, BarcaError> {
-    let dag = crate::load::build_dag(file_args, python).await?;
+    let dag = barca_compile::load::build_dag(file_args, python).await?;
     let id = partitioned_target(&dag, name)?;
     partition_key_detail(cfg, &dag, python, &id, key, sample).await
 }
@@ -533,7 +533,7 @@ pub struct PartitionKeyDetail {
     /// The same key in each node of the chain, upstream first.
     pub chain: Vec<ChainKeyState>,
     /// The key's latest attempts, newest first (at most 20).
-    pub attempts: Vec<crate::db::KeyAttempt>,
+    pub attempts: Vec<barca_db::db::KeyAttempt>,
     /// Its latest successful result.
     pub output: Option<KeyArtifact>,
     /// What it reads: the same key of each partitioned input with its dimensions, and the
@@ -545,14 +545,14 @@ pub struct PartitionKeyDetail {
 const KEY_ATTEMPTS: usize = 20;
 
 pub async fn partition_key_detail(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     dag: &Dag,
     python: &std::path::Path,
     id: &str,
     key: &str,
     sample: usize,
 ) -> Result<Option<PartitionKeyDetail>, BarcaError> {
-    let parsed = crate::StepId::parse(&format!("{id}[{key}]")).partition;
+    let parsed = barca_model::StepId::parse(&format!("{id}[{key}]")).partition;
     let suffix = parsed.suffix();
     let chain = chain_states(cfg, dag, id).await?;
     let state_in = |node: &str| -> char {
@@ -570,7 +570,7 @@ pub async fn partition_key_detail(
     let step = format!("{id}[{suffix}]");
     let db_exists = std::path::Path::new(&cfg.db_path).exists();
     let attempts = if db_exists {
-        crate::db::key_attempts(&cfg.db_path, &step, KEY_ATTEMPTS).await?
+        barca_db::db::key_attempts(&cfg.db_path, &step, KEY_ATTEMPTS).await?
     } else {
         Vec::new()
     };
@@ -597,20 +597,20 @@ pub async fn partition_key_detail(
         }
     }
     let reader = if db_exists {
-        crate::cache::CacheReader::for_config(cfg).await.ok()
+        barca_decide::cache::CacheReader::for_config(cfg).await.ok()
     } else {
         None
     };
     let pins = match &reader {
-        Some(reader) => crate::db::pins_on(reader.conn()).await?,
+        Some(reader) => barca_db::db::pins_on(reader.conn()).await?,
         None => BTreeMap::new(),
     };
     let mut found: Vec<KeyArtifact> = Vec::new();
     for (node, step) in &wanted {
         let output = match &reader {
             Some(reader) => match pins.get(step) {
-                Some(pin) => crate::db::success_at(reader, step, &pin.run_hash).await,
-                None => crate::db::latest_success(reader, step)
+                Some(pin) => barca_db::db::success_at(reader, step, &pin.run_hash).await,
+                None => barca_db::db::latest_success(reader, step)
                     .await
                     .map(|l| l.output),
             },
@@ -632,7 +632,7 @@ pub async fn partition_key_detail(
         .enumerate()
         .filter_map(|(i, a)| Some((i, (a.artifact_path.clone()?, a.format.clone()?))))
         .collect();
-    let shapes = crate::store_inspect::artifact_shapes(
+    let shapes = barca_store::store_inspect::artifact_shapes(
         python,
         cfg,
         &readable.iter().map(|(_, a)| a.clone()).collect::<Vec<_>>(),
@@ -686,7 +686,7 @@ mod tests {
     fn error_shapes_name_the_dimension_each_value_came_from() {
         let k = key(&[("day", "2026-03-01"), ("region", "apac")]);
         assert_eq!(
-            crate::db::error_shape(
+            barca_db::db::error_shape(
                 Some("s3://raw/apac/2026-03-01.csv has 0 rows\ntraceback"),
                 &k
             ),
@@ -698,7 +698,7 @@ mod tests {
     fn error_shapes_leave_a_value_inside_a_longer_word() {
         let k = key(&[("k", "a")]);
         assert_eq!(
-            crate::db::error_shape(Some("ValueError: no rows for a (a-b)"), &k),
+            barca_db::db::error_shape(Some("ValueError: no rows for a (a-b)"), &k),
             "ValueError: no rows for <k> (<k>-b)"
         );
     }

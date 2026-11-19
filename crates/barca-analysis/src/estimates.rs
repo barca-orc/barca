@@ -12,10 +12,10 @@
 //! a tick can only look again (an undecided node, a node above it that no tick refreshes),
 //! the node has `recheck_at` alone.
 
-use crate::cache_state::CacheState;
-use crate::db::NodeAge;
 pub use crate::liveness::{PlannedRun, QueueRun, queue_starts, typical_run_seconds};
 use crate::views::{Checks, DataSignal, Health, HealthReason, NodeStatus, recorded_at};
+use barca_db::db::NodeAge;
+use barca_model::cache_state::CacheState;
 use std::collections::{HashMap, HashSet};
 
 /// Estimated times are rounded up to a multiple of this many seconds: an estimate is not
@@ -139,12 +139,12 @@ pub fn source_times<'a>(files: impl IntoIterator<Item = &'a str>) -> HashMap<Str
 }
 
 /// [`source_times`] of the files the nodes of `dag` are declared in.
-pub fn source_times_of(dag: &crate::dag::Dag) -> HashMap<String, i64> {
+pub fn source_times_of(dag: &barca_compile::dag::Dag) -> HashMap<String, i64> {
     source_times(dag.topo_order().into_iter().map(source_file))
 }
 
 fn rfc3339(at: i64) -> Option<String> {
-    crate::time::rfc3339_secs(at)
+    barca_model::time::rfc3339_secs(at)
 }
 
 /// `at` rounded up to [`ROUND_SECONDS`], and never before `now`.
@@ -194,7 +194,7 @@ pub fn node_run_seconds(node: &NodeStatus, durations: &HashMap<String, f64>) -> 
 }
 
 /// When `input`'s result first changed after `own` (unix seconds: when the node reading it
-/// last succeeded): the earliest of its recorded value changes ([`crate::db::NodeAge::changed_at`])
+/// last succeeded): the earliest of its recorded value changes ([`barca_db::db::NodeAge::changed_at`])
 /// that is newer. A sensor polled again with the same observation, and a rerun that wrote
 /// the same bytes, add a result and no change, so this does not move while the reader stays
 /// out of date. Where no change is on record (rows that recorded no digest), the input's
@@ -584,7 +584,7 @@ pub fn times(nodes: &[NodeStatus], evidence: Evidence<'_>) -> Vec<Times> {
 pub fn behind_seconds(node: &NodeStatus, now: i64) -> i64 {
     node.stale_since
         .as_deref()
-        .and_then(crate::time::parse_rfc3339)
+        .and_then(barca_model::time::parse_rfc3339)
         .map_or(0, |since| (now - since).max(0))
 }
 
@@ -593,15 +593,15 @@ pub fn behind_seconds(node: &NodeStatus, now: i64) -> i64 {
 pub fn ahead_seconds(node: &NodeStatus, now: i64) -> i64 {
     node.expected_fresh_at
         .as_deref()
-        .and_then(crate::time::parse_rfc3339)
+        .and_then(barca_model::time::parse_rfc3339)
         .map_or(0, |at| (at - now).max(0))
 }
 
 /// A time for a table cell as of `now` (unix seconds): `15:05 UTC`, with the day when it is
 /// not today's. `up`: an estimate, shown to the minute rounded up (never earlier than
 /// estimated).
-pub(crate) fn clock(at: &str, now: i64, up: bool) -> Option<String> {
-    let at = crate::time::parse_rfc3339(at)?;
+pub fn clock(at: &str, now: i64, up: bool) -> Option<String> {
+    let at = barca_model::time::parse_rfc3339(at)?;
     let at = if up {
         at + (60 - at.rem_euclid(60)) % 60
     } else {
@@ -642,9 +642,9 @@ pub fn line(node: &NodeStatus, now: i64) -> Option<String> {
         && let Some(since) = node
             .stale_since
             .as_deref()
-            .and_then(crate::time::parse_rfc3339)
+            .and_then(barca_model::time::parse_rfc3339)
     {
-        return Some(format!("overdue {}", crate::text::span(now - since)));
+        return Some(format!("overdue {}", barca_store::text::span(now - since)));
     }
     node.recheck_at
         .as_deref()
@@ -655,11 +655,11 @@ pub fn line(node: &NodeStatus, now: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dag::Dag;
     use crate::health::{Checks, classify};
     use crate::refresh_path::{PathEvidence, PathSchedule, PathSchedules, Paths};
-    use crate::schedule::{Zone, jobs_from_dag};
     use crate::status::ScheduleStatus;
+    use barca_compile::dag::Dag;
+    use barca_decide::schedule::{Zone, jobs_from_dag};
 
     /// 2026-11-17T14:57:00Z.
     const NOW: i64 = 1_794_927_420;
@@ -695,7 +695,8 @@ def loose(): ...
 "#;
 
     fn dag() -> Dag {
-        Dag::build(&crate::parse::extract_nodes(PIPELINE, "p.py").unwrap()).expect("valid dag")
+        Dag::build(&barca_compile::parse::extract_nodes(PIPELINE, "p.py").unwrap())
+            .expect("valid dag")
     }
 
     fn id(name: &str) -> String {
@@ -735,9 +736,9 @@ def loose(): ...
         dag.topo_order()
             .into_iter()
             .map(|node_id| {
-                let name = crate::targets::short_name(node_id);
+                let name = barca_compile::targets::short_name(node_id);
                 let node = dag.get_node(node_id).unwrap();
-                let sensor = node.kind() == crate::NodeKind::Sensor;
+                let sensor = node.kind() == barca_model::NodeKind::Sensor;
                 let state = states
                     .iter()
                     .find(|(n, _)| *n == name)
@@ -765,7 +766,7 @@ def loose(): ...
         dag: Dag,
         paths: Paths,
         schedules: PathSchedules,
-        ages: HashMap<String, crate::db::NodeAge>,
+        ages: HashMap<String, barca_db::db::NodeAge>,
         checks: Checks,
         durations: HashMap<String, f64>,
         runs: Vec<PlannedRun>,
@@ -843,7 +844,7 @@ def loose(): ...
         of(nodes, name)
             .expected_fresh_at
             .as_deref()
-            .and_then(crate::time::parse_rfc3339)
+            .and_then(barca_model::time::parse_rfc3339)
             .map(|at| at - TICK)
     }
 
@@ -864,7 +865,7 @@ def loose(): ...
         assert_eq!(fresh_after_tick(&nodes, "side"), Some(25));
         assert_eq!(fresh_after_tick(&nodes, "report"), Some(35));
         // Every node with a path is rechecked at its next tick, fresh or not.
-        let tick = crate::time::rfc3339_secs(TICK);
+        let tick = barca_model::time::rfc3339_secs(TICK);
         assert_eq!(of(&nodes, "report").recheck_at, tick);
         assert_eq!(of(&nodes, "inbox").recheck_at, tick);
         // A fresh node has no estimate, and one no tick reaches has neither time.
@@ -1016,7 +1017,7 @@ def loose(): ...
             of(&nodes, name)
                 .expected_fresh_at
                 .as_deref()
-                .and_then(crate::time::parse_rfc3339)
+                .and_then(barca_model::time::parse_rfc3339)
                 .map(|at| at - NOW)
         };
         // The poll (2s) and the step (10s) from the anchor, rounded up to 5 seconds.
@@ -1035,7 +1036,7 @@ def loose(): ...
             of(&nodes, name)
                 .expected_fresh_at
                 .as_deref()
-                .and_then(crate::time::parse_rfc3339)
+                .and_then(barca_model::time::parse_rfc3339)
                 .map(|at| at - NOW)
         };
         assert_eq!(after("clean"), Some(70));
@@ -1052,14 +1053,14 @@ def loose(): ...
         let nodes = world.classified(&[("clean", "stale")]);
         assert_eq!(
             of(&nodes, "clean").expected_fresh_at,
-            crate::time::rfc3339_secs(NOW)
+            barca_model::time::rfc3339_secs(NOW)
         );
     }
 
     #[test]
     fn stale_since_is_the_earliest_record_of_what_made_it_stale() {
         let mut world = World::new();
-        let at = |time: &str| crate::db::NodeAge {
+        let at = |time: &str| barca_db::db::NodeAge {
             last_success_at: Some(time.to_string()),
             ..Default::default()
         };
@@ -1096,7 +1097,7 @@ def loose(): ...
         world.classify(&mut nodes);
         assert_eq!(
             of(&nodes, "orders").stale_since,
-            crate::time::rfc3339_secs(NOW - 30)
+            barca_model::time::rfc3339_secs(NOW - 30)
         );
         // A file last modified before the node's newest result does not date the change.
         world.source_times = HashMap::from([("p.py".to_string(), 1_000)]);
@@ -1111,12 +1112,12 @@ def loose(): ...
         let nodes = world.classified(&[("loose", "never_run")]);
         assert_eq!(
             of(&nodes, "loose").stale_since,
-            crate::time::rfc3339_secs(NOW - 30)
+            barca_model::time::rfc3339_secs(NOW - 30)
         );
         // A failure: its first failed attempt.
         world.ages.insert(
             id("orders"),
-            crate::db::NodeAge {
+            barca_db::db::NodeAge {
                 failing_since: Some("2026-11-17 13:00:00".to_string()),
                 ..Default::default()
             },
@@ -1154,7 +1155,7 @@ def loose(): ...
         // Missed by a tick, out of date for 16 hours.
         let orders = nodes.iter_mut().find(|n| n.name == "orders").unwrap();
         orders.expected_fresh_at = None;
-        orders.stale_since = crate::time::rfc3339_secs(NOW - 16 * 3600 - 5);
+        orders.stale_since = barca_model::time::rfc3339_secs(NOW - 16 * 3600 - 5);
         orders.refresh_path.as_mut().unwrap().missed_ticks = 2;
         assert_eq!(
             line(of(&nodes, "orders"), NOW).as_deref(),
