@@ -5,8 +5,8 @@
 use crate::db::materializations::{NewMaterialization, StepInsert};
 use crate::db::runs::advance_steps_executed;
 pub(crate) use barca_db::recording;
+pub(crate) use recording::RunLedger;
 use recording::write_terminal_ledger;
-pub(crate) use recording::{RunLedger, record_post};
 
 use crate::BarcaError;
 use crate::dag::Dag;

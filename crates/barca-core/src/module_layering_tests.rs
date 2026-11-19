@@ -25,7 +25,7 @@ use std::path::Path;
 /// `mod` in `lib.rs` is listed once.
 const LAYERS: &[(&str, u8, &[&str])] = &[
     // Plain data and helpers with no module of this crate below them.
-    ("leaf", 0, &["db", "http", "results", "text"]),
+    ("leaf", 0, &["db", "envelope", "http", "results", "text"]),
     (
         "storage",
         1,
@@ -84,7 +84,6 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
         4,
         &[
             "diagnostics",
-            "envelope",
             "outcome",
             "queries",
             "report",
@@ -95,10 +94,27 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
     ),
 ];
 
+/// The order inside the storage layer, top row first: a storage module may name the storage
+/// modules of the rows above its own, never its own row or a row below. So the storage layer
+/// has no cycle of its own, and no entry in the allowlist: an edge this order forbids fails.
+const STORAGE_ROWS: &[&[&str]] = &[
+    // What the others are built on: the artifact layout and the transfer helper, and the
+    // tables one feature owns.
+    &["pauses", "run_queue", "transfer", "verified_copies"],
+    // The metadata backups (and the launcher of `barca._state`), and a run's link to the store.
+    &["backup", "store_sync"],
+    // What the store and this machine hold at a path; what `.barca/` holds and may drop.
+    &["gc", "store_inspect"],
+    // The server's ledger, both halves, and the reader a cache decision asks.
+    &["ledger"],
+    // Pinned inputs, read through that reader.
+    &["pins"],
+];
+
 /// The number of modules in the largest strongly connected component of the module graph
 /// (modules that all reach each other through `crate::` paths in non-test code). 38 before
-/// the cuts of #1056's C1.
-const LARGEST_CYCLE: usize = 29;
+/// the cuts of #1056's C1, 29 after them, 19 with the storage layer out of it (C4).
+const LARGEST_CYCLE: usize = 19;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
 
@@ -480,6 +496,51 @@ fn modules_name_only_their_own_layer_and_the_layers_below() {
         problems.is_empty(),
         "module layers of barca-core (#1056, docs/engineering/layering.md; the allowlist is \
          crates/barca-core/src/module_layering_allowlist.txt and may only shrink):\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn storage_modules_name_only_the_storage_rows_above_their_own() {
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let (_, edges) = scan(&src_root);
+    let storage = LAYERS
+        .iter()
+        .find(|(name, ..)| *name == "storage")
+        .unwrap()
+        .2;
+    let row_of = |module: &str| STORAGE_ROWS.iter().position(|row| row.contains(&module));
+    let mut problems = Vec::new();
+    for module in storage {
+        let rows = STORAGE_ROWS.iter().filter(|r| r.contains(module)).count();
+        if rows != 1 {
+            problems.push(format!(
+                "  storage module `{module}` is in {rows} rows of STORAGE_ROWS: give it one"
+            ));
+        }
+    }
+    for module in STORAGE_ROWS.iter().flat_map(|row| row.iter()) {
+        if !storage.contains(module) {
+            problems.push(format!(
+                "  STORAGE_ROWS names `{module}`, which is not a storage module in LAYERS"
+            ));
+        }
+    }
+    for ((from, to), items) in &edges {
+        if let (Some(a), Some(b)) = (row_of(from), row_of(to))
+            && b >= a
+        {
+            problems.push(format!(
+                "  row {a} names row {b}: {}",
+                line_of(from, to, items)
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "the order inside barca-core's storage layer (STORAGE_ROWS; \
+         docs/engineering/layering.md). Move the item to a row above both of its users, or \
+         pass it in:\n{}",
         problems.join("\n")
     );
 }

@@ -11,6 +11,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
 
 - Internal: the modules inside barca-core have layers and a test that holds them (`docs/engineering/layering.md`, #1056); 26 of the 42 edges that pointed the wrong way are cut and the largest dependency cycle is 29 modules, down from 38. No behavior change.
+- Internal: barca-core's storage modules (`backup`, `gc`, `ledger`, `pins`, `store_inspect`, `store_sync`, `transfer` and the rest) name no higher layer and have a checked order among themselves (#1056); the wrong-way edges go from 16 to 6 and the largest dependency cycle from 29 modules to 19. No behavior change.
 
 - Internal: the Python helpers Rust starts share one envelope (request, stdout guard, lifeline, exit), `barca sql` and the server's query helper share one tables module, and the worker's single-step and batched runners share one step lifecycle; no behavior change (#1056).
 

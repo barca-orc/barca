@@ -7,6 +7,10 @@ pub use crate::text::shell_quote;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+/// The major version of the server's HTTP API, reported by `GET /health`. A client refuses
+/// another major; additive fields do not bump it.
+pub const API_VERSION: u32 = 1;
+
 /// What went wrong, as an agent needs to know it: fix the command, fix the code, retry, or
 /// nothing (the user cancelled). Each kind has exactly one exit code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

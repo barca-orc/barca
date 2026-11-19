@@ -1,15 +1,50 @@
 //! A run's connection to a remote store: queue each finished artifact for upload, fetch remote
 //! inputs before a phase reads them, and wait for the transfers at the end of the run.
 
-use crate::cache::BLOCKED_ARTIFACT_PATH;
 use crate::dispatch;
-use crate::recover;
 use crate::text::human;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use crate::verified_copies;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
+
+/// How an error starts when a directory at an artifact path could not be moved aside
+/// (`barca._storage.ArtifactPathError`): the state of barca's own artifact directory, not a
+/// fault of the step that was writing there.
+pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
+
+/// Whether the artifact recorded at `path` can be read from this machine as it is.
+///
+/// A file path (plain or `file://`) is looked up on disk. A remote URI cannot be: with a
+/// separate artifact store (`separate_store`) workers read only the local artifact directory,
+/// so a URI that is not in that store is out of reach; without one, the worker reads the URI
+/// itself and reports what it finds, so it is taken as readable.
+///
+/// An artifact is one file. A directory at the path, or a symlink that leads to one or to
+/// nothing, is not an artifact and counts as missing: the step is computed again, and whoever
+/// writes the file moves the directory out of the way first (`barca._storage.make_way`).
+pub(crate) fn on_disk(path: &str, separate_store: bool) -> bool {
+    match crate::transfer::local_path(path) {
+        Some(file) => file.is_file(),
+        None => !separate_store,
+    }
+}
+
+/// A store copy that is not the one its result was recorded with ([`crate::mismatch`] puts it
+/// on the step reports), in words, without the `[barca] warning: <step>:` prefix of the stderr line:
+/// `at` is the store location, `more` the number of further partitions of the step it holds
+/// for.
+pub(crate) fn describe_mismatch(base: &str, at: &str, more: usize) -> String {
+    let others = match more {
+        0 => String::new(),
+        n => format!(" (and {n} more of its partitions)"),
+    };
+    format!(
+        "the copy at {at}{others} is not the one this result was recorded with (another run \
+         overwrote it, or it was changed). Using it. Recompute with --refresh {base}."
+    )
+}
 
 /// This run's link to a separate artifact store: the transfer helper plus
 /// the cache hits whose artifacts still live only in the store.
@@ -186,7 +221,7 @@ impl StoreSync {
                 !std::path::Path::new(path).is_file()
                     && crate::transfer::local_path(at).is_some_and(|stored| !stored.exists())
             }
-            None => !recover::on_disk(path, store.is_some()),
+            None => !on_disk(path, store.is_some()),
         }
     }
 
@@ -364,7 +399,7 @@ impl StoreSync {
         }
         for (base, at, count) in differing {
             // The same words on stderr and, at the end of the run, in the JSON step entries.
-            let finding = crate::mismatch::describe(&base, at, count - 1);
+            let finding = describe_mismatch(&base, at, count - 1);
             let msg = format!("[barca] warning: {base}: {finding}");
             crate::lines::Lines::current().note(pb, &msg);
             self.mismatched.insert(base, finding);
