@@ -83,16 +83,17 @@ impl From<LogStreamArg> for barca_core::LogStream {
     }
 }
 
-/// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1). On `get`, `run`,
-/// `status`, `list`, `history`, `stats`, `logs` and `sql` only; the other commands always run
-/// here.
+/// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1; the project socket,
+/// #1056). On `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `queue`,
+/// `pause`, `resume`, `cancel`, `pin`, `unpin` and `gc` only; the other commands always run here.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct ServerFlags {
     /// Run this command on a barca server (`barca serve`) and print its result here: the URL
     /// given, or with no URL the configured one (BARCA_SERVER, else [server] url in
-    /// barca.toml). Without it, get and run run on this machine (against a configured server's
-    /// ledger), status, history, stats and logs are answered by a configured server, and sql
-    /// resolves its views from it (the query always runs here)
+    /// barca.toml). Without it, a `barca serve` running in this project is used the same way
+    /// (found by its socket under .barca/); with none, get and run run on this machine (against
+    /// a configured server's ledger), status, history, stats and logs are answered by a
+    /// configured server, and sql resolves its views from it (the query always runs here)
     #[arg(
         long,
         value_name = "URL",
@@ -102,10 +103,11 @@ pub(crate) struct ServerFlags {
     )]
     #[arg(help = "Use a server (URL or configured); get/run execute its deployed code", long_help = None)]
     pub(crate) server: Option<String>,
-    /// Ignore any configured server for this command: run against this machine's own ledger and
-    /// records; nothing is read from or sent to the server
+    /// Ignore any server for this command, a configured one and a `barca serve` running in
+    /// this project: run on this machine against its own ledger and records; nothing is read
+    /// from or sent to a server
     #[arg(long)]
-    #[arg(help = "Use independent local state; ignore the configured server", long_help = None)]
+    #[arg(help = "Run on this machine; ignore a configured server and this project's barca serve", long_help = None)]
     pub(crate) local: bool,
 }
 
@@ -240,7 +242,7 @@ Examples:
   barca get total pipeline.py --fields id,status   # JSON with each entry of `steps` trimmed to these keys
   barca get total --server                 # run it on the configured barca server; prints here as a local run
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
-  barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
+  barca get total --local                  # run in this process: not on this project's barca serve, nothing sent to a configured server
   barca get total pipeline.py --allow-paused   # run it even though it is paused (barca docs incidents)
   barca get --examples                     # the complete example collection; runs nothing
 
@@ -265,7 +267,7 @@ Examples:
   barca run check_a,check_b pipeline.py                # several tasks in one run; shared upstream runs once
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
-  barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
+  barca run deploy pipeline.py --local                 # run in this process: not on this project's barca serve, nothing posted to a configured server
   barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
@@ -354,6 +356,8 @@ Examples:
   barca gc --max-size off         # only leftovers and superseded results, all of them
   barca gc --json                 # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}
   barca gc --env dev              # only the dev environment's results (leftovers are shared)
+  barca gc --local                # evict in this process, not in a barca serve running in this project
+  barca gc --server http://barca.internal:8274   # a server evicts its own cache (POST /gc)
 
 More: barca docs cache (\"Disk use\")";
 
@@ -939,6 +943,8 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Show execution statistics for an asset
     #[command(after_help = quick_help("stats", STATS_HELP), after_long_help = STATS_HELP, long_about = None)]

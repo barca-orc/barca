@@ -234,7 +234,8 @@ def test_missed_ticks_are_counted_from_the_tick_record(project, serve):
     # A run nobody scheduled brings `orders` up to date: no tick missed a fresh node, and
     # the ticks before its success stay made good.
     time.sleep(1.1)  # results are recorded to the second
-    _ok(barca(project, "get", "orders", "pipeline.py"))
+    # `--local`: beside a server the command would go to it, and a read-only one refuses.
+    _ok(barca(project, "get", "orders", "pipeline.py", "--local"))
     paths = _status(project)
     assert paths["orders"]["missed_ticks"] == 0, paths
     assert paths["report"]["missed_ticks"] == 2, paths

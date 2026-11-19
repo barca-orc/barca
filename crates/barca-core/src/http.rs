@@ -36,3 +36,22 @@ pub fn client_with_redirects(
             "cannot set up the HTTPS client (TLS or the system's root certificates)".to_string()
         })
 }
+
+/// A client whose every connection is the Unix socket at `path` (a `barca serve` in this
+/// project). No TLS, no proxy, no redirect: the peer is one local process.
+#[cfg(unix)]
+pub fn unix_socket_client(
+    path: &std::path::Path,
+    timeout: Duration,
+) -> Result<reqwest::Client, String> {
+    // reqwest needs a provider installed to build any client, though this one never uses TLS.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::builder()
+        .unix_socket(path)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .connect_timeout(timeout)
+        .user_agent(concat!("barca/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("cannot set up the client of {}: {e}", path.display()))
+}

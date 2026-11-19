@@ -280,7 +280,7 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
 }
 
 // barca-server names these as `db::` paths; the `.barca/` layout is `barca_model::layout`'s.
-pub use barca_model::layout::{ensure_env_dirs, env_local_paths};
+pub use barca_model::layout::{ensure_env_dirs, env_local_paths, serve_socket_path};
 
 /// How long one barca process waits for another's DB operation before giving up.
 /// Operations are brief (a few queries), so hitting this means a stuck process.
@@ -305,20 +305,30 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
         .write(true)
         .open(&lock_path)
         .map_err(|e| BarcaError::Db(format!("failed to open lock file {lock_path}: {e}")))?;
-    let deadline = Instant::now() + wait;
+    // Uncontended (every operation of a one-shot command): one `flock`, no clock read.
+    match file.try_lock() {
+        Ok(()) => return Ok(file),
+        Err(fs::TryLockError::WouldBlock) => {}
+        Err(fs::TryLockError::Error(e)) => {
+            return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
+        }
+    }
+    let started = Instant::now();
+    let deadline = started + wait;
     let mut delay = Duration::from_millis(2);
     loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(file),
-            Err(fs::TryLockError::WouldBlock) => {}
-            Err(fs::TryLockError::Error(e)) => {
-                return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
-            }
-        }
         if Instant::now() >= deadline {
+            let holder = match lock_holder(&file) {
+                Some(holder) => format!("held now by {holder}"),
+                None => "its holder could not be named on this system".to_string(),
+            };
             return Err(BarcaError::Db(format!(
                 "timed out after {:.1}s waiting for {lock_path}: another barca process is \
-                 holding the metadata DB (a very long operation, or a stuck process)",
+                 holding the metadata DB ({holder}): a very long operation, a stuck process, or \
+                 many short operations of a busy `barca serve` in this project\n\
+                 With a server running here, leave out --local so the command goes to it \
+                 (barca docs server-mode); otherwise wait for that process or stop it, then run \
+                 the command again.",
                 wait.as_secs_f32()
             )));
         }
@@ -327,7 +337,117 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
             Duration::from_micros((barca_model::time::unix_nanos(SystemTime::now()) % 2000) as u64);
         tokio::time::sleep(delay + jitter).await;
         delay = (delay * 2).min(Duration::from_millis(40));
+        match file.try_lock() {
+            Ok(()) => {
+                note_lock_wait(started.elapsed());
+                return Ok(file);
+            }
+            Err(fs::TryLockError::WouldBlock) => {}
+            Err(fs::TryLockError::Error(e)) => {
+                return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
+            }
+        }
     }
+}
+
+/// Contended acquisitions of the cross-process lock in this process: how many, their total
+/// wait and the longest, in microseconds. An uncontended acquisition is not counted.
+static LOCK_WAITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_WAIT_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_WAIT_LONGEST_MICROS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn note_lock_wait(waited: Duration) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let micros = u64::try_from(waited.as_micros()).unwrap_or(u64::MAX);
+    LOCK_WAITS.fetch_add(1, Relaxed);
+    LOCK_WAIT_MICROS.fetch_add(micros, Relaxed);
+    LOCK_WAIT_LONGEST_MICROS.fetch_max(micros, Relaxed);
+}
+
+/// What this process waited for another process's hold on a metadata database's lock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LockWaits {
+    /// Acquisitions that found the lock held and waited.
+    pub waits: u64,
+    /// Their total wait.
+    pub total: Duration,
+    /// The longest one.
+    pub longest: Duration,
+}
+
+/// [`LockWaits`] so far (`BARCA_TRACE_TIMING` prints it at the end of a run).
+pub fn lock_waits() -> LockWaits {
+    use std::sync::atomic::Ordering::Relaxed;
+    LockWaits {
+        waits: LOCK_WAITS.load(Relaxed),
+        total: Duration::from_micros(LOCK_WAIT_MICROS.load(Relaxed)),
+        longest: Duration::from_micros(LOCK_WAIT_LONGEST_MICROS.load(Relaxed)),
+    }
+}
+
+/// The process holding the lock on `file` right now, as `pid N (command line)`, read from the
+/// kernel's lock table (`/proc/locks`, Linux only). `None` where that table does not exist or
+/// does not name the file. Nothing is written to disk to make this possible: the holder is
+/// looked up only when a wait has timed out.
+fn lock_holder(file: &fs::File) -> Option<String> {
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt;
+        file.metadata().ok()?.ino()
+    };
+    #[cfg(not(unix))]
+    let inode: u64 = {
+        let _ = file;
+        return None;
+    };
+    let table = fs::read_to_string("/proc/locks").ok()?;
+    let pid = holder_pid(&table, inode, std::process::id())?;
+    let command = fs::read(format!("/proc/{pid}/cmdline"))
+        .ok()
+        .map(|raw| {
+            raw.split(|b| *b == 0)
+                .filter(|part| !part.is_empty())
+                .map(|part| String::from_utf8_lossy(part).into_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|command| !command.is_empty());
+    Some(match command {
+        Some(command) => {
+            let short: String = command.chars().take(200).collect();
+            format!("pid {pid} ({short})")
+        }
+        None => format!("pid {pid}"),
+    })
+}
+
+/// The pid holding a `flock` on `inode` in a `/proc/locks` table: a line reads
+/// `<n>: FLOCK ADVISORY WRITE <pid> <major>:<minor>:<inode> <start> <end>` (a waiter's has
+/// `->` after the ordinal). Another process is preferred to this one, which may hold the same
+/// lock on another descriptor.
+fn holder_pid(table: &str, inode: u64, me: u32) -> Option<u32> {
+    let mut mine = None;
+    for line in table.lines() {
+        let mut fields = line.split_whitespace().skip(1);
+        if fields.next() != Some("FLOCK") {
+            continue;
+        }
+        let (Some(_), Some(_), Some(pid), Some(file)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if file.rsplit(':').next().and_then(|i| i.parse::<u64>().ok()) != Some(inode) {
+            continue;
+        }
+        match pid.parse::<u32>() {
+            Ok(pid) if pid == me => mine = Some(pid),
+            Ok(pid) => return Some(pid),
+            Err(_) => {}
+        }
+    }
+    mine
 }
 
 /// The in-process guard and the cross-process lock of the database at `db_path`, for an
@@ -824,11 +944,57 @@ mod tests {
             .to_string();
         assert!(err.contains("metadata.db.lock"), "{err}");
         assert!(err.contains("another barca process"), "{err}");
+        // The kernel's lock table names the holder (this process, on another descriptor).
+        if cfg!(target_os = "linux") && std::path::Path::new("/proc/locks").exists() {
+            assert!(
+                err.contains(&format!("held now by pid {}", std::process::id())),
+                "{err}"
+            );
+        }
+        assert!(err.contains("barca docs server-mode"), "{err}");
 
         drop(first);
         acquire_file_lock(&db_path, std::time::Duration::from_secs(1))
             .await
             .expect("lock is free again once the holder drops it");
+    }
+
+    #[test]
+    fn the_lock_table_names_another_holder_before_this_process() {
+        let table = "1: POSIX  ADVISORY  WRITE 900 00:2a:77 0 EOF\n\
+                     2: FLOCK  ADVISORY  WRITE 41 00:2a:77 0 EOF\n\
+                     3: -> FLOCK  ADVISORY  WRITE 43 00:2a:77 0 EOF\n\
+                     4: FLOCK  ADVISORY  WRITE 42 00:2a:77 0 EOF\n\
+                     5: FLOCK  ADVISORY  WRITE 50 00:2a:78 0 EOF\n";
+        assert_eq!(holder_pid(table, 77, 41), Some(42));
+        assert_eq!(holder_pid(table, 77, 7), Some(41));
+        assert_eq!(holder_pid(table, 78, 50), Some(50));
+        assert_eq!(holder_pid(table, 79, 7), None);
+    }
+
+    #[tokio::test]
+    async fn a_contended_acquisition_is_counted_with_its_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let before = lock_waits();
+        let held = acquire_file_lock(&db_path, std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
+        // Uncontended: not counted (other tests of this process may add their own waits).
+        let waiter_path = db_path.clone();
+        let waiter = tokio::spawn(async move {
+            acquire_file_lock(&waiter_path, std::time::Duration::from_secs(5)).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        drop(held);
+        waiter.await.unwrap().unwrap();
+        let after = lock_waits();
+        assert!(after.waits > before.waits, "{before:?} {after:?}");
+        assert!(
+            after.total >= before.total + std::time::Duration::from_millis(50),
+            "{before:?} {after:?}"
+        );
+        assert!(after.longest >= std::time::Duration::from_millis(50));
     }
 
     #[tokio::test]

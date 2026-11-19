@@ -1896,6 +1896,42 @@ fn cache_reason_enum_matches_the_code() {
     assert_eq!(listed("reason"), CACHE_REASONS, "Cache.reason");
 }
 
+#[tokio::test]
+async fn gc_matches_contract_and_a_read_only_server_refuses_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    // No body: the configured limit, files deleted (there is nothing to delete).
+    let plain = checked(&router, "POST", "/gc", "/gc", 200).await;
+    assert_eq!(plain["dry_run"], false);
+    let (status, dry) = checked_json(
+        &router,
+        "POST",
+        "/gc",
+        "/gc",
+        json!({"dry_run": true, "max_size": "1GB", "env": null}),
+    )
+    .await;
+    assert_eq!(status, 200, "{dry}");
+    assert_eq!(dry["dry_run"], true);
+    assert_eq!(dry["limit_bytes"], 1_000_000_000u64);
+    for (body, says) in [
+        (json!({"max_size": "lots"}), "max_size"),
+        (json!({"env": "elsewhere"}), "serves environment"),
+    ] {
+        let (status, refused) = checked_json(&router, "POST", "/gc", "/gc", body).await;
+        assert_eq!(status, 400, "{refused}");
+        assert!(
+            refused["error"].as_str().unwrap().contains(says),
+            "{refused}"
+        );
+    }
+    checked(&router, "GET", "/gc", "/gc", 405).await;
+
+    let read_only = app(config(dir.path(), true));
+    let refused = checked(&read_only, "POST", "/gc", "/gc", 403).await;
+    assert!(refused["error"].as_str().unwrap().contains("read-only"));
+}
+
 /// `request_json`, with the status and body checked against the contract's operation.
 async fn checked_json(
     router: &Router,

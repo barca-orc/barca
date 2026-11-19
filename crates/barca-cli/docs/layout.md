@@ -13,7 +13,7 @@ what a run records while it goes and after it is killed, and what an upgrade rec
 .barca/backups/                             with a store: the five newest backups of the metadata DB (`barca docs remote`)
 ```
 
-Every other entry barca writes under `.barca/` (locks, `run-owners/`, `staging/`, `sql-cache/`,
+Every other entry barca writes under `.barca/` (locks, `serve.sock`, `run-owners/`, `staging/`, `sql-cache/`,
 `range-cache/`, `live-logs/`, `branches/`, `inspection-cache/`, `auth/`, `gc-state.json`, the
 files `state restore` and `state reset` move aside, a batched call's `.batch-*` directory), who
 owns it, when it is removed and whether `barca gc` evicts it or the size budget counts it, is the
@@ -50,9 +50,19 @@ Several barca processes can run in one project at once (parallel scripts or agen
 alongside the CLI). The metadata DB is a single-file database that one process opens at a time,
 so each process holds a short lock on it (`.barca/metadata.db.lock`) only while it reads or
 writes, and releases it while your Python runs. Processes queue instead of failing. If a
-process waits more than 60 seconds for the lock you get an error that names the lock file;
+process waits more than 60 seconds for the lock you get an error that names the lock file and
+the process holding it at that moment (`held now by pid 4312 (barca serve ...)`, read from the
+kernel's lock table on Linux; elsewhere the error says the holder could not be named);
 an `... File is locked by another process` error means something outside barca (a DB browser, a
 backup tool, an older barca) has `.barca/metadata.db` open.
+
+A command typed in a project where `barca serve` is running does not queue on that lock: it
+finds the server by its socket, `.barca/serve.sock`, and the server does the work (`get` and
+`run` join its queue, `gc` runs inside it; `barca docs server-mode`, "In the server's own
+project"). `--local` runs the command in its own process, and then it waits on the lock like
+any second process. `BARCA_TRACE_TIMING=1` prints, at the end of a `get` or `run`, how often the
+process had to wait for the lock, for how long in total and at most:
+`[trace] metadata db opens 14, lock waits 2 (total 31.5ms, longest 20.1ms)`.
 
 If a required database write fails, the command reports an infrastructure error (exit 3) and
 records no new outcome; what was already recorded stays. With an artifact store, a refresh in

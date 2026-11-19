@@ -2,7 +2,8 @@
 
 ## Scope and status
 
-Specification version: 3. Status: implemented in 0.36.0.
+Specification version: 4. Status: implemented in 0.36.0; the project socket rule approved
+2026-11-19 (#1056) and implemented.
 Scope: token storage, bootstrap, request authentication, administration and browser access.
 Stream cursor resume follows the implemented [event replay owner](server-event-replay.md).
 Exact HTTP shapes belong to [OpenAPI](../interfaces/server-api.openapi.yaml); client
@@ -32,6 +33,14 @@ separate from backed-up metadata. It has a version and owner-only directory/file
 - Token mode authenticates every API method before route handling or ETag computation.
   Only exact static UI reads, `GET /auth/status` and the credential-bearing bootstrap
   exchange are public. Cookies, method overrides and unknown UI paths grant no access.
+- The project socket ([execution](execution.md#a-command-beside-a-server)) is outside token
+  authentication. Its file is owner-only (mode `0600`): it is bound inside a private (`0700`)
+  directory, restricted, then renamed into place, so no other user can connect before the
+  restriction applies. A request that arrives over it is authorized in every auth mode with no
+  `Authorization` header, token administration included, and what records an actor records
+  `project-socket`. The reason: whoever can open the socket can already write the metadata
+  database and read `.barca/auth/` beside it, and can mint a credential with
+  `barca tokens bootstrap`. The TCP listener is unaffected.
 - Each operation locks and reloads auth state. Mutations persist through atomic replacement
   and file/directory sync before acknowledgement. Validation never records last-used state.
 - Local revocation notifies open SSE responses; idle responses also revalidate at one-second
@@ -63,6 +72,9 @@ accepted tradeoff; untrusted projects require separate origins.
 - **INV-AUTH-SEPARATION:** metadata backup/restore cannot create or resurrect a credential.
   Project authentication is independent of the active metadata environment.
 
+- **INV-AUTH-SOCKET:** no token is asked on the project socket, and nothing but the socket's
+  own file permission admits a request to it; a request over TCP never gains this exemption.
+
 ## Failures and recovery
 
 Malformed, unreadable or unknown-version state fails closed. Token mode startup fails if
@@ -85,6 +97,11 @@ revocation. [Credential tests](../../ui/src/lib/credentials.test.ts) check scope
 redirect refusal and storage failures; [stream tests](../../ui/src/lib/eventStream.test.ts)
 check incremental decoding, abort and terminal authentication failure. These do not prove
 TLS deployment or immunity to same-origin scripts.
+[Project socket tests](../../python/tests/test_project_socket.py)
+(`test_the_socket_needs_no_token_when_tokens_are_on`) run a token-mode server: its TCP address
+answers 401 without a token while a command in the project is served over the socket, and
+[the socket file](../../crates/barca-server/src/project_socket.rs) is checked to be `0600`. A
+second local user being refused by the kernel is not exercised.
 
 ## Open questions and gaps
 

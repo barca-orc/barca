@@ -230,7 +230,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "get --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "run --server",
@@ -238,7 +238,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "run --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "status --server",
@@ -246,7 +246,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "status --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "list --server",
@@ -254,7 +254,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "list --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "history --server",
@@ -262,7 +262,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "history --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "stats --server",
@@ -270,7 +270,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "stats --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "logs --server",
@@ -278,7 +278,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "logs --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "sql --server",
@@ -286,7 +286,7 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
     ),
     (
         "sql --local",
-        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql)",
+        "server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock)",
     ),
     (
         "logs --follow",

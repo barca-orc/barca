@@ -573,7 +573,14 @@ async fn execute_started(
     // produced, read or returns is never evicted.
     executed.result.cache = crate::gc::after_command(cfg, &own, pin.as_ref()).await;
     if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
-        crate::errln!("[trace] metadata db opens {}", db::opens());
+        let waits = db::lock_waits();
+        crate::errln!(
+            "[trace] metadata db opens {}, lock waits {} (total {:.1}ms, longest {:.1}ms)",
+            db::opens(),
+            waits.waits,
+            waits.total.as_secs_f64() * 1000.0,
+            waits.longest.as_secs_f64() * 1000.0
+        );
         trace_resources();
     }
     Ok(executed)

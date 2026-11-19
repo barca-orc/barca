@@ -148,7 +148,8 @@ none of its own (a fresh machine taking over), it takes the newest and names who
   A copy that fails names the next newest (`barca state restore --from 3`).
 - A copy written by a newer barca in a format this one cannot use: exit 2; upgrade.
 - `barca serve` running on this environment (it holds `.barca/serve.lock`): exit 3, naming the
-  server's pid, host and address; stop it first.
+  server's pid, host and address; stop it first. This is checked by the lock, not by the
+  server's socket, and `--local` does not apply to it.
 
 To undo a restore, with no barca command running, put the kept file back:
 

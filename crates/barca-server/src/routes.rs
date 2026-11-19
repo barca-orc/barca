@@ -3,7 +3,7 @@
 //! routes rather than in front of them, so API paths stay what the contract says.
 
 use crate::state::AppState;
-use crate::{asset_pauses, handlers, inspect, ledger, pause, pins, queue, reset, runs, ui};
+use crate::{asset_pauses, gc, handlers, inspect, ledger, pause, pins, queue, reset, runs, ui};
 use axum::Router;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -87,6 +87,8 @@ pub fn router(state: AppState) -> Router {
         )
         // Start the metadata database over (the old one is moved aside, never deleted).
         .route("/state/reset", post(reset::reset))
+        // `barca gc`, run by the server between its own writes.
+        .route("/gc", post(gc::gc))
         // A schedule id is a node id: percent-encode a `/` in it.
         .route("/schedule/{id}/pause", post(pause::pause))
         .route("/schedule/{id}/resume", post(pause::resume))

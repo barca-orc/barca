@@ -29,6 +29,17 @@ pub fn env_local_paths(env: &str) -> LocalPaths {
     }
 }
 
+/// The file name of the Unix socket `barca serve` listens on, beside its environment's metadata
+/// database (`specs/interfaces/dot-barca-layout.md`).
+pub const SERVE_SOCKET: &str = "serve.sock";
+
+/// Where the server that owns the database at `db_path` listens: `serve.sock` beside it.
+pub fn serve_socket_path(db_path: &str) -> PathBuf {
+    Path::new(db_path)
+        .parent()
+        .map_or_else(|| PathBuf::from(SERVE_SOCKET), |d| d.join(SERVE_SOCKET))
+}
+
 /// Create the `.barca` tree for an environment and return its paths.
 pub fn ensure_env_dirs(env: &str) -> Result<LocalPaths, BarcaError> {
     let paths = env_local_paths(env);

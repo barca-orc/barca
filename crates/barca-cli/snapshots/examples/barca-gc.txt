@@ -18,6 +18,12 @@ Options:
       --env <ENV>
           Use a separate cache and history for this environment
 
+      --server [<URL>]
+          Use a server (URL or configured); get/run execute its deployed code
+
+      --local
+          Run on this machine; ignore a configured server and this project's barca serve
+
   -h, --help
           Show concise command help
 
@@ -31,5 +37,7 @@ Examples:
   barca gc --max-size off         # only leftovers and superseded results, all of them
   barca gc --json                 # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}
   barca gc --env dev              # only the dev environment's results (leftovers are shared)
+  barca gc --local                # evict in this process, not in a barca serve running in this project
+  barca gc --server http://barca.internal:8274   # a server evicts its own cache (POST /gc)
 
 More: barca docs cache ("Disk use")

@@ -41,6 +41,7 @@ use std::time::Duration;
 
 mod doctor;
 mod follow;
+mod gc;
 mod inspect;
 mod ledger;
 mod logs;
@@ -52,6 +53,7 @@ mod tests;
 mod transport;
 
 pub(crate) use doctor::doctor_checks;
+pub(crate) use gc::gc;
 pub(crate) use inspect::{
     activity, history, list, partition_keys, pause, pause_schedule, queue, resume, rollup,
     run_detail, sql, stats, status,
@@ -113,7 +115,7 @@ const RECONNECT_PAUSE: Duration = Duration::from_millis(500);
 /// The commands that take `--server` and `--local`.
 pub(crate) const SERVER_COMMANDS: &[&str] = &[
     "get", "run", "status", "list", "history", "stats", "logs", "sql", "doctor", "queue", "pause",
-    "resume", "cancel",
+    "resume", "cancel", "gc", "pin", "unpin",
 ];
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the
@@ -166,6 +168,48 @@ pub(crate) fn configured(flags: &ServerFlags) -> Result<Option<Server>, CliError
     Server::new(url, Some(source), true).map(Some)
 }
 
+/// How long the project's server gets to answer `GET /health` before a command runs on this
+/// machine instead.
+const PROJECT_SERVER_ANSWER: Duration = Duration::from_secs(5);
+
+/// The `barca serve` running in this project, for a command that named no server and did not
+/// say `--local`: its socket beside the metadata database of the environment the command
+/// uses (`.barca/serve.sock`). `None` when there is no socket file (the usual case, one or two
+/// `stat` calls and nothing else) or when nothing listens on it (a killed server's: ignored).
+/// Call from the project root.
+pub(crate) fn project_server(flags: &ServerFlags, env: Option<&str>) -> Option<Server> {
+    if flags.local || flags.server.is_some() {
+        return None;
+    }
+    // A command a step starts (`barca.get()` inside a task) runs in that step's process, as it
+    // did before the socket. Sent to the server that is executing the step, it would wait for
+    // a run slot its own caller holds.
+    if std::env::var_os("BARCA_WORKER").is_some() {
+        return None;
+    }
+    let path = barca_core::config::project_server_socket(env)?;
+    #[cfg(unix)]
+    {
+        // A socket nobody listens on refuses the connection at once.
+        std::os::unix::net::UnixStream::connect(&path).ok()?;
+        let http = transport::Http::over_socket(&path, REQUEST_TIMEOUT).ok()?;
+        Some(Server {
+            shown_url: http.shown_url().into(),
+            url: "http://localhost".to_string(),
+            http,
+            source: None,
+            // Its answers are this machine's own records: nothing of "here" is added to them.
+            implicit: false,
+            project: true,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// Rewrite argv so that `--server` followed by something that is not a URL (a target, a file,
 /// another flag) is bare `--server`: `barca get --server total` means the configured server and
 /// the target `total`, not a server named `total`. A word with `://` is taken as a URL, so a
@@ -204,8 +248,8 @@ pub(crate) fn refuse_on_local_commands(args: &[String]) -> Option<CliError> {
         ErrorKind::Usage,
         format!(
             "error: `barca {sub}` always runs on this machine; it does not take {flag}\n\
-             --server and --local apply to get, run, status, list, history, stats, logs, sql \
-             and doctor (barca docs server-mode)."
+             --server and --local apply to get, run, status, list, history, stats, logs, sql, \
+             queue, pause, resume, cancel, pin, unpin, gc and doctor (barca docs server-mode)."
         ),
     ))
 }
@@ -223,6 +267,8 @@ pub(crate) struct Server {
     source: Option<ServerSource>,
     /// Used because it is configured, without `--server`: errors point at `--local`.
     implicit: bool,
+    /// This project's own `barca serve`, reached over its socket ([`project_server`]).
+    project: bool,
 }
 
 /// Why a request got no answer, in a few words (the URL is named by the caller).
@@ -265,12 +311,39 @@ impl Server {
             http,
             source,
             implicit,
+            project: false,
         })
+    }
+
+    /// Whether this project's server answers (`GET /health`) within
+    /// [`PROJECT_SERVER_ANSWER`]; the error says why not, in a few words.
+    pub(crate) async fn answers(&self) -> Result<(), String> {
+        let request = self
+            .http
+            .request(reqwest::Method::GET, "/health")
+            .map_err(|e| e.error)?
+            .timeout(PROJECT_SERVER_ANSWER);
+        match request.send().await {
+            Ok(response) if response.status().is_success() => Ok(()),
+            Ok(response) => Err(format!("GET /health answered HTTP {}", response.status())),
+            Err(e) => Err(transport_reason(&e)),
+        }
+    }
+
+    /// The server's URL, or its socket's path, as printed.
+    pub(crate) fn shown(&self) -> &str {
+        &self.shown_url
     }
 
     /// `[barca] server <url> (<source>)`, once per command, for a server the command line did
     /// not name.
     pub(crate) fn announce(&self) {
+        if self.project {
+            barca_core::errln!(
+                "[barca] server {} (this project's barca serve; --local runs on this machine)",
+                self.shown_url
+            );
+        }
         if let Some(source) = self.source {
             barca_core::errln!("[barca] server {} ({})", self.shown_url, source.describe());
         }
@@ -284,7 +357,9 @@ impl Server {
 
     /// The remediation of an error that leaves the server unused.
     fn instead(&self) -> &'static str {
-        if self.implicit {
+        if self.project {
+            "To run the command on this machine instead of this project's server, pass --local."
+        } else if self.implicit {
             "To use this machine's own records instead, pass --local."
         } else {
             "To run on this machine instead, pass --local instead of --server."
@@ -344,6 +419,14 @@ impl Server {
     fn refusal(&self, status: reqwest::StatusCode, body: &[u8], what: &str) -> CliError {
         let body = self.http.error_body(body);
         match serde_json::from_slice::<ErrorEnvelope>(&body) {
+            // This project's server refuses the write (it is read-only): the command was
+            // sent to it without being asked to, so say how to run it here.
+            Ok(envelope) if self.project && status == reqwest::StatusCode::FORBIDDEN => {
+                CliError::from_prose(
+                    ErrorKind::Usage,
+                    format!("error: {}\n{}", envelope.error, self.instead()),
+                )
+            }
             Ok(envelope) => envelope,
             Err(_) => {
                 let text = String::from_utf8_lossy(&body);

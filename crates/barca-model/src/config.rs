@@ -1219,6 +1219,32 @@ fn configured_server_with(
     Ok(url.map(|u| (u, ServerSource::Toml)))
 }
 
+/// The socket of a `barca serve` running in this project (the cwd is its root), for the
+/// environment a command with `--env cli_env` would use, when the file exists. With no server
+/// this costs one `stat` when the environment is named (`--env`, `BARCA_ENV`), and two when it
+/// is not (`.barca/envs`, which only a project with a named environment has, then the socket):
+/// barca.toml's `default_env` is read only in a project that has named environments.
+pub fn project_server_socket(cli_env: Option<&str>) -> Option<PathBuf> {
+    let named = match cli_env {
+        Some(env) => Some(env.to_string()),
+        None => Vars::Process.get("BARCA_ENV"),
+    };
+    let env = match named {
+        Some(env) => env,
+        None if !Path::new(".barca").join("envs").is_dir() => DEFAULT_ENV.to_string(),
+        None => load_toml(Path::new("."))
+            .ok()
+            .flatten()
+            .and_then(|t| t.default_env)
+            .unwrap_or_else(|| DEFAULT_ENV.to_string()),
+    };
+    if !valid_env_name(&env) {
+        return None;
+    }
+    let socket = crate::layout::serve_socket_path(&crate::layout::env_local_paths(&env).db_path);
+    std::fs::symlink_metadata(&socket).is_ok().then_some(socket)
+}
+
 /// A server URL as barca uses it: `http://` or `https://`, without a trailing `/` (a proxy
 /// prefix such as `https://host/barca` is kept). `what` names where it came from, for the error.
 pub fn check_server_url(url: &str, what: &str) -> Result<String, BarcaError> {

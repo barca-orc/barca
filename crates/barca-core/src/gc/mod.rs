@@ -645,7 +645,7 @@ fn outside_kind(barca: &Path, path: &Path) -> Held {
     match name.strip_prefix("metadata.db") {
         Some(rest) if rest.contains(".reset-") || rest.contains(".pre-restore") => Held::DbCopies,
         Some(_) => Held::Metadata,
-        None if name == "serve.lock" => Held::Metadata,
+        None if name == "serve.lock" || name == "serve.sock" => Held::Metadata,
         None => Held::Other,
     }
 }
