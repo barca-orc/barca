@@ -1,0 +1,858 @@
+{
+  "5c4ed0001445": {
+    "attempts": 1,
+    "cancellation": null,
+    "client_run_id": null,
+    "command": "get",
+    "elapsed_seconds": 0.5,
+    "error": null,
+    "explanation": {
+      "attempts": "1 attempt: one per step, none retried",
+      "cancellation": null,
+      "counts": {
+        "attempts": 1,
+        "attempts_line": "1 attempt: one per step, none retried",
+        "cached": 0,
+        "failed": 0,
+        "nodes": 1,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": 0,
+        "ok": 1,
+        "outcome": "1 ok · 0 cached",
+        "planned": "1 step planned over 1 node",
+        "ran": 1,
+        "retries": 0,
+        "steps": 1,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [
+        {
+          "format": "json",
+          "keys": null,
+          "line": "orders_feed  json · 82 B",
+          "node_id": "orders.py:orders_feed",
+          "path": ".barca/artifacts/orders.py--orders_feed/0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495.json",
+          "rows": null,
+          "size_bytes": 82
+        }
+      ],
+      "progress": null,
+      "requested_by": "schedule",
+      "slowest": [
+        {
+          "keys": 1,
+          "node_id": "orders.py:orders_feed",
+          "seconds": 0.4
+        }
+      ],
+      "steps": "1 ok · 0 cached",
+      "target_line": "orders_feed",
+      "target_outcomes": [
+        "orders_feed ran"
+      ],
+      "targets": [
+        "orders.py:orders_feed"
+      ],
+      "why": {
+        "groups": [
+          {
+            "category": "sensor",
+            "label": "sensors (always run)",
+            "rows": [
+              {
+                "counts": "1 node",
+                "example": "orders.py:orders_feed",
+                "example_text": "orders_feed",
+                "line": "1 node: orders_feed",
+                "nodes": 1,
+                "share": 1.0,
+                "steps": 1,
+                "subject": null
+              }
+            ],
+            "steps": 1
+          }
+        ],
+        "headline": "1 step ran: 1 sensor (always runs)",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "failure": null,
+    "files": [
+      "orders.py"
+    ],
+    "finished_at": "2026-11-17T14:45:00.000Z",
+    "job": "orders.py:orders_feed",
+    "logs": [],
+    "outcome": null,
+    "plan_reasons": {
+      "nodes": 1,
+      "omitted": 0,
+      "reasons": [
+        {
+          "category": "sensor",
+          "example": "orders.py:orders_feed",
+          "nodes": 1,
+          "steps": 1,
+          "subject": null
+        }
+      ],
+      "steps": 1
+    },
+    "principal": null,
+    "retries": 0,
+    "run_id": "5c4ed0001445",
+    "schedule_id": "orders.py:orders_feed",
+    "scheduled_at": "2026-11-17T14:45:00Z",
+    "started_at": "2026-11-17T14:45:00.000Z",
+    "status": "success",
+    "steps": [
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--orders_feed/0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 0.4,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:orders_feed",
+        "output_tail": null,
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      }
+    ],
+    "steps_cached": 0,
+    "steps_executed": 1,
+    "steps_page": {
+      "nodes": [
+        {
+          "calls": 0,
+          "elapsed_seconds": 0.4,
+          "failed": 0,
+          "keys": 1,
+          "node_id": "orders.py:orders_feed",
+          "status": "ran"
+        }
+      ],
+      "total": 1,
+      "truncated": false
+    },
+    "steps_total": 1,
+    "target": "orders_feed",
+    "trigger_reason": null,
+    "triggered_by": "schedule",
+    "waiting_for": null
+  },
+  "a1f0c0000001": {
+    "attempts": 9,
+    "cancellation": null,
+    "client_run_id": null,
+    "command": "get",
+    "elapsed_seconds": 42.3,
+    "error": null,
+    "explanation": {
+      "attempts": "9 attempts: one per step, none retried",
+      "cancellation": null,
+      "counts": {
+        "attempts": 9,
+        "attempts_line": "9 attempts: one per step, none retried",
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 9,
+        "outcome": "9 ok · 0 cached",
+        "planned": "9 steps planned",
+        "ran": 9,
+        "retries": 0,
+        "steps": 9,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "manual",
+      "slowest": [
+        {
+          "keys": 1,
+          "node_id": "orders.py:revenue_hourly",
+          "seconds": 8.0
+        },
+        {
+          "keys": 3,
+          "node_id": "orders.py:sales_by_day",
+          "seconds": 7.5
+        },
+        {
+          "keys": 1,
+          "node_id": "orders.py:orders_enriched",
+          "seconds": 6.0
+        },
+        {
+          "keys": 1,
+          "node_id": "orders.py:orders",
+          "seconds": 3.2
+        },
+        {
+          "keys": 1,
+          "node_id": "orders.py:customers",
+          "seconds": 1.1
+        }
+      ],
+      "steps": "9 ok · 0 cached",
+      "target_line": "all assets",
+      "target_outcomes": [],
+      "targets": [],
+      "why": {
+        "groups": [
+          {
+            "category": "never_run",
+            "label": "never run",
+            "rows": [
+              {
+                "counts": "9 steps of 7 nodes",
+                "example": "orders.py:customers",
+                "example_text": "e.g. customers",
+                "line": "9 steps of 7 nodes, e.g. customers",
+                "nodes": 7,
+                "share": 1.0,
+                "steps": 9,
+                "subject": null
+              }
+            ],
+            "steps": 9
+          }
+        ],
+        "headline": "9 steps ran: 9 never run",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "failure": null,
+    "files": [
+      "orders.py"
+    ],
+    "finished_at": "2026-11-16T09:00:42.000Z",
+    "job": "all",
+    "logs": [],
+    "outcome": null,
+    "plan_reasons": {
+      "nodes": 7,
+      "omitted": 0,
+      "reasons": [
+        {
+          "category": "never_run",
+          "example": "orders.py:customers",
+          "nodes": 7,
+          "steps": 9,
+          "subject": null
+        }
+      ],
+      "steps": 9
+    },
+    "principal": null,
+    "retries": 0,
+    "run_id": "a1f0c0000001",
+    "schedule_id": null,
+    "scheduled_at": null,
+    "started_at": "2026-11-16T09:00:00.000Z",
+    "status": "success",
+    "steps": [
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--orders_feed/0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 0.4,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:orders_feed",
+        "output_tail": null,
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--orders/daebb2a2f927f91315cc16f36f7d6c40add56340ef4c26dd5a03308083ff1a63.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 3.2,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:orders",
+        "output_tail": null,
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "daebb2a2f927f91315cc16f36f7d6c40add56340ef4c26dd5a03308083ff1a63",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--customers/e9c6a64621e09f7457c6fe3d093c6c8b5ea81b9afda32c7a8bf8143ae32bee5a.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 1.1,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:customers",
+        "output_tail": null,
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "e9c6a64621e09f7457c6fe3d093c6c8b5ea81b9afda32c7a8bf8143ae32bee5a",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--fx_rates/56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 0.6,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:fx_rates",
+        "output_tail": null,
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--orders_enriched/0000000000000000000000000000000000000000000000000000000000000025.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 6.0,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:orders_enriched",
+        "output_tail": null,
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "0000000000000000000000000000000000000000000000000000000000000025",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--revenue_hourly/0000000000000000000000000000000000000000000000000000000000000024.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 8.0,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:revenue_hourly",
+        "output_tail": null,
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "0000000000000000000000000000000000000000000000000000000000000024",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--sales_by_day_day_2026-11-13/a88124dc31c87a73f37f248f63711e6a28c0d1e129e9586e7b0059f901f892c7.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 2.5,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:sales_by_day[day=2026-11-13]",
+        "output_tail": null,
+        "partition_key": "day=2026-11-13",
+        "rows": null,
+        "run_hash": "a88124dc31c87a73f37f248f63711e6a28c0d1e129e9586e7b0059f901f892c7",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--sales_by_day_day_2026-11-14/48d021d7c62d32c2c6cfa41b2fda06e1df901c1eba4a3b5c596708229265dd79.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 2.5,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:sales_by_day[day=2026-11-14]",
+        "output_tail": null,
+        "partition_key": "day=2026-11-14",
+        "rows": null,
+        "run_hash": "48d021d7c62d32c2c6cfa41b2fda06e1df901c1eba4a3b5c596708229265dd79",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      },
+      {
+        "artifact_format": "json",
+        "artifact_path": ".barca/artifacts/orders.py--sales_by_day_day_2026-11-15/3a8bce32e8965757bc9a3c6d62393a526110e012f2ba3165febb3694ca86e9e9.json",
+        "artifact_size_bytes": 82,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 2.5,
+        "error": null,
+        "error_message": null,
+        "error_phase": null,
+        "error_traceback": null,
+        "error_type": null,
+        "max_rss_bytes": null,
+        "node_id": "orders.py:sales_by_day[day=2026-11-15]",
+        "output_tail": null,
+        "partition_key": "day=2026-11-15",
+        "rows": null,
+        "run_hash": "3a8bce32e8965757bc9a3c6d62393a526110e012f2ba3165febb3694ca86e9e9",
+        "sink_seconds": null,
+        "status": "success",
+        "worker_exit": null
+      }
+    ],
+    "steps_cached": 0,
+    "steps_executed": 9,
+    "steps_page": {
+      "nodes": [
+        {
+          "calls": 0,
+          "elapsed_seconds": 0.4,
+          "failed": 0,
+          "keys": 1,
+          "node_id": "orders.py:orders_feed"
+        },
+        {
+          "calls": 0,
+          "elapsed_seconds": 3.2,
+          "failed": 0,
+          "keys": 1,
+          "node_id": "orders.py:orders"
+        },
+        {
+          "calls": 0,
+          "elapsed_seconds": 1.1,
+          "failed": 0,
+          "keys": 1,
+          "node_id": "orders.py:customers"
+        },
+        {
+          "calls": 0,
+          "elapsed_seconds": 0.6,
+          "failed": 0,
+          "keys": 1,
+          "node_id": "orders.py:fx_rates"
+        },
+        {
+          "calls": 0,
+          "elapsed_seconds": 6.0,
+          "failed": 0,
+          "keys": 1,
+          "node_id": "orders.py:orders_enriched"
+        },
+        {
+          "calls": 0,
+          "elapsed_seconds": 8.0,
+          "failed": 0,
+          "keys": 1,
+          "node_id": "orders.py:revenue_hourly"
+        },
+        {
+          "calls": 0,
+          "elapsed_seconds": 7.5,
+          "failed": 0,
+          "keys": 3,
+          "node_id": "orders.py:sales_by_day"
+        }
+      ],
+      "total": 9,
+      "truncated": false
+    },
+    "steps_total": 9,
+    "target": null,
+    "trigger_reason": null,
+    "triggered_by": "manual",
+    "waiting_for": null
+  },
+  "a1f0c0000005": {
+    "attempts": 1,
+    "cancellation": null,
+    "client_run_id": null,
+    "command": "get",
+    "elapsed_seconds": 0.9,
+    "error": "ValueError: 3 rows with a negative total",
+    "explanation": {
+      "attempts": "1 attempt: one per step, none retried",
+      "cancellation": null,
+      "counts": {
+        "attempts": 1,
+        "attempts_line": "1 attempt: one per step, none retried",
+        "cached": 0,
+        "failed": 1,
+        "nodes": 2,
+        "not_reached": 1,
+        "not_reached_line": "1 step not reached, 1 node never started: invoice_totals",
+        "not_reached_nodes": 1,
+        "ok": 0,
+        "outcome": "0 ok · 1 failed · 0 cached · 1 not reached",
+        "planned": "2 steps planned over 2 nodes",
+        "ran": 1,
+        "retries": 0,
+        "steps": 2,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "api · token:ci-bot",
+      "slowest": [
+        {
+          "keys": 1,
+          "node_id": "billing.py:invoices",
+          "seconds": 0.3
+        }
+      ],
+      "steps": "0 ok · 1 failed · 0 cached · 1 not reached",
+      "target_line": "invoice_totals",
+      "target_outcomes": [
+        "invoice_totals did not run: upstream invoices failed"
+      ],
+      "targets": [
+        "billing.py:invoice_totals"
+      ],
+      "why": {
+        "groups": [
+          {
+            "category": "refresh",
+            "label": "named in --refresh",
+            "rows": [
+              {
+                "counts": "1 node",
+                "example": "billing.py:invoices",
+                "example_text": "invoices",
+                "line": "1 node: invoices",
+                "nodes": 1,
+                "share": 1.0,
+                "steps": 1,
+                "subject": null
+              }
+            ],
+            "steps": 1
+          }
+        ],
+        "headline": "1 step ran: 1 named in --refresh",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "failure": {
+      "error": "ValueError: 3 rows with a negative total",
+      "node": "billing.py:invoices"
+    },
+    "files": [
+      "billing.py"
+    ],
+    "finished_at": "2026-11-17T13:55:00.000Z",
+    "job": "billing.py:invoice_totals",
+    "logs": [
+      {
+        "line": "reading 12,408 invoices",
+        "node_id": "billing.py:invoices",
+        "seq": 0,
+        "stream": "stdout",
+        "ts": "2026-11-17T13:55:01Z"
+      },
+      {
+        "line": "3 rows with a negative total",
+        "node_id": "billing.py:invoices",
+        "seq": 1,
+        "stream": "stderr",
+        "ts": "2026-11-17T13:55:01Z"
+      }
+    ],
+    "outcome": null,
+    "plan_reasons": {
+      "nodes": 1,
+      "omitted": 0,
+      "reasons": [
+        {
+          "category": "refresh",
+          "example": "billing.py:invoices",
+          "nodes": 1,
+          "steps": 1,
+          "subject": null
+        }
+      ],
+      "steps": 1
+    },
+    "principal": "token:ci-bot",
+    "retries": 0,
+    "run_id": "a1f0c0000005",
+    "schedule_id": null,
+    "scheduled_at": null,
+    "started_at": "2026-11-17T13:55:00.000Z",
+    "status": "failed",
+    "steps": [
+      {
+        "artifact_format": null,
+        "artifact_path": null,
+        "artifact_size_bytes": null,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 0.3,
+        "error": "ValueError: 3 rows with a negative total",
+        "error_message": "3 rows with a negative total",
+        "error_phase": "user_code",
+        "error_traceback": "ValueError: 3 rows with a negative total\n  File \"billing.py\", line 11, in invoices",
+        "error_type": "ValueError",
+        "max_rss_bytes": null,
+        "node_id": "billing.py:invoices",
+        "output_tail": [
+          "reading 12,408 invoices",
+          "3 rows with a negative total"
+        ],
+        "partition_key": null,
+        "rows": null,
+        "run_hash": "1ff289ee4b8708472ccf237ef27a400ccfad5a1a843f7252a120e63e12800349",
+        "sink_seconds": null,
+        "status": "failed",
+        "worker_exit": null
+      }
+    ],
+    "steps_cached": 0,
+    "steps_executed": 1,
+    "steps_page": {
+      "nodes": [
+        {
+          "calls": 0,
+          "elapsed_seconds": 0.3,
+          "failed": 1,
+          "keys": 1,
+          "node_id": "billing.py:invoices",
+          "status": "ran"
+        },
+        {
+          "blocked_by": "billing.py:invoices",
+          "calls": 0,
+          "elapsed_seconds": 0.0,
+          "failed": 0,
+          "keys": 0,
+          "node_id": "billing.py:invoice_totals",
+          "status": "skipped"
+        }
+      ],
+      "total": 1,
+      "truncated": false
+    },
+    "steps_total": 2,
+    "target": "invoice_totals",
+    "trigger_reason": null,
+    "triggered_by": "api",
+    "waiting_for": null
+  },
+  "a1f0c0000006": {
+    "attempts": 1,
+    "cancellation": null,
+    "client_run_id": null,
+    "command": "get",
+    "elapsed_seconds": 0.7,
+    "error": "KeyError: 'units'",
+    "explanation": {
+      "attempts": "1 attempt: one per step, none retried",
+      "cancellation": null,
+      "counts": {
+        "attempts": 1,
+        "attempts_line": "1 attempt: one per step, none retried",
+        "cached": 0,
+        "failed": 1,
+        "nodes": null,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 0,
+        "outcome": "0 ok · 1 failed · 0 cached",
+        "planned": "1 step planned",
+        "ran": 1,
+        "retries": 0,
+        "steps": 1,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "manual",
+      "slowest": [
+        {
+          "keys": 1,
+          "node_id": "orders.py:sales_by_day[day=2026-11-16]",
+          "seconds": 0.3
+        }
+      ],
+      "steps": "0 ok · 1 failed · 0 cached",
+      "target_line": "sales_by_day",
+      "target_outcomes": [],
+      "targets": [
+        "orders.py:sales_by_day"
+      ],
+      "why": {
+        "groups": [
+          {
+            "category": "never_run",
+            "label": "never run",
+            "rows": [
+              {
+                "counts": "1 node",
+                "example": "orders.py:sales_by_day",
+                "example_text": "sales_by_day",
+                "line": "1 node: sales_by_day",
+                "nodes": 1,
+                "share": 1.0,
+                "steps": 1,
+                "subject": null
+              }
+            ],
+            "steps": 1
+          }
+        ],
+        "headline": "1 step ran: 1 never run",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "failure": {
+      "error": "KeyError: 'units'",
+      "node": "orders.py:sales_by_day[day=2026-11-16]"
+    },
+    "files": [
+      "orders.py"
+    ],
+    "finished_at": "2026-11-17T02:00:00.000Z",
+    "job": "orders.py:sales_by_day",
+    "logs": [],
+    "outcome": null,
+    "plan_reasons": {
+      "nodes": 1,
+      "omitted": 0,
+      "reasons": [
+        {
+          "category": "never_run",
+          "example": "orders.py:sales_by_day",
+          "nodes": 1,
+          "steps": 1,
+          "subject": null
+        }
+      ],
+      "steps": 1
+    },
+    "principal": null,
+    "retries": 0,
+    "run_id": "a1f0c0000006",
+    "schedule_id": null,
+    "scheduled_at": null,
+    "started_at": "2026-11-17T02:00:00.000Z",
+    "status": "failed",
+    "steps": [
+      {
+        "artifact_format": null,
+        "artifact_path": null,
+        "artifact_size_bytes": null,
+        "attempts": 1,
+        "batch": null,
+        "cpu_seconds": null,
+        "elapsed_seconds": 0.3,
+        "error": "KeyError: 'units'",
+        "error_message": "'units'",
+        "error_phase": "user_code",
+        "error_traceback": "KeyError: 'units'\n  File \"orders.py\", line 48, in sales_by_day",
+        "error_type": "KeyError",
+        "max_rss_bytes": null,
+        "node_id": "orders.py:sales_by_day[day=2026-11-16]",
+        "output_tail": [],
+        "partition_key": "day=2026-11-16",
+        "rows": null,
+        "run_hash": "d987a38729c233bdb645b85bd8fe6e3f8f7c7916dae3275678bcdb1dc1d82e0f",
+        "sink_seconds": null,
+        "status": "failed",
+        "worker_exit": null
+      }
+    ],
+    "steps_cached": 0,
+    "steps_executed": 1,
+    "steps_page": {
+      "total": 1,
+      "truncated": false
+    },
+    "steps_total": 1,
+    "target": "sales_by_day",
+    "trigger_reason": null,
+    "triggered_by": "manual",
+    "waiting_for": null
+  }
+}
