@@ -18,6 +18,9 @@ use crate::targets::{refresh_name_matches, short_name};
 use crate::{Freshness, NodeKind};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+mod planned;
+pub(crate) use planned::{Planned, pin_manual};
+
 /// `Schedule(cron)` without `max_failures=`: consecutive failed ticks before the schedule is
 /// skipped and reported `failing`.
 pub(crate) const DEFAULT_MAX_FAILURES: u32 = 5;

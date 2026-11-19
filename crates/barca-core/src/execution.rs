@@ -1,36 +1,37 @@
 //! Run preparation, phase dispatch, and finalization.
 use crate::BarcaError;
 use crate::cache::{
-    BLOCKED_ARTIFACT_PATH, CachePolicy, DecideState, Decision, RunReason, decide_step,
-    has_sensor_output, in_dependency_order, localize_decision, sensor_inputs,
+    BLOCKED_ARTIFACT_PATH, CachePolicy, DecideState, Decision, decide_step, in_dependency_order,
+    localize_decision,
 };
+use crate::cache::{merge_partition_reports, report_for, stale_warning};
 use crate::dag::Dag;
 use crate::db;
 use crate::db::materializations::NewMaterialization;
 use crate::dispatch;
 use crate::dispatch::OutputRef;
+use crate::freshness::{Planned, pin_manual};
+use crate::model::kind_str;
 use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
 use crate::recover::{self, Work};
 use crate::report::{
     RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
-    fmt_eta, kind_str, merge_partition_reports, reconcile_total, report_for, stale_warning,
+    fmt_eta, reconcile_total,
 };
+use crate::sizing::{planned_weights, sizing_for, warn_over_capacity};
 use crate::step_status::StepStatus;
 use crate::targets::{
     blocking_failure, final_output_of, plan_for_targets, resolve_targets, short_name,
     skipped_tasks_note, target_outcomes, validate_refresh_names,
 };
-use crate::transfer::{ArtifactLayout, TransferClient};
+use crate::transfer::TransferClient;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 use crate::load::build_dag;
-use crate::results::{
-    ExplainResult, ExplainSummary, GetResult, MultiResult, StepReport, TargetOutcome,
-    TargetPrediction,
-};
+use crate::results::{GetResult, MultiResult, StepReport, TargetOutcome};
 
 use crate::persist::{
     BackupCheckpoints, RunLedger, StepRecorder, cancel_recorded_run, canonical_job, persist_run,
@@ -50,7 +51,6 @@ mod blocked;
 mod bookkeeping;
 mod finalize;
 mod phase;
-mod predict;
 mod prepare;
 mod republish;
 mod select;
@@ -59,7 +59,6 @@ use bookkeeping::{LedgerContext, RunEvidence, RunResults};
 use finalize::*;
 pub(crate) use phase::note;
 use phase::*;
-pub(crate) use predict::{HeldNodes, explain_dag, explain_dag_with_keys};
 use prepare::*;
 use select::*;
 pub(crate) use workers::upload_pending;
@@ -82,115 +81,6 @@ fn phase_step_count(phase: &Phase) -> usize {
             }
         })
         .sum()
-}
-
-/// The cores this process may use (`available_parallelism`), 4 when unknown.
-pub(crate) fn cores() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-}
-
-/// How many workers a run starts at most and the capacity their steps' `weight=` shares, each
-/// with where it came from (#436, #628).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Sizing {
-    pub pool_size: usize,
-    /// `BARCA_POOL_SIZE`, `[execution] pool_size`, `cores`, or the capacity that bounded the
-    /// cores (`[execution] capacity`, `BARCA_CAPACITY`, `[server] capacity`, `--capacity`).
-    pub pool_source: &'static str,
-    pub capacity: usize,
-    /// `BARCA_CAPACITY`, `[execution] capacity`, or `pool size`.
-    pub capacity_source: &'static str,
-}
-
-/// The pool size and capacity of a run.
-///
-/// Pool: `BARCA_POOL_SIZE` > `[execution] pool_size` > the cores, bounded by the capacity when
-/// one is set (`server`, the capacity a `barca serve` shares between its runs, bounds it too).
-/// Every step takes a weight of at least 1, so no more than `capacity` steps ever run at once:
-/// a worker past that would start, import the project and wait. Weights above 1 lower how
-/// many run at once further, but workers start only for steps the capacity admits, so the
-/// pool is not sized from them.
-///
-/// Capacity: `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
-pub fn sizing(
-    capacity: crate::config::CapacitySetting,
-    pool: crate::config::PoolSetting,
-    server: Option<(usize, &'static str)>,
-) -> Sizing {
-    sizing_with(capacity, pool, server, cores())
-}
-
-fn sizing_with(
-    capacity: crate::config::CapacitySetting,
-    pool: crate::config::PoolSetting,
-    server: Option<(usize, &'static str)>,
-    cores: usize,
-) -> Sizing {
-    let (pool_size, pool_source) = match pool {
-        Some((n, source)) => (n.max(1), source),
-        None => {
-            let bound = [capacity, server]
-                .into_iter()
-                .flatten()
-                .min_by_key(|(n, _)| *n);
-            match bound {
-                Some((n, source)) if n < cores => (n.max(1), source),
-                _ => (cores.max(1), "cores"),
-            }
-        }
-    };
-    let (capacity, capacity_source) = capacity.unwrap_or((pool_size, "pool size"));
-    Sizing {
-        pool_size,
-        pool_source,
-        capacity: capacity.max(1),
-        capacity_source,
-    }
-}
-
-/// [`sizing`] for a run with this configuration, under the capacity its host shares between
-/// its runs, when `barca serve` shares one.
-pub(crate) fn sizing_for(
-    cfg: &crate::config::ResolvedConfig,
-    host: &dyn crate::run_host::RunHost,
-) -> Sizing {
-    sizing(
-        cfg.capacity,
-        cfg.pool_size,
-        host.shared_capacity().map(|s| (s.total as usize, s.source)),
-    )
-}
-
-/// The planned nodes whose `weight=` is above 1, by node id.
-pub(crate) fn planned_weights(plan: &ExecutionPlan) -> std::collections::BTreeMap<String, u32> {
-    plan.phases
-        .iter()
-        .flat_map(|p| &p.streams)
-        .flat_map(|s| &s.steps)
-        .filter(|st| st.weight > 1)
-        .map(|st| (st.step_id.base_id().to_string(), st.weight))
-        .collect()
-}
-
-/// Warn, once per node, about each weight above the capacity: such a step runs alone, with
-/// nothing beside it, rather than never.
-pub(crate) fn warn_over_capacity(
-    weights: &std::collections::BTreeMap<String, u32>,
-    capacity: usize,
-    source: &str,
-) {
-    for (node, weight) in weights {
-        if *weight as usize > capacity {
-            crate::run_line!(
-                Always,
-                "[barca] warning: '{}' has weight={weight}, more than the capacity {capacity} \
-                 ({source}); it runs alone",
-                short_name(node)
-            );
-        }
-    }
 }
 
 /// What `execute` produced: the run, each target's outcome, and the first step failure.
@@ -1715,58 +1605,6 @@ async fn return_outputs(
                 run: None,
             }),
     })
-}
-
-/// `plan` without the steps outside `subgraph_ids` (a target's cone), and without the streams
-/// and phases that leaves empty.
-pub(crate) fn filter_plan_to_subgraph(plan: ExecutionPlan, subgraph_ids: &[&str]) -> ExecutionPlan {
-    let subgraph_set: std::collections::HashSet<&str> = subgraph_ids.iter().copied().collect();
-    let exec_plan = ExecutionPlan {
-        phases: plan
-            .phases
-            .into_iter()
-            .map(|phase| {
-                let filtered_streams: Vec<crate::planner::WorkerStream> = phase
-                    .streams
-                    .into_iter()
-                    .map(|s| crate::planner::WorkerStream {
-                        stream_id: s.stream_id,
-                        steps: s
-                            .steps
-                            .into_iter()
-                            .filter(|st| {
-                                let base_id = st.step_id.base_id();
-                                subgraph_set.contains(base_id)
-                            })
-                            .collect(),
-                    })
-                    .filter(|s| !s.steps.is_empty())
-                    .collect();
-                Phase {
-                    reason: phase.reason,
-                    streams: filtered_streams,
-                }
-            })
-            .filter(|p| !p.streams.is_empty())
-            .collect(),
-        total_steps: 0,
-    };
-    ExecutionPlan {
-        total_steps: exec_plan
-            .phases
-            .iter()
-            .flat_map(|p| &p.streams)
-            .flat_map(|s| &s.steps)
-            .map(|st| {
-                if st.partition_keys.is_empty() {
-                    1
-                } else {
-                    st.partition_keys.len()
-                }
-            })
-            .sum(),
-        ..exec_plan
-    }
 }
 
 /// `get` or `run`.

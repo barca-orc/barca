@@ -19,7 +19,7 @@
 //!   nothing downstream is invalidated. Its own inputs are subject to the same rule.
 //!
 //! `execution::execute` applies it where a phase's inputs are made available;
-//! `execution::explain_dag` predicts it with [`predict_recomputes`].
+//! `predict::explain_dag` predicts it with [`predict_recomputes`].
 
 use crate::cache::RunReason;
 use crate::dispatch::{OutputRef, ProvidedInput, build_provided_inputs};

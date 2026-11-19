@@ -326,7 +326,7 @@ pub fn explain(
         requested_by: requested_by(run.triggered_by, run.principal),
         attempts: counts.attempts_line.clone(),
         steps: counts.outcome.clone(),
-        target_line: crate::run_list::target_line(run.target),
+        target_line: target_line(run.target),
         outputs: Vec::new(),
         target_outcomes: target_outcomes(run, nodes),
         cancellation: run.cancellation.map(cancellation_notice),
@@ -618,11 +618,11 @@ fn output_of(node_id: &str, value: &serde_json::Value, steps: &[RunStep]) -> Opt
 /// The run's targets as node ids, in the order they were given when they were given as node
 /// ids; else its job's (sorted). Empty for a run of everything.
 pub fn output_targets(target: Option<&str>, job: Option<&str>) -> Vec<String> {
-    let given = crate::run_list::target_ids(target);
+    let given = target_ids(target);
     let ids = if !given.is_empty() && given.iter().all(|id| id.contains(':')) {
         given
     } else {
-        crate::run_list::target_ids(job)
+        target_ids(job)
     };
     ids.into_iter().map(str::to_string).collect()
 }
@@ -1078,6 +1078,30 @@ pub fn why_lines(why: &WhyRan, rows: usize) -> Vec<String> {
         ));
     }
     out
+}
+
+/// A run's targets as given (`target`: comma-separated node ids; `None`, empty or `all` for a
+/// run of everything), one each.
+pub fn target_ids(target: Option<&str>) -> Vec<&str> {
+    target
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty() && *id != "all")
+        .collect()
+}
+
+/// A run's targets in a few words, for a row of a list: `all assets` for a run of everything,
+/// the one target's id, or the first target's id and how many more (`billing.py:orders +21
+/// more`). A tick's first target is its scheduled node. Never the comma-joined list: that is
+/// `target`, for `--json` and a run's own page.
+pub fn target_line(target: Option<&str>) -> String {
+    let ids = target_ids(target);
+    match ids.as_slice() {
+        [] => "all assets".to_string(),
+        [one] => (*one).to_string(),
+        [first, rest @ ..] => format!("{first} +{} more", count(rest.len() as u64)),
+    }
 }
 
 #[cfg(test)]

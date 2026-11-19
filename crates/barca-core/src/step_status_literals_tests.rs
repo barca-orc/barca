@@ -23,7 +23,17 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the health vocabulary shares three spellings (`blocked`, `partial`, `cached`)",
     ),
     (
+        "views/health.rs",
+        "*",
+        "the health vocabulary shares three spellings (`blocked`, `partial`, `cached`)",
+    ),
+    (
         "partition_grid.rs",
+        "blocked",
+        "the key-state vocabulary shares one spelling",
+    ),
+    (
+        "key_query.rs",
         "blocked",
         "the key-state vocabulary shares one spelling",
     ),

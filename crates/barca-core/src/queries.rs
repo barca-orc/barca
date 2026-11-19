@@ -26,16 +26,16 @@ pub async fn plan(
     let cwd = std::env::current_dir()
         .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
     let (capacity, pool) = crate::config::execution_in(&cwd)?;
-    let sizing = crate::execution::sizing(capacity, pool, None);
+    let sizing = crate::sizing(capacity, pool, None);
     let result = plan_selected(&dag, sizing, partition)?;
     crate::warnings::print(&result.warnings);
-    crate::execution::warn_over_capacity(&result.weights, result.capacity, &result.capacity_source);
+    crate::sizing::warn_over_capacity(&result.weights, result.capacity, &result.capacity_source);
     Ok(result)
 }
 
 /// Render a previously validated graph using the same planner as strict commands, for a pool
-/// and capacity of `sizing` ([`crate::execution::sizing`]).
-pub fn plan_from_dag(dag: &crate::dag::Dag, sizing: crate::execution::Sizing) -> PlanResult {
+/// and capacity of `sizing` ([`crate::sizing()`]).
+pub fn plan_from_dag(dag: &crate::dag::Dag, sizing: crate::sizing::Sizing) -> PlanResult {
     plan_selected(dag, sizing, None).expect("a plan without a selection")
 }
 
@@ -43,7 +43,7 @@ pub fn plan_from_dag(dag: &crate::dag::Dag, sizing: crate::execution::Sizing) ->
 /// target narrows its plan; a usage error as for `get`.
 pub(crate) fn plan_selected(
     dag: &crate::dag::Dag,
-    sizing: crate::execution::Sizing,
+    sizing: crate::sizing::Sizing,
     partition: Option<&crate::selection::PartitionSelection>,
 ) -> Result<PlanResult, BarcaError> {
     let pool_size = sizing.pool_size;
@@ -68,7 +68,7 @@ pub(crate) fn plan_selected(
         pool_source: sizing.pool_source.to_string(),
         capacity: sizing.capacity,
         capacity_source: sizing.capacity_source.to_string(),
-        weights: crate::execution::planned_weights(&plan),
+        weights: crate::sizing::planned_weights(&plan),
         total_steps: plan.total_steps,
         phases: plan
             .phases
@@ -528,7 +528,7 @@ pub async fn explain(
     {
         crate::errln!("{note}");
     }
-    let result = crate::execution::explain_dag(
+    let result = crate::predict::explain_dag(
         &dag,
         cfg,
         target_names,
