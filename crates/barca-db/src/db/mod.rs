@@ -700,9 +700,18 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<FileLock, Ba
     let mut delay = Duration::from_millis(1);
     loop {
         if Instant::now() >= deadline {
-            let holder = match lock_holder(&file) {
-                Some(holder) => format!("held now by {holder}"),
-                None => "its holder could not be named on this system".to_string(),
+            let holder = match lock_holder(&file).await {
+                // Released while its holder was looked up: this is the turn waited for.
+                Holder::Gone => {
+                    note_lock_wait(started.elapsed());
+                    return Ok(FileLock::held(file, lock_path));
+                }
+                Holder::Named(holder) => format!("held now by {holder}"),
+                Holder::NotListed => "the kernel's lock table does not name its holder: a \
+                                      process outside this container, or on another machine \
+                                      that shares the directory"
+                    .to_string(),
+                Holder::NoTable => "its holder could not be named on this system".to_string(),
             };
             return Err(BarcaError::Db(format!(
                 "timed out after {:.1}s waiting for {lock_path}: another barca process is \
@@ -818,23 +827,96 @@ pub fn lock_waits() -> LockWaits {
     }
 }
 
-/// The process holding the lock on `file` right now, as `pid N (command line)`, read from the
-/// kernel's lock table (`/proc/locks`, Linux only). `None` where that table does not exist or
-/// does not name the file. Nothing is written to disk to make this possible: the holder is
-/// looked up only when a wait has timed out.
-fn lock_holder(file: &fs::File) -> Option<String> {
+/// What a look for the holder of a lock found ([`lock_holder`]).
+enum Holder {
+    /// `pid N (command line)`.
+    Named(String),
+    /// Nobody holds it any more: the lock was free, and the caller now has it.
+    Gone,
+    /// The kernel's table was read and names no holder that has the file open.
+    NotListed,
+    /// There is no table to read (not Linux, or no `/proc`).
+    NoTable,
+}
+
+/// How often the lock table is read before its silence is believed ([`lock_holder`]).
+const HOLDER_LOOKS: usize = 5;
+
+/// The process holding the lock on `file` right now, read from the kernel's lock table
+/// (`/proc/locks`, Linux only). Nothing is written to disk to make this possible: the holder
+/// is looked up only when a wait has timed out.
+///
+/// One read of the table is not an answer. The kernel hands it out a page at a time and finds
+/// its place again by counting entries, so a lock taken or released elsewhere on the machine
+/// between two pages makes it skip a line: with other processes locking and unlocking, about
+/// one read in a hundred did not list a lock held throughout. And the holder may simply have
+/// let go. So the table is read up to [`HOLDER_LOOKS`] times, and after each read that does
+/// not name a holder the lock is tried: free means the caller holds it now ([`Holder::Gone`]).
+async fn lock_holder(file: &fs::File) -> Holder {
+    let Some(id) = file_id_of(file) else {
+        return Holder::NoTable;
+    };
+    for look in 0..HOLDER_LOOKS {
+        let Some(table) = lock_table() else {
+            return Holder::NoTable;
+        };
+        if let Some(pid) = holder_pid(&table, id.1, std::process::id(), |pid| has_open(pid, id)) {
+            return Holder::Named(described(pid));
+        }
+        if file.try_lock().is_ok() {
+            return Holder::Gone;
+        }
+        if look + 1 < HOLDER_LOOKS {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+    Holder::NotListed
+}
+
+/// The device and inode of an open file, as `stat` reports them.
+fn file_id_of(file: &fs::File) -> Option<FileId> {
     #[cfg(unix)]
-    let inode = {
+    {
         use std::os::unix::fs::MetadataExt;
-        file.metadata().ok()?.ino()
-    };
+        file.metadata().ok().map(|m| (m.dev(), m.ino()))
+    }
     #[cfg(not(unix))]
-    let inode: u64 = {
+    {
         let _ = file;
-        return None;
-    };
-    let table = fs::read_to_string("/proc/locks").ok()?;
-    let pid = holder_pid(&table, inode, std::process::id())?;
+        None
+    }
+}
+
+/// The kernel's lock table, read with a buffer larger than the table usually is: every extra
+/// `read` is one more place where the kernel can lose its position ([`lock_holder`]).
+fn lock_table() -> Option<String> {
+    use std::io::Read;
+    let mut file = fs::File::open("/proc/locks").ok()?;
+    let mut table = Vec::new();
+    let mut chunk = vec![0u8; 1 << 16];
+    loop {
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => table.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(String::from_utf8_lossy(&table).into_owned())
+}
+
+/// Whether process `pid` has the file `id` open, from `/proc/<pid>/fd`: `None` when that
+/// cannot be read (another user's process, or one that has exited).
+fn has_open(pid: u32, id: FileId) -> Option<bool> {
+    let fds = fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+    Some(
+        fds.filter_map(|fd| fd.ok())
+            .any(|fd| file_id(&fd.path().to_string_lossy()) == Some(id)),
+    )
+}
+
+/// `pid N (command line)`, or `pid N` for a process whose command line cannot be read.
+fn described(pid: u32) -> String {
     let command = fs::read(format!("/proc/{pid}/cmdline"))
         .ok()
         .map(|raw| {
@@ -845,21 +927,33 @@ fn lock_holder(file: &fs::File) -> Option<String> {
                 .join(" ")
         })
         .filter(|command| !command.is_empty());
-    Some(match command {
+    match command {
         Some(command) => {
             let short: String = command.chars().take(200).collect();
             format!("pid {pid} ({short})")
         }
         None => format!("pid {pid}"),
-    })
+    }
 }
 
-/// The pid holding a `flock` on `inode` in a `/proc/locks` table: a line reads
+/// The pid holding a `flock` on the file with `inode` in a `/proc/locks` table: a line reads
 /// `<n>: FLOCK ADVISORY WRITE <pid> <major>:<minor>:<inode> <start> <end>` (a waiter's has
-/// `->` after the ordinal). Another process is preferred to this one, which may hold the same
-/// lock on another descriptor.
-fn holder_pid(table: &str, inode: u64, me: u32) -> Option<u32> {
-    let mut mine = None;
+/// `->` after the ordinal; a holder in a pid namespace this process cannot see has pid 0).
+///
+/// The inode alone does not say which file: every filesystem numbers its own, and a busy
+/// machine holds locks on the same number elsewhere. The table's device cannot settle it
+/// either, because it is the filesystem's own number while `stat` gives a btrfs subvolume's.
+/// So `has_open` is asked of each process a matching line names: one that has the file open
+/// is the holder, one that does not is holding another filesystem's file, and one that cannot
+/// be asked (`None`) is named only if no other line is in doubt. Another process is preferred
+/// to this one (`me`), which may hold the same lock on another descriptor.
+fn holder_pid(
+    table: &str,
+    inode: u64,
+    me: u32,
+    has_open: impl Fn(u32) -> Option<bool>,
+) -> Option<u32> {
+    let mut pids: Vec<u32> = Vec::new();
     for line in table.lines() {
         let mut fields = line.split_whitespace().skip(1);
         if fields.next() != Some("FLOCK") {
@@ -874,12 +968,24 @@ fn holder_pid(table: &str, inode: u64, me: u32) -> Option<u32> {
             continue;
         }
         match pid.parse::<u32>() {
-            Ok(pid) if pid == me => mine = Some(pid),
-            Ok(pid) => return Some(pid),
-            Err(_) => {}
+            Ok(pid) if pid != 0 && !pids.contains(&pid) => pids.push(pid),
+            _ => {}
         }
     }
-    mine
+    // Another process first.
+    pids.sort_by_key(|pid| *pid == me);
+    let mut unasked = Vec::new();
+    for pid in pids {
+        match has_open(pid) {
+            Some(true) => return Some(pid),
+            Some(false) => {}
+            None => unasked.push(pid),
+        }
+    }
+    match unasked[..] {
+        [only] => Some(only),
+        _ => None,
+    }
 }
 
 /// The in-process guard and the cross-process lock of the database at `db_path`, for an
@@ -1392,10 +1498,124 @@ mod tests {
                      3: -> FLOCK  ADVISORY  WRITE 43 00:2a:77 0 EOF\n\
                      4: FLOCK  ADVISORY  WRITE 42 00:2a:77 0 EOF\n\
                      5: FLOCK  ADVISORY  WRITE 50 00:2a:78 0 EOF\n";
-        assert_eq!(holder_pid(table, 77, 41), Some(42));
-        assert_eq!(holder_pid(table, 77, 7), Some(41));
-        assert_eq!(holder_pid(table, 78, 50), Some(50));
-        assert_eq!(holder_pid(table, 79, 7), None);
+        let open = |_| Some(true);
+        assert_eq!(holder_pid(table, 77, 41, open), Some(42));
+        assert_eq!(holder_pid(table, 77, 7, open), Some(41));
+        assert_eq!(holder_pid(table, 78, 50, open), Some(50));
+        assert_eq!(holder_pid(table, 79, 7, open), None);
+    }
+
+    #[test]
+    fn a_lock_on_the_same_inode_of_another_filesystem_is_not_the_holder() {
+        // 41 holds inode 77 of another filesystem; 42 holds this file.
+        let table = "1: FLOCK  ADVISORY  WRITE 41 00:19:77 0 EOF\n\
+                     2: FLOCK  ADVISORY  WRITE 42 00:23:77 0 EOF\n";
+        assert_eq!(holder_pid(table, 77, 7, |pid| Some(pid == 42)), Some(42));
+        assert_eq!(holder_pid(table, 77, 7, |pid| Some(pid == 41)), Some(41));
+        // Only the other filesystem's is listed (this read skipped the holder's line).
+        assert_eq!(holder_pid(table, 77, 7, |_| Some(false)), None);
+        // A process that cannot be asked is named when it is the only one in doubt,
+        assert_eq!(
+            holder_pid(table, 77, 7, |pid| (pid == 41).then_some(false)),
+            Some(42)
+        );
+        // and not when two are: either could be the other filesystem's.
+        assert_eq!(holder_pid(table, 77, 7, |_| None), None);
+        // A holder in a pid namespace this process cannot see is listed as pid 0.
+        let hidden = "1: FLOCK  ADVISORY  WRITE 0 00:23:77 0 EOF\n";
+        assert_eq!(holder_pid(hidden, 77, 7, |_| Some(true)), None);
+    }
+
+    #[test]
+    fn a_process_is_asked_whether_it_has_a_file_open() {
+        if !std::path::Path::new("/proc/self/fd").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let open = fs::File::create(dir.path().join("open")).unwrap();
+        fs::write(dir.path().join("closed"), b"").unwrap();
+        let closed = file_id(&dir.path().join("closed").to_string_lossy()).unwrap();
+        let me = std::process::id();
+        assert_eq!(has_open(me, file_id_of(&open).unwrap()), Some(true));
+        assert_eq!(has_open(me, closed), Some(false));
+        assert_eq!(has_open(u32::MAX, closed), None, "no such process");
+    }
+
+    /// One read of `/proc/locks` can skip a lock that is held throughout, when other locks
+    /// are taken and released between the pages the kernel hands out (about 1 read in 100
+    /// here, which failed `file_lock_excludes_a_second_holder_until_released` on a busy
+    /// machine, and fails this test with `HOLDER_LOOKS` at 1). The holder is named every time
+    /// all the same.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_holder_is_named_while_other_locks_come_and_go() {
+        if !std::path::Path::new("/proc/locks").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let _held = acquire_file_lock(&db_path, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let waiter = fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{db_path}.lock"))
+            .unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let churn: Vec<_> = (0..4)
+            .map(|i| {
+                let stop = stop.clone();
+                let files: Vec<fs::File> = (0..40)
+                    .map(|j| fs::File::create(dir.path().join(format!("churn-{i}-{j}"))).unwrap())
+                    .collect();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        for file in &files {
+                            file.lock().unwrap();
+                        }
+                        for file in &files {
+                            file.unlock().unwrap();
+                        }
+                    }
+                })
+            })
+            .collect();
+        let me = format!("pid {}", std::process::id());
+        let mut unnamed = 0;
+        for _ in 0..1000 {
+            match lock_holder(&waiter).await {
+                Holder::Named(holder) if holder.starts_with(&me) => {}
+                _ => unnamed += 1,
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for thread in churn {
+            thread.join().unwrap();
+        }
+        assert_eq!(unnamed, 0, "of 1000 looks");
+    }
+
+    #[tokio::test]
+    async fn a_lock_released_while_its_holder_is_looked_up_is_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        drop(
+            acquire_file_lock(&db_path, Duration::from_secs(1))
+                .await
+                .unwrap(),
+        );
+        let waiter = fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{db_path}.lock"))
+            .unwrap();
+        if std::path::Path::new("/proc/locks").exists() {
+            assert!(matches!(lock_holder(&waiter).await, Holder::Gone));
+            assert!(matches!(
+                fs::File::open(format!("{db_path}.lock"))
+                    .unwrap()
+                    .try_lock(),
+                Err(fs::TryLockError::WouldBlock)
+            ));
+        }
     }
 
     #[tokio::test]
