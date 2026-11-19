@@ -308,7 +308,16 @@ async fn vacuum(db_path: &str) -> Result<bool, BarcaError> {
         return Ok(false);
     }
     drop_unnamed_definitions(&conn).await?;
+    let started = Instant::now();
     conn.execute("VACUUM", ()).await.map_err(failed("VACUUM"))?;
+    // The one piece of a trim that cannot be cut into shorter holds of the lock.
+    if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
+        barca_model::errln!(
+            "[timing] metadata vacuum: {} bytes in {:.3} ms",
+            file_bytes(db_path),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     // A reader in the way leaves the log to the next checkpoint.
     let _ = db::checkpoint_once(&conn).await;
     Ok(true)

@@ -15,7 +15,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Internal: the Python helpers Rust starts share one envelope (request, stdout guard, lifeline, exit), `barca sql` and the server's query helper share one tables module, and the worker's single-step and batched runners share one step lifecycle; no behavior change (#1056).
 
+### Performance
+
+- **A barca process keeps one connection to the metadata database, and the read commands do not take its lock (#1056, #1054).** Every database operation opened the database twice and closed it, and the read commands (`status`, `history`, `stats`, `logs`, `doctor`, what `sql` reads) queued on the lock with every writer. A process now keeps one connection for its lifetime, still taking the lock for each operation, and checks under the lock that the files at the path are the ones it has open (a restore or reset gets a new connection); the read commands read the database in place, as a server's routes do. Measured on release builds: a trivial `get --refresh-all` opens the database 4 times, down from 16, with coordinator CPU 8.0 ms against 10.6 ms (median of 40) and the same peak memory; `scripts/perf-gate.py`'s 5,000-key incremental run 9.4 to 10.0 ms of CPU against 15.0 to 23.3 ms. `BARCA_TRACE_TIMING=1` prints how often and how long a command held the lock, and each `VACUUM`. Design and safety tests: `docs/engineering/metadata-owner.md`.
+
 ### Bug Fixes
+
+- **A process waiting for the metadata lock gets a turn (#1054, #1056).** A process that took the lock again right after releasing it (a trim's batches, a run recording step after step) left gaps of microseconds, and waiters, which poll, found one only by chance. A waiter now marks the lock file (its modification time; the file stays empty) and the holder leaves the lock free for 8 ms before its next operation. On a 5.2 GB metadata database (`benchmarks/metadata_lock/fixture.py`), `barca gc --local` trimming it beside a loop of `barca get --local`: 37 runs finished and none failed, the longest wait for the lock 11.8 s (one `VACUUM`); before, 7 finished, one failed after the 60 s wait, and the longest wait was 57.7 s. The trim's run deletions hold the lock for at most about 100 ms a batch (up to 1.1 s before) and eviction marks are recorded 1000 at a time. `VACUUM` remains one hold (3.4 to 4.8 s on that database), and runs only when no run is alive.
 
 - The web UI reads four more answers from the server in place of working them out (#1056): a
   grouped page's `N running` is its scope's `running` in the rollup, a partitioned node's

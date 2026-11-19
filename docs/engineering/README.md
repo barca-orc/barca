@@ -9,6 +9,8 @@ change those contracts.
 - [Crate split](crate-split.md): the November 2026 split of `barca-core` into five crates (#905), its decisions, measurements and follow-ups.
 - [Layers inside `barca-compile`](compile-layering.md): the module rows the layering test enforces (#1056, track D), the cuts made and what is left.
 - [Layers inside barca-core](layering.md): the layer of every module of `barca-core`, the rule, the test that holds it and the edges still listed as exceptions (#1056 track C).
+- [One owner of the metadata connection per process](metadata-owner.md): reads without the lock, turns at the lock and the kept connection (#1056, A7 and A8), the safety properties with their tests, measurements and what is not done.
+- [One owner of the metadata connection per process](metadata-owner.md): reads without the lock, turns at the lock and the kept connection (#1056, A7 and A8), the safety properties with their tests, measurements and what is not done.
 - [Requirements discussion handoff](requirements-handoff.md): unanswered proposals and remaining decisions.
 - [User API rationale](user-api-decisions.md): reasons behind declaration choices.
 - [DuckDB lifetime investigation](history/duckdb-step-isolation.md): retained empirical evidence and rejected isolation alternatives.

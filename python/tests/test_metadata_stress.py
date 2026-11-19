@@ -74,9 +74,7 @@ def refresh(project: Path):
     return barca(project, "get", "pipeline.py", "--local", "--refresh-all", "--json")
 
 
-def test_local_runs_and_readers_beside_a_server_leave_the_history_of_a_serial_run(
-    tmp_path, serve
-):
+def test_local_runs_and_readers_beside_a_server_leave_the_history_of_a_serial_run(tmp_path, serve):
     serial = tmp_path / "serial"
     busy = tmp_path / "busy"
     for project in (serial, busy):

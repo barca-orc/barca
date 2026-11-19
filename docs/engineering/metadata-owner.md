@@ -83,6 +83,16 @@ hold. `VACUUM` is one statement and cannot be split: see "Not done".
   connection is not in autocommit and removes it from the table, so it closes (and SQLite
   rolls back) when the caller's clone drops, as a per-operation connection did. A handout
   checks again and never reuses a connection with a transaction open.
+- **Memory.** A handout first lets go of the pages the last operation read
+  (`PRAGMA shrink_memory`), so a process's memory is what its largest operation needs, as it
+  was when each had a connection of its own.
+- **Checkpoints.** The log is no longer empty between a process's operations, so a
+  checkpoint that must empty it (`fold_log`: backups, restore, reset) really waits for the
+  readers of what is in it. Each try now answers at once and the wait is asynchronous, for up
+  to 5 s; SQLite's own wait slept on the calling thread, where a reader on the same thread
+  could never finish.
+- **Measuring `.barca/`.** `gc` closes this process's kept connections before it walks the
+  directory, so the size it plans from holds no log of its own that comes and goes.
 - **Process exit.** The CLI closes the owner's connections as a command ends
   (`db::close_connections`), each under its lock if that is free, so the last close still
   folds the log into the main file as it did after every operation. A killed process leaves
@@ -105,10 +115,32 @@ hold. `VACUUM` is one statement and cannot be split: see "Not done".
 | Reads do not wait for the lock | `python/tests/test_reads_without_the_lock.py` |
 | A waiter gets a turn | `db::tests::a_holder_that_takes_the_lock_again_at_once_gives_a_waiter_its_turn` |
 
+## Measured
+
+2026-11-19, release builds, a machine under load (load average about 30), the base being
+`integrate/modularity` at 489abbaf.
+
+- Trivial pipeline (`benchmarks/trivial`, `get --refresh-all`), 40 interleaved runs: database
+  opens 16 to 4, coordinator CPU 10.6 to 8.0 ms (median), wall 53.0 to 50.6 ms (median), peak
+  15,674 to 15,492 KiB.
+- `scripts/perf-gate.py`, two runs each: trivial CPU 8.3 and 8.4 ms to 8.5 and 6.7 ms, peak
+  15,840 and 15,792 KiB to 15,808 and 15,920 KiB; 5,000-key incremental CPU (max) 23.3 and
+  15.0 ms to 10.0 and 9.4 ms, peak 16,240 and 16,172 to 16,476 and 16,520 KiB; plan reasons
+  2.8 and 2.9 ms to 2.0 and 1.3 ms. All budgets met on both.
+- The fixture of `benchmarks/metadata_lock/fixture.py` (1,002,000 materializations, 20,000
+  runs, 2,000,000 log lines, 5.2 GB): `barca gc` trimming it with `barca get` run in a loop
+  beside it. Base: 7 runs finished in 145 s, one of them failed after the 60 s wait, the
+  longest single wait for the lock was 57.7 s. Now: 37 runs in 222 s, none failed, the longest
+  wait 11.8 s (a `VACUUM`), a run's median 7.1 s against 9.1 s.
+- The longest single hold of the lock by that `gc`, alone: 5.6 s before and after, a
+  `VACUUM` (three of them, 3.4 to 4.8 s each). With a run alive, so that no `VACUUM` runs:
+  0.54 s, a batch of 2,000 rows' components. The trim's run deletions held it for up to 1.1 s
+  a batch before and are cut at 100 ms.
+
 ## Not done
 
-- **`VACUUM` is one hold.** It rewrites the live data in one statement: 5.6 s on the 5.2 GB
-  fixture after the trim had cut it to 0.65 GB. It runs only when no run is alive on the
+- **`VACUUM` is one hold.** It rewrites the live data in one statement: 3.4 to 4.8 s on the
+  fixture once the trim had cut it to under 1 GB (`BARCA_TRACE_TIMING` prints each). It runs only when no run is alive on the
   database, and readers are not held up by it (they read in place), but a run that starts
   meanwhile waits for it.
 - **The process-wide guard stays.** One process's operations still take turns with each
@@ -118,6 +150,12 @@ hold. `VACUUM` is one statement and cannot be split: see "Not done".
 - **The `flock` is per operation, not per batch.** Taking it once for a batch of operations
   would save one `open` and one `flock` each, and would bring back long holds.
 - **Read views open a connection per query.** A server's read routes could keep one per view.
+- **A long read holds the log.** `barca doctor` checks every page of the database through a
+  view; while that one statement runs, no checkpoint can empty the log, so a backup's
+  `fold_log` fails with "could not finish" after 5 s and is tried again at its next occasion.
+  Before, `doctor` copied the database under the lock, and every writer waited for the copy.
+- **Eviction marks were not measured.** They are recorded 1000 per hold; the fixture has
+  nothing to evict.
 - **`barca serve` does not close its owned connection on exit**: its log is folded in by the
   next command that closes one.
 - **A database file replaced in place by something outside barca** (written over, same

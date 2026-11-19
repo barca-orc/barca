@@ -73,10 +73,10 @@ finds the server by its socket, `.barca/serve.sock`, and the server does the wor
 `run` join its queue, `gc` runs inside it; [Server Mode: a Shared Ledger and --server: In the server's own project](/reference/server-mode/#in-the-servers-own-project-the-project-socket)). `--local` runs the command in its own process, and then it waits on the lock like
 any second process. `BARCA_TRACE_TIMING=1` prints, at the end of a `get` or `run`, how often the
 process had to wait for the lock, for how long in total and at most:
-`[trace] metadata db opens 2, lock waits 2 (total 31.5ms, longest 20.1ms)`. Every command also
+`[trace] metadata db opens 4, lock waits 2 (total 31.5ms, longest 20.1ms)`. Every command also
 prints how often it held the lock itself, for how long in total and at most (the longest
 another process can have waited for it):
-`[trace] metadata lock holds 9 (total 2.4ms, longest 0.9ms)`.
+`[trace] metadata lock holds 8 (total 9.2ms, longest 6.0ms)`.
 
 If a required database write fails, the command reports an infrastructure error (exit 3) and
 records no new outcome; what was already recorded stays. With an artifact store, a refresh in

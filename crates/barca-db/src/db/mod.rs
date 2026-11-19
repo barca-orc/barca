@@ -519,6 +519,9 @@ async fn connection_for(
         return Err(unusable_at(unusable(why), path));
     }
     if let Some(conn) = reusable(path) {
+        // The pages the last operation read are let go, as they were when its connection
+        // closed: a process's memory is what its largest operation needs, not their sum.
+        let _ = conn.execute("PRAGMA shrink_memory", ()).await;
         // What every open read: a database a newer barca rewrote meanwhile is refused now.
         if let Err(e) = crate::db::schema::ddl::check(&conn).await {
             let dropped = OWNED.lock().unwrap().remove(path);
