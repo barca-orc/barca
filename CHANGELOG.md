@@ -12,6 +12,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Internal: the modules inside barca-core have layers and a test that holds them (`docs/engineering/layering.md`, #1056); 26 of the 42 edges that pointed the wrong way are cut and the largest dependency cycle is 29 modules, down from 38. No behavior change.
 
+- Internal: the Python helpers Rust starts share one envelope (request, stdout guard, lifeline, exit), `barca sql` and the server's query helper share one tables module, and the worker's single-step and batched runners share one step lifecycle; no behavior change (#1056).
+
 ### Bug Fixes
 
 - The web UI reads four more answers from the server in place of working them out (#1056): a

@@ -3,11 +3,15 @@
 Started by Rust as ``python -m barca._worker --daemon`` (`io_loop.rs`, `worker_command`).
 The wire protocol is `specs/interfaces/worker-protocol.md`; this module has no DB access.
 
-A step runs in three parts that `_run_daemon_step` (one step) and `_run_daemon_call` (the keys
-of one batched call, RFC-0013) share: `_begin` imports the module and finds the function,
+`_run_daemon_step` (one step) and `_run_daemon_call` (the keys of one batched call, RFC-0013)
+share the parts of a step: `_begin` imports the module and finds the function,
 `_resolve_inputs` reads the inputs, `_call` runs the function with its output captured, and
-`_materialize` writes the result and reports it. What differs is how a call's keys are
-assembled and how its result is split and reported, one key at a time.
+`_materialize` writes the result and reports it. They share how a step is timed, traced,
+interrupted and reported when it fails too: `_Run`. What differs is how a call's keys are
+assembled and how its result is split and reported, one key at a time (`barca/_batch.py`).
+
+Where its neighbours take over: inputs are read through `barca/_lru.py`, a failure is worded
+by `barca/_failure.py`, and results and errors leave through `barca/_runtime.py`.
 """
 
 from __future__ import annotations
@@ -19,9 +23,9 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from barca import _duckdb, _runtime, _sinks, _storage, _telemetry
+from barca import _duckdb, _rss, _runtime, _sinks, _storage, _telemetry
 from barca._artifacts import (
     _FORMAT_EXTENSIONS,
     FORMAT_OF_EXTENSION,
@@ -36,12 +40,24 @@ from barca._artifacts import (
     serialize_hashed,
 )
 from barca._capture import _LineEmitter, _StderrTee, captured, stderr_for_step, stdout_for_step
+from barca._failure import (
+    LOAD_INPUTS,
+    SPLIT_OUTPUT,
+    USER_CODE,
+    WRITE_OUTPUT,
+    failure_message,
+    output_phase,
+    traceback_for,
+)
 from barca._lru import _ArtifactLRU, artifact_size, cacheable_frame_type, is_cacheable_frame_type
 from barca._rss import RssWindow
 from barca._signals import ctrl_c_does_nothing as _ctrl_c_does_nothing
 from barca._signals import ctrl_c_interrupts_the_step as _ctrl_c_interrupts_the_step
 from barca._signals import exit_on_sigterm, join_the_job
 from barca._source_import import activate_source_path, load_pipeline_module
+
+if TYPE_CHECKING:
+    from barca import _batch
 
 Step = dict[str, Any]
 Modules = dict[str, Any]
@@ -53,85 +69,6 @@ def _default_artifact_dir() -> str:
     if uri:
         return uri
     return str(Path(".barca/artifacts").resolve())
-
-
-def _emit(msg_type: str, **fields: Any) -> None:
-    """Report a step's result to the coordinator over the worker socket (`msg_type` is
-    `result`; errors go through `_runtime.emit_step_error` directly)."""
-    if msg_type != "result":
-        raise ValueError(f"unknown worker message {msg_type!r}")
-    _runtime.emit_step_completed(fields["node_id"], fields["artifact"])
-
-
-# Where a step failed (the `phase` of a `step_error`). A closed set: the coordinator reads any
-# other value as unknown. Only `user_code` is the step's own code; the others are barca's.
-USER_CODE = "user_code"  # importing the module, calling the function, checking what it returned
-LOAD_INPUTS = "load_inputs"  # reading the step's input artifacts (collect() fan-in included)
-SPLIT_OUTPUT = "split_output"  # dividing a batched call's result into its keys
-WRITE_OUTPUT = "write_output"  # writing the result to its artifact
-SINK = "sink"  # writing the step's @sink files
-PHASES = (USER_CODE, LOAD_INPUTS, SPLIT_OUTPUT, WRITE_OUTPUT, SINK)
-
-
-def _traceback_for(exc: BaseException, phase: str) -> str:
-    """The traceback a failure in `phase` reports: the user's frames for a failure in user
-    code, every frame for a failure in barca's own code, which has nowhere else to show."""
-    if phase == USER_CODE:
-        return _user_traceback(exc)
-    import traceback
-
-    return "".join(traceback.format_list(traceback.extract_tb(exc.__traceback__))).rstrip("\n")
-
-
-def _output_phase(exc: BaseException) -> str:
-    """The phase of a failure while a result was written: its sinks, or its artifact."""
-    return SINK if isinstance(exc, _sinks.SinkError) else WRITE_OUTPUT
-
-
-def _user_traceback(exc: BaseException) -> str:
-    """Format the traceback with barca-internal frames stripped.
-
-    Keeps only frames from user code so surfaced errors point at the user's
-    file/line, never at _worker.py plumbing. Returns "" when every frame is
-    internal (e.g. a TypeError raised by the fn(**kwargs) call itself) — the
-    caller always leads with "ErrorType: message", which carries the detail.
-    """
-    import importlib
-    import traceback  # only on failure: it costs ~10 ms at start-up on Python 3.14
-
-    barca_dir = str(Path(__file__).resolve().parent)
-    importlib_dir = str(Path(importlib.__file__).resolve().parent)
-
-    def internal(filename: str) -> bool:
-        # importlib's own frames (`<frozen importlib._bootstrap>`, importlib/__init__.py) say
-        # nothing about the user's code: an import that fails shows them and nothing else.
-        if filename.startswith("<frozen importlib"):
-            return True
-        path = str(Path(filename).resolve())
-        return path.startswith((barca_dir, importlib_dir))
-
-    frames = [f for f in traceback.extract_tb(exc.__traceback__) if not internal(f.filename)]
-    text = "".join(traceback.format_list(frames))
-    if isinstance(exc, SyntaxError) and exc.filename:
-        # Where the syntax error is (file, line, the source line and a caret), which no frame
-        # shows; the caller leads with "SyntaxError: message", so that last line is left out.
-        text += "".join(traceback.format_exception_only(exc)[:-1])
-    return text.rstrip("\n")
-
-
-def _failure_message(exc: BaseException, bound_views: Sequence[str] = ()) -> str:
-    """What a failed step's error says: the exception's text, with a note when the step called
-    `sys.exit()` and, for a DuckDB error from mixing connections, what to do instead."""
-    message = str(exc)
-    if isinstance(exc, SystemExit):
-        message = (
-            f"{message} (the step called sys.exit(); a step must return a value or raise "
-            "an exception, and barca reports any sys.exit() as a failure)"
-        )
-    note = _duckdb.explain_error(exc, list(bound_views))
-    if note:
-        message = f"{message}\n\n{note}"
-    return message
 
 
 def _run_with_timeout(
@@ -180,25 +117,6 @@ def _run_with_timeout(
 # ─── Inputs ───────────────────────────────────────────────────────────────────
 
 
-def _load_artifact(
-    path: str, lru: _ArtifactLRU, fmt: str | None = None, *, frame_type: str | None = None
-) -> Any:
-    """Resolve one artifact path to its deserialized value via the tier-1 LRU
-    cache, falling through to the artifact store on miss."""
-    cacheable = is_cacheable_frame_type(frame_type)
-    hot = lru.get(path, frame_type) if cacheable else None
-    if hot is not None:
-        return hot
-    if not _storage.exists(path):
-        raise FileNotFoundError(f"Input artifact not found: {path}")
-    if fmt is None:
-        fmt = FORMAT_OF_EXTENSION.get(_storage.suffix(path), "json")
-    value = deserialize(path, fmt, frame_type=frame_type)
-    if cacheable:
-        lru.admit(path, value, frame_type)
-    return value
-
-
 # Fan-in (collect()) reads are I/O-bound (local disk or a remote fsspec
 # fetch-to-temp-file), so worker threads spend most of their time blocked
 # with the GIL released — a thread pool collapses wall time toward the
@@ -225,8 +143,8 @@ def _load_collected_artifacts(
 
     `param` (the destination parameter name, when known) is folded into a
     missing-artifact error at the point it's raised, matching
-    `_load_artifact`'s message shape — the caller doesn't need to catch and
-    rewrap.
+    `_ArtifactLRU.read`'s message shape — the caller doesn't need to catch and
+    rewrap. A single input is read through the cache by the cache itself (`_ArtifactLRU.read`).
     """
     results: list[Any] = [None] * len(artifacts)
     to_fetch: list[tuple[int, dict[str, Any]]] = []
@@ -322,25 +240,8 @@ def _keyed_value(path: str, key: str) -> Any:
     return value
 
 
-@dataclass(frozen=True)
-class _Keys:
-    """The keys of one batched call (RFC-0013), as `barca/_batch.py` names them."""
-
-    dims: list[str]  # the partition dimensions, sorted
-    keys: list[Any]  # what the function sees for each step: a value, or a tuple of values
-    texts: list[str]  # `retailer=r7`, for messages
-
-    @classmethod
-    def of(cls, steps: list[Step]) -> _Keys:
-        from barca import _batch
-
-        dims = _batch.key_dims(steps)
-        keys = [_batch.key_of(st, dims) for st in steps]
-        return cls(dims, keys, [_batch.key_text(k, dims) for k in keys])
-
-
 def _resolve_inputs(
-    fn: Callable[..., Any], steps: list[Step], lru: _ArtifactLRU, batch: _Keys | None = None
+    fn: Callable[..., Any], steps: list[Step], lru: _ArtifactLRU, batch: _batch.Keys | None = None
 ) -> dict[str, Any]:
     """The keyword arguments of the step function, from the steps' `inputs`.
 
@@ -396,7 +297,7 @@ def _resolve_inputs(
         if batch is None or param not in aligned:
             if value:
                 try:
-                    kwargs[param] = _load_artifact(value, lru, frame_type=frame_type)
+                    kwargs[param] = lru.read(value, frame_type=frame_type)
                 except FileNotFoundError:
                     raise FileNotFoundError(
                         f"Input artifact for parameter '{param}' not found: {value}"
@@ -418,7 +319,7 @@ def _resolve_inputs(
             )
         else:
             kwargs[param] = {
-                k: _load_artifact(path, lru, frame_type=frame_type)
+                k: lru.read(path, frame_type=frame_type)
                 for k, path in zip(batch.keys, paths, strict=True)
             }
     return kwargs
@@ -534,8 +435,6 @@ def _materialize(
     systematically undercounted for large payloads (serialization can be the
     majority of a step's real wall time and was previously invisible).
     """
-    from barca import _rss
-
     # The step has returned: a result it left unread would block writing a returned relation.
     _duckdb.finish_open_result()
     explicit_fmt = step.get("serializer")
@@ -653,7 +552,7 @@ def _materialize(
         artifact["write_seconds"] = time.perf_counter() - _ser_wall0
     if before_emit is not None:
         before_emit()
-    _emit("result", node_id=node_id, artifact=artifact)
+    _runtime.emit_step_completed(node_id, artifact)
     return artifact
 
 
@@ -759,6 +658,112 @@ def _call(
         return fn(*args, **kwargs)
 
 
+class _Run:
+    """One step, or one batched call, running in this worker: its clock, its trace, where it
+    is, and how it ends. Both runners do their work inside `with _Run(...) as run:`.
+
+    However the work ends, Ctrl-C stops interrupting, the trace is finished, the views bound
+    for the inputs are dropped (`bound_views`: they must outlive the write of the result, as
+    a returned relation is lazy and may still read them) and `cleanup` runs.
+
+    When it ends with an exception, the step failed: `report(exc, wall seconds)` tells the
+    coordinator, `survives` says whether this worker may take more work (`_worker_survives`),
+    and the exception goes no further. Any exception is a step error, TimeoutError and OSError
+    from user code included. (The socket errors are OSError subclasses, so they cannot be told
+    apart here; a socket that is really gone fails the report, and that propagates to the
+    daemon loop.) An exception of a type in `propagates` is not the step's and is raised on.
+    """
+
+    __slots__ = (
+        "bound_views",
+        "c0",
+        "cleanup",
+        "import_seconds",
+        "imported",
+        "phase",
+        "propagates",
+        "report",
+        "rss_window",
+        "survives",
+        "t0",
+        "tracing",
+    )
+
+    def __init__(
+        self,
+        step: Step,
+        report: Callable[[BaseException, float], None],
+        cleanup: Callable[[], None] | None = None,
+        call_id: str | None = None,
+        keys: int = 0,
+    ) -> None:
+        self.tracing = _tracing(step, call_id, keys)
+        self.report = report
+        self.cleanup = cleanup
+        # Per-task self-timing: CPU time (`process_time`, the truest measure of work), wall
+        # time and peak RSS ride back on the completion message.
+        self.t0 = time.perf_counter()
+        self.c0 = time.process_time()
+        self.rss_window: RssWindow = _rss.start_window()
+        self.bound_views: list[str] = []
+        self.import_seconds: float | None = None
+        # Whether the step's module is imported and its function found: a failure before that
+        # stops the worker (`_worker_survives`).
+        self.imported = False
+        # Where the step is: what a failure is reported as (`_failure.PHASES`).
+        self.phase = USER_CODE
+        self.propagates: tuple[type[BaseException], ...] = ()
+        self.survives = True
+
+    def begin(self, step: Step, modules: Modules, log_id: str) -> _Begun:
+        """Import the step's module and find its function (`_begin`). From here until the
+        run ends, Ctrl-C interrupts the step."""
+        begun = _begin(step, modules, log_id)
+        self.import_seconds = begun.import_seconds
+        self.imported = True
+        _ctrl_c_interrupts_the_step()
+        return begun
+
+    def wall(self) -> float:
+        return time.perf_counter() - self.t0
+
+    def cpu(self) -> float:
+        return time.process_time() - self.c0
+
+    def failure(self, exc: BaseException) -> dict[str, Any]:
+        """What a report of this run failing with `exc` says, whichever step it is for: the
+        fields of `_runtime.emit_step_error` that do not depend on the step."""
+        return {
+            "message": failure_message(exc, self.bound_views),
+            "traceback": traceback_for(exc, self.phase),
+            "import_seconds": _slow_import(self.import_seconds),
+            "phase": self.phase,
+        }
+
+    def __enter__(self) -> _Run:
+        return self
+
+    def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> bool:
+        # The step is over. A Ctrl-C from here on (people press it twice) must not interrupt
+        # the report of how it ended: it would leave the runner as an uncaught
+        # KeyboardInterrupt and print a traceback. The coordinator has the same signal and
+        # stops this worker.
+        _ctrl_c_does_nothing()
+        try:
+            if exc is None or isinstance(exc, self.propagates):
+                return False
+            wall = self.wall()
+            self.tracing.finish(exc)
+            self.survives = _worker_survives(exc, self.imported)
+            self.report(exc, wall)
+            return True
+        finally:
+            self.tracing.finish()
+            _duckdb.unbind_inputs(self.bound_views)
+            if self.cleanup is not None:
+                self.cleanup()
+
+
 def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactLRU) -> bool:
     """Execute one step in daemon mode and emit its result or error.
 
@@ -766,47 +771,38 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
     with an exception that left the interpreter sound), False when it must stop. Socket
     errors raised while emitting propagate to the caller (the connection is gone — exit the
     loop).
-    Per-task self-timing: CPU time (`process_time`, the truest measure of
-    work), wall time, and peak RSS ride back on the completion message.
     """
-    from barca import _rss
-
-    tracing = _tracing(step)
     node_id = step.get("node_id", "unknown")
-    t0 = time.perf_counter()
-    c0 = time.process_time()
-    rss_window = _rss.start_window()
-
-    # Views bound for duckdb-typed inputs. They must outlive materialization: a returned
-    # relation is lazy and may still reference them when it is written to parquet.
-    bound_views: list[str] = []
     # Set when this step is a parallel() branch whose return value could not be written.
     unwritable = False
-    import_seconds = None
-    # Whether the step's module is imported and its function found: a failure before that
-    # stops the worker (`_worker_survives`).
-    imported = False
-    # Where the step is: what a failure is reported as (`PHASES`).
-    phase = USER_CODE
 
-    try:
-        begun = _begin(step, modules, node_id)
-        import_seconds = begun.import_seconds
-        imported = True
+    def report(exc: BaseException, wall: float) -> None:
+        from barca import _branches
 
-        # From here until the result is written, Ctrl-C interrupts the step.
-        _ctrl_c_interrupts_the_step()
+        _runtime.emit_step_error(
+            node_id=node_id,
+            # Only this branch's own return value that could not be written is reported as
+            # such. A branch that raises, a BranchResultError from a parallel() of its own
+            # included, is a branch that raised.
+            error_type=_branches.UNRETURNABLE if unwritable else type(exc).__name__,
+            elapsed=wall,
+            worker_continues=run.survives,
+            **run.failure(exc),
+        )
 
-        phase = LOAD_INPUTS
+    with _Run(step, report) as run:
+        begun = run.begin(step, modules, node_id)
+
+        run.phase = LOAD_INPUTS
         kwargs = _resolve_inputs(begun.fn, [step], lru)
-        bound_views = _duckdb.bind_inputs(kwargs, step.get("param_types") or {})
+        run.bound_views = _duckdb.bind_inputs(kwargs, step.get("param_types") or {})
 
-        phase = USER_CODE
+        run.phase = USER_CODE
         # Direct args from parallel() dispatch; kwargs carry its direct kwargs already.
         result = _call(begun, step, kwargs, node_id, args=step.get("direct_args", []))
 
-        wall = time.perf_counter() - t0
-        cpu = time.process_time() - c0
+        wall = run.wall()
+        cpu = run.cpu()
 
         # Freshness is independent of the optional payload.
         sensor_changed = None
@@ -822,11 +818,11 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
                 "finished_at": time.time(),
                 "cpu_seconds": cpu,
             }
-            peak = _rss.step_peak_bytes(rss_window)
+            peak = _rss.step_peak_bytes(run.rss_window)
             if peak is not None:
                 artifact["max_rss_bytes"] = peak
-            tracing.finish()
-            _emit("result", node_id=node_id, artifact=artifact)
+            run.tracing.finish()
+            _runtime.emit_step_completed(node_id, artifact)
             return True
 
         # Convert ParallelError instances so results are JSON-serializable.
@@ -845,10 +841,10 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
             source_observation = observe(result, step.get("previous_sensor"))
 
         # Source validation and comparison are producer work too, not coordinator overhead.
-        wall = time.perf_counter() - t0
-        cpu = time.process_time() - c0
+        wall = run.wall()
+        cpu = run.cpu()
         # Serialize result to artifact (and write any declared sinks).
-        phase = WRITE_OUTPUT
+        run.phase = WRITE_OUTPUT
         extra: dict[str, Any] = {}
         if sensor_changed is not None:
             extra["sensor_changed"] = sensor_changed
@@ -862,12 +858,12 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
                 materialize_step,
                 wall,
                 elapsed_in_artifact=True,
-                timing=_timing(cpu, rss_window, import_seconds),
+                timing=_timing(cpu, run.rss_window, run.import_seconds),
                 extra=extra,
-                before_emit=tracing.finish,
+                before_emit=run.tracing.finish,
             )
         except Exception as exc:
-            phase = _output_phase(exc)
+            run.phase = output_phase(exc)
             if not step.get("branch"):
                 raise
             # A parallel() branch whose return value cannot be written: say so in terms of
@@ -882,61 +878,7 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
         # Keyed sources have a separate snapshot cache; this copy is never used by it.
         if result_type is not False and not step.get("branch") and not step.get("partition_source"):
             lru.admit(artifact["path"], result, result_type, artifact.get("size_bytes"))
-        return True
-
-    except BaseException as exc:
-        # Any failure inside the step — including TimeoutError and OSError
-        # from user code — is a step error. (TimeoutError and the socket
-        # errors are OSError subclasses, so a socket-error catch here would
-        # swallow them; genuine socket death surfaces when the emit below
-        # fails, and that propagates to the caller.)
-        # The step is over. A Ctrl-C from here on (people press it twice) must not interrupt
-        # the report of how it ended: it would leave this function as an uncaught
-        # KeyboardInterrupt and print a traceback. The coordinator has the same signal and
-        # stops this worker.
-        _ctrl_c_does_nothing()
-        wall = time.perf_counter() - t0
-        tracing.finish(exc)
-        from barca import _branches
-
-        survives = _worker_survives(exc, imported)
-        _runtime.emit_step_error(
-            node_id=node_id,
-            # Only this branch's own return value that could not be written is reported as
-            # such. A branch that raises, a BranchResultError from a parallel() of its own
-            # included, is a branch that raised.
-            error_type=_branches.UNRETURNABLE if unwritable else type(exc).__name__,
-            message=_failure_message(exc, bound_views),
-            traceback=_traceback_for(exc, phase),
-            elapsed=wall,
-            import_seconds=_slow_import(import_seconds),
-            worker_continues=survives,
-            phase=phase,
-        )
-        return survives
-
-    finally:
-        _ctrl_c_does_nothing()
-        tracing.finish()
-        _duckdb.unbind_inputs(bound_views)
-
-
-def _key_result(value: Any, explicit: str | None) -> tuple[Any, str | None]:
-    """One key's value as `_batch.split` left it: the value itself, or, for a key DuckDB wrote
-    to parquet, `(None, file)` when that file can be installed as the artifact as it is, else a
-    relation over the files."""
-    if not (isinstance(value, tuple) and len(value) == 2 and value[0] == "parquet"):
-        return value, None
-    files = value[1]
-    if (
-        len(files) == 1
-        and Path(files[0]).name != "__empty.parquet"
-        and explicit in (None, "parquet")
-    ):
-        return None, files[0]
-    import duckdb
-
-    return duckdb.read_parquet(files), None
+    return run.survives
 
 
 def _run_daemon_call(
@@ -947,158 +889,97 @@ def _run_daemon_call(
 
     Returns True when this worker may go on, as `_run_daemon_step` does.
     """
-    from barca import _batch, _rss
+    from barca import _batch
 
     first = steps[0]
-    batch = _Keys.of(steps)
+    batch = _batch.Keys.of(steps)
     base = first.get("node_id", "unknown").split("[", 1)[0]
     call_id = call.get("id", "")
     # The call's own output goes to the log under `<node>[batch=<id>]`: recorded once, and
     # found from each of its keys (`barca logs --step 'node[key]'`).
     log_id = f"{base}[batch={call_id}]"
-    tracing = _tracing(first, call_id, len(steps))
-    t0 = time.perf_counter()
-    c0 = time.process_time()
-    rss_window = _rss.start_window()
-    import_seconds = None
-    imported = False
-    reported: set[str] = set()
     n = len(steps)
-    bound_views: list[str] = []
-    phase = USER_CODE
+    reported: set[str] = set()
     staging = batch_staging(art_dir, call_id)
 
-    def fail_all(exc: BaseException, survives: bool, wall: float) -> None:
+    def fail_all(exc: BaseException, wall: float) -> None:
         """Report every key of the call not yet reported as failed with `exc`."""
-        message = _failure_message(exc, bound_views)
-        traceback = _traceback_for(exc, phase)
+        said = run.failure(exc)
         left = [st for st in steps if st["node_id"] not in reported]
         for i, st in enumerate(left):
             reported.add(st["node_id"])
             _runtime.emit_step_error(
                 node_id=st["node_id"],
                 error_type=type(exc).__name__,
-                message=message,
-                traceback=traceback,
                 elapsed=wall / max(n, 1),
-                import_seconds=_slow_import(import_seconds),
                 # The coordinator stops an unsound worker at the first report that says so:
                 # every key is reported before that.
-                worker_continues=survives or i < len(left) - 1,
-                phase=phase,
+                worker_continues=run.survives or i < len(left) - 1,
+                **said,
             )
 
-    try:
-        begun = _begin(first, modules, log_id)
-        import_seconds = begun.import_seconds
-        imported = True
-        _ctrl_c_interrupts_the_step()
+    def cleanup() -> None:
+        _batch.unbind()
+        import shutil
 
-        phase = LOAD_INPUTS
+        shutil.rmtree(staging, ignore_errors=True)
+
+    with _Run(first, fail_all, cleanup, call_id=call_id, keys=n) as run:
+        begun = run.begin(first, modules, log_id)
+
+        run.phase = LOAD_INPUTS
         load_start = time.perf_counter()
         kwargs = _resolve_inputs(begun.fn, steps, lru, batch)
-        bound_views.extend(_duckdb.bind_inputs(kwargs, first.get("param_types") or {}))
+        run.bound_views.extend(_duckdb.bind_inputs(kwargs, first.get("param_types") or {}))
 
-        phase = USER_CODE
+        run.phase = USER_CODE
         compute_start = time.perf_counter()
         result = _call(begun, first, kwargs, log_id)
         # Splitting the result runs DuckDB on the shared connection: see finish_open_result.
         _duckdb.finish_open_result()
 
-        explicit = first.get("serializer")
-        phase = SPLIT_OUTPUT
+        run.phase = SPLIT_OUTPUT
         split_start = time.perf_counter()
         values = _batch.split(result, batch.keys, batch.dims, staging)
         split_end = time.perf_counter()
-    except BaseException as exc:
-        _ctrl_c_does_nothing()
-        survives = _worker_survives(exc, imported)
-        tracing.finish(exc)
-        _duckdb.unbind_inputs(bound_views)
-        _batch.unbind()
-        fail_all(exc, survives, time.perf_counter() - t0)
-        return survives
 
-    # The call ran: write and report each key. Its time and memory are the call's, shared.
-    wall = time.perf_counter() - t0
-    cpu = time.process_time() - c0
-    share = wall / max(n, 1)
-    # Once per call, on the first key written: the coordinator adds the calls of a node up.
-    phases: dict[str, float] | None = {
-        "import_seconds": import_seconds or 0.0,
-        "load_seconds": compute_start - load_start,
-        "compute_seconds": split_start - compute_start,
-        "split_seconds": split_end - split_start,
-    }
-    ok = True
-    key_phase = SPLIT_OUTPUT
-    try:
-        for k, text, st in zip(batch.keys, batch.texts, steps, strict=True):
-            node_id = st["node_id"]
-            n_key = _batch._norm(k, batch.dims)
-            # The call's own failure of this key (`barca.Failed`) is the step's.
-            key_phase = SPLIT_OUTPUT
-            try:
-                if n_key not in values:
-                    raise _batch.BatchFailed(f"batch returned no result for {text}")
-                value = values[n_key]
-                if isinstance(value, _batch.Failed):
-                    key_phase = USER_CODE
-                    raise _batch.BatchFailed(value.reason or f"{text} failed")
-                value, prewritten = _key_result(value, explicit)
-                key_phase = WRITE_OUTPUT
-                _materialize(
-                    value,
-                    node_id,
-                    art_dir,
-                    st,
-                    share,
-                    elapsed_in_artifact=True,
-                    timing=_timing(cpu / max(n, 1), rss_window),
-                    prewritten=prewritten,
-                    extra={
-                        "batch": call_id,
-                        "batch_keys": n,
-                        **({"batch_phases": phases} if phases else {}),
-                    },
-                )
-                phases = None
-                reported.add(node_id)
-            except (BrokenPipeError, ConnectionResetError):
-                raise
-            except Exception as exc:
-                reported.add(node_id)
-                if key_phase == WRITE_OUTPUT:
-                    key_phase = _output_phase(exc)
-                if isinstance(exc, _batch.BatchFailed):
-                    error_type, traceback = "BatchKeyFailed", ""
-                else:
-                    error_type, traceback = type(exc).__name__, _traceback_for(exc, key_phase)
-                _runtime.emit_step_error(
-                    node_id=node_id,
-                    error_type=error_type,
-                    message=str(exc),
-                    traceback=traceback,
-                    elapsed=share,
-                    worker_continues=True,
-                    phase=key_phase,
-                )
-    except BaseException as exc:
-        _ctrl_c_does_nothing()
-        if isinstance(exc, BrokenPipeError | ConnectionResetError):
-            raise
-        ok = _worker_survives(exc, True)
-        phase = key_phase
-        fail_all(exc, ok, time.perf_counter() - t0)
-    finally:
-        _ctrl_c_does_nothing()
-        tracing.finish()
-        _duckdb.unbind_inputs(bound_views)
-        _batch.unbind()
-        import shutil
+        # The call ran: write and report each key. Its time and memory are the call's, shared.
+        share = run.wall() / max(n, 1)
+        cpu_share = run.cpu() / max(n, 1)
+        # Once per call, on the first key written: the coordinator adds the calls of a node up.
+        phases: dict[str, float] | None = {
+            "import_seconds": run.import_seconds or 0.0,
+            "load_seconds": compute_start - load_start,
+            "compute_seconds": split_start - compute_start,
+            "split_seconds": split_end - split_start,
+        }
 
-        shutil.rmtree(staging, ignore_errors=True)
-    return ok
+        def write(st: Step, value: Any, prewritten: str | None) -> None:
+            nonlocal phases
+            _materialize(
+                value,
+                st["node_id"],
+                art_dir,
+                st,
+                share,
+                elapsed_in_artifact=True,
+                timing=_timing(cpu_share, run.rss_window),
+                prewritten=prewritten,
+                extra={
+                    "batch": call_id,
+                    "batch_keys": n,
+                    **({"batch_phases": phases} if phases else {}),
+                },
+            )
+            phases = None
+
+        # A key that fails is that key's failure, reported as it happens. A socket that is
+        # gone is nobody's: no key is reported for it, and the daemon loop ends.
+        run.propagates = (BrokenPipeError, ConnectionResetError)
+        _batch.write_keys(
+            batch, steps, values, first.get("serializer"), write, share, at=run, reported=reported
+        )
+    return run.survives
 
 
 # ─── The daemon loop ──────────────────────────────────────────────────────────
