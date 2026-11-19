@@ -1118,6 +1118,233 @@ pub fn attach(result: &mut StatusResult, evidence: Evidence<'_>, running: &HashS
     ));
 }
 
+/// Successful materializations considered for a node's typical durations.
+pub const DURATION_WINDOW: usize = 20;
+
+/// Median and p95 wall time over a node's most recent successful materializations.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Durations {
+    pub median_seconds: f64,
+    pub p95_seconds: f64,
+    /// How many materializations these are computed from (at most 20).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub samples: usize,
+}
+
+/// [`Durations`] of each node's recent successful runs ([`db::recent_durations`], at most
+/// [`DURATION_WINDOW`] of them, partition keys folded into their node); a node without one
+/// has no entry. The median is the one every typical time is
+/// ([`crate::schedule_standing::median`]: the middle value, or the mean of the two middle
+/// values of an even count); p95 is the nearest rank.
+pub fn durations(recent: HashMap<String, Vec<f64>>) -> HashMap<String, Durations> {
+    recent
+        .into_iter()
+        .filter_map(|(id, mut recent)| {
+            if recent.is_empty() {
+                return None;
+            }
+            recent.sort_by(f64::total_cmp);
+            // Nearest rank over the sorted values.
+            let rank = (0.95 * recent.len() as f64).ceil() as usize;
+            Some((
+                id,
+                Durations {
+                    median_seconds: crate::schedule_standing::median(&recent),
+                    p95_seconds: recent[rank.clamp(1, recent.len()) - 1],
+                    samples: recent.len(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// The run queue as the estimates read it: the runs in flight and when one that joined now
+/// would start. A server fills it from the queue it holds; `barca status` and a read-only
+/// server from the one the serving server records ([`Queue::recorded`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Queue {
+    /// The runs in flight: executing, or waiting ([`crate::estimates::Timing::runs`]).
+    pub runs: Vec<crate::estimates::PlannedRun>,
+    pub clear_at: Option<i64>,
+    /// The queue starts runs: neither paused nor draining, and its server is up.
+    pub open: bool,
+    /// How many steps of one run execute at once.
+    pub workers: usize,
+    /// How many runs execute at once, where the host knows.
+    pub max_runs: Option<usize>,
+}
+
+impl Queue {
+    /// The queue a serving server recorded ([`recorded_queue`]); `max_runs` is what the host
+    /// has configured, read when the server recorded none.
+    pub fn recorded(timing: crate::liveness::RecordedTiming, max_runs: Option<usize>) -> Self {
+        Self {
+            runs: timing.runs,
+            clear_at: timing.queue_clear_at,
+            open: timing.queue_open,
+            workers: timing.workers.unwrap_or(1),
+            max_runs: timing.max_runs.or(max_runs),
+        }
+    }
+}
+
+/// What the queue of the database at `db_path` records, as the estimates read it
+/// ([`crate::liveness::recorded_timing`]): its runs, its pause, and whether its server is
+/// gone (`recorded`, `observed`: [`crate::liveness`]). `ticks` are the schedules' recorded
+/// ticks. A database that does not exist records an open, empty queue.
+pub async fn recorded_queue(
+    db_path: &str,
+    dag: &crate::dag::Dag,
+    ticks: &HashMap<String, crate::schedule_standing::Ticks>,
+    recorded: &crate::liveness::Recorded,
+    observed: &crate::liveness::Observed,
+    now: i64,
+) -> Result<crate::liveness::RecordedTiming, BarcaError> {
+    let (runs, paused) = if Path::new(db_path).exists() {
+        (
+            crate::liveness::recorded_runs(db_path).await?,
+            crate::run_queue::paused_at(db_path).await?.is_some(),
+        )
+    } else {
+        Default::default()
+    };
+    Ok(crate::liveness::recorded_timing(
+        &runs,
+        ticks,
+        recorded,
+        paused,
+        observed.server_gone(recorded),
+        dag,
+        now,
+    ))
+}
+
+/// Everything health, schedule standing and the estimates are computed from, as of
+/// `schedules.now`: plain data, filled by the host answering. `barca status` fills it from
+/// the metadata database ([`attach_from_db`]); a server from its read cache, its scheduler
+/// and its run queue. The hosts differ only in what they put here: [`Inputs::assemble`] is the
+/// one computation over it.
+#[derive(Clone, Copy)]
+pub struct Inputs<'a> {
+    /// Every node's age ([`db::node_ages`]).
+    pub ages: &'a HashMap<String, NodeAge>,
+    /// Pinned assets (`barca pin`).
+    pub pinned: &'a HashSet<String>,
+    /// Paused nodes (`barca pause`).
+    pub paused: &'a HashSet<String>,
+    /// What the newest ticks found ([`checks`]).
+    pub checks: &'a Checks,
+    /// Which schedules reach each node ([`crate::refresh_path::Paths::of`]).
+    pub paths: &'a crate::refresh_path::Paths,
+    /// The schedules: ticks, failures, pauses, the scheduler here or the one on record, and
+    /// the instant everything is read at.
+    pub schedules: crate::refresh_path::ScheduleInputs<'a>,
+    /// Typical durations ([`durations`]) of the nodes in scope; empty where no estimate
+    /// needs them.
+    pub durations: &'a HashMap<String, Durations>,
+    pub queue: &'a Queue,
+    /// When each source file changed ([`crate::estimates::source_times_of`]).
+    pub source_times: &'a HashMap<String, i64>,
+}
+
+impl<'a> Inputs<'a> {
+    /// Where every schedule stands and what classification reads, computed once per answer.
+    pub fn assemble(self) -> Assembled<'a> {
+        let schedules = crate::refresh_path::schedule_views(self.schedules);
+        Assembled {
+            late: schedules
+                .iter()
+                .filter(|(_, schedule)| schedule.standing.late)
+                .map(|(id, _)| id.clone())
+                .collect(),
+            path_schedules: crate::refresh_path::path_schedules(&schedules),
+            typical: self
+                .durations
+                .iter()
+                .map(|(id, d)| (id.clone(), d.median_seconds))
+                .collect(),
+            schedules,
+            inputs: self,
+        }
+    }
+}
+
+/// [`Inputs`] with what is derived from them once per answer: each schedule's view, the late
+/// ones and each node's typical duration. Every host classifies, attaches and sums through
+/// it.
+pub struct Assembled<'a> {
+    inputs: Inputs<'a>,
+    /// Every schedule, by scheduled node id ([`crate::refresh_path::schedule_views`]).
+    pub schedules: HashMap<String, crate::refresh_path::ScheduleView>,
+    late: HashSet<String>,
+    path_schedules: crate::refresh_path::PathSchedules,
+    typical: HashMap<String, f64>,
+}
+
+impl Assembled<'_> {
+    /// What [`classify`], [`attach`] and [`crate::rollup::build`] read.
+    pub fn evidence(&self) -> Evidence<'_> {
+        let inputs = &self.inputs;
+        Evidence {
+            ages: inputs.ages,
+            pinned: inputs.pinned,
+            late: &self.late,
+            checks: inputs.checks,
+            path: crate::refresh_path::PathEvidence {
+                paths: inputs.paths,
+                schedules: &self.path_schedules,
+                paused: inputs.paused,
+                pinned: inputs.pinned,
+            },
+            timing: crate::estimates::Timing {
+                durations: &self.typical,
+                runs: &inputs.queue.runs,
+                queue_clear_at: inputs.queue.clear_at,
+                queue_open: inputs.queue.open,
+                workers: inputs.queue.workers,
+                source_times: inputs.source_times,
+                max_runs: inputs.queue.max_runs,
+            },
+            now: inputs.schedules.now.timestamp(),
+        }
+    }
+
+    /// Each scheduled node of `nodes` gets its `schedule` block.
+    pub fn attach_schedules(&self, nodes: &mut [NodeStatus]) {
+        for node in nodes.iter_mut() {
+            if let Some(schedule) = self.schedules.get(&node.id) {
+                node.schedule = Some(schedule.block.clone());
+            }
+        }
+    }
+
+    /// [`attach`] with this evidence.
+    pub fn attach(&self, result: &mut StatusResult, running: &HashSet<String>) {
+        attach(result, self.evidence(), running);
+    }
+
+    /// The rollup of `result`, which [`Assembled::attach`] has filled, as of `as_of`
+    /// ([`crate::rollup::build`]). `server`: a server answers.
+    pub fn rollup(
+        &self,
+        result: &StatusResult,
+        groups: &[crate::groups::NodeGroup],
+        running: &HashSet<String>,
+        as_of: chrono::DateTime<chrono::Utc>,
+        server: bool,
+    ) -> crate::rollup::Rollup {
+        crate::rollup::build(
+            &result.nodes,
+            groups,
+            running,
+            as_of,
+            self.evidence(),
+            server,
+        )
+    }
+}
+
 /// [`attach`] with the evidence the metadata DB of `cfg` holds (none when it does not exist
 /// yet): what `barca status` and `barca sql` read on this machine. Cron is evaluated in
 /// `zone`; a paused schedule is not late.
@@ -1128,7 +1355,21 @@ pub async fn attach_from_db(
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), BarcaError> {
-    from_db(result, dag, cfg, zone, now, false)
+    from_db(result, dag, cfg, zone, now, false, false)
+        .await
+        .map(|_| ())
+}
+
+/// [`attach_from_db`], with each scheduled node's `schedule` block from the same read
+/// (`barca status`).
+pub async fn attach_from_db_with_schedules(
+    result: &mut StatusResult,
+    dag: &crate::dag::Dag,
+    cfg: &crate::config::ResolvedConfig,
+    zone: &Zone,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), BarcaError> {
+    from_db(result, dag, cfg, zone, now, false, true)
         .await
         .map(|_| ())
 }
@@ -1142,11 +1383,14 @@ pub async fn rollup_from_db(
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<crate::rollup::Rollup, BarcaError> {
-    Ok(from_db(result, dag, cfg, zone, now, true)
+    Ok(from_db(result, dag, cfg, zone, now, true, false)
         .await?
         .expect("the rollup was asked for"))
 }
 
+/// Fill [`Inputs`] from the metadata DB of `cfg` and attach: this host's half. No scheduler
+/// and no run queue run here, so the schedules and the queue are what the serving server
+/// recorded (`crate::liveness`), in the zone it recorded.
 async fn from_db(
     result: &mut StatusResult,
     dag: &crate::dag::Dag,
@@ -1154,16 +1398,29 @@ async fn from_db(
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
     rollup: bool,
+    schedules: bool,
 ) -> Result<Option<crate::rollup::Rollup>, BarcaError> {
     let db_path = cfg.db_path.as_str();
+    let exists = Path::new(db_path).exists();
     let jobs = crate::schedule::jobs_from_dag(dag);
     let ids: Vec<String> = jobs.iter().map(|job| job.id.clone()).collect();
-    // What the records say of a scheduler and of the queue of the server that writes them
-    // (`crate::liveness`): none runs here.
-    let (seen, queued) = if Path::new(db_path).exists() {
+    let (seen, ages, pinned, paused, pauses, failures, ticks) = if exists {
         (
             crate::liveness::recorded(db_path).await?,
-            crate::liveness::recorded_runs(db_path).await?,
+            db::node_ages(db_path).await?,
+            crate::pins::list(db_path)
+                .await?
+                .into_iter()
+                .map(|pin| pin.node_id)
+                .collect::<HashSet<String>>(),
+            crate::pauses::list(db_path)
+                .await?
+                .into_iter()
+                .map(|pause| pause.id)
+                .collect::<HashSet<String>>(),
+            db::get_schedule_pauses(db_path).await?,
+            db::get_schedule_failures(db_path).await?,
+            crate::schedule_standing::recorded(db_path, &ids).await?,
         )
     } else {
         Default::default()
@@ -1171,97 +1428,55 @@ async fn from_db(
     let recorded_zone = seen.zone();
     let zone = recorded_zone.as_ref().unwrap_or(zone);
     let observed = crate::liveness::observe(&jobs, zone, now, &seen);
-    let (ages, pinned, paused_nodes, pauses, failures, ticks, checks) =
-        if Path::new(db_path).exists() {
-            let ages = db::node_ages(db_path).await?;
-            let checks = checks(db_path, dag, &ages, zone).await?;
-            (
-                ages,
-                crate::pins::list(db_path)
-                    .await?
-                    .into_iter()
-                    .map(|pin| pin.node_id)
-                    .collect::<HashSet<String>>(),
-                crate::pauses::list(db_path)
-                    .await?
-                    .into_iter()
-                    .map(|pause| pause.id)
-                    .collect::<HashSet<String>>(),
-                db::get_schedule_pauses(db_path).await?,
-                db::get_schedule_failures(db_path).await?,
-                crate::schedule_standing::recorded(db_path, &ids).await?,
-                checks,
-            )
-        } else {
-            Default::default()
-        };
-    // The scheduler's walk, once per command (#961). No scheduler runs here: a schedule is
-    // live when the records show one firing it (#1039).
-    let paths = crate::refresh_path::Paths::of(dag);
-    let schedules = crate::refresh_path::recorded_schedules(
-        &jobs, &ticks, &failures, &pauses, &observed, zone, now,
-    );
-    let late = schedules
-        .iter()
-        .filter(|(_, schedule)| schedule.standing.as_ref().is_some_and(|s| s.late))
-        .map(|(id, _)| id.clone())
-        .collect();
-    // No run queue here either: the one the serving server records, with its run slots.
-    let queue_paused = match Path::new(db_path).exists() {
-        true => crate::run_queue::paused_at(db_path).await?.is_some(),
-        false => false,
+    let checks = match exists {
+        true => checks(db_path, dag, &ages, zone).await?,
+        false => Checks::default(),
     };
-    let queue = crate::liveness::recorded_timing(
-        &queued,
-        &ticks,
-        &seen,
-        queue_paused,
-        observed.server_gone(&seen),
-        dag,
-        now.timestamp(),
+    // The serving server's run slots, when it recorded them; else what is configured here.
+    let queue = Queue::recorded(
+        recorded_queue(db_path, dag, &ticks, &seen, &observed, now.timestamp()).await?,
+        cfg.server_max_runs,
     );
     // The typical durations are what an estimate is made of where a scheduler is seen
     // firing, and what the rollup's roots cost.
+    let durations = if (rollup || observed.running) && exists {
+        let ids: Vec<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
+        durations(db::recent_durations(db_path, &ids, DURATION_WINDOW).await?)
+    } else {
+        HashMap::new()
+    };
+    // The scheduler's walk, once per command (#961).
+    let paths = crate::refresh_path::Paths::of(dag);
     let source_times = crate::estimates::source_times_of(dag);
-    let durations: HashMap<String, f64> =
-        if (rollup || observed.running) && Path::new(db_path).exists() {
-            let ids: Vec<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
-            db::recent_durations(db_path, &ids, 20)
-                .await?
-                .into_iter()
-                .filter(|(_, recent)| !recent.is_empty())
-                .map(|(id, recent)| (id, crate::schedule_standing::median(&recent)))
-                .collect()
-        } else {
-            HashMap::new()
-        };
-    let evidence = Evidence {
+    // No scheduler runs here: a schedule is live when the records show one firing it (#1039).
+    let firing = HashMap::new();
+    let health = Inputs {
         ages: &ages,
         pinned: &pinned,
-        late: &late,
+        paused: &paused,
         checks: &checks,
-        path: crate::refresh_path::PathEvidence {
-            paths: &paths,
-            schedules: &schedules,
-            paused: &paused_nodes,
-            pinned: &pinned,
+        paths: &paths,
+        schedules: crate::refresh_path::ScheduleInputs {
+            jobs: &jobs,
+            zone,
+            now,
+            ticks: &ticks,
+            failures: &failures,
+            pauses: &pauses,
+            firing: &firing,
+            observed: &observed,
         },
-        timing: crate::estimates::Timing {
-            durations: &durations,
-            runs: &queue.runs,
-            queue_clear_at: queue.queue_clear_at,
-            queue_open: queue.queue_open,
-            workers: queue.workers.unwrap_or(1),
-            source_times: &source_times,
-            // The serving server's, when it recorded them; else what is configured here.
-            max_runs: queue.max_runs.or(cfg.server_max_runs),
-        },
-        now: now.timestamp(),
-    };
+        durations: &durations,
+        queue: &queue,
+        source_times: &source_times,
+    }
+    .assemble();
+    if schedules {
+        health.attach_schedules(&mut result.nodes);
+    }
     let running = HashSet::new();
-    attach(result, evidence, &running);
-    Ok(rollup
-        .then(|| crate::rollup::build(&result.nodes, &dag.groups, &running, now, evidence, false)))
+    health.attach(result, &running);
+    Ok(rollup.then(|| health.rollup(result, &dag.groups, &running, now, false)))
 }
 
 /// What the tick record at `db_path` says about the nodes of `dag` ([`Checks`]): two bounded
