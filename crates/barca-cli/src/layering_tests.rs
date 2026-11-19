@@ -542,3 +542,29 @@ fn a_wrong_way_edge_is_named() {
     assert!(broken_rule("dispatch", "client").is_none());
     assert!(broken_rule("dispatch", "commands").is_none());
 }
+
+/// A command that kept a connection to a metadata DB closes it as it ends, which folds the
+/// log into the main file (`barca_core::db::end_of_command`). `crate::exit` does that, so it
+/// is the one place that ends the process: the `logs -f` paths once called `term::exit`
+/// themselves and left the log unfolded.
+#[test]
+fn every_exit_goes_through_the_one_that_closes_the_database() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut exits = Vec::new();
+    for (path, _) in module_files(&src).into_values().flatten() {
+        let code = without_test_items(&code_only(&std::fs::read_to_string(&path).unwrap()));
+        for call in ["term::exit(", "process::exit("] {
+            for _ in code.matches(call) {
+                exits.push(format!(
+                    "{} {call}",
+                    path.strip_prefix(&src).unwrap().display()
+                ));
+            }
+        }
+    }
+    assert_eq!(
+        exits,
+        ["main.rs term::exit("],
+        "call `crate::exit(code)` instead: it closes the metadata DB first"
+    );
+}

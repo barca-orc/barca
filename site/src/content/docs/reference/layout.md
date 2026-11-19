@@ -60,11 +60,19 @@ turns: a process that finds the lock held marks the lock file (its modification 
 process holding it lets the next one in before its own next operation. The read commands
 (`status`, `history`, `stats`, `logs`, `doctor`, and what `sql` reads) do not take the lock at
 all: they read the database in place, beside a run's writes, and neither wait for one nor hold
-one up. A process keeps one connection to the database for as long as it runs and folds the
-write-ahead log (`metadata.db-wal`) into `metadata.db` when its command ends. If a
+one up. A process that writes keeps one connection to the database for as long as it runs and folds
+the write-ahead log (`metadata.db-wal`) into `metadata.db` when its command ends: with no other
+process on the database, `metadata.db-wal` and `metadata.db-shm` are then gone. A read command
+only reads, so it cannot fold or delete them: after it, an empty `metadata.db-wal` (0 bytes,
+or a log another process's writes are still in) and a `metadata.db-shm` (32 KB) stay beside the
+database until the next command that writes ends. They hold nothing `metadata.db` lacks when
+the log is empty, they are counted in `.barca/`'s size, and deleting them by hand while no
+barca process runs is harmless. If a
 process waits more than 60 seconds for the lock you get an error that names the lock file and
 the process holding it at that moment (`held now by pid 4312 (barca serve ...)`, read from the
-kernel's lock table on Linux; elsewhere the error says the holder could not be named);
+kernel's lock table on Linux; elsewhere the error says the holder could not be named, and when
+the table does not name it, a process outside this container or on another machine that shares
+the directory, the error says that);
 an `... File is locked by another process` error means something outside barca (a DB browser, a
 backup tool, an older barca) has `.barca/metadata.db` open.
 

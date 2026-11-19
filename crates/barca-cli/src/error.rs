@@ -46,8 +46,7 @@ impl CliErrorExt for CliError {
         if let Some(line) = self.run_failure_line() {
             barca_core::errln!("{line}");
         }
-        barca_core::db::end_of_command();
-        barca_core::term::exit(self.code())
+        crate::exit(self.code())
     }
 }
 

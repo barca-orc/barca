@@ -19,11 +19,16 @@ pub async fn open_metadata(cfg: &crate::config::ResolvedConfig) -> Result<(), cr
 /// Reads through a view take neither barca's cross-process lock nor the process-wide guard
 /// (#1056, A7): `barca status` beside a recording run, or beside a `barca serve` that the
 /// command was told not to use (`--local`), does not wait for a write and no write waits for
-/// it. A database that cannot be read in place (missing, written by an earlier release and
-/// not yet completed, not in WAL mode) is first opened as a writer opens it, under the lock
-/// and briefly ([`open_metadata`], or `init_db` when `create` is false and it exists), and
-/// then viewed. Only when it still has no view are the reads made on the database itself,
-/// under the lock, as every read was before.
+/// it.
+///
+/// Reading never changes what a command does to a database that cannot be read in place
+/// (missing, written by an earlier release and not yet completed, not in WAL mode, an empty
+/// file). With `create`, the commands that have always created or completed the database
+/// first (`history`, `stats`, `logs`: [`open_metadata`]) still do, and then view it. Without,
+/// nothing is opened here: the reads are made on the database itself, under the lock, exactly
+/// as before there were views, so the caller's own steps decide what happens to it (`barca
+/// status` refuses an empty file, and completes an earlier release's database only where it
+/// always did, after its cache decisions).
 pub struct MetadataRead {
     cfg: crate::config::ResolvedConfig,
     _view: Option<ReadView>,
@@ -72,13 +77,11 @@ pub async fn read_metadata(
     if let Some(view) = ReadView::open(&cfg.db_path).await? {
         return Ok(viewed(view));
     }
-    if create {
-        open_metadata(cfg).await?;
-    } else if std::path::Path::new(&cfg.db_path).exists() {
-        init_db(&cfg.db_path).await?;
-    } else {
+    if !create {
+        // Not this function's to create, migrate or convert: see [`MetadataRead`].
         return Ok(plain(cfg));
     }
+    open_metadata(cfg).await?;
     Ok(match ReadView::open(&cfg.db_path).await? {
         Some(view) => viewed(view),
         None => plain(cfg),
@@ -140,7 +143,7 @@ pub use barca_db::db::{
 /// What a command does with the metadata DB as it ends: the connections this process kept
 /// are closed (the last one to close folds the log into the main file, as the close of every
 /// operation used to), then the lock is reported ([`trace_lock_holds`]). The CLI calls this
-/// before every exit.
+/// before every exit: its one `exit` function does (`crates/barca-cli/src/main.rs`).
 pub fn end_of_command() {
     barca_db::db::close_connections();
     trace_lock_holds();

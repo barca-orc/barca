@@ -37,7 +37,7 @@ pub(crate) async fn logs_cmd(
     }
     let status = follow_local(&cfg, &run_id, args).await?;
     follow_ended(&run_id, &status);
-    barca_core::term::exit(follow_exit_code(&status));
+    crate::exit(follow_exit_code(&status));
 }
 
 /// `-f` on this machine: print the run's lines from its spool as they arrive, and once the

@@ -31,9 +31,23 @@ Three things went wrong with it:
 
 The CLI's read commands (`status` and its keys views, `history`, `stats`, `logs`, `sql`'s
 reads, `doctor`'s metadata check) read through a `ReadView`, as the server's routes do:
-`barca_core::db::read_metadata`. A database that has no view (missing, written by an earlier
-release and not yet completed, not in WAL mode) is opened once as a writer opens it, under the
-lock, and then viewed; only if it still has none are the reads made under the lock as before.
+`barca_core::db::read_metadata`. A database that has no view (missing, an empty file, written
+by an earlier release and not yet completed, not in WAL mode) is treated as it was before
+there were views, command by command. `history`, `stats` and `logs` have always created or
+completed the database first (`open_metadata`); they still do, and then view it. `status`, its
+rollup and keys views and `sql` did not, so `read_metadata` opens nothing for them and their
+reads are made on the database itself, under the lock: `status` and `sql` refuse an empty file
+(exit 3, the file untouched), and complete an earlier release's database or return a
+rollback-journal one to WAL mode only at the step that always did (`init_db` before the
+history queries, after the cache decisions). `python/tests/test_reads_of_databases_without_a_view.py`
+pins each case against the bytes of the file.
+
+A read-only connection cannot checkpoint or delete the log, so a read command that is the
+last to close leaves `metadata.db-wal` (empty unless another process's writes are in it) and
+`metadata.db-shm` (32 KB) beside the database; the next command that writes removes them as it
+ends. Removing them from the reader would take a read-write connection under the lock, which
+is what the read path no longer has, so the manual and the layout specification say what
+remains instead. `.barca/`'s measured size includes the 32 KB while they exist.
 `barca sql` still stamps the results a query read (`last_read_at`), which is a write.
 
 ### Turns at the lock (A7)
@@ -95,8 +109,10 @@ hold. `VACUUM` is one statement and cannot be split: see "Not done".
   directory, so the size it plans from holds no log of its own that comes and goes.
 - **Process exit.** The CLI closes the owner's connections as a command ends
   (`db::close_connections`), each under its lock if that is free, so the last close still
-  folds the log into the main file as it did after every operation. A killed process leaves
-  the log on disk; the next open recovers it, as after any crash.
+  folds the log into the main file as it did after every operation. Every exit of a command
+  goes through one function that does it (`exit` in `crates/barca-cli/src/main.rs`; a test
+  reads the sources for another, after the `logs -f` exits were found to skip it). A killed
+  process leaves the log on disk; the next open recovers it, as after any crash.
 
 ### The safety properties and their tests
 
@@ -113,6 +129,9 @@ hold. `VACUUM` is one statement and cannot be split: see "Not done".
 | A backup copies a whole database beside writes | `db::fold_log_tests::a_backup_copies_beside_writes_without_the_lock`, `a_pinned_main_file_takes_writes_without_changing` (unchanged) |
 | Opens per run stay down | `db::owner_tests::operations_share_one_connection`, `python/tests/test_worker_startup.py` |
 | Reads do not wait for the lock | `python/tests/test_reads_without_the_lock.py` |
+| A read command changes no database it cannot read in place, beyond what it always did | `python/tests/test_reads_of_databases_without_a_view.py` |
+| Every exit of the CLI closes the kept connections | `layering_tests::every_exit_goes_through_the_one_that_closes_the_database` |
+| The lock's holder is named while other locks come and go | `db::tests::the_holder_is_named_while_other_locks_come_and_go` |
 | A waiter gets a turn | `db::tests::a_holder_that_takes_the_lock_again_at_once_gives_a_waiter_its_turn` |
 
 ## Measured

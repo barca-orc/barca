@@ -38,8 +38,15 @@ fn finish(json: bool) -> ! {
             &Context::default(),
         ).emit(json)
     }
+    exit(0)
+}
+
+/// Exit the process. Every exit of a command goes through here (a test reads the sources for
+/// another): the connections this process kept to a metadata DB are closed first, which
+/// folds its log into the main file, then `term::exit` copies out what child processes wrote.
+pub(crate) fn exit(code: i32) -> ! {
     barca_core::db::end_of_command();
-    barca_core::term::exit(0)
+    barca_core::term::exit(code)
 }
 
 fn main() {
