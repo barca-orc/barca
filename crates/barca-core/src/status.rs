@@ -2,7 +2,7 @@
 //! materialization and artifact shape.
 //!
 //! Nothing here is new logic. Cache state comes from the same decision `--dry-run` makes
-//! ([`crate::execution::explain_dag`]), history from the metadata DB, and artifact shape from
+//! ([`crate::predict::explain_dag`]), history from the metadata DB, and artifact shape from
 //! `python -m barca._inspect`, which opens artifact files only: user code is never imported.
 //! The ledger is read-only; bounded disposable inspection evidence is cached separately.
 
@@ -14,270 +14,14 @@ use crate::results::StepReport;
 use crate::step_status::StepStatus;
 use crate::targets::short_name;
 use crate::text::trace_since;
-use serde::{Deserialize, Serialize};
+pub use crate::views::{
+    CacheStatus, LastMaterialization, NodeStatus, PartitionState, ScheduleStatus, StatusFilter,
+    StatusResult, StatusSummary,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 mod store_check;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusResult {
-    /// Project-wide maintained cache accounting, filled by status entry points only.
-    #[serde(default)]
-    pub disk_usage: crate::gc::DiskUsage,
-    /// The target name, when status was scoped to one node's upstream cone (`null` for the
-    /// whole DAG or for several targets).
-    pub target: Option<String>,
-    /// Every target the status was scoped to, in the order given (empty for the whole DAG).
-    #[serde(default)]
-    pub targets: Vec<String>,
-    /// Every node in scope, in dependency order.
-    pub nodes: Vec<NodeStatus>,
-    /// Node counts per cache state, for every node in scope: a filter does not change them.
-    pub summary: StatusSummary,
-    /// How many assets in scope had their data measured (a recorded row count), and how many of
-    /// those look wrong: `7 of 556 measured`. For every node in scope, like `summary`.
-    #[serde(default)]
-    pub data_coverage: crate::health::DataCoverage,
-    /// The instant the nodes were classified at (RFC 3339, UTC): what every derived time and
-    /// `gap_seconds` are as of. `null` on a result that was not classified.
-    #[serde(default)]
-    pub as_of: Option<String>,
-    /// The scope summed: the root entry of `barca status --rollup` (counts by health and by
-    /// cause in nodes and in assets, `gap_seconds`, `unbounded`, `fresh_by`), for every node
-    /// in scope, like `summary`. Its `children` are empty here: the tree is the rollup's.
-    #[serde(default)]
-    pub rollup: Option<crate::rollup::RollupEntry>,
-    /// `--state` / `--problems`: which nodes `nodes` keeps. Absent without a filter.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter: Option<StatusFilter>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct NodeStatus {
-    /// Node id, e.g. `pipeline.py:clean`.
-    pub id: String,
-    /// The declared name, or function name when no explicit name is set.
-    pub name: String,
-    /// `asset`, `task` or `sensor`.
-    #[cfg_attr(feature = "ts", ts(type = "\"asset\" | \"task\" | \"sensor\""))]
-    pub kind: String,
-    /// Upstream node ids (direct inputs and `collect(...)` inputs), sorted.
-    pub inputs: Vec<String>,
-    pub partitioned: bool,
-    pub cache: CacheStatus,
-    /// Whether something needs doing about it, in one word, most severe first: `failing`,
-    /// `blocked`, `suspect`, `behind`, `undecided`, `never_run`, `ok` (`barca docs
-    /// status-fields`, "Health"). Beside `cache.state`, never in place of it.
-    #[serde(default)]
-    pub health: crate::health::Health,
-    /// Which rule decided `health`.
-    #[serde(default)]
-    pub health_reason: crate::health::HealthReason,
-    /// What its recorded results say about its data (`empty`, `rows_changed`,
-    /// `behind_input`); empty when nothing does, which for an unmeasured asset says nothing.
-    #[serde(default)]
-    pub signals: Vec<crate::health::DataSignal>,
-    /// Whether its latest successful result has a recorded row count (for a partitioned asset,
-    /// any key's); `null` for a task or sensor. `false` is "not measured", not ok.
-    #[serde(default)]
-    pub measured: Option<bool>,
-    /// Why it is not fresh, in one word: `catching_up`, `queued`, `no_refresh_path`,
-    /// `overdue`, `failing` or `undecided` (`barca docs status-fields`, "Cause"); `null`
-    /// exactly when it is fresh (`health` is `ok` or `suspect`).
-    #[serde(default)]
-    pub cause: Option<crate::health::Cause>,
-    /// The upstream fact that explains why it is not fresh (`barca docs status-fields`,
-    /// "Root"): the sensor whose observation changed, the node whose code changed, the
-    /// failing node, the missing or paused schedule. `null` exactly when it is fresh. Every
-    /// node with the same `root.id` is held by the same thing (`barca status --rollup`).
-    #[serde(default)]
-    pub root: Option<crate::health::Root>,
-    /// The node's freshness gap, seconds: how long it has been out of date (`stale_since` to
-    /// now) plus how long until it is expected fresh (now to `expected_fresh_at`), read at
-    /// the start of the current minute. 0 for a fresh or undecided node; a term whose time
-    /// is `null` counts 0.
-    #[serde(default)]
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub gap_seconds: i64,
-    /// What the newest finished tick that had the node as a target did with it, and when
-    /// (`barca docs status-fields`, "Last check"); `null` when no retained tick did. When the
-    /// node's own state is `unknown`, a check that found it up to date decides its health
-    /// (`health_reason: "checked_up_to_date"`).
-    #[serde(default)]
-    pub last_check: Option<crate::health::LastCheck>,
-    /// The schedule whose tick brings the node up to date, with its next tick and the ticks
-    /// that already missed the node (`barca docs status-fields`, "Refresh path"); `null` when
-    /// no tick has the node as a target, or the node is paused or pinned.
-    #[serde(default)]
-    pub refresh_path: Option<crate::refresh_path::RefreshPath>,
-    /// Since when the node has been out of date (RFC 3339, UTC): the earliest recorded time
-    /// from which it has been continuously not fresh (`barca docs status-fields`, "Times").
-    /// `null` for a fresh or undecided node and where no record holds the time.
-    #[serde(default)]
-    pub stale_since: Option<String>,
-    /// When the node is expected to be fresh (RFC 3339, UTC), an estimate rounded up to 5
-    /// seconds: the start of the run that computes it plus the typical durations of the
-    /// steps before it. `null` for a fresh node and where no run is known to leave it fresh
-    /// (failing, blocked, undecided, missed by a tick, no refresh path).
-    #[serde(default)]
-    pub expected_fresh_at: Option<String>,
-    /// When a tick next looks at the node (RFC 3339, UTC): the next tick of its refresh path.
-    /// A node with this and no `expected_fresh_at` will be rechecked, not necessarily fresh.
-    /// `null` when it has no refresh path or the path has no next tick.
-    #[serde(default)]
-    pub recheck_at: Option<String>,
-    /// Why a node that is not fresh has no `expected_fresh_at`, in one word (`barca docs
-    /// status-fields`, "Times"): `failing`, `paused`, `scheduler_off`, `no_path`,
-    /// `undecided`, `missed`, `queue_stopped`, `no_scheduler_here` or `not_promised`. `null`
-    /// for a fresh node and one that has an estimate.
-    #[serde(default)]
-    pub no_estimate: Option<crate::health::NoEstimate>,
-    /// Per-key cache state of a partitioned node.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partitions: Option<PartitionState>,
-    /// The most recent execution (successful or failed); `null` if it never ran. Cache hits
-    /// are not executions and do not appear here.
-    pub last_materialization: Option<LastMaterialization>,
-    /// Last recompute whose bytes differed for unchanged code and inputs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_bytes_change: Option<db::BytesChange>,
-    /// Shape of `last_materialization`'s artifact (`null` when there is none).
-    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
-    pub shape: Option<serde_json::Value>,
-    /// Environment variables the node declares with `env=[...]` (empty when none); their values
-    /// are part of its run hash.
-    #[serde(default)]
-    pub env: Vec<String>,
-    /// Environment variables the node's code reads without declaring them in `env=[...]`
-    /// (`barca docs cache`, "Environment variables"), sorted; not part of its run hash. Absent
-    /// when there are none. Experimental (#574).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub undeclared_env: Vec<String>,
-    /// With a configured server (`barca status` answered by the server's ledger): whether this
-    /// machine has a copy of the node's result (RFC-0007 section 4.1). Absent otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(skip))]
-    pub local: Option<bool>,
-    /// A node with `freshness=Schedule(...)`: its schedule's state (`barca status`, "Schedules").
-    /// Absent for a node that is not scheduled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(optional))]
-    pub schedule: Option<ScheduleStatus>,
-}
-
-/// The state of one scheduled node's schedule. With a server it is what the server's scheduler
-/// reports (`GET /schedule`, the numbers the web UI shows); on this machine there is no
-/// scheduler, so it is read from the metadata DB, which holds what a `barca serve` of this
-/// `.barca/` recorded (failures, pauses, the last tick), and `live` is false.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct ScheduleStatus {
-    /// The cron expression.
-    pub cron: String,
-    /// When the cron expression next matches (RFC 3339, UTC): in the server's `--timezone` from
-    /// a server, in this machine's local time otherwise, as `barca list` computes it.
-    pub next_fire: Option<String>,
-    /// The newest tick the scheduler fired (RFC 3339, UTC): the slot of the newest run the
-    /// schedule started or queued. `null` when none is recorded.
-    pub last_fired: Option<String>,
-    /// Status of the run that tick started, in the words of `barca history`: `pending` while
-    /// it waits in the server's run queue, then `running`, `success`, `failed`, `cancelled`,
-    /// `error` or `interrupted`.
-    pub last_status: Option<String>,
-    /// The run that tick started (`barca history --run <id>`).
-    pub last_run_id: Option<String>,
-    /// Where it stands, in one word: `paused`, `held` (after `max_failures` failed ticks),
-    /// `late`, `overrunning` (its runs outlast its interval) or `on_time`
-    /// ([`crate::schedule_standing::ScheduleState`]). The word every surface shows.
-    #[serde(default)]
-    pub state: crate::schedule_standing::ScheduleState,
-    /// The fact behind `state` in a line, with what ends it; `null` for `on_time` and
-    /// `paused`.
-    #[serde(default)]
-    pub state_detail: Option<String>,
-    /// A slot passed with nothing decided for it, longer ago than its grace plus its queue
-    /// wait ([`crate::schedule_standing::standing`]). Never while paused or held.
-    pub late: bool,
-    /// The first slot that has passed after the newest slot the scheduler decided (fired, or
-    /// skipped because its run was still in flight) (RFC 3339, UTC); `null` while on time,
-    /// while paused or held and when no tick is recorded.
-    pub late_since: Option<String>,
-    /// Consecutive failed ticks.
-    pub failures: u32,
-    /// `Schedule(..., max_failures=N)`, default 5.
-    pub max_failures: u32,
-    /// `failures >= max_failures`: ticks are skipped until an explicit request or a change in
-    /// the node's inputs.
-    pub failing: bool,
-    /// Held back by `POST /schedule/{id}/pause`.
-    pub paused: bool,
-    /// When a timed pause ends (RFC 3339, UTC); `null` for a pause until resumed.
-    pub paused_until: Option<String>,
-    /// Why the last due tick was skipped: `in_flight` or `paused` (server only).
-    pub skip_reason: Option<String>,
-    /// A scheduler is firing the schedule: the answering server's own, or, where none runs
-    /// (`barca status` without `--server`, a `--read-only` or `--no-schedule` server), one
-    /// the metadata DB shows deciding its slots ([`crate::liveness::observe`]). False when
-    /// none does: it stopped, it left a slot undecided past the grace, or none ever ran.
-    pub live: bool,
-    /// How long its ticks' runs typically wait for a run slot, whole seconds: the median
-    /// queue wait of its newest 20 fired ticks; 0 with none recorded.
-    #[serde(default)]
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub typical_queue_wait_seconds: u64,
-    /// How long its ticks' runs typically take, start to end, whole seconds: the median of
-    /// its newest 20 fired ticks whose run succeeded; `null` with none recorded.
-    #[serde(default)]
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub typical_run_seconds: Option<u64>,
-    /// Its typical queue wait exceeds its interval: its ticks wait for a run slot longer than
-    /// they are apart (`--max-runs`).
-    #[serde(default)]
-    pub queue_bound: bool,
-}
-
-impl ScheduleStatus {
-    /// A schedule that needs attention: paused, or skipped after `max_failures` failed ticks.
-    pub(crate) fn needs_attention(&self) -> bool {
-        self.paused || self.failing
-    }
-
-    /// The table's SCHEDULE cell: `*/5 * * * *; held, failing 3/3`, `0 6 * * *; paused`,
-    /// `*/10 * * * * *; overrunning, next ...`,
-    /// `0 6 * * *; next 2026-10-23 06:00:00 UTC`,
-    /// `0 6 * * *; late since 2026-10-23 06:00:00 UTC, next 2026-10-24 06:00:00 UTC`.
-    pub fn cell(&self) -> String {
-        let state = if self.paused {
-            match &self.paused_until {
-                Some(until) => format!("paused until {}", crate::text::utc_cell(until)),
-                None => "paused".to_string(),
-            }
-        } else if self.failing {
-            format!("held, failing {}/{}", self.failures, self.max_failures)
-        } else {
-            let next = self
-                .next_fire
-                .as_deref()
-                .map(|t| format!("next {}", crate::text::utc_cell(t)))
-                .unwrap_or_else(|| "no next fire".to_string());
-            let next = match self.late_since.as_deref().filter(|_| self.late) {
-                Some(since) => format!("late since {}, {next}", crate::text::utc_cell(since)),
-                None if self.state == crate::schedule_standing::ScheduleState::Overrunning => {
-                    format!("overrunning, {next}")
-                }
-                None => next,
-            };
-            match self.failures {
-                0 => next,
-                1 => format!("1 failure, {next}"),
-                n => format!("{n} failures, {next}"),
-            }
-        };
-        format!("{}; {state}", self.cron)
-    }
-}
 
 // barca-server names this path (`handlers.rs`); the helper lives in `time`.
 pub use crate::time::rfc3339_secs;
@@ -328,50 +72,6 @@ pub async fn attach_schedules_of(
     Ok(())
 }
 
-impl ScheduleStatus {
-    /// `job`'s schedule as it stands (`standing`), with its failed ticks `(failures,
-    /// max_failures)` and its pause when one is on. Not `live`: the caller says whether a
-    /// scheduler fires it (its own, or [`crate::liveness::observe`]).
-    pub fn of(
-        job: &crate::schedule::ScheduledJob,
-        standing: crate::schedule_standing::Standing,
-        (failures, max_failures): (u32, u32),
-        pause: Option<&db::SchedulePause>,
-    ) -> Self {
-        let state = crate::schedule_standing::ScheduleState::of(
-            &standing,
-            pause.is_some(),
-            (failures, max_failures),
-        );
-        Self {
-            state,
-            state_detail: state.detail(
-                crate::targets::short_name(&job.id),
-                &standing,
-                (failures, max_failures),
-                job.kind == crate::NodeKind::Task,
-            ),
-            cron: job.cron_str.clone(),
-            next_fire: standing.next_fire.and_then(rfc3339_secs),
-            last_fired: standing.last_fired.and_then(rfc3339_secs),
-            last_status: standing.last_status,
-            last_run_id: standing.last_run_id,
-            late: standing.late,
-            late_since: standing.late_since.and_then(rfc3339_secs),
-            failures,
-            max_failures,
-            failing: failures >= max_failures,
-            paused: pause.is_some(),
-            paused_until: pause.and_then(|p| p.until).and_then(rfc3339_secs),
-            skip_reason: None,
-            live: false,
-            typical_queue_wait_seconds: standing.typical_queue_wait_seconds.round() as u64,
-            typical_run_seconds: standing.typical_run_seconds.map(|s| s.round() as u64),
-            queue_bound: standing.queue_bound,
-        }
-    }
-}
-
 /// The `cache.state` values, as JSON and `--state` spell them.
 pub(crate) const STATES: [CacheState; 8] = CacheState::ALL;
 
@@ -397,27 +97,6 @@ pub const CACHE_REASONS: &[&str] = &[
     "task",
     "sensor",
 ];
-
-/// Which nodes `barca status --state` / `--problems` (and `GET /nodes?state=&problems=`) keep.
-/// The summary always counts every node in scope.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StatusFilter {
-    /// Keep nodes whose `cache.state` is one of these (snake_case, as in JSON).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub states: Vec<CacheState>,
-    /// Keep nodes that need attention ([`needs_attention`]).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub problems: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cause: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub health: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    /// How many nodes passed, before any `--limit` (the table's note).
-    #[serde(skip)]
-    pub matched: usize,
-}
 
 impl StatusFilter {
     /// Parse `--state a,b` (or `?state=a,b`): each one of [`STATES`], `never-run` spelled either
@@ -575,170 +254,6 @@ pub(crate) fn short_error(error: &str, max: usize) -> String {
     } else {
         let cut: String = line.chars().take(max.saturating_sub(3)).collect();
         format!("{cut}...")
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct CacheStatus {
-    /// `cached`, `unsynced`, `stale`, `never_run`, `partial`, `blocked`, `unknown` or
-    /// `always_runs`.
-    pub state: CacheState,
-    /// Machine-readable reason: `materialized`, `local_only`, `store_only`, `mismatch`,
-    /// `not_in_ledger` (the CLI with a configured server; the server never answers it), `changed`,
-    /// `upstream_stale`, `upstream_failed`, `failed`, `artifact_missing`, `evicted`, `no_record`,
-    /// `partitions_missing`, `partitions_unknown`, `sensor_output_unknown`, `cutoff_pending`,
-    /// `not_planned` (the dry run status is computed from has no step for it), `task` or
-    /// `sensor`: [`CACHE_REASONS`].
-    #[cfg_attr(
-        feature = "ts",
-        ts(
-            type = "\"materialized\" | \"local_only\" | \"store_only\" | \"mismatch\" | \"not_in_ledger\" | \"changed\" | \"upstream_stale\" | \"upstream_failed\" | \"failed\" | \"artifact_missing\" | \"evicted\" | \"no_record\" | \"partitions_missing\" | \"partitions_unknown\" | \"sensor_output_unknown\" | \"cutoff_pending\" | \"not_planned\" | \"task\" | \"sensor\""
-        )
-    )]
-    pub reason: String,
-    /// The reason in words.
-    pub detail: String,
-    /// The run hash this code and these inputs hash to now (the cache key).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_hash: Option<String>,
-    /// The artifact a `get` would serve from cache.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub artifact: Option<String>,
-    /// A `stale` or failed node: what changed in its run hash since its last successful materialization
-    /// (`code`, `decorator argument NAME`, `decorator NAME`, `helper FILE:NAME`, `input ID`,
-    /// `sensor ID`, `env NAME`, `kind`). Absent when that materialization recorded no components
-    /// (before 0.29.0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub changed: Option<Vec<String>>,
-    /// What moved the run hash, by cause: any of `code_changed`, `inputs_changed`, `env_changed`
-    /// (from `changed`) and `upstream_stale` (an input is not cached yet). Set on `stale` nodes
-    /// and on a failed node that once succeeded; absent when the cause is not recorded.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(
-        feature = "ts",
-        ts(
-            optional,
-            type = "Array<\"code_changed\" | \"inputs_changed\" | \"env_changed\" | \"upstream_stale\">"
-        )
-    )]
-    pub change_causes: Option<Vec<String>>,
-}
-
-fn is_zero(n: &usize) -> bool {
-    *n == 0
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct PartitionState {
-    pub total: usize,
-    pub cached: usize,
-    pub missing: usize,
-    /// Keys without a cached result, capped at 20.
-    pub missing_keys: Vec<String>,
-    /// How many of `missing` last failed, rather than never having run or going stale.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
-    pub failed: usize,
-    /// The first of them in key order, capped at 20.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "ts", ts(as = "Option<Vec<String>>", optional))]
-    pub failed_keys: Vec<String>,
-    /// For each key of `missing_keys` with an earlier successful result, what changed in its
-    /// run hash since then (`value ID` when a dict `partitions_from` source returned a new value
-    /// for it). A new key is absent. Absent when no key has an earlier result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(optional))]
-    pub changed: Option<std::collections::BTreeMap<String, Vec<String>>>,
-    /// Keys whose latest successful result wrote no rows (its row count was recorded and is 0).
-    /// Absent when none is.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
-    pub empty: usize,
-    /// How many of `missing` wait on the same keys of an input, which failed (`barca docs
-    /// partitions`, "Failed keys block their own keys"): a run skips them. Absent when none
-    /// does; the node's `cache.state` is then `blocked`.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    #[cfg_attr(feature = "ts", ts(as = "Option<u32>", optional))]
-    pub blocked: usize,
-    /// The node whose failed keys they wait on, by id. Absent when no key is blocked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(optional))]
-    pub blocked_on: Option<String>,
-    /// How many of `missing` neither failed nor are blocked: stale, or never run. A run
-    /// computes them. `failed`, `blocked` and `behind` add up to `missing`.
-    #[serde(default)]
-    pub behind: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct LastMaterialization {
-    /// SHA-256 of the serialized artifact, absent for legacy materializations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_hash: Option<String>,
-    /// `success` or `failed`.
-    pub status: String,
-    /// When it was recorded (UTC, `YYYY-MM-DD HH:MM:SS`).
-    pub created_at: String,
-    pub elapsed_seconds: Option<f64>,
-    pub run_hash: Option<String>,
-    pub artifact: Option<String>,
-    /// `json`, `pickle` or `parquet`.
-    pub format: Option<String>,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub size_bytes: Option<i64>,
-    /// Rows of a successful tabular result, as its worker counted them: a frame's length or a
-    /// parquet file's footer. `null` when not counted (not a frame, a failed attempt, a CSV of a
-    /// lazy frame or relation, a row recorded by an older barca).
-    #[serde(default)]
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub rows: Option<i64>,
-    /// For a partitioned node: which key this was (e.g. `k=a`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partition: Option<String>,
-    /// For a failed attempt: the error message.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StatusSummary {
-    pub cached: usize,
-    pub stale: usize,
-    pub never_run: usize,
-    pub partial: usize,
-    /// Partitioned nodes some of whose keys wait on the same keys of an input, which failed
-    /// (#764).
-    #[serde(default)]
-    pub blocked: usize,
-    pub unknown: usize,
-    pub always_runs: usize,
-    /// Cached, but not (yet) where it should be: this machine's copy and the artifact store's
-    /// do not agree (RFC-0009: `local_only`, `store_only`, `mismatch`), or, with a server, a
-    /// result whose ledger post is pending (`not_in_ledger`).
-    #[serde(default)]
-    pub unsynced: usize,
-}
-
-impl StatusSummary {
-    /// Node counts per cache state.
-    pub fn of(nodes: &[NodeStatus]) -> Self {
-        let mut summary = StatusSummary::default();
-        for n in nodes {
-            match n.cache.state {
-                CacheState::Cached => summary.cached += 1,
-                CacheState::Unsynced => summary.unsynced += 1,
-                CacheState::Stale => summary.stale += 1,
-                CacheState::NeverRun => summary.never_run += 1,
-                CacheState::Partial => summary.partial += 1,
-                CacheState::Blocked => summary.blocked += 1,
-                CacheState::AlwaysRuns => summary.always_runs += 1,
-                CacheState::Unknown => summary.unknown += 1,
-            }
-        }
-        summary
     }
 }
 
@@ -936,7 +451,7 @@ pub(crate) async fn status_from_dag_with_membership(
     // The rules a run follows (#985): each node is decided on its own, and what reads a
     // `Manual` or pinned node is decided against the result a run reads, not against a
     // recompute of it.
-    let (explained, membership, _, held) = crate::execution::explain_dag_with_keys(
+    let (explained, membership, _, held) = crate::predict::explain_dag_with_keys(
         dag,
         cfg,
         &target_names,
@@ -1047,16 +562,11 @@ pub(crate) async fn status_from_dag_with_membership(
         }
         let held_note = held_above.map(|above| held_note(dag, above, held[above].pinned));
         let mut cache = cache_status(report, &inputs, &states, &history, &held, held_note);
-        local_only(
-            &mut cache,
-            id,
-            !node.extracted.partitions.is_empty(),
-            &pending,
-        );
+        local_only(&mut cache, id, !node.decl.partitions.is_empty(), &pending);
         // Keys that wait on the same keys of an input, which failed, are blocked (#764): a run
         // computes the node's other keys and skips these. Its own failed keys come first.
         if let Some(p) = partitions.as_ref().filter(|p| p.failed == 0)
-            && !node.extracted.partitions.is_empty()
+            && !node.decl.partitions.is_empty()
             && matches!(
                 cache.state,
                 CacheState::Stale | CacheState::NeverRun | CacheState::Partial
@@ -1095,7 +605,7 @@ pub(crate) async fn status_from_dag_with_membership(
         nodes.push(NodeStatus {
             id: id.to_string(),
             name: node
-                .extracted
+                .decl
                 .explicit_name
                 .as_deref()
                 .unwrap_or(node.function_name())
@@ -1105,7 +615,7 @@ pub(crate) async fn status_from_dag_with_membership(
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_else(|| "unknown".to_string()),
             inputs,
-            partitioned: !node.extracted.partitions.is_empty(),
+            partitioned: !node.decl.partitions.is_empty(),
             cache,
             // Filled by `health::attach`, once the whole scope is known.
             health: Default::default(),
@@ -1121,15 +631,15 @@ pub(crate) async fn status_from_dag_with_membership(
             expected_fresh_at: None,
             recheck_at: None,
             no_estimate: None,
-            partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
+            partitions: partitions.filter(|_| !node.decl.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
             last_bytes_change: history
                 .last_bytes_change
                 .filter(|_| crate::cache::checks_bytes(node)),
             shape: None,
-            env: node.extracted.env.clone(),
-            undeclared_env: node.extracted.undeclared_env(),
+            env: node.decl.env.clone(),
+            undeclared_env: node.undeclared_env(),
             local: None,
             schedule: None,
         });
@@ -1177,7 +687,7 @@ fn blocked_by(
     blocked: &HashMap<String, (usize, String)>,
     missing: usize,
 ) -> Option<(usize, String)> {
-    let mine: std::collections::BTreeSet<&String> = node.extracted.partitions.keys().collect();
+    let mine: std::collections::BTreeSet<&String> = node.decl.partitions.keys().collect();
     let mut reads: Vec<&String> = node.resolved_inputs.values().collect();
     reads.sort();
     reads.dedup();
@@ -1186,7 +696,7 @@ fn blocked_by(
         .filter(|up| {
             dag.get_node(up).is_some_and(|u| {
                 let theirs: std::collections::BTreeSet<&String> =
-                    u.extracted.partitions.keys().collect();
+                    u.decl.partitions.keys().collect();
                 theirs == mine
             })
         })
@@ -1245,7 +755,7 @@ fn cache_status(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
-    held: &crate::execution::HeldNodes,
+    held: &crate::predict::HeldNodes,
     held_note: Option<String>,
 ) -> CacheStatus {
     let Some(r) = report else {
@@ -1322,7 +832,7 @@ fn not_cached(
     inputs: &[String],
     states: &HashMap<String, CacheState>,
     history: &db::NodeHistory,
-    held: &crate::execution::HeldNodes,
+    held: &crate::predict::HeldNodes,
 ) -> CacheStatus {
     let state = if history.ever_succeeded {
         CacheState::Stale
@@ -1439,6 +949,30 @@ pub async fn read_schemas(
     store_check::read_shapes(python, cfg, nodes, sample, true, &verified_local).await;
 }
 
+/// `barca status --rollup` on this machine: the status of the targets' upstream cones (the
+/// whole graph without targets), classified with the evidence the metadata DB holds, summed.
+/// No run is tracked here, so `running` is 0 everywhere.
+pub async fn rollup(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+) -> Result<crate::rollup::Rollup, BarcaError> {
+    let dag = crate::load::build_dag(file_args, python).await?;
+    let read = crate::db::read_metadata(cfg, false).await?;
+    let cfg = read.cfg();
+    let mut result =
+        crate::status::status_from_dag(cfg, target_names, &dag, python, 0, false).await?;
+    crate::health::rollup_from_db(
+        &mut result,
+        &dag,
+        cfg,
+        &crate::schedule::Zone::Local,
+        chrono::Utc::now(),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1539,7 +1073,7 @@ mod tests {
     #[test]
     fn states_and_reasons() {
         let none = HashMap::new();
-        let no_held = crate::execution::HeldNodes::new();
+        let no_held = crate::predict::HeldNodes::new();
         let h = history(None, false);
         let c = cache_status(
             Some(&report("run", Some("not_materialized"))),
@@ -1653,7 +1187,7 @@ mod tests {
         // A held input (a `Manual` or pinned node a run reads as it is) is not what makes a
         // node stale, whatever its own state (#985): the node reads its current result.
         let h = history(Some("success"), true);
-        let held: crate::execution::HeldNodes = [(
+        let held: crate::predict::HeldNodes = [(
             "p.py:u".to_string(),
             crate::cache::ReadAsIs {
                 pinned: false,
@@ -1756,7 +1290,7 @@ mod tests {
             "add to CACHE_REASONS and the OpenAPI Cache.reason enum: {unlisted:?}"
         );
 
-        let ts = src
+        let ts = include_str!("views/node.rs")
             .split("pub reason: String")
             .next()
             .and_then(|head| head.rsplit("type = \"").next())

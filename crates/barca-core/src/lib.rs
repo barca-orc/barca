@@ -10,7 +10,7 @@
 //!   `partition_grid`, `history_filter`, `diagnostics`, `envelope`, `outcome`, `cache`, `http`,
 //!   `telemetry`, `text` (sizes, spans and times as text), `run_queue` (the server's queue
 //!   rows) and `serve` (what exists only for `barca serve`: capacity, claims,
-//!   `record_unstarted_run`); `sizing` from the run orchestrator.
+//!   `record_unstarted_run`); `sizing`, the pool size and capacity of a run.
 //! - **Metadata reads and the server's own writes**: `db`, a listed subset of `barca_db::db`
 //!   (see that module). An operation of several database calls is a core function above, not a
 //!   sequence in a caller.
@@ -63,6 +63,7 @@ pub mod pauses;
 mod persist;
 pub mod pins;
 pub(crate) mod plan_reasons;
+pub(crate) mod predict;
 pub mod queries;
 mod recover;
 pub mod refresh_path;
@@ -75,6 +76,8 @@ pub mod run_queue;
 pub mod schedule;
 pub mod schedule_standing;
 pub mod serve;
+pub mod served;
+pub(crate) mod sizing;
 #[cfg(test)]
 mod source_scan;
 pub mod sql;
@@ -86,6 +89,7 @@ pub mod text;
 pub mod transfer;
 pub mod values;
 mod verified_copies;
+pub(crate) mod views;
 
 // The model layer lives in `barca-model` (#905 step 4); its modules and root items keep their
 // `barca_core::` paths.
@@ -108,6 +112,7 @@ pub(crate) use barca_model::process;
 pub(crate) use barca_model::reports;
 pub use barca_model::run_explain;
 use barca_model::source_observation;
+pub(crate) use barca_model::step_result;
 pub use barca_model::step_status;
 pub use barca_model::suggest;
 pub use barca_model::term;
@@ -158,10 +163,12 @@ pub(crate) use barca_engine::protocol;
 pub(crate) use barca_engine::run_host;
 pub(crate) use barca_engine::step_trace;
 
-pub use execution::sizing;
+pub use sizing::sizing;
 
 #[cfg(test)]
 mod helper_launch_tests;
+#[cfg(test)]
+mod ir_roundtrip_tests;
 #[cfg(test)]
 mod layering_tests;
 #[cfg(test)]

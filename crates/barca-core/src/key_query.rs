@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::db::PartitionErrorGroup;
-use crate::partition_grid::{GridCounts, GridDimension, PartitionGrid, state};
 
 /// The most keys or values a served run selection spells out. A larger set that is not a
 /// rectangle of the dimensions has no selection: it is named by narrowing the filter.
@@ -28,6 +27,130 @@ pub const NEEDS_RUN: [char; 4] = [
     state::STALE,
     state::NEVER_RUN,
 ];
+
+/// A key's state, one character of [`PartitionGrid::states`].
+pub mod state {
+    /// Served from cache: a successful result matches its code and inputs.
+    pub const FRESH: char = 'c';
+    /// An operator holds this key at a chosen version until unpinned.
+    pub const PINNED: char = 'p';
+    /// It succeeded before, and its code or inputs changed since: it runs again.
+    pub const STALE: char = 's';
+    /// No attempt recorded: it runs.
+    pub const NEVER_RUN: char = 'n';
+    /// Its latest attempt failed: it runs again.
+    pub const FAILED: char = 'f';
+    /// It waits on the same key of an input whose latest attempt failed (or that waits too).
+    pub const BLOCKED: char = 'b';
+    /// Not a key: a combination of the dimensions' values the node does not have.
+    pub const NONE: char = '-';
+
+    /// Every state a key can be in, most urgent first, with the word the CLI and the web UI
+    /// name it by.
+    pub const NAMED: [(char, &str); 6] = [
+        (FAILED, "failed"),
+        (BLOCKED, "blocked"),
+        (STALE, "stale"),
+        (NEVER_RUN, "never_run"),
+        (PINNED, "pinned"),
+        (FRESH, "fresh"),
+    ];
+
+    /// A state character's word; `None` for [`NONE`].
+    pub fn name(state: char) -> Option<&'static str> {
+        NAMED.iter().find(|(c, _)| *c == state).map(|(_, n)| *n)
+    }
+}
+
+/// One dimension of a node's keys: its name and its values, in order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct GridDimension {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+/// How many keys are in each state.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct GridCounts {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub fresh: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub pinned: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub stale: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub never_run: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub failed: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub blocked: usize,
+    /// Keys whose latest attempt succeeded and wrote no rows (its row count recorded as 0),
+    /// whatever their state.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub empty: usize,
+}
+
+impl GridCounts {
+    /// How many keys are in the state `code` (a [`state`] character).
+    pub fn of(&self, code: char) -> usize {
+        match code {
+            state::FRESH => self.fresh,
+            state::PINNED => self.pinned,
+            state::STALE => self.stale,
+            state::NEVER_RUN => self.never_run,
+            state::FAILED => self.failed,
+            state::BLOCKED => self.blocked,
+            _ => 0,
+        }
+    }
+}
+
+/// Every key of a partitioned node.
+///
+/// Keys are the cells of the dimensions' product in row-major order, the last dimension
+/// varying fastest: with `day` (2 values) and `region` (3), cell 4 is the second day's second
+/// region. The per-key arrays have one entry per cell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct PartitionGrid {
+    pub id: String,
+    /// The partitioned nodes that share this node's keys (the same dimensions, linked through
+    /// their inputs), upstream first; this node among them.
+    pub chain: Vec<String>,
+    /// False while the keys are not known: a `partitions_from` source that has not run.
+    pub known: bool,
+    /// In key-suffix order (by name).
+    pub dimensions: Vec<GridDimension>,
+    /// One character per cell: `c` fresh, `s` stale, `n` never run, `f` failed, `b` blocked,
+    /// `-` not a key.
+    pub states: String,
+    pub counts: GridCounts,
+    /// The latest attempt of each cell, null where there is none: when, in seconds after
+    /// `attempted_base` (unix seconds); how long it took (milliseconds); its artifact's size;
+    /// and its run, an index into `runs`.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub attempted_base: i64,
+    #[cfg_attr(feature = "ts", ts(type = "Array<number | null>"))]
+    pub attempted_at: Vec<Option<i64>>,
+    #[cfg_attr(feature = "ts", ts(type = "Array<number | null>"))]
+    pub elapsed_ms: Vec<Option<u64>>,
+    #[cfg_attr(feature = "ts", ts(type = "Array<number | null>"))]
+    pub size_bytes: Vec<Option<i64>>,
+    /// The rows each cell's latest attempt wrote, where its worker counted them: null for a
+    /// failed attempt, a result that is not a frame or an older barca's row.
+    #[cfg_attr(feature = "ts", ts(type = "Array<number | null>"))]
+    pub rows: Vec<Option<i64>>,
+    pub run: Vec<Option<u32>>,
+    /// Each failed cell's error, an index into `errors`, by cell index.
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, number>"))]
+    pub error: BTreeMap<u32, u32>,
+    /// The failed keys' errors, most common first: the first line, each of the key's own
+    /// values replaced by its dimension's name (`<region>`).
+    pub errors: Vec<PartitionErrorGroup>,
+    pub runs: Vec<String>,
+}
 
 /// The order keys are listed in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -206,7 +206,7 @@ pub const TICK_COLUMNS: &[(&str, &str)] = &[
     ("targets", "STRUCT(node VARCHAR, outcome VARCHAR)[]"),
 ];
 
-/// [`QueueRow`]'s keys.
+/// The columns of `barca.queue` ([`queue`]).
 pub const QUEUE_COLUMNS: &[(&str, &str)] = &[
     ("run_id", V),
     ("position", I),
@@ -221,26 +221,6 @@ pub const QUEUE_COLUMNS: &[(&str, &str)] = &[
     ("schedule_id", V),
     ("scheduled_at", V),
 ];
-
-/// One run of a server's run queue, as `GET /queue` lists it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct QueueRow {
-    pub run_id: String,
-    /// Its place among the waiting runs, 1 = next; `None` for a started run.
-    pub position: Option<usize>,
-    /// `queued`, `running` or `draining`, as `run_queue` records it.
-    pub state: &'static str,
-    pub queued_at: String,
-    pub started_at: Option<String>,
-    pub estimated_start_at: Option<String>,
-    pub wait_seconds: Option<u64>,
-    pub command: String,
-    pub target: Option<String>,
-    pub triggered_by: crate::trigger::TriggeredBy,
-    pub schedule_id: Option<String>,
-    /// For a tick's run: its slot (RFC 3339, UTC).
-    pub scheduled_at: Option<String>,
-}
 
 /// A table of the `barca` schema over rows already in its columns' shape (`None`: a
 /// placeholder): what a server's `POST /sql/query` answered for `select * from barca.<name>`.
@@ -437,9 +417,10 @@ fn tick_row(t: &TickRecord) -> Value {
 }
 
 /// `barca.queue`: one row per run in a server's run queue, started runs first, then the
-/// waiting ones in order.
-pub fn queue(rows: Option<&[QueueRow]>) -> Table {
-    table(QUEUE, QUEUE_COLUMNS, rows.map(values))
+/// waiting ones in order. A row is an entry of `GET /queue` in the table's columns
+/// (`served::QueueEntry::table_row`).
+pub fn queue(rows: Option<Vec<Value>>) -> Table {
+    table(QUEUE, QUEUE_COLUMNS, rows)
 }
 
 /// What stderr says when a query names `barca.queue` on a machine without a server.
@@ -529,7 +510,7 @@ pub async fn local(
         None
     };
     // Only a server holds a run queue: here the table exists and is empty, and says why.
-    let mut queue = queue(named(query, QUEUE).then_some(&[]));
+    let mut queue = queue(named(query, QUEUE).then(Vec::new));
     if queue.rows.is_some() {
         queue.note = Some(NO_QUEUE_HERE.to_string());
     }
@@ -695,24 +676,28 @@ mod tests {
 
     #[test]
     fn queue_columns_are_the_queue_row_keys() {
-        let row = QueueRow {
+        let row = crate::served::QueueEntry {
             run_id: "run-1".into(),
+            status: "pending".into(),
             position: Some(1),
-            state: "queued",
+            state: Some(crate::run_queue::QueueState::Queued),
             queued_at: "2026-11-17T15:00:00.000Z".into(),
             started_at: None,
             estimated_start_at: None,
             wait_seconds: None,
             command: "get".into(),
             target: None,
+            target_line: "all assets".into(),
             triggered_by: crate::trigger::TriggeredBy::Schedule,
             schedule_id: Some("pipeline.py:inbox".into()),
             scheduled_at: Some("2026-11-17T15:00:00Z".into()),
+            waiting_for: None,
         };
-        let table = queue(Some(&[row]));
+        let table = queue(Some(vec![row.table_row()]));
         let rows = table.rows.unwrap();
         assert_eq!(sorted_keys(&rows[0]), sorted_columns(QUEUE_COLUMNS));
         assert_eq!(rows[0]["triggered_by"], "schedule");
+        assert_eq!(rows[0]["state"], "queued");
     }
 
     #[test]

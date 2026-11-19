@@ -79,7 +79,7 @@ class Rules(unittest.TestCase):
         )
 
     def test_a_leaf_crate_runs_the_guards_that_scan_it_and_nothing_else_below(self):
-        sel, out = run("crates/barca-server/src/handlers.rs")
+        sel, out = run("crates/barca-server/src/routes.rs")
         self.assertEqual(sorted(sel["whole"]), ["barca", "barca-server"])
         self.assertEqual(
             sorted(sel["readers"]["barca-core"]),
@@ -299,9 +299,9 @@ class Rules(unittest.TestCase):
         self.assertEqual(run("ui/src/App.tsx")[1]["rust_types"], "false")
 
     def test_the_log_names_every_crate(self):
-        sel, _ = run("crates/barca-server/src/handlers.rs")
+        sel, _ = run("crates/barca-server/src/routes.rs")
         text = "\n".join(explain(sel, CRATES, 1))
-        self.assertIn("barca-server: every test: owns crates/barca-server/src/handlers.rs", text)
+        self.assertIn("barca-server: every test: owns crates/barca-server/src/routes.rs", text)
         self.assertIn("barca: every test: depends on barca-server", text)
         self.assertIn("barca-engine: only test every_child_process_is_started_through", text)
         self.assertIn("barca-model: not run: no changed file can affect its tests", text)

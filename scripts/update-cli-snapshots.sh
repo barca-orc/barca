@@ -9,8 +9,8 @@
 #   - README.md                                        the command table
 #   - python/tests/snapshots/cli_contract/*.txt        JSON output schemas and the error envelope
 #   - site/src/content/docs/reference/*.md             the site pages generated from manual
-#                                                      topics (SITE_PAGES in contract.rs);
-#                                                      alone: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract::
+#                                                      topics (SITE_PAGES in site_pages_tests.rs);
+#                                                      alone: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests::
 #
 # Run from anywhere in the repository; review the diff afterwards, it is the contract change.
 # Uses .venv (maturin develop) when present, otherwise the python/maturin on PATH.
@@ -30,7 +30,7 @@ else
 fi
 
 echo "==> help snapshots and generated tables (cargo test -p barca)"
-BARCA_UPDATE_SNAPSHOTS=1 cargo test -q -p barca contract::
+BARCA_UPDATE_SNAPSHOTS=1 cargo test -q -p barca -- contract:: site_pages_tests::
 
 echo "==> rebuilding barca so the JSON snapshots see this source"
 "$MATURIN" develop --release -q
@@ -39,10 +39,10 @@ echo "==> JSON schema snapshots and tables (pytest)"
 BARCA_UPDATE_SNAPSHOTS=1 "$PY" -m pytest -q python/tests/test_cli_contract.py
 
 echo "==> copying contract.md, now complete, and the other manual topics to the site"
-BARCA_UPDATE_SNAPSHOTS=1 cargo test -q -p barca contract::
+BARCA_UPDATE_SNAPSHOTS=1 cargo test -q -p barca -- contract:: site_pages_tests::
 
 echo "==> checking that the snapshots are stable"
-cargo test -q -p barca contract::
+cargo test -q -p barca -- contract:: site_pages_tests::
 "$PY" -m pytest -q python/tests/test_cli_contract.py
 
 echo

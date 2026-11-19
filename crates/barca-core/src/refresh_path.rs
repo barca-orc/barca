@@ -20,80 +20,10 @@ use crate::dag::Dag;
 use crate::freshness::{Reach, tick_reach};
 use crate::schedule::{Zone, next_fire};
 use crate::schedule_standing::Standing;
-use crate::status::ScheduleStatus;
-use serde::{Deserialize, Serialize};
+pub use crate::views::RefreshPath;
+use crate::views::ScheduleStatus;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
-
-/// `refresh_path`: the schedule whose tick reaches the node as a target. With several, the
-/// one that fires earliest next (a schedule with no next tick last, ties by schedule id).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct RefreshPath {
-    /// The scheduled node's id.
-    pub schedule: String,
-    /// The schedule's next slot (RFC 3339, UTC); the first slot after a timed pause ends;
-    /// `null` for a pause until resumed and when `live` is false.
-    pub next_tick: Option<String>,
-    /// The schedule is paused (`POST /schedule/{id}/pause`).
-    pub paused: bool,
-    /// A running scheduler fires the schedule: the answering server's own, or one the
-    /// metadata DB shows deciding its slots. False when none does and for a schedule held
-    /// after `max_failures` failed ticks.
-    pub live: bool,
-    /// Where the schedule stands, in one word (`schedule.state`): `paused`, `held`, `late`,
-    /// `overrunning` or `on_time`.
-    #[serde(default)]
-    pub state: crate::schedule_standing::ScheduleState,
-    /// How many finished ticks of the node's path had it as a target and did not leave it
-    /// fresh (`failed` or `not_reached`), counted back from the newest to the last one that
-    /// found it up to date or rebuilt it, and only those that ended after its newest
-    /// successful result. 0 for a fresh node. Bounded by the tick record: the newest 20
-    /// fired ticks of each schedule keep their targets.
-    pub missed_ticks: u32,
-}
-
-impl RefreshPath {
-    /// What will refresh the node, for a table cell: `next tick 15:05 UTC by inbox`,
-    /// `inbox is paused`, `inbox is not firing`; with `, missed 2 ticks` when it has. `now`
-    /// (unix seconds) decides whether the day is named.
-    pub fn line(&self, now: i64) -> String {
-        let by = crate::targets::short_name(&self.schedule);
-        let next = self
-            .next_tick
-            .as_deref()
-            .and_then(crate::time::parse_rfc3339)
-            .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
-            .map(|at| {
-                let today = chrono::DateTime::from_timestamp(now, 0)
-                    .is_some_and(|now| now.date_naive() == at.date_naive());
-                at.format(if today {
-                    "%H:%M UTC"
-                } else {
-                    "%Y-%m-%d %H:%M UTC"
-                })
-                .to_string()
-            });
-        use crate::schedule_standing::ScheduleState;
-        let path = match (self.paused, self.live, next) {
-            (true, _, Some(next)) => format!("{by} is paused, next tick {next}"),
-            (true, _, None) => format!("{by} is paused"),
-            (false, true, Some(next)) if self.state == ScheduleState::Overrunning => {
-                format!("next tick {next} by {by}, which is overrunning")
-            }
-            (false, true, Some(next)) => format!("next tick {next} by {by}"),
-            (false, _, _) if self.state == ScheduleState::Held => {
-                format!("{by} is held after failed ticks")
-            }
-            (false, _, _) => format!("{by} is not firing"),
-        };
-        match self.missed_ticks {
-            0 => path,
-            1 => format!("{path}, missed 1 tick"),
-            n => format!("{path}, missed {n} ticks"),
-        }
-    }
-}
 
 /// What a table says of a node with no refresh path.
 pub const NO_REFRESH_PATH: &str = "no refresh path";
@@ -117,7 +47,7 @@ impl Paths {
             .into_iter()
             .filter(|id| {
                 dag.get_node(id)
-                    .is_some_and(|n| matches!(n.extracted.freshness, crate::Freshness::Schedule(_)))
+                    .is_some_and(|n| matches!(n.decl.freshness, crate::Freshness::Schedule(_)))
             })
             .collect();
         let manual: HashSet<String> = dag
@@ -125,7 +55,7 @@ impl Paths {
             .into_iter()
             .filter(|id| {
                 dag.get_node(id)
-                    .is_some_and(|n| matches!(n.extracted.freshness, crate::Freshness::Manual))
+                    .is_some_and(|n| matches!(n.decl.freshness, crate::Freshness::Manual))
             })
             .map(str::to_string)
             .collect();

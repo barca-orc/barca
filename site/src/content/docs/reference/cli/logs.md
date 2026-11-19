@@ -4,7 +4,7 @@ description: "barca logs: a run's recorded step stdout and stderr, following a l
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/logs.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/logs.md (barca docs logs). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/logs.md (barca docs logs). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `barca logs RUN_ID` reads what a run's steps wrote, line by line: their stdout, and their
 Python stderr (`logging`, `warnings`, `print(..., file=sys.stderr)` and the traceback of each

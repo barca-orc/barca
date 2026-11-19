@@ -18,22 +18,25 @@
 //!
 //! **Size.** The helper refuses a query whose rows pass a few megabytes
 //! (`MAX_ANSWER_BYTES` in the helper), and this side reads no line of it longer than
-//! [`MAX_LINE`]: a longer one is a helper that lost the protocol, and is replaced. DuckDB's
+//! `sql_helper::MAX_LINE`: a longer one is a helper that lost the protocol, and is replaced. DuckDB's
 //! memory limit bounds only its own buffers; these bound what Python and the server hold.
 //!
 //! **Tables.** [`SOURCES`] lists them. A table is handed to the helper when a query names it
 //! and it is not loaded for the current state: the metadata database on disk
-//! ([`AppState::db_state`]) and, for a table computed from the graph, the inspected graph
-//! ([`AppState::inspect_dag`]). A query on an unchanged server sends the helper nothing but
+//! (`Reads::db_state`) and, for a table computed from the graph, the inspected graph
+//! (`Reads::inspect_dag`). A query on an unchanged server sends the helper nothing but
 //! the query. A new table is one more entry in [`SOURCES`].
 //!
-//! **Time.** A query has [`TIMEOUT`], waiting for the helper and loading tables included. Past
+//! **Time.** A query has `sql_helper::TIMEOUT`, waiting for the helper and loading tables included. Past
 //! it the helper is told to interrupt the query; if it has not answered [`CANCEL_GRACE`]
 //! later it is killed. Either way the answer is `408` and no query keeps running.
 
 use crate::error::ApiError;
-use crate::handlers::SnapshotDb;
-use crate::read_cache::{STATUS_MAX_AGE, Stamp};
+use crate::read_cache::Stamp;
+use crate::snapshot::SnapshotDb;
+use crate::sql_helper::{
+    CANCEL_GRACE, Ended, Loaded, Lost, MAX_PENDING, Process, QueryHelper, Shape,
+};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -43,56 +46,20 @@ use barca_core::sql::{SqlResult, tables};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::sync::atomic::Ordering;
 use tokio::time::Instant;
 
 /// Rows answered when the request names no `limit`.
 pub const DEFAULT_LIMIT: usize = 1_000;
 /// The most rows one answer holds.
 pub const MAX_LIMIT: usize = 10_000;
-/// How long a query has, waiting for the helper and loading tables included.
-pub const TIMEOUT: Duration = Duration::from_secs(5);
-/// How long an interrupted query has to stop before the helper is killed.
-const CANCEL_GRACE: Duration = Duration::from_secs(1);
-/// How long the helper has to start (the interpreter, importing DuckDB).
-const START_LIMIT: Duration = Duration::from_secs(30);
-/// How long the helper has to take one table's rows. Generous: it holds the helper's lock,
-/// and a helper that has not answered by then is replaced.
-const LOAD_LIMIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 60 });
+
 /// The most rows of one table the helper holds: the newest ones. More are named in `notes`.
 pub const TABLE_ROWS: usize = 100_000;
-/// The longest line read from the helper: its answer is at most 4MB of rows
-/// (`MAX_ANSWER_BYTES` in `python/barca/_sql_server.py`) and the column names around them.
-const MAX_LINE: usize = 16 * 1024 * 1024;
-/// Queries admitted at once: one running and the rest waiting for the helper. One more is
-/// answered `429`.
-pub const MAX_PENDING: usize = 4;
+
 /// What a `429` tells the client to wait, in seconds.
 const BUSY_RETRY_AFTER: u64 = 1;
-
-/// The module the helper runs.
-const MODULE: &str = "barca._sql_server";
-
-/// Environment variables the helper inherits, by name: what an interpreter needs to start and
-/// find `barca`. It gets none of the server's credentials (it reads no store and no file, and
-/// what it is not given it cannot leak), and `HOME` is its own empty directory.
-const ENV_KEPT: &[&str] = &[
-    "PATH",
-    "TMPDIR",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "TZ",
-    "VIRTUAL_ENV",
-    "PYTHONPATH",
-    "PYTHONHOME",
-    "LD_LIBRARY_PATH",
-    "DYLD_LIBRARY_PATH",
-];
 
 /// What a table is loaded from.
 pub(crate) struct Inputs {
@@ -120,7 +87,7 @@ pub(crate) struct Source {
     /// (column, DuckDB type), in order: the columns `barca sql` gives the table.
     pub(crate) columns: &'static [(&'static str, &'static str)],
     /// Whether its rows are computed from the graph as well as the database. Such a table is
-    /// loaded again when the inspected graph changes, and at least every [`STATUS_MAX_AGE`]
+    /// loaded again when the inspected graph changes, and at least every `STATUS_MAX_AGE`
     /// (what it shows also moves with the clock: a schedule turning late).
     pub(crate) graph: bool,
     /// Whether its rows are the server's own state in memory (the run queue), which neither
@@ -212,7 +179,7 @@ fn nodes(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
             .dag
             .as_ref()
             .expect("a graph table is given the graph");
-        let status = crate::inspect::node_status(
+        let status = crate::health_view::node_status(
             &inputs.state,
             dag,
             &inputs.db,
@@ -235,7 +202,7 @@ fn schedules(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
             .dag
             .as_ref()
             .expect("a graph table is given the graph");
-        let status = crate::inspect::node_status(
+        let status = crate::health_view::node_status(
             &inputs.state,
             dag,
             &inputs.db,
@@ -245,8 +212,8 @@ fn schedules(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
             None,
         )
         .await?;
-        let paths = inputs.state.cached_paths(dag).await?;
-        let zone = crate::scheduler::zone_of(&inputs.state.config);
+        let paths = inputs.state.reads.cached_paths(dag).await?;
+        let zone = crate::config::zone_of(&inputs.state.config);
         let rows = tables::schedule_rows(
             &status.nodes,
             |id| tables::targets_in(&status.nodes, &paths, id),
@@ -268,10 +235,18 @@ fn ticks(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
 /// The runs of `GET /queue`, as that route lists them now.
 fn queue(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
     Box::pin(async move {
-        let rows = crate::queue::table_rows(&inputs.state).await?;
+        let rows = crate::queue_view::table_rows(&inputs.state).await?;
         let total = rows.len();
-        Ok(rows_of(tables::queue(Some(&rows)), total))
+        Ok(rows_of(
+            tables::queue(Some(rows.iter().map(|row| row.table_row()).collect())),
+            total,
+        ))
     })
+}
+
+/// Every table as the helper is told of it when it starts.
+fn shapes() -> Vec<Shape> {
+    SOURCES.iter().map(|s| (s.name, s.columns)).collect()
 }
 
 fn table_list() -> String {
@@ -282,342 +257,7 @@ fn table_list() -> String {
         .join(", ")
 }
 
-/// What a loaded table was loaded for.
-struct Loaded {
-    db: Stamp,
-    dag: Option<Arc<Dag>>,
-    at: Instant,
-    /// Said with every answer that names the table: rows left out.
-    note: Option<String>,
-}
-
-impl Loaded {
-    fn current(&self, source: &Source, db: &Stamp, dag: Option<&Arc<Dag>>) -> bool {
-        let same_graph = match (&self.dag, dag) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        };
-        !source.live
-            && self.db == *db
-            && same_graph
-            && !(source.graph && self.at.elapsed() >= STATUS_MAX_AGE)
-    }
-}
-
-/// The running helper and what it holds.
-struct Process {
-    // Killed when dropped.
-    child: tokio::process::Child,
-    stdin: tokio::process::ChildStdin,
-    answers: BufReader<tokio::process::ChildStdout>,
-    /// The line being read: kept here so that a read given up at a deadline loses nothing.
-    partial: Vec<u8>,
-    next_id: u64,
-    loaded: HashMap<&'static str, Loaded>,
-    /// Server paths that an error message must not carry ([`Process::scrub`]).
-    private: Vec<String>,
-    /// The helper's working directory and `HOME`: empty, removed when the helper is dropped.
-    _home: tempfile::TempDir,
-}
-
-/// Why a request to the helper has no answer.
-enum Lost {
-    /// The helper is gone, or said something that is not the protocol: it is replaced.
-    Dead(String),
-    /// DuckDB is not installed in the server's environment.
-    NoDuckdb(String),
-}
-
-impl Lost {
-    fn into_api(self) -> ApiError {
-        match self {
-            Lost::Dead(why) => ApiError::NoHelper(format!(
-                "the query helper stopped: {why}\n\
-                 Send the query again: the server starts a new helper. The other routes are \
-                 not affected."
-            )),
-            Lost::NoDuckdb(message) => ApiError::NoHelper(format!(
-                "{message}\n\
-                 Install it there (`uv add 'barca[sql]'`) and send the query again: the helper \
-                 starts with the next query. The other routes are not affected."
-            )),
-        }
-    }
-}
-
-impl Process {
-    async fn start(python: &std::path::Path) -> Result<Self, Lost> {
-        let home = tempfile::Builder::new()
-            .prefix("barca-sql-")
-            .tempdir()
-            .map_err(|e| Lost::Dead(format!("no directory to run it in ({e})")))?;
-        // The interpreter by an absolute path: the helper does not start in the project.
-        let python = match python.components().count() > 1 && python.is_relative() {
-            true => std::env::current_dir()
-                .map(|here| here.join(python))
-                .unwrap_or_else(|_| python.to_path_buf()),
-            false => python.to_path_buf(),
-        };
-        // `-P`: nothing is put in front of `sys.path` (with `-m` that is the working directory).
-        let mut cmd = tokio::process::Command::new(&python);
-        cmd.args(["-P", "-m", MODULE]);
-        cmd.env_clear();
-        for (name, value) in std::env::vars_os() {
-            if name.to_str().is_some_and(|n| ENV_KEPT.contains(&n)) {
-                cmd.env(name, value);
-            }
-        }
-        // Not the project root (the server's working directory), so nothing in the project is
-        // importable or relative to the helper, and not the server user's home, which DuckDB
-        // looks under for secrets and extensions.
-        cmd.current_dir(home.path()).env("HOME", home.path());
-        // The terminal's Ctrl-C is the server's to act on. Stdin is the request channel and
-        // the lifeline at once: only this process holds its other end.
-        barca_core::helper_proc::shield_from_ctrl_c(&mut cmd);
-        cmd.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(barca_core::term::child_output())
-            .kill_on_drop(true);
-        let mut child = barca_core::helper_proc::spawn(&mut cmd)
-            .map_err(|e| Lost::Dead(format!("cannot run {}: {e}", python.display())))?;
-        let stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = child.stdout.take().expect("stdout is piped");
-        let mut process = Process {
-            child,
-            stdin,
-            answers: BufReader::new(stdout),
-            partial: Vec::new(),
-            next_id: 0,
-            loaded: HashMap::new(),
-            private: private_paths(&python, home.path()),
-            _home: home,
-        };
-        let hello = tokio::time::timeout(START_LIMIT, process.line())
-            .await
-            .map_err(|_| {
-                Lost::Dead(format!(
-                    "it did not start within {}s",
-                    START_LIMIT.as_secs()
-                ))
-            })??;
-        if hello["error"]["kind"] == "no_duckdb" {
-            let message = hello["error"]["message"].as_str().unwrap_or_default();
-            return Err(Lost::NoDuckdb(message.to_string()));
-        }
-        if hello["ready"] != true {
-            return Err(Lost::Dead(format!("unexpected first line: {hello}")));
-        }
-        // Every table exists from the start, as a placeholder until it is loaded.
-        for source in SOURCES {
-            process.load(source, None).await?;
-        }
-        Ok(process)
-    }
-
-    fn exited(&mut self) -> bool {
-        !matches!(self.child.try_wait(), Ok(None))
-    }
-
-    async fn say(&mut self, message: &Value) -> Result<(), Lost> {
-        let mut line = message.to_string();
-        line.push('\n');
-        let sent = async {
-            self.stdin.write_all(line.as_bytes()).await?;
-            self.stdin.flush().await
-        };
-        sent.await
-            .map_err(|e| Lost::Dead(format!("it does not take requests ({e})")))
-    }
-
-    /// The helper's next line, at most [`MAX_LINE`] bytes of it. Cancel-safe: what was read
-    /// of a line stays in `partial`.
-    async fn line(&mut self) -> Result<Value, Lost> {
-        loop {
-            let read = self.answers.fill_buf().await;
-            let buffer =
-                read.map_err(|e| Lost::Dead(format!("its answer cannot be read ({e})")))?;
-            if buffer.is_empty() {
-                return Err(Lost::Dead("it exited".into()));
-            }
-            let end = buffer.iter().position(|b| *b == b'\n');
-            let taken = end.unwrap_or(buffer.len());
-            self.partial.extend_from_slice(&buffer[..taken]);
-            self.answers.consume(taken + usize::from(end.is_some()));
-            if self.partial.len() > MAX_LINE {
-                return Err(Lost::Dead(format!(
-                    "it answered a line longer than {}MB",
-                    MAX_LINE / (1024 * 1024)
-                )));
-            }
-            if end.is_some() {
-                let line = std::mem::take(&mut self.partial);
-                return serde_json::from_slice(&line).map_err(|e| {
-                    Lost::Dead(format!("it answered something that is not JSON ({e})"))
-                });
-            }
-        }
-    }
-
-    /// `message` without the server's own paths (its project root and home, the interpreter's
-    /// environment, the helper's directory): DuckDB names paths in some errors, and an error
-    /// goes to whoever sent the query.
-    fn scrub(&self, message: &str) -> String {
-        let mut out = message.to_string();
-        for path in &self.private {
-            out = out.replace(path.as_str(), "<server>");
-        }
-        out
-    }
-
-    /// The answer to request `id`.
-    async fn answer(&mut self, id: u64) -> Result<Value, Lost> {
-        loop {
-            let answer = self.line().await?;
-            if answer["id"] == id {
-                return Ok(answer);
-            }
-        }
-    }
-
-    fn id(&mut self) -> u64 {
-        self.next_id += 1;
-        self.next_id
-    }
-
-    /// Replace `source`'s table with `rows`, or with a placeholder.
-    async fn load(&mut self, source: &Source, rows: Option<&[Value]>) -> Result<(), Lost> {
-        let id = self.id();
-        self.say(&json!({"op": "load", "id": id, "table": {
-            "schema": tables::SCHEMA,
-            "name": source.name,
-            "columns": source.columns,
-            "rows": rows,
-        }}))
-        .await?;
-        let answer = tokio::time::timeout(LOAD_LIMIT, self.answer(id))
-            .await
-            .map_err(|_| {
-                Lost::Dead(format!(
-                    "it did not load barca.{} within {}s",
-                    source.name,
-                    LOAD_LIMIT.as_secs()
-                ))
-            })??;
-        if answer["ok"] == true {
-            return Ok(());
-        }
-        Err(Lost::Dead(format!(
-            "it could not load barca.{}: {}",
-            source.name,
-            answer["error"]["message"].as_str().unwrap_or("no reason")
-        )))
-    }
-}
-
-/// The server paths an answer must not name, longest first: the project root, the server
-/// user's home, the Python environment and the helper's directory, each also as the
-/// filesystem resolves it (`/var` is `/private/var` on macOS).
-fn private_paths(python: &std::path::Path, helper_home: &std::path::Path) -> Vec<String> {
-    let mut paths: Vec<std::path::PathBuf> = vec![helper_home.to_path_buf()];
-    paths.extend(std::env::current_dir().ok());
-    paths.extend(std::env::var_os("HOME").map(Into::into));
-    paths.extend(std::env::var_os("VIRTUAL_ENV").map(Into::into));
-    // `<environment>/bin/python`: the environment.
-    paths.extend(python.parent().and_then(|bin| bin.parent()).map(Into::into));
-    let resolved: Vec<_> = paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
-    paths.extend(resolved);
-    let mut paths: Vec<String> = paths
-        .iter()
-        .map(|p| p.display().to_string())
-        .filter(|p| p.len() > 1)
-        .collect();
-    paths.sort_by_key(|p| std::cmp::Reverse(p.len()));
-    paths.dedup();
-    paths
-}
-
-/// The server's one query helper ([`AppState::sql`]).
-pub struct QueryHelper {
-    /// Held for a whole query: one at a time.
-    process: tokio::sync::Mutex<Option<Process>>,
-    /// One permit per admitted query ([`MAX_PENDING`]): the one running and those waiting.
-    pending: tokio::sync::Semaphore,
-    /// [`TIMEOUT`] in milliseconds (shorter in tests).
-    timeout_ms: AtomicU64,
-    /// How many helpers were started and how many tables were handed over (tests).
-    pub(crate) starts: AtomicUsize,
-    pub(crate) loads: AtomicUsize,
-}
-
-impl Default for QueryHelper {
-    fn default() -> Self {
-        Self {
-            process: tokio::sync::Mutex::new(None),
-            pending: tokio::sync::Semaphore::new(MAX_PENDING),
-            timeout_ms: AtomicU64::new(TIMEOUT.as_millis() as u64),
-            starts: AtomicUsize::new(0),
-            loads: AtomicUsize::new(0),
-        }
-    }
-}
-
-/// What ends a query without rows.
-enum Ended {
-    /// An answer for the client; the helper is fine.
-    Api(ApiError),
-    /// The helper is replaced before the next query.
-    Replace(ApiError),
-}
-
-impl From<ApiError> for Ended {
-    fn from(e: ApiError) -> Self {
-        Ended::Api(e)
-    }
-}
-
-impl From<barca_core::BarcaError> for Ended {
-    fn from(e: barca_core::BarcaError) -> Self {
-        Ended::Api(e.into())
-    }
-}
-
-impl From<Lost> for Ended {
-    fn from(lost: Lost) -> Self {
-        Ended::Replace(lost.into_api())
-    }
-}
-
 impl QueryHelper {
-    fn timeout(&self) -> Duration {
-        Duration::from_millis(self.timeout_ms.load(Ordering::Relaxed))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_timeout(&self, timeout: Duration) {
-        self.timeout_ms
-            .store(timeout.as_millis() as u64, Ordering::Relaxed);
-    }
-
-    /// The helper's process id, when one is running (tests).
-    #[cfg(test)]
-    pub(crate) async fn pid(&self) -> Option<u32> {
-        self.process
-            .lock()
-            .await
-            .as_ref()
-            .and_then(|p| p.child.id())
-    }
-
-    fn timed_out(&self) -> ApiError {
-        ApiError::Timeout(format!(
-            "the query did not finish within {}s and was cancelled\n\
-             Narrow it (a filter, an aggregate over fewer rows, a smaller join) and send it \
-             again.",
-            self.timeout().as_secs_f64()
-        ))
-    }
-
     /// Run `query` over barca's tables as they are now, for at most `limit` rows.
     pub(crate) async fn run(
         &self,
@@ -645,7 +285,7 @@ impl QueryHelper {
         if slot.is_none() {
             self.starts.fetch_add(1, Ordering::Relaxed);
             *slot = Some(
-                Process::start(&state.config.python)
+                Process::start(&state.config.python, &shapes())
                     .await
                     .map_err(Lost::into_api)?,
             );
@@ -681,9 +321,9 @@ impl QueryHelper {
         if named.is_empty() {
             return Ok(Vec::new());
         }
-        let db = state.db_state();
+        let db = state.reads.db_state();
         let dag = match named.iter().any(|s| s.graph) {
-            true => Some(state.inspect_dag().await?),
+            true => Some(state.reads.inspect_dag().await?),
             false => None,
         };
         let mut inputs: Option<Inputs> = None;
@@ -693,12 +333,12 @@ impl QueryHelper {
             let current = process
                 .loaded
                 .get(source.name)
-                .is_some_and(|l| l.current(source, &db, graph));
+                .is_some_and(|l| l.current(source.graph, source.live, &db, graph));
             if !current {
                 if inputs.is_none() {
                     inputs = Some(Inputs {
                         state: state.clone(),
-                        snapshot: crate::handlers::snapshot_db(state).await?,
+                        snapshot: state.reads.snapshot_db().await?,
                         db: db.clone(),
                         dag: dag.clone(),
                     });
@@ -706,7 +346,9 @@ impl QueryHelper {
                 let Rows { rows, total } =
                     (source.load)(inputs.as_ref().expect("just set")).await?;
                 process.loaded.remove(source.name);
-                process.load(source, Some(&rows)).await?;
+                process
+                    .load((source.name, source.columns), Some(&rows))
+                    .await?;
                 self.loads.fetch_add(1, Ordering::Relaxed);
                 let note = (total > rows.len()).then(|| {
                     format!(
@@ -893,7 +535,9 @@ pub async fn query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql_helper::{ENV_KEPT, LOAD_LIMIT, TIMEOUT};
     use std::path::Path;
+    use std::time::Duration;
 
     const PIPELINE: &str = "from barca import asset\n\n\
         @asset()\ndef first() -> dict:\n    return {\"n\": 1}\n\n\
@@ -953,7 +597,7 @@ mod tests {
             read_only,
         });
         // The database and the sources are trusted once they have been still for a moment.
-        tokio::time::sleep(crate::read_cache::SOURCES_SETTLED + Duration::from_millis(100)).await;
+        tokio::time::sleep(crate::sources::SOURCES_SETTLED + Duration::from_millis(100)).await;
         state
     }
 
@@ -988,7 +632,7 @@ mod tests {
         (
             state.sql.starts.load(Ordering::Relaxed),
             state.sql.loads.load(Ordering::Relaxed),
-            state.reads.status_computes.load(Ordering::Relaxed),
+            state.reads.cache.status_computes.load(Ordering::Relaxed),
         )
     }
 
@@ -1368,7 +1012,7 @@ mod tests {
              for _ in range(4096):\n    sys.stdout.write(chunk)\n",
         );
         let started = std::time::Instant::now();
-        let Err(lost) = Process::start(&python).await else {
+        let Err(lost) = Process::start(&python, &shapes()).await else {
             panic!("a helper that sends 4GB on one line was accepted");
         };
         let Lost::Dead(why) = lost else {
@@ -1388,7 +1032,7 @@ mod tests {
             "import time\nprint('{\"ready\": true}', flush=True)\ntime.sleep(600)\n",
         );
         let started = std::time::Instant::now();
-        let Err(Lost::Dead(why)) = Process::start(&python).await else {
+        let Err(Lost::Dead(why)) = Process::start(&python, &shapes()).await else {
             panic!("a helper that never loads was accepted");
         };
         assert!(why.contains("did not load barca.runs within"), "{why}");
@@ -1591,7 +1235,7 @@ mod tests {
             body["remediation"].as_str().unwrap().contains("barca[sql]"),
             "{body}"
         );
-        let nodes = crate::handlers::state(
+        let nodes = crate::state_routes::state(
             State(state.clone()),
             axum::extract::Query(Default::default()),
         )

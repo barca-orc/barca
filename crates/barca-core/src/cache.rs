@@ -118,7 +118,7 @@ pub(crate) fn cutoff_token(partition: &str, content_hash: &str) -> String {
 use crate::store_sync::StoreSync;
 use crate::targets::{refresh_name_matches, short_name};
 use crate::transfer::ArtifactLayout;
-use crate::{dag::Dag, db, dispatch, dispatch::OutputRef, planner::Phase};
+use crate::{dag::Dag, db, planner::Phase, step_result::OutputRef};
 
 // ─── Cache decisions ─────────────────────────────────────────────────────────
 //
@@ -314,7 +314,7 @@ pub(crate) struct DecideState {
     /// step finishes (it runs in an earlier phase than its consumers) or is served from cache;
     /// a dry run seeds it from each one's last recorded output.
     pub(crate) sensor_outputs: HashMap<String, String>,
-    pub(crate) sensor_previous: HashMap<String, crate::dispatch::OutputRef>,
+    pub(crate) sensor_previous: HashMap<String, OutputRef>,
     /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
     pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
     partition_pins: Option<BTreeMap<String, db::AssetPin>>,
@@ -478,7 +478,7 @@ pub(crate) use crate::dag::folds_output;
 /// the same reason: what reads it is decided by the bytes the refresh wrote.
 pub(crate) fn is_cutoff(dag: &Dag, id: &str) -> bool {
     dag.get_node(id)
-        .is_some_and(|n| n.kind() == crate::NodeKind::Asset && n.extracted.cutoff)
+        .is_some_and(|n| n.kind() == crate::NodeKind::Asset && n.decl.cutoff)
 }
 
 /// Whether new bytes under an unchanged run hash mean `node` is not deterministic, so barca
@@ -618,10 +618,12 @@ pub(crate) fn hash_step(
     let base_id = step.step_id.base_id();
     let display_id = step.step_id.display();
     let base_node = dag.get_node(base_id);
-    let def_hash = base_node.map(|n| n.definition_hash.as_str()).unwrap_or("");
+    let def_hash = base_node
+        .map(|n| n.fingerprint.definition_hash.as_str())
+        .unwrap_or("");
     // Declared env (`@asset(env=[...])`) is read now, at plan time, and folded into the run hash.
     let env_input = base_node
-        .map(|n| crate::envdeps::hash_input(&crate::envdeps::resolve(&n.extracted.env)))
+        .map(|n| crate::envdeps::hash_input(&crate::envdeps::resolve(&n.decl.env)))
         .unwrap_or(None);
 
     // Run hashes for EVERY step (sensors, tasks, refreshed and partitioned steps too): they
@@ -1195,28 +1197,22 @@ pub(crate) use crate::ledger::{CacheReader, lookup_cached};
 /// How a cache row's artifact is reached on this machine.
 pub(crate) enum CacheHit {
     /// Use the output as recorded.
-    Local(dispatch::OutputRef),
+    Local(OutputRef),
     /// The row records a location in the artifact store; `local` points at
     /// its local mirror, which is fetched before anything reads it.
-    Store {
-        local: dispatch::OutputRef,
-        store: String,
-    },
+    Store { local: OutputRef, store: String },
 }
 
 /// Resolve a cache row against this run's artifact store (`layout` is Some
 /// when the store is separate from the local artifact dir). This only says
 /// where the artifact is read from; whether it is there is checked when
 /// something needs to read it (see [`crate::recover`]).
-pub(crate) fn resolve_cache_hit(
-    oref: dispatch::OutputRef,
-    layout: Option<&ArtifactLayout>,
-) -> CacheHit {
+pub(crate) fn resolve_cache_hit(oref: OutputRef, layout: Option<&ArtifactLayout>) -> CacheHit {
     match layout.and_then(|l| l.local_for(&oref.path)) {
         Some(local) => {
             let store = oref.path.clone();
             CacheHit::Store {
-                local: dispatch::OutputRef {
+                local: OutputRef {
                     path: local.to_string_lossy().into_owned(),
                     ..oref
                 },
@@ -1232,8 +1228,8 @@ pub(crate) fn resolve_cache_hit(
 pub(crate) fn accept_cache_hit(
     store: &mut Option<StoreSync>,
     node_id: &str,
-    oref: dispatch::OutputRef,
-) -> dispatch::OutputRef {
+    oref: OutputRef,
+) -> OutputRef {
     match resolve_cache_hit(oref, store.as_ref().map(|s| &s.layout)) {
         CacheHit::Local(o) => o,
         CacheHit::Store { local, store: at } => {
@@ -1301,6 +1297,11 @@ pub enum CachePolicy {
 }
 
 pub(crate) use crate::store_sync::BLOCKED_ARTIFACT_PATH;
+
+mod step_report;
+pub(crate) use step_report::{
+    computed_by_another_run, env_report, merge_partition_reports, report_for, stale_warning,
+};
 
 #[cfg(test)]
 mod lookup_tests;
@@ -1460,7 +1461,7 @@ def downstream(x: int) -> int:
         .unwrap();
 
         let file = root.join("p.py").to_string_lossy().to_string();
-        let dag = crate::load::build_dag_blocking(
+        let (dag, extracted) = crate::load::build_dag_and_extracted_blocking(
             std::slice::from_ref(&file),
             &std::path::PathBuf::from("python3"),
         )
@@ -1470,7 +1471,10 @@ def downstream(x: int) -> int:
         // at its decorator, as written, with the freshness, the input parameter names, the
         // sinks and the serializer added as JSON.
         let definition_hash_before_0_19 = |node: &crate::model::DagNode| {
-            let n = &node.extracted;
+            let n = extracted
+                .iter()
+                .find(|n| n.continuity_key() == node.id)
+                .unwrap();
             let from_def = &n.source_text[n.source_text.find("def ").unwrap()..];
             let def_at = n.byte_offset + source[n.byte_offset..].find("def ").unwrap();
             let as_written = &source[n.byte_offset..def_at + from_def.len()];
@@ -1498,7 +1502,7 @@ def downstream(x: int) -> int:
                     None,
                 );
                 hashes.insert(id.to_string(), h.clone());
-                by_name.push((node.extracted.function_name.clone(), h));
+                by_name.push((node.invoke.python().function_name.clone(), h));
             }
             by_name.sort();
             by_name
@@ -1529,7 +1533,7 @@ def downstream(x: int) -> int:
         //    `downstream` also differs because its upstream's run hash does. If one of these
         //    moves, every cache entry is recomputed after upgrading: change them only on
         //    purpose, with a release note.
-        let got = run_hashes(&|node| node.definition_hash.clone());
+        let got = run_hashes(&|node| node.fingerprint.definition_hash.clone());
         assert_eq!(
             got,
             [
@@ -1708,7 +1712,7 @@ def report(m: list) -> int:
                 steps.any(|st| st.step_id.base_id() == "t.py:margin")
             })
             .expect("a phase with margin");
-        dispatch::expand_pending_partitions(dag, phase, &outputs, pool_size)
+        crate::dispatch::expand_pending_partitions(dag, phase, &outputs, pool_size)
             .phase
             .expect("expanded")
     }
@@ -1724,6 +1728,7 @@ def report(m: list) -> int:
             let def_hash = &dag
                 .get_node(step.step_id.base_id())
                 .unwrap()
+                .fingerprint
                 .definition_hash;
             for pk in &step.partition_keys {
                 let hash = compute_run_hash(
@@ -1861,7 +1866,11 @@ def report(values: list) -> int:
         }
         let missing = "t.py:part[k=b]";
         assert!(!state.run_hashes.contains_key(missing));
-        let definition = &dag.get_node("t.py:report").unwrap().definition_hash;
+        let definition = &dag
+            .get_node("t.py:report")
+            .unwrap()
+            .fingerprint
+            .definition_hash;
         let partial = compute_run_hash(
             definition,
             None,
@@ -2016,7 +2025,10 @@ def report(values: list) -> int:
             }
             let consumer = step(&phases, "t.py:report");
             let expected = compute_run_hash(
-                &dag.get_node("t.py:report").unwrap().definition_hash,
+                &dag.get_node("t.py:report")
+                    .unwrap()
+                    .fingerprint
+                    .definition_hash,
                 None,
                 consumer.inputs.values(),
                 state.run_hashes(),
@@ -2076,7 +2088,7 @@ def report(values: list) -> int:
             .phases
             .iter()
             .map(|phase| {
-                dispatch::expand_pending_partitions(&dag, phase, &outputs, pool)
+                crate::dispatch::expand_pending_partitions(&dag, phase, &outputs, pool)
                     .phase
                     .unwrap_or_else(|| phase.clone())
             })
@@ -2184,7 +2196,10 @@ def report(values: list) -> int:
                 .run_hashes
                 .insert(format!("{upstream}[k=b]"), "hash-b".into());
             let expected = compute_run_hash(
-                &dag.get_node(&consumer_id).unwrap().definition_hash,
+                &dag.get_node(&consumer_id)
+                    .unwrap()
+                    .fingerprint
+                    .definition_hash,
                 None,
                 consumer.inputs.values(),
                 state.run_hashes(),
@@ -2423,13 +2438,18 @@ def below_plain(p: int) -> int:
 
     #[test]
     fn cutoff_does_not_change_the_assets_own_definition_hash() {
-        let with = dag().get_node("t.py:dims").unwrap().definition_hash.clone();
+        let with = dag()
+            .get_node("t.py:dims")
+            .unwrap()
+            .fingerprint
+            .definition_hash
+            .clone();
         let source = PIPELINE.replacen("@asset(cutoff=True)\ndef dims", "@asset()\ndef dims", 1);
         let nodes = crate::parse::extract_nodes(&source, "t.py").unwrap();
         let without = Dag::build(&nodes).unwrap();
         let without = without.get_node("t.py:dims").unwrap();
-        assert!(!without.extracted.cutoff);
-        assert_eq!(with, without.definition_hash);
+        assert!(!without.decl.cutoff);
+        assert_eq!(with, without.fingerprint.definition_hash);
     }
 
     #[test]

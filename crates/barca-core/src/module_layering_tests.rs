@@ -45,7 +45,16 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
     (
         "decisions",
         2,
-        &["cache", "changes", "freshness", "plan_reasons", "schedule"],
+        &[
+            "cache",
+            "changes",
+            "freshness",
+            "plan_reasons",
+            "predict",
+            "recover",
+            "schedule",
+            "sizing",
+        ],
     ),
     (
         "engine",
@@ -56,7 +65,6 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
             "incremental",
             "mismatch",
             "persist",
-            "recover",
             "telemetry",
         ],
     ),
@@ -77,6 +85,7 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
             "run_list",
             "schedule_standing",
             "status",
+            "views",
         ],
     ),
     (
@@ -90,8 +99,26 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
             "serve",
             "sql",
             "values",
+            "served",
         ],
     ),
+];
+
+/// The order inside the analysis layer (#1056 C3), first row first: an analysis module may
+/// name the analysis modules of the rows before its own, and none of its own row or a later
+/// one. So the read models cannot form a cycle. Every analysis module of [`LAYERS`] is in one
+/// row.
+const ANALYSIS_ROWS: &[&[&str]] = &[
+    // The shared view types, and the modules that name no other read model.
+    &["views", "history_filter", "key_query", "run_explanation"],
+    &["schedule_standing", "partition_grid"],
+    &["liveness"],
+    &["refresh_path"],
+    &["estimates"],
+    &["causes"],
+    &["rollup"],
+    &["health", "run_list"],
+    &["status"],
 ];
 
 /// The order inside the storage layer, top row first: a storage module may name the storage
@@ -113,10 +140,22 @@ const STORAGE_ROWS: &[&[&str]] = &[
 
 /// The number of modules in the largest strongly connected component of the module graph
 /// (modules that all reach each other through `crate::` paths in non-test code). 38 before
-/// the cuts of #1056's C1, 29 after them, 19 with the storage layer out of it (C4).
-const LARGEST_CYCLE: usize = 19;
+/// the cuts of #1056's C1, 29 after them, 19 with the storage layer out of it (C4), 16 with the prediction in the
+/// decisions layer (C2).
+const LARGEST_CYCLE: usize = 5;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
+
+/// What the layers below the engine still take from `barca-engine` through this crate's
+/// re-exports (`crate::dispatch`, `crate::helper_proc`, ...), in the format of the allowlist.
+/// The module scan above cannot see these: they are paths into another crate, and Cargo allows
+/// them while the layers are one crate. A crate made of the leaf, storage, decisions or analysis
+/// layer must not depend on `barca-engine`, so this list may only shrink too.
+const ENGINE_USES: &str = include_str!("engine_uses_allowlist.txt");
+
+/// The layers that may name `barca-engine`: the run orchestrator, and the service layer above
+/// it.
+const LAYERS_OVER_THE_ENGINE: &[&str] = &["engine", "service"];
 
 /// (from, to) -> the items of `to` that `from` names.
 type Edges = BTreeMap<(String, String), BTreeSet<String>>;
@@ -128,9 +167,19 @@ fn layer_of(module: &str) -> Option<(&'static str, u8)> {
         .map(|(name, rank, _)| (*name, *rank))
 }
 
+fn analysis_row(module: &str) -> Option<usize> {
+    ANALYSIS_ROWS.iter().position(|row| row.contains(&module))
+}
+
 /// Whether `from` may name `to`.
 fn allowed(from: &str, to: &str) -> bool {
     match (layer_of(from), layer_of(to)) {
+        (Some(("analysis", _)), Some(("analysis", _))) => {
+            match (analysis_row(from), analysis_row(to)) {
+                (Some(a), Some(b)) => b < a,
+                _ => false,
+            }
+        }
         (Some((a, ra)), Some((b, rb))) => a == b || rb < ra,
         _ => false,
     }
@@ -316,6 +365,45 @@ fn scan(src_root: &Path) -> (BTreeSet<String>, Edges) {
     (modules, edges)
 }
 
+/// The modules of `barca-engine` that `lib.rs` re-exports (`use barca_engine::m;`).
+fn engine_reexports(lib: &str) -> BTreeSet<String> {
+    let toks = lex(lib);
+    let mut out = BTreeSet::new();
+    for i in 0..toks.len() {
+        if toks[i] == Tok::Ident("barca_engine".into())
+            && is_path_sep(&toks, i + 1)
+            && let (Some(Tok::Ident(name)), Some(Tok::Punct(';'))) =
+                (toks.get(i + 3), toks.get(i + 4))
+        {
+            out.insert(name.clone());
+        }
+    }
+    out
+}
+
+/// (module of this crate, re-exported module of `barca-engine`) -> the items named, over the
+/// non-test source of the layers that may not name the engine.
+fn engine_uses(src_root: &Path) -> Edges {
+    let lib = std::fs::read_to_string(src_root.join("lib.rs")).unwrap();
+    let modules = declared_modules(&lib);
+    let engine = engine_reexports(&lib);
+    let mut edges = Edges::new();
+    for (rel, src) in non_test_sources(src_root) {
+        let from = module_of(&rel);
+        let below = layer_of(from).is_some_and(|(l, _)| !LAYERS_OVER_THE_ENGINE.contains(&l));
+        if !modules.contains(from) || !below {
+            continue;
+        }
+        for (to, items) in references(&src, &engine) {
+            edges
+                .entry((from.to_string(), to))
+                .or_default()
+                .extend(items);
+        }
+    }
+    edges
+}
+
 fn line_of(from: &str, to: &str, items: &BTreeSet<String>) -> String {
     let items: Vec<&str> = items.iter().map(String::as_str).collect();
     format!("{from} -> {to}: {}", items.join(", "))
@@ -434,6 +522,30 @@ fn modules_name_only_their_own_layer_and_the_layers_below() {
         }
     }
 
+    let analysis = LAYERS
+        .iter()
+        .find(|(layer, _, _)| *layer == "analysis")
+        .map(|(_, _, listed)| *listed)
+        .unwrap_or_default();
+    for module in analysis {
+        if analysis_row(module).is_none() {
+            problems.push(format!(
+                "  analysis module `{module}` has no row: add it to ANALYSIS_ROWS"
+            ));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for module in ANALYSIS_ROWS.iter().flat_map(|row| row.iter()) {
+        if !analysis.contains(module) {
+            problems.push(format!(
+                "  ANALYSIS_ROWS names `{module}`, which is not an analysis module of LAYERS"
+            ));
+        }
+        if !seen.insert(*module) {
+            problems.push(format!("  ANALYSIS_ROWS names `{module}` twice"));
+        }
+    }
+
     for ((from, to), items) in &edges {
         if allowed(from, to) || layer_of(from).is_none() || layer_of(to).is_none() {
             continue;
@@ -496,6 +608,50 @@ fn modules_name_only_their_own_layer_and_the_layers_below() {
         problems.is_empty(),
         "module layers of barca-core (#1056, docs/engineering/layering.md; the allowlist is \
          crates/barca-core/src/module_layering_allowlist.txt and may only shrink):\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn the_layers_below_the_engine_name_barca_engine_only_where_listed() {
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let lib = std::fs::read_to_string(src_root.join("lib.rs")).unwrap();
+    let engine = engine_reexports(&lib);
+    assert!(
+        engine.contains("dispatch") && engine.contains("helper_proc"),
+        "lib.rs no longer re-exports barca-engine's modules as `use barca_engine::m;`: \
+         teach engine_reexports the new form ({engine:?})"
+    );
+    let found = engine_uses(&src_root);
+    let listed = parse_allowlist(ENGINE_USES);
+    let mut problems = Vec::new();
+    for ((from, to), items) in &found {
+        let layer = layer_of(from).map(|(l, _)| l).unwrap_or("?");
+        match listed.get(&(from.clone(), to.clone())) {
+            None => problems.push(format!(
+                "  new use, {layer} names barca-engine: {}",
+                line_of(from, to, items)
+            )),
+            Some(known) if known != items => problems.push(format!(
+                "  {from} -> {to} changed: the source has `{}`",
+                line_of(from, to, items)
+            )),
+            Some(_) => {}
+        }
+    }
+    for (from, to) in listed.keys() {
+        if !found.contains_key(&(from.clone(), to.clone())) {
+            problems.push(format!(
+                "  the list has {from} -> {to}, which the source no longer has: delete the line"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "what the leaf, storage, decisions and analysis layers of barca-core take from \
+         barca-engine (crates/barca-core/src/engine_uses_allowlist.txt, which may only shrink; \
+         docs/engineering/layering.md). A value type belongs in barca-model; name it there \
+         (`crate::step_result::OutputRef`). Behaviour is passed in or moved below:\n{}",
         problems.join("\n")
     );
 }
@@ -585,4 +741,21 @@ fn the_rule_orders_the_layers() {
     assert!(!allowed("execution", "status"));
     assert!(!allowed("status", "execution"));
     assert!(!allowed("gc", "report"));
+}
+
+#[test]
+fn the_rows_order_the_analysis_layer() {
+    assert!(allowed("health", "views"));
+    assert!(allowed("status", "health"));
+    assert!(allowed("health", "rollup"));
+    assert!(allowed("run_list", "run_explanation"));
+    assert!(allowed("partition_grid", "key_query"));
+    // A later row, and the same row.
+    assert!(!allowed("rollup", "health"));
+    assert!(!allowed("views", "schedule_standing"));
+    assert!(!allowed("key_query", "partition_grid"));
+    assert!(!allowed("health", "run_list"));
+    // The layers below are open to every row.
+    assert!(allowed("views", "cache"));
+    assert!(!allowed("views", "report"));
 }

@@ -4,7 +4,7 @@ description: "barca get --refresh, --refresh-all and --no-cascade: what reruns, 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/refresh.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/refresh.md (barca docs refresh). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/refresh.md (barca docs refresh). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 A step that is cached is not run again ([The Cache: At a glance](/reference/cache/#at-a-glance)). Below:
 forcing one to run anyway: `--refresh` and `--refresh-all`, what they do to what is downstream,

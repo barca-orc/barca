@@ -10,7 +10,7 @@ const graph = [
 ]
 
 const job = (id: string, next_fire: number | null): ScheduleJob => ({
-  state: 'on_time', state_detail: null,
+  state: 'on_time', state_detail: null, queue_bound: false, typical_queue_wait_seconds: 0, typical_run_seconds: null,
   id, cron: '* * * * *', kind: 'asset', next_fire, last_fired: null, last_run_id: null, last_run: null, last_status: null, late: false, late_since: null,
   last_skipped: null, skipped_for: null, skip_reason: null, paused: false, paused_until: null,
   failures: 0, max_failures: 5, failing: false,
@@ -35,7 +35,7 @@ describe('blastRadius', () => {
 
 describe('pauses', () => {
   it('reads ids, files and the banner', () => {
-    expect(pausedIds({ total: 1, paused: [{ id: 'p.py:a', paused_at: 1, via: 'a' }] }).has('p.py:a')).toBe(true)
+    expect(pausedIds({ total: 1, paused: [{ id: 'p.py:a', paused_at: 1, via: 'a' }], schedules: [] }).has('p.py:a')).toBe(true)
     expect(pausedIds(undefined).size).toBe(0)
     expect(fileOf('dir/p.py:a')).toBe('dir/p.py')
     expect(pausedBanner(0)).toBeNull()

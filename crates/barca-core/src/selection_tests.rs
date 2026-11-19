@@ -1,5 +1,5 @@
 //! Unit tests of `barca_compile::selection` (#905 step 4: moved up from barca-compile, because
-//! they narrow the plan to a target's cone with `crate::execution::filter_plan_to_subgraph`, which
+//! they narrow the plan to a target's cone with `crate::predict::filter_plan_to_subgraph`, which
 //! is core's).
 
 use crate::BarcaError;
@@ -107,7 +107,7 @@ fn apply(raw: &str, targets: &[&str]) -> Result<(ExecutionPlan, Narrowing), Barc
     let sel = PartitionSelection::parse(raw).unwrap();
     let mut plan = plan_of(&dag, Some(&sel));
     if !targets.is_empty() {
-        plan = crate::execution::filter_plan_to_subgraph(plan, &dag.subgraph_many(targets));
+        plan = crate::predict::filter_plan_to_subgraph(plan, &dag.subgraph_many(targets));
     }
     let n = sel.apply(&dag, &mut plan, targets)?;
     Ok((plan, n))

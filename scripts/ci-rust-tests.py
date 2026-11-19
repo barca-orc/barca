@@ -157,14 +157,17 @@ READERS = [
     # barca-cli: the README's command table, SKILL.md, the site's reference pages and sidebar,
     # every crate's BARCA_* variables, the server's route table. Whole crate except the last
     # two: the contract tests that read the site are many and share helpers.
+    {"source": "crates/barca-cli/src/contract.rs", "paths": ["README.md"]},
+    {"source": "crates/barca-cli/src/site_pages_tests.rs", "paths": ["site/*"]},
     {
-        "source": "crates/barca-cli/src/contract.rs",
-        "paths": ["README.md", "site/*"],
-    },
-    {
-        "source": "crates/barca-cli/src/contract.rs",
+        "source": "crates/barca-cli/src/env_vars_tests.rs",
         "tests": ["every_barca_env_var_is_in_the_contract"],
         "paths": ["crates/*/src/*"],
+    },
+    {
+        "source": "crates/barca-cli/src/route_tests.rs",
+        "tests": ["print_the_table"],
+        "paths": ["docs/engineering/cli-layering.md"],
     },
     {"source": "crates/barca-cli/src/tests.rs", "paths": ["README.md"]},
     {"source": "crates/barca-cli/src/docs.rs", "paths": ["SKILL.md"]},
@@ -192,6 +195,7 @@ WORKSPACE_READERS = {
     "crates/barca-model/src/artifact_format.rs": "python/barca/_artifacts.py",
     "crates/barca-compile/src/load.rs": "python/ on PYTHONPATH",
     "crates/barca-core/src/backup.rs": "python/ on PYTHONPATH",
+    "crates/barca-core/src/ir_roundtrip_tests.rs": "python/ on PYTHONPATH",
     "crates/barca-core/src/persist.rs": "python/ on PYTHONPATH",
     "crates/barca-core/src/transfer/tests.rs": ".venv/bin/python (untracked)",
     "crates/barca-engine/src/wire.rs": "python/barca/_wire.py",

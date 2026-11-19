@@ -18,10 +18,9 @@
 //! or at the point where one would have to be added; so is an undecided node no tick will
 //! reach, which only a run decides.
 
-use crate::estimates::PlannedRun;
-use crate::health::{Cause, DataSignal, Evidence, Health, HealthReason, Root, RootKind};
+use crate::estimates::{Evidence, PlannedRun};
 use crate::refresh_path::{PathEvidence, PathSchedule};
-use crate::status::NodeStatus;
+use crate::views::{Cause, DataSignal, Health, HealthReason, NodeStatus, Root, RootKind};
 use std::collections::HashMap;
 
 /// The instant `gap_seconds` is read at: the start of `now`'s minute (unix seconds), so an

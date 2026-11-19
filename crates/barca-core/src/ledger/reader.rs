@@ -6,7 +6,7 @@
 
 use super::Ledger;
 use crate::db;
-use crate::dispatch;
+use crate::step_result::OutputRef;
 
 /// One phase's cache lookups: the metadata DB's [`db::CacheReader`] and, when this command runs
 /// against a server, its ledger, which answers them in place of this machine's history
@@ -56,7 +56,7 @@ pub(crate) async fn lookup_cached(
     cache: &CacheReader,
     node_id: &str,
     run_hash: &str,
-) -> Option<dispatch::OutputRef> {
+) -> Option<OutputRef> {
     // With a server, its ledger answers, not this machine's history (RFC-0007 section 4.1).
     // Every key a decision looks up was asked for before the phase was decided; one that was
     // not is a miss, and the step runs here.
@@ -92,7 +92,7 @@ pub(crate) async fn lookup_cached(
         if !cache.allows_artifact(&path) {
             continue;
         }
-        return Some(dispatch::OutputRef {
+        return Some(OutputRef {
             path,
             format: row.get::<String>(1).ok()?,
             size_bytes: row.get::<i64>(2).ok()? as u64,
@@ -105,7 +105,7 @@ pub(crate) async fn lookup_cached(
 /// A lookup the database could not answer is a miss: the step runs again, which costs time and
 /// never gives a wrong result. A `--read-only` server saw this beside a writer's `VACUUM` while
 /// barca dropped its own SQLite locks ([`crate::db::held_file`]).
-fn lookup_failed(node_id: &str, e: libsql::Error) -> Option<dispatch::OutputRef> {
+fn lookup_failed(node_id: &str, e: libsql::Error) -> Option<OutputRef> {
     crate::errln!("[barca] warning: cache lookup of {node_id} failed: {e}");
     None
 }

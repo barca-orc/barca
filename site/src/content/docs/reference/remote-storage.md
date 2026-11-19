@@ -4,7 +4,7 @@ description: "Keep results and backups of the run history in S3, GCS, Azure or C
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/remote.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/remote.md (barca docs remote). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/remote.md (barca docs remote). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Point barca at a bucket and every result is uploaded there, and the metadata database (run
 history and what is cached) is backed up there. The store is this machine's backup and

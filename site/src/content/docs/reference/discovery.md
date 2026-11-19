@@ -4,7 +4,7 @@ description: "Which files make up a barca project: the root, tree walks, [discov
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/discovery.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/discovery.md (barca docs discovery). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/discovery.md (barca docs discovery). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 A barca project is a directory tree. Every command reads the `.py` files in it that import
 barca and builds one DAG from all their `@asset`, `@task` and `@sensor` functions. You do not

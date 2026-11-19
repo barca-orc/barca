@@ -25,7 +25,8 @@ crates/
   barca-compile/src/          source in, DAG and plan out (no database)
     parse.rs, discover.rs     read decorated functions from source with ruff's parser; find the project's .py files
     load.rs                   from source files to a DAG, with dynamic partitions resolved
-    dag.rs, planner.rs        petgraph graph, validation, phases and streams of the plan
+    link.rs, dag.rs           parsed functions to graph nodes (references resolved); petgraph graph, validation
+    planner.rs                phases and streams of the plan
     cone.rs                   the helper code a function reaches (part of its run hash)
     definition.rs             which decorator arguments are part of the hash, and their canonical form
     targets.rs                target resolution, refresh-name checks and target planning
@@ -94,9 +95,9 @@ re-exports the lower crates' modules under its own paths. A test in `barca-core`
 1. **Parse.** Each file is parsed with ruff's Python parser. Nothing is imported. The
    exceptions are a non-literal `partitions(...)` or `batches(...)` expression and a `batches_by`
    function, which a resolver subprocess evaluates.
-2. **Graph.** `dag.rs` builds a petgraph graph from the decorators and rejects cycles, unknown
-   inputs, a sensor with inputs, a task used as an input to an asset or sensor, and two nodes
-   with the same id.
+2. **Graph.** `link.rs` resolves each input to the node it means and `dag.rs` builds a petgraph
+   graph from the result; together they reject cycles, unknown inputs, a sensor with inputs, a
+   task used as an input to an asset or sensor, and two nodes with the same id.
 3. **Plan.** `planner.rs` splits the part of the graph the target needs into phases. A phase is
    a set of steps whose inputs are available when it starts.
 4. **Cache check.** Each asset's run hash is looked up in the metadata database. A hit is

@@ -4,7 +4,7 @@ description: "barca status: every node's cache state and why, its last run, its 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/status.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/status.md (barca docs status). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/status.md (barca docs status). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 One read-only view of every node: what it is, whether it is cached and why, when it last ran,
 and what its artifact looks like. It answers in one call what would otherwise take `barca list`,

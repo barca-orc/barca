@@ -4,7 +4,7 @@ description: "Rerun a step when a file or table changes in place by reading it t
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/external-data.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/external-data.md (barca docs external-data). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/external-data.md (barca docs external-data). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Barca reruns a step when its run hash changes ([The Cache](/reference/cache/)). Two cases need more than the
 hash: data that changes in place under the same path or table, which a `@sensor` makes visible,

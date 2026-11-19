@@ -13,10 +13,13 @@
 use crate::cache::{CachePolicy, compute_run_hash_with};
 use crate::dag::Dag;
 use crate::db;
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 use crate::targets::{refresh_name_matches, short_name};
 use crate::{Freshness, NodeKind};
 use std::collections::{HashMap, HashSet, VecDeque};
+
+mod planned;
+pub(crate) use planned::{Planned, pin_manual};
 
 /// `Schedule(cron)` without `max_failures=`: consecutive failed ticks before the schedule is
 /// skipped and reported `failing`.
@@ -104,7 +107,7 @@ fn follow<'a>(
             if down == from || !seen.insert(down) {
                 continue;
             }
-            match node.extracted.freshness {
+            match node.decl.freshness {
                 Freshness::Always => {
                     reached.push(down);
                     queue.push_back(down);
@@ -186,8 +189,7 @@ pub fn tick_targets(dag: &Dag, scheduled: &str) -> Vec<String> {
             // Polled by the run. A sensor with a `Schedule` of its own is followed by its own
             // ticks.
             if dag.get_node(input).is_some_and(|n| {
-                n.kind() == NodeKind::Sensor
-                    && !matches!(n.extracted.freshness, Freshness::Schedule(_))
+                n.kind() == NodeKind::Sensor && !matches!(n.decl.freshness, Freshness::Schedule(_))
             }) {
                 follow(dag, input, &mut seen, &mut reached);
             }
@@ -248,9 +250,9 @@ pub fn tick_reach<'a>(
 /// them, whatever their freshness. A partitioned node is not pinned (it is computed as before).
 pub(crate) fn pins_itself(dag: &Dag, id: &str) -> bool {
     dag.get_node(id).is_some_and(|n| {
-        n.extracted.freshness == Freshness::Manual
+        n.decl.freshness == Freshness::Manual
             && matches!(n.kind(), NodeKind::Asset | NodeKind::Task)
-            && n.extracted.partitions.is_empty()
+            && n.decl.partitions.is_empty()
     })
 }
 
@@ -446,7 +448,7 @@ pub(crate) async fn is_stale(
         let Some(up_node) = dag.get_node(up) else {
             return false;
         };
-        if !up_node.extracted.partitions.is_empty() {
+        if !up_node.decl.partitions.is_empty() {
             return false;
         }
         match run_hashes.get(up.as_str()) {
@@ -470,9 +472,9 @@ pub(crate) async fn is_stale(
             .await
             .unwrap_or_default(),
     );
-    let env = crate::envdeps::hash_input(&crate::envdeps::resolve(&node.extracted.env));
+    let env = crate::envdeps::hash_input(&crate::envdeps::resolve(&node.decl.env));
     let current = compute_run_hash_with(
-        &node.definition_hash,
+        &node.fingerprint.definition_hash,
         None,
         inputs.iter(),
         &hashes,

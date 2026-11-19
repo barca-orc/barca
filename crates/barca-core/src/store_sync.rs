@@ -1,7 +1,7 @@
 //! A run's connection to a remote store: queue each finished artifact for upload, fetch remote
 //! inputs before a phase reads them, and wait for the transfers at the end of the run.
 
-use crate::dispatch;
+use crate::step_result::ProvidedInput;
 use crate::text::human;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use crate::verified_copies;
@@ -266,7 +266,7 @@ impl StoreSync {
     /// stay fetchable: a later eager reader still downloads the whole artifact.
     pub(crate) fn read_in_place(
         &self,
-        provided: &mut HashMap<String, dispatch::ProvidedInput>,
+        provided: &mut HashMap<String, ProvidedInput>,
         lazy: &HashSet<String>,
     ) {
         for (key, input) in provided.iter_mut() {
@@ -274,7 +274,7 @@ impl StoreSync {
             if !lazy.contains(key) && !lazy.contains(base) {
                 continue;
             }
-            let dispatch::ProvidedInput::Single(oref) = input else {
+            let ProvidedInput::Single(oref) = input else {
                 continue;
             };
             if oref.format != "parquet" || std::path::Path::new(&oref.path).is_file() {

@@ -37,7 +37,7 @@ pub(crate) fn step_components(
     display_id: &str,
 ) -> Option<BTreeMap<String, String>> {
     let node = dag.get_node(crate::StepId::parse(display_id).base_id())?;
-    let mut out: BTreeMap<String, String> = node.components.iter().cloned().collect();
+    let mut out: BTreeMap<String, String> = node.fingerprint.components.iter().cloned().collect();
     out.append(&mut own_components(dag, state, display_id)?);
     Some(out)
 }
@@ -89,7 +89,7 @@ pub(crate) fn own_components(
             crate::hash::short_digest(token.as_bytes()),
         );
     }
-    for (name, value) in crate::envdeps::resolve(&node.extracted.env) {
+    for (name, value) in crate::envdeps::resolve(&node.decl.env) {
         let value = serde_json::to_string(&value).unwrap_or_default();
         out.insert(
             format!("env {name}"),
@@ -112,7 +112,10 @@ pub(crate) fn step_components_json(
 ) -> Option<String> {
     let node = dag.get_node(crate::StepId::parse(display_id).base_id())?;
     let mut own = own_components(dag, state, display_id)?;
-    own.insert(DEFINITION_KEY.to_string(), node.definition_hash.clone());
+    own.insert(
+        DEFINITION_KEY.to_string(),
+        node.fingerprint.definition_hash.clone(),
+    );
     serde_json::to_string(&own).ok()
 }
 
@@ -124,12 +127,16 @@ pub(crate) fn definition_rows<'a>(
     let mut rows = BTreeMap::new();
     for id in ids {
         if let Some(node) = dag.get_node(id)
-            && !rows.contains_key(&node.definition_hash)
+            && !rows.contains_key(&node.fingerprint.definition_hash)
         {
-            let parts: BTreeMap<&String, &String> =
-                node.components.iter().map(|(k, v)| (k, v)).collect();
+            let parts: BTreeMap<&String, &String> = node
+                .fingerprint
+                .components
+                .iter()
+                .map(|(k, v)| (k, v))
+                .collect();
             if let Ok(json) = serde_json::to_string(&parts) {
-                rows.insert(node.definition_hash.clone(), json);
+                rows.insert(node.fingerprint.definition_hash.clone(), json);
             }
         }
     }
@@ -220,8 +227,8 @@ pub(crate) fn causes(changed: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ExtractedNode;
     use barca_compile::definition::definition_components;
+    use barca_compile::extracted::ExtractedNode;
 
     #[test]
     fn causes_split_code_inputs_and_env() {

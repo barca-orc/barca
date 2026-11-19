@@ -229,17 +229,21 @@ impl RowFacts {
 }
 
 /// One run's rows for one node, keys folded into their base id: what the run cost on the node
-/// as a whole, where `elapsed_seconds` of a key's row is that key's share alone.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// as a whole, where `elapsed_seconds` of a key's row is that key's share alone. A node's
+/// `last_run` in `GET /state` (`last_materialization.elapsed_seconds` is one key's share, this
+/// is every key of the run added up, over the batched calls they ran in).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunTotals {
     pub run_id: String,
-    /// Wall time summed over the rows that recorded one; `None` when none did (every key
+    /// Wall time summed over the rows that recorded one; `null` when none did (every key
     /// failed before finishing).
     pub elapsed_seconds: Option<f64>,
     /// Rows the run recorded for the node: its keys, or 1.
     pub keys: u32,
-    /// Batched calls (RFC-0013) those keys ran in; 0 when each ran on its own.
+    /// Batched calls (RFC-0013) those keys ran in; `0` when each ran on its own.
     pub calls: u32,
+    /// Keys that failed.
     pub failed: u32,
 }
 

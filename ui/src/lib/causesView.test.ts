@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { ACTION_WORD, ROOT_KIND_WORD, actionWords, explained, heldCauses, heldGap, heldLine, signals, todos } from './causesView'
+import { ROLLUP, entry, root } from './testdata/project'
 import { causeCounts, failureRoot, heldBy, heldRoot } from './testdata/rollup'
 
-// As served: roots holding nodes with no estimate first, the most nodes first.
+// Roots spelled by hand, for the kinds and sizes the generated project has none of (a run
+// queue, a sensor value, a Manual node, two failures with one error, hundreds of nodes): input
+// to the joining and wording below, not a claim about what the server says.
 const roots = [
   heldRoot({ kind: 'no_schedule', node: 'p.py:ledger', detail: 'no tick reaches ledger', nodes: 152, assets: 140, action: { kind: 'add_schedule', command: null, run_once: null, estimated_seconds: 420 } }),
   failureRoot('p.py:orders', 'row count fell 64%', 59, 52),
@@ -70,6 +73,52 @@ describe('the to-do list', () => {
     // Nothing to say when the head is the whole list.
     expect(explained({ not_fresh: 3, held_by: [heldBy('code:p.py:a', 3, 3)] })).toBeNull()
     expect(explained({ not_fresh: 0, held_by: [] })).toBeNull()
+  })
+})
+
+describe('the to-do list of the generated project', () => {
+  const list = todos(entry('root'), ROLLUP.roots)
+
+  it('is the roots as served, in the order served: what needs someone and holds the most first', () => {
+    expect(list.map((t) => t.root.id)).toEqual([
+      'scheduler_off', 'failure:billing.py:invoices', 'failure:orders.py:sales_by_day', 'failure:billing.py:check__invoices',
+      'no_schedule:orders.py:forecast', 'input:orders.py:orders_enriched',
+    ])
+    expect(list.map((t) => t.root.id)).toEqual(ROLLUP.roots.map((r) => r.id))
+    // Three failures, three errors: none is folded under another.
+    expect(list.every((t) => t.same.length === 0)).toBe(true)
+    // A file's list is the roots its own entry names.
+    expect(todos(entry('file:billing.py'), ROLLUP.roots).map((t) => t.root.id)).toEqual(['failure:billing.py:invoices', 'failure:billing.py:check__invoices'])
+  })
+
+  it('says what each root holds and what it costs in freshness, from the entry', () => {
+    const by = (id: string) => list.find((t) => t.root.id === id)!
+    const lines = (id: string) => [heldLine(by(id)), heldCauses(by(id)), heldGap(by(id))]
+    expect(lines('failure:billing.py:invoices')).toEqual(['holds 3 nodes (3 assets)', '3 failing', '1d of gap across nodes (node-time) · 3 with no estimate'])
+    // A failing task holds a node and no asset.
+    expect(lines('failure:billing.py:check__invoices')).toEqual(['holds 1 node (0 assets)', '1 failing', '1d of gap across nodes (node-time) · 1 with no estimate'])
+    expect(lines('scheduler_off')).toEqual(['holds 1 node (0 assets)', '1 no refresh path', '8h of gap across nodes (node-time) · 1 with no estimate'])
+    // The queued run covers `orders_enriched`; `revenue_hourly` below it is promised no time.
+    expect(lines('input:orders.py:orders_enriched')).toEqual(['holds 2 nodes (2 assets)', '2 queued', '10s of gap across nodes (node-time) · 1 with no estimate'])
+  })
+
+  it('says what clears each root in the server\'s words', () => {
+    const by = (id: string) => actionWords(root(id))
+    expect(by('failure:billing.py:invoices')).toEqual({ word: 'fix the failure', command: 'barca get invoices --server', hint: null, cost: 'about 8s of compute' })
+    // A task is run, not got; nothing has timed it, so there is no cost.
+    expect(by('failure:billing.py:check__invoices')).toEqual({ word: 'fix the failure', command: 'barca run check__invoices --server', hint: null, cost: null })
+    expect(by('scheduler_off')).toEqual({ word: 'start a server', command: 'barca serve', hint: null, cost: 'about 3s of compute' })
+    expect(by('no_schedule:orders.py:forecast')).toEqual({ word: 'add a schedule', command: null, hint: 'freshness=Schedule(...) on it or on a node above it', cost: null })
+    expect(by('input:orders.py:orders_enriched')).toEqual({ word: 'wait', command: null, hint: null, cost: 'about 14s of compute' })
+    expect(root('scheduler_off').detail).toBe('the running scheduler does not fire nightly_export: 1 schedule missed a slot')
+    expect(root('failure:billing.py:check__invoices').error_group).toBe('AssertionError: # rows with a negative total')
+  })
+
+  it('says how much of the scope the head of the list explains', () => {
+    expect(explained(entry('root'))).toEqual({ roots: 3, nodes: 6, of: 10 })
+    expect(explained(entry('file:orders.py'))).toEqual({ roots: 3, nodes: 4, of: 5 })
+    // Two roots hold all of billing.py: the head is the whole list.
+    expect(explained(entry('file:billing.py'))).toBeNull()
   })
 })
 

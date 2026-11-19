@@ -4,7 +4,7 @@ description: "What barca get and barca run report for each step, recompute byte 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/artifacts.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/artifacts.md (barca docs artifacts). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/artifacts.md (barca docs artifacts). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 What `barca get` and `barca run` report for each step, how barca checks the bytes of a
 recomputed result against an earlier one, and what happens when a cached result's file is gone.

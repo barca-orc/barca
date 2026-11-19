@@ -1,0 +1,13 @@
+{
+  "pins": [
+    {
+      "node_id": "orders.py:fx_rates",
+      "pinned_at": "2026-11-16T12:00:00Z",
+      "pinned_by": "ada@laptop",
+      "reason": "month-end close",
+      "run_hash": "56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87",
+      "run_id": "a1f0c0000001",
+      "upload": null
+    }
+  ]
+}

@@ -6,14 +6,14 @@
 
 import { match } from 'ts-pattern'
 import type { Tone } from './tone'
-import type { Health } from './types'
+import type { ServerHealth } from './types'
 
 export type Connection =
   | { kind: 'connecting' }
   | { kind: 'online'; version: string }
   | { kind: 'offline' }
 
-export function connection(health: Health | undefined, isError: boolean): Connection {
+export function connection(health: ServerHealth | undefined, isError: boolean): Connection {
   if (health && !isError) return { kind: 'online', version: health.version }
   return isError ? { kind: 'offline' } : { kind: 'connecting' }
 }

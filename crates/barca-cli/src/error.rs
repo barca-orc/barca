@@ -17,16 +17,17 @@ pub use barca_core::envelope::{
 };
 
 pub trait CliErrorExt {
-    fn from_clap(e: &clap::Error, argv: &[String]) -> Self;
+    fn from_clap(e: &clap::Error, argv: &[String], root: clap::Command) -> Self;
     fn emit(&self, json: bool) -> !;
 }
 
 impl CliErrorExt for CliError {
     /// An argument-parser (clap) error for `argv`: always `usage`. A mistyped flag or
     /// subcommand gets the one "Did you mean" rule (`barca_core::suggest`) in place of clap's
-    /// `-- --flag` tip.
-    fn from_clap(e: &clap::Error, argv: &[String]) -> Self {
-        let mut out = Self::from_prose(ErrorKind::Usage, clap_prose(e, argv));
+    /// `-- --flag` tip. `root` is the CLI's whole command (`Cli::command()`), passed in so this
+    /// module names nothing above it.
+    fn from_clap(e: &clap::Error, argv: &[String], root: clap::Command) -> Self {
+        let mut out = Self::from_prose(ErrorKind::Usage, clap_prose(e, argv, root));
         // "the following required arguments were not provided:" names them on the next line.
         if out.error.ends_with(':')
             && let Some(rem) = out.remediation.take()
@@ -53,14 +54,14 @@ impl CliErrorExt for CliError {
 /// clap's rendered error, with "Did you mean ...?" after its first line for an unknown flag or
 /// subcommand that is close to one `argv`'s command takes. clap's tip to pass an unknown flag
 /// as a value (`use '-- --refesh'`) is dropped: it is wrong advice for a mistyped flag.
-fn clap_prose(e: &clap::Error, argv: &[String]) -> String {
+fn clap_prose(e: &clap::Error, argv: &[String], root: clap::Command) -> String {
     use clap::error::{ContextKind, ContextValue, ErrorKind as Kind};
     let rendered = e.render().to_string();
     let invalid = |kind| match e.get(kind) {
         Some(ContextValue::String(s)) => Some(s.as_str()),
         _ => None,
     };
-    let cmd = command_of(argv);
+    let cmd = command_of(argv, root);
     let meant = match e.kind() {
         Kind::UnknownArgument => invalid(ContextKind::InvalidArg).and_then(|arg| {
             let typed = arg.strip_prefix("--")?.split('=').next()?;
@@ -118,10 +119,9 @@ fn clap_prose(e: &clap::Error, argv: &[String]) -> String {
 }
 
 /// The (sub)command `argv` names: `barca get ...` is `get`, `barca state reset ...` is
-/// `state reset`; the top-level command when none is named.
-fn command_of(argv: &[String]) -> clap::Command {
-    use clap::CommandFactory;
-    let mut cmd = crate::args::Cli::command();
+/// `state reset`; the top-level command (`root`) when none is named.
+fn command_of(argv: &[String], root: clap::Command) -> clap::Command {
+    let mut cmd = root;
     for arg in argv.iter().skip(1) {
         if arg == "--" {
             break;
@@ -136,67 +136,11 @@ fn command_of(argv: &[String]) -> clap::Command {
     cmd
 }
 
-/// Whether raw argv asks for JSON output, for errors raised before the arguments parse. Same
-/// precedence as results (see output.rs): an explicit `--json` / `--pretty` / `-o`, then
-/// `BARCA_OUTPUT`, then whether stdout is a terminal. `plan` is always JSON; `docs` only with
-/// `--json`; `serve` and `version` never.
-pub fn json_mode_from_argv(argv: &[String]) -> bool {
-    use std::io::IsTerminal;
-    let env = std::env::var(crate::output::ENV_VAR).ok();
-    json_mode_from_argv_with(argv, env.as_deref(), std::io::stdout().is_terminal())
-}
-
-/// [`json_mode_from_argv`] without process state, for tests.
-pub fn json_mode_from_argv_with(argv: &[String], env: Option<&str>, stdout_is_tty: bool) -> bool {
-    let args = argv.get(1..).unwrap_or_default();
-    if args.iter().any(|a| a == "--json") {
-        return true;
-    }
-    if args.iter().any(|a| a == "--pretty") {
-        return false;
-    }
-    let Some(sub) = args.iter().find(|a| !a.starts_with('-')) else {
-        return false;
-    };
-    let follows_rule = match sub.as_str() {
-        "plan" => return true,
-        "get" | "run" => true,
-        s if s.ends_with(".py") => true,
-        "list" | "history" | "stats" | "status" => true,
-        _ => false,
-    };
-    if !follows_rule {
-        return false;
-    }
-    let mut it = args.iter().peekable();
-    while let Some(a) = it.next() {
-        let value = match a.as_str() {
-            "-o" | "--output" => it.peek().map(|s| s.as_str()),
-            s => s
-                .strip_prefix("--output=")
-                .or_else(|| s.strip_prefix("-o="))
-                .or_else(|| s.strip_prefix("-o").filter(|v| !v.is_empty())),
-        };
-        match value {
-            Some("value" | "pretty") => return false,
-            Some("json") => return true,
-            _ => {}
-        }
-    }
-    // An invalid BARCA_OUTPUT is reported separately; here it falls back to the terminal.
-    crate::output::decide(None, env, stdout_is_tty)
-        .map_or(!stdout_is_tty, |f| f == crate::output::Format::Json)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use barca_core::BarcaError;
     use serde_json::Value;
-
-    fn argv(s: &str) -> Vec<String> {
-        s.split_whitespace().map(String::from).collect()
-    }
 
     #[test]
     fn exit_code_table() {
@@ -299,39 +243,5 @@ mod tests {
             e.to_human(),
             "error: no files provided\n\nUsage: barca get [TARGET] <FILES>..."
         );
-    }
-
-    #[test]
-    fn json_mode_detection_before_parsing() {
-        let piped = |s: &str| json_mode_from_argv_with(&argv(s), None, false);
-        let tty = |s: &str| json_mode_from_argv_with(&argv(s), None, true);
-        // Piped (agents, scripts): JSON unless a flag says otherwise.
-        assert!(piped("barca get x p.py --bogus"));
-        assert!(piped("barca run t p.py"));
-        assert!(piped("barca p.py --bogus"));
-        assert!(piped("barca list p.py --bogus"));
-        assert!(!piped("barca get x p.py -o pretty --bogus"));
-        assert!(!piped("barca get x p.py --output=value"));
-        assert!(!piped("barca get x p.py -opretty"));
-        assert!(!piped("barca list p.py --pretty --bogus"));
-        // In a terminal: human unless a flag or BARCA_OUTPUT asks for JSON.
-        assert!(!tty("barca get x p.py --bogus"));
-        assert!(tty("barca get x p.py -o json --bogus"));
-        assert!(tty("barca list --json --bogus"));
-        assert!(json_mode_from_argv_with(
-            &argv("barca get x p.py --bogus"),
-            Some("json"),
-            true
-        ));
-        assert!(!json_mode_from_argv_with(
-            &argv("barca get x p.py"),
-            Some("pretty"),
-            false
-        ));
-        // Fixed modes.
-        assert!(tty("barca plan"));
-        assert!(!piped("barca docs nope"));
-        assert!(!piped("barca frobnicate"));
-        assert!(!piped("barca"));
     }
 }

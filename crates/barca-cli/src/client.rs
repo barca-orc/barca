@@ -10,8 +10,9 @@
 //! `barca_core::ledger::LedgerTransport`), and `status`, `history` and `stats` answer from it.
 //! `--local` leaves the configured server untouched.
 //!
-//! This file is the façade: choosing the server and the one client of it. The rest is laid
-//! out by layer, one module each:
+//! This is the remote backend: [`perform`] takes a checked request (`crate::request`) and sends
+//! it to the server `dispatch` resolved. This file is the façade: choosing the server and the one
+//! client of it. The rest is laid out by layer, one module each:
 //!
 //! 1. **Choosing the server** ([`choose`], [`configured`]): the flags, `BARCA_SERVER` and
 //!    `[server] url`.
@@ -28,6 +29,8 @@
 //!    [`stats`], [`queue`], [`sql`]; [`logs`]): the CLI's `--json` bodies, rendered here with
 //!    this command's own `--limit`, `--fields` and output mode.
 //! 6. **Doctor** ([`doctor`]: [`doctor_checks`]): `barca doctor`'s checks of the server.
+//!
+//! Which commands come here at all is `crate::route`'s table; nothing in this module decides it.
 
 use crate::args::ServerFlags;
 use crate::error::{CliError, Context, ErrorKind};
@@ -45,7 +48,8 @@ mod gc;
 mod inspect;
 mod ledger;
 mod logs;
-pub(crate) mod pins;
+mod perform;
+mod pins;
 mod runs;
 mod sse;
 #[cfg(test)]
@@ -53,13 +57,14 @@ mod tests;
 mod transport;
 
 pub(crate) use doctor::doctor_checks;
-pub(crate) use gc::gc;
-pub(crate) use inspect::{
+use gc::gc;
+use inspect::{
     activity, history, list, partition_keys, pause, pause_schedule, queue, resume, rollup,
     run_detail, sql, stats, status,
 };
-pub(crate) use logs::logs;
-pub(crate) use runs::{RunArgs, cancel_run, run};
+use logs::logs;
+pub(crate) use perform::perform;
+use runs::{RunArgs, cancel_run, run};
 
 /// How long one ordinary request (not the event stream) may take, connection included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -111,12 +116,6 @@ const STREAM_PROVEN: Duration = Duration::from_secs(10);
 const RECONNECT_PAUSE: Duration = Duration::from_millis(500);
 
 // ─── 1. choosing the server ─────────────────────────────────────────────────
-
-/// The commands that take `--server` and `--local`.
-pub(crate) const SERVER_COMMANDS: &[&str] = &[
-    "get", "run", "status", "list", "history", "stats", "logs", "sql", "doctor", "queue", "pause",
-    "resume", "cancel", "gc", "pin", "unpin",
-];
 
 /// Where `--server` sends this command, or `None` to run it here. Bare `--server` uses the
 /// configured server (`BARCA_SERVER`, then `[server] url`) and is a usage error when none is
@@ -230,28 +229,6 @@ pub(crate) fn bare_server_flags(args: Vec<String>) -> Vec<String> {
         out.push(arg);
     }
     out
-}
-
-/// `--server` or `--local` on a command that always runs on this machine: a usage error that
-/// says so, instead of clap's "unexpected argument".
-pub(crate) fn refuse_on_local_commands(args: &[String]) -> Option<CliError> {
-    let sub = args.iter().skip(1).find(|a| !a.starts_with('-'))?;
-    if SERVER_COMMANDS.contains(&sub.as_str()) || sub.ends_with(".py") {
-        return None;
-    }
-    let flag = args
-        .iter()
-        .take_while(|a| *a != "--")
-        .find(|a| *a == "--local" || *a == "--server" || a.starts_with("--server="))?;
-    let flag = flag.split('=').next().unwrap_or(flag);
-    Some(CliError::from_prose(
-        ErrorKind::Usage,
-        format!(
-            "error: `barca {sub}` always runs on this machine; it does not take {flag}\n\
-             --server and --local apply to get, run, status, list, history, stats, logs, sql, \
-             queue, pause, resume, cancel, pin, unpin, gc and doctor (barca docs server-mode)."
-        ),
-    ))
 }
 
 // ─── 2. transport ───────────────────────────────────────────────────────────

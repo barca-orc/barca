@@ -4,7 +4,7 @@ description: "Operating barca serve: the run queue, stopping and restarting with
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/serve-ops.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/serve-ops.md (barca docs serve-ops). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/serve-ops.md (barca docs serve-ops). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 A running server accepts runs into a durable queue, drains when told to stop and resumes the
 queue when it starts again. For whoever deploys and restarts it: the run

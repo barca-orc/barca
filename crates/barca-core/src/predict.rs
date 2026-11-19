@@ -1,7 +1,30 @@
 //! Dry-run prediction: what `barca get --dry-run` / `barca plan` say each step would do,
-//! phase by phase, without running anything.
+//! phase by phase, without running anything. `barca status` and the partition grid read the
+//! same prediction under the status rules.
+//!
+//! It decides with what a run decides with: the plan a request prepares
+//! ([`crate::freshness::pin_manual`]), [`crate::cache::decide_step`], the recompute rule of
+//! [`crate::recover`], [`crate::sizing`] and the report line of a decision
+//! ([`crate::cache::report_for`]). Nothing here names the run orchestrator.
 
-use super::*;
+use crate::BarcaError;
+use crate::cache::{
+    CachePolicy, DecideState, Decision, RunReason, decide_step, has_sensor_output,
+    in_dependency_order, merge_partition_reports, report_for, sensor_inputs,
+};
+use crate::dag::Dag;
+use crate::db;
+use crate::dispatch;
+use crate::freshness::{Planned, pin_manual};
+use crate::model::kind_str;
+use crate::planner::{Phase, ResourceConfig};
+use crate::recover;
+use crate::results::{ExplainResult, ExplainSummary, StepReport, TargetPrediction};
+use crate::sizing::{planned_weights, sizing_for, warn_over_capacity};
+use crate::step_result::OutputRef;
+use crate::targets::{plan_for_targets, resolve_targets, short_name, validate_refresh_names};
+use crate::transfer::ArtifactLayout;
+use std::collections::HashMap;
 
 /// [`crate::queries::explain`] on an already-built DAG (`barca status` reuses its DAG for the node listing).
 pub(crate) async fn explain_dag(
@@ -86,13 +109,13 @@ pub(crate) async fn explain_dag_with_keys(
     let Planned { cone, pinned, .. } =
         pin_manual(dag, &mut targets, cfg, &policy, rules, file_args).await?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let pool_size = sizing_for(cfg, &crate::run_host::LocalHost).pool_size;
+    let pool_size = sizing_for(cfg, None).pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
     };
     let mut exec_plan = match &cone {
-        Some(cone) => super::filter_plan_to_subgraph(
+        Some(cone) => filter_plan_to_subgraph(
             crate::planner::plan_from_dag_narrowed(dag, &config, partition),
             cone,
         ),
@@ -252,12 +275,8 @@ pub(crate) async fn explain_dag_with_keys(
     for r in &mut steps {
         r.weight = weights.get(recover::base_of(&r.id)).copied();
     }
-    let capacity = sizing_for(cfg, &crate::run_host::LocalHost).capacity;
-    warn_over_capacity(
-        &weights,
-        capacity,
-        sizing_for(cfg, &crate::run_host::LocalHost).capacity_source,
-    );
+    let capacity = sizing_for(cfg, None).capacity;
+    warn_over_capacity(&weights, capacity, sizing_for(cfg, None).capacity_source);
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
         crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)
@@ -303,28 +322,28 @@ pub(crate) async fn explain_dag_with_keys(
     ))
 }
 
-pub(super) struct Prediction<'a> {
-    pub(super) targets: &'a [&'a str],
-    pub(super) user_pins: &'a [db::AssetPin],
-    pub(super) dag: &'a Dag,
-    pub(super) policy: &'a CachePolicy,
-    pub(super) cache: Option<&'a crate::cache::CacheReader>,
-    pub(super) layout: Option<&'a ArtifactLayout>,
-    pub(super) pool_size: usize,
-    pub(super) state: &'a mut DecideState,
-    pub(super) all_outputs: &'a mut HashMap<String, OutputRef>,
-    pub(super) cached_steps: &'a mut recover::CachedSteps,
-    pub(super) unknown_ids: &'a mut HashMap<String, &'static str>,
-    pub(super) hash_unknown: &'a mut std::collections::HashSet<String>,
-    pub(super) cutoff_unknown: &'a mut HashMap<String, String>,
-    pub(super) steps: &'a mut Vec<StepReport>,
-    pub(super) summary: &'a mut ExplainSummary,
-    pub(super) narrowing: Option<&'a mut crate::selection::Narrowing>,
+struct Prediction<'a> {
+    targets: &'a [&'a str],
+    user_pins: &'a [db::AssetPin],
+    dag: &'a Dag,
+    policy: &'a CachePolicy,
+    cache: Option<&'a crate::cache::CacheReader>,
+    layout: Option<&'a ArtifactLayout>,
+    pool_size: usize,
+    state: &'a mut DecideState,
+    all_outputs: &'a mut HashMap<String, OutputRef>,
+    cached_steps: &'a mut recover::CachedSteps,
+    unknown_ids: &'a mut HashMap<String, &'static str>,
+    hash_unknown: &'a mut std::collections::HashSet<String>,
+    cutoff_unknown: &'a mut HashMap<String, String>,
+    steps: &'a mut Vec<StepReport>,
+    summary: &'a mut ExplainSummary,
+    narrowing: Option<&'a mut crate::selection::Narrowing>,
     /// The status prediction: the nodes read as they are, filled as each is decided.
-    pub(super) held: Option<&'a mut HeldNodes>,
+    held: Option<&'a mut HeldNodes>,
 }
 
-pub(super) fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: String) -> StepReport {
+fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: String) -> StepReport {
     StepReport {
         id: base_id.to_string(),
         kind: kind_str(dag.get_node(base_id).map(|n| n.kind())),
@@ -335,10 +354,7 @@ pub(super) fn unknown_report(dag: &Dag, base_id: &str, reason: &str, detail: Str
     }
 }
 
-pub(super) async fn expand_prediction(
-    ctx: &mut Prediction<'_>,
-    phase: &Phase,
-) -> Result<Phase, BarcaError> {
+async fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<Phase, BarcaError> {
     // A `partitions_from` source is read to expand its consumers: if its artifact is
     // missing it runs again first, and its keys are not known until it has.
     let sources = dispatch::partition_sources(phase, ctx.all_outputs)
@@ -392,7 +408,7 @@ pub(super) async fn expand_prediction(
     Ok(ready)
 }
 
-pub(super) async fn predict_steps(
+async fn predict_steps(
     ctx: &mut Prediction<'_>,
     phase_ref: &Phase,
 ) -> Result<Vec<crate::planner::StreamStep>, BarcaError> {
@@ -698,10 +714,7 @@ pub(super) async fn predict_steps(
     Ok(to_run)
 }
 
-pub(super) async fn predict_phase(
-    ctx: &mut Prediction<'_>,
-    phase: &Phase,
-) -> Result<(), BarcaError> {
+async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), BarcaError> {
     let ready = expand_prediction(ctx, phase).await?;
     let expansion = dispatch::expand_pending_partitions_filtered(
         ctx.dag,
@@ -760,4 +773,59 @@ pub(super) async fn predict_phase(
     )
     .await?;
     Ok(())
+}
+
+/// `plan` without the steps outside `subgraph_ids` (a target's cone), and without the streams
+/// and phases that leaves empty.
+pub(crate) fn filter_plan_to_subgraph(
+    plan: crate::planner::ExecutionPlan,
+    subgraph_ids: &[&str],
+) -> crate::planner::ExecutionPlan {
+    let subgraph_set: std::collections::HashSet<&str> = subgraph_ids.iter().copied().collect();
+    let exec_plan = crate::planner::ExecutionPlan {
+        phases: plan
+            .phases
+            .into_iter()
+            .map(|phase| {
+                let filtered_streams: Vec<crate::planner::WorkerStream> = phase
+                    .streams
+                    .into_iter()
+                    .map(|s| crate::planner::WorkerStream {
+                        stream_id: s.stream_id,
+                        steps: s
+                            .steps
+                            .into_iter()
+                            .filter(|st| {
+                                let base_id = st.step_id.base_id();
+                                subgraph_set.contains(base_id)
+                            })
+                            .collect(),
+                    })
+                    .filter(|s| !s.steps.is_empty())
+                    .collect();
+                Phase {
+                    reason: phase.reason,
+                    streams: filtered_streams,
+                }
+            })
+            .filter(|p| !p.streams.is_empty())
+            .collect(),
+        total_steps: 0,
+    };
+    crate::planner::ExecutionPlan {
+        total_steps: exec_plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .map(|st| {
+                if st.partition_keys.is_empty() {
+                    1
+                } else {
+                    st.partition_keys.len()
+                }
+            })
+            .sum(),
+        ..exec_plan
+    }
 }

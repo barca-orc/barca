@@ -221,7 +221,7 @@ Cost: two reads per classification of a scope, never one per node. One reads
 `schedule_ticks` once for every node (`db::latest_ticks`: the retained target lists, and the
 runs of ticks in flight); one reads by primary key the newest successful row of each asset
 whose check could stand (`db::components_of_rows`). The server keeps the result per graph and
-database state (`AppState::cached_checks`), so a poll that finds nothing changed reads
+database state (`Reads::cached_checks`), so a poll that finds nothing changed reads
 nothing; expiry is a time the result carries, compared with the clock per answer.
 
 What it does not see, bounded by the expiry: an edit to a node above (shown on that node,
@@ -281,7 +281,7 @@ Implemented in `crates/barca-core/src/refresh_path.rs` (`Paths`, `path_schedule`
   schedule contributes at most 20; a skipped, paused or unfired tick is not a miss.
 
 Cost: the walk depends on the graph alone and takes seconds on a graph of thousands of nodes
-and dozens of schedules, so it runs once per loaded graph (`AppState::cached_paths`; once per
+and dozens of schedules, so it runs once per loaded graph (`Reads::cached_paths`; once per
 CLI command), never per poll or per node. The schedule state is each schedule's standing,
 already computed per answer; the misses come with the one read "Last check" makes.
 

@@ -88,13 +88,13 @@ pub(crate) fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarnin
             .and_then(|upstream| dag.get_node(upstream))
             .is_some_and(|upstream| upstream.kind() == NodeKind::Sensor)
     };
-    node.extracted
+    node.findings
         .unused_inputs
         .iter()
         .filter(|param| !from_sensor(param))
         .map(|param| {
             // What the unused input costs depends on how it would have been read.
-            let cost = match node.extracted.param_types.get(param) {
+            let cost = match node.invoke.python().param_types.get(param) {
                 Some(t) if t.is_lazy() => format!(
                     "It is annotated as a lazy input ({}), so a parquet artifact is opened but \
                      not read; it still counts toward the step's cache key",
@@ -123,7 +123,7 @@ pub(crate) fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarnin
 /// ([`crate::env_reads`]). Every item of a step carries the same message, naming all of them;
 /// stderr gets one summary line for the whole command instead ([`print`]).
 pub(crate) fn undeclared_env_warnings(node: &DagNode) -> Vec<PlanWarning> {
-    let names = node.extracted.undeclared_env();
+    let names = node.undeclared_env();
     if names.is_empty() {
         return Vec::new();
     }
@@ -365,7 +365,7 @@ def unrelated(raw):
     fn an_unused_sensor_input_is_a_cache_trigger_not_a_warning() {
         let dag = dag();
         let bronze = dag.get_node("p.py:bronze").unwrap();
-        assert_eq!(bronze.extracted.unused_inputs, ["etag"]);
+        assert_eq!(bronze.findings.unused_inputs, ["etag"]);
         assert_eq!(unused_input_warnings(&dag, bronze), []);
     }
 

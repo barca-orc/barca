@@ -17,7 +17,7 @@ use crate::run_queue::{set_state_value, state_value};
 use crate::schedule::{ScheduledJob, Zone, next_fire, prev_fire};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The `server_state` key of [`SchedulerRecord`].
 const SCHEDULER: &str = "scheduler";
@@ -405,12 +405,92 @@ pub async fn recorded_runs(db_path: &str) -> Result<Vec<RecordedRun>, BarcaError
     Ok(out)
 }
 
+/// A run in flight, as an estimate reads it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlannedRun {
+    pub run_id: String,
+    /// The scheduled node whose tick started it; `None` for a run someone asked for.
+    pub schedule: Option<String>,
+    /// The nodes it computes when they are out of date: its targets and everything above
+    /// them. `None` for a run of every node. Not read for a tick's run, whose nodes are its
+    /// schedule's targets ([`crate::refresh_path::Paths`]).
+    pub nodes: Option<HashSet<String>>,
+    /// It is executing; false while it waits for a run slot.
+    pub running: bool,
+    /// When what it has left starts, unix seconds: for a running run its latest progress
+    /// (its start, or the last step it finished); for a waiting run its estimated start
+    /// ([`queue_starts`]). `None` when that is not known (a paused or draining queue).
+    pub start: Option<i64>,
+}
+
+/// A run of the run queue, as [`queue_starts`] reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueueRun {
+    pub run_id: String,
+    /// When it started executing, unix seconds; `None` while it waits.
+    pub started_at: Option<i64>,
+    /// How long such a run typically takes, seconds.
+    pub typical_seconds: f64,
+}
+
+/// When each waiting run of the run queue is expected to start, unix seconds, and when a run
+/// that joined now would. `runs`: the running runs, then the waiting ones in the order they
+/// start. Each of `max_runs` slots is free when its run ends (its start plus its typical
+/// time, or `now` when that has passed); a waiting run takes the slot that frees first. The
+/// extra slot a run someone asked for may take past scheduled work is not modelled.
+pub fn queue_starts(runs: &[QueueRun], max_runs: usize, now: i64) -> (HashMap<String, i64>, i64) {
+    let mut slots: Vec<i64> = runs
+        .iter()
+        .filter_map(|run| {
+            run.started_at
+                .map(|at| (at + run.typical_seconds.ceil() as i64).max(now))
+        })
+        .collect();
+    while slots.len() < max_runs.max(1) {
+        slots.push(now);
+    }
+    let mut starts = HashMap::new();
+    for run in runs.iter().filter(|run| run.started_at.is_none()) {
+        let (slot, free) = slots
+            .iter()
+            .copied()
+            .enumerate()
+            .min_by_key(|(_, free)| *free)
+            .expect("at least one slot");
+        starts.insert(run.run_id.clone(), free);
+        slots[slot] = free + run.typical_seconds.ceil() as i64;
+    }
+    let clear = slots.into_iter().min().unwrap_or(now);
+    (starts, clear)
+}
+
+/// How long a run that `schedule`'s tick started typically takes, seconds: the median of its
+/// newest ticks' successful runs ([`crate::schedule_standing::Ticks::run_seconds`]). For a
+/// run no schedule started, and a schedule with none recorded: the median of the schedules
+/// that have one; 0 when none has.
+pub fn typical_run_seconds(
+    ticks: &HashMap<String, crate::schedule_standing::Ticks>,
+    schedule: Option<&str>,
+) -> f64 {
+    use crate::schedule_standing::median;
+    let of = |ticks: &crate::schedule_standing::Ticks| {
+        (!ticks.run_seconds.is_empty()).then(|| median(&ticks.run_seconds))
+    };
+    schedule
+        .and_then(|id| ticks.get(id))
+        .and_then(of)
+        .unwrap_or_else(|| {
+            let known: Vec<f64> = ticks.values().filter_map(of).collect();
+            median(&known)
+        })
+}
+
 /// The recorded queue as the estimates read it ([`recorded_timing`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RecordedTiming {
     /// The recorded runs in flight ([`crate::estimates::Timing::runs`]); none when their
     /// server is gone.
-    pub runs: Vec<crate::estimates::PlannedRun>,
+    pub runs: Vec<PlannedRun>,
     /// Each started run: when it started executing.
     pub started: HashMap<String, i64>,
     /// Each waiting run: when it is expected to start. Empty while the queue starts nothing
@@ -439,7 +519,6 @@ pub fn recorded_timing(
     dag: &crate::dag::Dag,
     now: i64,
 ) -> RecordedTiming {
-    use crate::estimates::{PlannedRun, QueueRun, queue_starts, typical_run_seconds};
     let serving = recorded.serving.as_ref();
     let max_runs = serving.map(|s| s.max_runs).filter(|n| *n > 0);
     let workers = serving.map(|s| s.workers).filter(|n| *n > 0);

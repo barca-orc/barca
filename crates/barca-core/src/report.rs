@@ -1,17 +1,16 @@
 //! Shared result rendering and JSON projection for frontends.
 //!
 //! Tables return their complete text, including newlines, so callers choose their output
-//! stream. JSON helpers preserve the CLI schema and field selection. Engine progress helpers
-//! format step reports and progress lines without emitting them.
+//! stream. JSON helpers preserve the CLI schema and field selection.
 
 mod commands;
 mod keys;
 pub use commands::{
     GetShape, HistoryExtras, HistoryNow, OutputChunk, RenderedOutput, ResultFormat, Returned,
-    Shown, first_multi_failure, history_json, history_target, render_activity, render_explain,
-    render_failed_get, render_failed_run, render_get, render_get_multi, render_history,
-    render_list, render_multi, render_plan, render_rollup, render_run, render_run_detail,
-    render_sql, render_stats, render_status,
+    Shown, history_json, history_target, render_activity, render_explain, render_failed_get,
+    render_failed_run, render_get, render_get_multi, render_history, render_list, render_multi,
+    render_plan, render_rollup, render_run, render_run_detail, render_sql, render_stats,
+    render_status,
 };
 pub(crate) use commands::{
     failed_run_body, multi_json, multi_parts, render_failed_get_returned, render_get_body,
@@ -23,14 +22,9 @@ pub use keys::{
 };
 
 use crate::cache_state::CacheState;
+use crate::results::*;
 use crate::step_status::StepStatus;
-use crate::targets::short_name;
 pub use crate::text::utc_cell;
-use crate::{
-    cache::{Decision, RunReason},
-    dag::Dag,
-    results::*,
-};
 
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -505,94 +499,11 @@ pub fn stats_json(stats: &crate::db::AssetStats) -> serde_json::Value {
     out
 }
 
-pub fn artifact_metadata(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
-    serde_json::json!({
-        "_barca_artifact": {
-            "path": oref.path,
-            "format": oref.format,
-            "size_bytes": oref.size_bytes,
-        }
-    })
-}
-
-/// What `barca get --json` returns by default (#404): the artifact pointer, or for a
-/// partitioned target an object of pointers keyed by partition key ([`keyed_output`]). `None`
-/// when the run returned nothing (a `get` of every asset).
-pub fn pointer_output(
-    single: Option<&crate::dispatch::OutputRef>,
-    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
-    summary: Option<&crate::results::KeySummary>,
-) -> Option<serde_json::Value> {
-    output_with(single, keys, summary, artifact_metadata)
-}
-
-/// A task's JSON results, preserving its keys; binary formats remain artifact references.
-/// The command layer reads tabular partition values with `values::task_output`.
-pub(crate) fn read_task_output(
-    single: Option<&crate::dispatch::OutputRef>,
-    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
-    summary: Option<&crate::results::KeySummary>,
-) -> Option<serde_json::Value> {
-    output_with(single, keys, summary, read_final_output)
-}
-
-fn output_with(
-    single: Option<&crate::dispatch::OutputRef>,
-    keys: Option<&[(String, crate::dispatch::OutputRef)]>,
-    summary: Option<&crate::results::KeySummary>,
-    read: impl Fn(&crate::dispatch::OutputRef) -> serde_json::Value,
-) -> Option<serde_json::Value> {
-    match crate::results::KeySummary::listed(summary, keys) {
-        Some(keys) => Some(keyed_output(
-            keys.iter()
-                .map(|(key, oref)| (key.clone(), read(oref)))
-                .collect(),
-            summary,
-        )),
-        None => single.map(read),
-    }
-}
-
-pub(crate) use crate::results::{KEY_SUMMARY, key_preview};
-
-/// A partitioned target's `final_output`: `entries` (key to pointer or value) as they are, or,
-/// with a summary (more than [`crate::results::LISTED_KEYS`] keys), `{"_barca_partitions":
-/// {"keys", "computed", "cached", "outputs", "truncated", "hint"}}`, where `outputs` holds the
-/// entries of the keys the run computed.
-pub fn keyed_output(
-    entries: serde_json::Map<String, serde_json::Value>,
-    summary: Option<&crate::results::KeySummary>,
-) -> serde_json::Value {
-    let Some(s) = summary else {
-        return serde_json::Value::Object(entries);
-    };
-    let truncated = entries.len() < s.computed;
-    serde_json::json!({
-        KEY_SUMMARY: {
-            "keys": s.keys,
-            "computed": s.computed,
-            "cached": s.keys - s.computed,
-            "outputs": entries,
-            "truncated": truncated,
-            "hint": key_summary_hint(s),
-        }
-    })
-}
-
-/// Why a partitioned output is summarized, and how to see the keys it leaves out.
-fn key_summary_hint(s: &crate::results::KeySummary) -> String {
-    format!(
-        "{} keys, more than {}: outputs lists only the keys this run computed{}; select keys \
-         with --partition to list their paths, or read every key with barca sql",
-        s.keys,
-        crate::results::LISTED_KEYS,
-        if s.computed > crate::results::LISTED_KEYS {
-            format!(" (the first {})", crate::results::LISTED_KEYS)
-        } else {
-            String::new()
-        }
-    )
-}
+// The JSON form of a result's `final_output` is the result's own (`results`), and reading a
+// task's JSON artifacts is `values`; these keep the paths the CLI and the server name.
+pub(crate) use crate::results::{KEY_SUMMARY, parse_key_summary};
+pub use crate::results::{artifact_metadata, first_multi_failure, keyed_output, pointer_output};
+pub(crate) use crate::values::read_task_output;
 
 /// The stderr note under the paths of a summarized partitioned output.
 pub(crate) fn key_summary_note(s: &crate::results::KeySummary) -> String {
@@ -608,34 +519,6 @@ pub(crate) fn key_summary_note(s: &crate::results::KeySummary) -> String {
         },
         crate::results::LISTED_KEYS
     )
-}
-
-/// The counts of a summarized partitioned `final_output` ([`keyed_output`]); `None` for any
-/// other value.
-pub(crate) fn parse_key_summary(output: &serde_json::Value) -> Option<crate::results::KeySummary> {
-    let s = output.get(KEY_SUMMARY)?;
-    let n = |k: &str| {
-        s.get(k)
-            .and_then(serde_json::Value::as_u64)
-            .map(|n| n as usize)
-    };
-    Some(crate::results::KeySummary {
-        keys: n("keys")?,
-        computed: n("computed")?,
-        listed: Vec::new(),
-    })
-}
-
-/// Read an artifact for display: a JSON artifact's value inline, metadata for binary formats.
-pub(crate) fn read_final_output(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
-    if oref.format == "json" {
-        std::fs::read_to_string(&oref.path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| artifact_metadata(oref))
-    } else {
-        artifact_metadata(oref)
-    }
 }
 
 /// Keep only `fields` on each object in `items` (non-objects are left alone).
@@ -708,364 +591,6 @@ impl Page {
     }
 }
 
-/// Format seconds as a fixed-width time string for progress display.
-/// Always 8 chars wide: "   5s   ", " 2m 30s ", " 1h 05m ", "2d 03h  "
-pub(crate) fn fmt_eta(secs: f64) -> String {
-    let s = secs.round() as u64;
-    if s < 60 {
-        format!("{s:>4}s   ")
-    } else if s < 3600 {
-        format!("{:>2}m {:02}s ", s / 60, s % 60)
-    } else if s < 86400 {
-        format!("{:>2}h {:02}m ", s / 3600, (s % 3600) / 60)
-    } else {
-        let d = s / 86400;
-        format!("{d:>2}d {:02}h  ", (s % 86400) / 3600)
-    }
-}
-
-/// The progress total, grown to cover steps the plan did not count (the children a `parallel()`
-/// call fans out to complete as extra steps). Keeps `completed <= total` for the counters and
-/// the ETA subtraction.
-pub(crate) fn reconcile_total(total_steps: usize, completed_steps: usize) -> usize {
-    total_steps.max(completed_steps)
-}
-
-/// A partitioned asset plans one step per key; report it as one line with a partition summary.
-pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepReport> {
-    let mut out: Vec<StepReport> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
-    for r in reports {
-        let Some(p) = r.partitions.clone() else {
-            out.push(r);
-            continue;
-        };
-        match index.get(&r.id).copied() {
-            None => {
-                index.insert(r.id.clone(), out.len());
-                out.push(r);
-            }
-            Some(i) => {
-                let m = &mut out[i];
-                let mp = m.partitions.get_or_insert_with(PartitionSummary::default);
-                mp.total += p.total;
-                mp.cached += p.cached;
-                mp.will_run += p.will_run;
-                mp.will_run_keys = key_preview(
-                    std::mem::take(&mut mp.will_run_keys)
-                        .into_iter()
-                        .chain(p.will_run_keys),
-                );
-                if let Some(changed) = p.changed {
-                    mp.changed
-                        .get_or_insert_with(Default::default)
-                        .extend(changed);
-                }
-                if let Some(changed) = &mut mp.changed {
-                    let keys = &mp.will_run_keys;
-                    changed.retain(|k, _| keys.contains(k));
-                }
-                if m.reason.is_none() {
-                    m.reason = r.reason;
-                    m.detail = r.detail;
-                } else if m.changed.is_none() && r.changed.is_some() {
-                    // What changed in the first key that ran before, whichever chunk it is in.
-                    m.detail = r.detail;
-                }
-                if m.changed.is_none() {
-                    m.changed = r.changed;
-                }
-            }
-        }
-    }
-    // Recompute the verdict of merged lines from their totals.
-    for r in &mut out {
-        let Some(p) = &r.partitions else { continue };
-        let verdict = |dry: bool| match (p.cached, p.will_run) {
-            (_, 0) => StepStatus::Cached.as_str(),
-            (0, _) => {
-                if dry {
-                    "run"
-                } else {
-                    StepStatus::Ran.as_str()
-                }
-            }
-            _ => StepStatus::Partial.as_str(),
-        };
-        if r.action.is_some() {
-            r.action = Some(verdict(true).to_string());
-        } else {
-            r.status = Some(verdict(false).to_string());
-        }
-    }
-    out
-}
-
-pub(crate) fn stale_warning(display_id: &str, root: &str, dry: bool) -> String {
-    let id = short_name(display_id);
-    let (served, reflect) = if dry {
-        ("will be served", "will not reflect")
-    } else {
-        ("was served", "does not reflect")
-    };
-    format!(
-        "'{id}' {served} from cache but depends on refreshed '{root}', so it {reflect} the \
-         refresh. Drop --no-cascade, add it to --refresh (for example --refresh {root},{id}) or \
-         use --refresh-all."
-    )
-}
-
-/// The declared env values of `base_id` as reported in output (secrets redacted, unset = null),
-/// or `None` when the node declares no env.
-pub(crate) fn env_report(
-    dag: &Dag,
-    base_id: &str,
-) -> Option<std::collections::BTreeMap<String, Option<String>>> {
-    let node = dag.get_node(base_id)?;
-    if node.extracted.env.is_empty() {
-        return None;
-    }
-    Some(crate::envdeps::report(&crate::envdeps::resolve(
-        &node.extracted.env,
-    )))
-}
-
-/// The `--agent` step-line suffix for `node_id`'s declared env (empty when none is declared).
-pub(crate) fn env_suffix(dag: &Dag, node_id: &str) -> String {
-    dag.get_node(crate::StepId::parse(node_id).base_id())
-        .map(|n| crate::envdeps::agent_suffix(&crate::envdeps::resolve(&n.extracted.env)))
-        .unwrap_or_default()
-}
-
-pub(crate) use crate::model::kind_str;
-
-/// Build the report line for one decided step. `dry` selects the vocabulary: a dry run says what
-/// will happen (`action`), a real run says what happened (`status`).
-/// What another run of the same server computed while this run waited for it (#654), as this
-/// run reports it: a cache hit. `display_id` is the step (with its partition key), `artifact`
-/// where its result is. Adjusts the report of its node made when the step was decided.
-pub(crate) fn computed_by_another_run(
-    reports: &mut [StepReport],
-    display_id: &str,
-    artifact: Option<&str>,
-) {
-    let id = crate::StepId::parse(display_id);
-    let base = id.base_id();
-    let key = (!id.partition.is_empty()).then(|| id.partition.suffix());
-    for r in reports.iter_mut().rev().filter(|r| r.id == base) {
-        match (&key, r.partitions.as_mut()) {
-            (Some(key), Some(p)) if p.will_run > 0 => {
-                p.will_run -= 1;
-                p.cached += 1;
-                p.will_run_keys.retain(|k| k != key);
-                if let Some(changed) = p.changed.as_mut() {
-                    changed.remove(key);
-                }
-                if p.will_run == 0 {
-                    r.reason = None;
-                    r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
-                    r.status = Some(
-                        if p.cached == p.total {
-                            StepStatus::Cached
-                        } else {
-                            StepStatus::Partial
-                        }
-                        .to_string(),
-                    );
-                }
-                return;
-            }
-            (None, None) if StepStatus::Ran.is(r.status.as_deref()) => {
-                r.status = Some(StepStatus::Cached.to_string());
-                r.reason = None;
-                r.changed = None;
-                r.detail = Some(COMPUTED_BY_ANOTHER_RUN.to_string());
-                r.artifact = artifact.map(str::to_string);
-                return;
-            }
-            _ => {}
-        }
-    }
-}
-
-/// The detail of a step another run of the server computed for this one.
-pub(crate) const COMPUTED_BY_ANOTHER_RUN: &str =
-    "computed by another run of the server at the same time";
-
-pub(crate) fn report_for(
-    dag: &Dag,
-    step: &crate::planner::StreamStep,
-    decision: &Decision,
-    dry: bool,
-) -> StepReport {
-    let display_id = step.step_id.display();
-    let base_id = step.step_id.base_id();
-    let mut r = StepReport {
-        id: base_id.to_string(),
-        kind: kind_str(dag.get_node(base_id).map(|n| n.kind())),
-        env: env_report(dag, base_id),
-        undeclared_env: dag
-            .get_node(base_id)
-            .map(|n| n.extracted.undeclared_env())
-            .filter(|names| !names.is_empty()),
-        ..Default::default()
-    };
-    let (word_cached, word_partial) = (StepStatus::Cached.as_str(), StepStatus::Partial.as_str());
-    let word_run = if dry { "run" } else { StepStatus::Ran.as_str() };
-    let verdict = match decision {
-        Decision::Run(reason) => {
-            r.reason = Some(reason.code().to_string());
-            r.detail = Some(reason.detail());
-            r.run_hash = step.run_hashes.get(&display_id).cloned();
-            if step.partition_keys.is_empty() {
-                word_run
-            } else {
-                // A forced (task/refresh) partitioned step runs every key.
-                r.partitions = Some(PartitionSummary {
-                    total: step.partition_keys.len(),
-                    cached: 0,
-                    will_run: step.partition_keys.len(),
-                    will_run_keys: key_preview(step.partition_keys.iter().map(|k| k.suffix())),
-                    changed: None,
-                });
-                word_run
-            }
-        }
-        Decision::Cached {
-            oref,
-            stale_root,
-            held,
-        } => {
-            r.run_hash = step.run_hashes.get(&display_id).cloned();
-            r.artifact = Some(oref.path.clone());
-            if let Some(held) = held {
-                r.detail = Some(held.detail().to_string());
-                if *held == crate::cache::Held::Pinned {
-                    r.reason = Some(crate::cache::PINNED_REASON.to_string());
-                }
-            }
-            if let Some(root) = stale_root {
-                r.warning = Some(stale_warning(&display_id, root, dry));
-            }
-            word_cached
-        }
-        Decision::Partitioned {
-            cached,
-            missing,
-            refresh,
-            cutoff_stopped,
-        } => {
-            if *cutoff_stopped {
-                r.detail = Some("unchanged cutoff bytes: refresh propagation stopped".to_string());
-            }
-            let total = cached.len() + missing.len();
-            r.partitions = Some(PartitionSummary {
-                total,
-                cached: cached.len(),
-                will_run: missing.len(),
-                will_run_keys: key_preview(missing.iter().map(|k| k.suffix())),
-                changed: None,
-            });
-            if !missing.is_empty() {
-                let reason = refresh.as_ref().unwrap_or(&RunReason::NotMaterialized);
-                r.reason = Some(reason.code().to_string());
-                r.detail = Some(reason.detail());
-            }
-            match (cached.is_empty(), missing.is_empty()) {
-                (_, true) => word_cached,
-                (true, false) => word_run,
-                (false, false) => word_partial,
-            }
-        }
-    };
-    if dry {
-        r.action = Some(verdict.to_string());
-    } else {
-        r.status = Some(verdict.to_string());
-    }
-    r
-}
-
-/// How a run ended, for its last stderr line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RunOutcome {
-    Done,
-    Failed,
-    Cancelled,
-}
-
-/// A batched node's calls in a run, so its per-key `step:` lines read as one computation.
-pub(crate) fn batch_line(node: &str, b: &crate::results::BatchExecution) -> String {
-    let calls = if b.calls == 1 { "call" } else { "calls" };
-    let keys = if b.keys == 1 { "key" } else { "keys" };
-    format!(
-        "[barca] batch:{node} {} {calls}, {} {keys} | import {:.1}s, load {:.1}s, compute {:.1}s, split {:.1}s, write {:.1}s",
-        b.calls,
-        b.keys,
-        b.import_seconds,
-        b.load_seconds,
-        b.compute_seconds,
-        b.split_seconds,
-        b.write_seconds
-    )
-}
-
-/// The last progress line of a run that executed steps, with or without `--agent`:
-/// `[barca] N/M steps | done in Xs` (`failed in`, `cancelled after`).
-pub(crate) fn end_of_run_line(
-    completed: usize,
-    total: usize,
-    secs: f64,
-    outcome: RunOutcome,
-) -> String {
-    let how = match outcome {
-        RunOutcome::Done => "done in",
-        RunOutcome::Failed => "failed in",
-        RunOutcome::Cancelled => "cancelled after",
-    };
-    format!("[barca] {completed}/{total} steps | {how} {secs:.1}s")
-}
-
-/// The `--agent` line for a step served from cache: `[barca] step:<id> cached`, with its declared
-/// env.
-pub(crate) fn cached_step_line(dag: &Dag, display_id: &str) -> String {
-    format!(
-        "[barca] step:{display_id} cached{}",
-        env_suffix(dag, display_id)
-    )
-}
-
-/// The `--agent` line for a step that raised: `[barca] step:<id> failed: <first line of the
-/// error>`, beside the `completed` and `cached` lines.
-pub(crate) fn failed_step_line(node_id: &str, error: &str) -> String {
-    let first = error
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("unknown error");
-    format!("[barca] step:{node_id} failed: {first}")
-}
-
-#[cfg(test)]
-mod progress_tests {
-    use super::reconcile_total;
-
-    #[test]
-    fn total_grows_to_cover_steps_the_plan_did_not_count() {
-        // parallel() children complete as extra steps beyond the plan.
-        assert_eq!(reconcile_total(2, 4), 4);
-        assert_eq!(reconcile_total(4, 2), 4);
-        assert_eq!(reconcile_total(3, 3), 3);
-        assert_eq!(reconcile_total(0, 0), 0);
-    }
-
-    #[test]
-    fn remaining_never_underflows() {
-        // The ETA math subtracts usizes; this used to panic in debug and wrap in release.
-        assert_eq!(2usize.saturating_sub(4), 0);
-    }
-}
-
 #[cfg(test)]
 mod utc_tests {
     use super::utc_cell;
@@ -1129,58 +654,6 @@ mod key_summary_output_tests {
         assert_eq!(out[super::KEY_SUMMARY]["truncated"], true);
         assert!(
             super::key_summary_note(&cold).contains(&format!("{} computed", 5000 - LISTED_KEYS))
-        );
-    }
-}
-
-#[cfg(test)]
-mod run_line_tests {
-    use super::{RunOutcome, batch_line, end_of_run_line, failed_step_line};
-
-    #[test]
-    fn a_batched_node_has_one_line_with_its_calls_keys_and_phases() {
-        let b = barca_model::reports::BatchExecution {
-            calls: 1,
-            keys: 3077,
-            import_seconds: 0.12,
-            load_seconds: 1.2,
-            compute_seconds: 8.44,
-            split_seconds: 3.1,
-            write_seconds: 14.2,
-        };
-        assert_eq!(
-            batch_line("p.py:orders", &b),
-            "[barca] batch:p.py:orders 1 call, 3077 keys | import 0.1s, load 1.2s, compute 8.4s, split 3.1s, write 14.2s"
-        );
-    }
-
-    #[test]
-    fn end_of_run_line_is_one_format_and_never_says_done_on_failure() {
-        assert_eq!(
-            end_of_run_line(3, 3, 1.26, RunOutcome::Done),
-            "[barca] 3/3 steps | done in 1.3s"
-        );
-        let failed = end_of_run_line(0, 3, 0.0, RunOutcome::Failed);
-        assert_eq!(failed, "[barca] 0/3 steps | failed in 0.0s");
-        assert!(!failed.contains("done"));
-        assert_eq!(
-            end_of_run_line(1, 3, 2.0, RunOutcome::Cancelled),
-            "[barca] 1/3 steps | cancelled after 2.0s"
-        );
-    }
-
-    #[test]
-    fn failed_step_line_names_the_step_and_the_first_error_line() {
-        assert_eq!(
-            failed_step_line(
-                "p.py:broken",
-                "\nValueError: boom\n  File \"p.py\", line 3, in broken"
-            ),
-            "[barca] step:p.py:broken failed: ValueError: boom"
-        );
-        assert_eq!(
-            failed_step_line("p.py:x", ""),
-            "[barca] step:p.py:x failed: unknown error"
         );
     }
 }

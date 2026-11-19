@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { pausedIds, type PauseRequest } from '@/lib/pauses'
+import { pausedIds } from '@/lib/pauses'
+import type { PauseRequest } from '@/lib/types'
 import { recovering } from './polling'
 
 /** The paused assets (`GET /pauses`). */

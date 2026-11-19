@@ -2,11 +2,18 @@ import { CausesList, DataSignals } from '@/components/CausesList'
 import { HealthMap } from '@/components/HealthMap'
 import { indexRollup, ROOT } from '@/lib/rollupView'
 import { signals, todos } from '@/lib/causesView'
+import { ROLLUP, STATE } from '@/lib/testdata/project'
 import { causeCounts, counts, failureRoot, heldBy, heldRoot, nodeEntry, rollup, scopeEntry } from '@/lib/testdata/rollup'
 import { NOW_MS } from '../fixtures'
 import { Spec, Variant } from '../Kit'
 
-// A rollup as `GET /state/rollup` answers it: a failing partitioned node with the six nodes it
+// The rollup of the generated project, as `GET /state/rollup` serves it (`@/lib/testdata/project`).
+const served = indexRollup(ROLLUP)
+const servedRoot = served.entries.get(ROOT)!
+const servedList = todos(servedRoot, served.roots)
+const servedSince = (id: string) => STATE.find((n) => n.id === id)?.failing_since ?? null
+
+// A larger rollup spelled by hand, for the layout: a failing partitioned node with the six nodes it
 // holds, twelve sources of which three no tick reaches, and twenty exports that are fresh.
 const levers = Array.from({ length: 6 }, (_, i) => nodeEntry(`drivers.py:lever_${i}`, 'group:p.py:drivers', 'blocked', { cause: 'failing' }))
 const sources = Array.from({ length: 12 }, (_, i) => nodeEntry(`inputs.py:source_${i}`, 'group:p.py:inputs', i < 3 ? 'behind' : 'ok', i < 3 ? { cause: 'no_refresh_path' } : {}))
@@ -47,12 +54,14 @@ export function Health() {
     <>
       <div id="kit-health" />
       <Spec title="HealthMap" note="A scope as a sunburst over the rollup: a segment's angle is how far what is underneath is from fresh, its colours what is inside it, by cause. Click to zoom, the centre to go up.">
+        <Variant label="as served"><HealthMap tree={served} focus={ROOT} onFocus={noop} onOpen={noop} size={260} /></Variant>
         <Variant label="problems"><HealthMap tree={tree} focus={ROOT} onFocus={noop} onOpen={noop} size={260} /></Variant>
         <Variant label="zoomed"><HealthMap tree={tree} focus="group:p.py:drivers" onFocus={noop} onOpen={noop} size={260} /></Variant>
         <Variant label="what a root holds"><HealthMap tree={tree} focus={ROOT} onFocus={noop} onOpen={noop} lit={new Set(['group:p.py:inputs'])} size={260} /></Variant>
         <Variant label="fresh"><HealthMap tree={healthy} focus={ROOT} onFocus={noop} onOpen={noop} size={260} /></Variant>
       </Spec>
       <Spec title="CausesList" note="The to-do list: one entry per root as the server ranks them, with what it holds, why, and what clears it.">
+        <Variant label="as served"><div style={{ width: 620 }}><CausesList todos={servedList} scope={servedRoot} name={name} onOpen={noop} failingSince={servedSince} nowMs={NOW_MS} /></div></Variant>
         <Variant label="roots"><div style={{ width: 620 }}><CausesList todos={list} scope={root} name={name} onOpen={noop} failingSince={() => '2026-11-16 09:00:00'} nowMs={NOW_MS} /></div></Variant>
         <Variant label="one picked"><div style={{ width: 620 }}><CausesList todos={list} scope={root} name={name} onOpen={noop} selected={unscheduled.id} onSelect={noop} nowMs={NOW_MS} /></div></Variant>
         <Variant label="none"><div style={{ width: 620 }}><CausesList todos={[]} scope={{ held_by: [], not_fresh: 0 }} name={name} onOpen={noop} nowMs={NOW_MS} /></div></Variant>

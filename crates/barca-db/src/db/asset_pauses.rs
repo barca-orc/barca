@@ -13,10 +13,15 @@ pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS asset_pauses (
 
 /// One paused node: since when (unix seconds) and what was paused to pause it (`via`: the
 /// node itself, the node a `--downstream` pause started from, or a file).
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct AssetPause {
     pub id: String,
+    /// Unix seconds.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub paused_at: i64,
+    /// What the pause named: the node, the node a downstream pause started from, or a file.
+    #[serde(default)]
     pub via: String,
 }
 

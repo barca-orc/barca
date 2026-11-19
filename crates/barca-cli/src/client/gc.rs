@@ -33,6 +33,6 @@ pub(crate) async fn gc(
     let (_, body) = server.send(request, what).await?;
     let result: barca_core::gc::GcResult = serde_json::from_slice(&body)
         .map_err(|e| server.unexpected(what, &format!("not a gc result: {e}")))?;
-    crate::commands::print_gc(&result, json);
+    crate::print::print_gc(&result, json);
     Ok(())
 }

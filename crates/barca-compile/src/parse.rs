@@ -15,11 +15,11 @@ use crate::arg_values::{
 use crate::decorators::{
     extract_cutoff, is_unsafe_decorator, match_node_decorator, try_extract_sink,
 };
+use crate::extracted::{DeclaredInput, ExtractedNode, ParallelCall};
 use crate::file_names::{FileNames, dotted_expr};
 use crate::syntax_problem::SyntaxProblem;
 use barca_model::model::{
-    CronExpr, DeclaredInput, ExtractedNode, Freshness, NodeKind, NodeRef, ParallelCall,
-    PartitionSpec, PartitionValue, SinkDecl, ValueType,
+    CronExpr, Freshness, NodeKind, NodeRef, PartitionSpec, PartitionValue, SinkDecl, ValueType,
 };
 
 /// Error from parsing a Python source file.
@@ -1028,7 +1028,7 @@ fn extract_schedule_batch(
         },
         _ => String::new(),
     };
-    crate::batch_spec::BatchOverride::parse(std::slice::from_ref(&value))
+    crate::batch_override::BatchOverride::parse(std::slice::from_ref(&value))
         .map_err(|e| (at, format!("Schedule(batch=): {e}")))?;
     Ok(Some(value))
 }

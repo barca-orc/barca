@@ -14,7 +14,7 @@ stubs for decorators.
 ```
 Cargo.toml              ← Rust workspace root
 crates/
-  barca-model/          ← Shared vocabulary: ids, values, hashes, time, `term` (outln!/errln!), barca.toml config
+  barca-model/          ← Shared vocabulary: ids, values, the graph's node types (`ir`), hashes, time, `term` (outln!/errln!), barca.toml config
   barca-compile/        ← Source in, `Dag` and `ExecutionPlan` out: parser, decorator args, DAG, planner
   barca-db/             ← The metadata database (`.barca/metadata.db`, libSQL): schema, owners of every write
   barca-engine/         ← The per-step scheduler and worker loop: coordinator, dispatch, wire protocol
@@ -76,7 +76,13 @@ paths (`barca_core::config`). Only barca-db and barca-core link libsql.
 Inside barca-core the modules are layered too (leaf, storage, decisions, engine beside
 analysis, service: `docs/engineering/layering.md`). `crates/barca-core/src/module_layering_tests.rs`
 checks every `crate::<module>` path against the layers; the exceptions are listed in
-`module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there.
+`module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there; an
+analysis module also gets a row (`ANALYSIS_ROWS`) and names only the rows before it.
+
+Inside barca-server the modules are in rows too (leaf, the stateful parts, `state`, views,
+`runs`, `scheduler`, route families, `routes`: `docs/engineering/server-layering.md`);
+`crates/barca-server/src/layering_tests.rs` checks them, and its `ALLOWED` list is empty. A new
+module gets a row there; a handler takes the sub-state it uses (`State<Reads>`), not `AppState`.
 
 ### How it works
 

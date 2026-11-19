@@ -13,21 +13,21 @@
 //! [`lifecycle`], and what the routes answer with (one run, the run list) is [`projection`].
 
 use crate::error::ApiError;
+pub(crate) use crate::run_model::RunSpec;
 use crate::state::AppState;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use barca_core::BarcaError;
-use barca_core::cache::CachePolicy;
 use barca_core::envelope::Context;
-use barca_core::outcome::{RunCommand, Trigger};
+use barca_core::outcome::RunCommand;
 use std::time::Duration;
 
+mod admission;
 mod handlers;
 mod lifecycle;
 mod projection;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use admission::{admit, admit_as, dispatch, ensure_db, resume_at_startup};
 pub(crate) use handlers::{
     cancel, create, detail, events, get_target, in_flight_now, list, logs, output, run_all,
     run_target, status,
@@ -58,81 +58,6 @@ pub(crate) fn run_timeout(state: &AppState, spec: &RunSpec) -> Option<(Duration,
 
 // ─── starting runs ──────────────────────────────────────────────────────────
 
-/// A run to start: what to run, how, and what asked for it.
-pub(crate) struct RunSpec {
-    pub command: RunCommand,
-    /// As given (`[]`: every asset and sensor).
-    pub targets: Vec<String>,
-    /// The full node ids the targets resolved to.
-    pub nodes: Vec<String>,
-    /// As given in the request (`[]`: the deployed set).
-    pub files: Vec<String>,
-    pub policy: CachePolicy,
-    pub trigger: Trigger,
-    /// `get -o value`: the outcome's `final_output` holds values, not pointers.
-    pub values: bool,
-    /// `get --partition`.
-    pub partition: Option<barca_core::selection::PartitionSelection>,
-    /// `--batch` (RFC-0013), each as the flag takes it.
-    pub batch: Vec<String>,
-    /// The freshness rules (RFC-0008): a `Manual` node read as it is (`POST /runs`, as the CLI
-    /// does), and whether this is a scheduled tick.
-    pub rules: barca_core::freshness::RunRules,
-    /// `Schedule(..., timeout_seconds=N)` of the tick that started it: how long the run may
-    /// take (0: no limit). `None`: the server's run timeout ([`run_timeout`]).
-    pub timeout: Option<u64>,
-    /// How many times a server killed during its drain left this run unfinished, and the next
-    /// server put it back in the queue ([`crate::queue::resume_at_startup`]).
-    pub kill_requeues: u32,
-}
-
-impl RunSpec {
-    /// A run started over HTTP.
-    pub fn api(command: RunCommand, targets: Vec<String>, nodes: Vec<String>) -> Self {
-        Self {
-            command,
-            targets,
-            nodes,
-            files: Vec::new(),
-            policy: CachePolicy::CacheAware,
-            trigger: Trigger::api(),
-            values: false,
-            partition: None,
-            batch: Vec::new(),
-            // The older trigger routes compute what they are asked for, as before RFC-0008.
-            rules: barca_core::freshness::RunRules::default(),
-            timeout: None,
-            kill_requeues: 0,
-        }
-    }
-}
-
-/// Refuse a request while the server drains before it stops: `503` with `Retry-After`
-/// (`POST /state/reset`). Runs are not refused: they join the queue, which the next server
-/// resumes.
-pub(crate) fn refuse_if_draining(state: &AppState) -> Result<(), ApiError> {
-    if state.is_draining() {
-        return Err(ApiError::Unavailable {
-            message: "this server is shutting down: it finishes the runs in flight and \
-                      accepts no new ones; retry against the server that replaces it"
-                .to_string(),
-            retry_after: state.retry_after_secs(),
-        });
-    }
-    Ok(())
-}
-
-/// Refuse a request that would run or cancel work on a `--read-only` server.
-pub(crate) fn refuse_if_read_only(state: &AppState) -> Result<(), ApiError> {
-    if state.config.read_only {
-        return Err(ApiError::Forbidden(
-            "this server is read-only (`barca serve --read-only`): it does not run or cancel work"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
 /// Check a trigger's target before a run is started for it, with the function `barca get`
 /// and `barca run` use (`barca_core::targets::resolve_target_among`), so the server refuses what the
 /// command line refuses, in the same words: an unknown name is `404`, a name that matches
@@ -160,7 +85,7 @@ async fn check_target_as(
     verb: &str,
     wording: Wording,
 ) -> Result<String, ApiError> {
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     let nodes: Vec<(String, barca_core::NodeKind)> =
         barca_core::queries::list_assets_from_dag(&dag)
             .into_iter()
@@ -216,7 +141,7 @@ pub(crate) fn verb_command(verb: &str) -> &'static str {
 
 /// Refuse a run of every asset and sensor when no asset or sensor loaded.
 pub(crate) async fn check_any_asset(state: &AppState) -> Result<(), ApiError> {
-    let dag = state.loaded_dag().await?;
+    let dag = state.reads.loaded_dag().await?;
     if !barca_core::queries::list_assets_from_dag(&dag)
         .iter()
         .any(|n| n.kind != barca_core::NodeKind::Task)
@@ -267,32 +192,6 @@ fn run_files<'a>(state: &'a AppState, files: &'a [String]) -> &'a [String] {
     } else {
         files
     }
-}
-
-/// The stdout text of a rendering, without its final newline.
-pub(crate) fn stdout_of(rendered: barca_core::report::RenderedOutput) -> String {
-    let mut text: String = rendered
-        .chunks
-        .into_iter()
-        .filter_map(|c| match c {
-            barca_core::report::OutputChunk::Stdout(s) => Some(s),
-            barca_core::report::OutputChunk::Stderr(_) => None,
-        })
-        .collect();
-    if text.ends_with('\n') {
-        text.pop();
-    }
-    text
-}
-
-/// A JSON body sent as it is (its keys in the order the CLI prints them).
-pub(crate) fn json_text(status: StatusCode, text: String) -> Response {
-    (
-        status,
-        [(axum::http::header::CONTENT_TYPE, "application/json")],
-        text,
-    )
-        .into_response()
 }
 
 /// The envelope context of a local command with these files.

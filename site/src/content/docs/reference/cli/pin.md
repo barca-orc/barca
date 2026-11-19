@@ -4,7 +4,7 @@ description: "barca pin and unpin: roll an asset back to an earlier materializat
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/pins.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/pins.md (barca docs pins). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/pins.md (barca docs pins). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 When an asset produced bad data, `barca pin` puts a previous good materialization back in
 service at once, without editing code or recomputing anything. Artifacts are addressed by run
