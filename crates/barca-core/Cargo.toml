@@ -11,6 +11,7 @@ barca-db = { path = "../barca-db" }
 barca-engine = { path = "../barca-engine" }
 barca-proc = { path = "../barca-proc" }
 barca-store = { path = "../barca-store" }
+barca-decide = { path = "../barca-decide" }
 ruff_python_parser = { workspace = true }
 ruff_python_ast = { workspace = true }
 ruff_text_size = { workspace = true }

@@ -2,8 +2,8 @@
 //! from the configuration and the host, the same for a run and for the commands that predict
 //! one (`barca plan`, `barca status`, `barca doctor`).
 
-use crate::planner::ExecutionPlan;
-use crate::targets::short_name;
+use barca_compile::planner::ExecutionPlan;
+use barca_compile::targets::short_name;
 
 /// The cores this process may use (`available_parallelism`), 4 when unknown.
 pub(crate) fn cores() -> usize {
@@ -36,16 +36,16 @@ pub struct Sizing {
 ///
 /// Capacity: `BARCA_CAPACITY` > `[execution] capacity` > the pool size.
 pub fn sizing(
-    capacity: crate::config::CapacitySetting,
-    pool: crate::config::PoolSetting,
+    capacity: barca_model::config::CapacitySetting,
+    pool: barca_model::config::PoolSetting,
     server: Option<(usize, &'static str)>,
 ) -> Sizing {
     sizing_with(capacity, pool, server, cores())
 }
 
 fn sizing_with(
-    capacity: crate::config::CapacitySetting,
-    pool: crate::config::PoolSetting,
+    capacity: barca_model::config::CapacitySetting,
+    pool: barca_model::config::PoolSetting,
     server: Option<(usize, &'static str)>,
     cores: usize,
 ) -> Sizing {
@@ -74,15 +74,15 @@ fn sizing_with(
 /// [`sizing`] for a run with this configuration, under the capacity its host shares between
 /// its runs: `shared` is that capacity and where it was set, `None` for a run on its own (a
 /// prediction included). The caller reads it from its host, so this names no host.
-pub(crate) fn sizing_for(
-    cfg: &crate::config::ResolvedConfig,
+pub fn sizing_for(
+    cfg: &barca_model::config::ResolvedConfig,
     shared: Option<(usize, &'static str)>,
 ) -> Sizing {
     sizing(cfg.capacity, cfg.pool_size, shared)
 }
 
 /// The planned nodes whose `weight=` is above 1, by node id.
-pub(crate) fn planned_weights(plan: &ExecutionPlan) -> std::collections::BTreeMap<String, u32> {
+pub fn planned_weights(plan: &ExecutionPlan) -> std::collections::BTreeMap<String, u32> {
     plan.phases
         .iter()
         .flat_map(|p| &p.streams)
@@ -94,14 +94,14 @@ pub(crate) fn planned_weights(plan: &ExecutionPlan) -> std::collections::BTreeMa
 
 /// Warn, once per node, about each weight above the capacity: such a step runs alone, with
 /// nothing beside it, rather than never.
-pub(crate) fn warn_over_capacity(
+pub fn warn_over_capacity(
     weights: &std::collections::BTreeMap<String, u32>,
     capacity: usize,
     source: &str,
 ) {
     for (node, weight) in weights {
         if *weight as usize > capacity {
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] warning: '{}' has weight={weight}, more than the capacity {capacity} \
                  ({source}); it runs alone",

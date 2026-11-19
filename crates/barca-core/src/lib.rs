@@ -37,15 +37,12 @@
 // Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
-pub mod cache;
 pub mod causes;
-pub(crate) mod changes;
 pub mod commands;
 pub mod db;
 pub mod diagnostics;
 pub mod estimates;
 pub(crate) mod execution;
-pub mod freshness;
 pub mod health;
 pub mod history_filter;
 mod incremental;
@@ -55,20 +52,15 @@ mod mismatch;
 pub mod outcome;
 pub mod partition_grid;
 mod persist;
-pub(crate) mod plan_reasons;
-pub(crate) mod predict;
 pub mod queries;
-mod recover;
 pub mod refresh_path;
 pub mod report;
 pub mod rollup;
 pub mod run_explanation;
 pub mod run_list;
-pub mod schedule;
 pub mod schedule_standing;
 pub mod serve;
 pub mod served;
-pub(crate) mod sizing;
 pub mod sql;
 pub mod status;
 pub mod telemetry;
@@ -96,7 +88,6 @@ pub use barca_model::run_explain;
 use barca_model::source_observation;
 #[cfg(test)]
 use barca_model::source_scan;
-pub(crate) use barca_model::step_result;
 pub use barca_model::step_status;
 pub use barca_model::suggest;
 pub use barca_model::term;
@@ -180,3 +171,13 @@ pub(crate) use barca_store::store_inspect;
 use barca_store::store_sync;
 pub use barca_store::text;
 pub use barca_store::transfer;
+
+// The decide layer lives in `barca-decide` (#1056, C6).
+pub use barca_decide::cache;
+pub(crate) use barca_decide::changes;
+pub use barca_decide::freshness;
+pub(crate) use barca_decide::plan_reasons;
+pub(crate) use barca_decide::predict;
+use barca_decide::recover;
+pub use barca_decide::schedule;
+pub(crate) use barca_decide::sizing;

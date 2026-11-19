@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[cfg(test)]
 /// Compute the run_hash for a step given its context. `env` is the step's declared env values
-/// ([`crate::envdeps::hash_input`]); `None` leaves the hash exactly as a node without `env=`.
+/// ([`barca_model::envdeps::hash_input`]); `None` leaves the hash exactly as a node without `env=`.
 ///
 /// `outputs` maps an upstream step (display id) to a content hash of its output. Only the steps
 /// whose output is folded ([`folds_output`]) have an entry: a consumer of a sensor depends on
@@ -33,7 +33,7 @@ pub(crate) fn compute_run_hash(
 }
 
 /// [`compute_run_hash`] with `extra` upstream tokens (a key's value from a dict
-/// `partitions_from` source, [`crate::keyed::token`]), and the graph `dag` that says which
+/// `partitions_from` source, [`barca_model::keyed::token`]), and the graph `dag` that says which
 /// upstreams are `@asset(cutoff=True)` ([`is_cutoff`]): their output replaces their run hash.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_run_hash_with(
@@ -58,7 +58,7 @@ pub(crate) fn compute_run_hash_with(
         ));
     }
     let hash_refs: Vec<&str> = upstream_hashes.iter().map(|s| s.as_str()).collect();
-    crate::hash::run_hash(def_hash, partition_key, &hash_refs, None, env)
+    barca_model::hash::run_hash(def_hash, partition_key, &hash_refs, None, env)
 }
 
 /// What upstream `uid` contributes to the run hash of a step with `partition_key`: its run hash
@@ -115,10 +115,13 @@ pub(crate) fn cutoff_token(partition: &str, content_hash: &str) -> String {
     format!("cutoff{partition}:{content_hash}")
 }
 
-use crate::store_sync::StoreSync;
-use crate::targets::{refresh_name_matches, short_name};
-use crate::transfer::ArtifactLayout;
-use crate::{dag::Dag, db, planner::Phase, step_result::OutputRef};
+use barca_compile::dag::Dag;
+use barca_compile::planner::Phase;
+use barca_compile::targets::{refresh_name_matches, short_name};
+use barca_db::db;
+use barca_model::step_result::OutputRef;
+use barca_store::store_sync::StoreSync;
+use barca_store::transfer::ArtifactLayout;
 
 // ─── Cache decisions ─────────────────────────────────────────────────────────
 //
@@ -127,7 +130,7 @@ use crate::{dag::Dag, db, planner::Phase, step_result::OutputRef};
 
 /// Why a step runs instead of being served from cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RunReason {
+pub enum RunReason {
     Task,
     Sensor,
     Refresh,
@@ -140,7 +143,7 @@ pub(crate) enum RunReason {
     /// It has a cached result, but the artifact is gone and something needs to read it
     /// (see [`crate::recover`]).
     ArtifactMissing,
-    /// The same, because the cache size limit deleted the file (RFC-0012, see [`crate::gc`]).
+    /// The same, because the cache size limit deleted the file (RFC-0012, see [`barca_store::gc`]).
     Evicted,
 }
 
@@ -189,7 +192,7 @@ pub(crate) const PINNED_REASON: &str = "pinned";
 
 /// Why a step that is not cached for its run hash is served from an earlier result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Held {
+pub enum Held {
     /// A `Manual` node read as it is (RFC-0008): its latest result, `stale` when its inputs'
     /// latest results or its code differ from the ones it was computed with.
     Manual { stale: bool },
@@ -202,7 +205,7 @@ pub(crate) enum Held {
 }
 
 impl Held {
-    pub(crate) fn detail(self) -> &'static str {
+    pub fn detail(self) -> &'static str {
         match self {
             Held::Manual { stale: false } => "Manual: its last result is read as it is",
             Held::Manual { stale: true } => {
@@ -222,11 +225,11 @@ impl Held {
 /// A node the status prediction decided on its own, and that a run reads as it is
 /// ([`read_as_held`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReadAsIs {
+pub struct ReadAsIs {
     /// Pinned with `barca pin`; otherwise a `Manual` asset or task.
-    pub(crate) pinned: bool,
+    pub pinned: bool,
     /// The result a run reads is not the one its current code and inputs give.
-    pub(crate) stale: bool,
+    pub stale: bool,
 }
 
 /// The status prediction ([`crate::freshness::RunRules::status`]), after `step` was decided on
@@ -240,7 +243,7 @@ pub(crate) async fn read_as_held(
     dag: &Dag,
     cache: Option<&CacheReader>,
     state: &mut DecideState,
-    step: &crate::planner::StreamStep,
+    step: &barca_compile::planner::StreamStep,
     decision: &Decision,
     user_pins: &[db::AssetPin],
 ) -> Option<ReadAsIs> {
@@ -272,7 +275,7 @@ pub(crate) async fn read_as_held(
     })
 }
 
-pub(crate) enum Decision {
+pub enum Decision {
     Run(RunReason),
     Cached {
         oref: OutputRef,
@@ -283,7 +286,7 @@ pub(crate) enum Decision {
     },
     Partitioned {
         cached: Vec<(String, OutputRef)>,
-        missing: Vec<crate::model::PartitionKey>,
+        missing: Vec<barca_model::model::PartitionKey>,
         refresh: Option<RunReason>,
         cutoff_stopped: bool,
     },
@@ -292,11 +295,11 @@ pub(crate) enum Decision {
 /// Per-run state the decisions accumulate: run hashes (also used to persist results), assets
 /// refreshed in this run, and cached assets downstream of a refreshed one.
 #[derive(Default, Clone)]
-pub(crate) struct DecideState {
+pub struct DecideState {
     // Monotonic: only this component can insert, and no key is removed during a run.
     run_hashes: HashMap<String, String>,
     /// Why the steps decided to run so far run (#925, [`crate::plan_reasons`]).
-    pub(crate) plan_tally: crate::plan_reasons::PlanTally,
+    pub plan_tally: crate::plan_reasons::PlanTally,
     expected_steps: BTreeMap<String, BTreeSet<String>>,
     /// Keys a dry run predicts would run, per base id (display ids): every one, not the
     /// report's preview, for a node's key grid (`GET /assets/{name}/partitions/grid`).
@@ -313,13 +316,13 @@ pub(crate) struct DecideState {
     /// output, folded into each consumer's run hash (#183, #548). A real run fills it as such a
     /// step finishes (it runs in an earlier phase than its consumers) or is served from cache;
     /// a dry run seeds it from each one's last recorded output.
-    pub(crate) sensor_outputs: HashMap<String, String>,
-    pub(crate) sensor_previous: HashMap<String, OutputRef>,
+    pub sensor_outputs: HashMap<String, String>,
+    pub sensor_previous: HashMap<String, OutputRef>,
     /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
-    pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
+    pub pinned: HashMap<String, crate::freshness::Pin>,
     partition_pins: Option<BTreeMap<String, db::AssetPin>>,
     /// Under a tick: the scheduled node. Every other task fires only when it is out of date.
-    pub(crate) tick: Option<String>,
+    pub tick: Option<String>,
     /// Under a tick: the tasks decided to run in this run (base ids). A task reading one fires.
     pub(crate) firing_tasks: HashSet<String>,
     /// Steps whose keys receive a value from a dict `partitions_from` source (base id ->
@@ -328,11 +331,11 @@ pub(crate) struct DecideState {
     /// Artifact paths of cached keys whose `last_read_at` is within [`READ_STAMP_REFRESH`], as
     /// the node's rows read together say ([`db::KeyRows`]): a read of them need not be stamped
     /// again (RFC-0012).
-    pub(crate) recently_read: HashSet<String>,
+    pub recently_read: HashSet<String>,
 }
 
 /// How old a result's `last_read_at` may be before a read of it is stamped again.
-pub(crate) use crate::db::READ_STAMP_REFRESH;
+pub use barca_db::db::READ_STAMP_REFRESH;
 
 /// One dict source's value hashes, as a step's keys fold them in ([`DecideState::keyed`]).
 #[derive(Clone, Debug)]
@@ -371,27 +374,27 @@ impl DecideState {
                 };
                 Some((
                     ks.source_id.clone(),
-                    crate::keyed::token(source_run_hash, value),
+                    barca_model::keyed::token(source_run_hash, value),
                 ))
             })
             .collect()
     }
 }
 
-pub(crate) type ExpandedMembership = BTreeMap<String, BTreeSet<String>>;
+pub type ExpandedMembership = BTreeMap<String, BTreeSet<String>>;
 
 impl DecideState {
-    pub(crate) fn seed_fresh(
+    pub fn seed_fresh(
         &mut self,
         dag: &Dag,
-        step: &crate::planner::StreamStep,
+        step: &barca_compile::planner::StreamStep,
         id: &str,
         hash: String,
         content: Option<&String>,
     ) {
         let phase = Phase {
-            reason: crate::planner::PhaseReason::Initial,
-            streams: vec![crate::planner::WorkerStream {
+            reason: barca_compile::planner::PhaseReason::Initial,
+            streams: vec![barca_compile::planner::WorkerStream {
                 stream_id: "fresh".into(),
                 steps: vec![step.clone()],
             }],
@@ -405,13 +408,13 @@ impl DecideState {
         (self.expected_steps, self.will_run)
     }
 
-    pub(crate) fn run_hashes(&self) -> &HashMap<String, String> {
+    pub fn run_hashes(&self) -> &HashMap<String, String> {
         &self.run_hashes
     }
 
     /// Register the actual expanded plan, including all worker chunks, before deciding it.
     /// Recovery subsets cannot shrink the identities required by a previous phase.
-    pub(crate) fn register_phase(&mut self, phase: &Phase) {
+    pub fn register_phase(&mut self, phase: &Phase) {
         for step in phase.streams.iter().flat_map(|stream| &stream.steps) {
             if !step.pending_partitions.is_empty() {
                 continue;
@@ -434,8 +437,8 @@ impl DecideState {
 
     fn require_upstream_hashes(
         &mut self,
-        step: &crate::planner::StreamStep,
-    ) -> Result<(), crate::BarcaError> {
+        step: &barca_compile::planner::StreamStep,
+    ) -> Result<(), barca_model::BarcaError> {
         // Planner inputs are resolved canonical base IDs, not partition display IDs.
         // A '[' may be part of a legitimate source filename or directory.
         let upstreams: BTreeSet<&str> = step.inputs.values().map(String::as_str).collect();
@@ -444,7 +447,7 @@ impl DecideState {
                 continue;
             }
             let expected = self.expected_steps.get(upstream).ok_or_else(|| {
-                crate::BarcaError::Other(format!(
+                barca_model::BarcaError::Other(format!(
                     "cannot decide '{}': upstream '{upstream}' has no registered expanded steps",
                     step.step_id.display()
                 ))
@@ -458,7 +461,7 @@ impl DecideState {
                 } else {
                     "missing upstream run hash"
                 };
-                return Err(crate::BarcaError::Other(format!(
+                return Err(barca_model::BarcaError::Other(format!(
                     "cannot decide '{}': {detail} '{missing}'",
                     step.step_id.display()
                 )));
@@ -470,15 +473,15 @@ impl DecideState {
     }
 }
 
-pub(crate) use crate::dag::folds_output;
+pub use barca_compile::dag::folds_output;
 
 /// Whether `id` (a base id) is an `@asset(cutoff=True)` (#628): what reads it folds in the
 /// content hash of its output ([`cutoff_token`]) instead of its run hash, so a rerun that
 /// writes the same bytes leaves its consumers cached. A `--refresh` cascade stops at it for
 /// the same reason: what reads it is decided by the bytes the refresh wrote.
-pub(crate) fn is_cutoff(dag: &Dag, id: &str) -> bool {
+pub fn is_cutoff(dag: &Dag, id: &str) -> bool {
     dag.get_node(id)
-        .is_some_and(|n| n.kind() == crate::NodeKind::Asset && n.decl.cutoff)
+        .is_some_and(|n| n.kind() == barca_model::NodeKind::Asset && n.decl.cutoff)
 }
 
 /// Whether new bytes under an unchanged run hash mean `node` is not deterministic, so barca
@@ -490,7 +493,7 @@ pub(crate) fn is_cutoff(dag: &Dag, id: &str) -> bool {
 /// An asset declared `@asset(deterministic=False)` says the same: it may return new bytes for
 /// the same code and inputs (#627). Caching is unchanged; only the warning and the
 /// `bytes_changed` / `last_bytes_change` reports are left out.
-pub(crate) fn checks_bytes(node: &crate::model::DagNode) -> bool {
+pub fn checks_bytes(node: &barca_model::model::DagNode) -> bool {
     node.checks_bytes()
 }
 
@@ -515,7 +518,10 @@ pub(crate) fn record_output(
 
 /// The sensors `step` reads directly (base ids), a dict `partitions_from` source's value
 /// included.
-pub(crate) fn sensor_inputs<'a>(dag: &Dag, step: &'a crate::planner::StreamStep) -> Vec<&'a str> {
+pub(crate) fn sensor_inputs<'a>(
+    dag: &Dag,
+    step: &'a barca_compile::planner::StreamStep,
+) -> Vec<&'a str> {
     let mut out: Vec<&str> = step
         .inputs
         .values()
@@ -523,7 +529,7 @@ pub(crate) fn sensor_inputs<'a>(dag: &Dag, step: &'a crate::planner::StreamStep)
         .chain(step.keyed.direct().map(|ks| ks.source_id.as_str()))
         .filter(|up| {
             dag.get_node(up)
-                .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+                .is_some_and(|n| n.kind() == barca_model::NodeKind::Sensor)
         })
         .collect();
     out.sort();
@@ -559,10 +565,10 @@ pub(crate) async fn lookup_in(
 /// before any chunk of its consumers (#330); walking stream by stream does not guarantee that.
 /// The order here is the DAG's topological order of the nodes; the chunks of one node keep
 /// their stream order.
-pub(crate) fn in_dependency_order<'p>(
+pub fn in_dependency_order<'p>(
     dag: &Dag,
     phase: &'p Phase,
-) -> Vec<(usize, &'p crate::planner::StreamStep)> {
+) -> Vec<(usize, &'p barca_compile::planner::StreamStep)> {
     let rank: HashMap<&str, usize> = dag
         .order_for(
             phase
@@ -575,7 +581,7 @@ pub(crate) fn in_dependency_order<'p>(
         .enumerate()
         .map(|(i, id)| (id, i))
         .collect();
-    let mut steps: Vec<(usize, &crate::planner::StreamStep)> = phase
+    let mut steps: Vec<(usize, &barca_compile::planner::StreamStep)> = phase
         .streams
         .iter()
         .enumerate()
@@ -595,8 +601,8 @@ pub(crate) fn in_dependency_order<'p>(
 pub(crate) fn hash_step(
     dag: &Dag,
     state: &mut DecideState,
-    step: &crate::planner::StreamStep,
-) -> Result<crate::planner::StreamStep, crate::BarcaError> {
+    step: &barca_compile::planner::StreamStep,
+) -> Result<barca_compile::planner::StreamStep, barca_model::BarcaError> {
     // A `Manual` node read as it is: its latest result's run hash, so what reads it is hashed
     // against the version it reads. Its inputs are not planned.
     if step.partition_keys.is_empty()
@@ -623,7 +629,7 @@ pub(crate) fn hash_step(
         .unwrap_or("");
     // Declared env (`@asset(env=[...])`) is read now, at plan time, and folded into the run hash.
     let env_input = base_node
-        .map(|n| crate::envdeps::hash_input(&crate::envdeps::resolve(&n.decl.env)))
+        .map(|n| barca_model::envdeps::hash_input(&barca_model::envdeps::resolve(&n.decl.env)))
         .unwrap_or(None);
 
     // Run hashes for EVERY step (sensors, tasks, refreshed and partitioned steps too): they
@@ -648,7 +654,7 @@ pub(crate) fn hash_step(
         state.run_hashes.insert(display_id.clone(), run_h.clone());
         step.run_hashes.insert(display_id.clone(), run_h);
     } else {
-        // A dict `partitions_from` source: each key folds in its own value (`crate::keyed`).
+        // A dict `partitions_from` source: each key folds in its own value (`barca_model::keyed`).
         let keyed: Vec<KeyedHashes> = step
             .keyed
             .direct()
@@ -726,7 +732,7 @@ fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> 
 /// consumers' hashes, [`folds_output`]), a step with partitions read from another step's
 /// output, and everything below them are left out; the phase that decides them asks for them
 /// ([`phase_keys`]).
-pub(crate) fn cone_keys(dag: &Dag, phases: &[Phase]) -> Vec<(String, String)> {
+pub fn cone_keys(dag: &Dag, phases: &[Phase]) -> Vec<(String, String)> {
     let mut state = DecideState::default();
     let mut unknown: HashSet<String> = HashSet::new();
     let mut keys = Vec::new();
@@ -746,7 +752,7 @@ pub(crate) fn cone_keys(dag: &Dag, phases: &[Phase]) -> Vec<(String, String)> {
                 continue;
             }
             match hash_step(dag, &mut state, step) {
-                Ok(hashed) if kind == Some(crate::NodeKind::Asset) => {
+                Ok(hashed) if kind == Some(barca_model::NodeKind::Asset) => {
                     keys.extend(hashed.run_hashes);
                 }
                 Ok(_) => {}
@@ -762,11 +768,13 @@ pub(crate) fn cone_keys(dag: &Dag, phases: &[Phase]) -> Vec<(String, String)> {
 /// The `(node id, run hash)` of every asset step of `phase`, hashed on a copy of `state` (which
 /// has the phase registered and every upstream decided). A step that cannot be hashed yet is
 /// left out; its decision then finds no answer and runs it.
-pub(crate) fn phase_keys(dag: &Dag, phase: &Phase, state: &DecideState) -> Vec<(String, String)> {
+pub fn phase_keys(dag: &Dag, phase: &Phase, state: &DecideState) -> Vec<(String, String)> {
     let mut scratch = state.clone();
     let mut keys = Vec::new();
     for (_, step) in in_dependency_order(dag, phase) {
-        if dag.get_node(step.step_id.base_id()).map(|n| n.kind()) != Some(crate::NodeKind::Asset) {
+        if dag.get_node(step.step_id.base_id()).map(|n| n.kind())
+            != Some(barca_model::NodeKind::Asset)
+        {
             // Hashed all the same: an asset below it needs its run hash.
             let _ = hash_step(dag, &mut scratch, step);
             continue;
@@ -790,13 +798,13 @@ const KEYS_READ_TOGETHER: usize = 256;
 /// ([`in_dependency_order`]): in-phase upstream run
 /// hashes are already in `state` when a consumer is hashed, so check-time and persist-time hashes
 /// are identical. `cache` is `None` when there is no metadata DB yet (nothing is cached).
-pub(crate) async fn decide_step(
+pub async fn decide_step(
     dag: &Dag,
     policy: &CachePolicy,
     cache: Option<&CacheReader>,
     state: &mut DecideState,
-    step: &crate::planner::StreamStep,
-) -> Result<(crate::planner::StreamStep, Decision), crate::BarcaError> {
+    step: &barca_compile::planner::StreamStep,
+) -> Result<(barca_compile::planner::StreamStep, Decision), barca_model::BarcaError> {
     // Partition pins are resolved after expansion, only for keys in this step.
     // A missing pinned artifact must never silently fall back to computation.
     if !step.partition_keys.is_empty() {
@@ -813,7 +821,7 @@ pub(crate) async fn decide_step(
                     Some(cache) => db::success_at(cache, &id, &pin.run_hash).await,
                     None => None,
                 }
-                .ok_or_else(|| crate::BarcaError::Usage(crate::freshness::pin_lost(&id)))?;
+                .ok_or_else(|| barca_model::BarcaError::Usage(crate::freshness::pin_lost(&id)))?;
                 state.pinned.insert(
                     id,
                     crate::freshness::Pin {
@@ -864,14 +872,14 @@ pub(crate) async fn decide_step(
             .iter()
             .filter(|n| n.contains('[') && refresh_name_matches(base_id, n))
         {
-            let (_, selected) = crate::model::PartitionKey::parse_from_id(name);
+            let (_, selected) = barca_model::model::PartitionKey::parse_from_id(name);
             if !state.expected_steps.get(base_id).is_some_and(|ids| {
                 ids.iter().any(|id| {
-                    let (_, key) = crate::model::PartitionKey::parse_from_id(id);
+                    let (_, key) = barca_model::model::PartitionKey::parse_from_id(id);
                     selected.0.iter().all(|(d, v)| key.0.get(d) == Some(v))
                 })
             }) {
-                return Err(crate::BarcaError::Usage(format!(
+                return Err(barca_model::BarcaError::Usage(format!(
                     "--refresh: selector '{name}' matches no planned partition keys of '{}'.",
                     short_name(base_id)
                 )));
@@ -882,7 +890,7 @@ pub(crate) async fn decide_step(
     // Sensors and tasks always re-run — never cached. Under a tick, a task other than the
     // scheduled one runs only when it is out of date.
     match kind {
-        Some(crate::NodeKind::Task) => {
+        Some(barca_model::NodeKind::Task) => {
             if let Some(oref) = task_up_to_date(dag, cache, state, &step).await {
                 let decision = Decision::Cached {
                     oref,
@@ -896,14 +904,14 @@ pub(crate) async fn decide_step(
             }
             return Ok((step, Decision::Run(RunReason::Task)));
         }
-        Some(crate::NodeKind::Sensor) => return Ok((step, Decision::Run(RunReason::Sensor))),
+        Some(barca_model::NodeKind::Sensor) => return Ok((step, Decision::Run(RunReason::Sensor))),
         _ => {}
     }
 
     // Refresh policy (`barca run`): force-rerun assets named in the refresh set and, when
     // cascading, every asset downstream of one (plan order puts upstream steps first, so a
     // refreshed upstream is already in `cascade_roots` when its consumers are decided).
-    let is_asset = kind == Some(crate::NodeKind::Asset);
+    let is_asset = kind == Some(barca_model::NodeKind::Asset);
     let refresh = if step.partition_keys.is_empty() {
         refresh_reason(dag, policy, state, &step, &display_id, is_asset)
     } else {
@@ -1065,7 +1073,7 @@ pub(crate) async fn decide_step(
 fn reads_refreshed_cutoff(
     dag: &Dag,
     state: &DecideState,
-    step: &crate::planner::StreamStep,
+    step: &barca_compile::planner::StreamStep,
 ) -> bool {
     step.inputs.values().any(|up| {
         if !is_cutoff(dag, up) {
@@ -1085,7 +1093,7 @@ fn refresh_reason(
     dag: &Dag,
     policy: &CachePolicy,
     state: &DecideState,
-    step: &crate::planner::StreamStep,
+    step: &barca_compile::planner::StreamStep,
     display: &str,
     is_asset: bool,
 ) -> Option<RunReason> {
@@ -1097,7 +1105,7 @@ fn refresh_reason(
         CachePolicy::CacheAware => None,
         CachePolicy::RefreshAll => Some(RunReason::RefreshAll),
         CachePolicy::RefreshSelective { names, cascade } => {
-            let (_, key) = crate::model::PartitionKey::parse_from_id(display);
+            let (_, key) = barca_model::model::PartitionKey::parse_from_id(display);
             let selected = names.iter().any(|name| {
                 if !refresh_name_matches(base, name) {
                     return false;
@@ -1105,7 +1113,7 @@ fn refresh_reason(
                 if !name.contains('[') {
                     return true;
                 }
-                let (_, selection) = crate::model::PartitionKey::parse_from_id(name);
+                let (_, selection) = barca_model::model::PartitionKey::parse_from_id(name);
                 !selection.is_empty() && selection.0.iter().all(|(d, v)| key.0.get(d) == Some(v))
             });
             if selected {
@@ -1158,7 +1166,7 @@ async fn task_up_to_date(
     dag: &Dag,
     cache: Option<&CacheReader>,
     state: &DecideState,
-    step: &crate::planner::StreamStep,
+    step: &barca_compile::planner::StreamStep,
 ) -> Option<OutputRef> {
     let scheduled = state.tick.as_deref()?;
     let base_id = step.step_id.base_id();
@@ -1174,7 +1182,7 @@ async fn task_up_to_date(
     }
     for up in step.inputs.values() {
         let up_base = up.split('[').next().unwrap_or(up);
-        if dag.get_node(up_base).map(|n| n.kind()) != Some(crate::NodeKind::Task) {
+        if dag.get_node(up_base).map(|n| n.kind()) != Some(barca_model::NodeKind::Task) {
             continue;
         }
         if state.firing_tasks.contains(up_base) {
@@ -1192,10 +1200,10 @@ async fn task_up_to_date(
 
 // The reader a cache decision asks (this machine's history, or a server's ledger) and its one
 // lookup are the ledger's: the server answers `POST /ledger/lookup` with the same lookup.
-pub(crate) use crate::ledger::{CacheReader, lookup_cached};
+pub use barca_store::ledger::{CacheReader, lookup_cached};
 
 /// How a cache row's artifact is reached on this machine.
-pub(crate) enum CacheHit {
+pub enum CacheHit {
     /// Use the output as recorded.
     Local(OutputRef),
     /// The row records a location in the artifact store; `local` points at
@@ -1207,7 +1215,7 @@ pub(crate) enum CacheHit {
 /// when the store is separate from the local artifact dir). This only says
 /// where the artifact is read from; whether it is there is checked when
 /// something needs to read it (see [`crate::recover`]).
-pub(crate) fn resolve_cache_hit(oref: OutputRef, layout: Option<&ArtifactLayout>) -> CacheHit {
+pub fn resolve_cache_hit(oref: OutputRef, layout: Option<&ArtifactLayout>) -> CacheHit {
     match layout.and_then(|l| l.local_for(&oref.path)) {
         Some(local) => {
             let store = oref.path.clone();
@@ -1225,7 +1233,7 @@ pub(crate) fn resolve_cache_hit(oref: OutputRef, layout: Option<&ArtifactLayout>
 
 /// Apply this run's artifact store to a cache row: the output to read, with
 /// a store-backed row registered for fetching.
-pub(crate) fn accept_cache_hit(
+pub fn accept_cache_hit(
     store: &mut Option<StoreSync>,
     node_id: &str,
     oref: OutputRef,
@@ -1246,9 +1254,9 @@ pub(crate) fn accept_cache_hit(
 
 /// Apply this run's artifact store to a cache decision: cached outputs point
 /// at their local mirror.
-pub(crate) fn localize_decision(
+pub fn localize_decision(
     decision: Decision,
-    step: &crate::planner::StreamStep,
+    step: &barca_compile::planner::StreamStep,
     store: &mut Option<StoreSync>,
 ) -> Decision {
     match decision {
@@ -1296,10 +1304,10 @@ pub enum CachePolicy {
     RefreshSelective { names: Vec<String>, cascade: bool },
 }
 
-pub(crate) use crate::store_sync::BLOCKED_ARTIFACT_PATH;
+pub use barca_store::store_sync::BLOCKED_ARTIFACT_PATH;
 
 mod step_report;
-pub(crate) use step_report::{
+pub use step_report::{
     computed_by_another_run, env_report, merge_partition_reports, report_for, stale_warning,
 };
 
@@ -1309,7 +1317,8 @@ mod lookup_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PartitionKey, StepId};
+    use barca_model::PartitionKey;
+    use barca_model::StepId;
 
     #[test]
     fn step_id_parse_unpartitioned() {
@@ -1461,7 +1470,7 @@ def downstream(x: int) -> int:
         .unwrap();
 
         let file = root.join("p.py").to_string_lossy().to_string();
-        let (dag, extracted) = crate::load::build_dag_and_extracted_blocking(
+        let (dag, extracted) = barca_compile::load::build_dag_and_extracted_blocking(
             std::slice::from_ref(&file),
             &std::path::PathBuf::from("python3"),
         )
@@ -1470,7 +1479,7 @@ def downstream(x: int) -> int:
         // The definition hash as 0.10 to 0.18 computed it: over the function's text starting
         // at its decorator, as written, with the freshness, the input parameter names, the
         // sinks and the serializer added as JSON.
-        let definition_hash_before_0_19 = |node: &crate::model::DagNode| {
+        let definition_hash_before_0_19 = |node: &barca_model::model::DagNode| {
             let n = extracted
                 .iter()
                 .find(|n| n.continuity_key() == node.id)
@@ -1486,9 +1495,9 @@ def downstream(x: int) -> int:
                 "serializer": n.artifact_serializer,
             })
             .to_string();
-            crate::hash::definition_hash(as_written, &n.cone_hash, &metadata)
+            barca_model::hash::definition_hash(as_written, &n.cone_hash, &metadata)
         };
-        let run_hashes = |definition_hash: &dyn Fn(&crate::model::DagNode) -> String| {
+        let run_hashes = |definition_hash: &dyn Fn(&barca_model::model::DagNode) -> String| {
             let mut hashes: HashMap<String, String> = HashMap::new();
             let mut by_name: Vec<(String, String)> = Vec::new();
             for id in dag.topo_order() {
@@ -1529,7 +1538,7 @@ def downstream(x: int) -> int:
         // 2. The values from 0.19.0 on. Every one differs from its 0.10.0 value above for the
         //    same single reason (#283): the definition hash no longer covers the decorator as
         //    text (`@asset()`, `@asset(inputs={"x": uses_from})`) and the freshness, but the
-        //    decorator arguments that count, in canonical form (`crate::definition`).
+        //    decorator arguments that count, in canonical form (`barca_model::definition`).
         //    `downstream` also differs because its upstream's run hash does. If one of these
         //    moves, every cache entry is recomputed after upgrading: change them only on
         //    purpose, with a release note.
@@ -1549,7 +1558,7 @@ def downstream(x: int) -> int:
 
     #[test]
     fn declared_env_changes_the_run_hash() {
-        use crate::envdeps::{hash_input, resolve_with};
+        use barca_model::envdeps::{hash_input, resolve_with};
         let names = vec!["SOURCE_CSV".to_string()];
         let hashes = HashMap::new();
         let h = |v: Option<&str>| {
@@ -1658,7 +1667,7 @@ def downstream(x: int) -> int:
 #[cfg(test)]
 mod dependency_order_tests {
     use super::*;
-    use crate::planner::ResourceConfig;
+    use barca_compile::planner::ResourceConfig;
 
     const CHAINED: &str = r#"
 from barca import asset, collect, partitions_from
@@ -1703,7 +1712,7 @@ def report(m: list) -> int:
             pool_size,
             concurrency_groups: HashMap::new(),
         };
-        let plan = crate::planner::plan_from_dag(dag, &config);
+        let plan = barca_compile::planner::plan_from_dag(dag, &config);
         let phase = plan
             .phases
             .iter()
@@ -1712,7 +1721,7 @@ def report(m: list) -> int:
                 steps.any(|st| st.step_id.base_id() == "t.py:margin")
             })
             .expect("a phase with margin");
-        crate::dispatch::expand_pending_partitions(dag, phase, &outputs, pool_size)
+        barca_compile::dispatch::expand_pending_partitions(dag, phase, &outputs, pool_size)
             .phase
             .expect("expanded")
     }
@@ -1720,7 +1729,7 @@ def report(m: list) -> int:
     /// Run hashes of every key of `sales` and `margin`, hashed in the order `order` gives.
     fn run_hashes<'p>(
         dag: &Dag,
-        order: impl Iterator<Item = &'p crate::planner::StreamStep>,
+        order: impl Iterator<Item = &'p barca_compile::planner::StreamStep>,
     ) -> Vec<(String, String)> {
         let mut state: HashMap<String, String> =
             HashMap::from([("t.py:keys".to_string(), "h_keys".to_string())]);
@@ -1752,7 +1761,7 @@ def report(m: list) -> int:
     /// dependency order it never does, and the run hashes are the same at every pool size.
     #[test]
     fn every_key_of_an_upstream_is_decided_before_any_key_of_its_consumer() {
-        let nodes = crate::parse::extract_nodes(CHAINED, "t.py").unwrap();
+        let nodes = barca_compile::parse::extract_nodes(CHAINED, "t.py").unwrap();
         let dag = Dag::build(&nodes).unwrap();
         let keys = ["a", "b", "c", "d", "e"];
 
@@ -1813,7 +1822,7 @@ def report(m: list) -> int:
 #[cfg(test)]
 mod upstream_boundary_tests {
     use super::*;
-    use crate::planner::{ResourceConfig, StreamStep};
+    use barca_compile::planner::{ResourceConfig, StreamStep};
 
     const STATIC: &str = r#"
 from barca import asset, collect, partitions
@@ -1826,9 +1835,9 @@ def report(values: list) -> int:
 "#;
 
     fn planned(pool: usize) -> (Dag, Vec<Phase>) {
-        let nodes = crate::parse::extract_nodes(STATIC, "t.py").unwrap();
+        let nodes = barca_compile::parse::extract_nodes(STATIC, "t.py").unwrap();
         let dag = Dag::build(&nodes).unwrap();
-        let plan = crate::planner::plan_from_dag(
+        let plan = barca_compile::planner::plan_from_dag(
             &dag,
             &ResourceConfig {
                 pool_size: pool,
@@ -2063,8 +2072,9 @@ def report(values: list) -> int:
 "#;
 
     fn derived(keys: &[&str], pool: usize) -> (Dag, Vec<Phase>) {
-        let dag = Dag::build(&crate::parse::extract_nodes(DERIVED, "t.py").unwrap()).unwrap();
-        let plan = crate::planner::plan_from_dag(
+        let dag =
+            Dag::build(&barca_compile::parse::extract_nodes(DERIVED, "t.py").unwrap()).unwrap();
+        let plan = barca_compile::planner::plan_from_dag(
             &dag,
             &ResourceConfig {
                 pool_size: pool,
@@ -2088,7 +2098,7 @@ def report(values: list) -> int:
             .phases
             .iter()
             .map(|phase| {
-                crate::dispatch::expand_pending_partitions(&dag, phase, &outputs, pool)
+                barca_compile::dispatch::expand_pending_partitions(&dag, phase, &outputs, pool)
                     .phase
                     .unwrap_or_else(|| phase.clone())
             })
@@ -2165,9 +2175,9 @@ def report(values: list) -> int:
             "folder[old]/pipeline.py",
             "folder[old]/pipeline[old].py",
         ] {
-            let nodes = crate::parse::extract_nodes(STATIC, file).unwrap();
+            let nodes = barca_compile::parse::extract_nodes(STATIC, file).unwrap();
             let dag = Dag::build(&nodes).unwrap();
-            let plan = crate::planner::plan_from_dag(
+            let plan = barca_compile::planner::plan_from_dag(
                 &dag,
                 &ResourceConfig {
                     pool_size: 2,
@@ -2236,9 +2246,9 @@ def d(c: int) -> int:
 
     #[test]
     fn cone_keys_are_the_run_hashes_a_run_computes_except_below_a_sensor() {
-        let nodes = crate::parse::extract_nodes(LEDGER, "t.py").unwrap();
+        let nodes = barca_compile::parse::extract_nodes(LEDGER, "t.py").unwrap();
         let dag = Dag::build(&nodes).unwrap();
-        let phases = crate::planner::plan_from_dag(
+        let phases = barca_compile::planner::plan_from_dag(
             &dag,
             &ResourceConfig {
                 pool_size: 2,
@@ -2292,7 +2302,7 @@ def d(c: int) -> int:
 #[cfg(test)]
 mod cutoff_tests {
     use super::*;
-    use crate::planner::ResourceConfig;
+    use barca_compile::planner::ResourceConfig;
 
     const PIPELINE: &str = r#"
 from barca import asset, collect, partitions
@@ -2327,11 +2337,11 @@ def below_plain(p: int) -> int:
 "#;
 
     fn dag() -> Dag {
-        let nodes = crate::parse::extract_nodes(PIPELINE, "t.py").unwrap();
+        let nodes = barca_compile::parse::extract_nodes(PIPELINE, "t.py").unwrap();
         Dag::build(&nodes).unwrap()
     }
 
-    fn step(phases: &[Phase], base: &str) -> crate::planner::StreamStep {
+    fn step(phases: &[Phase], base: &str) -> barca_compile::planner::StreamStep {
         phases
             .iter()
             .flat_map(|p| &p.streams)
@@ -2355,7 +2365,7 @@ def below_plain(p: int) -> int:
 
     fn planned() -> (Dag, Vec<Phase>) {
         let dag = dag();
-        let plan = crate::planner::plan_from_dag(
+        let plan = barca_compile::planner::plan_from_dag(
             &dag,
             &ResourceConfig {
                 pool_size: 1,
@@ -2425,7 +2435,7 @@ def below_plain(p: int) -> int:
             let source = format!(
                 "from barca import asset\n@asset(cutoff={bad})\ndef a() -> int:\n    return 1\n"
             );
-            let err = crate::parse::extract_nodes(&source, "t.py").unwrap_err();
+            let err = barca_compile::parse::extract_nodes(&source, "t.py").unwrap_err();
             assert!(
                 err.to_string().contains("cutoff= must be True or False"),
                 "{bad}: {err}"
@@ -2433,7 +2443,7 @@ def below_plain(p: int) -> int:
         }
         // Not an argument of @sensor or @task.
         let source = "from barca import task\n@task(cutoff=True)\ndef t() -> None:\n    pass\n";
-        assert!(crate::parse::extract_nodes(source, "t.py").is_err());
+        assert!(barca_compile::parse::extract_nodes(source, "t.py").is_err());
     }
 
     #[test]
@@ -2445,7 +2455,7 @@ def below_plain(p: int) -> int:
             .definition_hash
             .clone();
         let source = PIPELINE.replacen("@asset(cutoff=True)\ndef dims", "@asset()\ndef dims", 1);
-        let nodes = crate::parse::extract_nodes(&source, "t.py").unwrap();
+        let nodes = barca_compile::parse::extract_nodes(&source, "t.py").unwrap();
         let without = Dag::build(&nodes).unwrap();
         let without = without.get_node("t.py:dims").unwrap();
         assert!(!without.decl.cutoff);

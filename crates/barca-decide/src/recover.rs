@@ -22,18 +22,20 @@
 //! `predict::explain_dag` predicts it with [`predict_recomputes`].
 
 use crate::cache::RunReason;
-use crate::dispatch::build_provided_inputs;
-use crate::model::NodeKind;
-use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream, returned_step};
-use crate::results::{ExplainSummary, PartitionSummary, StepReport};
-use crate::step_result::{OutputRef, ProvidedInput};
-use crate::step_status::StepStatus;
-use crate::store_sync::StoreSync;
-use crate::transfer::ArtifactLayout;
+use barca_compile::dispatch::build_provided_inputs;
+use barca_compile::planner::{
+    ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream, returned_step,
+};
+use barca_model::model::NodeKind;
+use barca_model::step_result::{OutputRef, ProvidedInput};
+use barca_model::step_status::StepStatus;
+use barca_store::results::{ExplainSummary, PartitionSummary, StepReport};
+use barca_store::store_sync::StoreSync;
+use barca_store::transfer::ArtifactLayout;
 use std::collections::{HashMap, HashSet};
 
 /// What a run does next (see the loop in `execution::execute`).
-pub(crate) enum Work<'p> {
+pub enum Work<'p> {
     /// A phase of the plan: expand its partitions, decide each step, run what is not cached.
     Planned(&'p Phase),
     /// Steps already decided to run, waiting for an input to be computed again.
@@ -41,7 +43,7 @@ pub(crate) enum Work<'p> {
     /// Cached outputs (by id) whose artifact is missing and needed: run their steps again.
     Recompute(Vec<String>),
     /// Cached outputs (by id) of steps with `@sink`s: republish each sink that holds another
-    /// run hash's output (`crate::sink_publications`).
+    /// run hash's output (`barca_db::sink_publications`).
     Republish(Vec<String>),
     /// Every phase is done: check the output the command returns.
     Returned,
@@ -49,7 +51,7 @@ pub(crate) enum Work<'p> {
 
 // Whether an artifact can be read from this machine as it is: the store's own question, asked
 // here for every cache hit of a phase.
-pub(crate) use crate::store_sync::on_disk;
+pub(crate) use barca_store::store_sync::on_disk;
 
 /// `test` of every item, in order. A handful is done in place; many are spread over a few
 /// threads, because each test is a file lookup and a partitioned asset has one per key.
@@ -74,7 +76,7 @@ pub(crate) fn flags<T: Sync>(items: &[T], test: impl Fn(&T) -> bool + Sync) -> V
 }
 
 /// The base node id of a step or output id (`p.py:a[k=1]` -> `p.py:a`).
-pub(crate) fn base_of(id: &str) -> &str {
+pub fn base_of(id: &str) -> &str {
     id.split('[').next().unwrap_or(id)
 }
 
@@ -82,7 +84,7 @@ pub(crate) fn base_of(id: &str) -> &str {
 /// the one asset whose value is the run's `final_output`. Their artifacts are needed even
 /// though no step reads them. Every other asset at the end of a pipeline is treated like a
 /// pruned intermediate.
-pub(crate) fn requested(plan: &ExecutionPlan, target_ids: &[&str]) -> HashSet<String> {
+pub fn requested(plan: &ExecutionPlan, target_ids: &[&str]) -> HashSet<String> {
     if !target_ids.is_empty() {
         return target_ids.iter().map(|id| id.to_string()).collect();
     }
@@ -94,7 +96,7 @@ pub(crate) fn requested(plan: &ExecutionPlan, target_ids: &[&str]) -> HashSet<St
 }
 
 /// The paths a phase's provided inputs are read from.
-pub(crate) fn input_paths(provided: &HashMap<String, ProvidedInput>) -> Vec<String> {
+pub fn input_paths(provided: &HashMap<String, ProvidedInput>) -> Vec<String> {
     provided
         .values()
         .flat_map(|p| match p {
@@ -106,7 +108,7 @@ pub(crate) fn input_paths(provided: &HashMap<String, ProvidedInput>) -> Vec<Stri
 }
 
 /// The ids of the outputs a step produces: its own, or one per partition key.
-pub(crate) fn output_ids(step: &StreamStep) -> Vec<String> {
+pub fn output_ids(step: &StreamStep) -> Vec<String> {
     if step.partition_keys.is_empty() {
         vec![step.step_id.display()]
     } else {
@@ -120,7 +122,7 @@ pub(crate) fn output_ids(step: &StreamStep) -> Vec<String> {
 /// Remove from `phase` every step for which `blocked` names a failed step upstream of it
 /// (given the step's base id), calling `dropped` with the step and that upstream. Streams left
 /// empty are removed. Used when several targets keep going around a failure.
-pub(crate) fn drop_blocked<'a>(
+pub fn drop_blocked<'a>(
     phase: &mut Phase,
     blocked: impl Fn(&str) -> Option<&'a str>,
     mut dropped: impl FnMut(&StreamStep, &'a str),
@@ -165,7 +167,7 @@ pub(crate) fn outputs_at(
 /// only when something is first looked up, so a run that recovers nothing never pays for it,
 /// and one that does pays once per step, not once per lookup.
 #[derive(Default)]
-pub(crate) struct CachedSteps {
+pub struct CachedSteps {
     /// The planned steps served from cache (a partitioned node is planned as several steps,
     /// each holding some of its keys).
     steps: Vec<StreamStep>,
@@ -177,7 +179,7 @@ pub(crate) struct CachedSteps {
 
 impl CachedSteps {
     /// Remember a step that was served from cache, wholly or for some of its partition keys.
-    pub(crate) fn remember(&mut self, step: StreamStep) {
+    pub fn remember(&mut self, step: StreamStep) {
         self.steps.push(step);
     }
 
@@ -206,7 +208,7 @@ impl CachedSteps {
     /// first: a step never shares a phase with the producer of one of its inputs, so each
     /// reads complete inputs (a `collect()` consumer would otherwise be handed only the keys
     /// that were still cached).
-    pub(crate) fn first_layer(&mut self, ids: &[String]) -> Vec<String> {
+    pub fn first_layer(&mut self, ids: &[String]) -> Vec<String> {
         self.reindex();
         let bases: HashSet<&str> = ids.iter().map(|id| base_of(id)).collect();
         let first: Vec<String> = ids
@@ -234,7 +236,7 @@ impl CachedSteps {
     /// A phase that runs again exactly the steps that produced `ids`: one stream per node, a
     /// partitioned node with only the keys named. Ids that are not remembered are left out;
     /// `None` when that leaves nothing.
-    pub(crate) fn phase_for(&mut self, ids: &[String]) -> Option<Phase> {
+    pub fn phase_for(&mut self, ids: &[String]) -> Option<Phase> {
         self.reindex();
         let mut order: Vec<&str> = Vec::new();
         let mut steps: HashMap<&str, StreamStep> = HashMap::new();
@@ -308,7 +310,7 @@ impl CachedSteps {
 /// anything is recomputed the store is confirmed to be there and listable (once per run). A
 /// store that is gone, misnamed or unreachable is an error, as is any fetch that fails for
 /// another reason; the run then fails without computing or uploading anything on its account.
-pub(crate) async fn lost(
+pub async fn lost(
     store: &mut Option<StoreSync>,
     check: &[String],
     fetch: &[String],
@@ -353,10 +355,7 @@ pub(crate) async fn lost(
 /// The stderr lines that say which cached results are computed again because their artifact
 /// is missing: one per node, naming one path. A result the cache size limit evicted (its path
 /// is in `evicted`) says so instead (RFC-0012).
-pub(crate) fn recompute_warnings(
-    lost: &[(String, String)],
-    evicted: &HashSet<String>,
-) -> Vec<String> {
+pub fn recompute_warnings(lost: &[(String, String)], evicted: &HashSet<String>) -> Vec<String> {
     let mut nodes: Vec<(&str, &str, usize, bool)> = Vec::new();
     let mut slot: HashMap<(&str, bool), usize> = HashMap::new();
     for (id, path) in lost {
@@ -403,8 +402,9 @@ fn predicted_gone(oref: &OutputRef, layout: Option<&ArtifactLayout>) -> bool {
         // Recorded in the store: read from its local mirror, or fetched from the store.
         Some((layout, mirror)) => {
             !mirror.is_file()
-                && crate::transfer::local_path(&oref.path).is_some_and(|stored| !stored.exists())
-                && crate::transfer::local_path(layout.store_root())
+                && barca_store::transfer::local_path(&oref.path)
+                    .is_some_and(|stored| !stored.exists())
+                && barca_store::transfer::local_path(layout.store_root())
                     .is_some_and(|root| root.is_dir())
         }
         None => !on_disk(&oref.path, layout.is_some()),
@@ -424,7 +424,7 @@ pub(crate) async fn predict_recomputes(
     steps: &mut [StepReport],
     summary: &mut ExplainSummary,
     pins: &HashMap<String, crate::freshness::Pin>,
-) -> Result<(), crate::BarcaError> {
+) -> Result<(), barca_model::BarcaError> {
     let gone = |oref: &&OutputRef| predicted_gone(oref, layout);
     // Each lost output's path is taken as it leaves `all_outputs`: copying every path first
     // cost a string per output per phase, 200k for a 200k-key node.
@@ -433,14 +433,16 @@ pub(crate) async fn predict_recomputes(
         .iter()
         .find(|(id, _)| pins.get(id).is_some_and(|pin| pin.user.is_some()))
     {
-        return Err(crate::BarcaError::Usage(crate::freshness::pin_lost(id)));
+        return Err(barca_model::BarcaError::Usage(crate::freshness::pin_lost(
+            id,
+        )));
     }
     // Which of them the cache size limit deleted: asked about these paths only. Reading every
     // evicted path up front cost half a second per dry run with 283k of them.
     let evicted = match cache {
         Some(cache) if !lost.is_empty() => {
             let paths: Vec<&str> = lost.iter().map(|(_, path)| path.as_str()).collect();
-            crate::db::evicted_among_on(cache.conn(), &paths).await
+            barca_db::db::evicted_among_on(cache.conn(), &paths).await
         }
         _ => HashSet::new(),
     };
@@ -520,12 +522,7 @@ fn lose(
 /// again because its artifact is missing (`evicted`: because the cache size limit deleted it).
 /// `dry` selects the vocabulary, as in a report: a dry run says `run`, a real run says `ran`.
 /// Returns false when no cached line matches.
-pub(crate) fn mark_recomputed(
-    reports: &mut [StepReport],
-    id: &str,
-    dry: bool,
-    evicted: bool,
-) -> bool {
+pub fn mark_recomputed(reports: &mut [StepReport], id: &str, dry: bool, evicted: bool) -> bool {
     let base = base_of(id);
     let key = id
         .split_once('[')
@@ -553,7 +550,7 @@ pub(crate) fn mark_recomputed(
         let p: &mut PartitionSummary = r.partitions.as_mut().expect("matched on its partitions");
         p.cached -= 1;
         p.will_run += 1;
-        p.will_run_keys = crate::results::key_preview(
+        p.will_run_keys = barca_store::results::key_preview(
             std::mem::take(&mut p.will_run_keys)
                 .into_iter()
                 .chain([key.to_string()]),
@@ -590,7 +587,8 @@ pub(crate) fn mark_recomputed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PartitionKey, StepId};
+    use barca_model::PartitionKey;
+    use barca_model::StepId;
     use std::sync::Arc;
 
     fn step(id: &str, inputs: &[(&str, &str)], keys: &[&str]) -> StreamStep {

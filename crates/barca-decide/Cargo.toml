@@ -1,0 +1,26 @@
+[package]
+name = "barca-decide"
+version = "0.45.0"
+edition = "2024"
+description = "Decisions layer — run hash, cache and freshness verdicts, why a step runs, what a run would do, its pool size, when a schedule fires"
+
+# Above barca-store, below the run orchestrator and the read models (#1056, C6). Never
+# barca-engine: a decision is the same whether a run executes it or a dry run predicts it.
+[dependencies]
+barca-model = { path = "../barca-model" }
+barca-compile = { path = "../barca-compile" }
+barca-db = { path = "../barca-db" }
+barca-store = { path = "../barca-store" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+croner = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "process"] }
+indicatif = "0.18.4"
+
+# libsql only here: one test writes rows no owner writes (a result recorded before its format
+# was). No code of this crate opens the database but through barca-db.
+[dev-dependencies]
+tempfile = { workspace = true }
+libsql = { version = "=0.10.0", default-features = false, features = ["core"] }

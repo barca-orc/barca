@@ -1,17 +1,17 @@
 //! The report line of a decided step ([`StepReport`]): what a run did with it, or what a dry
-//! run predicts it would do. Built where the decision is, so a run (`crate::execution`) and a
+//! run predicts it would do. Built where the decision is, so a run (`barca_model::execution`) and a
 //! prediction (`crate::predict`) report the same decision the same way.
 
 use super::{Decision, RunReason};
-use crate::dag::Dag;
-use crate::model::kind_str;
-use crate::results::{PartitionSummary, StepReport, key_preview};
-use crate::step_status::StepStatus;
-use crate::targets::short_name;
+use barca_compile::dag::Dag;
+use barca_compile::targets::short_name;
+use barca_model::model::kind_str;
+use barca_model::step_status::StepStatus;
+use barca_store::results::{PartitionSummary, StepReport, key_preview};
 use std::collections::HashMap;
 
 /// A partitioned asset plans one step per key; report it as one line with a partition summary.
-pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepReport> {
+pub fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepReport> {
     let mut out: Vec<StepReport> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for r in reports {
@@ -80,7 +80,7 @@ pub(crate) fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepRepor
     out
 }
 
-pub(crate) fn stale_warning(display_id: &str, root: &str, dry: bool) -> String {
+pub fn stale_warning(display_id: &str, root: &str, dry: bool) -> String {
     let id = short_name(display_id);
     let (served, reflect) = if dry {
         ("will be served", "will not reflect")
@@ -96,7 +96,7 @@ pub(crate) fn stale_warning(display_id: &str, root: &str, dry: bool) -> String {
 
 /// The declared env values of `base_id` as reported in output (secrets redacted, unset = null),
 /// or `None` when the node declares no env.
-pub(crate) fn env_report(
+pub fn env_report(
     dag: &Dag,
     base_id: &str,
 ) -> Option<std::collections::BTreeMap<String, Option<String>>> {
@@ -104,16 +104,16 @@ pub(crate) fn env_report(
     if node.decl.env.is_empty() {
         return None;
     }
-    Some(crate::envdeps::report(&crate::envdeps::resolve(
-        &node.decl.env,
-    )))
+    Some(barca_model::envdeps::report(
+        &barca_model::envdeps::resolve(&node.decl.env),
+    ))
 }
 
 /// Build the report line for one decided step. `dry` selects the vocabulary: a dry run says what
 /// will happen (`action`), a real run says what happened (`status`).
-pub(crate) fn report_for(
+pub fn report_for(
     dag: &Dag,
-    step: &crate::planner::StreamStep,
+    step: &barca_compile::planner::StreamStep,
     decision: &Decision,
     dry: bool,
 ) -> StepReport {
@@ -208,12 +208,12 @@ pub(crate) fn report_for(
 /// What another run of the same server computed while this run waited for it (#654), as this
 /// run reports it: a cache hit. `display_id` is the step (with its partition key), `artifact`
 /// where its result is. Adjusts the report of its node made when the step was decided.
-pub(crate) fn computed_by_another_run(
+pub fn computed_by_another_run(
     reports: &mut [StepReport],
     display_id: &str,
     artifact: Option<&str>,
 ) {
-    let id = crate::StepId::parse(display_id);
+    let id = barca_model::StepId::parse(display_id);
     let base = id.base_id();
     let key = (!id.partition.is_empty()).then(|| id.partition.suffix());
     for r in reports.iter_mut().rev().filter(|r| r.id == base) {

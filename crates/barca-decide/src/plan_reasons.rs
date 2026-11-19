@@ -5,15 +5,15 @@
 //! `GET /runs/{run_id}` and `barca history RUN_ID` say why a run is a full rebuild.
 //!
 //! The reasons come from the decision itself (a task, a sensor, a refresh, a missing artifact)
-//! or, for a step with no cache hit, from its history ([`crate::db::step_histories`]): no
+//! or, for a step with no cache hit, from its history ([`barca_db::db::step_histories`]): no
 //! success ever (never run, or new keys of a partitioned node), the last attempt at this run
 //! hash failed, or what changed since the last success, the same component diff
 //! `barca status` and `--dry-run` make ([`crate::changes`]). Only steps that are not cache hits
 //! are looked up, so a run served from cache pays nothing.
 
 use crate::cache::{DecideState, RunReason};
-use crate::dag::Dag;
-use crate::run_explain::{
+use barca_compile::dag::Dag;
+use barca_model::run_explain::{
     EXAMINED_KEYS_PER_NODE, MAX_REASONS, PlanReason, PlanReasons, ReasonCategory,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -23,14 +23,14 @@ pub(crate) type Reason = (ReasonCategory, Option<String>);
 
 /// The reasons of a run so far.
 #[derive(Default, Clone, Debug)]
-pub(crate) struct PlanTally {
+pub struct PlanTally {
     entries: HashMap<Reason, Entry>,
     nodes: HashSet<String>,
     steps: u64,
     /// Changed since [`PlanTally::take_changed`] last returned it.
     dirty: bool,
     /// Time spent looking up reasons, for `BARCA_TRACE_TIMING`.
-    pub(crate) lookup: std::time::Duration,
+    pub lookup: std::time::Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -42,7 +42,7 @@ struct Entry {
 
 impl PlanTally {
     /// `steps` steps of node `base`, each executed for every one of `reasons`.
-    pub(crate) fn add(&mut self, base: &str, reasons: &[Reason], steps: u64) {
+    pub fn add(&mut self, base: &str, reasons: &[Reason], steps: u64) {
         if steps == 0 {
             return;
         }
@@ -98,7 +98,7 @@ impl PlanTally {
     }
 
     /// The aggregate as JSON when it changed since the last call.
-    pub(crate) fn take_changed(&mut self) -> Option<String> {
+    pub fn take_changed(&mut self) -> Option<String> {
         if !std::mem::take(&mut self.dirty) {
             return None;
         }
@@ -106,14 +106,14 @@ impl PlanTally {
     }
 
     /// The aggregate as JSON, `None` before any step was decided to run.
-    pub(crate) fn json(&self) -> Option<String> {
+    pub fn json(&self) -> Option<String> {
         serde_json::to_string(&self.summary()?).ok()
     }
 }
 
 /// The reason a decision gives by itself, or `None` when the step simply had no cache hit
 /// ([`RunReason::NotMaterialized`]) and its history says why.
-pub(crate) fn of_run_reason(base: &str, reason: &RunReason) -> Option<Reason> {
+pub fn of_run_reason(base: &str, reason: &RunReason) -> Option<Reason> {
     Some(match reason {
         RunReason::Task => (ReasonCategory::Task, None),
         RunReason::Sensor => (ReasonCategory::Sensor, None),
@@ -128,12 +128,12 @@ pub(crate) fn of_run_reason(base: &str, reason: &RunReason) -> Option<Reason> {
 
 /// The steps of one phase with no cache hit, whose history says why.
 #[derive(Default)]
-pub(crate) struct Missed {
+pub struct Missed {
     /// Unpartitioned steps (display ids).
-    pub(crate) steps: Vec<String>,
+    pub steps: Vec<String>,
     /// Partitioned steps: the base id, its keys that run (display ids), and whether some of
     /// its keys were cache hits.
-    pub(crate) keys: Vec<(String, Vec<String>, bool)>,
+    pub keys: Vec<(String, Vec<String>, bool)>,
 }
 
 impl Missed {
@@ -143,7 +143,7 @@ impl Missed {
 }
 
 /// Look up why each of `missed` had no cache hit, and add it to the run's tally.
-pub(crate) async fn explain(
+pub async fn explain(
     cache: &crate::cache::CacheReader,
     dag: &Dag,
     state: &mut DecideState,
@@ -169,7 +169,7 @@ async fn explain_missed(
         for id in &missed.steps {
             state
                 .plan_tally
-                .add(crate::StepId::parse(id).base_id(), &not_examined, 1);
+                .add(barca_model::StepId::parse(id).base_id(), &not_examined, 1);
         }
         for (base, keys, _) in &missed.keys {
             state.plan_tally.add(base, &not_examined, keys.len() as u64);
@@ -180,7 +180,7 @@ async fn explain_missed(
     for (_, keys, _) in &missed.keys {
         ids.extend(keys.iter().take(EXAMINED_KEYS_PER_NODE).map(String::as_str));
     }
-    let histories = crate::db::step_histories(cache, &ids).await;
+    let histories = barca_db::db::step_histories(cache, &ids).await;
     let mut explainer = Explainer {
         cache,
         dag,
@@ -190,7 +190,11 @@ async fn explain_missed(
     let mut add: Vec<(String, Vec<Reason>, u64)> = Vec::new();
     for id in &missed.steps {
         let reasons = explainer.reasons(id, histories.get(id), false).await;
-        add.push((crate::StepId::parse(id).base_id().to_string(), reasons, 1));
+        add.push((
+            barca_model::StepId::parse(id).base_id().to_string(),
+            reasons,
+            1,
+        ));
     }
     for (base, keys, any_cached) in &missed.keys {
         let examined = &keys[..keys.len().min(EXAMINED_KEYS_PER_NODE)];
@@ -198,7 +202,7 @@ async fn explain_missed(
             || examined
                 .iter()
                 .any(|k| histories.get(k).is_some_and(|h| h.last_success.is_some()))
-            || crate::db::any_key_succeeded(cache, base).await;
+            || barca_db::db::any_key_succeeded(cache, base).await;
         // Keys with the same reasons are added together.
         let mut groups: BTreeMap<Vec<Reason>, u64> = BTreeMap::new();
         for (i, key) in examined.iter().enumerate() {
@@ -236,7 +240,7 @@ impl Explainer<'_> {
     async fn reasons(
         &mut self,
         id: &str,
-        history: Option<&crate::db::StepHistory>,
+        history: Option<&barca_db::db::StepHistory>,
         node_succeeded: bool,
     ) -> Vec<Reason> {
         let partitioned = id.contains('[');
@@ -277,7 +281,7 @@ impl Explainer<'_> {
     /// What differs between the components `recorded` and `id`'s now: the definition's diffed
     /// once per recorded definition, the step's own each time.
     async fn changed(&mut self, id: &str, recorded: &str) -> Option<Vec<String>> {
-        let base = crate::StepId::parse(id).base_id().to_string();
+        let base = barca_model::StepId::parse(id).base_id().to_string();
         let node = self.dag.get_node(&base)?;
         let mut own: BTreeMap<String, String> = serde_json::from_str(recorded).ok()?;
         let Some(definition) = own.remove(crate::changes::DEFINITION_KEY) else {
@@ -289,7 +293,7 @@ impl Explainer<'_> {
         if definition != node.fingerprint.definition_hash {
             let key = (base, definition);
             if !self.definitions.contains_key(&key) {
-                let diff = crate::db::definition_components(self.cache, &key.1)
+                let diff = barca_db::db::definition_components(self.cache, &key.1)
                     .await
                     .map(|old| {
                         let current: BTreeMap<String, String> =

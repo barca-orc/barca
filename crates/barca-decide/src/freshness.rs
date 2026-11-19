@@ -11,15 +11,16 @@
 //!   successfully since ([`crate::cache::decide_step`]).
 
 use crate::cache::{CachePolicy, compute_run_hash_with};
-use crate::dag::Dag;
-use crate::db;
-use crate::step_result::OutputRef;
-use crate::targets::{refresh_name_matches, short_name};
-use crate::{Freshness, NodeKind};
+use barca_compile::dag::Dag;
+use barca_compile::targets::{refresh_name_matches, short_name};
+use barca_db::db;
+use barca_model::Freshness;
+use barca_model::NodeKind;
+use barca_model::step_result::OutputRef;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 mod planned;
-pub(crate) use planned::{Planned, pin_manual};
+pub use planned::{Planned, pin_manual};
 
 /// `Schedule(cron)` without `max_failures=`: consecutive failed ticks before the schedule is
 /// skipped and reported `failing`.
@@ -288,7 +289,7 @@ pub(crate) fn walk<'a>(dag: &'a Dag, targets: &[&str], policy: &CachePolicy) -> 
 /// The walk of `targets`, stopping also at every node in `user` (pinned with `barca pin`), whatever the
 /// policy and even as a target: a pinned asset is never computed. `manual`: stop at `Manual`
 /// nodes too ([`RunRules::pin_manual`]). `paused`: under a tick, the paused nodes
-/// (`crate::pauses`); one that is not a target is a stop, read as it is like a `Manual` one.
+/// (`barca_store::pauses`); one that is not a target is a stop, read as it is like a `Manual` one.
 pub(crate) fn walk_with<'a>(
     dag: &'a Dag,
     targets: &[&str],
@@ -343,16 +344,16 @@ pub(crate) fn walk_with<'a>(
 
 /// A `Manual` node read as it is: its latest successful result.
 #[derive(Debug, Clone)]
-pub(crate) struct Pin {
+pub struct Pin {
     /// The run hash of that result. Nodes below hash it and the result's content hash
     /// (`output`), so a refresh of the `Manual` node that gives new bytes changes their run
     /// hashes and they are recomputed (#548).
-    pub(crate) run_hash: String,
+    pub run_hash: String,
     pub(crate) output: OutputRef,
     /// Its inputs' latest results or its code differ from the ones it was computed with.
     pub(crate) stale: bool,
     /// Set for an asset pinned with `barca pin` (not a `Manual` node): the pin it is read by.
-    pub(crate) user: Option<db::AssetPin>,
+    pub user: Option<db::AssetPin>,
 }
 
 /// The `Manual` nodes of a [`Walk`], with what each is read as.
@@ -426,7 +427,7 @@ pub(crate) async fn load_pins(
 /// `run_hashes` (and a sensor's output in `outputs`) when this run computed or polled it, else
 /// its latest recorded result. `false` when that cannot be told (an input is partitioned or has
 /// no result).
-pub(crate) async fn is_stale(
+pub async fn is_stale(
     cache: &crate::cache::CacheReader,
     dag: &Dag,
     id: &str,
@@ -472,7 +473,7 @@ pub(crate) async fn is_stale(
             .await
             .unwrap_or_default(),
     );
-    let env = crate::envdeps::hash_input(&crate::envdeps::resolve(&node.decl.env));
+    let env = barca_model::envdeps::hash_input(&barca_model::envdeps::resolve(&node.decl.env));
     let current = compute_run_hash_with(
         &node.fingerprint.definition_hash,
         None,
@@ -504,7 +505,7 @@ pub(crate) fn blocked_on(
 }
 
 /// The error for a pinned asset whose pinned materialization is gone.
-pub(crate) fn pin_lost(id: &str) -> String {
+pub fn pin_lost(id: &str) -> String {
     let name = short_name(id);
     format!(
         "'{name}' is pinned, but its pinned materialization is no longer recorded with a \
@@ -514,7 +515,7 @@ pub(crate) fn pin_lost(id: &str) -> String {
 }
 
 /// The command that recomputes the `Manual` node `id`.
-pub(crate) fn refresh_command(dag: &Dag, id: &str, file_args: &[String]) -> String {
+pub fn refresh_command(dag: &Dag, id: &str, file_args: &[String]) -> String {
     let name = short_name(id);
     let files = file_args.join(" ");
     let files = if files.is_empty() {
@@ -529,7 +530,7 @@ pub(crate) fn refresh_command(dag: &Dag, id: &str, file_args: &[String]) -> Stri
 }
 
 /// The note printed when a request reads a stale `Manual` node as it is.
-pub(crate) fn stale_note(dag: &Dag, id: &str, file_args: &[String]) -> String {
+pub fn stale_note(dag: &Dag, id: &str, file_args: &[String]) -> String {
     format!(
         "[barca] note: {} is Manual and stale; {} to recompute",
         short_name(id),
@@ -538,8 +539,8 @@ pub(crate) fn stale_note(dag: &Dag, id: &str, file_args: &[String]) -> String {
 }
 
 /// The usage error for a request that reads a `Manual` node that has never been computed.
-pub(crate) fn never_computed(dag: &Dag, id: &str, file_args: &[String]) -> crate::BarcaError {
-    crate::BarcaError::Usage(format!(
+pub(crate) fn never_computed(dag: &Dag, id: &str, file_args: &[String]) -> barca_model::BarcaError {
+    barca_model::BarcaError::Usage(format!(
         "'{}' is Manual and has never been computed; a Manual node is computed only when \
          named in --refresh\nCompute it first: {}",
         short_name(id),
@@ -580,7 +581,7 @@ mod tests {
             "from barca import asset, sensor, task, Always, Manual, Schedule\n{}",
             nodes.join("")
         );
-        Dag::build(&crate::parse::extract_nodes(&src, "p.py").unwrap()).expect("valid dag")
+        Dag::build(&barca_compile::parse::extract_nodes(&src, "p.py").unwrap()).expect("valid dag")
     }
 
     fn names(ids: &[String]) -> Vec<&str> {

@@ -2,7 +2,7 @@
 //! with #905 step 4: they call `cache::lookup_cached`).
 
 use crate::cache::{CacheReader, lookup_cached};
-use crate::db::{db_guard, init_db, open_conn, prepares};
+use barca_db::db::{db_guard, init_db, open_conn, prepares};
 use barca_model::step_result::OutputRef;
 
 /// A reader compiles its lookup statements once, however many keys it looks up: 0.34.0

@@ -2,7 +2,7 @@
 //!
 //! A run hash is one SHA-256 over several components: the function, the decorator parts that
 //! count, the helper code the function reaches, the node's kind, its inputs' run hashes (and a
-//! sensor's output), and its declared env values ([`crate::hash`]). One hash cannot say which
+//! sensor's output), and its declared env values ([`barca_model::hash`]). One hash cannot say which
 //! of them moved, so each successful materialization also records a short digest of every
 //! component (`materializations.components`, a JSON object). `barca status` and `--dry-run`
 //! compare the current components with the ones recorded by the node's last success and name
@@ -16,7 +16,7 @@
 //!   (`pipelines/common.py`);
 //! - `input ID` / `sensor ID`: an upstream's run hash, or a sensor's run hash and output;
 //! - `value ID`: the value a dict `partitions_from` source `ID` returned for this key, with the
-//!   source's run hash ([`crate::keyed`]);
+//!   source's run hash ([`barca_model::keyed`]);
 //! - `env NAME`: a declared environment variable's value;
 //! - `kind`.
 //!
@@ -24,7 +24,7 @@
 //! row recorded before they existed has none, and the reason stays a plain `changed`.
 
 use crate::cache::DecideState;
-use crate::dag::Dag;
+use barca_compile::dag::Dag;
 use std::collections::BTreeMap;
 
 /// Every component of the run hash of `display_id` (`pipeline.py:p` or `pipeline.py:p[k=a]`)
@@ -36,7 +36,7 @@ pub(crate) fn step_components(
     state: &DecideState,
     display_id: &str,
 ) -> Option<BTreeMap<String, String>> {
-    let node = dag.get_node(crate::StepId::parse(display_id).base_id())?;
+    let node = dag.get_node(barca_model::StepId::parse(display_id).base_id())?;
     let mut out: BTreeMap<String, String> = node.fingerprint.components.iter().cloned().collect();
     out.append(&mut own_components(dag, state, display_id)?);
     Some(out)
@@ -44,14 +44,14 @@ pub(crate) fn step_components(
 
 /// The components of `display_id`'s run hash that are its own, not its definition's: its
 /// inputs' and sensors' tokens, a dict source's value for its key, its env values. The same for
-/// no two keys of a node in general; the definition's ([`crate::dag::Dag`] node `components`)
+/// no two keys of a node in general; the definition's ([`barca_compile::dag::Dag`] node `components`)
 /// are the same for all of them.
 pub(crate) fn own_components(
     dag: &Dag,
     state: &DecideState,
     display_id: &str,
 ) -> Option<BTreeMap<String, String>> {
-    let step = crate::StepId::parse(display_id);
+    let step = barca_model::StepId::parse(display_id);
     let node = dag.get_node(step.base_id())?;
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     let partition = (!step.partition.is_empty()).then(|| step.partition.suffix());
@@ -74,43 +74,39 @@ pub(crate) fn own_components(
             continue;
         }
         let word = match dag.get_node(up).map(|n| n.kind()) {
-            Some(crate::NodeKind::Sensor) => "sensor",
+            Some(barca_model::NodeKind::Sensor) => "sensor",
             _ => "input",
         };
         out.insert(
             format!("{word} {up}"),
-            crate::hash::short_digest(tokens.join("\n").as_bytes()),
+            barca_model::hash::short_digest(tokens.join("\n").as_bytes()),
         );
     }
-    // A dict `partitions_from` source's value for this key (`crate::keyed`).
+    // A dict `partitions_from` source's value for this key (`barca_model::keyed`).
     for (source, token) in state.keyed_tokens(step.base_id(), &step.partition.0) {
         out.insert(
             format!("value {source}"),
-            crate::hash::short_digest(token.as_bytes()),
+            barca_model::hash::short_digest(token.as_bytes()),
         );
     }
-    for (name, value) in crate::envdeps::resolve(&node.decl.env) {
+    for (name, value) in barca_model::envdeps::resolve(&node.decl.env) {
         let value = serde_json::to_string(&value).unwrap_or_default();
         out.insert(
             format!("env {name}"),
-            crate::hash::short_digest(value.as_bytes()),
+            barca_model::hash::short_digest(value.as_bytes()),
         );
     }
     Some(out)
 }
 
 /// The key of a recorded row's components that names its definition's (`definition_components`).
-pub(crate) use crate::db::DEFINITION_KEY;
+pub use barca_db::db::DEFINITION_KEY;
 
 /// [`step_components`] as the JSON text recorded with a materialization: a definition's digests
 /// are the same for each of its keys and can be tens of KB, so the row names them
 /// ([`definition_rows`]) and holds only what is its own.
-pub(crate) fn step_components_json(
-    dag: &Dag,
-    state: &DecideState,
-    display_id: &str,
-) -> Option<String> {
-    let node = dag.get_node(crate::StepId::parse(display_id).base_id())?;
+pub fn step_components_json(dag: &Dag, state: &DecideState, display_id: &str) -> Option<String> {
+    let node = dag.get_node(barca_model::StepId::parse(display_id).base_id())?;
     let mut own = own_components(dag, state, display_id)?;
     own.insert(
         DEFINITION_KEY.to_string(),
@@ -120,10 +116,7 @@ pub(crate) fn step_components_json(
 }
 
 /// What `definition_components` holds for `ids`: (definition hash, its components as JSON).
-pub(crate) fn definition_rows<'a>(
-    dag: &Dag,
-    ids: impl Iterator<Item = &'a str>,
-) -> Vec<(String, String)> {
+pub fn definition_rows<'a>(dag: &Dag, ids: impl Iterator<Item = &'a str>) -> Vec<(String, String)> {
     let mut rows = BTreeMap::new();
     for id in ids {
         if let Some(node) = dag.get_node(id)
@@ -189,7 +182,7 @@ pub(crate) async fn since_last_success(
     if cache.ledger().is_some() {
         return None;
     }
-    let recorded = crate::db::last_success_components(cache, display_id).await?;
+    let recorded = barca_db::db::last_success_components(cache, display_id).await?;
     let current = step_components(dag, state, display_id)?;
     diff(&recorded, &current)
 }
@@ -206,7 +199,7 @@ pub fn summary(changed: &[String]) -> String {
 /// The named components of `changed` by cause, in a fixed order: `code_changed` (the function,
 /// its decorators, helpers, kind), `inputs_changed` (an upstream, a sensor, a source value),
 /// `env_changed` (a declared variable). A component this function does not know counts as code.
-pub(crate) fn causes(changed: &[String]) -> Vec<String> {
+pub fn causes(changed: &[String]) -> Vec<String> {
     let has = |cause: &str| {
         changed.iter().any(|c| {
             let is = match c.split(' ').next().unwrap_or(c) {
@@ -247,10 +240,10 @@ mod tests {
 
     fn node(source_text: &str, cone_parts: &[(&str, &str)]) -> ExtractedNode {
         ExtractedNode {
-            kind: crate::NodeKind::Asset,
+            kind: barca_model::NodeKind::Asset,
             function_name: "clean".to_string(),
             explicit_name: None,
-            freshness: crate::Freshness::Always,
+            freshness: barca_model::Freshness::Always,
             max_failures: None,
             schedule_timeout: None,
             inputs: Default::default(),
@@ -314,7 +307,7 @@ mod tests {
         let code = &c.iter().find(|(k, _)| k == "code").unwrap().1;
         assert_eq!(
             code,
-            &crate::hash::short_digest(b"def clean():\n    return 1")
+            &barca_model::hash::short_digest(b"def clean():\n    return 1")
         );
         // Two sinks share one entry.
         assert!(

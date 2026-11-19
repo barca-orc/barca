@@ -7,33 +7,35 @@
 //! [`crate::recover`], [`crate::sizing`] and the report line of a decision
 //! ([`crate::cache::report_for`]). Nothing here names the run orchestrator.
 
-use crate::BarcaError;
 use crate::cache::{
     CachePolicy, DecideState, Decision, RunReason, decide_step, has_sensor_output,
     in_dependency_order, merge_partition_reports, report_for, sensor_inputs,
 };
-use crate::dag::Dag;
-use crate::db;
-use crate::dispatch;
 use crate::freshness::{Planned, pin_manual};
-use crate::model::kind_str;
-use crate::planner::{Phase, ResourceConfig};
 use crate::recover;
-use crate::results::{ExplainResult, ExplainSummary, StepReport, TargetPrediction};
 use crate::sizing::{planned_weights, sizing_for, warn_over_capacity};
-use crate::step_result::OutputRef;
-use crate::targets::{plan_for_targets, resolve_targets, short_name, validate_refresh_names};
-use crate::transfer::ArtifactLayout;
+use barca_compile::dag::Dag;
+use barca_compile::dispatch;
+use barca_compile::planner::{Phase, ResourceConfig};
+use barca_compile::targets::{
+    plan_for_targets, resolve_targets, short_name, validate_refresh_names,
+};
+use barca_db::db;
+use barca_model::BarcaError;
+use barca_model::model::kind_str;
+use barca_model::step_result::OutputRef;
+use barca_store::results::{ExplainResult, ExplainSummary, StepReport, TargetPrediction};
+use barca_store::transfer::ArtifactLayout;
 use std::collections::HashMap;
 
-/// [`crate::queries::explain`] on an already-built DAG (`barca status` reuses its DAG for the node listing).
-pub(crate) async fn explain_dag(
+/// [`barca_model::queries::explain`] on an already-built DAG (`barca status` reuses its DAG for the node listing).
+pub async fn explain_dag(
     dag: &Dag,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     policy: CachePolicy,
     command_label: &str,
-    partition: Option<&crate::selection::PartitionSelection>,
+    partition: Option<&barca_compile::selection::PartitionSelection>,
     file_args: &[String],
 ) -> Result<ExplainResult, BarcaError> {
     // A dry run predicts `barca get` / `barca run`, which read a stale `Manual` upstream as it is.
@@ -56,11 +58,11 @@ pub(crate) async fn explain_dag(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn explain_dag_with_membership(
     dag: &Dag,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     policy: CachePolicy,
     command_label: &str,
-    partition: Option<&crate::selection::PartitionSelection>,
+    partition: Option<&barca_compile::selection::PartitionSelection>,
     rules: &crate::freshness::RunRules,
     file_args: &[String],
 ) -> Result<(ExplainResult, crate::cache::ExpandedMembership), BarcaError> {
@@ -80,18 +82,18 @@ pub(crate) async fn explain_dag_with_membership(
 
 /// The nodes a status prediction decided on their own that a run reads as they are, by id
 /// ([`crate::cache::read_as_held`]). Empty under any other rules.
-pub(crate) type HeldNodes = HashMap<String, crate::cache::ReadAsIs>;
+pub type HeldNodes = HashMap<String, crate::cache::ReadAsIs>;
 
 /// [`explain_dag_with_membership`], the keys of each partitioned node the dry run predicts
 /// would run (every one, where the report previews a few), and the [`HeldNodes`].
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn explain_dag_with_keys(
+pub async fn explain_dag_with_keys(
     dag: &Dag,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     policy: CachePolicy,
     command_label: &str,
-    partition: Option<&crate::selection::PartitionSelection>,
+    partition: Option<&barca_compile::selection::PartitionSelection>,
     rules: &crate::freshness::RunRules,
     file_args: &[String],
 ) -> Result<
@@ -116,7 +118,7 @@ pub(crate) async fn explain_dag_with_keys(
     };
     let mut exec_plan = match &cone {
         Some(cone) => filter_plan_to_subgraph(
-            crate::planner::plan_from_dag_narrowed(dag, &config, partition),
+            barca_compile::planner::plan_from_dag_narrowed(dag, &config, partition),
             cone,
         ),
         None => plan_for_targets(dag, &target_ids, &config, command_label, partition),
@@ -139,18 +141,18 @@ pub(crate) async fn explain_dag_with_keys(
     }
 
     dag.check_imports(exec_plan.step_ids())?;
-    let warnings = crate::warnings::for_plan(dag, &exec_plan);
-    crate::text::trace_since("dry run: plan", t0);
+    let warnings = barca_compile::warnings::for_plan(dag, &exec_plan);
+    barca_store::text::trace_since("dry run: plan", t0);
 
     // With a server, the dry run is decided against its ledger: check the server (a dry run
     // posts nothing) and ask once for every run hash known before anything runs. The ledger's
     // answers are read through a cache reader, so the database is created if there is none.
-    if let Some(ledger) = crate::ledger::attached(cfg) {
+    if let Some(ledger) = barca_store::ledger::attached(cfg) {
         ledger.prepare(cfg, false).await?;
         ledger
             .prefetch(crate::cache::cone_keys(dag, &exec_plan.phases))
             .await?;
-        crate::layout::ensure_env_dirs(&cfg.env)?;
+        barca_model::layout::ensure_env_dirs(&cfg.env)?;
         db::init_db(&cfg.db_path).await?;
     }
     // No metadata DB yet means nothing is cached. Do not create one just to look.
@@ -187,7 +189,7 @@ pub(crate) async fn explain_dag_with_keys(
             .iter()
             .flat_map(|p| &p.streams)
             .flat_map(|s| &s.steps)
-            .filter(|st| st.keyed.is_source && st.kind == crate::NodeKind::Sensor);
+            .filter(|st| st.keyed.is_source && st.kind == barca_model::NodeKind::Sensor);
         for st in sources {
             let id = st.step_id.base_id();
             if let Some(last) = db::latest_success(cache, id).await
@@ -239,13 +241,13 @@ pub(crate) async fn explain_dag_with_keys(
         narrowing: narrowing.as_mut(),
         held: rules.status.then_some(&mut held),
     };
-    crate::text::trace_since("dry run: sensor outputs and evictions", t0);
+    barca_store::text::trace_since("dry run: sensor outputs and evictions", t0);
     for (i, phase) in exec_plan.phases.iter().enumerate() {
         let tp = std::time::Instant::now();
         predict_phase(&mut prediction, phase).await?;
-        crate::text::trace_since(&format!("dry run: phase {}", i + 1), tp);
+        barca_store::text::trace_since(&format!("dry run: phase {}", i + 1), tp);
     }
-    crate::text::trace_since("dry run: decided", t0);
+    barca_store::text::trace_since("dry run: decided", t0);
 
     // The outputs the command was asked for are read by whoever ran it.
     let returned = all_outputs
@@ -279,7 +281,10 @@ pub(crate) async fn explain_dag_with_keys(
     warn_over_capacity(&weights, capacity, sizing_for(cfg, None).capacity_source);
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
-        crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)
+        barca_db::pending_uploads::report(
+            &barca_db::pending_uploads::list(&cfg.db_path).await?,
+            None,
+        )
     } else {
         None
     };
@@ -338,7 +343,7 @@ struct Prediction<'a> {
     cutoff_unknown: &'a mut HashMap<String, String>,
     steps: &'a mut Vec<StepReport>,
     summary: &'a mut ExplainSummary,
-    narrowing: Option<&'a mut crate::selection::Narrowing>,
+    narrowing: Option<&'a mut barca_compile::selection::Narrowing>,
     /// The status prediction: the nodes read as they are, filled as each is decided.
     held: Option<&'a mut HeldNodes>,
 }
@@ -411,13 +416,13 @@ async fn expand_prediction(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<Ph
 async fn predict_steps(
     ctx: &mut Prediction<'_>,
     phase_ref: &Phase,
-) -> Result<Vec<crate::planner::StreamStep>, BarcaError> {
+) -> Result<Vec<barca_compile::planner::StreamStep>, BarcaError> {
     let mut pruned;
     let phase_ref = if ctx.user_pins.is_empty() {
         phase_ref
     } else {
         pruned = phase_ref.clone();
-        crate::pins::prune_expanded_inputs(ctx.dag, &mut pruned, ctx.targets, ctx.user_pins);
+        barca_store::pins::prune_expanded_inputs(ctx.dag, &mut pruned, ctx.targets, ctx.user_pins);
         &pruned
     };
     ctx.state.register_phase(phase_ref);
@@ -755,7 +760,7 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), Ba
     let to_run = predict_steps(ctx, phase_ref).await?;
     let running = Phase {
         reason: phase_ref.reason.clone(),
-        streams: vec![crate::planner::WorkerStream {
+        streams: vec![barca_compile::planner::WorkerStream {
             stream_id: "dry-run".to_string(),
             steps: to_run,
         }],
@@ -777,20 +782,20 @@ async fn predict_phase(ctx: &mut Prediction<'_>, phase: &Phase) -> Result<(), Ba
 
 /// `plan` without the steps outside `subgraph_ids` (a target's cone), and without the streams
 /// and phases that leaves empty.
-pub(crate) fn filter_plan_to_subgraph(
-    plan: crate::planner::ExecutionPlan,
+pub fn filter_plan_to_subgraph(
+    plan: barca_compile::planner::ExecutionPlan,
     subgraph_ids: &[&str],
-) -> crate::planner::ExecutionPlan {
+) -> barca_compile::planner::ExecutionPlan {
     let subgraph_set: std::collections::HashSet<&str> = subgraph_ids.iter().copied().collect();
-    let exec_plan = crate::planner::ExecutionPlan {
+    let exec_plan = barca_compile::planner::ExecutionPlan {
         phases: plan
             .phases
             .into_iter()
             .map(|phase| {
-                let filtered_streams: Vec<crate::planner::WorkerStream> = phase
+                let filtered_streams: Vec<barca_compile::planner::WorkerStream> = phase
                     .streams
                     .into_iter()
-                    .map(|s| crate::planner::WorkerStream {
+                    .map(|s| barca_compile::planner::WorkerStream {
                         stream_id: s.stream_id,
                         steps: s
                             .steps
@@ -812,7 +817,7 @@ pub(crate) fn filter_plan_to_subgraph(
             .collect(),
         total_steps: 0,
     };
-    crate::planner::ExecutionPlan {
+    barca_compile::planner::ExecutionPlan {
         total_steps: exec_plan
             .phases
             .iter()

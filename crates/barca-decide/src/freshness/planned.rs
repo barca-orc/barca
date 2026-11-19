@@ -1,17 +1,17 @@
 //! What a request plans before anything is decided: the `Manual` and pinned nodes it reads as
 //! they are (RFC-0008), the paused nodes a tick skips, and the cone that leaves. A run
-//! (`crate::execution`) and a prediction of one (`crate::predict`) plan through the same
+//! (`barca_model::execution`) and a prediction of one (`crate::predict`) plan through the same
 //! function.
 
 use super::*;
-use crate::BarcaError;
-use crate::results::TargetOutcome;
-use crate::step_status::StepStatus;
+use barca_model::BarcaError;
+use barca_model::step_status::StepStatus;
+use barca_store::results::TargetOutcome;
 
 /// The metadata DB for a read, or `None` when there is none yet, or it is an empty file
 /// (nothing was computed).
 async fn existing_cache(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
 ) -> Result<Option<crate::cache::CacheReader>, BarcaError> {
     // An empty file is a database the run is about to initialize: nothing was computed.
     if std::fs::metadata(&cfg.db_path).is_ok_and(|m| m.len() > 0) {
@@ -25,12 +25,12 @@ async fn existing_cache(
 /// the cone, not walking past them. A `Manual` node that has never been computed is a usage
 /// error; under a tick it blocks the targets that read it instead, which are moved to the
 /// returned list. Stale ones get a note on stderr (not under a tick).
-pub(crate) struct Planned<'a> {
-    pub(crate) user_pins: Vec<db::AssetPin>,
-    pub(crate) cone: Option<Vec<&'a str>>,
-    pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
-    pub(crate) blocked: Vec<(String, TargetOutcome)>,
-    pub(crate) paused: HashSet<String>,
+pub struct Planned<'a> {
+    pub user_pins: Vec<db::AssetPin>,
+    pub cone: Option<Vec<&'a str>>,
+    pub pinned: HashMap<String, crate::freshness::Pin>,
+    pub blocked: Vec<(String, TargetOutcome)>,
+    pub paused: HashSet<String>,
 }
 
 /// The outcome of a tick's target that is not run because `node` is paused.
@@ -46,10 +46,10 @@ fn paused_outcome(node: &str, error: String) -> TargetOutcome {
     }
 }
 
-pub(crate) async fn pin_manual<'a>(
+pub async fn pin_manual<'a>(
     dag: &'a Dag,
     targets: &mut Vec<(String, String)>,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     policy: &CachePolicy,
     rules: &crate::freshness::RunRules,
     file_args: &[String],
@@ -66,7 +66,7 @@ pub(crate) async fn pin_manual<'a>(
     if targets.is_empty() || rules.status {
         return Ok(planned);
     }
-    // A tick does not compute a paused node (`crate::pauses`): a paused target is skipped.
+    // A tick does not compute a paused node (`barca_store::pauses`): a paused target is skipped.
     if rules.tick.is_some() {
         planned.paused = db::get_asset_pauses(&cfg.db_path)
             .await?
@@ -76,9 +76,10 @@ pub(crate) async fn pin_manual<'a>(
         let paused = &planned.paused;
         targets.retain(|(name, id)| {
             if paused.contains(id) {
-                planned
-                    .blocked
-                    .push((name.clone(), paused_outcome(id, crate::pauses::detail(id))));
+                planned.blocked.push((
+                    name.clone(),
+                    paused_outcome(id, barca_store::pauses::detail(id)),
+                ));
                 false
             } else {
                 true
@@ -202,7 +203,7 @@ pub(crate) async fn pin_manual<'a>(
             for up in dag.upstream(id) {
                 if dag
                     .get_node(up)
-                    .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+                    .is_some_and(|n| n.kind() == barca_model::NodeKind::Sensor)
                 {
                     planned_ids.insert(up);
                 }

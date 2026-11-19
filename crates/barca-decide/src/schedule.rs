@@ -1,7 +1,9 @@
 //! Static schedule analysis shared by the CLI and server.
 
-use crate::results::AssetSummary;
-use crate::{CronExpr, Freshness, NodeKind};
+use barca_model::CronExpr;
+use barca_model::Freshness;
+use barca_model::NodeKind;
+use barca_store::results::AssetSummary;
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 use croner::Cron;
 use serde::Serialize;
@@ -30,20 +32,23 @@ pub(crate) async fn describe_schedule_in(
     python: &std::path::Path,
     zone: &Zone,
 ) -> Vec<ScheduleInfo> {
-    match crate::load::build_dag(files, python).await {
+    match barca_compile::load::build_dag(files, python).await {
         Ok(dag) => describe_schedule_from_dag(Some(&dag), zone),
         Err(error) => {
-            crate::errln!("[barca] scheduler disabled: failed to analyze DAG: {error}");
+            barca_model::errln!("[barca] scheduler disabled: failed to analyze DAG: {error}");
             Vec::new()
         }
     }
 }
 
 /// Describe schedules in an already validated graph.
-pub fn describe_schedule_from_dag(dag: Option<&crate::dag::Dag>, zone: &Zone) -> Vec<ScheduleInfo> {
+pub fn describe_schedule_from_dag(
+    dag: Option<&barca_compile::dag::Dag>,
+    zone: &Zone,
+) -> Vec<ScheduleInfo> {
     let now = Utc::now();
     let jobs = dag
-        .map(|dag| jobs_from_summaries(crate::results::list_assets_from_dag(dag)))
+        .map(|dag| jobs_from_summaries(barca_store::results::list_assets_from_dag(dag)))
         .unwrap_or_default();
     jobs.iter()
         .map(|j| {
@@ -114,7 +119,7 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
                 timeout_seconds: None,
                 batch: None,
             }),
-            Err(e) => crate::errln!(
+            Err(e) => barca_model::errln!(
                 "[barca] skipping '{}': invalid cron {:?}: {e}",
                 s.id,
                 expr.0
@@ -127,8 +132,8 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
 /// The scheduled jobs of a loaded DAG, each with the `Always` nodes its ticks reconcile and its
 /// `max_failures`. This is what `barca serve` schedules; it is computed when the DAG is loaded
 /// (and again on a `--watch` reload), not per tick.
-pub fn jobs_from_dag(dag: &crate::dag::Dag) -> Vec<ScheduledJob> {
-    let mut jobs = jobs_from_summaries(crate::results::list_assets_from_dag(dag));
+pub fn jobs_from_dag(dag: &barca_compile::dag::Dag) -> Vec<ScheduledJob> {
+    let mut jobs = jobs_from_summaries(barca_store::results::list_assets_from_dag(dag));
     for job in &mut jobs {
         job.followers = crate::freshness::tick_targets(dag, &job.id)
             .into_iter()
