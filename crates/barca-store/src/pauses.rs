@@ -6,9 +6,9 @@
 //! refused unless it says it means it (`--allow-paused`, `allow_paused`). The pauses
 //! themselves are rows of `asset_pauses` (`barca_db::db::get_asset_pauses`).
 
-use barca_compile::dag::Dag;
 use barca_compile::targets::{short_name, target_name_matches};
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use std::collections::{HashSet, VecDeque};
 
 /// The nodes a pause of `target` covers, in dependency order: the node `target` names (as a
@@ -244,7 +244,8 @@ mod tests {
             @asset(inputs={\"raw\": raw})\ndef clean(raw):\n    return raw\n\
             @asset(inputs={\"clean\": clean})\ndef report(clean):\n    return clean\n\
             @asset()\ndef other():\n    return 2\n";
-        Dag::build(&barca_compile::parse::extract_nodes(src, "p.py").unwrap()).expect("valid dag")
+        barca_python::link::build(&barca_python::parse::extract_nodes(src, "p.py").unwrap())
+            .expect("valid dag")
     }
 
     fn names(ids: &[String]) -> Vec<&str> {

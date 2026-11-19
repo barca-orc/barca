@@ -243,7 +243,7 @@ pub(crate) struct Dispatch {
 }
 
 impl Dispatch {
-    pub fn new(dag: &barca_compile::dag::Dag, job: &str, run_id: &str) -> Self {
+    pub fn new(dag: &barca_model::dag::Dag, job: &str, run_id: &str) -> Self {
         let upstream = dag
             .topo_order()
             .into_iter()

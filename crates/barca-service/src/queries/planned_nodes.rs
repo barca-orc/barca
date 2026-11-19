@@ -106,7 +106,7 @@ mod tests {
 @asset()\ndef unrelated(): return 1\n";
 
     fn dag() -> crate::dag::Dag {
-        crate::dag::Dag::build(&crate::parse::extract_nodes(SRC, "p.py").unwrap()).unwrap()
+        barca_python::link::build(&crate::parse::extract_nodes(SRC, "p.py").unwrap()).unwrap()
     }
 
     fn ran(node_id: &str, keys: usize, failed: usize) -> RunNodeSummary {

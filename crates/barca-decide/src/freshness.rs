@@ -11,11 +11,11 @@
 //!   successfully since ([`crate::cache::decide_step`]).
 
 use crate::cache::{CachePolicy, compute_run_hash_with};
-use barca_compile::dag::Dag;
 use barca_compile::targets::{refresh_name_matches, short_name};
 use barca_db::db;
 use barca_model::Freshness;
 use barca_model::NodeKind;
+use barca_model::dag::Dag;
 use barca_model::step_result::OutputRef;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -581,7 +581,8 @@ mod tests {
             "from barca import asset, sensor, task, Always, Manual, Schedule\n{}",
             nodes.join("")
         );
-        Dag::build(&barca_compile::parse::extract_nodes(&src, "p.py").unwrap()).expect("valid dag")
+        barca_python::link::build(&barca_python::parse::extract_nodes(&src, "p.py").unwrap())
+            .expect("valid dag")
     }
 
     fn names(ids: &[String]) -> Vec<&str> {

@@ -14,7 +14,6 @@ use crate::cache::{
 use crate::freshness::{Planned, pin_manual};
 use crate::recover;
 use crate::sizing::{planned_weights, sizing_for, warn_over_capacity};
-use barca_compile::dag::Dag;
 use barca_compile::dispatch;
 use barca_compile::planner::{Phase, ResourceConfig};
 use barca_compile::targets::{
@@ -22,6 +21,7 @@ use barca_compile::targets::{
 };
 use barca_db::db;
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use barca_model::model::kind_str;
 use barca_model::step_result::OutputRef;
 use barca_store::results::{ExplainResult, ExplainSummary, StepReport, TargetPrediction};

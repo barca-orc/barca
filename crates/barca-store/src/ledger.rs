@@ -342,7 +342,7 @@ impl Ledger {
         &self,
         cfg: &barca_model::config::ResolvedConfig,
         run_id: &str,
-        dag: &barca_compile::dag::Dag,
+        dag: &barca_model::dag::Dag,
     ) -> Vec<String> {
         // A run some of whose results are not in the store yet (#390: their upload failed and
         // is pending) is not posted now: the server would refuse objects it cannot find, and
@@ -614,7 +614,7 @@ fn unreachable_error(url: &str, route: &str, e: &LedgerError) -> BarcaError {
 async fn build_post(
     db_path: &str,
     run_id: &str,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
 ) -> Result<Option<LedgerPost>, BarcaError> {
     let Some(run) = db::get_run(db_path, run_id).await? else {
         return Ok(None);

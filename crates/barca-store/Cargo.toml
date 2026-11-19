@@ -8,6 +8,7 @@ description = "Storage layer — what is kept on disk, in the store and in the t
 [dependencies]
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }
+barca-python = { path = "../barca-python" }
 barca-db = { path = "../barca-db" }
 barca-proc = { path = "../barca-proc" }
 serde = { workspace = true }
@@ -29,4 +30,4 @@ ts-rs = { workspace = true, optional = true }
 
 [features]
 # Generate TS type bindings for the frontend. Off by default.
-ts = ["dep:ts-rs", "barca-model/ts", "barca-compile/ts", "barca-db/ts"]
+ts = ["dep:ts-rs", "barca-model/ts", "barca-db/ts"]

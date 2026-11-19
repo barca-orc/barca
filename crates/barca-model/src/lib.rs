@@ -8,9 +8,14 @@
 
 #[doc(hidden)]
 pub mod artifact_format;
+// The value of `--batch` and its grammar.
+#[doc(hidden)]
+pub mod batch_override;
 pub mod cache_size;
 pub mod cache_state;
 pub mod config;
+// The validated graph: the IR's nodes (`ir`), edges and groups in one container.
+pub mod dag;
 pub mod dag_error;
 #[doc(hidden)]
 pub mod envdeps;
@@ -26,6 +31,9 @@ pub mod layout;
 pub mod ledger_post;
 pub mod lines;
 pub mod model;
+// Node names as people write them.
+#[doc(hidden)]
+pub mod names;
 #[doc(hidden)]
 pub mod node_estimate;
 #[doc(hidden)]

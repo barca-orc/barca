@@ -13,7 +13,7 @@ pub(crate) async fn status_cmd(
     let cfg = barca_service::config::resolve(env)?;
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let mut result =
-        barca_service::status::status(&cfg, &targets, &file_args, python, opts.sample, true)
+        barca_service::loaded::status(&cfg, &targets, &file_args, python, opts.sample, true)
             .await?;
     opts.filter.apply(&mut result);
     result.disk_usage = barca_service::gc::disk_usage(&cfg);
@@ -38,7 +38,7 @@ pub(crate) async fn rollup_cmd(
 ) -> Result<(), barca_service::BarcaError> {
     let cfg = barca_service::config::resolve(env)?;
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-    let mut rollup = barca_service::status::rollup(&cfg, &targets, &file_args, python).await?;
+    let mut rollup = barca_service::loaded::rollup(&cfg, &targets, &file_args, python).await?;
     if !targets.is_empty() {
         rollup.entries[0].label = targets.join(", ");
     }
@@ -62,21 +62,26 @@ pub(crate) async fn keys_cmd(
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     let rendered = match view {
         KeysView::Key { key, sample } => {
-            let detail = grid::key_for_target(&cfg, target, &file_args, python, &key, sample)
-                .await?
-                .ok_or_else(|| barca_service::BarcaError::Usage(grid::no_such_key(target, &key)))?;
+            let detail = barca_service::loaded::key_for_target(
+                &cfg, target, &file_args, python, &key, sample,
+            )
+            .await?
+            .ok_or_else(|| barca_service::BarcaError::Usage(grid::no_such_key(target, &key)))?;
             barca_service::report::render_partition_key(&detail, json)
         }
         KeysView::Grid => {
-            let grid = grid::grid_for_target(&cfg, target, &file_args, python).await?;
+            let grid =
+                barca_service::loaded::grid_for_target(&cfg, target, &file_args, python).await?;
             barca_service::report::render_partition_grid(&grid, limit, json)
         }
         KeysView::Overview => {
-            let grid = grid::grid_for_target(&cfg, target, &file_args, python).await?;
+            let grid =
+                barca_service::loaded::grid_for_target(&cfg, target, &file_args, python).await?;
             barca_service::report::render_partition_overview(&grid.overview(limit), json)
         }
         KeysView::Keys(mut query) => {
-            let grid = grid::grid_for_target(&cfg, target, &file_args, python).await?;
+            let grid =
+                barca_service::loaded::grid_for_target(&cfg, target, &file_args, python).await?;
             query.limit = limit;
             let page = grid
                 .keys_page(&query)

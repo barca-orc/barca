@@ -222,7 +222,7 @@ pub struct CacheReport {
 }
 
 /// Describe a previously validated graph without reading/importing source again.
-pub fn list_assets_from_dag(dag: &barca_compile::dag::Dag) -> Vec<AssetSummary> {
+pub fn list_assets_from_dag(dag: &barca_model::dag::Dag) -> Vec<AssetSummary> {
     dag.topo_order()
         .into_iter()
         .filter_map(|id| dag.get_node(id))

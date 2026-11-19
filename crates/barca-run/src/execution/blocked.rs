@@ -12,9 +12,9 @@
 //! (`barca_compile::selection`): a consumer's keys line up with an input's when both have exactly the
 //! same dimension names and the input is not collected.
 
-use barca_compile::dag::Dag;
 use barca_compile::planner::Phase;
 use barca_compile::targets::{blocking_failure, short_name};
+use barca_model::dag::Dag;
 use barca_model::model::kind_str;
 use barca_model::step_status::StepStatus;
 use barca_store::results::StepReport;
@@ -246,7 +246,8 @@ def whole(forecast: list) -> dict:
 def other_dim(region: str, forecast: dict) -> dict:
     return {}
 "#;
-        Dag::build(&barca_compile::parse::extract_nodes(src, "p.py").unwrap()).unwrap()
+        barca_python::link::build(&barca_python::parse::extract_nodes(src, "p.py").unwrap())
+            .unwrap()
     }
 
     fn keys(base: &str, keys: &[&str]) -> Keys {

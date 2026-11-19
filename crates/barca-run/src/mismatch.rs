@@ -13,8 +13,8 @@
 //! The key is absent everywhere else. It is a finding of this run, made when an artifact is
 //! fetched; a dry run, which does not contact the store, never has it.
 
-use barca_compile::dag::Dag;
 use barca_decide::recover::base_of;
+use barca_model::dag::Dag;
 use barca_model::step_status::StepStatus;
 use barca_store::results::StepReport;
 use std::collections::HashMap;
@@ -82,7 +82,7 @@ pub(crate) fn mark(dag: &Dag, reports: &mut [StepReport], mismatched: &HashMap<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_compile::parse::extract_nodes;
+    use barca_python::parse::extract_nodes;
 
     const SRC: &str = r#"
 from barca import asset, collect, partitions, partitions_from, task
@@ -113,7 +113,7 @@ def publish(total): return None
 "#;
 
     fn dag() -> Dag {
-        Dag::build(&extract_nodes(SRC, "p.py").unwrap()).unwrap()
+        barca_python::link::build(&extract_nodes(SRC, "p.py").unwrap()).unwrap()
     }
 
     fn report(name: &str, status: &str) -> StepReport {

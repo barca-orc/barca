@@ -3,9 +3,9 @@
 //! Parsing is static (ruff's AST); the only Python that runs is the subprocess that lists a
 //! dynamic partition's values.
 
-use crate::dag::Dag;
 use crate::parse::extract_pipeline;
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -317,7 +317,7 @@ fn load_files(
         // `isolate` rather than `build`: a broken definition elsewhere in an imported file must
         // not fail a command that does not use it. The given files' nodes are always kept, so
         // their own errors are reported below.
-        let keep: std::collections::HashSet<String> = Dag::isolate(&all_nodes, &[])
+        let keep: std::collections::HashSet<String> = crate::link::isolate(&all_nodes, &[])
             .0
             .subgraph_many(&given)
             .into_iter()
@@ -348,14 +348,14 @@ fn load_files(
             )));
         }
         let groups = crate::groups::resolve(group_declarations, &all_nodes)?;
-        let mut dag = Dag::build(&all_nodes)?;
+        let mut dag = crate::link::build(&all_nodes)?;
         dag.groups = groups;
         dag.cannot_run = cannot_run(&dag, &broken_imports);
         dag.files_read = files_read;
         return Ok((dag, errors, all_nodes));
     }
     let failed_files = errors.iter().map(|e| e.file.clone()).collect::<Vec<_>>();
-    let (dag, mut failures) = Dag::isolate(&all_nodes, &failed_files);
+    let (dag, mut failures) = crate::link::isolate(&all_nodes, &failed_files);
     // The healthy nodes as written, as the full load above evaluates them: before building the
     // graph copies a source's keys onto each `partitions_from` consumer. Evaluated after, a
     // consumer in another file evaluated its source's expression in its own module, where the
@@ -366,7 +366,7 @@ fn load_files(
         .cloned()
         .collect();
     let unevaluated = resolve_dynamic_partitions(&mut healthy, python)?;
-    let (mut dag, additional) = Dag::isolate_with(&healthy, &failed_files, unevaluated);
+    let (mut dag, additional) = crate::link::isolate_with(&healthy, &failed_files, unevaluated);
     dag.cannot_run = cannot_run(&dag, &broken_imports);
     dag.files_read = files_read;
     failures.extend(additional);
@@ -725,73 +725,6 @@ mod source_dir_tests {
     use super::{build_dag, build_partial_dag, source_dir};
     use std::path::{Path, PathBuf};
 
-    /// #574: the environment variables a step reads, in its function and in the project
-    /// helpers it reaches, are found statically; the undeclared ones are plan warnings (one item
-    /// per step and variable, one stderr line per command), and no hash changes.
-    #[tokio::test]
-    async fn undeclared_env_reads_are_found_through_helpers_and_summarized_once() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("settings.py"),
-            "import os\n\nclass Settings:\n    ROOT = os.environ.get(\"APP_ROOT\", \"data\")\n\n\
-             def registry(name):\n    return os.environ.get(f\"{name.upper()}_REGISTRY_CSV\")\n\n\
-             def unused():\n    return os.environ[\"NEVER_REACHED\"]\n",
-        )
-        .unwrap();
-        let file = dir.path().join("p.py").display().to_string();
-        let source = "import os\nfrom barca import asset\nfrom settings import Settings, registry\n\n\
-                      @asset(env=[\"ACCOUNT_REGISTRY_CSV\"])\ndef reg():\n    return [Settings.ROOT, registry(\"account\")]\n\n\
-                      @asset(inputs={\"r\": reg})\ndef plain(r):\n    return r, os.getenv(\"TOKEN_A\"), os.environ[\"TOKEN_B\"]\n\n\
-                      @asset()\ndef quiet():\n    return 1\n";
-        std::fs::write(&file, source).unwrap();
-        let dag = build_dag(
-            std::slice::from_ref(&file),
-            std::path::Path::new("/nonexistent-python"),
-        )
-        .await
-        .unwrap();
-        let node = |name: &str| dag.get_node(&format!("{file}:{name}")).unwrap();
-        assert_eq!(
-            node("reg").findings.env_reads,
-            ["*_REGISTRY_CSV", "APP_ROOT"]
-        );
-        // The pattern is covered by the declared name that matches it.
-        assert_eq!(node("reg").undeclared_env(), ["APP_ROOT"]);
-        assert_eq!(node("plain").undeclared_env(), ["TOKEN_A", "TOKEN_B"]);
-        assert!(node("quiet").findings.env_reads.is_empty());
-
-        let plan = crate::planner::plan_from_dag(
-            &dag,
-            &crate::planner::ResourceConfig {
-                pool_size: 2,
-                concurrency_groups: Default::default(),
-            },
-        );
-        let warnings = crate::warnings::for_plan(&dag, &plan);
-        let items: Vec<(&str, &str, &str)> = warnings
-            .iter()
-            .map(|w| (w.kind.as_str(), &w.node[file.len() + 1..], w.param.as_str()))
-            .collect();
-        assert_eq!(
-            items,
-            [
-                ("undeclared_env", "plain", "TOKEN_A"),
-                ("undeclared_env", "plain", "TOKEN_B"),
-                ("undeclared_env", "reg", "APP_ROOT"),
-            ]
-        );
-        // One line per step: every item of a step carries the same message.
-        assert_eq!(warnings[0].message, warnings[1].message);
-        assert!(warnings[0].message.contains("TOKEN_A, TOKEN_B"));
-        assert!(warnings[0].message.contains("env=[...]"));
-        // stderr: one summary line for the command.
-        assert_eq!(
-            crate::warnings::undeclared_env_summary(&warnings).unwrap(),
-            "2 steps read environment variables not declared in env=: APP_ROOT, TOKEN_A, \
-             TOKEN_B; barca status lists them"
-        );
-    }
-
     #[tokio::test]
     async fn partial_loading_keeps_colocated_healthy_nodes_without_imports() {
         let dir = tempfile::tempdir().unwrap();
@@ -846,7 +779,7 @@ mod source_dir_tests {
 
     #[test]
     fn partial_reference_guards_preserve_candidate_priority() {
-        use crate::{dag::Dag, parse::extract_nodes};
+        use crate::parse::extract_nodes;
         // Imports prefer siblings; canonical refs prefer their literal path.
         for imported in [true, false] {
             for earlier_healthy in [true, false] {
@@ -871,7 +804,7 @@ mod source_dir_tests {
                     "@asset(inputs={'x': asset_ref('shared.py:value')})"
                 };
                 nodes.extend(extract_nodes(&format!("from barca import asset, asset_ref\n{declaration}\ndef consumer(x): return x+1\n"), "sub/p.py").unwrap());
-                let (dag, errors) = Dag::isolate(&nodes, &[failed.to_string()]);
+                let (dag, errors) = crate::link::isolate(&nodes, &[failed.to_string()]);
                 assert_eq!(
                     dag.get_node("sub/p.py:consumer").is_some(),
                     earlier_healthy,

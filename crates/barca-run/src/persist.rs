@@ -8,10 +8,10 @@ pub(crate) use barca_db::recording;
 pub(crate) use recording::RunLedger;
 use recording::write_terminal_ledger;
 
-use barca_compile::dag::Dag;
 use barca_compile::dispatch;
 use barca_db::db;
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1700,10 +1700,9 @@ sys.exit(_state.main())
                       @asset(inputs={\"rates\": rates, \"raw\": raw})\ndef a(rates, raw): return raw\n\
                       @asset(inputs={\"raw\": raw})\ndef cached(raw): return raw\n\
                       @asset(inputs={\"a\": a})\ndef bad(a): return a\n";
-        let dag = barca_compile::dag::Dag::build(
-            &barca_compile::parse::extract_nodes(source, "f.py").unwrap(),
-        )
-        .unwrap();
+        let dag =
+            barca_python::link::build(&barca_python::parse::extract_nodes(source, "f.py").unwrap())
+                .unwrap();
         let report = telemetry_report(
             &fx.ledger("r1"),
             &dag,
@@ -1728,10 +1727,9 @@ sys.exit(_state.main())
                       @asset()\ndef cached(): return 1\n\
                       @asset(inputs={\"a\": a})\ndef bad(a): return a\n\
                       @asset(inputs={\"bad\": bad})\ndef after(bad): return bad\n";
-        let dag = barca_compile::dag::Dag::build(
-            &barca_compile::parse::extract_nodes(source, "f.py").unwrap(),
-        )
-        .unwrap();
+        let dag =
+            barca_python::link::build(&barca_python::parse::extract_nodes(source, "f.py").unwrap())
+                .unwrap();
         let skipped = HashSet::from(["f.py:after".to_string(), "f.py:part".to_string()]);
         let clocks = no_clocks();
         let files = vec!["f.py".to_string()];
@@ -1772,7 +1770,7 @@ sys.exit(_state.main())
         fx.failures[0].error.started_unix_ns = Some(started);
         fx.failures[0].error.elapsed_seconds = Some(270.25);
         fx.failures[0].error.attempts = 3;
-        let dag = barca_compile::dag::Dag::build(&[]).unwrap();
+        let dag = barca_python::link::build(&[]).unwrap();
         let run_started = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(started);
         let report = telemetry_report(&fx.ledger("r1"), &dag, at(run_started, &no_clocks()));
         let bad = report

@@ -718,8 +718,6 @@ def dynamic_config() -> dict:
 
 #[test]
 fn dag_rejects_task_as_asset_input() {
-    use barca_service::dag::Dag;
-
     let src = r#"
 from barca import asset, task
 
@@ -732,7 +730,7 @@ def bad_asset(email) -> dict:
     return {}
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    let result = Dag::build(&nodes);
+    let result = barca_python::link::build(&nodes);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("task"));
@@ -740,8 +738,6 @@ def bad_asset(email) -> dict:
 
 #[test]
 fn dag_allows_asset_upstream_of_task() {
-    use barca_service::dag::Dag;
-
     let src = r#"
 from barca import asset, task
 
@@ -754,13 +750,11 @@ def deploy(d):
     pass
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    assert!(Dag::build(&nodes).is_ok());
+    assert!(barca_python::link::build(&nodes).is_ok());
 }
 
 #[test]
 fn dag_rejects_sensor_with_inputs() {
-    use barca_service::dag::Dag;
-
     let src = r#"
 from barca import asset, sensor
 
@@ -772,7 +766,7 @@ def bad_sensor(data):
     return (True, {})
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    let result = Dag::build(&nodes);
+    let result = barca_python::link::build(&nodes);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("sensor"));
@@ -780,8 +774,6 @@ def bad_sensor(data):
 
 #[test]
 fn dag_rejects_duplicate_continuity_key() {
-    use barca_service::dag::Dag;
-
     let src = r#"
 from barca import asset
 
@@ -792,7 +784,7 @@ def asset_a(): return {}
 def asset_b(): return {}
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    let result = Dag::build(&nodes);
+    let result = barca_python::link::build(&nodes);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("duplicate") || err.contains("Duplicate"));
@@ -806,8 +798,6 @@ def asset_b(): return {}
 
 #[test]
 fn partitions_from_creates_partition_source_edge() {
-    use barca_service::dag::Dag;
-
     let src = r#"
 from barca import asset, partitions_from
 
@@ -820,7 +810,7 @@ def fetch_prices(ticker: str) -> dict:
     return {"ticker": ticker}
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    let dag = Dag::build(&nodes).unwrap();
+    let dag = barca_python::link::build(&nodes).unwrap();
 
     // The partition source edge should be visible in the DAG
     let upstream = dag.upstream("test.py:fetch_prices");
@@ -858,8 +848,6 @@ def aggregate(all_data) -> dict:
 
 #[test]
 fn spaceflights_topology() {
-    use barca_service::dag::Dag;
-
     let src = r#"
 from barca import asset
 
@@ -894,7 +882,7 @@ def train(data): return {}
 def evaluate(model, data): return {}
 "#;
     let nodes = extract_nodes(src, "test.py").unwrap();
-    let dag = Dag::build(&nodes).unwrap();
+    let dag = barca_python::link::build(&nodes).unwrap();
 
     assert_eq!(dag.node_count(), 10);
     // 3 raw→prep edges + 3 prep→master + master→split + split→train + train→eval + split→eval

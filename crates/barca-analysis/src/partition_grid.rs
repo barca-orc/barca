@@ -13,9 +13,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 pub use crate::key_query::{GridCounts, GridDimension, PartitionGrid, state};
-use barca_compile::dag::Dag;
 use barca_db::db::{LatestAttempt, PartitionErrorGroup};
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use barca_model::model::{PartitionKey, PartitionSpec, PartitionValue};
 
 /// The partitioned nodes sharing `id`'s keys: connected to it through input edges between
@@ -358,33 +358,6 @@ pub fn partitioned_target(dag: &Dag, name: &str) -> Result<String, BarcaError> {
         return Err(BarcaError::Usage(not_partitioned(name)));
     }
     Ok(id)
-}
-
-/// `barca status NODE --keys` / `--grid` on this machine: every key of the node `name` names
-/// in the project's files.
-pub async fn grid_for_target(
-    cfg: &barca_model::config::ResolvedConfig,
-    name: &str,
-    file_args: &[String],
-    python: &std::path::Path,
-) -> Result<PartitionGrid, BarcaError> {
-    let dag = barca_compile::load::build_dag(file_args, python).await?;
-    let id = partitioned_target(&dag, name)?;
-    partition_grid(cfg, &dag, &id).await
-}
-
-/// `barca status NODE --key KEY` on this machine; `None` when the node has no such key.
-pub async fn key_for_target(
-    cfg: &barca_model::config::ResolvedConfig,
-    name: &str,
-    file_args: &[String],
-    python: &std::path::Path,
-    key: &str,
-    sample: usize,
-) -> Result<Option<PartitionKeyDetail>, BarcaError> {
-    let dag = barca_compile::load::build_dag(file_args, python).await?;
-    let id = partitioned_target(&dag, name)?;
-    partition_key_detail(cfg, &dag, python, &id, key, sample).await
 }
 
 /// The most sample rows one key's detail reads from each artifact.

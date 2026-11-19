@@ -3,12 +3,12 @@
 mod publication;
 use publication::publish_proofs;
 
-use barca_compile::dag::Dag;
 use barca_compile::dispatch::OutputRef;
 use barca_compile::planner::{ExecutionPlan, Phase, StreamStep};
 use barca_db::db;
 use barca_decide::cache::CachePolicy;
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use barca_model::model::{Freshness, NodeKind, PartitionKey, PartitionSpec};
 use barca_store::results::{KeySummary, LISTED_KEYS, PartitionSummary, StepReport};
 use serde::{Deserialize, Serialize};

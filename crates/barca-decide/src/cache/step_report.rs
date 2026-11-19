@@ -3,8 +3,8 @@
 //! prediction (`crate::predict`) report the same decision the same way.
 
 use super::{Decision, RunReason};
-use barca_compile::dag::Dag;
 use barca_compile::targets::short_name;
+use barca_model::dag::Dag;
 use barca_model::model::kind_str;
 use barca_model::step_status::StepStatus;
 use barca_store::results::{PartitionSummary, StepReport, key_preview};

@@ -20,9 +20,9 @@ use crate::schedule_standing::Standing;
 pub use crate::views::RefreshPath;
 use crate::views::ScheduleStatus;
 pub use crate::views::{CoveredSchedule, PauseCover, PauseRelation};
-use barca_compile::dag::Dag;
 use barca_decide::freshness::{Reach, tick_reach};
 use barca_decide::schedule::{Zone, next_fire};
+use barca_model::dag::Dag;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -457,7 +457,7 @@ mod tests {
     use barca_decide::schedule::jobs_from_dag;
 
     fn dag(source: &str) -> Dag {
-        Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
+        barca_python::link::build(&barca_python::parse::extract_nodes(source, "p.py").unwrap())
             .expect("valid dag")
     }
 

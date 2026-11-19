@@ -17,11 +17,11 @@
 //! A narrowed key is computed exactly as a full run computes it, so it has the same run hash
 //! and a later full run serves it from cache.
 
-use crate::dag::Dag;
-use crate::names::short_name;
 pub use crate::partition_selection::PartitionSelection;
 use crate::planner::{ExecutionPlan, Phase};
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
+use barca_model::names::short_name;
 use barca_model::step_result::OutputRef;
 use barca_model::step_status::StepStatus;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -497,7 +497,7 @@ impl Narrowing {
             if let Some(s) = self
                 .skipped
                 .iter()
-                .find(|s| crate::names::refresh_name_matches(&s.id, name))
+                .find(|s| barca_model::names::refresh_name_matches(&s.id, name))
             {
                 return Err(BarcaError::Usage(format!(
                     "--refresh {name}: --partition skips '{}': it {}.",

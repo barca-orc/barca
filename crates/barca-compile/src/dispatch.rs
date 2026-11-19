@@ -49,7 +49,7 @@ pub struct Expansion {
 
 /// The node id of the `partitions_from` source `source_name` of `node` (a `PartitionSource`
 /// predecessor with that name), else the first recorded output named so.
-fn source_id_of(dag: &crate::dag::Dag, node: &str, source_name: &str) -> Option<String> {
+fn source_id_of(dag: &barca_model::dag::Dag, node: &str, source_name: &str) -> Option<String> {
     dag.partition_sources(node)
         .into_iter()
         .find(|id| crate::targets::short_name(id) == source_name)
@@ -66,7 +66,7 @@ fn source_id_of(dag: &crate::dag::Dag, node: &str, source_name: &str) -> Option<
 /// Tests only (here and in `barca-service`), so compiled always.
 #[doc(hidden)]
 pub fn expand_pending_partitions(
-    dag: &crate::dag::Dag,
+    dag: &barca_model::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
@@ -94,7 +94,7 @@ pub fn selected_source(
 }
 
 pub fn expand_pending_partitions_filtered(
-    dag: &crate::dag::Dag,
+    dag: &barca_model::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
@@ -494,8 +494,8 @@ mod tests {
     use std::sync::Arc;
 
     /// A DAG without nodes: sources are found by name among the outputs.
-    fn no_dag() -> crate::dag::Dag {
-        crate::dag::Dag::build(&[]).unwrap()
+    fn no_dag() -> barca_model::dag::Dag {
+        barca_python::link::build(&[]).unwrap()
     }
 
     fn test_output_ref(path: &str, format: &str) -> OutputRef {

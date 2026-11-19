@@ -9,8 +9,8 @@ use std::sync::{Mutex, OnceLock};
 
 pub use barca_model::reports::PlanWarning;
 
-use crate::dag::Dag;
 use crate::planner::ExecutionPlan;
+use barca_model::dag::Dag;
 use barca_model::model::{DagNode, NodeKind};
 
 /// Print `[barca] warning: <message>` on stderr unless this process already printed the same
@@ -120,7 +120,7 @@ pub(crate) fn unused_input_warnings(dag: &Dag, node: &DagNode) -> Vec<PlanWarnin
 }
 
 /// One warning per environment variable `node`'s code reads without declaring it
-/// ([`crate::env_reads`]). Every item of a step carries the same message, naming all of them;
+/// ([`barca_python::env_reads`]). Every item of a step carries the same message, naming all of them;
 /// stderr gets one summary line for the whole command instead ([`print`]).
 pub(crate) fn undeclared_env_warnings(node: &DagNode) -> Vec<PlanWarning> {
     let names = node.undeclared_env();
@@ -209,9 +209,9 @@ pub(crate) fn undeclared_env_summary(warnings: &[PlanWarning]) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::extract_nodes;
     use crate::planner::{ResourceConfig, plan_from_dag};
     use crate::targets::plan_for_targets;
+    use barca_python::parse::extract_nodes;
 
     const SRC: &str = r#"
 import duckdb
@@ -254,7 +254,7 @@ def unrelated(raw):
 "#;
 
     fn dag() -> Dag {
-        Dag::build(&extract_nodes(SRC, "p.py").unwrap()).unwrap()
+        barca_python::link::build(&extract_nodes(SRC, "p.py").unwrap()).unwrap()
     }
 
     fn config() -> ResourceConfig {
@@ -374,5 +374,72 @@ def unrelated(raw):
         assert!(warn_once("warnings.rs test: only once"));
         assert!(!warn_once("warnings.rs test: only once"));
         assert!(warn_once("warnings.rs test: another message"));
+    }
+
+    /// #574: the environment variables a step reads, in its function and in the project
+    /// helpers it reaches, are found statically; the undeclared ones are plan warnings (one item
+    /// per step and variable, one stderr line per command), and no hash changes.
+    #[tokio::test]
+    async fn undeclared_env_reads_are_found_through_helpers_and_summarized_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.py"),
+            "import os\n\nclass Settings:\n    ROOT = os.environ.get(\"APP_ROOT\", \"data\")\n\n\
+             def registry(name):\n    return os.environ.get(f\"{name.upper()}_REGISTRY_CSV\")\n\n\
+             def unused():\n    return os.environ[\"NEVER_REACHED\"]\n",
+        )
+        .unwrap();
+        let file = dir.path().join("p.py").display().to_string();
+        let source = "import os\nfrom barca import asset\nfrom settings import Settings, registry\n\n\
+                      @asset(env=[\"ACCOUNT_REGISTRY_CSV\"])\ndef reg():\n    return [Settings.ROOT, registry(\"account\")]\n\n\
+                      @asset(inputs={\"r\": reg})\ndef plain(r):\n    return r, os.getenv(\"TOKEN_A\"), os.environ[\"TOKEN_B\"]\n\n\
+                      @asset()\ndef quiet():\n    return 1\n";
+        std::fs::write(&file, source).unwrap();
+        let dag = barca_python::load::build_dag(
+            std::slice::from_ref(&file),
+            std::path::Path::new("/nonexistent-python"),
+        )
+        .await
+        .unwrap();
+        let node = |name: &str| dag.get_node(&format!("{file}:{name}")).unwrap();
+        assert_eq!(
+            node("reg").findings.env_reads,
+            ["*_REGISTRY_CSV", "APP_ROOT"]
+        );
+        // The pattern is covered by the declared name that matches it.
+        assert_eq!(node("reg").undeclared_env(), ["APP_ROOT"]);
+        assert_eq!(node("plain").undeclared_env(), ["TOKEN_A", "TOKEN_B"]);
+        assert!(node("quiet").findings.env_reads.is_empty());
+
+        let plan = crate::planner::plan_from_dag(
+            &dag,
+            &crate::planner::ResourceConfig {
+                pool_size: 2,
+                concurrency_groups: Default::default(),
+            },
+        );
+        let warnings = crate::warnings::for_plan(&dag, &plan);
+        let items: Vec<(&str, &str, &str)> = warnings
+            .iter()
+            .map(|w| (w.kind.as_str(), &w.node[file.len() + 1..], w.param.as_str()))
+            .collect();
+        assert_eq!(
+            items,
+            [
+                ("undeclared_env", "plain", "TOKEN_A"),
+                ("undeclared_env", "plain", "TOKEN_B"),
+                ("undeclared_env", "reg", "APP_ROOT"),
+            ]
+        );
+        // One line per step: every item of a step carries the same message.
+        assert_eq!(warnings[0].message, warnings[1].message);
+        assert!(warnings[0].message.contains("TOKEN_A, TOKEN_B"));
+        assert!(warnings[0].message.contains("env=[...]"));
+        // stderr: one summary line for the command.
+        assert_eq!(
+            crate::warnings::undeclared_env_summary(&warnings).unwrap(),
+            "2 steps read environment variables not declared in env=: APP_ROOT, TOKEN_A, \
+             TOKEN_B; barca status lists them"
+        );
     }
 }

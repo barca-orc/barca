@@ -1,5 +1,4 @@
 //! Run preparation, phase dispatch, and finalization.
-use barca_compile::dag::Dag;
 use barca_compile::dispatch;
 use barca_compile::dispatch::OutputRef;
 use barca_compile::planner::{ExecutionPlan, Phase, ResourceConfig};
@@ -18,6 +17,7 @@ use barca_decide::freshness::{Planned, pin_manual};
 use barca_decide::recover::{self, Work};
 use barca_decide::sizing::{planned_weights, sizing_for, warn_over_capacity};
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use barca_model::model::kind_str;
 use barca_model::step_status::StepStatus;
 use barca_store::transfer::TransferClient;
@@ -26,7 +26,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use barca_compile::load::build_dag;
+use barca_python::load::build_dag;
 use barca_store::results::{GetResult, MultiResult, StepReport, TargetOutcome};
 
 use crate::persist::{

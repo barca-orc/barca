@@ -1,8 +1,9 @@
 use super::*;
 use crate::ServeConfig;
 use crate::run_model::{RunState, RunStatus};
+use barca_service::loaded::describe_schedule;
 use barca_service::results::AssetSummary;
-use barca_service::schedule::{describe_schedule, jobs_from_summaries, next_fire};
+use barca_service::schedule::{jobs_from_summaries, next_fire};
 use barca_service::{CronExpr, Freshness, NodeKind, db};
 use chrono::{DateTime, Local, TimeZone, Timelike, Utc};
 use croner::Cron;

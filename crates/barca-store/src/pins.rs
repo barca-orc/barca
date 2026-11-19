@@ -5,10 +5,10 @@
 //! run hash, so it is computed again (or served from an earlier cache hit) against the pinned
 //! data. `barca unpin` removes the pin; the next run decides the asset as before.
 
-use barca_compile::dag::Dag;
 use barca_compile::targets::{find_target_id, short_name};
 use barca_db::db::{self, AssetPin, Version};
 use barca_model::BarcaError;
+use barca_model::dag::Dag;
 use serde::{Deserialize, Serialize};
 
 /// The versions a list shows by default.
@@ -713,7 +713,6 @@ pub fn prune_expanded_inputs(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     /// A node's dimensions are held in a map with no order of its own: a key that names every
     /// dimension is that node's key however the map happens to list them.
@@ -728,8 +727,10 @@ def events(day: str, kind: str, region: str) -> dict:
 "#;
         // Each graph hashes its maps anew: enough of them see every order.
         for _ in 0..40 {
-            let dag = Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
-                .expect("dag");
+            let dag = barca_python::link::build(
+                &barca_python::parse::extract_nodes(source, "p.py").unwrap(),
+            )
+            .expect("dag");
             let (id, pinnable) =
                 super::pinnable(&dag, "p.py:events[day=d1,kind=b,region=apac]").unwrap();
             assert_eq!(id, "p.py:events[day=d1,kind=b,region=apac]");

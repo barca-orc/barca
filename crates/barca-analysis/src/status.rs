@@ -310,71 +310,11 @@ pub fn pending_for<'a>(
     })
 }
 
-/// Gather status for every node in scope (the targets' upstream cones, or the whole DAG when
-/// `target_names` is empty). `sample` > 0 adds up to that many sample rows to json/parquet
-/// shapes; `shape` = false skips the artifact reader entirely.
-pub async fn status(
-    cfg: &barca_model::config::ResolvedConfig,
-    target_names: &[String],
-    file_args: &[String],
-    python: &std::path::Path,
-    sample: usize,
-    shape: bool,
-) -> Result<StatusResult, BarcaError> {
-    let dag = barca_compile::load::build_dag(file_args, python).await?;
-    let mut result =
-        status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape)
-            .await?
-            .0;
-    // No scheduler runs here: a schedule's state is what the metadata DB holds.
-    crate::health::attach_from_db_with_schedules(
-        &mut result,
-        &dag,
-        cfg,
-        &barca_decide::schedule::Zone::Local,
-        chrono::Utc::now(),
-    )
-    .await?;
-    Ok(result)
-}
-
-/// SQL reuses this prediction instead of loading the DAG or interpreting keys again.
-pub async fn status_with_membership(
-    cfg: &barca_model::config::ResolvedConfig,
-    target_names: &[String],
-    file_args: &[String],
-    python: &std::path::Path,
-    sample: usize,
-    shape: bool,
-) -> Result<
-    (
-        StatusResult,
-        barca_decide::cache::ExpandedMembership,
-        barca_compile::dag::Dag,
-    ),
-    BarcaError,
-> {
-    let t0 = std::time::Instant::now();
-    let dag = barca_compile::load::build_dag(file_args, python).await?;
-    trace_since("status: load", t0);
-    let (mut result, membership) =
-        status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape).await?;
-    crate::health::attach_from_db(
-        &mut result,
-        &dag,
-        cfg,
-        &barca_decide::schedule::Zone::Local,
-        chrono::Utc::now(),
-    )
-    .await?;
-    Ok((result, membership, dag))
-}
-
 /// Inspect a validated graph; shares cache decisions with strict status.
 pub async fn status_from_dag(
     cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     python: &std::path::Path,
     sample: usize,
     shape: bool,
@@ -388,7 +328,7 @@ pub async fn status_from_dag(
 
 /// Expand status group selectors into their leaf nodes before planning the upstream cones.
 pub fn group_targets(
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     targets: &[String],
 ) -> Result<Vec<String>, BarcaError> {
     if targets.is_empty() || dag.groups.is_empty() {
@@ -441,7 +381,7 @@ pub fn group_targets(
 pub async fn status_from_dag_with_membership(
     cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     python: &std::path::Path,
     sample: usize,
     shape: bool,
@@ -683,7 +623,7 @@ pub async fn status_from_dag_with_membership(
 /// input key for key (both have exactly the same dimension names and the input is not
 /// collected) whose keys failed, or are blocked in turn. Names the node whose keys failed.
 fn blocked_by(
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     node: &barca_model::model::DagNode,
     failed_keys: &HashMap<String, db::FailedKeys>,
     blocked: &HashMap<String, (usize, String)>,
@@ -905,7 +845,7 @@ fn not_cached(
 
 /// The `detail` of a cached node below `above`, a stale node a run reads as it is: what it is
 /// up to date against, and how that node is recomputed.
-fn held_note(dag: &barca_compile::dag::Dag, above: &str, pinned: bool) -> String {
+fn held_note(dag: &barca_model::dag::Dag, above: &str, pinned: bool) -> String {
     let name = short_name(above);
     if pinned {
         format!(
@@ -951,28 +891,6 @@ pub async fn read_schemas(
         HashSet::new()
     };
     store_check::read_shapes(python, cfg, nodes, sample, true, &verified_local).await;
-}
-
-/// `barca status --rollup` on this machine: the status of the targets' upstream cones (the
-/// whole graph without targets), classified with the evidence the metadata DB holds, summed.
-/// No run is tracked here, so `running` is 0 everywhere.
-pub async fn rollup(
-    cfg: &barca_model::config::ResolvedConfig,
-    target_names: &[String],
-    file_args: &[String],
-    python: &std::path::Path,
-) -> Result<crate::rollup::Rollup, BarcaError> {
-    let dag = barca_compile::load::build_dag(file_args, python).await?;
-    let mut result =
-        crate::status::status_from_dag(cfg, target_names, &dag, python, 0, false).await?;
-    crate::health::rollup_from_db(
-        &mut result,
-        &dag,
-        cfg,
-        &barca_decide::schedule::Zone::Local,
-        chrono::Utc::now(),
-    )
-    .await
 }
 
 #[cfg(test)]

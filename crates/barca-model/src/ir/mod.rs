@@ -15,9 +15,9 @@
 //! - the frontend's **findings** ([`NodeFindings`]): what its analysis noticed, reported as
 //!   plan warnings and part of no hash.
 //!
-//! The graph itself (`barca_compile::dag::Dag`: these nodes, their edges, the groups) is not in
+//! The graph itself (`barca_model::dag::Dag`: these nodes, their edges, the groups) is not in
 //! this crate yet because it needs petgraph; it uses only this module and node names, and its
-//! serializable form is `barca_compile::dag::DagParts`. The values a declaration is made of
+//! serializable form is `barca_model::dag::DagParts`. The values a declaration is made of
 //! ([`NodeKind`], [`Freshness`], [`PartitionSpec`], [`SinkDecl`], [`BatchSpec`], ...) are
 //! defined in [`crate::model`] and re-exported here, so this module lists everything a
 //! `barca-ir` crate would hold.

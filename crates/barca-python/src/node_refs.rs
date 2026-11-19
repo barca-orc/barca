@@ -1,5 +1,5 @@
 //! Which node a reference means. Works on extracted nodes alone, before any graph exists: the
-//! graph ([`crate::dag`]) builds its edges with it, groups ([`crate::groups`]) resolve their
+//! graph ([`barca_model::dag`]) builds its edges with it, groups ([`crate::groups`]) resolve their
 //! members with it, and loading ([`crate::load`]) asks it where an import points.
 
 use std::collections::HashMap;

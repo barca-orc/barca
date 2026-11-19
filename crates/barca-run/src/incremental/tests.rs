@@ -1,9 +1,9 @@
 use super::*;
-use barca_compile::dag::Dag;
 use barca_compile::planner::{ResourceConfig, decompose, plan};
+use barca_model::dag::Dag;
 
 fn dag_of(src: &str) -> Dag {
-    Dag::build(&barca_compile::parse::extract_nodes(src, "p.py").unwrap()).unwrap()
+    barca_python::link::build(&barca_python::parse::extract_nodes(src, "p.py").unwrap()).unwrap()
 }
 
 fn phase_of(dag: &Dag) -> Phase {

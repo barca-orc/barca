@@ -22,8 +22,10 @@ tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "proces
 ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Tests write graphs as Python source. No code of this crate loads one: it takes a graph.
+barca-python = { path = "../barca-python" }
 tempfile = { workspace = true }
 
 [features]
 # Generate TS type bindings for the frontend. Off by default.
-ts = ["dep:ts-rs", "barca-model/ts", "barca-compile/ts", "barca-db/ts", "barca-store/ts"]
+ts = ["dep:ts-rs", "barca-model/ts", "barca-db/ts", "barca-store/ts"]

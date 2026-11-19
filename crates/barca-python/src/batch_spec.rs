@@ -1,7 +1,7 @@
 //! The compile side of batched partitions (RFC-0013): reading `batch=` from the source
 //! ([`extract`]) and the Python evaluation of `batches(<expression>)` and
 //! `batches_by(<function>)` that loading a pipeline runs. The per-run override (`--batch`,
-//! [`BatchOverride`]) is [`crate::batch_override`]'s and re-exported here; grouping the keys of
+//! [`BatchOverride`]) is [`barca_model::batch_override`]'s and re-exported here; grouping the keys of
 //! a run into calls is `barca_engine::batch`'s.
 
 use ruff_python_ast::{self as ast, Expr};
@@ -290,7 +290,7 @@ pub(crate) fn scalar_annotation(annotation: &Expr) -> Option<String> {
 
 // ─── The per-run override ───────────────────────────────────────────────────
 
-pub use crate::batch_override::{BatchOverride, OverrideValue};
+pub use barca_model::batch_override::{BatchOverride, OverrideValue};
 
 // ─── Python evaluation ───────────────────────────────────────────────────────
 

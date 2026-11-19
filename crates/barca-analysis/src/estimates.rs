@@ -139,7 +139,7 @@ pub fn source_times<'a>(files: impl IntoIterator<Item = &'a str>) -> HashMap<Str
 }
 
 /// [`source_times`] of the files the nodes of `dag` are declared in.
-pub fn source_times_of(dag: &barca_compile::dag::Dag) -> HashMap<String, i64> {
+pub fn source_times_of(dag: &barca_model::dag::Dag) -> HashMap<String, i64> {
     source_times(dag.topo_order().into_iter().map(source_file))
 }
 
@@ -658,8 +658,8 @@ mod tests {
     use crate::health::{Checks, classify};
     use crate::refresh_path::{PathEvidence, PathSchedule, PathSchedules, Paths};
     use crate::status::ScheduleStatus;
-    use barca_compile::dag::Dag;
     use barca_decide::schedule::{Zone, jobs_from_dag};
+    use barca_model::dag::Dag;
 
     /// 2026-11-17T14:57:00Z.
     const NOW: i64 = 1_794_927_420;
@@ -695,7 +695,7 @@ def loose(): ...
 "#;
 
     fn dag() -> Dag {
-        Dag::build(&barca_compile::parse::extract_nodes(PIPELINE, "p.py").unwrap())
+        barca_python::link::build(&barca_python::parse::extract_nodes(PIPELINE, "p.py").unwrap())
             .expect("valid dag")
     }
 

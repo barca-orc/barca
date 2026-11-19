@@ -27,25 +27,42 @@ use std::path::Path;
 /// dependency table (dev-dependencies too: a dev cycle splits a crate's tests from its code).
 const ALLOWED: &[(&str, &[&str])] = &[
     ("barca-model", &[]),
-    ("barca-compile", &["barca-model"]),
+    ("barca-python", &["barca-model"]),
+    // The frontend in tests only: they write a graph as Python source.
+    ("barca-compile", &["barca-model", "barca-python"]),
     ("barca-db", &["barca-model"]),
     ("barca-proc", &["barca-model"]),
+    // The frontend for `batch_spec` alone: a batched step's `batches_by` labels are evaluated
+    // by the frontend's evaluator (docs/engineering/crate-split-2.md, "What still loads").
     (
         "barca-engine",
-        &["barca-model", "barca-compile", "barca-proc"],
+        &["barca-model", "barca-python", "barca-compile", "barca-proc"],
     ),
     (
         "barca-store",
-        &["barca-model", "barca-compile", "barca-db", "barca-proc"],
+        &[
+            "barca-model",
+            "barca-python",
+            "barca-compile",
+            "barca-db",
+            "barca-proc",
+        ],
     ),
     (
         "barca-decide",
-        &["barca-model", "barca-compile", "barca-db", "barca-store"],
+        &[
+            "barca-model",
+            "barca-python",
+            "barca-compile",
+            "barca-db",
+            "barca-store",
+        ],
     ),
     (
         "barca-analysis",
         &[
             "barca-model",
+            "barca-python",
             "barca-compile",
             "barca-db",
             "barca-store",
@@ -56,6 +73,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
         "barca-run",
         &[
             "barca-model",
+            "barca-python",
             "barca-compile",
             "barca-db",
             "barca-proc",
@@ -68,6 +86,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
         "barca-service",
         &[
             "barca-model",
+            "barca-python",
             "barca-compile",
             "barca-db",
             "barca-proc",

@@ -11,8 +11,8 @@
 use crate::rollup::headline;
 use crate::run_explanation::count;
 pub use crate::run_explanation::{target_ids, target_line};
-use barca_compile::groups::NodeGroup;
 use barca_compile::targets::short_name;
+use barca_model::ir::NodeGroup;
 use barca_model::trigger::TriggeredBy;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

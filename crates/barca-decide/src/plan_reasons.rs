@@ -12,7 +12,7 @@
 //! are looked up, so a run served from cache pays nothing.
 
 use crate::cache::{DecideState, RunReason};
-use barca_compile::dag::Dag;
+use barca_model::dag::Dag;
 use barca_model::run_explain::{
     EXAMINED_KEYS_PER_NODE, MAX_REASONS, PlanReason, PlanReasons, ReasonCategory,
 };

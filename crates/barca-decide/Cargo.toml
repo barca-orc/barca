@@ -22,5 +22,7 @@ indicatif = "0.18.4"
 # libsql only here: one test writes rows no owner writes (a result recorded before its format
 # was). No code of this crate opens the database but through barca-db.
 [dev-dependencies]
+# Tests write graphs as Python source. No code of this crate loads one: it takes a graph.
+barca-python = { path = "../barca-python" }
 tempfile = { workspace = true }
 libsql = { version = "=0.10.0", default-features = false, features = ["core"] }

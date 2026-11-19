@@ -412,8 +412,8 @@ impl ErrorEnvelope {
                 None if !ctx.files.is_empty()
                     && matches!(
                         d,
-                        barca_compile::dag::DagError::UnresolvedInput { .. }
-                            | barca_compile::dag::DagError::UnresolvedImport { .. }
+                        barca_model::dag::DagError::UnresolvedInput { .. }
+                            | barca_model::dag::DagError::UnresolvedImport { .. }
                     ) =>
                 {
                     format!(

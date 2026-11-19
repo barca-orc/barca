@@ -58,7 +58,7 @@ pub fn short_name(base_id: &str) -> &str {
 
 /// The [`NodeContext`] of every node of `dag`, by base id.
 pub fn node_contexts(
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
 ) -> std::collections::HashMap<String, NodeContext> {
     use barca_model::model::{Freshness, NodeKind};
     use std::collections::HashMap;
@@ -68,7 +68,7 @@ pub fn node_contexts(
         *name_count.entry(short_name(id)).or_default() += 1;
     }
     // Groups name their members by node id or group id; a member has at most one parent.
-    let mut parent: HashMap<&str, &barca_compile::groups::NodeGroup> = HashMap::new();
+    let mut parent: HashMap<&str, &barca_model::ir::NodeGroup> = HashMap::new();
     for group in &dag.groups {
         for member in &group.members {
             parent.insert(member.as_str(), group);
@@ -151,7 +151,7 @@ pub struct StepTrace {
 
 impl StepTrace {
     pub fn new(
-        dag: &barca_compile::dag::Dag,
+        dag: &barca_model::dag::Dag,
         job: &str,
         run_id: &str,
         service: String,

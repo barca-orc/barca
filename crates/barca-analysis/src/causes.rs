@@ -362,9 +362,9 @@ mod tests {
     use crate::rollup::{ActionKind, Rollup};
     use crate::schedule_standing::{TickRun, Ticks};
     use crate::status::ScheduleStatus;
-    use barca_compile::dag::Dag;
     use barca_db::db::NodeAge;
     use barca_decide::schedule::Zone;
+    use barca_model::dag::Dag;
     use std::collections::HashSet;
 
     // 2026-11-17 14:57:00 UTC.
@@ -388,8 +388,10 @@ mod tests {
 
     impl World {
         fn new(source: &str) -> Self {
-            let dag = Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
-                .expect("valid dag");
+            let dag = barca_python::link::build(
+                &barca_python::parse::extract_nodes(source, "p.py").unwrap(),
+            )
+            .expect("valid dag");
             let nodes = barca_store::results::list_assets_from_dag(&dag)
                 .into_iter()
                 .map(|n| {

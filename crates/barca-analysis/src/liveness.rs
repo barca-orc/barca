@@ -516,7 +516,7 @@ pub fn recorded_timing(
     recorded: &Recorded,
     paused: bool,
     gone: bool,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     now: i64,
 ) -> RecordedTiming {
     let serving = recorded.serving.as_ref();
@@ -590,7 +590,6 @@ pub fn recorded_timing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_compile::dag::Dag;
 
     fn jobs() -> Vec<ScheduledJob> {
         let source = r#"
@@ -605,8 +604,9 @@ def daily(): return 1
 @sensor(freshness=Schedule("*/5 * * * *"))
 def unclaimed(): return 1
 "#;
-        let dag = Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
-            .expect("valid dag");
+        let dag =
+            barca_python::link::build(&barca_python::parse::extract_nodes(source, "p.py").unwrap())
+                .expect("valid dag");
         barca_decide::schedule::jobs_from_dag(&dag)
     }
 

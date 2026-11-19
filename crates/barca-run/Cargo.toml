@@ -9,6 +9,7 @@ description = "Run orchestrator — executes a plan and records what happened: t
 [dependencies]
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }
+barca-python = { path = "../barca-python" }
 barca-db = { path = "../barca-db" }
 barca-proc = { path = "../barca-proc" }
 barca-engine = { path = "../barca-engine" }
@@ -31,4 +32,4 @@ ts-rs = { workspace = true, optional = true }
 
 [features]
 # Generate TS type bindings for the frontend. Off by default.
-ts = ["dep:ts-rs", "barca-model/ts", "barca-compile/ts", "barca-db/ts", "barca-store/ts"]
+ts = ["dep:ts-rs", "barca-model/ts", "barca-db/ts", "barca-store/ts"]

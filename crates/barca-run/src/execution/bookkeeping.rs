@@ -4,9 +4,9 @@
 //! work and builds borrowed views of them; it does not dispatch, publish or write to storage.
 
 use crate::persist::RunLedger;
-use barca_compile::dag::Dag;
 use barca_compile::dispatch::{OutputRef, StepFailure};
 use barca_decide::cache::DecideState;
+use barca_model::dag::Dag;
 use barca_store::results::{BatchExecution, StepReport};
 use std::collections::{BTreeMap, HashMap, HashSet};
 

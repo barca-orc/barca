@@ -1283,7 +1283,7 @@ fn manual_nodes(project: &Project, rows: &[plan::Row]) -> Option<HashSet<String>
         .ok()?
         .unwrap_or_default();
     let mut files: HashSet<String> =
-        barca_compile::discover::discover(&project.root, &[], &toml.discovery.unwrap_or_default())
+        barca_python::discover::discover(&project.root, &[], &toml.discovery.unwrap_or_default())
             .unwrap_or_default()
             .into_iter()
             .collect();
@@ -1299,7 +1299,7 @@ fn manual_nodes(project: &Project, rows: &[plan::Row]) -> Option<HashSet<String>
     let mut out = HashSet::new();
     for file in files {
         let source = std::fs::read_to_string(project.root.join(&file)).ok()?;
-        for node in barca_compile::parse::extract_nodes(&source, &file).ok()? {
+        for node in barca_python::parse::extract_nodes(&source, &file).ok()? {
             if node.freshness == barca_model::model::Freshness::Manual {
                 out.insert(node.continuity_key());
             }

@@ -10,6 +10,7 @@ description = "Service layer — one operation per command, its typed result and
 [dependencies]
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }
+barca-python = { path = "../barca-python" }
 barca-db = { path = "../barca-db" }
 barca-proc = { path = "../barca-proc" }
 barca-engine = { path = "../barca-engine" }
@@ -36,4 +37,4 @@ ruff_python_ast = { workspace = true }
 
 [features]
 # Generate TS type bindings for the frontend. Off by default.
-ts = ["dep:ts-rs", "barca-model/ts", "barca-compile/ts", "barca-db/ts", "barca-store/ts", "barca-analysis/ts", "barca-run/ts"]
+ts = ["dep:ts-rs", "barca-model/ts", "barca-python/ts", "barca-db/ts", "barca-store/ts", "barca-analysis/ts", "barca-run/ts"]

@@ -3,7 +3,7 @@
 //! output, not a view of a result, so they live with the orchestrator that prints them
 //! (`docs/engineering/layering.md`, C5). Each function returns the text; the caller emits it.
 
-use barca_compile::dag::Dag;
+use barca_model::dag::Dag;
 
 /// Format seconds as a fixed-width time string for progress display.
 /// Always 8 chars wide: "   5s   ", " 2m 30s ", " 1h 05m ", "2d 03h  "

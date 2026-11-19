@@ -115,10 +115,10 @@ pub(crate) fn cutoff_token(partition: &str, content_hash: &str) -> String {
     format!("cutoff{partition}:{content_hash}")
 }
 
-use barca_compile::dag::Dag;
 use barca_compile::planner::Phase;
 use barca_compile::targets::{refresh_name_matches, short_name};
 use barca_db::db;
+use barca_model::dag::Dag;
 use barca_model::step_result::OutputRef;
 use barca_store::store_sync::StoreSync;
 use barca_store::transfer::ArtifactLayout;
@@ -473,7 +473,7 @@ impl DecideState {
     }
 }
 
-pub use barca_compile::dag::folds_output;
+pub use barca_model::dag::folds_output;
 
 /// Whether `id` (a base id) is an `@asset(cutoff=True)` (#628): what reads it folds in the
 /// content hash of its output ([`cutoff_token`]) instead of its run hash, so a rerun that
@@ -1470,7 +1470,7 @@ def downstream(x: int) -> int:
         .unwrap();
 
         let file = root.join("p.py").to_string_lossy().to_string();
-        let (dag, extracted) = barca_compile::load::build_dag_and_extracted_blocking(
+        let (dag, extracted) = barca_python::load::build_dag_and_extracted_blocking(
             std::slice::from_ref(&file),
             &std::path::PathBuf::from("python3"),
         )
@@ -1761,8 +1761,8 @@ def report(m: list) -> int:
     /// dependency order it never does, and the run hashes are the same at every pool size.
     #[test]
     fn every_key_of_an_upstream_is_decided_before_any_key_of_its_consumer() {
-        let nodes = barca_compile::parse::extract_nodes(CHAINED, "t.py").unwrap();
-        let dag = Dag::build(&nodes).unwrap();
+        let nodes = barca_python::parse::extract_nodes(CHAINED, "t.py").unwrap();
+        let dag = barca_python::link::build(&nodes).unwrap();
         let keys = ["a", "b", "c", "d", "e"];
 
         let reference = {
@@ -1835,8 +1835,8 @@ def report(values: list) -> int:
 "#;
 
     fn planned(pool: usize) -> (Dag, Vec<Phase>) {
-        let nodes = barca_compile::parse::extract_nodes(STATIC, "t.py").unwrap();
-        let dag = Dag::build(&nodes).unwrap();
+        let nodes = barca_python::parse::extract_nodes(STATIC, "t.py").unwrap();
+        let dag = barca_python::link::build(&nodes).unwrap();
         let plan = barca_compile::planner::plan_from_dag(
             &dag,
             &ResourceConfig {
@@ -2072,8 +2072,10 @@ def report(values: list) -> int:
 "#;
 
     fn derived(keys: &[&str], pool: usize) -> (Dag, Vec<Phase>) {
-        let dag =
-            Dag::build(&barca_compile::parse::extract_nodes(DERIVED, "t.py").unwrap()).unwrap();
+        let dag = barca_python::link::build(
+            &barca_python::parse::extract_nodes(DERIVED, "t.py").unwrap(),
+        )
+        .unwrap();
         let plan = barca_compile::planner::plan_from_dag(
             &dag,
             &ResourceConfig {
@@ -2175,8 +2177,8 @@ def report(values: list) -> int:
             "folder[old]/pipeline.py",
             "folder[old]/pipeline[old].py",
         ] {
-            let nodes = barca_compile::parse::extract_nodes(STATIC, file).unwrap();
-            let dag = Dag::build(&nodes).unwrap();
+            let nodes = barca_python::parse::extract_nodes(STATIC, file).unwrap();
+            let dag = barca_python::link::build(&nodes).unwrap();
             let plan = barca_compile::planner::plan_from_dag(
                 &dag,
                 &ResourceConfig {
@@ -2246,8 +2248,8 @@ def d(c: int) -> int:
 
     #[test]
     fn cone_keys_are_the_run_hashes_a_run_computes_except_below_a_sensor() {
-        let nodes = barca_compile::parse::extract_nodes(LEDGER, "t.py").unwrap();
-        let dag = Dag::build(&nodes).unwrap();
+        let nodes = barca_python::parse::extract_nodes(LEDGER, "t.py").unwrap();
+        let dag = barca_python::link::build(&nodes).unwrap();
         let phases = barca_compile::planner::plan_from_dag(
             &dag,
             &ResourceConfig {
@@ -2337,8 +2339,8 @@ def below_plain(p: int) -> int:
 "#;
 
     fn dag() -> Dag {
-        let nodes = barca_compile::parse::extract_nodes(PIPELINE, "t.py").unwrap();
-        Dag::build(&nodes).unwrap()
+        let nodes = barca_python::parse::extract_nodes(PIPELINE, "t.py").unwrap();
+        barca_python::link::build(&nodes).unwrap()
     }
 
     fn step(phases: &[Phase], base: &str) -> barca_compile::planner::StreamStep {
@@ -2435,7 +2437,7 @@ def below_plain(p: int) -> int:
             let source = format!(
                 "from barca import asset\n@asset(cutoff={bad})\ndef a() -> int:\n    return 1\n"
             );
-            let err = barca_compile::parse::extract_nodes(&source, "t.py").unwrap_err();
+            let err = barca_python::parse::extract_nodes(&source, "t.py").unwrap_err();
             assert!(
                 err.to_string().contains("cutoff= must be True or False"),
                 "{bad}: {err}"
@@ -2443,7 +2445,7 @@ def below_plain(p: int) -> int:
         }
         // Not an argument of @sensor or @task.
         let source = "from barca import task\n@task(cutoff=True)\ndef t() -> None:\n    pass\n";
-        assert!(barca_compile::parse::extract_nodes(source, "t.py").is_err());
+        assert!(barca_python::parse::extract_nodes(source, "t.py").is_err());
     }
 
     #[test]
@@ -2455,8 +2457,8 @@ def below_plain(p: int) -> int:
             .definition_hash
             .clone();
         let source = PIPELINE.replacen("@asset(cutoff=True)\ndef dims", "@asset()\ndef dims", 1);
-        let nodes = barca_compile::parse::extract_nodes(&source, "t.py").unwrap();
-        let without = Dag::build(&nodes).unwrap();
+        let nodes = barca_python::parse::extract_nodes(&source, "t.py").unwrap();
+        let without = barca_python::link::build(&nodes).unwrap();
         let without = without.get_node("t.py:dims").unwrap();
         assert!(!without.decl.cutoff);
         assert_eq!(with, without.fingerprint.definition_hash);

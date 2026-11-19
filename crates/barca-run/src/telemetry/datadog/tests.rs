@@ -393,28 +393,28 @@ fn node_names_are_short_unless_two_files_share_one() {
             .map(|n| format!("@asset\ndef {n}():\n    return 1\n"))
             .collect::<String>()
     };
-    let mut nodes = barca_compile::parse::extract_nodes(
+    let mut nodes = barca_python::parse::extract_nodes(
         &format!("from barca import asset\n{}", source(&["orders", "rates"])),
         "a.py",
     )
     .unwrap();
     nodes.extend(
-        barca_compile::parse::extract_nodes(
+        barca_python::parse::extract_nodes(
             &format!("from barca import asset\n{}", source(&["orders"])),
             "b.py",
         )
         .unwrap(),
     );
-    let mut dag = barca_compile::dag::Dag::build(&nodes).unwrap();
+    let mut dag = barca_python::link::build(&nodes).unwrap();
     dag.groups = vec![
-        barca_compile::groups::NodeGroup {
+        barca_model::ir::NodeGroup {
             id: "group:a.py:outer".into(),
             name: "Outer".into(),
             description: String::new(),
             members: vec!["group:a.py:inner".into()],
             output: "a.py:rates".into(),
         },
-        barca_compile::groups::NodeGroup {
+        barca_model::ir::NodeGroup {
             id: "group:a.py:inner".into(),
             name: "Inner".into(),
             description: String::new(),

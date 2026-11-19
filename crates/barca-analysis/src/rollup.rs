@@ -27,7 +27,7 @@ pub use crate::views::{
 use crate::views::{
     DataCoverage, Health, NodeStatus, RootKind, Sums, last_attempt_failed, latest, oldest,
 };
-use barca_compile::groups::NodeGroup;
+use barca_model::ir::NodeGroup;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 

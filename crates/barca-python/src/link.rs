@@ -5,10 +5,10 @@
 //! partitioned asset copies onto its consumer, what a definition's fingerprint is
 //! ([`crate::definition`]), and which definitions to leave out when some are broken. The
 //! result is handed to [`Dag::from_parts`] as nodes with resolved inputs and a list of edges;
-//! the graph ([`crate::dag`]) names nothing in this module or in the frontend.
+//! the graph ([`barca_model::dag`]) names nothing in this module or in the frontend.
 //!
 //! [`Dag::build`], [`Dag::isolate`] and [`Dag::isolate_with`] are defined here, on the graph's
-//! type, because their callers (and many tests) have always written `Dag::build(&nodes)`. They
+//! type, because their callers (and many tests) have always written `crate::link::build(&nodes)`. They
 //! take the Python frontend's nodes, so when the frontend is a crate of its own they become
 //! functions of that crate.
 
@@ -20,9 +20,9 @@ use barca_model::ir::{
     DagNode, EdgeKind, Fingerprint, Invocation, NodeDecl, NodeFindings, NodeKind, PythonFunction,
 };
 
-use crate::dag::{Dag, DagError, DagParts, Edge, check_data_edge};
 use crate::extracted::ExtractedNode;
 use crate::node_refs::{Resolver, file_dir, norm_path};
+use barca_model::dag::{Dag, DagError, DagParts, Edge, check_data_edge};
 
 /// Reject mixed static/evaluated and runtime-derived dimensions before Python evaluation.
 pub(crate) fn validate_partition_dimensions(nodes: &[ExtractedNode]) -> Result<(), DagError> {
@@ -258,259 +258,257 @@ fn to_ir(
     }
 }
 
-impl Dag {
-    /// Isolate graph-invalid definitions while retaining their unrelated neighbours.
-    /// Dependency edges are resolved before removing anything, so removal cannot redirect
-    /// an input to a different same-named definition.
-    pub(crate) fn isolate(
-        nodes: &[ExtractedNode],
-        failed_files: &[String],
-    ) -> (Self, Vec<(String, String)>) {
-        Self::isolate_with(nodes, failed_files, Vec::new())
-    }
+/// Isolate graph-invalid definitions while retaining their unrelated neighbours.
+/// Dependency edges are resolved before removing anything, so removal cannot redirect
+/// an input to a different same-named definition.
+pub(crate) fn isolate(
+    nodes: &[ExtractedNode],
+    failed_files: &[String],
+) -> (Dag, Vec<(String, String)>) {
+    isolate_with(nodes, failed_files, Vec::new())
+}
 
-    /// [`Self::isolate`], with nodes already known to be broken: `failed` (node id, error)
-    /// are left out with their error, and so is everything downstream of them.
-    pub(crate) fn isolate_with(
-        nodes: &[ExtractedNode],
-        failed_files: &[String],
-        failed: Vec<(String, String)>,
-    ) -> (Self, Vec<(String, String)>) {
-        use std::collections::HashSet;
-        let refs = Resolver::new(nodes);
-        let mut edges = Vec::new();
-        let mut failures = failed;
-        for node in nodes {
-            let id = node.continuity_key();
-            let inputs = node
-                .inputs
-                .iter()
-                .map(|i| (&i.param_name, &i.upstream, true))
-                .chain(node.partitions.iter().filter_map(|(dim, p)| match p {
-                    barca_model::model::PartitionSpec::DerivedFrom { source_ref } => {
-                        Some((dim, source_ref, false))
-                    }
-                    _ => None,
-                }));
-            for (param, upstream, required) in inputs {
-                // Follow the resolver's priority: a failed lower-priority source
-                // cannot hide an earlier healthy binding, and an earlier failed
-                // source cannot redirect to a later healthy same-named node.
-                let candidates = match upstream {
-                    barca_model::model::NodeRef::Canonical(value)
-                        if !refs.by_id.contains_key(value) =>
-                    {
-                        value.rsplit_once(':').map(|(file, name)| {
-                            (
-                                vec![
-                                    std::path::PathBuf::from(file),
-                                    file_dir(&node.source_file).join(file),
-                                ],
-                                name,
-                            )
-                        })
-                    }
-                    barca_model::model::NodeRef::Imported { module, name } => Some((
-                        Resolver::module_files(&node.source_file, module),
-                        name.as_str(),
-                    )),
-                    _ => None,
-                };
-                let mut failed = None;
-                if let Some((candidates, name)) = candidates {
-                    for candidate in candidates {
-                        failed = failed_files.iter().find(|file| {
-                            norm_path(&candidate) == norm_path(std::path::Path::new(file))
-                        });
-                        if failed.is_some() || refs.in_file(&candidate, name).is_some() {
-                            break;
-                        }
-                    }
+/// [`isolate`], with nodes already known to be broken: `failed` (node id, error)
+/// are left out with their error, and so is everything downstream of them.
+pub(crate) fn isolate_with(
+    nodes: &[ExtractedNode],
+    failed_files: &[String],
+    failed: Vec<(String, String)>,
+) -> (Dag, Vec<(String, String)>) {
+    use std::collections::HashSet;
+    let refs = Resolver::new(nodes);
+    let mut edges = Vec::new();
+    let mut failures = failed;
+    for node in nodes {
+        let id = node.continuity_key();
+        let inputs = node
+            .inputs
+            .iter()
+            .map(|i| (&i.param_name, &i.upstream, true))
+            .chain(node.partitions.iter().filter_map(|(dim, p)| match p {
+                barca_model::model::PartitionSpec::DerivedFrom { source_ref } => {
+                    Some((dim, source_ref, false))
                 }
-                if let Some(file) = failed {
-                    failures.push((
-                        id.clone(),
-                        format!("input '{param}' references unloaded source '{file}'"),
-                    ));
-                    continue;
-                }
-                match refs.resolve_input(node, param, upstream) {
-                    Ok(i) => edges.push((refs.ids[i].clone(), id.clone())),
-                    Err(DagError::UnresolvedInput { .. }) if !required => {}
-                    Err(e) => failures.push((id.clone(), e.to_string())),
-                }
-            }
-        }
-        let mut excluded: HashSet<String> = failures.iter().map(|(id, _)| id.clone()).collect();
-        loop {
-            // Close over the original bindings, never over newly selected names.
-            loop {
-                let before = excluded.len();
-                for (upstream, dependent) in &edges {
-                    if excluded.contains(upstream) && excluded.insert(dependent.clone()) {
-                        failures.push((
-                            dependent.clone(),
-                            format!("upstream '{upstream}' is not loaded"),
-                        ));
-                    }
-                }
-                if before == excluded.len() {
-                    break;
-                }
-            }
-            let selected: Vec<_> = nodes
-                .iter()
-                .filter(|n| !excluded.contains(&n.continuity_key()))
-                .cloned()
-                .collect();
-            match Self::build(&selected) {
-                Ok(dag) => return (dag, failures),
-                Err(error) => {
-                    let offenders: Vec<String> = match &error {
-                        DagError::UnresolvedInput { node, .. }
-                        | DagError::AmbiguousInput { node, .. }
-                        | DagError::UnresolvedImport { node, .. }
-                        | DagError::PartitionedInputToUnpartitioned { node, .. }
-                        | DagError::PartitionsFrom { node, .. } => vec![node.clone()],
-                        // Not from `build`: only plain data can be malformed.
-                        DagError::Malformed(_) => Vec::new(),
-                        DagError::SensorWithInputs { sensor } => vec![sensor.clone()],
-                        DagError::TaskAsInput { downstream, .. } => vec![downstream.clone()],
-                        DagError::DuplicateKey { key, .. } => vec![key.clone()],
-                        DagError::CycleDetected => {
-                            let mut graph = DiGraph::<String, ()>::new();
-                            let indices: HashMap<_, _> = selected
-                                .iter()
-                                .map(|n| {
-                                    let id = n.continuity_key();
-                                    let idx = graph.add_node(id.clone());
-                                    (id, idx)
-                                })
-                                .collect();
-                            for (upstream, dependent) in &edges {
-                                if let (Some(&u), Some(&d)) =
-                                    (indices.get(upstream), indices.get(dependent))
-                                {
-                                    graph.add_edge(u, d, ());
-                                }
-                            }
-                            petgraph::algo::tarjan_scc(&graph)
-                                .into_iter()
-                                .filter(|component| {
-                                    component.len() > 1
-                                        || graph.contains_edge(component[0], component[0])
-                                })
-                                .flatten()
-                                .map(|i| graph[i].clone())
-                                .collect()
-                        }
-                    };
-                    assert!(
-                        !offenders.is_empty(),
-                        "DAG validation must identify its invalid definitions"
-                    );
-                    for id in offenders {
-                        assert!(excluded.insert(id.clone()), "isolation must make progress");
-                        failures.push((id, error.to_string()));
-                    }
-                }
-            }
-        }
-    }
-
-    /// Build a DAG from extracted nodes. Validates all constraints.
-    pub fn build(nodes: &[ExtractedNode]) -> Result<Self, DagError> {
-        validate_partition_dimensions(nodes)?;
-        let resolved = resolve_partitions_from(nodes)?;
-        let nodes = resolved.as_slice();
-        let refs = Resolver::new(nodes);
-
-        // First pass: check for duplicate keys.
-        let mut index: HashMap<&str, usize> = HashMap::with_capacity(nodes.len());
-        for (i, node) in nodes.iter().enumerate() {
-            let id = refs.ids[i].as_str();
-            if let Some(&existing) = index.get(id) {
-                return Err(DagError::DuplicateKey {
-                    key: id.to_string(),
-                    first: nodes[existing].source_file.clone(),
-                    second: node.source_file.clone(),
-                });
-            }
-            // Validate: sensors cannot have inputs.
-            if node.kind == NodeKind::Sensor && !node.inputs.is_empty() {
-                return Err(DagError::SensorWithInputs {
-                    sensor: id.to_string(),
-                });
-            }
-            index.insert(id, i);
-        }
-
-        // Second pass: resolve inputs into edges.
-        let mut edges = Vec::new();
-        let mut resolved_maps = Vec::with_capacity(nodes.len());
-        for (downstream, node) in nodes.iter().enumerate() {
-            let downstream_key = refs.ids[downstream].as_str();
-            let mut resolved_inputs = HashMap::new();
-            let mut resolved_collected = HashMap::new();
-            for input in &node.inputs {
-                let upstream = refs.resolve_input(node, &input.param_name, &input.upstream)?;
-                let upstream_key = refs.ids[upstream].as_str();
-                check_data_edge(
-                    (
-                        upstream_key,
-                        nodes[upstream].kind,
-                        !nodes[upstream].partitions.is_empty(),
-                    ),
-                    (downstream_key, node.kind, !node.partitions.is_empty()),
-                    input.collected,
-                    || input.param_name.as_str(),
-                )?;
-                edges.push(Edge {
-                    from: upstream,
-                    to: downstream,
-                    kind: if input.collected {
-                        EdgeKind::Collect
-                    } else {
-                        EdgeKind::Direct
-                    },
-                });
-                // Record the resolved mapping on the node.
-                if input.collected {
-                    resolved_collected.insert(input.param_name.clone(), upstream_key.to_string());
-                } else {
-                    resolved_inputs.insert(input.param_name.clone(), upstream_key.to_string());
-                }
-            }
-
-            // Add partition_source edges for partitions_from.
-            for spec in node.partitions.values() {
-                if let barca_model::model::PartitionSpec::DerivedFrom { source_ref } = spec
-                    && let Ok(source) = refs.resolve(&node.source_file, source_ref)
+                _ => None,
+            }));
+        for (param, upstream, required) in inputs {
+            // Follow the resolver's priority: a failed lower-priority source
+            // cannot hide an earlier healthy binding, and an earlier failed
+            // source cannot redirect to a later healthy same-named node.
+            let candidates = match upstream {
+                barca_model::model::NodeRef::Canonical(value)
+                    if !refs.by_id.contains_key(value) =>
                 {
-                    edges.push(Edge {
-                        from: source,
-                        to: downstream,
-                        kind: EdgeKind::PartitionSource,
+                    value.rsplit_once(':').map(|(file, name)| {
+                        (
+                            vec![
+                                std::path::PathBuf::from(file),
+                                file_dir(&node.source_file).join(file),
+                            ],
+                            name,
+                        )
+                    })
+                }
+                barca_model::model::NodeRef::Imported { module, name } => Some((
+                    Resolver::module_files(&node.source_file, module),
+                    name.as_str(),
+                )),
+                _ => None,
+            };
+            let mut failed = None;
+            if let Some((candidates, name)) = candidates {
+                for candidate in candidates {
+                    failed = failed_files.iter().find(|file| {
+                        norm_path(&candidate) == norm_path(std::path::Path::new(file))
                     });
+                    if failed.is_some() || refs.in_file(&candidate, name).is_some() {
+                        break;
+                    }
                 }
             }
-            resolved_maps.push((resolved_inputs, resolved_collected));
+            if let Some(file) = failed {
+                failures.push((
+                    id.clone(),
+                    format!("input '{param}' references unloaded source '{file}'"),
+                ));
+                continue;
+            }
+            match refs.resolve_input(node, param, upstream) {
+                Ok(i) => edges.push((refs.ids[i].clone(), id.clone())),
+                Err(DagError::UnresolvedInput { .. }) if !required => {}
+                Err(e) => failures.push((id.clone(), e.to_string())),
+            }
+        }
+    }
+    let mut excluded: HashSet<String> = failures.iter().map(|(id, _)| id.clone()).collect();
+    loop {
+        // Close over the original bindings, never over newly selected names.
+        loop {
+            let before = excluded.len();
+            for (upstream, dependent) in &edges {
+                if excluded.contains(upstream) && excluded.insert(dependent.clone()) {
+                    failures.push((
+                        dependent.clone(),
+                        format!("upstream '{upstream}' is not loaded"),
+                    ));
+                }
+            }
+            if before == excluded.len() {
+                break;
+            }
+        }
+        let selected: Vec<_> = nodes
+            .iter()
+            .filter(|n| !excluded.contains(&n.continuity_key()))
+            .cloned()
+            .collect();
+        match build(&selected) {
+            Ok(dag) => return (dag, failures),
+            Err(error) => {
+                let offenders: Vec<String> = match &error {
+                    DagError::UnresolvedInput { node, .. }
+                    | DagError::AmbiguousInput { node, .. }
+                    | DagError::UnresolvedImport { node, .. }
+                    | DagError::PartitionedInputToUnpartitioned { node, .. }
+                    | DagError::PartitionsFrom { node, .. } => vec![node.clone()],
+                    // Not from `build`: only plain data can be malformed.
+                    DagError::Malformed(_) => Vec::new(),
+                    DagError::SensorWithInputs { sensor } => vec![sensor.clone()],
+                    DagError::TaskAsInput { downstream, .. } => vec![downstream.clone()],
+                    DagError::DuplicateKey { key, .. } => vec![key.clone()],
+                    DagError::CycleDetected => {
+                        let mut graph = DiGraph::<String, ()>::new();
+                        let indices: HashMap<_, _> = selected
+                            .iter()
+                            .map(|n| {
+                                let id = n.continuity_key();
+                                let idx = graph.add_node(id.clone());
+                                (id, idx)
+                            })
+                            .collect();
+                        for (upstream, dependent) in &edges {
+                            if let (Some(&u), Some(&d)) =
+                                (indices.get(upstream), indices.get(dependent))
+                            {
+                                graph.add_edge(u, d, ());
+                            }
+                        }
+                        petgraph::algo::tarjan_scc(&graph)
+                            .into_iter()
+                            .filter(|component| {
+                                component.len() > 1
+                                    || graph.contains_edge(component[0], component[0])
+                            })
+                            .flatten()
+                            .map(|i| graph[i].clone())
+                            .collect()
+                    }
+                };
+                assert!(
+                    !offenders.is_empty(),
+                    "DAG validation must identify its invalid definitions"
+                );
+                for id in offenders {
+                    assert!(excluded.insert(id.clone()), "isolation must make progress");
+                    failures.push((id, error.to_string()));
+                }
+            }
+        }
+    }
+}
+
+/// Build a DAG from extracted nodes. Validates all constraints.
+pub fn build(nodes: &[ExtractedNode]) -> Result<Dag, DagError> {
+    validate_partition_dimensions(nodes)?;
+    let resolved = resolve_partitions_from(nodes)?;
+    let nodes = resolved.as_slice();
+    let refs = Resolver::new(nodes);
+
+    // First pass: check for duplicate keys.
+    let mut index: HashMap<&str, usize> = HashMap::with_capacity(nodes.len());
+    for (i, node) in nodes.iter().enumerate() {
+        let id = refs.ids[i].as_str();
+        if let Some(&existing) = index.get(id) {
+            return Err(DagError::DuplicateKey {
+                key: id.to_string(),
+                first: nodes[existing].source_file.clone(),
+                second: node.source_file.clone(),
+            });
+        }
+        // Validate: sensors cannot have inputs.
+        if node.kind == NodeKind::Sensor && !node.inputs.is_empty() {
+            return Err(DagError::SensorWithInputs {
+                sensor: id.to_string(),
+            });
+        }
+        index.insert(id, i);
+    }
+
+    // Second pass: resolve inputs into edges.
+    let mut edges = Vec::new();
+    let mut resolved_maps = Vec::with_capacity(nodes.len());
+    for (downstream, node) in nodes.iter().enumerate() {
+        let downstream_key = refs.ids[downstream].as_str();
+        let mut resolved_inputs = HashMap::new();
+        let mut resolved_collected = HashMap::new();
+        for input in &node.inputs {
+            let upstream = refs.resolve_input(node, &input.param_name, &input.upstream)?;
+            let upstream_key = refs.ids[upstream].as_str();
+            check_data_edge(
+                (
+                    upstream_key,
+                    nodes[upstream].kind,
+                    !nodes[upstream].partitions.is_empty(),
+                ),
+                (downstream_key, node.kind, !node.partitions.is_empty()),
+                input.collected,
+                || input.param_name.as_str(),
+            )?;
+            edges.push(Edge {
+                from: upstream,
+                to: downstream,
+                kind: if input.collected {
+                    EdgeKind::Collect
+                } else {
+                    EdgeKind::Direct
+                },
+            });
+            // Record the resolved mapping on the node.
+            if input.collected {
+                resolved_collected.insert(input.param_name.clone(), upstream_key.to_string());
+            } else {
+                resolved_inputs.insert(input.param_name.clone(), upstream_key.to_string());
+            }
         }
 
-        drop(index);
-        let ids = refs.ids;
-        let nodes = resolved
-            .into_iter()
-            .zip(ids)
-            .zip(resolved_maps)
-            .map(|((node, id), (inputs, collected))| to_ir(node, id, inputs, collected))
-            .collect();
-        Dag::from_parts(DagParts {
-            nodes,
-            edges,
-            ..DagParts::default()
-        })
+        // Add partition_source edges for partitions_from.
+        for spec in node.partitions.values() {
+            if let barca_model::model::PartitionSpec::DerivedFrom { source_ref } = spec
+                && let Ok(source) = refs.resolve(&node.source_file, source_ref)
+            {
+                edges.push(Edge {
+                    from: source,
+                    to: downstream,
+                    kind: EdgeKind::PartitionSource,
+                });
+            }
+        }
+        resolved_maps.push((resolved_inputs, resolved_collected));
     }
+
+    drop(index);
+    let ids = refs.ids;
+    let nodes = resolved
+        .into_iter()
+        .zip(ids)
+        .zip(resolved_maps)
+        .map(|((node, id), (inputs, collected))| to_ir(node, id, inputs, collected))
+        .collect();
+    Dag::from_parts(DagParts {
+        nodes,
+        edges,
+        ..DagParts::default()
+    })
 }
 
 #[cfg(test)]
@@ -561,7 +559,7 @@ mod tests {
         for (path, src) in files {
             nodes.extend(crate::parse::extract_nodes(src, path).unwrap());
         }
-        Dag::build(&nodes)
+        crate::link::build(&nodes)
     }
 
     fn input_of(dag: &Dag, node: &str, param: &str) -> String {
@@ -731,7 +729,7 @@ mod tests {
     }
 
     fn build_src(src: &str) -> Result<Dag, DagError> {
-        Dag::build(&crate::parse::extract_nodes(src, "t.py").unwrap())
+        crate::link::build(&crate::parse::extract_nodes(src, "t.py").unwrap())
     }
 
     const SALES: &str = "from barca import asset, collect, partitions, partitions_from\n\n\
@@ -860,7 +858,7 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
 @asset(inputs={\"s\": src})\ndef b(s: int) -> int:\n    return s\n\n\
 @asset()\ndef other() -> int:\n    return 2\n";
         let nodes = crate::parse::extract_nodes(src, "t.py").unwrap();
-        let dag = Dag::build(&nodes).unwrap();
+        let dag = crate::link::build(&nodes).unwrap();
         let union = dag.subgraph_many(&["t.py:a", "t.py:b"]);
         assert_eq!(union.len(), 3);
         assert_eq!(union[0], "t.py:src", "dependencies come first");
@@ -876,7 +874,7 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
             "from barca import asset, sensor, task, sink, partitions, partitions_from\n{source}"
         );
         let nodes = crate::parse::extract_nodes(source, "test.py").unwrap();
-        let dag = Dag::build(&nodes).unwrap();
+        let dag = crate::link::build(&nodes).unwrap();
         dag.get_node("test.py:a")
             .unwrap()
             .fingerprint
@@ -928,8 +926,8 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
         other.description = Some("d".to_string());
         other.tags.insert("team".to_string(), "a".to_string());
         other.env.push("HOME".to_string());
-        let d1 = Dag::build(std::slice::from_ref(&plain)).unwrap();
-        let d2 = Dag::build(std::slice::from_ref(&other)).unwrap();
+        let d1 = crate::link::build(std::slice::from_ref(&plain)).unwrap();
+        let d2 = crate::link::build(std::slice::from_ref(&other)).unwrap();
         assert_eq!(
             d1.get_node("test.py:a")
                 .unwrap()
@@ -943,7 +941,7 @@ def margin(region: str, tier: str, sales: dict) -> dict:\n    return sales\n"
 
         let mut sensor = node("a");
         sensor.kind = NodeKind::Sensor;
-        let d3 = Dag::build(std::slice::from_ref(&sensor)).unwrap();
+        let d3 = crate::link::build(std::slice::from_ref(&sensor)).unwrap();
         assert_ne!(
             d1.get_node("test.py:a")
                 .unwrap()

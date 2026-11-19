@@ -69,7 +69,7 @@ def notify(retailer, orders):
 "#;
 
 fn dag() -> Dag {
-    Dag::build(&crate::parse::extract_nodes(SRC, "p.py").unwrap()).unwrap()
+    barca_python::link::build(&crate::parse::extract_nodes(SRC, "p.py").unwrap()).unwrap()
 }
 
 fn plan_of(dag: &Dag, sel: Option<&PartitionSelection>) -> ExecutionPlan {

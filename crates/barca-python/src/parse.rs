@@ -1028,7 +1028,7 @@ fn extract_schedule_batch(
         },
         _ => String::new(),
     };
-    crate::batch_override::BatchOverride::parse(std::slice::from_ref(&value))
+    barca_model::batch_override::BatchOverride::parse(std::slice::from_ref(&value))
         .map_err(|e| (at, format!("Schedule(batch=): {e}")))?;
     Ok(Some(value))
 }

@@ -599,7 +599,7 @@ impl Queue {
 /// ticks. A database that does not exist records an open, empty queue.
 pub async fn recorded_queue(
     db_path: &str,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     ticks: &HashMap<String, crate::schedule_standing::Ticks>,
     recorded: &crate::liveness::Recorded,
     observed: &crate::liveness::Observed,
@@ -733,7 +733,7 @@ impl Assembled<'_> {
     pub fn rollup(
         &self,
         result: &StatusResult,
-        groups: &[barca_compile::groups::NodeGroup],
+        groups: &[barca_model::ir::NodeGroup],
         running: &HashSet<String>,
         as_of: chrono::DateTime<chrono::Utc>,
         server: bool,
@@ -754,7 +754,7 @@ impl Assembled<'_> {
 /// `zone`; a paused schedule is not late.
 pub async fn attach_from_db(
     result: &mut StatusResult,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
@@ -768,7 +768,7 @@ pub async fn attach_from_db(
 /// (`barca status`).
 pub async fn attach_from_db_with_schedules(
     result: &mut StatusResult,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
@@ -782,7 +782,7 @@ pub async fn attach_from_db_with_schedules(
 /// tracked here, so `running` is 0 everywhere.
 pub async fn rollup_from_db(
     result: &mut StatusResult,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
@@ -797,7 +797,7 @@ pub async fn rollup_from_db(
 /// recorded (`crate::liveness`), in the zone it recorded.
 async fn from_db(
     result: &mut StatusResult,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     cfg: &barca_model::config::ResolvedConfig,
     zone: &Zone,
     now: chrono::DateTime<chrono::Utc>,
@@ -889,7 +889,7 @@ async fn from_db(
 /// server keeps it until one of them changes.
 pub async fn checks(
     db_path: &str,
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     ages: &HashMap<String, NodeAge>,
     zone: &Zone,
 ) -> Result<Checks, BarcaError> {

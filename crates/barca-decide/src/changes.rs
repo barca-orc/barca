@@ -24,7 +24,7 @@
 //! row recorded before they existed has none, and the reason stays a plain `changed`.
 
 use crate::cache::DecideState;
-use barca_compile::dag::Dag;
+use barca_model::dag::Dag;
 use std::collections::BTreeMap;
 
 /// Every component of the run hash of `display_id` (`pipeline.py:p` or `pipeline.py:p[k=a]`)
@@ -44,7 +44,7 @@ pub(crate) fn step_components(
 
 /// The components of `display_id`'s run hash that are its own, not its definition's: its
 /// inputs' and sensors' tokens, a dict source's value for its key, its env values. The same for
-/// no two keys of a node in general; the definition's ([`barca_compile::dag::Dag`] node `components`)
+/// no two keys of a node in general; the definition's ([`barca_model::dag::Dag`] node `components`)
 /// are the same for all of them.
 pub(crate) fn own_components(
     dag: &Dag,
@@ -220,8 +220,8 @@ pub fn causes(changed: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_compile::definition::definition_components;
-    use barca_compile::extracted::ExtractedNode;
+    use barca_python::definition::definition_components;
+    use barca_python::extracted::ExtractedNode;
 
     #[test]
     fn causes_split_code_inputs_and_env() {

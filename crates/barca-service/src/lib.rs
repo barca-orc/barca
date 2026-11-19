@@ -44,6 +44,7 @@
 
 pub mod db;
 pub mod diagnostics;
+pub mod loaded;
 pub mod outcome;
 pub mod queries;
 pub mod report;
@@ -79,16 +80,16 @@ pub use barca_model::{
 };
 
 // The compile layer (`barca-compile`).
-pub use barca_compile::dag;
-pub use barca_compile::discover;
 pub use barca_compile::dispatch;
-pub use barca_compile::groups;
-pub use barca_compile::load;
-pub use barca_compile::parse;
 pub(crate) use barca_compile::planner;
 pub use barca_compile::selection;
 pub use barca_compile::targets;
 pub use barca_compile::warnings;
+pub use barca_model::dag;
+pub use barca_python::discover;
+pub use barca_python::groups;
+pub use barca_python::load;
+pub use barca_python::parse;
 
 // The metadata database (`barca-db`); `db` above is the listed subset of `barca_db::db`.
 pub use barca_db::run_logs;

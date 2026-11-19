@@ -20,30 +20,9 @@ pub struct ScheduleInfo {
     pub next_fire_local: Option<String>,
 }
 
-/// Enumerate scheduled jobs from source and compute each one's next fire time.
-/// Pure static analysis — used by the `barca list` CLI, no running server.
-pub async fn describe_schedule(files: &[String], python: &std::path::Path) -> Vec<ScheduleInfo> {
-    describe_schedule_in(files, python, &Zone::Local).await
-}
-
-/// Describe jobs using the configured server timezone.
-pub(crate) async fn describe_schedule_in(
-    files: &[String],
-    python: &std::path::Path,
-    zone: &Zone,
-) -> Vec<ScheduleInfo> {
-    match barca_compile::load::build_dag(files, python).await {
-        Ok(dag) => describe_schedule_from_dag(Some(&dag), zone),
-        Err(error) => {
-            barca_model::errln!("[barca] scheduler disabled: failed to analyze DAG: {error}");
-            Vec::new()
-        }
-    }
-}
-
 /// Describe schedules in an already validated graph.
 pub fn describe_schedule_from_dag(
-    dag: Option<&barca_compile::dag::Dag>,
+    dag: Option<&barca_model::dag::Dag>,
     zone: &Zone,
 ) -> Vec<ScheduleInfo> {
     let now = Utc::now();
@@ -132,7 +111,7 @@ pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
 /// The scheduled jobs of a loaded DAG, each with the `Always` nodes its ticks reconcile and its
 /// `max_failures`. This is what `barca serve` schedules; it is computed when the DAG is loaded
 /// (and again on a `--watch` reload), not per tick.
-pub fn jobs_from_dag(dag: &barca_compile::dag::Dag) -> Vec<ScheduledJob> {
+pub fn jobs_from_dag(dag: &barca_model::dag::Dag) -> Vec<ScheduledJob> {
     let mut jobs = jobs_from_summaries(barca_store::results::list_assets_from_dag(dag));
     for job in &mut jobs {
         job.followers = crate::freshness::tick_targets(dag, &job.id)

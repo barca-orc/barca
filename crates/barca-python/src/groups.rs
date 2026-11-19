@@ -376,8 +376,8 @@ mod tests {
                 crate::cone::cone_hash(&organizational, &a.function_name, &modules)
             );
         }
-        let a = crate::Dag::build(&before).unwrap();
-        let b = crate::Dag::build(&after).unwrap();
+        let a = crate::link::build(&before).unwrap();
+        let b = crate::link::build(&after).unwrap();
         assert_eq!(a.topo_order(), b.topo_order());
         assert_eq!(a.edge_count(), b.edge_count());
         for id in a.topo_order() {

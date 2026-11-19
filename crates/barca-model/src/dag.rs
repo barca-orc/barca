@@ -13,9 +13,9 @@ use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use barca_model::ir::{DagNode, EdgeKind, NodeGroup, NodeKind};
+use crate::ir::{DagNode, EdgeKind, NodeGroup, NodeKind};
 
-pub use barca_model::dag_error::DagError;
+pub use crate::dag_error::DagError;
 
 /// The constructed DAG — validated, acyclic, ready for plan generation.
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ pub struct DagParts {
 
 /// The rules of one data edge (an input or a `collect()`), which hold in any language.
 /// `param` is called only to word an error.
-pub(crate) fn check_data_edge<'a>(
+pub fn check_data_edge<'a>(
     upstream: (&str, NodeKind, bool),
     downstream: (&str, NodeKind, bool),
     collected: bool,
@@ -110,7 +110,7 @@ impl Dag {
         names
     }
 
-    pub(crate) fn named(&self, name: &str) -> Vec<&DagNode> {
+    pub fn named(&self, name: &str) -> Vec<&DagNode> {
         self.names
             .get(crate::names::short_name(name))
             .into_iter()
@@ -322,13 +322,13 @@ impl Dag {
     pub fn check_imports<'a>(
         &self,
         step_ids: impl IntoIterator<Item = &'a str>,
-    ) -> Result<(), barca_model::BarcaError> {
+    ) -> Result<(), crate::BarcaError> {
         if self.cannot_run.is_empty() {
             return Ok(());
         }
         for id in step_ids {
             if let Some(why) = self.cannot_run.get(id) {
-                return Err(barca_model::BarcaError::Parse(why.clone()));
+                return Err(crate::BarcaError::Parse(why.clone()));
             }
         }
         Ok(())
@@ -422,10 +422,8 @@ impl Dag {
 /// phase, once its output is known.
 pub fn folds_output(dag: &Dag, id: &str) -> bool {
     dag.get_node(id).is_some_and(|n| match n.kind() {
-        barca_model::NodeKind::Sensor => true,
-        barca_model::NodeKind::Asset => {
-            n.decl.freshness == barca_model::Freshness::Manual || n.decl.cutoff
-        }
-        barca_model::NodeKind::Task => false,
+        crate::NodeKind::Sensor => true,
+        crate::NodeKind::Asset => n.decl.freshness == crate::Freshness::Manual || n.decl.cutoff,
+        crate::NodeKind::Task => false,
     })
 }
