@@ -26,7 +26,7 @@ pub(crate) async fn list(
         let body = server.get_json("/groups").await?;
         let groups: Vec<barca_core::groups::NodeGroup> = serde_json::from_value(body)
             .map_err(|e| server.unexpected("GET /groups", &e.to_string()))?;
-        crate::commands::print_groups(&groups, json);
+        crate::print::print_groups(&groups, json);
         return Ok(());
     }
     let body = server.get_json("/list").await?;
@@ -59,7 +59,7 @@ pub(crate) async fn list(
     }
     let total = assets.len();
     assets.truncate(limit.unwrap_or(total));
-    crate::commands::emit(barca_core::report::render_list(
+    crate::print::emit(barca_core::report::render_list(
         &assets,
         total,
         &next_fires,
@@ -101,7 +101,7 @@ pub(crate) async fn rollup(
     let body = server.get_json(&path).await?;
     let rollup: barca_core::rollup::Rollup = serde_json::from_value(body)
         .map_err(|e| server.unexpected("GET /state/rollup", &e.to_string()))?;
-    crate::commands::emit(barca_core::report::render_rollup(&rollup, json));
+    crate::print::emit(barca_core::report::render_rollup(&rollup, json));
     Ok(())
 }
 
@@ -110,7 +110,7 @@ pub(crate) async fn status(
     server: &Server,
     targets: &[String],
     files: &[PathBuf],
-    opts: crate::commands::StatusOpts<'_>,
+    opts: crate::request::StatusOpts<'_>,
     env: Option<&str>,
 ) -> Result<(), CliError> {
     server.health(env).await?;
@@ -135,7 +135,7 @@ pub(crate) async fn status(
     // Filtered here, after this machine's own states are known (`not_in_ledger`); the summary
     // keeps counting every node.
     opts.filter.apply(&mut result);
-    crate::commands::emit(barca_core::report::render_status(
+    crate::print::emit(barca_core::report::render_status(
         result,
         opts.json,
         opts.limit,
@@ -214,7 +214,7 @@ pub(crate) async fn history(
     // The server's own words for each run: its `line`, and with `--status running` what a
     // run in progress is working on (`now`).
     let extras = barca_core::report::HistoryExtras::of_server_runs(&body["runs"]);
-    crate::commands::emit(barca_core::report::render_history(
+    crate::print::emit(barca_core::report::render_history(
         &runs, total, json, fields, &extras,
     ));
     Ok(())
@@ -242,7 +242,7 @@ pub(crate) async fn activity(
     };
     let activity: barca_core::run_list::RunActivity = serde_json::from_value(activity.clone())
         .map_err(|e| server.unexpected("GET /runs", &e.to_string()))?;
-    crate::commands::emit(barca_core::report::render_activity(&activity, json));
+    crate::print::emit(barca_core::report::render_activity(&activity, json));
     Ok(())
 }
 
@@ -307,7 +307,7 @@ pub(crate) async fn run_detail(
         steps_page,
         outputs,
     };
-    crate::commands::emit(barca_core::report::render_run_detail(&detail, json, select));
+    crate::print::emit(barca_core::report::render_run_detail(&detail, json, select));
     Ok(())
 }
 
@@ -491,7 +491,7 @@ pub(crate) async fn stats(
     }
     let stats: barca_core::db::AssetStats = serde_json::from_value(body)
         .map_err(|e| server.unexpected("GET /stats", &e.to_string()))?;
-    crate::commands::emit(barca_core::report::render_stats(&stats, json, fields));
+    crate::print::emit(barca_core::report::render_stats(&stats, json, fields));
     Ok(())
 }
 
@@ -569,7 +569,7 @@ pub(crate) async fn sql(
             truncated: answer["truncated"].as_bool().unwrap_or_default(),
             notes: serde_json::from_value(answer["notes"].clone()).unwrap_or_default(),
         };
-        crate::commands::emit(barca_core::report::render_sql(result, json));
+        crate::print::emit(barca_core::report::render_sql(result, json));
         return Ok(());
     }
 
@@ -688,7 +688,7 @@ pub(crate) async fn sql(
     )
     .await
     .map_err(here)?;
-    crate::commands::emit(barca_core::report::render_sql(result, json));
+    crate::print::emit(barca_core::report::render_sql(result, json));
     Ok(())
 }
 
@@ -909,12 +909,12 @@ pub(crate) async fn partition_keys(
     server: &Server,
     target: &str,
     files: &[PathBuf],
-    view: crate::commands::KeysView,
+    view: crate::request::KeysView,
     json: bool,
     limit: Option<usize>,
     env: Option<&str>,
 ) -> Result<(), CliError> {
-    use crate::commands::KeysView;
+    use crate::request::KeysView;
     server.health(env).await?;
     server.deployed_files(files).await?;
     let rendered = match view {
@@ -975,7 +975,7 @@ pub(crate) async fn partition_keys(
             barca_core::report::render_partition_grid(&grid, limit, json)
         }
     };
-    crate::commands::emit(rendered);
+    crate::print::emit(rendered);
     Ok(())
 }
 

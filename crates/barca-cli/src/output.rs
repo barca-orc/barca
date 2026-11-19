@@ -80,9 +80,65 @@ pub fn resolve(flag: Option<Format>) -> Format {
     })
 }
 
+/// Whether raw argv asks for JSON output, for errors raised before the arguments parse. Same
+/// precedence as results (above): an explicit `--json` / `--pretty` / `-o`, then
+/// `BARCA_OUTPUT`, then whether stdout is a terminal. `plan` is always JSON; `docs` only with
+/// `--json`; `serve` and `version` never.
+pub fn json_mode_from_argv(argv: &[String]) -> bool {
+    use std::io::IsTerminal;
+    let env = std::env::var(ENV_VAR).ok();
+    json_mode_from_argv_with(argv, env.as_deref(), std::io::stdout().is_terminal())
+}
+
+/// [`json_mode_from_argv`] without process state, for tests.
+pub fn json_mode_from_argv_with(argv: &[String], env: Option<&str>, stdout_is_tty: bool) -> bool {
+    let args = argv.get(1..).unwrap_or_default();
+    if args.iter().any(|a| a == "--json") {
+        return true;
+    }
+    if args.iter().any(|a| a == "--pretty") {
+        return false;
+    }
+    let Some(sub) = args.iter().find(|a| !a.starts_with('-')) else {
+        return false;
+    };
+    let follows_rule = match sub.as_str() {
+        "plan" => return true,
+        "get" | "run" => true,
+        s if s.ends_with(".py") => true,
+        "list" | "history" | "stats" | "status" => true,
+        _ => false,
+    };
+    if !follows_rule {
+        return false;
+    }
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        let value = match a.as_str() {
+            "-o" | "--output" => it.peek().map(|s| s.as_str()),
+            s => s
+                .strip_prefix("--output=")
+                .or_else(|| s.strip_prefix("-o="))
+                .or_else(|| s.strip_prefix("-o").filter(|v| !v.is_empty())),
+        };
+        match value {
+            Some("value" | "pretty") => return false,
+            Some("json") => return true,
+            _ => {}
+        }
+    }
+    // An invalid BARCA_OUTPUT is reported separately; here it falls back to the terminal.
+    decide(None, env, stdout_is_tty)
+        .map_or(!stdout_is_tty, |f| f == Format::Json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
 
     #[test]
     fn terminal_gets_pretty_and_everything_else_gets_json() {
@@ -120,5 +176,39 @@ mod tests {
             decide(Some(Format::Json), Some("yaml"), false),
             Ok(Format::Json)
         );
+    }
+
+    #[test]
+    fn json_mode_detection_before_parsing() {
+        let piped = |s: &str| json_mode_from_argv_with(&argv(s), None, false);
+        let tty = |s: &str| json_mode_from_argv_with(&argv(s), None, true);
+        // Piped (agents, scripts): JSON unless a flag says otherwise.
+        assert!(piped("barca get x p.py --bogus"));
+        assert!(piped("barca run t p.py"));
+        assert!(piped("barca p.py --bogus"));
+        assert!(piped("barca list p.py --bogus"));
+        assert!(!piped("barca get x p.py -o pretty --bogus"));
+        assert!(!piped("barca get x p.py --output=value"));
+        assert!(!piped("barca get x p.py -opretty"));
+        assert!(!piped("barca list p.py --pretty --bogus"));
+        // In a terminal: human unless a flag or BARCA_OUTPUT asks for JSON.
+        assert!(!tty("barca get x p.py --bogus"));
+        assert!(tty("barca get x p.py -o json --bogus"));
+        assert!(tty("barca list --json --bogus"));
+        assert!(json_mode_from_argv_with(
+            &argv("barca get x p.py --bogus"),
+            Some("json"),
+            true
+        ));
+        assert!(!json_mode_from_argv_with(
+            &argv("barca get x p.py"),
+            Some("pretty"),
+            false
+        ));
+        // Fixed modes.
+        assert!(tty("barca plan"));
+        assert!(!piped("barca docs nope"));
+        assert!(!piped("barca frobnicate"));
+        assert!(!piped("barca"));
     }
 }
