@@ -22,7 +22,7 @@ The table is `crates/barca-cli/ui-layering.json`. Two checks hold it:
 |---|---|---|
 | `scripts/check-ui-layering.py` | a prek hook (`prek.toml`): every pull request and merge group in every CI tier, UI-only diffs included, and `scripts/check-fast.sh` | the UI's sources (`ui/src`) to the table |
 | `cargo test -p barca ui_layering` | the Rust tests (the merge tier) | the table to the real CLI and the server's router |
-| `cargo test -p barca-core ui_fixture` | the Rust tests | the health words the UI's fixtures use (`ui/src/lib/testdata/health-alone.json`) to `health::classify` |
+| `cargo test -p barca-core ui_fixture` | the Rust tests | the UI's fixtures (`ui/src/lib/testdata/served/*.json`, `health-alone.json`, `weights.json`) to what `barca-core` computes |
 
 Together they fail when:
 
@@ -73,11 +73,31 @@ Extend the table only for what is true of the new code:
 
 ## Fixtures
 
-The UI's unit tests and its kit page need rows "as the server would serve them".
-`ui/src/lib/testdata/served.ts` fills a fixture row's `health` by looking it up in
-`health-alone.json`, which a Rust test writes by running `health::classify` on each such row
-(`crates/barca-core/src/ui_fixture_tests.rs`); no health rule is written in TypeScript, in
-tests either. After changing the health table:
+The UI's unit tests and its kit page need rows "as the server would serve them", and a value
+someone typed can drift from what the server computes. So the values come from Rust
+(`crates/barca-core/src/ui_fixture_tests.rs`), which fails when a checked-in file differs from
+what the code produces:
+
+- **A project as served** (`ui/src/lib/testdata/served/`, read through
+  `ui/src/lib/testdata/project.ts`). The test copies the fixture project
+  (`crates/barca-core/testdata/ui_fixture/`: a node that is fresh, stale, failing, blocked,
+  never run, paused, pinned, partitioned with failed keys, on a late schedule, covered by a
+  queued run), records a history for it with a fixed clock and writes the rows of `GET /state`,
+  `GET /state/rollup`, the run list, four run details, the pauses, the pins and the
+  explanations of runs in flight. A test that asserts on something the server computes (a
+  health, a cause, a root, an estimate, a weight, a count, a headline, a schedule's standing, a
+  line of a run's explanation) reads it from there.
+- **A row spelled by hand** (`ui/src/lib/testdata/served.ts`) gets its `health`, reason and
+  cause by lookup in `health-alone.json`, which the same test writes by running
+  `health::classify` on each such row. A fixture that states a health states its reason and
+  cause with it (`blockedBy` and `LATE_SCHEDULE` read them off the project's rows): no table
+  from a health to a reason or a cause is written in TypeScript, in tests either.
+
+Fixtures spelled by hand remain for presentation alone: a layout, the words for a given number,
+an empty state, a size the fixture project does not have. The server-side joins that live in
+`barca-server` (`NodeState` beyond its status row, `RunSummary`, the record half of `RunView`)
+are repeated in the Rust test from the same reads, so a field added there is added to the test
+by hand. After changing the health table, a wording, a weight or the fixture project:
 
 ```bash
 BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture

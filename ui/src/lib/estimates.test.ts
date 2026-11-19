@@ -1,8 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { nodeEstimate, scopeEstimate } from './estimates'
+import { NOW_MS as NOW, entry, row } from './testdata/project'
 import { formatAbout, formatEstimate, formatSlot } from './time'
-
-const NOW = Date.parse('2026-11-17T14:57:00Z')
 
 beforeAll(() => {
   process.env.TZ = 'America/New_York'
@@ -64,6 +63,40 @@ describe('when a node is fresh', () => {
   it('says when a fresh node is next rechecked, and nothing when no tick reaches it', () => {
     expect(nodeEstimate(node({ recheck_at: '2026-11-17T15:00:00Z' }), 'utc', NOW)).toMatchObject({ kind: 'ok', text: 'rechecked 15:00' })
     expect(nodeEstimate(node(), 'utc', NOW)).toMatchObject({ kind: 'ok', text: '' })
+  })
+})
+
+describe('the estimates of the generated project', () => {
+  const words = (name: string) => nodeEstimate(row(name), 'utc', NOW)
+
+  it('says fresh, with a time, only where the server promises one', () => {
+    // A queued run covers it: expected fresh 10s from now, said to the minute.
+    expect(row('orders_enriched')).toMatchObject({ cause: 'queued', expected_fresh_at: '2026-11-17T14:57:10Z', no_estimate: null })
+    expect(words('orders_enriched')).toMatchObject({ kind: 'fresh', text: 'fresh ~14:58' })
+    // Below it, a tick will look at `revenue_hourly`, and the server promises nothing of it.
+    expect(row('revenue_hourly')).toMatchObject({ cause: 'queued', expected_fresh_at: null, recheck_at: '2026-11-17T15:00:00Z', no_estimate: 'not_promised' })
+    expect(words('revenue_hourly')).toMatchObject({ kind: 'rechecked', text: 'rechecked 15:00' })
+    expect(words('revenue_hourly').title).toContain('no estimate: a result above it may come out unchanged')
+  })
+
+  it('says why not, for each reason the server gives', () => {
+    expect(['invoices', 'invoice_totals', 'ledger', 'sales_by_day', 'sales_report', 'check__invoices'].map((name) => words(name).text)).toEqual(Array(6).fill('no estimate: until the failure is fixed'))
+    expect(words('forecast').text).toBe('no estimate: no refresh path')
+    expect(words('nightly_export').text).toBe('no estimate: no scheduler is firing its schedule')
+  })
+
+  it('says when a fresh node is next looked at, and nothing where no tick reaches it', () => {
+    expect(['orders_feed', 'orders', 'publish_dashboard'].map((name) => words(name))).toEqual(Array(3).fill(expect.objectContaining({ kind: 'ok', text: 'rechecked 15:00' })))
+    expect(['customers', 'fx_rates'].map((name) => words(name))).toEqual(Array(2).fill(expect.objectContaining({ kind: 'ok', text: '' })))
+  })
+
+  it('reads a scope off its entry', () => {
+    const scope = (id: string) => scopeEstimate(entry(id), 'utc', NOW).text
+    expect(scope('root')).toBe('9 with no estimate · the rest fresh by ~14:58')
+    expect(scope('file:orders.py')).toBe('4 with no estimate · the rest fresh by ~14:58')
+    expect(scope('file:billing.py')).toBe('4 with no estimate')
+    expect(scope('group:orders.py:reporting')).toBe('1 with no estimate')
+    expect(scope('orders.py:orders')).toBe('fresh')
   })
 })
 

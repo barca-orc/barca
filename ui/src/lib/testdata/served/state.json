@@ -1,0 +1,1016 @@
+[
+  {
+    "cache": {
+      "detail": "last attempt failed: ValueError: 3 rows with a negative total",
+      "reason": "failed",
+      "run_hash": "1ff289ee4b8708472ccf237ef27a400ccfad5a1a843f7252a120e63e12800349",
+      "state": "stale"
+    },
+    "cause": "failing",
+    "consecutive_failures": 2,
+    "durations": {
+      "median_seconds": 2.8,
+      "p95_seconds": 2.8,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": "2026-11-17 00:40:01",
+    "gap_seconds": 51419,
+    "health": "failing",
+    "health_reason": "last_attempt_failed",
+    "id": "billing.py:invoices",
+    "inputs": [],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": null,
+      "created_at": "2026-11-17 13:55:01",
+      "elapsed_seconds": 0.3,
+      "error": "ValueError: 3 rows with a negative total",
+      "format": null,
+      "rows": null,
+      "run_hash": "1ff289ee4b8708472ccf237ef27a400ccfad5a1a843f7252a120e63e12800349",
+      "size_bytes": null,
+      "status": "failed"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 0.3,
+      "failed": 1,
+      "keys": 1,
+      "run_id": "a1f0c0000005"
+    },
+    "last_success_at": "2026-11-16 09:30:03",
+    "late_since": null,
+    "measured": false,
+    "name": "invoices",
+    "next_run": null,
+    "no_estimate": "failing",
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": {
+      "id": "failure:billing.py:invoices",
+      "kind": "failure",
+      "node": "billing.py:invoices"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T00:40:01Z"
+  },
+  {
+    "cache": {
+      "detail": "tasks always re-run",
+      "reason": "task",
+      "run_hash": "d6235c663d993e7613e67d85dd0151a64320a93103ddf32456eb413ef4f71d46",
+      "state": "always_runs"
+    },
+    "cause": "failing",
+    "consecutive_failures": 1,
+    "durations": null,
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": "2026-11-16 10:00:01",
+    "gap_seconds": 104219,
+    "health": "failing",
+    "health_reason": "last_attempt_failed",
+    "id": "billing.py:check__invoices",
+    "inputs": [
+      "billing.py:invoices"
+    ],
+    "kind": "task",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": null,
+      "created_at": "2026-11-16 10:00:01",
+      "elapsed_seconds": 0.3,
+      "error": "AssertionError: 3 rows with a negative total",
+      "format": null,
+      "rows": null,
+      "run_hash": "d6235c663d993e7613e67d85dd0151a64320a93103ddf32456eb413ef4f71d46",
+      "size_bytes": null,
+      "status": "failed"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 0.3,
+      "failed": 1,
+      "keys": 1,
+      "run_id": "a1f0c0000003"
+    },
+    "last_success_at": null,
+    "late_since": null,
+    "measured": null,
+    "name": "check__invoices",
+    "next_run": null,
+    "no_estimate": "failing",
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": {
+      "id": "failure:billing.py:check__invoices",
+      "kind": "failure",
+      "node": "billing.py:check__invoices"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-16T10:00:01Z"
+  },
+  {
+    "cache": {
+      "change_causes": [
+        "upstream_stale"
+      ],
+      "detail": "upstream 'invoices' is not cached, so this node's inputs will change",
+      "reason": "upstream_stale",
+      "run_hash": "26f102455ed8dadf27c0a6404495fd69a83c94e96817ef698c1104cc4414d8f3",
+      "state": "stale"
+    },
+    "cause": "failing",
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 1.9,
+      "p95_seconds": 1.9,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 51419,
+    "health": "blocked",
+    "health_reason": "upstream_failing",
+    "id": "billing.py:invoice_totals",
+    "inputs": [
+      "billing.py:invoices"
+    ],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": ".barca/artifacts/billing.py--invoice_totals/0000000000000000000000000000000000000000000000000000000000000025.json",
+      "content_hash": "out-000000000000",
+      "created_at": "2026-11-16 09:30:05",
+      "elapsed_seconds": 1.9,
+      "format": "json",
+      "rows": null,
+      "run_hash": "0000000000000000000000000000000000000000000000000000000000000025",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 1.9,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "a1f0c0000002"
+    },
+    "last_success_at": "2026-11-16 09:30:05",
+    "late_since": null,
+    "measured": false,
+    "name": "invoice_totals",
+    "next_run": null,
+    "no_estimate": "failing",
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": {
+      "id": "failure:billing.py:invoices",
+      "kind": "failure",
+      "node": "billing.py:invoices"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T00:40:01Z"
+  },
+  {
+    "cache": {
+      "detail": "no successful materialization recorded",
+      "reason": "no_record",
+      "run_hash": "00df4c9dd66ac2b59958b13ed5139eb91b30c5167f046ddd4aad7480de9b2008",
+      "state": "never_run"
+    },
+    "cause": "failing",
+    "consecutive_failures": 0,
+    "durations": null,
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 51419,
+    "health": "blocked",
+    "health_reason": "upstream_failing",
+    "id": "billing.py:ledger",
+    "inputs": [
+      "billing.py:invoice_totals"
+    ],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": null,
+    "last_success_at": null,
+    "late_since": null,
+    "measured": false,
+    "name": "ledger",
+    "next_run": null,
+    "no_estimate": "failing",
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": {
+      "id": "failure:billing.py:invoices",
+      "kind": "failure",
+      "node": "billing.py:invoices"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T00:40:01Z"
+  },
+  {
+    "cache": {
+      "detail": "tasks always re-run",
+      "reason": "task",
+      "run_hash": "0cbd8d52f90ebca946b32c6c81b4b3a6d2482c9dfa68e1f4b42d285862e2fd58",
+      "state": "always_runs"
+    },
+    "cause": "no_refresh_path",
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 2.6,
+      "p95_seconds": 2.6,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 32220,
+    "health": "behind",
+    "health_reason": "schedule_late",
+    "id": "orders.py:nightly_export",
+    "inputs": [],
+    "kind": "task",
+    "last_check": {
+      "at": "2026-11-16T06:00:03Z",
+      "outcome": "rebuilt",
+      "schedule": "orders.py:nightly_export"
+    },
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--nightly_export/0cbd8d52f90ebca946b32c6c81b4b3a6d2482c9dfa68e1f4b42d285862e2fd58.json",
+      "content_hash": "out-0cbd8d52f90e",
+      "created_at": "2026-11-16 06:00:03",
+      "elapsed_seconds": 2.6,
+      "format": "json",
+      "rows": null,
+      "run_hash": "0cbd8d52f90ebca946b32c6c81b4b3a6d2482c9dfa68e1f4b42d285862e2fd58",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 2.6,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "5c4ed0000600"
+    },
+    "last_success_at": "2026-11-16 06:00:03",
+    "late_since": 1794895200,
+    "measured": null,
+    "name": "nightly_export",
+    "next_run": 1794981600,
+    "no_estimate": "scheduler_off",
+    "partitioned": false,
+    "prev_run": 1794895200,
+    "recheck_at": null,
+    "refresh_path": {
+      "live": false,
+      "missed_ticks": 0,
+      "next_tick": null,
+      "paused": false,
+      "schedule": "orders.py:nightly_export",
+      "state": "late"
+    },
+    "root": {
+      "id": "scheduler_off",
+      "kind": "scheduler_off",
+      "node": ""
+    },
+    "running": null,
+    "schedule": {
+      "cron": "0 6 * * *",
+      "failing": false,
+      "failures": 0,
+      "last_fired": "2026-11-16T06:00:00Z",
+      "last_run_id": "5c4ed0000600",
+      "last_status": "success",
+      "late": true,
+      "late_since": "2026-11-17T06:00:00Z",
+      "live": false,
+      "max_failures": 5,
+      "next_fire": "2026-11-18T06:00:00Z",
+      "paused": false,
+      "paused_until": null,
+      "queue_bound": false,
+      "skip_reason": null,
+      "state": "late",
+      "state_detail": "no tick has been decided since the 2026-11-17T06:00:00Z slot: no scheduler is firing it",
+      "typical_queue_wait_seconds": 1,
+      "typical_run_seconds": 2
+    },
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T06:00:00Z"
+  },
+  {
+    "cache": {
+      "detail": "no successful materialization recorded",
+      "reason": "no_record",
+      "run_hash": "59c97d26475fbbfd7f1578effb8a5303c1816ce270d180f9c0610e2c6d3594d7",
+      "state": "never_run"
+    },
+    "cause": "no_refresh_path",
+    "consecutive_failures": 0,
+    "durations": null,
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 6420,
+    "health": "never_run",
+    "health_reason": "never_run",
+    "id": "orders.py:forecast",
+    "inputs": [],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": null,
+    "last_success_at": null,
+    "late_since": null,
+    "measured": false,
+    "name": "forecast",
+    "next_run": null,
+    "no_estimate": "no_path",
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": {
+      "id": "no_schedule:orders.py:forecast",
+      "kind": "no_schedule",
+      "node": "orders.py:forecast"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T13:10:00Z"
+  },
+  {
+    "cache": {
+      "artifact": ".barca/artifacts/orders.py--fx_rates/56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87.json",
+      "detail": "a successful materialization matches this code and these inputs",
+      "reason": "materialized",
+      "run_hash": "56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87",
+      "state": "cached"
+    },
+    "cause": null,
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 0.6,
+      "p95_seconds": 0.6,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 0,
+    "health": "ok",
+    "health_reason": "cached",
+    "id": "orders.py:fx_rates",
+    "inputs": [],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--fx_rates/56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87.json",
+      "content_hash": "out-56279612f46d",
+      "created_at": "2026-11-16 09:00:05",
+      "elapsed_seconds": 0.6,
+      "format": "json",
+      "rows": null,
+      "run_hash": "56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 0.6,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "a1f0c0000001"
+    },
+    "last_success_at": "2026-11-16 09:00:05",
+    "late_since": null,
+    "measured": false,
+    "name": "fx_rates",
+    "next_run": null,
+    "no_estimate": null,
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": null,
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": null
+  },
+  {
+    "cache": {
+      "detail": "3 of 5 partition keys cached",
+      "reason": "partitions_missing",
+      "state": "partial"
+    },
+    "cause": "failing",
+    "consecutive_failures": 1,
+    "durations": {
+      "median_seconds": 2.5,
+      "p95_seconds": 2.5,
+      "samples": 3
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": "2026-11-17 02:00:01",
+    "gap_seconds": 46619,
+    "health": "failing",
+    "health_reason": "last_attempt_failed",
+    "id": "orders.py:sales_by_day",
+    "inputs": [],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": null,
+      "created_at": "2026-11-17 02:00:01",
+      "elapsed_seconds": 0.3,
+      "error": "KeyError: 'units'",
+      "format": null,
+      "partition": "day=2026-11-16",
+      "rows": null,
+      "run_hash": "d987a38729c233bdb645b85bd8fe6e3f8f7c7916dae3275678bcdb1dc1d82e0f",
+      "size_bytes": null,
+      "status": "failed"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 0.3,
+      "failed": 1,
+      "keys": 1,
+      "run_id": "a1f0c0000006"
+    },
+    "last_success_at": "2026-11-16 09:00:30",
+    "late_since": null,
+    "measured": false,
+    "name": "sales_by_day",
+    "next_run": null,
+    "no_estimate": "failing",
+    "partitioned": true,
+    "partitions": {
+      "behind": 1,
+      "cached": 3,
+      "failed": 1,
+      "failed_keys": [
+        "day=2026-11-16"
+      ],
+      "missing": 2,
+      "missing_keys": [
+        "day=2026-11-16",
+        "day=2026-11-17"
+      ],
+      "total": 5
+    },
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": {
+      "id": "failure:orders.py:sales_by_day",
+      "kind": "failure",
+      "node": "orders.py:sales_by_day"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T02:00:01Z"
+  },
+  {
+    "cache": {
+      "detail": "1 of 5 missing keys wait on 'sales_by_day': the same keys of it failed",
+      "reason": "upstream_failed",
+      "state": "blocked"
+    },
+    "cause": "failing",
+    "consecutive_failures": 0,
+    "durations": null,
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 46619,
+    "health": "blocked",
+    "health_reason": "upstream_failing",
+    "id": "orders.py:sales_report",
+    "inputs": [
+      "orders.py:sales_by_day"
+    ],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": null,
+    "last_success_at": null,
+    "late_since": null,
+    "measured": false,
+    "name": "sales_report",
+    "next_run": null,
+    "no_estimate": "failing",
+    "partitioned": true,
+    "partitions": {
+      "behind": 4,
+      "blocked": 1,
+      "blocked_on": "orders.py:sales_by_day",
+      "cached": 0,
+      "missing": 5,
+      "missing_keys": [
+        "day=2026-11-13",
+        "day=2026-11-14",
+        "day=2026-11-15",
+        "day=2026-11-16",
+        "day=2026-11-17"
+      ],
+      "total": 5
+    },
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": {
+      "id": "failure:orders.py:sales_by_day",
+      "kind": "failure",
+      "node": "orders.py:sales_by_day"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T02:00:01Z"
+  },
+  {
+    "cache": {
+      "artifact": ".barca/artifacts/orders.py--customers/e9c6a64621e09f7457c6fe3d093c6c8b5ea81b9afda32c7a8bf8143ae32bee5a.json",
+      "detail": "a successful materialization matches this code and these inputs",
+      "reason": "materialized",
+      "run_hash": "e9c6a64621e09f7457c6fe3d093c6c8b5ea81b9afda32c7a8bf8143ae32bee5a",
+      "state": "cached"
+    },
+    "cause": null,
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 1.1,
+      "p95_seconds": 1.1,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 0,
+    "health": "ok",
+    "health_reason": "cached",
+    "id": "orders.py:customers",
+    "inputs": [],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--customers/e9c6a64621e09f7457c6fe3d093c6c8b5ea81b9afda32c7a8bf8143ae32bee5a.json",
+      "content_hash": "out-e9c6a64621e0",
+      "created_at": "2026-11-16 09:00:05",
+      "elapsed_seconds": 1.1,
+      "format": "json",
+      "rows": null,
+      "run_hash": "e9c6a64621e09f7457c6fe3d093c6c8b5ea81b9afda32c7a8bf8143ae32bee5a",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 1.1,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "a1f0c0000001"
+    },
+    "last_success_at": "2026-11-16 09:00:05",
+    "late_since": null,
+    "measured": false,
+    "name": "customers",
+    "next_run": null,
+    "no_estimate": null,
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": null,
+    "refresh_path": null,
+    "root": null,
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": null
+  },
+  {
+    "cache": {
+      "detail": "sensors always re-run",
+      "reason": "sensor",
+      "run_hash": "0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495",
+      "state": "always_runs"
+    },
+    "cause": null,
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 0.4,
+      "p95_seconds": 0.4,
+      "samples": 4
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 0,
+    "health": "ok",
+    "health_reason": "last_run_succeeded",
+    "id": "orders.py:orders_feed",
+    "inputs": [],
+    "kind": "sensor",
+    "last_check": {
+      "at": "2026-11-17T14:45:03Z",
+      "outcome": "rebuilt",
+      "schedule": "orders.py:orders_feed"
+    },
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--orders_feed/0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495.json",
+      "content_hash": "out-0fd4eeadde9f",
+      "created_at": "2026-11-17 14:45:02",
+      "elapsed_seconds": 0.4,
+      "format": "json",
+      "rows": null,
+      "run_hash": "0fd4eeadde9ff05b5dea75e59fa0beab248874b286c86fe73a96105e7eae0495",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 0.4,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "5c4ed0001445"
+    },
+    "last_success_at": "2026-11-17 14:45:02",
+    "late_since": null,
+    "measured": null,
+    "name": "orders_feed",
+    "next_run": 1794927600,
+    "no_estimate": null,
+    "partitioned": false,
+    "prev_run": 1794926700,
+    "recheck_at": "2026-11-17T15:00:00Z",
+    "refresh_path": {
+      "live": true,
+      "missed_ticks": 0,
+      "next_tick": "2026-11-17T15:00:00Z",
+      "paused": false,
+      "schedule": "orders.py:orders_feed",
+      "state": "on_time"
+    },
+    "root": null,
+    "running": null,
+    "schedule": {
+      "cron": "*/15 * * * *",
+      "failing": false,
+      "failures": 0,
+      "last_fired": "2026-11-17T14:45:00Z",
+      "last_run_id": "5c4ed0001445",
+      "last_status": "success",
+      "late": false,
+      "late_since": null,
+      "live": true,
+      "max_failures": 5,
+      "next_fire": "2026-11-17T15:00:00Z",
+      "paused": false,
+      "paused_until": null,
+      "queue_bound": false,
+      "skip_reason": null,
+      "state": "on_time",
+      "state_detail": null,
+      "typical_queue_wait_seconds": 1,
+      "typical_run_seconds": 2
+    },
+    "shape": null,
+    "signals": [],
+    "stale_since": null
+  },
+  {
+    "cache": {
+      "artifact": ".barca/artifacts/orders.py--orders/daebb2a2f927f91315cc16f36f7d6c40add56340ef4c26dd5a03308083ff1a63.json",
+      "detail": "a successful materialization matches this code and these inputs; assumes sensor 'orders_feed' returns the same value as its last run",
+      "reason": "materialized",
+      "run_hash": "daebb2a2f927f91315cc16f36f7d6c40add56340ef4c26dd5a03308083ff1a63",
+      "state": "cached"
+    },
+    "cause": null,
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 3.2,
+      "p95_seconds": 3.2,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 0,
+    "health": "ok",
+    "health_reason": "cached",
+    "id": "orders.py:orders",
+    "inputs": [
+      "orders.py:orders_feed"
+    ],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--orders/daebb2a2f927f91315cc16f36f7d6c40add56340ef4c26dd5a03308083ff1a63.json",
+      "content_hash": "out-daebb2a2f927",
+      "created_at": "2026-11-16 09:00:05",
+      "elapsed_seconds": 3.2,
+      "format": "json",
+      "rows": null,
+      "run_hash": "daebb2a2f927f91315cc16f36f7d6c40add56340ef4c26dd5a03308083ff1a63",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 3.2,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "a1f0c0000001"
+    },
+    "last_success_at": "2026-11-16 09:00:05",
+    "late_since": null,
+    "measured": false,
+    "name": "orders",
+    "next_run": null,
+    "no_estimate": null,
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": "2026-11-17T15:00:00Z",
+    "refresh_path": {
+      "live": true,
+      "missed_ticks": 0,
+      "next_tick": "2026-11-17T15:00:00Z",
+      "paused": false,
+      "schedule": "orders.py:orders_feed",
+      "state": "on_time"
+    },
+    "root": null,
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": null
+  },
+  {
+    "cache": {
+      "detail": "code or upstream outputs changed since the last materialization (the run hash differs)",
+      "reason": "changed",
+      "run_hash": "8d7c4b9d26682df822bd36ce9dd60dbe5edd2cc2b347b5b7e126c1f7f25799b7",
+      "state": "stale"
+    },
+    "cause": "queued",
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 6.0,
+      "p95_seconds": 6.0,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": "2026-11-17T14:57:10Z",
+    "failing_since": null,
+    "gap_seconds": 10,
+    "health": "behind",
+    "health_reason": "stale",
+    "id": "orders.py:orders_enriched",
+    "inputs": [
+      "orders.py:customers",
+      "orders.py:orders"
+    ],
+    "kind": "asset",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--orders_enriched/0000000000000000000000000000000000000000000000000000000000000025.json",
+      "content_hash": "out-000000000000",
+      "created_at": "2026-11-16 09:00:12",
+      "elapsed_seconds": 6.0,
+      "format": "json",
+      "rows": null,
+      "run_hash": "0000000000000000000000000000000000000000000000000000000000000025",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 6.0,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "a1f0c0000001"
+    },
+    "last_success_at": "2026-11-16 09:00:12",
+    "late_since": null,
+    "measured": false,
+    "name": "orders_enriched",
+    "next_run": null,
+    "no_estimate": null,
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": "2026-11-17T15:00:00Z",
+    "refresh_path": {
+      "live": true,
+      "missed_ticks": 0,
+      "next_tick": "2026-11-17T15:00:00Z",
+      "paused": false,
+      "schedule": "orders.py:orders_feed",
+      "state": "on_time"
+    },
+    "root": {
+      "id": "input:orders.py:orders_enriched",
+      "kind": "input",
+      "node": "orders.py:orders_enriched"
+    },
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": null
+  },
+  {
+    "cache": {
+      "change_causes": [
+        "upstream_stale"
+      ],
+      "detail": "upstream 'orders_enriched' is not cached, so this node's inputs will change",
+      "reason": "upstream_stale",
+      "run_hash": "92d67827cc2c5e954a19c23a05ef310e165db278af33d9e2da7d93abc2bce068",
+      "state": "stale"
+    },
+    "cause": "queued",
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 8.0,
+      "p95_seconds": 8.0,
+      "samples": 3
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 0,
+    "health": "behind",
+    "health_reason": "stale",
+    "id": "orders.py:revenue_hourly",
+    "inputs": [
+      "orders.py:orders_enriched"
+    ],
+    "kind": "asset",
+    "last_check": {
+      "at": "2026-11-17T13:00:03Z",
+      "outcome": "rebuilt",
+      "schedule": "orders.py:revenue_hourly"
+    },
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--revenue_hourly/0000000000000000000000000000000000000000000000000000000000000024.json",
+      "content_hash": "out-000000000000",
+      "created_at": "2026-11-17 13:00:09",
+      "elapsed_seconds": 8.0,
+      "format": "json",
+      "rows": null,
+      "run_hash": "0000000000000000000000000000000000000000000000000000000000000024",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 8.0,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "5c4ed0001300"
+    },
+    "last_success_at": "2026-11-17 13:00:09",
+    "late_since": null,
+    "measured": false,
+    "name": "revenue_hourly",
+    "next_run": 1794927600,
+    "no_estimate": "not_promised",
+    "partitioned": false,
+    "prev_run": 1794924000,
+    "recheck_at": "2026-11-17T15:00:00Z",
+    "refresh_path": {
+      "live": true,
+      "missed_ticks": 0,
+      "next_tick": "2026-11-17T15:00:00Z",
+      "paused": false,
+      "schedule": "orders.py:revenue_hourly",
+      "state": "on_time"
+    },
+    "root": {
+      "id": "input:orders.py:orders_enriched",
+      "kind": "input",
+      "node": "orders.py:orders_enriched"
+    },
+    "running": null,
+    "schedule": {
+      "cron": "0 * * * *",
+      "failing": false,
+      "failures": 0,
+      "last_fired": "2026-11-17T14:00:00Z",
+      "last_run_id": "5c4ed0001400",
+      "last_status": "pending",
+      "late": false,
+      "late_since": null,
+      "live": true,
+      "max_failures": 5,
+      "next_fire": "2026-11-17T15:00:00Z",
+      "paused": false,
+      "paused_until": null,
+      "queue_bound": false,
+      "skip_reason": null,
+      "state": "on_time",
+      "state_detail": null,
+      "typical_queue_wait_seconds": 1,
+      "typical_run_seconds": 2
+    },
+    "shape": null,
+    "signals": [],
+    "stale_since": null
+  },
+  {
+    "cache": {
+      "detail": "tasks always re-run",
+      "reason": "task",
+      "run_hash": "a61ff96c0a92ea44a27f7745129f55fb5fac991a032b07a4c0b5b9b2043b8016",
+      "state": "always_runs"
+    },
+    "cause": null,
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 1.4,
+      "p95_seconds": 1.4,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 0,
+    "health": "ok",
+    "health_reason": "last_run_succeeded",
+    "id": "orders.py:publish_dashboard",
+    "inputs": [
+      "orders.py:revenue_hourly"
+    ],
+    "kind": "task",
+    "last_check": null,
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--publish_dashboard/a61ff96c0a92ea44a27f7745129f55fb5fac991a032b07a4c0b5b9b2043b8016.json",
+      "content_hash": "out-a61ff96c0a92",
+      "created_at": "2026-11-16 09:10:02",
+      "elapsed_seconds": 1.4,
+      "format": "json",
+      "rows": null,
+      "run_hash": "a61ff96c0a92ea44a27f7745129f55fb5fac991a032b07a4c0b5b9b2043b8016",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 1.4,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "a1f0c0000007"
+    },
+    "last_success_at": "2026-11-16 09:10:02",
+    "late_since": null,
+    "measured": null,
+    "name": "publish_dashboard",
+    "next_run": null,
+    "no_estimate": null,
+    "partitioned": false,
+    "prev_run": null,
+    "recheck_at": "2026-11-17T15:00:00Z",
+    "refresh_path": {
+      "live": true,
+      "missed_ticks": 0,
+      "next_tick": "2026-11-17T15:00:00Z",
+      "paused": false,
+      "schedule": "orders.py:revenue_hourly",
+      "state": "on_time"
+    },
+    "root": null,
+    "running": null,
+    "shape": null,
+    "signals": [],
+    "stale_since": null
+  }
+]

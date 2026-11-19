@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
 
+- Internal: the web UI's unit tests and kit page read what the server computes from files a Rust test generates from a fixture project (`ui/src/lib/testdata/served/`, regenerate with `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`) instead of from values typed by hand, and the fixtures' own table from a health to a reason and a cause is gone (#1056); no behavior change.
+
 - Internal: the modules inside barca-core have layers and a test that holds them (`docs/engineering/layering.md`, #1056); 26 of the 42 edges that pointed the wrong way are cut and the largest dependency cycle is 29 modules, down from 38. No behavior change.
 - Internal: barca-core's storage modules (`backup`, `gc`, `ledger`, `pins`, `store_inspect`, `store_sync`, `transfer` and the rest) name no higher layer and have a checked order among themselves (#1056); the wrong-way edges go from 16 to 6 and the largest dependency cycle from 29 modules to 19. No behavior change.
 

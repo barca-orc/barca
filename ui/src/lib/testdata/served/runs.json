@@ -1,0 +1,1143 @@
+{
+  "activity": {
+    "excluded": null,
+    "hours": [
+      {
+        "at": "2026-11-16T15:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T16:00:00Z"
+      },
+      {
+        "at": "2026-11-16T16:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T17:00:00Z"
+      },
+      {
+        "at": "2026-11-16T17:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T18:00:00Z"
+      },
+      {
+        "at": "2026-11-16T18:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T19:00:00Z"
+      },
+      {
+        "at": "2026-11-16T19:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T20:00:00Z"
+      },
+      {
+        "at": "2026-11-16T20:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T21:00:00Z"
+      },
+      {
+        "at": "2026-11-16T21:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T22:00:00Z"
+      },
+      {
+        "at": "2026-11-16T22:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-16T23:00:00Z"
+      },
+      {
+        "at": "2026-11-16T23:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T00:00:00Z"
+      },
+      {
+        "at": "2026-11-17T00:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 1,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 1,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": {
+          "runs": 1,
+          "text": "invoices: ValueError: 3 rows with a negative total"
+        },
+        "in_progress": 0,
+        "median_seconds": 0.9,
+        "not_successful": 1,
+        "ok": 0,
+        "runs": 1,
+        "until": "2026-11-17T01:00:00Z"
+      },
+      {
+        "at": "2026-11-17T01:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T02:00:00Z"
+      },
+      {
+        "at": "2026-11-17T02:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 1,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 1,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": {
+          "runs": 1,
+          "text": "sales_by_day: KeyError: 'units'"
+        },
+        "in_progress": 0,
+        "median_seconds": 0.7,
+        "not_successful": 1,
+        "ok": 0,
+        "runs": 1,
+        "until": "2026-11-17T03:00:00Z"
+      },
+      {
+        "at": "2026-11-17T03:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T04:00:00Z"
+      },
+      {
+        "at": "2026-11-17T04:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T05:00:00Z"
+      },
+      {
+        "at": "2026-11-17T05:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T06:00:00Z"
+      },
+      {
+        "at": "2026-11-17T06:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T07:00:00Z"
+      },
+      {
+        "at": "2026-11-17T07:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T08:00:00Z"
+      },
+      {
+        "at": "2026-11-17T08:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T09:00:00Z"
+      },
+      {
+        "at": "2026-11-17T09:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T10:00:00Z"
+      },
+      {
+        "at": "2026-11-17T10:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T11:00:00Z"
+      },
+      {
+        "at": "2026-11-17T11:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 0
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 0,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": null,
+        "not_successful": 0,
+        "ok": 0,
+        "runs": 0,
+        "until": "2026-11-17T12:00:00Z"
+      },
+      {
+        "at": "2026-11-17T12:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 1
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 1,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": 9.0,
+        "not_successful": 0,
+        "ok": 1,
+        "runs": 1,
+        "until": "2026-11-17T13:00:00Z"
+      },
+      {
+        "at": "2026-11-17T13:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 1,
+          "interrupted": 0,
+          "running": 1,
+          "success": 1
+        },
+        "by_trigger": {
+          "api": 1,
+          "client": 0,
+          "manual": 1,
+          "schedule": 1,
+          "unknown": 0
+        },
+        "failure": {
+          "runs": 1,
+          "text": "invoices: ValueError: 3 rows with a negative total"
+        },
+        "in_progress": 1,
+        "median_seconds": 4.95,
+        "not_successful": 1,
+        "ok": 1,
+        "runs": 3,
+        "until": "2026-11-17T14:00:00Z"
+      },
+      {
+        "at": "2026-11-17T14:00:00Z",
+        "by_status": {
+          "cancelled": 0,
+          "error": 0,
+          "failed": 0,
+          "interrupted": 0,
+          "running": 0,
+          "success": 3
+        },
+        "by_trigger": {
+          "api": 0,
+          "client": 0,
+          "manual": 0,
+          "schedule": 3,
+          "unknown": 0
+        },
+        "failure": null,
+        "in_progress": 0,
+        "median_seconds": 0.5,
+        "not_successful": 0,
+        "ok": 3,
+        "runs": 3,
+        "until": "2026-11-17T15:00:00Z"
+      }
+    ],
+    "not_triggered_by": [],
+    "search": null,
+    "since": "2026-11-16T15:00:00Z",
+    "statuses": [],
+    "summary": "9 runs in the last 24 hours · 3 not successful · 1 in progress · median 0.8s · 5 schedule, 1 api, 3 manual",
+    "total": {
+      "at": "2026-11-16T15:00:00Z",
+      "by_status": {
+        "cancelled": 0,
+        "error": 0,
+        "failed": 3,
+        "interrupted": 0,
+        "running": 1,
+        "success": 5
+      },
+      "by_trigger": {
+        "api": 1,
+        "client": 0,
+        "manual": 3,
+        "schedule": 5,
+        "unknown": 0
+      },
+      "failure": {
+        "runs": 2,
+        "text": "invoices: ValueError: 3 rows with a negative total"
+      },
+      "in_progress": 1,
+      "median_seconds": 0.8,
+      "not_successful": 3,
+      "ok": 5,
+      "runs": 9,
+      "until": "2026-11-17T15:00:00Z"
+    },
+    "triggered_by": [],
+    "until": "2026-11-17T15:00:00Z"
+  },
+  "runs": [
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 0.5,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-17T14:45:00.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "5c4ed0001445",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "1 ok · 0 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 1 step planned",
+        "target": "orders_feed",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "5c4ed0001445",
+      "schedule_id": "orders.py:orders_feed",
+      "scheduled_at": "2026-11-17T14:45:00Z",
+      "started_at": "2026-11-17T14:45:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_failed": 0,
+      "steps_total": 1,
+      "target": "orders_feed",
+      "trigger_reason": null,
+      "triggered_by": "schedule"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 0.5,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-17T14:30:00.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "5c4ed0001430",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "1 ok · 0 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 1 step planned",
+        "target": "orders_feed",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "5c4ed0001430",
+      "schedule_id": "orders.py:orders_feed",
+      "scheduled_at": "2026-11-17T14:30:00Z",
+      "started_at": "2026-11-17T14:30:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_failed": 0,
+      "steps_total": 1,
+      "target": "orders_feed",
+      "trigger_reason": null,
+      "triggered_by": "schedule"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 0.5,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-17T14:15:00.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "5c4ed0001415",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "1 ok · 0 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 1 step planned",
+        "target": "orders_feed",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "5c4ed0001415",
+      "schedule_id": "orders.py:orders_feed",
+      "scheduled_at": "2026-11-17T14:15:00Z",
+      "started_at": "2026-11-17T14:15:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_failed": 0,
+      "steps_total": 1,
+      "target": "orders_feed",
+      "trigger_reason": null,
+      "triggered_by": "schedule"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": null,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": null,
+      "first_failure": null,
+      "handle": null,
+      "id": "a1f0c0000008",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "0 ok · 7 left",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 7 steps planned",
+        "target": "sales_report",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "a1f0c0000008",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-17T13:58:00.000Z",
+      "status": "running",
+      "steps_cached": 0,
+      "steps_executed": 0,
+      "steps_failed": 0,
+      "steps_total": 7,
+      "target": "sales_report",
+      "trigger_reason": null,
+      "triggered_by": "manual"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 0.9,
+      "error": null,
+      "files": [
+        "billing.py"
+      ],
+      "finished_at": "2026-11-17T13:55:00.000Z",
+      "first_failure": {
+        "error": "ValueError: 3 rows with a negative total",
+        "node_id": "billing.py:invoices"
+      },
+      "handle": null,
+      "id": "a1f0c0000005",
+      "line": {
+        "failure": "stopped at invoices · ValueError: 3 rows with a negative total",
+        "failure_detail": "billing.py:invoices: ValueError: 3 rows with a negative total",
+        "steps": "0 ok · 1 failed · 0 cached · 1 not reached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 2 steps planned · stopped at billing.py:invoices",
+        "target": "invoice_totals",
+        "target_count": 1
+      },
+      "principal": "token:ci-bot",
+      "run_id": "a1f0c0000005",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-17T13:55:00.000Z",
+      "status": "failed",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_failed": 1,
+      "steps_total": 2,
+      "target": "invoice_totals",
+      "trigger_reason": null,
+      "triggered_by": "api"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 9.0,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-17T13:00:09.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "5c4ed0001300",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "1 ok · 4 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 5 steps planned",
+        "target": "revenue_hourly",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "5c4ed0001300",
+      "schedule_id": "orders.py:revenue_hourly",
+      "scheduled_at": "2026-11-17T13:00:00Z",
+      "started_at": "2026-11-17T13:00:00.000Z",
+      "status": "success",
+      "steps_cached": 4,
+      "steps_executed": 1,
+      "steps_failed": 0,
+      "steps_total": 5,
+      "target": "revenue_hourly",
+      "trigger_reason": null,
+      "triggered_by": "schedule"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 9.0,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-17T12:00:09.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "5c4ed0001200",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "1 ok · 4 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 5 steps planned",
+        "target": "revenue_hourly",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "5c4ed0001200",
+      "schedule_id": "orders.py:revenue_hourly",
+      "scheduled_at": "2026-11-17T12:00:00Z",
+      "started_at": "2026-11-17T12:00:00.000Z",
+      "status": "success",
+      "steps_cached": 4,
+      "steps_executed": 1,
+      "steps_failed": 0,
+      "steps_total": 5,
+      "target": "revenue_hourly",
+      "trigger_reason": null,
+      "triggered_by": "schedule"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 0.7,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-17T02:00:00.000Z",
+      "first_failure": {
+        "error": "KeyError: 'units'",
+        "node_id": "orders.py:sales_by_day[day=2026-11-16]"
+      },
+      "handle": null,
+      "id": "a1f0c0000006",
+      "line": {
+        "failure": "sales_by_day: 1 key failed · KeyError: 'units'",
+        "failure_detail": "orders.py:sales_by_day[day=2026-11-16]: KeyError: 'units'",
+        "steps": "0 ok · 1 failed · 0 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 1 step planned · stopped at orders.py:sales_by_day[day=2026-11-16]",
+        "target": "sales_by_day",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "a1f0c0000006",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-17T02:00:00.000Z",
+      "status": "failed",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_failed": 1,
+      "steps_total": 1,
+      "target": "sales_by_day",
+      "trigger_reason": null,
+      "triggered_by": "manual"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 0.9,
+      "error": null,
+      "files": [
+        "billing.py"
+      ],
+      "finished_at": "2026-11-17T00:40:00.000Z",
+      "first_failure": {
+        "error": "ValueError: 3 rows with a negative total",
+        "node_id": "billing.py:invoices"
+      },
+      "handle": null,
+      "id": "a1f0c0000004",
+      "line": {
+        "failure": "stopped at invoices · ValueError: 3 rows with a negative total",
+        "failure_detail": "billing.py:invoices: ValueError: 3 rows with a negative total",
+        "steps": "0 ok · 1 failed · 0 cached · 1 not reached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 2 steps planned · stopped at billing.py:invoices",
+        "target": "invoice_totals",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "a1f0c0000004",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-17T00:40:00.000Z",
+      "status": "failed",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_failed": 1,
+      "steps_total": 2,
+      "target": "invoice_totals",
+      "trigger_reason": null,
+      "triggered_by": "manual"
+    },
+    {
+      "cancellation": null,
+      "command": "run",
+      "elapsed_seconds": 1.2,
+      "error": null,
+      "files": [
+        "billing.py"
+      ],
+      "finished_at": "2026-11-16T10:00:01.000Z",
+      "first_failure": {
+        "error": "AssertionError: 3 rows with a negative total",
+        "node_id": "billing.py:check__invoices"
+      },
+      "handle": null,
+      "id": "a1f0c0000003",
+      "line": {
+        "failure": "stopped at check__invoices · AssertionError: 3 rows with a negative total",
+        "failure_detail": "billing.py:check__invoices: AssertionError: 3 rows with a negative total",
+        "steps": "0 ok · 1 failed · 1 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 2 steps planned · stopped at billing.py:check__invoices",
+        "target": "check__invoices",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "a1f0c0000003",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-16T10:00:00.000Z",
+      "status": "failed",
+      "steps_cached": 1,
+      "steps_executed": 1,
+      "steps_failed": 1,
+      "steps_total": 2,
+      "target": "check__invoices",
+      "trigger_reason": null,
+      "triggered_by": "manual"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 5.1,
+      "error": null,
+      "files": [
+        "billing.py"
+      ],
+      "finished_at": "2026-11-16T09:30:05.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "a1f0c0000002",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "2 ok · 0 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 2 steps planned",
+        "target": "invoice_totals",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "a1f0c0000002",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-16T09:30:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 2,
+      "steps_failed": 0,
+      "steps_total": 2,
+      "target": "invoice_totals",
+      "trigger_reason": null,
+      "triggered_by": "manual"
+    },
+    {
+      "cancellation": null,
+      "command": "run",
+      "elapsed_seconds": 2.0,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-16T09:10:02.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "a1f0c0000007",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "1 ok · 5 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 6 steps planned",
+        "target": "publish_dashboard",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "a1f0c0000007",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-16T09:10:00.000Z",
+      "status": "success",
+      "steps_cached": 5,
+      "steps_executed": 1,
+      "steps_failed": 0,
+      "steps_total": 6,
+      "target": "publish_dashboard",
+      "trigger_reason": null,
+      "triggered_by": "manual"
+    },
+    {
+      "cancellation": null,
+      "command": "get",
+      "elapsed_seconds": 42.3,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-16T09:00:42.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "a1f0c0000001",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "9 ok · 0 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 9 steps planned",
+        "target": "all assets",
+        "target_count": 0
+      },
+      "principal": null,
+      "run_id": "a1f0c0000001",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "started_at": "2026-11-16T09:00:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 9,
+      "steps_failed": 0,
+      "steps_total": 9,
+      "target": null,
+      "trigger_reason": null,
+      "triggered_by": "manual"
+    },
+    {
+      "cancellation": null,
+      "command": "run",
+      "elapsed_seconds": 3.0,
+      "error": null,
+      "files": [
+        "orders.py"
+      ],
+      "finished_at": "2026-11-16T06:00:03.000Z",
+      "first_failure": null,
+      "handle": null,
+      "id": "5c4ed0000600",
+      "line": {
+        "failure": null,
+        "failure_detail": null,
+        "steps": "1 ok · 0 cached",
+        "steps_detail": "A step is one node, or one key of a partitioned node · 1 step planned",
+        "target": "nightly_export",
+        "target_count": 1
+      },
+      "principal": null,
+      "run_id": "5c4ed0000600",
+      "schedule_id": "orders.py:nightly_export",
+      "scheduled_at": "2026-11-16T06:00:00Z",
+      "started_at": "2026-11-16T06:00:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_failed": 0,
+      "steps_total": 1,
+      "target": "nightly_export",
+      "trigger_reason": null,
+      "triggered_by": "schedule"
+    }
+  ],
+  "total": 14,
+  "truncated": false
+}

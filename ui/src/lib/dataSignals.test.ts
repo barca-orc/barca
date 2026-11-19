@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { coverageLine, dataSignalSets, signalLine } from './dataSignals'
-import { served } from './testdata/served'
+import { NOW_MS, ROLLUP, STATE, entry, row as projectRow } from './testdata/project'
+import { LATE_SCHEDULE, served } from './testdata/served'
 import type { NodeState } from './types'
 
 describe('signalLine', () => {
@@ -32,6 +33,23 @@ describe('data coverage', () => {
   })
 })
 
+describe('the generated project', () => {
+  it('has one late schedule, said with how long ago its slot was, and no data signal', () => {
+    const sets = dataSignalSets(STATE, NOW_MS)
+    expect([...sets.behind]).toEqual([['orders.py:nightly_export', 'schedule missed its slot: late by 8h 57m']])
+    expect([...sets.suspect]).toEqual([])
+    // What the server says of the late node: behind, and nothing will refresh it as things stand.
+    expect(projectRow('nightly_export')).toMatchObject({ health: 'behind', health_reason: 'schedule_late', cause: 'no_refresh_path', no_estimate: 'scheduler_off' })
+    // A schedule whose tick waits in the run queue is not late.
+    expect(projectRow('revenue_hourly').schedule).toMatchObject({ state: 'on_time', late: false, last_status: 'pending' })
+  })
+
+  it('measures none of its assets: no run recorded a row count', () => {
+    expect(ROLLUP.data_coverage).toEqual({ assets: 11, measured: 0, suspect: 0 })
+    expect(coverageLine(entry('file:billing.py').data_coverage)).toBe('0 of 3 measured')
+  })
+})
+
 describe('dataSignalSets', () => {
   it('words the signals and the lateness the server reports, and decides neither', () => {
     const now = Date.parse('2026-11-16T12:17:00Z')
@@ -39,7 +57,7 @@ describe('dataSignalSets', () => {
       [
         row('p.py:empty', { signals: [{ kind: 'empty', empty_keys: 1, keys: 1, previous_empty_keys: null }] }),
         row('p.py:fan', { signals: [{ kind: 'behind_input', input: 'p.py:orders', input_success_at: '2026-11-16 09:00:00', last_success_at: '2026-11-14 10:00:00' }] }),
-        row('p.py:job', { health: 'behind', health_reason: 'schedule_late', late_since: Date.parse('2026-11-16T12:05:00Z') / 1000 }),
+        row('p.py:job', { ...LATE_SCHEDULE, late_since: Date.parse('2026-11-16T12:05:00Z') / 1000 }),
         // A missed slot the server does not call late (within its grace, or paused) is not behind.
         row('p.py:soon', { late_since: Date.parse('2026-11-16T12:16:30Z') / 1000 }),
       ],
