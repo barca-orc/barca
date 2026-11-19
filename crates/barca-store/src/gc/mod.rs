@@ -21,7 +21,7 @@
 //! flight on this `.barca/` (its rows are not written yet).
 //!
 //! **The metadata DBs** cannot be evicted, so each is kept within its own share of the limit
-//! first ([`crate::metadata_size`]).
+//! first ([`barca_db::metadata_size`]).
 //!
 //! **Never evicted:** the metadata DBs (and the copies `state reset` and `state restore` move
 //! aside), their logs and locks, the backups, and anything else barca does not own (only files
@@ -40,9 +40,9 @@ pub use plan::Plan;
 pub(crate) use plan::{Eviction, Goal, LeftoverKind, Protections, Tier};
 pub(crate) use size::MaxSize;
 
-use crate::BarcaError;
-use crate::config::ResolvedConfig;
 use crate::transfer::ArtifactLayout;
+use barca_model::BarcaError;
+use barca_model::config::ResolvedConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -71,7 +71,7 @@ const SQL_CACHE_GRACE: Duration = Duration::from_secs(300);
 pub(crate) const UNREFERENCED_GRACE: Duration = Duration::from_secs(60);
 
 /// What the last full walk found, kept in `.barca/gc-state.json`.
-const STATE_FILE: &str = crate::layout::GC_STATE_FILE;
+const STATE_FILE: &str = barca_model::layout::GC_STATE_FILE;
 
 // `CacheReport`, the `cache` object of a `get`/`run` result, is declared with the results it
 // is part of.
@@ -94,11 +94,11 @@ static NEXT_PIN: AtomicU64 = AtomicU64::new(1);
 
 /// The results a run in flight in this process may read. `serve` runs several at once; each
 /// holds one from before it plans until it returns.
-pub(crate) struct Pin {
+pub struct Pin {
     id: u64,
 }
 
-pub(crate) fn pin(run_id: &str) -> Pin {
+pub fn pin(run_id: &str) -> Pin {
     pin_at(run_id, &std::env::current_dir().unwrap_or_default())
 }
 
@@ -123,7 +123,7 @@ fn pins() -> std::sync::MutexGuard<'static, BTreeMap<u64, PinState>> {
 
 impl Pin {
     /// The run's plan is known: protect the current results of these base node ids.
-    pub(crate) fn nodes(&self, nodes: impl IntoIterator<Item = String>) {
+    pub fn nodes(&self, nodes: impl IntoIterator<Item = String>) {
         if let Some(state) = pins().get_mut(&self.id) {
             state.nodes.extend(nodes);
             state.resolved = true;
@@ -131,7 +131,7 @@ impl Pin {
     }
 
     /// Run hashes the run decided on (cached or to compute).
-    pub(crate) fn run_hashes<'a>(&self, hashes: impl IntoIterator<Item = &'a String>) {
+    pub fn run_hashes<'a>(&self, hashes: impl IntoIterator<Item = &'a String>) {
         if let Some(state) = pins().get_mut(&self.id) {
             for hash in hashes {
                 if !state.run_hashes.contains(hash) {
@@ -226,7 +226,7 @@ impl Project {
 
     /// `path` as an absolute path, if it is inside `.barca/`.
     fn owned(&self, path: &Path) -> Option<PathBuf> {
-        let abs = crate::config::normalize_lexically(&self.root.join(path));
+        let abs = barca_model::config::normalize_lexically(&self.root.join(path));
         let inside = abs.starts_with(&self.barca)
             || self
                 .barca_canon
@@ -274,11 +274,11 @@ struct EnvDb {
 fn envs(project: &Project) -> Vec<EnvDb> {
     let has_db = |dir: &Path| {
         let db = dir.join("metadata.db");
-        db.is_file() && !crate::db::empty_file(&db.display().to_string())
+        db.is_file() && !barca_db::db::empty_file(&db.display().to_string())
     };
     let mut names = Vec::new();
     if has_db(&project.barca) {
-        names.push(crate::config::DEFAULT_ENV.to_string());
+        names.push(barca_model::config::DEFAULT_ENV.to_string());
     }
     if let Ok(entries) = std::fs::read_dir(project.barca.join("envs")) {
         let mut found: Vec<String> = entries
@@ -292,8 +292,8 @@ fn envs(project: &Project) -> Vec<EnvDb> {
     names
         .into_iter()
         .map(|env| {
-            let local = crate::layout::env_local_paths(&env);
-            let layout = crate::config::resolve_in(Some(&env), &project.root)
+            let local = barca_model::layout::env_local_paths(&env);
+            let layout = barca_model::config::resolve_in(Some(&env), &project.root)
                 .ok()
                 .filter(|cfg| cfg.remote_artifacts())
                 .and_then(|cfg| {
@@ -458,7 +458,7 @@ struct StoreCheck {
 
 impl StoreCheck {
     /// The store `cfg` uses, checked at `at`.
-    fn of(cfg: &crate::config::ResolvedConfig, at: u64) -> Self {
+    fn of(cfg: &barca_model::config::ResolvedConfig, at: u64) -> Self {
         use sha2::{Digest, Sha256};
         let options = cfg
             .storage_options_json
@@ -480,12 +480,12 @@ impl StoreCheck {
 
 /// How long a successful check of the artifact store is trusted by a run that needs no
 /// transfer (#593): such a run starts no transfer helper.
-pub(crate) const STORE_CHECK_WINDOW: Duration = Duration::from_secs(300);
+pub const STORE_CHECK_WINDOW: Duration = Duration::from_secs(300);
 
 /// Whether the artifact store of `cfg` (its environment, store URI and storage options) was
 /// checked and found there less than [`STORE_CHECK_WINDOW`] ago, by this project's
 /// `.barca/gc-state.json`. A clock that went back counts as not recent.
-pub(crate) fn store_checked_recently(cfg: &crate::config::ResolvedConfig) -> bool {
+pub fn store_checked_recently(cfg: &barca_model::config::ResolvedConfig) -> bool {
     let Ok(project) = Project::here() else {
         return false;
     };
@@ -499,7 +499,7 @@ pub(crate) fn store_checked_recently(cfg: &crate::config::ResolvedConfig) -> boo
 }
 
 /// Remember that the artifact store of `cfg` was just checked and found there (#593).
-pub(crate) fn remember_store_check(cfg: &crate::config::ResolvedConfig) {
+pub fn remember_store_check(cfg: &barca_model::config::ResolvedConfig) {
     if let Ok(project) = Project::here() {
         update_store_checks(&project, StoreCheck::of(cfg, now_secs()), true);
     }
@@ -507,7 +507,7 @@ pub(crate) fn remember_store_check(cfg: &crate::config::ResolvedConfig) {
 
 /// Forget the last check of the artifact store of `cfg`: a transfer to it failed, so the next
 /// run checks it again (#593).
-pub(crate) fn forget_store_check(cfg: &crate::config::ResolvedConfig) {
+pub fn forget_store_check(cfg: &barca_model::config::ResolvedConfig) {
     if let Ok(project) = Project::here() {
         update_store_checks(&project, StoreCheck::of(cfg, 0), false);
     }
@@ -533,7 +533,7 @@ fn update_store_checks(project: &Project, check: StoreCheck, keep: bool) {
 const STUCK_FOR: Duration = Duration::from_secs(600);
 const STUCK_SLACK: u64 = 1 << 20;
 
-use crate::time::now_secs;
+use barca_model::time::now_secs;
 
 /// Record that a check found `size` under `limit` ([`State::checked_size`]).
 fn checked(project: &Project, size: u64, limit: u64) {
@@ -561,7 +561,7 @@ fn record_measurement(project: &Project, measured: Measurement) {
 /// `backup`, which is below this module and so names the file's owner, `layout`, not `gc`.
 #[cfg(test)]
 fn forget_survey_in(project: &Project) {
-    crate::layout::forget_gc_survey(&project.barca);
+    barca_model::layout::forget_gc_survey(&project.barca);
 }
 
 fn read_state(project: &Project) -> Option<State> {
@@ -651,7 +651,7 @@ fn outside_kind(barca: &Path, path: &Path) -> Held {
 }
 
 fn modified_secs(meta: &std::fs::Metadata) -> u64 {
-    meta.modified().map_or(0, crate::time::unix_secs)
+    meta.modified().map_or(0, barca_model::time::unix_secs)
 }
 
 /// Bytes under `path` (not following symlinks) and the newest modification time in it.
@@ -760,16 +760,18 @@ fn staging_leftovers(project: &Project) -> Vec<plan::Leftover> {
         .filter(|e| e.path().is_dir())
         .filter_map(|e| {
             let pid: i64 = e.file_name().to_str()?.parse().ok()?;
-            (pid != i64::from(std::process::id()) && !crate::process::pid_alive(pid)).then(|| {
-                let (bytes, modified) = du(&e.path());
-                plan::Leftover {
-                    kind: LeftoverKind::Staging,
-                    path: e.path(),
-                    with: Vec::new(),
-                    bytes,
-                    modified,
-                }
-            })
+            (pid != i64::from(std::process::id()) && !barca_model::process::pid_alive(pid)).then(
+                || {
+                    let (bytes, modified) = du(&e.path());
+                    plan::Leftover {
+                        kind: LeftoverKind::Staging,
+                        path: e.path(),
+                        with: Vec::new(),
+                        bytes,
+                        modified,
+                    }
+                },
+            )
         })
         .collect()
 }
@@ -891,9 +893,9 @@ async fn with_db<T>(
     db_path: &str,
     f: impl AsyncFnOnce(&libsql::Connection) -> Result<T, BarcaError>,
 ) -> Result<T, BarcaError> {
-    crate::db::init_db(db_path).await?;
-    let _g = crate::db::db_guard().await;
-    let (_db, conn) = crate::db::open_conn(db_path).await?;
+    barca_db::db::init_db(db_path).await?;
+    let _g = barca_db::db::db_guard().await;
+    let (_db, conn) = barca_db::db::open_conn(db_path).await?;
     f(&conn).await
 }
 
@@ -909,7 +911,7 @@ async fn scan<T>(
     mut each: impl FnMut(&libsql::Row) -> Result<T, BarcaError>,
 ) -> Result<Vec<T>, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read {db_path}: {e}"));
-    crate::db::init_db(db_path).await?;
+    barca_db::db::init_db(db_path).await?;
     let sql = format!(
         "SELECT id, {select} FROM materializations WHERE id > ?1 AND ({filter}) \
          ORDER BY id LIMIT {SCAN_CHUNK}"
@@ -919,8 +921,8 @@ async fn scan<T>(
     let mut after = i64::MIN;
     loop {
         let read = {
-            let _g = crate::db::db_guard().await;
-            let (_db, conn) = crate::db::open_conn(db_path).await?;
+            let _g = barca_db::db::db_guard().await;
+            let (_db, conn) = barca_db::db::open_conn(db_path).await?;
             let mut rows = conn.query(&sql, [after]).await.map_err(failed)?;
             let mut read = 0usize;
             while let Some(row) = rows.next().await.map_err(failed)? {
@@ -1261,7 +1263,7 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
 /// What a command protects of its own: its outputs, what it read and returned, and its run
 /// hashes; and the `Manual` nodes of its DAG.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Own {
+pub struct Own {
     pub recorded: HashSet<String>,
     pub run_hashes: HashSet<String>,
     /// Current results proven fresh without materializing each key's cache state.
@@ -1277,11 +1279,11 @@ pub(crate) struct Own {
 /// walk of the project finds and the files the recorded node ids name. `None` when one of
 /// those files cannot be read or parsed: then no node is known not to be `Manual`.
 fn manual_nodes(project: &Project, rows: &[plan::Row]) -> Option<HashSet<String>> {
-    let toml = crate::config::load_toml(&project.root)
+    let toml = barca_model::config::load_toml(&project.root)
         .ok()?
         .unwrap_or_default();
     let mut files: HashSet<String> =
-        crate::discover::discover(&project.root, &[], &toml.discovery.unwrap_or_default())
+        barca_compile::discover::discover(&project.root, &[], &toml.discovery.unwrap_or_default())
             .unwrap_or_default()
             .into_iter()
             .collect();
@@ -1297,8 +1299,8 @@ fn manual_nodes(project: &Project, rows: &[plan::Row]) -> Option<HashSet<String>
     let mut out = HashSet::new();
     for file in files {
         let source = std::fs::read_to_string(project.root.join(&file)).ok()?;
-        for node in crate::parse::extract_nodes(&source, &file).ok()? {
-            if node.freshness == crate::model::Freshness::Manual {
+        for node in barca_compile::parse::extract_nodes(&source, &file).ok()? {
+            if node.freshness == barca_model::model::Freshness::Manual {
                 out.insert(node.continuity_key());
             }
         }
@@ -1311,7 +1313,7 @@ async fn live_elsewhere(envs: &[EnvDb], ours: &HashSet<String>) -> Vec<String> {
     let mut out = Vec::new();
     for env in envs {
         let live = with_db(&env.db_path, async |conn| {
-            Ok(crate::db::live_runs(conn, &env.db_path).await)
+            Ok(barca_db::db::live_runs(conn, &env.db_path).await)
         })
         .await
         .unwrap_or_default();
@@ -1328,7 +1330,7 @@ async fn pending_uploads(envs: &[EnvDb]) -> (HashSet<String>, Option<String>) {
     let mut out = HashSet::new();
     let mut unread = None;
     for env in envs {
-        match crate::pending_uploads::list(&env.db_path).await {
+        match barca_db::pending_uploads::list(&env.db_path).await {
             Ok(rows) => out.extend(rows.into_iter().map(|p| p.store_path)),
             Err(e) => unread = Some(e.to_string()),
         }
@@ -1372,7 +1374,7 @@ async fn protections(
     // and nothing recomputes it: that result is never evicted.
     let mut user_pins = HashSet::new();
     for env in envs {
-        if let Ok(pins) = crate::db::get_pins(&env.db_path).await {
+        if let Ok(pins) = barca_db::db::get_pins(&env.db_path).await {
             user_pins.extend(pins.into_iter().map(|p| p.run_hash));
         }
     }
@@ -1472,13 +1474,13 @@ async fn delete(
 }
 
 async fn mark_evicted(db_path: &str, paths: &[&str]) {
-    let _g = crate::db::db_guard().await;
-    let Ok((_db, conn)) = crate::db::open_conn(db_path).await else {
+    let _g = barca_db::db::db_guard().await;
+    let Ok((_db, conn)) = barca_db::db::open_conn(db_path).await else {
         return;
     };
-    let _ = crate::db::with_tx(&conn, "BEGIN IMMEDIATE", "eviction marks", async {
+    let _ = barca_db::db::with_tx(&conn, "BEGIN IMMEDIATE", "eviction marks", async {
         for path in paths {
-            crate::db::materializations::mark_evicted(&conn, path)
+            barca_db::db::materializations::mark_evicted(&conn, path)
                 .await
                 .map_err(|e| BarcaError::Db(format!("failed to mark an eviction: {e}")))?;
         }
@@ -1519,7 +1521,7 @@ fn warn_failed(failed: &[(PathBuf, String)]) {
             0 => String::new(),
             n => format!(" (and {n} more)"),
         };
-        crate::errln!(
+        barca_model::errln!(
             "[barca] warning: could not evict {}: {error}{more}; skipped",
             path.display()
         );
@@ -1531,7 +1533,7 @@ static WORKING_SET_WARNED: AtomicBool = AtomicBool::new(false);
 /// Once per process: what may be evicted was not enough to get under the limit.
 fn warn_working_set(after: u64, limit: u64) {
     if after > limit && !WORKING_SET_WARNED.swap(true, Ordering::Relaxed) {
-        crate::errln!(
+        barca_model::errln!(
             "[barca] warning: cache working set {} is larger than max_size {}; results will be \
              recomputed often",
             size::human(after),
@@ -1561,7 +1563,7 @@ pub(crate) fn target_of(limit: u64) -> u64 {
 /// limit, evict down to [`LOW_WATERMARK_PERCENT`] of it, for at most a few seconds. Never fails
 /// the command: a problem is one warning on stderr. Returns the `cache` report when
 /// `.barca/` was over the limit.
-pub(crate) async fn after_command(
+pub async fn after_command(
     cfg: &ResolvedConfig,
     own: &Own,
     pin: Option<&Pin>,
@@ -1572,7 +1574,7 @@ pub(crate) async fn after_command(
     let started = Instant::now();
     let checked = off_the_event_loop(check(cfg.cache_max_size, own, pin)).await;
     if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
-        crate::errln!(
+        barca_model::errln!(
             "[trace] cache size check {:.1}ms",
             started.elapsed().as_secs_f64() * 1000.0
         );
@@ -1580,7 +1582,7 @@ pub(crate) async fn after_command(
     match checked {
         Ok(report) => report,
         Err(e) => {
-            crate::errln!("[barca] warning: cache size check failed: {e}");
+            barca_model::errln!("[barca] warning: cache size check failed: {e}");
             None
         }
     }
@@ -1600,7 +1602,7 @@ async fn off_the_event_loop<F: std::future::Future>(fut: F) -> F::Output {
     }
 }
 
-/// Keep each metadata DB within its share of `limit` ([`crate::metadata_size`]). One that cannot
+/// Keep each metadata DB within its share of `limit` ([`barca_db::metadata_size`]). One that cannot
 /// get there with everything removable gone is not looked at again until [`STUCK_FOR`] passes,
 /// or until it has grown a tenth. Never fails a command. True when one ran out of `time` while
 /// it was still removing things. One waiting for a moment with no run alive does not count:
@@ -1612,7 +1614,7 @@ async fn trim_metadata(
     time: Option<Duration>,
 ) -> bool {
     let mut under_way = false;
-    let allowance = crate::metadata_size::allowance(limit);
+    let allowance = barca_db::metadata_size::allowance(limit);
     for env in envs {
         let size = std::fs::metadata(&env.db_path).map_or(0, |m| m.len());
         if size <= allowance {
@@ -1626,11 +1628,11 @@ async fn trim_metadata(
         {
             continue;
         }
-        match crate::metadata_size::trim(&env.db_path, allowance, time).await {
+        match barca_db::metadata_size::trim(&env.db_path, allowance, time).await {
             Ok(Some(done)) => {
                 under_way |= done.out_of_time && done.removed();
                 if done.after_bytes < done.before_bytes || (done.finished && done.removed()) {
-                    crate::errln!(
+                    barca_model::errln!(
                         "[barca] metadata {} over its {} share of the limit: now {}; cleared \
                          {} component records and {} run reports, removed {} old results and \
                          {} old runs",
@@ -1654,7 +1656,7 @@ async fn trim_metadata(
                 write_state(project, &state);
             }
             Ok(None) => {}
-            Err(e) => crate::errln!("[barca] warning: could not trim {}: {e}", env.db_path),
+            Err(e) => barca_model::errln!("[barca] warning: could not trim {}: {e}", env.db_path),
         }
     }
     under_way
@@ -1667,7 +1669,7 @@ async fn trim_metadata(
 fn metadata_excess(envs: &[EnvDb], limit: Option<u64>) -> u64 {
     // Under this a database is little more than its schema, which no trim can remove.
     const SMALL: u64 = 1 << 20;
-    let allowance = crate::metadata_size::allowance(limit).max(SMALL);
+    let allowance = barca_db::metadata_size::allowance(limit).max(SMALL);
     envs.iter()
         .map(|env| {
             let bytes = |path: &str| std::fs::metadata(path).map_or(0, |m| m.len());
@@ -1820,7 +1822,7 @@ async fn check_in(
     let size_after = survey.total.saturating_sub(evicted_bytes);
     remember(size_after, limit);
     if !done.evicted.is_empty() {
-        crate::errln!(
+        barca_model::errln!(
             "[barca] cache {} over its {} limit; evicted {} file{} ({}): {}",
             size::human(budget_bytes),
             size::human(limit),

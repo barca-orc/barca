@@ -16,7 +16,7 @@ impl Fixture {
         let root = std::fs::canonicalize(dir.path()).unwrap().join("proj");
         std::fs::create_dir_all(root.join(".barca/artifacts")).unwrap();
         let db = root.join(".barca/metadata.db").display().to_string();
-        crate::db::init_db(&db).await.unwrap();
+        barca_db::db::init_db(&db).await.unwrap();
         Self {
             project: Project::at(root),
             _dir: dir,
@@ -39,8 +39,8 @@ impl Fixture {
     }
 
     async fn row(&self, node: &str, hash: &str, recorded: &str, bytes: usize, created: &str) {
-        let _g = crate::db::db_guard().await;
-        let (_h, conn) = crate::db::open_conn(&self.db).await.unwrap();
+        let _g = barca_db::db::db_guard().await;
+        let (_h, conn) = barca_db::db::open_conn(&self.db).await.unwrap();
         conn.execute(
             "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, \
              artifact_size_bytes, status, created_at) VALUES (?1, ?2, ?3, 'json', ?4, 'success', ?5)",
@@ -51,14 +51,14 @@ impl Fixture {
     }
 
     async fn sql(&self, sql: &str) {
-        let _g = crate::db::db_guard().await;
-        let (_h, conn) = crate::db::open_conn(&self.db).await.unwrap();
+        let _g = barca_db::db::db_guard().await;
+        let (_h, conn) = barca_db::db::open_conn(&self.db).await.unwrap();
         conn.execute(sql, ()).await.unwrap();
     }
 
     async fn evicted_at(&self, recorded: &str) -> Option<String> {
-        let _g = crate::db::db_guard().await;
-        let (_h, conn) = crate::db::open_conn(&self.db).await.unwrap();
+        let _g = barca_db::db::db_guard().await;
+        let (_h, conn) = barca_db::db::open_conn(&self.db).await.unwrap();
         let mut rows = conn
             .query(
                 "SELECT evicted_at FROM materializations WHERE artifact_path = ?1",
@@ -227,7 +227,7 @@ async fn a_result_whose_upload_is_pending_is_never_evicted() {
     // superseded nor a current one is evicted while its upload is pending.
     let (f, files) = project().await;
     let [old, _current, cold, _hot] = files.try_into().unwrap();
-    let pending = |rel: &str, node: &str| crate::pending_uploads::PendingUpload {
+    let pending = |rel: &str, node: &str| barca_db::pending_uploads::PendingUpload {
         store_path: rel.to_string(),
         node_id: node.to_string(),
         run_hash: None,
@@ -235,7 +235,7 @@ async fn a_result_whose_upload_is_pending_is_never_evicted() {
         local_path: f.root().join(rel).display().to_string(),
         error: Some("upload failed".into()),
     };
-    crate::pending_uploads::record(&f.db, &[pending(&old, "p.py:a"), pending(&cold, "p.py:b")])
+    barca_db::pending_uploads::record(&f.db, &[pending(&old, "p.py:a"), pending(&cold, "p.py:b")])
         .await
         .unwrap();
     let result = f.gc(MaxSize::Bytes(1), false).await;
@@ -252,8 +252,8 @@ async fn a_result_whose_upload_is_pending_is_never_evicted() {
 async fn a_database_past_its_share_does_not_evict_artifacts_that_fit() {
     let (f, _files) = project().await;
     {
-        let _g = crate::db::db_guard().await;
-        let (_h, conn) = crate::db::open_conn(&f.db).await.unwrap();
+        let _g = barca_db::db::db_guard().await;
+        let (_h, conn) = barca_db::db::open_conn(&f.db).await.unwrap();
         conn.execute(
             "INSERT INTO runs (run_id, command, files, outcome_json) \
              VALUES ('big', 'get', 'p.py', zeroblob(50000000))",
@@ -447,7 +447,7 @@ async fn a_live_run_in_another_process_limits_eviction_to_tiers_1_and_2() {
         "INSERT INTO runs (run_id, command, files, status, pid, host) VALUES \
          ('elsewhere', 'get', '[]', 'running', {}, '{}')",
         std::process::id(),
-        crate::process::local_host()
+        barca_model::process::local_host()
     ))
     .await;
     let predicted = f.gc(MaxSize::Bytes(1), true).await;
@@ -620,12 +620,12 @@ async fn read_results_are_no_longer_evicted_and_move_their_last_read_time() {
     let rel = f.result("p.py:a", "h1", 10, "2026-10-01 00:00:00").await;
     mark_evicted(&f.db, &[rel.as_str()]).await;
     assert_eq!(
-        crate::db::evicted_among(&f.db, &[rel.as_str()]).await,
+        barca_db::db::evicted_among(&f.db, &[rel.as_str()]).await,
         HashSet::from([rel.clone()])
     );
-    crate::db::touch_read(&f.db, std::slice::from_ref(&rel)).await;
+    barca_db::db::touch_read(&f.db, std::slice::from_ref(&rel)).await;
     assert!(
-        crate::db::evicted_among(&f.db, &[rel.as_str()])
+        barca_db::db::evicted_among(&f.db, &[rel.as_str()])
             .await
             .is_empty()
     );
@@ -703,10 +703,10 @@ async fn a_working_set_larger_than_the_limit_is_not_planned_again_until_it_grows
 async fn a_version_1_database_from_an_earlier_release_gains_the_columns() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db").display().to_string();
-    crate::db::init_db(&path).await.unwrap();
+    barca_db::db::init_db(&path).await.unwrap();
     {
-        let _g = crate::db::db_guard().await;
-        let (_h, conn) = crate::db::open_conn(&path).await.unwrap();
+        let _g = barca_db::db::db_guard().await;
+        let (_h, conn) = barca_db::db::open_conn(&path).await.unwrap();
         conn.execute("DROP INDEX idx_mat_path", ()).await.unwrap();
         // The index on evicted rows came later still.
         conn.execute("DROP INDEX idx_mat_evicted", ())
@@ -725,16 +725,16 @@ async fn a_version_1_database_from_an_earlier_release_gains_the_columns() {
         .await
         .unwrap();
         assert!(
-            crate::db::schema::ddl::additions_missing(&conn)
+            barca_db::db::schema::ddl::additions_missing(&conn)
                 .await
                 .unwrap()
         );
     }
-    crate::db::init_db(&path).await.unwrap();
-    let _g = crate::db::db_guard().await;
-    let (_h, conn) = crate::db::open_conn(&path).await.unwrap();
+    barca_db::db::init_db(&path).await.unwrap();
+    let _g = barca_db::db::db_guard().await;
+    let (_h, conn) = barca_db::db::open_conn(&path).await.unwrap();
     assert!(
-        !crate::db::schema::ddl::additions_missing(&conn)
+        !barca_db::db::schema::ddl::additions_missing(&conn)
             .await
             .unwrap()
     );
@@ -750,7 +750,9 @@ async fn a_version_1_database_from_an_earlier_release_gains_the_columns() {
         1
     );
     assert_eq!(
-        crate::db::schema::ddl::read_version(&conn).await.unwrap(),
+        barca_db::db::schema::ddl::read_version(&conn)
+            .await
+            .unwrap(),
         1
     );
 }
@@ -867,7 +869,7 @@ async fn after_the_database_is_replaced_the_next_check_finds_the_old_files() {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", f.db));
     }
-    crate::db::init_db(&f.db).await.unwrap();
+    barca_db::db::init_db(&f.db).await.unwrap();
     // Written a few seconds ago, but before the database: no run can be about to name it.
     unnamed(&f, &a, 4000, 5);
     forget_survey_in(&f.project);
@@ -890,7 +892,7 @@ async fn files_no_row_names_stay_while_a_run_is_in_flight() {
         "INSERT INTO runs (run_id, command, files, status, pid, host) VALUES \
          ('elsewhere', 'get', '[]', 'running', {}, '{}')",
         std::process::id(),
-        crate::process::local_host()
+        barca_model::process::local_host()
     ))
     .await;
     let result = f.gc(MaxSize::Bytes(1), false).await;
@@ -913,11 +915,11 @@ async fn a_file_another_environment_names_is_not_a_leftover() {
     let dev_db = f.root().join(".barca/envs/dev/metadata.db");
     std::fs::create_dir_all(dev_db.parent().unwrap()).unwrap();
     let dev_db = dev_db.display().to_string();
-    crate::db::init_db(&dev_db).await.unwrap();
+    barca_db::db::init_db(&dev_db).await.unwrap();
     let rel = unnamed(&f, ".barca/envs/dev/artifacts/p.py--a/h1.json", 1000, 3600);
     {
-        let _g = crate::db::db_guard().await;
-        let (_h, conn) = crate::db::open_conn(&dev_db).await.unwrap();
+        let _g = barca_db::db::db_guard().await;
+        let (_h, conn) = barca_db::db::open_conn(&dev_db).await.unwrap();
         conn.execute(
             "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, \
              artifact_size_bytes, status, created_at) VALUES ('p.py:a', 'h1', ?1, 'json', 1000, \
@@ -932,7 +934,7 @@ async fn a_file_another_environment_names_is_not_a_leftover() {
     let opts = GcOptions {
         max_size: Some(MaxSize::Bytes(1)),
         dry_run: false,
-        env: Some(crate::config::DEFAULT_ENV.to_string()),
+        env: Some(barca_model::config::DEFAULT_ENV.to_string()),
     };
     let result = gc_in(&f.project, MaxSize::Off, &opts).await.unwrap();
     assert!(result.evicted.is_empty(), "{result:?}");
@@ -970,7 +972,8 @@ async fn gc_says_what_holds_the_space_it_cannot_free() {
 #[tokio::test]
 async fn a_survey_keeps_the_store_checks_and_each_store_has_its_own() {
     let (f, _) = project().await;
-    let mut cfg = crate::config::resolve_with(None, f.root(), crate::config::Vars::NONE).unwrap();
+    let mut cfg =
+        barca_model::config::resolve_with(None, f.root(), barca_model::config::Vars::NONE).unwrap();
     cfg.artifact_root = "s3://bucket/p/default/artifacts".into();
     update_store_checks(&f.project, StoreCheck::of(&cfg, 100), true);
     let mut other = cfg.clone();
@@ -1106,7 +1109,7 @@ async fn a_writer_does_not_wait_for_a_whole_scan() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let mut written = Instant::now();
     for i in 0..3 {
-        crate::db::create_run(&f.db, &format!("r{i}"), "get", "[]", None, Some(1))
+        barca_db::db::create_run(&f.db, &format!("r{i}"), "get", "[]", None, Some(1))
             .await
             .unwrap();
         written = Instant::now();

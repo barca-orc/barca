@@ -1,14 +1,14 @@
 //! Pinning an asset to an earlier materialization (`barca pin`, `barca unpin`, the
 //! `/assets/{name}/pin` routes). A pinned asset is read by every run as the materialization it
 //! is pinned at and is never computed, whatever the cache policy, schedule or `--refresh`
-//! ([`crate::freshness::walk_with`]); what reads it is hashed against that materialization's
+//! ([`barca_model::freshness::walk_with`]); what reads it is hashed against that materialization's
 //! run hash, so it is computed again (or served from an earlier cache hit) against the pinned
 //! data. `barca unpin` removes the pin; the next run decides the asset as before.
 
-use crate::BarcaError;
-use crate::dag::Dag;
-use crate::db::{self, AssetPin, Version};
-use crate::targets::{find_target_id, short_name};
+use barca_compile::dag::Dag;
+use barca_compile::targets::{find_target_id, short_name};
+use barca_db::db::{self, AssetPin, Version};
+use barca_model::BarcaError;
 use serde::{Deserialize, Serialize};
 
 /// The versions a list shows by default.
@@ -65,10 +65,10 @@ fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
         let node = dag.get_node(&id).expect("resolved node exists");
         return Ok((
             id,
-            node.kind() == crate::NodeKind::Asset && node.decl.partitions.is_empty(),
+            node.kind() == barca_model::NodeKind::Asset && node.decl.partitions.is_empty(),
         ));
     }
-    let step = crate::StepId::parse(name);
+    let step = barca_model::StepId::parse(name);
     let id = find_target_id(dag, step.base_id())?;
     let node = dag.get_node(&id).expect("resolved node exists");
     if !step.partition.is_empty() {
@@ -81,10 +81,10 @@ fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
             ));
         }
         for (dim, value) in &step.partition.0 {
-            if let crate::PartitionSpec::Static { values } = &node.decl.partitions[dim] {
+            if let barca_model::PartitionSpec::Static { values } = &node.decl.partitions[dim] {
                 let known = values.iter().any(|v| match v {
-                    crate::PartitionValue::Str(s) => s == value,
-                    crate::PartitionValue::Int(n) => n.to_string() == *value,
+                    barca_model::PartitionValue::Str(s) => s == value,
+                    barca_model::PartitionValue::Int(n) => n.to_string() == *value,
                 });
                 if !known {
                     return Err(BarcaError::Usage(format!(
@@ -95,12 +95,12 @@ fn pinnable(dag: &Dag, name: &str) -> Result<(String, bool), BarcaError> {
         }
         return Ok((
             step.partition.display_id(&id),
-            node.kind() == crate::NodeKind::Asset,
+            node.kind() == barca_model::NodeKind::Asset,
         ));
     }
     Ok((
         id,
-        node.kind() == crate::NodeKind::Asset && node.decl.partitions.is_empty(),
+        node.kind() == barca_model::NodeKind::Asset && node.decl.partitions.is_empty(),
     ))
 }
 
@@ -117,7 +117,7 @@ pub fn local_actor() -> Option<String> {
         .or_else(|_| std::env::var("USERNAME"))
         .ok()
         .filter(|u| !u.is_empty())?;
-    let host = crate::process::local_host();
+    let host = barca_model::process::local_host();
     Some(if host.is_empty() {
         user
     } else {
@@ -231,7 +231,7 @@ pub async fn pin(
     let pin = AssetPin {
         node_id: id.clone(),
         run_hash: version.run_hash.clone(),
-        pinned_at: crate::time::rfc3339(chrono::Utc::now().timestamp()),
+        pinned_at: barca_model::time::rfc3339(chrono::Utc::now().timestamp()),
         pinned_by: by,
         reason: reason.filter(|r| !r.trim().is_empty()),
         run_id: version.run_id.clone(),
@@ -267,7 +267,7 @@ pub fn upload_format(file_name: &str, format: Option<&str>) -> Result<String, Ba
     let fmt = match format.map(str::trim).filter(|f| !f.is_empty()) {
         Some("pkl") => "pickle".to_string(),
         Some(f) => f.to_ascii_lowercase(),
-        None => crate::artifact_format::format_of(file_name).to_string(),
+        None => barca_model::artifact_format::format_of(file_name).to_string(),
     };
     if known.contains(&fmt.as_str()) {
         Ok(fmt)
@@ -284,13 +284,13 @@ pub fn upload_format(file_name: &str, format: Option<&str>) -> Result<String, Ba
 pub fn upload_run_hash(bytes: &[u8]) -> String {
     let mut tagged = b"barca-upload\0".to_vec();
     tagged.extend_from_slice(bytes);
-    crate::hash::sha256_hex(&tagged)
+    barca_model::hash::sha256_hex(&tagged)
 }
 
 /// Load the artifact at `path` with the reader runs use (`barca._value` `check`); why not.
 async fn check_loads(
     python: &std::path::Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     path: &str,
     format: &str,
 ) -> Result<(), String> {
@@ -298,7 +298,7 @@ async fn check_loads(
         "op": "check",
         "artifacts": [{"path": path, "format": format}],
     });
-    let cmd = crate::helper_proc::python_module(
+    let cmd = barca_proc::helper_proc::python_module(
         python,
         "barca._value",
         cfg.storage_options_json.as_deref(),
@@ -320,18 +320,19 @@ async fn check_loads(
 /// Validate runtime membership before recording replacement bytes. Read the same current
 /// source (including a source pin) as execution; never create a key by uploading to a typo.
 async fn check_runtime_key(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     python: &std::path::Path,
     dag: &Dag,
     id: &str,
 ) -> Result<(), BarcaError> {
-    let step = crate::StepId::parse(id);
+    let step = barca_model::StepId::parse(id);
     if step.partition.is_empty() {
         return Ok(());
     }
     let node = dag.get_node(step.base_id()).expect("resolved node exists");
     for (dim, value) in &step.partition.0 {
-        let crate::PartitionSpec::DerivedFrom { source_ref } = &node.decl.partitions[dim] else {
+        let barca_model::PartitionSpec::DerivedFrom { source_ref } = &node.decl.partitions[dim]
+        else {
             continue;
         };
         let source = dag
@@ -356,7 +357,7 @@ async fn check_runtime_key(
                 short_name(source)
             ))
         })?;
-        let cmd = crate::helper_proc::python_module(
+        let cmd = barca_proc::helper_proc::python_module(
             python,
             "barca._value",
             cfg.storage_options_json.as_deref(),
@@ -405,7 +406,7 @@ async fn check_runtime_key(
 /// written as a new artifact of the asset (run hash [`upload_run_hash`]), recorded as a
 /// materialization marked as an upload, and pinned. `db_path` must exist (initialized).
 pub async fn pin_upload(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     python: &std::path::Path,
     dag: &Dag,
     name: &str,
@@ -436,7 +437,7 @@ pub async fn pin_upload(
     let format = upload_format(&supplied.file_name, supplied.format.as_deref())?;
     let run_hash = upload_run_hash(&supplied.bytes);
     let ext = if format == "pickle" { "pkl" } else { &format };
-    let dir = std::path::Path::new(&cfg.local_artifact_dir).join(crate::safe_node_id(&id));
+    let dir = std::path::Path::new(&cfg.local_artifact_dir).join(barca_model::safe_node_id(&id));
     let dest = dir.join(format!("{run_hash}.{ext}"));
     let io = |e: std::io::Error| {
         BarcaError::Io(std::io::Error::new(
@@ -457,7 +458,7 @@ pub async fn pin_upload(
     }
     std::fs::rename(&tmp, &dest).map_err(io)?;
     let upload = db::Upload {
-        uploaded_at: crate::time::rfc3339(chrono::Utc::now().timestamp()),
+        uploaded_at: barca_model::time::rfc3339(chrono::Utc::now().timestamp()),
         uploaded_by: by.clone(),
         file_name: Some(supplied.file_name.clone()).filter(|n| !n.is_empty()),
         reason: reason.clone().filter(|r| !r.trim().is_empty()),
@@ -508,9 +509,9 @@ pub async fn unpin(db_path: &str, dag: &Dag, name: &str) -> Result<Unpinned, Bar
 
 /// Remove work that is only read by held partition keys. Unknown memberships are left to
 /// runtime expansion; never guess a key set from a historical materialization.
-pub(crate) fn prune_partition_inputs(
+pub fn prune_partition_inputs(
     dag: &Dag,
-    plan: &mut crate::planner::ExecutionPlan,
+    plan: &mut barca_compile::planner::ExecutionPlan,
     targets: &[&str],
     pins: &[AssetPin],
 ) {
@@ -557,7 +558,7 @@ pub(crate) fn prune_partition_inputs(
             if held.contains(display.as_str()) {
                 continue;
             }
-            let key = crate::StepId::parse(&display).partition;
+            let key = barca_model::StepId::parse(&display).partition;
             for up in dag.upstream(id) {
                 let Some(all) = members.get(up) else { continue };
                 let upstream = dag.get_node(up).expect("input node exists");
@@ -568,7 +569,7 @@ pub(crate) fn prune_partition_inputs(
                 } else if !node.resolved_collected.values().any(|v| v == up)
                     && dims.keys().all(|dim| key.0.contains_key(dim))
                 {
-                    let projected = crate::PartitionKey(
+                    let projected = barca_model::PartitionKey(
                         dims.keys()
                             .map(|dim| (dim.clone(), key.0[dim].clone()))
                             .collect(),
@@ -621,9 +622,9 @@ pub(crate) fn prune_partition_inputs(
 
 /// Prune expanded runtime keys whose every path to a requested target stops at a pin.
 /// Membership sources still run: a pin does not invent or retain a removed partition key.
-pub(crate) fn prune_expanded_inputs(
+pub fn prune_expanded_inputs(
     dag: &Dag,
-    phase: &mut crate::planner::Phase,
+    phase: &mut barca_compile::planner::Phase,
     targets: &[&str],
     pins: &[AssetPin],
 ) {
@@ -636,7 +637,7 @@ pub(crate) fn prune_expanded_inputs(
         relevant: HashSet<String>,
     }
     impl Demand<'_> {
-        fn needed(&mut self, id: &str, key: &crate::PartitionKey) -> bool {
+        fn needed(&mut self, id: &str, key: &barca_model::PartitionKey) -> bool {
             let display = key.display_id(id);
             if let Some(needed) = self.memo.get(&display) {
                 return *needed;
@@ -656,7 +657,7 @@ pub(crate) fn prune_expanded_inputs(
                     {
                         return true;
                     }
-                    let projected = crate::PartitionKey(
+                    let projected = barca_model::PartitionKey(
                         node.decl
                             .partitions
                             .keys()
@@ -727,8 +728,8 @@ def events(day: str, kind: str, region: str) -> dict:
 "#;
         // Each graph hashes its maps anew: enough of them see every order.
         for _ in 0..40 {
-            let dag =
-                Dag::build(&crate::parse::extract_nodes(source, "p.py").unwrap()).expect("dag");
+            let dag = Dag::build(&barca_compile::parse::extract_nodes(source, "p.py").unwrap())
+                .expect("dag");
             let (id, pinnable) =
                 super::pinnable(&dag, "p.py:events[day=d1,kind=b,region=apac]").unwrap();
             assert_eq!(id, "p.py:events[day=d1,kind=b,region=apac]");

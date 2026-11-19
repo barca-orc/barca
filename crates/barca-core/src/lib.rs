@@ -37,58 +37,42 @@
 // Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
-pub mod backup;
 pub mod cache;
 pub mod causes;
 pub(crate) mod changes;
 pub mod commands;
 pub mod db;
 pub mod diagnostics;
-pub mod envelope;
 pub mod estimates;
 pub(crate) mod execution;
 pub mod freshness;
-pub mod gc;
 pub mod health;
 pub mod history_filter;
-pub mod http;
 mod incremental;
 pub mod key_query;
-pub mod ledger;
 pub mod liveness;
 mod mismatch;
 pub mod outcome;
 pub mod partition_grid;
-pub mod pauses;
 mod persist;
-pub mod pins;
 pub(crate) mod plan_reasons;
 pub(crate) mod predict;
 pub mod queries;
 mod recover;
 pub mod refresh_path;
 pub mod report;
-pub mod results;
 pub mod rollup;
 pub mod run_explanation;
 pub mod run_list;
-pub mod run_queue;
 pub mod schedule;
 pub mod schedule_standing;
 pub mod serve;
 pub mod served;
 pub(crate) mod sizing;
-#[cfg(test)]
-mod source_scan;
 pub mod sql;
 pub mod status;
-pub(crate) mod store_inspect;
-mod store_sync;
 pub mod telemetry;
-pub mod text;
-pub mod transfer;
 pub mod values;
-mod verified_copies;
 pub(crate) mod views;
 
 // The model layer lives in `barca-model` (#905 step 4); its modules and root items keep their
@@ -102,16 +86,16 @@ pub use barca_model::hash;
 pub use barca_model::jsonlog;
 pub(crate) use barca_model::keyed;
 pub(crate) use barca_model::layout;
-pub(crate) use barca_model::ledger_post;
 pub use barca_model::lines;
 pub use barca_model::model;
 pub(crate) use barca_model::model::*;
 pub use barca_model::model::{CronExpr, Freshness, NodeKind, StepId};
 pub(crate) use barca_model::node_estimate;
 pub(crate) use barca_model::process;
-pub(crate) use barca_model::reports;
 pub use barca_model::run_explain;
 use barca_model::source_observation;
+#[cfg(test)]
+use barca_model::source_scan;
 pub(crate) use barca_model::step_result;
 pub use barca_model::step_status;
 pub use barca_model::suggest;
@@ -120,7 +104,6 @@ pub use barca_model::test_hooks;
 pub use barca_model::time;
 pub(crate) use barca_model::trace_ids;
 pub(crate) use barca_model::trigger;
-pub(crate) use barca_model::uri;
 pub use barca_model::{
     BarcaError, CancellationToken, FailedStep, LogStream, RunEvent, errln, outln,
     release_free_memory,
@@ -142,7 +125,6 @@ pub use barca_compile::warnings;
 
 // The metadata database layer lives in `barca-db` (#905 step 4); its modules keep their
 // `barca_core::` paths.
-use barca_db::metadata_size;
 pub(crate) use barca_db::pending_uploads;
 pub use barca_db::run_logs;
 use barca_db::run_owner;
@@ -183,3 +165,18 @@ mod step_status_literals_tests;
 mod ui_fixture_tests;
 #[cfg(test)]
 mod write_boundary_tests;
+
+// The store layer lives in `barca-store` (#1056, C6).
+pub use barca_store::backup;
+pub use barca_store::envelope;
+pub use barca_store::gc;
+pub use barca_store::http;
+pub use barca_store::ledger;
+pub use barca_store::pauses;
+pub use barca_store::pins;
+pub use barca_store::results;
+pub use barca_store::run_queue;
+pub(crate) use barca_store::store_inspect;
+use barca_store::store_sync;
+pub use barca_store::text;
+pub use barca_store::transfer;

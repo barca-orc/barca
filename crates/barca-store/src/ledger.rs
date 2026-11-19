@@ -7,8 +7,8 @@
 //! 1. [`Ledger::prepare`]: `GET /health` (API version, and the server's store must be this
 //!    machine's `[remote]`), then every run this machine could not post before is posted again.
 //! 2. [`Ledger::prefetch`]: `POST /ledger/lookup` with every run hash of the cone that is known
-//!    before anything runs ([`crate::cache::cone_keys`]); a phase whose hashes depend on what
-//!    ran before it asks for the rest ([`crate::cache::phase_keys`]). Cache decisions then read
+//!    before anything runs ([`barca_model::cache::cone_keys`]); a phase whose hashes depend on what
+//!    ran before it asks for the rest ([`barca_model::cache::phase_keys`]). Cache decisions then read
 //!    [`Ledger::answer`] instead of this machine's history. A hit is fetched from the store by
 //!    the transfer helper like any store-backed cache hit, and a local copy whose digest differs
 //!    from the server's is replaced by the store's copy.
@@ -26,10 +26,10 @@
 //! The server half, [`lookup`] and [`accept`], is what `barca serve` answers those requests
 //! with: the existing cache lookup, and `persist`'s rows with a verification in front of them.
 
-use crate::BarcaError;
-use crate::db;
 use crate::envelope::ErrorEnvelope;
-use crate::step_result::OutputRef;
+use barca_db::db;
+use barca_model::BarcaError;
+use barca_model::step_result::OutputRef;
 /// A boxed `Send` future, the return type of the [`Ledger`] and [`ObjectStat`] methods (what
 /// `futures::future::BoxFuture` spells; barca-cli implements the traits without `futures`).
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
@@ -39,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 mod reader;
-pub(crate) use reader::{CacheReader, lookup_cached};
+pub use reader::{CacheReader, lookup_cached};
 
 // ─── Wire types ──────────────────────────────────────────────────────────────
 
@@ -80,7 +80,7 @@ pub struct LookupResponse {
     pub results: Vec<LookupEntry>,
 }
 
-pub use crate::ledger_post::{LedgerPost, LedgerRun, LedgerStep, PostAccepted};
+pub use barca_model::ledger_post::{LedgerPost, LedgerRun, LedgerStep, PostAccepted};
 
 /// What a client needs from `GET /health`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -157,10 +157,10 @@ struct Inner {
 }
 
 /// The ledger `cfg` runs against ([`Ledger::attach`]), when its command runs against a server.
-pub fn attached(cfg: &crate::config::ResolvedConfig) -> Option<&Ledger> {
+pub fn attached(cfg: &barca_model::config::ResolvedConfig) -> Option<&Ledger> {
     cfg.ledger
         .as_ref()
-        .and_then(crate::config::AttachedLedger::get)
+        .and_then(barca_model::config::AttachedLedger::get)
 }
 
 /// One command's link to a server's ledger. Cheap to clone; clones share the answers.
@@ -200,9 +200,9 @@ impl Ledger {
     }
 
     /// This client as a command's `cfg.ledger`, which [`attached`] reads back.
-    pub fn attach(self) -> crate::config::AttachedLedger {
+    pub fn attach(self) -> barca_model::config::AttachedLedger {
         let url = self.url().to_string();
-        crate::config::AttachedLedger::new(&url, self)
+        barca_model::config::AttachedLedger::new(&url, self)
     }
 
     fn transport(&self) -> &dyn LedgerTransport {
@@ -223,9 +223,9 @@ impl Ledger {
     /// Once per command: print which server this command uses, check that it is one this
     /// machine can share results with, and (unless `retry` is false, as for a dry run, which
     /// writes nothing) post again the runs this machine could not post before.
-    pub(crate) async fn prepare(
+    pub async fn prepare(
         &self,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         retry: bool,
     ) -> Result<(), BarcaError> {
         self.inner
@@ -233,13 +233,13 @@ impl Ledger {
             .get_or_try_init(|| async {
                 match &self.inner.source {
                     Some(source) => {
-                        crate::run_line!(
+                        barca_model::run_line!(
                             Always,
                             "[barca] server {} ({source})",
                             crate::http::diagnostic_url(self.url())
                         )
                     }
-                    None => crate::run_line!(
+                    None => barca_model::run_line!(
                         Always,
                         "[barca] server {}",
                         crate::http::diagnostic_url(self.url())
@@ -255,7 +255,10 @@ impl Ledger {
         Ok(())
     }
 
-    async fn check_health(&self, cfg: &crate::config::ResolvedConfig) -> Result<(), BarcaError> {
+    async fn check_health(
+        &self,
+        cfg: &barca_model::config::ResolvedConfig,
+    ) -> Result<(), BarcaError> {
         let url = crate::http::diagnostic_url(self.url());
         if !cfg.remote_artifacts() {
             return Err(BarcaError::Usage(format!(
@@ -293,7 +296,7 @@ impl Ledger {
     /// Ask the ledger about every pair in `keys` it has not been asked about yet, in one
     /// request. A server that cannot be reached ends the command (exit 3): a run that silently
     /// fell back to this machine's ledger would stop agreeing with everyone else's.
-    pub(crate) async fn prefetch(&self, keys: Vec<(String, String)>) -> Result<(), BarcaError> {
+    pub async fn prefetch(&self, keys: Vec<(String, String)>) -> Result<(), BarcaError> {
         let ask: Vec<LedgerKey> = {
             let answers = self.inner.answers.lock().unwrap();
             let mut seen = HashSet::new();
@@ -335,11 +338,11 @@ impl Ledger {
     /// already held with different bytes and get the warning ([`LedgerPost::warns_for`]).
     /// Never fails the run: a post that is refused or does
     /// not arrive prints a warning and is kept `unsynced` for the next command.
-    pub(crate) async fn record_run(
+    pub async fn record_run(
         &self,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         run_id: &str,
-        dag: &crate::dag::Dag,
+        dag: &barca_compile::dag::Dag,
     ) -> Vec<String> {
         // A run some of whose results are not in the store yet (#390: their upload failed and
         // is pending) is not posted now: the server would refuse objects it cannot find, and
@@ -349,7 +352,7 @@ impl Ledger {
             Ok(Some(post)) => post,
             Ok(None) => return Vec::new(),
             Err(e) => {
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] warning: run {run_id} was not recorded on the server {}: {e}",
                     crate::http::diagnostic_url(self.url())
@@ -359,7 +362,7 @@ impl Ledger {
         };
         if is_held(&post, &pending_paths(cfg).await) {
             let kept = posts::record(&cfg.db_path, self.url(), &post, Err(NOT_UPLOADED)).await;
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] warning: run {run_id} is not recorded on the server {} yet: some of its \
                  results are not in the artifact store yet (barca status shows them unsynced); \
@@ -374,7 +377,7 @@ impl Ledger {
         match self.send(cfg, &post).await {
             Ok(accepted) => post.warns_for(accepted.bytes_changed),
             Err(e) => {
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] warning: run {run_id} was not recorded on the server {}: {}; it \
                      stays on this machine (unsynced) and the next command against the server \
@@ -390,7 +393,7 @@ impl Ledger {
     /// Post `post` and record the outcome in this machine's `ledger_posts`.
     async fn send(
         &self,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         post: &LedgerPost,
     ) -> Result<PostAccepted, LedgerError> {
         let result = self.transport().post_run(post).await;
@@ -409,7 +412,7 @@ impl Ledger {
         )
         .await;
         if let Err(e) = recorded {
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] warning: could not record the ledger post of run {}: {e}",
                 post.run.run_id
@@ -445,9 +448,9 @@ impl Ledger {
     /// Post the held runs with a result at one of `store_paths`, whose pending uploads a retry
     /// has just settled (#507), after the retry and before this command's own steps are
     /// decided.
-    pub(crate) async fn post_uploaded(
+    pub async fn post_uploaded(
         &self,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         store_paths: &HashSet<String>,
     ) {
         if !store_paths.is_empty() {
@@ -460,7 +463,7 @@ impl Ledger {
     /// held: the server would refuse it.
     async fn retry_unsynced(
         &self,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         only: Option<&HashSet<String>>,
     ) {
         if !std::path::Path::new(&cfg.db_path).exists() {
@@ -469,7 +472,7 @@ impl Ledger {
         let unsynced = match posts::unsynced(&cfg.db_path, self.url()).await {
             Ok(unsynced) => unsynced,
             Err(e) => {
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] warning: could not read the runs waiting for the server: {e}"
                 );
@@ -484,24 +487,24 @@ impl Ledger {
             }
             // A held post was built before its uploads, which record the digests they confirm.
             if let Err(e) = posts::refresh_digests(&cfg.db_path, &mut post).await {
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] warning: could not read the digests of run {run_id}: {e}"
                 );
             }
             match self.send(cfg, &post).await {
                 Ok(accepted) => {
-                    crate::run_line!(
+                    barca_model::run_line!(
                         Always,
                         "[barca] recorded run {run_id} on the server (run {})",
                         accepted.run_id
                     );
                     // The same rule as a post sent at the end of its run (#570).
                     for node in post.warns_for(accepted.bytes_changed) {
-                        crate::run_line!(Always, "{}", bytes_changed_warning(&node));
+                        barca_model::run_line!(Always, "{}", bytes_changed_warning(&node));
                     }
                 }
-                Err(e) => crate::run_line!(
+                Err(e) => barca_model::run_line!(
                     Always,
                     "[barca] warning: run {run_id} is still not recorded on the server {}: {}",
                     crate::http::diagnostic_url(self.url()),
@@ -516,8 +519,8 @@ impl Ledger {
 const NOT_UPLOADED: &str = "some of its results are not in the artifact store yet";
 
 /// The store locations of this host's results whose upload is pending (#390).
-async fn pending_paths(cfg: &crate::config::ResolvedConfig) -> HashSet<String> {
-    crate::pending_uploads::list(&cfg.db_path)
+async fn pending_paths(cfg: &barca_model::config::ResolvedConfig) -> HashSet<String> {
+    barca_db::pending_uploads::list(&cfg.db_path)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -534,7 +537,7 @@ fn is_held(post: &LedgerPost, paths: &HashSet<String>) -> bool {
 
 /// The warning for a step whose bytes differ from what was recorded for the same run hash
 /// (`specs/interfaces/materialization-digests.md`).
-pub(crate) fn bytes_changed_warning(node: &str) -> String {
+pub fn bytes_changed_warning(node: &str) -> String {
     format!(
         "[barca] warning: {node} produced different bytes for the same code and inputs; the \
          function is not deterministic"
@@ -544,7 +547,7 @@ pub(crate) fn bytes_changed_warning(node: &str) -> String {
 /// The server at `url`, whose `GET /health` reports `store_uri`, writes to this project's store:
 /// what one records, the other can read. `instead` ends the remediation (`pass --local to ...`).
 pub fn same_store(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     url: &str,
     store_uri: Option<&str>,
     instead: &str,
@@ -611,7 +614,7 @@ fn unreachable_error(url: &str, route: &str, e: &LedgerError) -> BarcaError {
 async fn build_post(
     db_path: &str,
     run_id: &str,
-    dag: &crate::dag::Dag,
+    dag: &barca_compile::dag::Dag,
 ) -> Result<Option<LedgerPost>, BarcaError> {
     let Some(run) = db::get_run(db_path, run_id).await? else {
         return Ok(None);
@@ -621,19 +624,23 @@ async fn build_post(
     }
     let mut steps = posts::run_steps(db_path, run_id).await?;
     steps.retain(|step| {
-        let id = crate::StepId::parse(&step.node_id);
+        let id = barca_model::StepId::parse(&step.node_id);
         // A `parallel()` branch stays on this machine (it is never uploaded).
         !id.partition.0.contains_key("_branch")
             && dag
                 .get_node(id.base_id())
-                .is_some_and(|n| n.kind() == crate::NodeKind::Asset)
+                .is_some_and(|n| n.kind() == barca_model::NodeKind::Asset)
     });
     if steps.is_empty() {
         return Ok(None);
     }
     let mut bytes_unchecked: Vec<String> = steps
         .iter()
-        .map(|step| crate::StepId::parse(&step.node_id).base_id().to_string())
+        .map(|step| {
+            barca_model::StepId::parse(&step.node_id)
+                .base_id()
+                .to_string()
+        })
         .filter(|base| dag.get_node(base).is_some_and(|n| !n.checks_bytes()))
         .collect();
     bytes_unchecked.sort();
@@ -651,7 +658,7 @@ async fn build_post(
             started_at: run.started_at,
             finished_at: run.finished_at,
             elapsed_seconds: run.elapsed_seconds,
-            host: Some(crate::process::local_host()),
+            host: Some(barca_model::process::local_host()),
         },
         steps,
         bytes_unchecked,
@@ -667,8 +674,8 @@ async fn build_post(
 /// additive table of metadata format 1 (`specs/interfaces/metadata-schema.md`).
 pub mod posts {
     use super::{LedgerPost, LedgerStep};
-    use crate::BarcaError;
-    use crate::db;
+    use barca_db::db;
+    use barca_model::BarcaError;
     use std::collections::HashSet;
 
     const CREATE: &str = "CREATE TABLE IF NOT EXISTS ledger_posts (
@@ -880,7 +887,7 @@ pub mod posts {
     /// Take the steps whose result is at one of `store_paths` out of the posts still waiting
     /// to be sent: a pending upload that was dropped (its local file is gone) leaves an object
     /// the server would never find. A post with no step left is removed.
-    pub(crate) async fn forget_steps(
+    pub async fn forget_steps(
         db_path: &str,
         store_paths: &HashSet<String>,
     ) -> Result<(), BarcaError> {
@@ -975,7 +982,7 @@ pub mod posts {
 
 /// `POST /ledger/lookup` on the server: the existing cache lookup for each pair.
 pub async fn lookup(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     request: &LookupRequest,
 ) -> Result<LookupResponse, BarcaError> {
     if request.hashes.is_empty() || !std::path::Path::new(&cfg.db_path).exists() {
@@ -1048,7 +1055,7 @@ pub trait ObjectStat: Send + Sync {
 /// [`ObjectStat`] through `python -m barca._state stat` with the server's storage options.
 pub struct HelperStat<'a> {
     pub python: &'a std::path::Path,
-    pub cfg: &'a crate::config::ResolvedConfig,
+    pub cfg: &'a barca_model::config::ResolvedConfig,
 }
 
 impl ObjectStat for HelperStat<'_> {
@@ -1064,7 +1071,7 @@ impl ObjectStat for HelperStat<'_> {
 /// (`triggered_by: client`) and its steps. A missing or mismatched object rejects the whole
 /// post, and nothing from it is recorded.
 pub async fn accept(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     store: &dyn ObjectStat,
     post: &LedgerPost,
 ) -> Result<PostAccepted, Rejection> {

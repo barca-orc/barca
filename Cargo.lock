@@ -240,6 +240,7 @@ dependencies = [
  "barca-engine",
  "barca-model",
  "barca-proc",
+ "barca-store",
  "chrono",
  "chrono-tz",
  "croner",
@@ -359,6 +360,30 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tower",
+ "ts-rs",
+]
+
+[[package]]
+name = "barca-store"
+version = "0.45.0"
+dependencies = [
+ "barca-compile",
+ "barca-db",
+ "barca-model",
+ "barca-proc",
+ "chrono",
+ "futures",
+ "indicatif",
+ "libc",
+ "libsql",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
  "ts-rs",
 ]
 

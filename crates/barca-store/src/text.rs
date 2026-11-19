@@ -54,9 +54,9 @@ pub fn shell_quote(s: &str) -> String {
 
 /// With `BARCA_TRACE_TIMING` set: one stderr line with how long `what` took since `t0`, so the
 /// cost of each part of `barca status` (and of a dry run) can be read without a profiler.
-pub(crate) fn trace_since(what: &str, t0: std::time::Instant) {
+pub fn trace_since(what: &str, t0: std::time::Instant) {
     if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
-        crate::errln!(
+        barca_model::errln!(
             "[timing] {what}: {:.1} ms",
             t0.elapsed().as_secs_f64() * 1000.0
         );

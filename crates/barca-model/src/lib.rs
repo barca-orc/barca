@@ -34,6 +34,10 @@ pub mod reports;
 pub mod run_explain;
 #[doc(hidden)]
 pub mod source_observation;
+// The lexer the source-scanning guards of every crate share (layering, write boundary, status
+// literals). Test support: nothing in a build calls it.
+#[doc(hidden)]
+pub mod source_scan;
 #[doc(hidden)]
 pub mod spawn_lock;
 pub mod step_result;

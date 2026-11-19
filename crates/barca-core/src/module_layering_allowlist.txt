@@ -1,3 +1,0 @@
-# Edges between barca-core's modules that point the wrong way (see module_layering_tests.rs and
-# docs/engineering/layering.md). One edge per line: `from -> to: the items of `to` that `from`
-# names`. This list may only shrink: delete a line when its edge is cut.

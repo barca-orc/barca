@@ -28,6 +28,10 @@ const ALLOWED: &[(&str, &[&str])] = &[
         &["barca-model", "barca-compile", "barca-proc"],
     ),
     (
+        "barca-store",
+        &["barca-model", "barca-compile", "barca-db", "barca-proc"],
+    ),
+    (
         "barca-core",
         &[
             "barca-model",
@@ -35,6 +39,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "barca-db",
             "barca-proc",
             "barca-engine",
+            "barca-store",
         ],
     ),
     ("barca-server", &["barca-core"]),
@@ -42,7 +47,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
 ];
 
 /// The crates that may link libsql (the metadata database).
-const LIBSQL: &[&str] = &["barca-db", "barca-core"];
+const LIBSQL: &[&str] = &["barca-db", "barca-store", "barca-core"];
 
 /// Every dependency name in a manifest's dependency tables, target-specific ones included.
 fn dependencies(manifest: &toml::Table) -> Vec<String> {

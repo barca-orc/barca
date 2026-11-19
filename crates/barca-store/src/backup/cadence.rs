@@ -1,6 +1,8 @@
 //! The routine backup cadence: how often a routine backup is due, how long `barca serve`
 //! gives one, and per-database admission, separate from the database's short write lock.
-use crate::{BarcaError, config::ResolvedConfig, process::Until};
+use barca_model::BarcaError;
+use barca_model::config::ResolvedConfig;
+use barca_model::process::Until;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -130,7 +132,7 @@ pub async fn admit(
             .unwrap_or(dir.clone())
             .join(".last-attempt")
     });
-    let wall = crate::time::unix_nanos(std::time::SystemTime::now());
+    let wall = barca_model::time::unix_nanos(std::time::SystemTime::now());
     let now = Instant::now();
     let mut observations = OBSERVATIONS
         .get_or_init(Mutex::default)
@@ -175,13 +177,14 @@ mod tests {
     async fn disabled_busy_restart_and_final_admission() {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg =
-            crate::config::resolve_with(None, dir.path(), crate::config::Vars::NONE).unwrap();
+            barca_model::config::resolve_with(None, dir.path(), barca_model::config::Vars::NONE)
+                .unwrap();
         cfg.db_path = dir
             .path()
             .join("metadata.db")
             .to_string_lossy()
             .into_owned();
-        cfg.backup_interval = crate::config::BackupInterval(None);
+        cfg.backup_interval = barca_model::config::BackupInterval(None);
         assert!(
             admit(&cfg, Request::Routine, Until::done())
                 .await
@@ -193,14 +196,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        cfg.backup_interval = crate::config::BackupInterval(Some(Duration::from_secs(3600)));
+        cfg.backup_interval = barca_model::config::BackupInterval(Some(Duration::from_secs(3600)));
         assert!(
             admit(&cfg, Request::Routine, Until::done())
                 .await
                 .unwrap()
                 .is_none()
         );
-        let cancel = crate::CancellationToken::new();
+        let cancel = barca_model::CancellationToken::new();
         cancel.cancel();
         assert!(matches!(
             admit(&cfg, Request::Final, Until::cancelled(&cancel)).await,

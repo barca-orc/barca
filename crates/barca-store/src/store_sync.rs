@@ -1,10 +1,10 @@
 //! A run's connection to a remote store: queue each finished artifact for upload, fetch remote
 //! inputs before a phase reads them, and wait for the transfers at the end of the run.
 
-use crate::step_result::ProvidedInput;
 use crate::text::human;
 use crate::transfer::{ArtifactLayout, TransferClient};
 use crate::verified_copies;
+use barca_model::step_result::ProvidedInput;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 /// How an error starts when a directory at an artifact path could not be moved aside
 /// (`barca._storage.ArtifactPathError`): the state of barca's own artifact directory, not a
 /// fault of the step that was writing there.
-pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
+pub const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
 
 /// Whether the artifact recorded at `path` can be read from this machine as it is.
 ///
@@ -24,18 +24,18 @@ pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
 /// An artifact is one file. A directory at the path, or a symlink that leads to one or to
 /// nothing, is not an artifact and counts as missing: the step is computed again, and whoever
 /// writes the file moves the directory out of the way first (`barca._storage.make_way`).
-pub(crate) fn on_disk(path: &str, separate_store: bool) -> bool {
+pub fn on_disk(path: &str, separate_store: bool) -> bool {
     match crate::transfer::local_path(path) {
         Some(file) => file.is_file(),
         None => !separate_store,
     }
 }
 
-/// A store copy that is not the one its result was recorded with ([`crate::mismatch`] puts it
+/// A store copy that is not the one its result was recorded with ([`barca_model::mismatch`] puts it
 /// on the step reports), in words, without the `[barca] warning: <step>:` prefix of the stderr line:
 /// `at` is the store location, `more` the number of further partitions of the step it holds
 /// for.
-pub(crate) fn describe_mismatch(base: &str, at: &str, more: usize) -> String {
+pub fn describe_mismatch(base: &str, at: &str, more: usize) -> String {
     let others = match more {
         0 => String::new(),
         n => format!(" (and {n} more of its partitions)"),
@@ -48,22 +48,22 @@ pub(crate) fn describe_mismatch(base: &str, at: &str, more: usize) -> String {
 
 /// This run's link to a separate artifact store: the transfer helper plus
 /// the cache hits whose artifacts still live only in the store.
-pub(crate) struct StoreSync {
-    pub(crate) client: TransferClient,
-    pub(crate) layout: ArtifactLayout,
+pub struct StoreSync {
+    pub client: TransferClient,
+    pub layout: ArtifactLayout,
     /// Local mirror path → (node id, store location, recorded SHA-256), for
     /// store-backed cache hits. Fetched on first use, so fully-cached
     /// intermediates a run never reads are never downloaded. With a recorded
     /// hash, a copy already on disk is checked against it on first use too, unless this
     /// process found it to hold that hash and it has not changed since
     /// ([`crate::verified_copies`]).
-    pub(crate) fetchable: HashMap<String, (String, String, Option<String>)>,
+    pub fetchable: HashMap<String, (String, String, Option<String>)>,
     /// Base step id -> what was found, for each store copy fetched in this run that does not
-    /// have its recorded hash. Put on the step reports when the run ends ([`crate::mismatch`]).
-    pub(crate) mismatched: HashMap<String, String>,
+    /// have its recorded hash. Put on the step reports when the run ends ([`barca_model::mismatch`]).
+    pub mismatched: HashMap<String, String>,
     /// Store location -> SHA-256 of the store's copy, for each of those fetches: the copy now in
-    /// use, recorded as the result's digest when the run ends ([`crate::db::adopt_store_digests`]).
-    pub(crate) adopted: Vec<(String, String)>,
+    /// use, recorded as the result's digest when the run ends ([`barca_db::db::adopt_store_digests`]).
+    pub adopted: Vec<(String, String)>,
     /// Local mirror paths of fetches the store answered with "no such object",
     /// until [`Self::take_missing`] collects them.
     missing: Vec<String>,
@@ -73,17 +73,19 @@ pub(crate) struct StoreSync {
     /// The run's cancellation: a wait on the store ends when it fires.
     cancel: CancellationToken,
     /// Display id -> (store location, digest) of the object this machine knows the store holds
-    /// for the run hash the sensor runs at ([`crate::db::confirmed_object`]), for each sensor
+    /// for the run hash the sensor runs at ([`barca_db::db::confirmed_object`]), for each sensor
     /// decided to run. A poll that produces the same bytes there is not uploaded again (#554).
-    pub(crate) confirmed: HashMap<String, (String, String)>,
+    pub confirmed: HashMap<String, (String, String)>,
     /// Sensor polls that preserved their observation and whose bytes the store already held.
-    pub(crate) unchanged_observations: usize,
+    pub unchanged_observations: usize,
     /// Set when the run skipped the startup check (the store was checked in the last 5 minutes,
     /// #593): the check's time limit. The first fetch makes the check before it starts.
     check_before_fetching: Option<std::time::Duration>,
 }
 
 /// What to check when the artifact store fails its check (after "Nothing ran." at startup).
+#[doc(hidden)]
+#[macro_export]
 macro_rules! store_check_fix {
     () => {
         "Check the store's URI (BARCA_REMOTE_URI or [remote] uri), that the bucket or container \
@@ -92,14 +94,14 @@ macro_rules! store_check_fix {
          docs remote)."
     };
 }
-pub(crate) use store_check_fix;
+pub use store_check_fix;
 
 /// What a wait on the artifact store reports when the run is cancelled during it. The run
 /// then ends as cancelled; this text is never the error a user sees.
 const STORE_WAIT_CANCELLED: &str = "run cancelled";
 
 impl StoreSync {
-    pub(crate) fn new(client: TransferClient, cancel: CancellationToken) -> Self {
+    pub fn new(client: TransferClient, cancel: CancellationToken) -> Self {
         Self {
             layout: client.layout().clone(),
             client,
@@ -119,7 +121,7 @@ impl StoreSync {
     /// the first fetch, so a store that is gone or misconfigured is reported as such and not
     /// as missing objects to compute again. Uploads are not held back: a failed one is kept
     /// pending as usual.
-    pub(crate) fn check_before_fetching(mut self, limit: std::time::Duration) -> Self {
+    pub fn check_before_fetching(mut self, limit: std::time::Duration) -> Self {
         self.check_before_fetching = Some(limit);
         self
     }
@@ -130,7 +132,7 @@ impl StoreSync {
             return Ok(());
         };
         let location = crate::transfer::diagnostic_uri(self.layout.store_root());
-        crate::run_line!(
+        barca_model::run_line!(
             Always,
             "[barca] checking artifact store {location} (timeout {}s)",
             limit.as_secs()
@@ -156,7 +158,7 @@ impl StoreSync {
 
     /// Whether the store already holds `digest` at `store` for sensor `node_id`, by this
     /// machine's record of a confirmed upload: the poll's result need not be uploaded again.
-    pub(crate) fn holds_already(&self, node_id: &str, store: &str, digest: &str) -> bool {
+    pub fn holds_already(&self, node_id: &str, store: &str, digest: &str) -> bool {
         self.confirmed
             .get(node_id)
             .is_some_and(|(at, known)| at == store && known == digest)
@@ -164,7 +166,7 @@ impl StoreSync {
 
     /// A newly written artifact supersedes a pending cache read at that mirror path.
     /// Never fetch an earlier sensor observation over the producer's new bytes.
-    pub(crate) fn produced(&mut self, path: &str) {
+    pub fn produced(&mut self, path: &str) {
         self.fetchable.remove(path);
         verified_copies::forget(std::path::Path::new(path));
     }
@@ -202,20 +204,20 @@ impl StoreSync {
     /// Whether `path` is the local mirror of a cache hit that has not been
     /// fetched in this run: its artifact is read from the store if it is not
     /// here.
-    pub(crate) fn holds(&self, path: &str) -> bool {
+    pub fn holds(&self, path: &str) -> bool {
         self.fetchable.contains_key(path)
     }
 
     /// The local mirror paths of the artifacts [`Self::ensure_local`] found
     /// to be absent from the store since this was last called.
-    pub(crate) fn take_missing(&mut self) -> Vec<String> {
+    pub fn take_missing(&mut self) -> Vec<String> {
         std::mem::take(&mut self.missing)
     }
 
     /// Whether a cache hit whose artifact is not on this disk is known to be
     /// absent, without asking a remote store: a local row, or a directory
     /// store, is a stat away. Unknown (false) for a result in a remote store.
-    pub(crate) fn known_absent(store: Option<&Self>, path: &str) -> bool {
+    pub fn known_absent(store: Option<&Self>, path: &str) -> bool {
         match store.and_then(|s| s.fetchable.get(path)) {
             Some((_, at, _)) => {
                 !std::path::Path::new(path).is_file()
@@ -233,7 +235,7 @@ impl StoreSync {
     /// artifact. A store that is gone, misnamed or unreachable answers the
     /// same way for every object, and recomputing then would turn an outage or
     /// a bad setting into a full recompute written to the wrong place.
-    pub(crate) async fn confirm_present(&mut self, lost: &[String]) -> Result<(), String> {
+    pub async fn confirm_present(&mut self, lost: &[String]) -> Result<(), String> {
         if self.present.is_none() {
             let answer = tokio::select! {
                 biased;
@@ -264,7 +266,7 @@ impl StoreSync {
     /// Point lazily read parquet inputs that are not on this disk at the store,
     /// so the step's reader fetches only the byte ranges its query uses. They
     /// stay fetchable: a later eager reader still downloads the whole artifact.
-    pub(crate) fn read_in_place(
+    pub fn read_in_place(
         &self,
         provided: &mut HashMap<String, ProvidedInput>,
         lazy: &HashSet<String>,
@@ -293,7 +295,7 @@ impl StoreSync {
     /// whether to compute that result again. Any other failure (permissions,
     /// a store that cannot be reached) is an error naming what could not be
     /// fetched.
-    pub(crate) async fn ensure_local<'a>(
+    pub async fn ensure_local<'a>(
         &mut self,
         paths: impl IntoIterator<Item = &'a str>,
         pb: Option<&indicatif::ProgressBar>,
@@ -351,7 +353,7 @@ impl StoreSync {
         }
         let trace = |sent: usize| {
             if asked > 0 && std::env::var_os("BARCA_TRACE_TIMING").is_some() {
-                crate::errln!(
+                barca_model::errln!(
                     "[trace]  ensure_local: {asked} cached input(s), {remembered} unchanged since \
                      checked, {hashed_here} hashed here, {sent} sent to the transfer helper to check, \
                      {:.1}ms",
@@ -381,7 +383,7 @@ impl StoreSync {
                 human(report.bytes),
                 started.elapsed().as_secs_f64()
             );
-            crate::lines::Lines::current().note(pb, &msg);
+            barca_model::lines::Lines::current().note(pb, &msg);
         }
         // An artifact path is `{node}/{run_hash}`, so a refresh or another machine computing
         // the same step overwrites it; the store's copy is as valid a result as the recorded
@@ -391,7 +393,7 @@ impl StoreSync {
             if let Some(sha256) = sha256 {
                 self.adopted.push((at.clone(), sha256.clone()));
             }
-            let base = crate::StepId::parse(node).base_id().to_string();
+            let base = barca_model::StepId::parse(node).base_id().to_string();
             match differing.iter_mut().find(|(b, _, _)| *b == base) {
                 Some((_, _, count)) => *count += 1,
                 None => differing.push((base, at, 1)),
@@ -401,7 +403,7 @@ impl StoreSync {
             // The same words on stderr and, at the end of the run, in the JSON step entries.
             let finding = describe_mismatch(&base, at, count - 1);
             let msg = format!("[barca] warning: {base}: {finding}");
-            crate::lines::Lines::current().note(pb, &msg);
+            barca_model::lines::Lines::current().note(pb, &msg);
             self.mismatched.insert(base, finding);
         }
         let (missing, failed): (Vec<_>, Vec<_>) = report.failures.iter().partition(|f| f.missing);
@@ -435,7 +437,7 @@ impl StoreSync {
 /// recomputing: the upload would meet the same directory. Barca changes nothing in a store
 /// but its own objects, so the directory has to be removed there. A local directory that
 /// could not be moved aside says what to do in its own message.
-pub(crate) fn transfer_remedy(messages: &[&str], otherwise: &str) -> String {
+pub fn transfer_remedy(messages: &[&str], otherwise: &str) -> String {
     if messages.iter().any(|m| m.starts_with("IsADirectoryError")) {
         "A directory sits where the artifact's object belongs in the store. Remove or rename \
          it there (barca changes nothing in a store but its own objects), then run the \

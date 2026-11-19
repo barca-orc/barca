@@ -12,7 +12,7 @@ use std::path::Path;
 
 /// Where a cached result's copies are, against what was recorded for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Copies {
+pub enum Copies {
     /// This machine's copy, the store's object and the recorded digest agree.
     InSync,
     /// Here, not in the store.
@@ -39,11 +39,7 @@ pub struct StoreObject {
 /// Classify a result's copies. `local` is this machine's copy (size, SHA-256) when there is
 /// one; `recorded` the digest its row was recorded with. Without a checksum from the store,
 /// copies of the same size are taken to agree.
-pub(crate) fn classify(
-    local: Option<(u64, &str)>,
-    store: &StoreObject,
-    recorded: Option<&str>,
-) -> Copies {
+pub fn classify(local: Option<(u64, &str)>, store: &StoreObject, recorded: Option<&str>) -> Copies {
     match (local, store.exists) {
         (None, false) => Copies::Missing,
         (None, true) => Copies::StoreOnly,
@@ -76,20 +72,20 @@ pub(crate) fn classify(
 
 /// Disposable status evidence; publication and transfer checks remain strict.
 #[derive(Deserialize)]
-pub(crate) struct CopyEvidence {
-    pub(crate) objects: Vec<StoreObject>,
-    pub(crate) locals: Vec<Option<LocalEvidence>>,
+pub struct CopyEvidence {
+    pub objects: Vec<StoreObject>,
+    pub locals: Vec<Option<LocalEvidence>>,
 }
 #[derive(Deserialize)]
-pub(crate) struct LocalEvidence {
-    pub(crate) size_bytes: u64,
-    pub(crate) sha256: String,
+pub struct LocalEvidence {
+    pub size_bytes: u64,
+    pub sha256: String,
 }
 /// What the store holds at each of `paths` and this machine at each of `locals`, with one
 /// `python -m barca._state stat`.
-pub(crate) async fn inspect_copies(
+pub async fn inspect_copies(
     python: &Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     paths: &[&str],
     locals: &[String],
 ) -> Result<CopyEvidence, String> {
@@ -97,12 +93,12 @@ pub(crate) async fn inspect_copies(
     command.arg("stat").kill_on_drop(true);
     let request = serde_json::json!({"paths": paths, "locals": locals, "inspection_cache": cfg.inspection_cache_path()});
     let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(60));
-    use crate::helper_proc::JsonFailed;
-    match crate::helper_proc::run_json(command, &request, Some(limit)).await {
+    use barca_proc::helper_proc::JsonFailed;
+    match barca_proc::helper_proc::run_json(command, &request, Some(limit)).await {
         Ok(reply) => Ok(reply),
         Err(JsonFailed::Spawn(error) | JsonFailed::Io(error)) => Err(error.to_string()),
         Err(JsonFailed::TimedOut(limit)) => Err(format!("no answer within {}s", limit.as_secs())),
-        Err(JsonFailed::Exited(stderr)) => Err(crate::helper_proc::helper_cause(&stderr)),
+        Err(JsonFailed::Exited(stderr)) => Err(barca_proc::helper_proc::helper_cause(&stderr)),
         Err(JsonFailed::Invalid(error)) => Err(error.to_string()),
     }
 }
@@ -110,10 +106,10 @@ pub(crate) async fn inspect_copies(
 /// Ask the store about each of `paths` with one `python -m barca._state stat`.
 pub(crate) async fn stat_objects(
     python: &Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     paths: &[&str],
 ) -> Result<Vec<StoreObject>, String> {
-    use crate::helper_proc::JsonFailed;
+    use barca_proc::helper_proc::JsonFailed;
     #[derive(Deserialize)]
     struct Reply {
         objects: Vec<StoreObject>,
@@ -122,21 +118,21 @@ pub(crate) async fn stat_objects(
     cmd.arg("stat").kill_on_drop(true);
     let request = serde_json::json!({ "paths": paths });
     let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(60));
-    match crate::helper_proc::run_json::<Reply>(cmd, &request, Some(limit)).await {
+    match barca_proc::helper_proc::run_json::<Reply>(cmd, &request, Some(limit)).await {
         Ok(reply) => Ok(reply.objects),
         Err(JsonFailed::Spawn(e)) => Err(format!("{}: {e}", python.display())),
         Err(JsonFailed::Io(e)) => Err(e.to_string()),
         Err(JsonFailed::TimedOut(limit)) => Err(format!("no answer within {}s", limit.as_secs())),
-        Err(JsonFailed::Exited(stderr)) => Err(crate::helper_proc::helper_cause(&stderr)),
+        Err(JsonFailed::Exited(stderr)) => Err(barca_proc::helper_proc::helper_cause(&stderr)),
         Err(JsonFailed::Invalid(e)) => Err(e.to_string()),
     }
 }
 
 /// The shape of each artifact (`(path, format)`), as `barca status` reads it: one per artifact,
 /// a `{note}` where it could not be read.
-pub(crate) async fn artifact_shapes(
+pub async fn artifact_shapes(
     python: &Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     artifacts: &[(String, String)],
     sample: usize,
     fields: bool,
@@ -153,7 +149,7 @@ pub(crate) async fn artifact_shapes(
             .map(|(path, format)| serde_json::json!({"path": path, "format": format}))
             .collect::<Vec<_>>(),
     });
-    let inspector = crate::helper_proc::python_module(
+    let inspector = barca_proc::helper_proc::python_module(
         python,
         "barca._inspect",
         cfg.storage_options_json.as_deref(),
@@ -172,19 +168,19 @@ fn note(msg: &str) -> serde_json::Value {
 /// Run a Python helper that reads one JSON document on stdin and answers with one JSON array
 /// on stdout (`barca._inspect`, `barca._value`). Its last stderr line is the error. `cmd` is
 /// built by `helper_proc::python_module`, so it carries the resolved storage options.
-pub(crate) async fn run_json_helper(
+pub async fn run_json_helper(
     cmd: tokio::process::Command,
     python: &Path,
     request: &serde_json::Value,
 ) -> Result<Vec<serde_json::Value>, String> {
-    use crate::helper_proc::JsonFailed;
-    crate::helper_proc::run_json(cmd, request, None)
+    use barca_proc::helper_proc::JsonFailed;
+    barca_proc::helper_proc::run_json(cmd, request, None)
         .await
         .map_err(|failed| match failed {
             JsonFailed::Spawn(e) => format!("{}: {e}", python.display()),
             JsonFailed::Io(e) => e.to_string(),
             JsonFailed::TimedOut(limit) => format!("no answer within {}s", limit.as_secs()),
-            JsonFailed::Exited(stderr) => crate::helper_proc::last_line(&stderr),
+            JsonFailed::Exited(stderr) => barca_proc::helper_proc::last_line(&stderr),
             JsonFailed::Invalid(e) => e.to_string(),
         })
 }

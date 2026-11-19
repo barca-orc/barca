@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-pub use crate::uri::diagnostic_url;
+pub use barca_model::uri::diagnostic_url;
 
 /// A client for HTTPS requests, each bounded by `timeout` from connecting to the last byte of
 /// the reply. Building one reads the system's root certificates, so build it once and reuse it.

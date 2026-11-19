@@ -9,11 +9,11 @@
 //! paused. Only `barca serve` writes them; what a row's `spec` holds is the server's business
 //! (`barca-server`), stored as text.
 
-use crate::BarcaError;
-use crate::db;
+use barca_db::db;
+use barca_model::BarcaError;
 use libsql::Connection;
 
-use crate::db::schema::ddl::{RUN_QUEUE as CREATE_QUEUE, SERVER_STATE as CREATE_SERVER_STATE};
+use barca_db::db::schema::ddl::{RUN_QUEUE as CREATE_QUEUE, SERVER_STATE as CREATE_SERVER_STATE};
 
 /// The `server_state` key of a paused queue; its value is when it was paused (unix seconds).
 const PAUSED_AT: &str = "queue_paused_at";
@@ -277,7 +277,7 @@ pub async fn set_paused(db_path: &str, at: Option<i64>) -> Result<(), BarcaError
 }
 
 /// The `server_state` entry `key`, when there is one: what a server recorded of itself
-/// ([`crate::liveness`]). A database without the table has none.
+/// ([`barca_model::liveness`]). A database without the table has none.
 pub async fn state_value(db_path: &str, key: &str) -> Result<Option<String>, BarcaError> {
     if std::fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
         return Ok(None);
@@ -403,10 +403,10 @@ mod tests {
         db::insert_logs(
             &path,
             "first",
-            &[crate::run_logs::RecordedLine {
+            &[barca_db::run_logs::RecordedLine {
                 node_id: "p.py:slow".into(),
                 line: "attempt one".into(),
-                stream: crate::LogStream::Stdout,
+                stream: barca_model::LogStream::Stdout,
                 ts: None,
             }],
         )

@@ -13,12 +13,21 @@ fn every_helper_launch_forwards_resolved_storage_options() {
             include_str!("../../barca-engine/src/io_loop/lifecycle.rs"),
             "barca._worker",
         ),
-        (include_str!("backup.rs"), "barca._state"),
+        (
+            include_str!("../../barca-store/src/backup.rs"),
+            "barca._state",
+        ),
         (include_str!("diagnostics.rs"), "barca._doctor"),
-        (include_str!("store_inspect.rs"), "barca._inspect"),
+        (
+            include_str!("../../barca-store/src/store_inspect.rs"),
+            "barca._inspect",
+        ),
         (include_str!("values.rs"), "barca._value"),
         (include_str!("sql.rs"), "barca._sql"),
-        (include_str!("transfer.rs"), "barca._transfer"),
+        (
+            include_str!("../../barca-store/src/transfer.rs"),
+            "barca._transfer",
+        ),
     ] {
         let production = source.split("mod tests {").next().unwrap();
         let code = production

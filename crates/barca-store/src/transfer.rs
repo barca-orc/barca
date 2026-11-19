@@ -17,9 +17,9 @@
 //! Local and store paths map by prefix substitution ([`ArtifactLayout`]): the
 //! store keeps the worker's `{node}/{run_hash}{ext}` layout verbatim.
 
-use crate::BarcaError;
-use crate::config::ResolvedConfig;
-use crate::protocol::{FrameReader, TransferReply, TransferRequest, encode_message};
+use barca_model::BarcaError;
+use barca_model::config::ResolvedConfig;
+use barca_proc::protocol::{FrameReader, TransferReply, TransferRequest, encode_message};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -29,11 +29,11 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-pub use crate::uri::diagnostic_uri;
-pub(crate) use crate::uri::local_path;
+pub use barca_model::uri::diagnostic_uri;
+pub use barca_model::uri::local_path;
 
 /// Shared run-owned upload staging identity, handed to workers and the helper.
-pub(crate) fn upload_snapshot_prefix(run_id: &str) -> std::io::Result<PathBuf> {
+pub fn upload_snapshot_prefix(run_id: &str) -> std::io::Result<PathBuf> {
     Ok(std::env::current_dir()?
         .join(".barca/staging")
         .join(std::process::id().to_string())
@@ -65,7 +65,7 @@ impl ArtifactLayout {
     }
 
     /// The store root, without a trailing slash.
-    pub(crate) fn store_root(&self) -> &str {
+    pub fn store_root(&self) -> &str {
         &self.store_root
     }
 
@@ -105,7 +105,7 @@ impl ArtifactLayout {
 
 /// A transfer that did not complete. `key` is the caller's label (node id).
 #[derive(Debug, Clone)]
-pub(crate) struct TransferFailure {
+pub struct TransferFailure {
     pub key: String,
     pub store: String,
     pub message: String,
@@ -119,7 +119,7 @@ pub(crate) struct TransferFailure {
 
 /// Outcome of [`TransferClient::drain`] / [`TransferClient::await_fetches`].
 #[derive(Debug, Default)]
-pub(crate) struct TransferReport {
+pub struct TransferReport {
     pub transferred: usize,
     pub bytes: u64,
     pub failures: Vec<TransferFailure>,
@@ -133,7 +133,7 @@ pub(crate) struct TransferReport {
 /// A finished transfer: the local file's size and hash, and whether bytes moved
 /// (false when a fetch found a local copy with the recorded hash).
 #[derive(Debug, Clone)]
-pub(crate) struct Transferred {
+pub struct Transferred {
     pub bytes: u64,
     pub sha256: Option<String>,
     pub fetched: bool,
@@ -189,9 +189,9 @@ struct Pending {
 /// this value: [`Self::stop`] stops it and waits for it to be gone, and dropping the value kills
 /// it on the spot. So a command that fails or is cancelled before its helper was ever used
 /// leaves no process behind to find the socket gone.
-pub(crate) struct Launching {
+pub struct Launching {
     child: Child,
-    /// The helper's lifeline (see [`crate::helper_proc::give_lifeline`]). Kept out of `child`,
+    /// The helper's lifeline (see [`barca_proc::helper_proc::give_lifeline`]). Kept out of `child`,
     /// whose `wait` would close it.
     lifeline: Option<tokio::process::ChildStdin>,
     socket_path: PathBuf,
@@ -209,21 +209,21 @@ impl Launching {
         std::fs::remove_file(&socket_path).ok();
         let listener = UnixListener::bind(&socket_path)
             .map_err(|e| BarcaError::Other(format!("transfer socket bind: {e}")))?;
-        crate::helper_proc::shield_from_ctrl_c(&mut cmd);
-        crate::helper_proc::give_lifeline(&mut cmd);
+        barca_proc::helper_proc::shield_from_ctrl_c(&mut cmd);
+        barca_proc::helper_proc::give_lifeline(&mut cmd);
         cmd.env("BARCA_SOCKET", &socket_path)
             // Its warnings go to barca's stderr, through the pipe barca owns when that could
-            // lose its reader (`crate::term`).
+            // lose its reader (`barca_model::term`).
             .stdout(Stdio::inherit())
-            .stderr(crate::term::child_output())
+            .stderr(barca_model::term::child_output())
             .kill_on_drop(true);
-        let mut child = crate::helper_proc::spawn(&mut cmd).map_err(|e| {
+        let mut child = barca_proc::helper_proc::spawn(&mut cmd).map_err(|e| {
             std::fs::remove_file(&socket_path).ok();
             BarcaError::Other(format!("failed to spawn transfer helper: {e}"))
         })?;
         // One line per helper process, so a test can count them (#593).
         if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
-            crate::errln!("[trace]  transfer helper started");
+            barca_model::errln!("[trace]  transfer helper started");
         }
         let hello = tokio::spawn(async move { accept(&listener).await });
         Ok(Self {
@@ -280,7 +280,7 @@ impl Launching {
             self.hello.abort();
             let _ = self.hello.await;
         }
-        crate::helper_proc::stop(&mut self.child).await;
+        barca_proc::helper_proc::stop(&mut self.child).await;
         std::fs::remove_file(&self.socket_path).ok();
     }
 }
@@ -289,7 +289,7 @@ impl Launching {
 async fn accept(listener: &UnixListener) -> Result<tokio::net::UnixStream, String> {
     let accepted = tokio::time::timeout(Duration::from_secs(10), async {
         let (mut stream, _) = listener.accept().await?;
-        crate::protocol::accept_hello(&mut stream, "transfer").await?;
+        barca_proc::protocol::accept_hello(&mut stream, "transfer").await?;
         Ok::<_, std::io::Error>(stream)
     })
     .await;
@@ -299,7 +299,7 @@ async fn accept(listener: &UnixListener) -> Result<tokio::net::UnixStream, Strin
         Err(_) => Err(format!(
             "timeout waiting for transfer helper to connect and announce protocol v{}; \
              reinstall barca in this Python environment",
-            crate::protocol::PROTOCOL_VERSION
+            barca_proc::protocol::PROTOCOL_VERSION
         )),
     }
 }
@@ -323,7 +323,7 @@ struct Deferred {
 }
 
 /// Handle to the transfer helper process.
-pub(crate) struct TransferClient {
+pub struct TransferClient {
     layout: ArtifactLayout,
     /// The helper process; `None` until a deferred client sends its first request.
     child: Option<Child>,
@@ -362,11 +362,7 @@ impl TransferClient {
     /// A client whose helper is started only when the first request is sent: a run that
     /// transfers nothing starts no helper (#593). Unlike [`Self::launch`], a helper that fails
     /// to start is reported by the requests, each failing with the reason.
-    pub(crate) fn deferred(
-        python: &Path,
-        cfg: &ResolvedConfig,
-        run_id: &str,
-    ) -> Result<Self, BarcaError> {
+    pub fn deferred(python: &Path, cfg: &ResolvedConfig, run_id: &str) -> Result<Self, BarcaError> {
         let (cmd, socket_path, layout) = Self::command(python, cfg, run_id)?;
         Ok(Self::deferred_with(cmd, socket_path, layout))
     }
@@ -391,7 +387,7 @@ impl TransferClient {
     }
 
     /// Whether the helper process was started (a deferred client's starts on its first request).
-    pub(crate) fn started(&self) -> bool {
+    pub fn started(&self) -> bool {
         self.child.is_some()
     }
 
@@ -435,7 +431,7 @@ impl TransferClient {
         let local_root = std::fs::canonicalize(&cfg.local_artifact_dir)?;
         let layout = ArtifactLayout::new(local_root, &cfg.artifact_root);
 
-        let mut cmd = crate::helper_proc::python_module(
+        let mut cmd = barca_proc::helper_proc::python_module(
             python,
             "barca._transfer",
             cfg.storage_options_json.as_deref(),
@@ -455,7 +451,7 @@ impl TransferClient {
             cfg.transfer_timeout_secs.to_string(),
         );
         let socket_path =
-            crate::protocol::socket_path(run_id, "transfer").map_err(BarcaError::Other)?;
+            barca_proc::protocol::socket_path(run_id, "transfer").map_err(BarcaError::Other)?;
         Ok((cmd, socket_path, layout))
     }
 
@@ -507,7 +503,7 @@ impl TransferClient {
         self.queue_upload(key, local, local, None)
     }
 
-    pub(crate) fn upload_confirmed(
+    pub fn upload_confirmed(
         &mut self,
         key: &str,
         local: &str,
@@ -578,7 +574,8 @@ impl TransferClient {
     pub(crate) fn has_local_copy(&self, store: &str, sha256: Option<&str>) -> bool {
         self.layout.local_for(store).is_some_and(|local| {
             local.is_file()
-                && sha256.is_none_or(|h| crate::hash::file_sha256(&local).is_ok_and(|l| l == h))
+                && sha256
+                    .is_none_or(|h| barca_model::hash::file_sha256(&local).is_ok_and(|l| l == h))
         })
     }
 
@@ -619,7 +616,7 @@ impl TransferClient {
     }
 
     /// Startup permits a new directory store: check its existing ancestor without creating it.
-    pub(crate) async fn preflight(&mut self) -> Result<(), String> {
+    pub async fn preflight(&mut self) -> Result<(), String> {
         let root = match local_path(self.layout.store_root()) {
             Some(path) => {
                 let mut path = path.to_path_buf();
@@ -641,7 +638,7 @@ impl TransferClient {
     /// The requests are all sent before
     /// any answer is awaited, so the helper asks the store about them concurrently: one round
     /// trip's wait, not one per object.
-    pub(crate) async fn stat_all(
+    pub async fn stat_all(
         &mut self,
         stores: &[String],
     ) -> Vec<Result<Option<(u64, Option<String>)>, String>> {
@@ -671,7 +668,7 @@ impl TransferClient {
     }
 
     /// Number of uploads queued since the helper started, drained or not.
-    pub(crate) fn uploads_queued(&self) -> usize {
+    pub fn uploads_queued(&self) -> usize {
         self.uploads_queued
     }
 
@@ -738,12 +735,12 @@ impl TransferClient {
 
     /// Stop the helper now, abandoning queued and in-flight transfers (it is
     /// asked to stop first, so it removes the temp files it was writing; see
-    /// [`crate::helper_proc`]). Returns the keys of uploads not confirmed
+    /// [`barca_proc::helper_proc`]). Returns the keys of uploads not confirmed
     /// complete — their artifacts may be missing from the store, so they
     /// must not be recorded — and the hash of each upload that was confirmed.
     pub async fn abort(mut self) -> (Vec<String>, HashMap<String, String>) {
         if let Some(child) = self.child.as_mut() {
-            crate::helper_proc::stop(child).await;
+            barca_proc::helper_proc::stop(child).await;
         }
         // The socket owner may be finishing a successful notification as the helper
         // stops. Await its cancellation before inspecting receipts, so every row it
@@ -858,7 +855,7 @@ async fn io_task(mut stream: tokio::net::UnixStream, mut req_rx: mpsc::Unbounded
                 };
                 if let Some((tx, uploaded, t0, what)) = pending.remove(&id) {
                     if trace {
-                        crate::errln!(
+                        barca_model::errln!(
                             "[trace]  transfer {what} {} in {:.1}ms",
                             if result.is_ok() { "done" } else { "FAILED" },
                             t0.elapsed().as_secs_f64() * 1000.0

@@ -1,9 +1,9 @@
 //! Transport-neutral error classification, remediation, and rendering.
 
-use crate::BarcaError;
-use crate::step_result::ErrorPhase;
-use crate::step_status::StepStatus;
 pub use crate::text::shell_quote;
+use barca_model::BarcaError;
+use barca_model::step_result::ErrorPhase;
+use barca_model::step_status::StepStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -273,7 +273,7 @@ fn failed_word(phase: Option<ErrorPhase>) -> String {
 /// What to do about a failed step, by how it failed: a timeout, a worker that died without a
 /// Python exception, a failure in barca's own code around the step, or an exception (with or
 /// without a traceback to look at).
-fn step_remediation(step: &crate::FailedStep) -> String {
+fn step_remediation(step: &barca_model::FailedStep) -> String {
     const RERUN: &str =
         "re-run the same command. Steps that succeeded are cached and will not re-run.";
     let summary = step.summary();
@@ -394,7 +394,7 @@ impl ErrorEnvelope {
         let fallback = match &e {
             BarcaError::AssetNotFound(name, available) => {
                 let ids: Vec<&str> = available.split(", ").collect();
-                match crate::targets::target_suggestion(name, &ids) {
+                match barca_compile::targets::target_suggestion(name, &ids) {
                     Some(meant) => format!("{meant} {}", list_hint(&ctx.files)),
                     None => list_hint(&ctx.files),
                 }
@@ -412,8 +412,8 @@ impl ErrorEnvelope {
                 None if !ctx.files.is_empty()
                     && matches!(
                         d,
-                        crate::dag::DagError::UnresolvedInput { .. }
-                            | crate::dag::DagError::UnresolvedImport { .. }
+                        barca_compile::dag::DagError::UnresolvedInput { .. }
+                            | barca_compile::dag::DagError::UnresolvedImport { .. }
                     ) =>
                 {
                     format!(
@@ -545,7 +545,7 @@ impl ErrorEnvelope {
     /// For a `step_failed` envelope read back from the wire (which does not carry it): the
     /// one-line run summary a local run prints after the error, given how many downstream
     /// steps were skipped. Any other kind is returned unchanged.
-    pub(crate) fn with_failed_run_summary(mut self, skipped: usize) -> Self {
+    pub fn with_failed_run_summary(mut self, skipped: usize) -> Self {
         if self.kind == ErrorKind::StepFailed {
             let node = self.node.clone().unwrap_or_default();
             let prefix = format!("step '{node}' failed: ");
@@ -585,7 +585,7 @@ mod wire_tests {
     #[test]
     fn a_failure_in_barca_says_so_and_keeps_its_phase_on_the_wire() {
         let step = |phase| {
-            BarcaError::WorkerFailed(Box::new(crate::FailedStep {
+            BarcaError::WorkerFailed(Box::new(barca_model::FailedStep {
                 node: "p.py:a".into(),
                 message: "FileNotFoundError: Input artifact not found: x.json\n  File \"/site/barca/_worker.py\", line 9, in _load_artifact".into(),
                 phase,
@@ -652,7 +652,7 @@ mod wire_tests {
 
     #[test]
     fn envelopes_roundtrip_the_existing_wire_schema_without_local_prose() {
-        let failed = BarcaError::WorkerFailed(Box::new(crate::FailedStep {
+        let failed = BarcaError::WorkerFailed(Box::new(barca_model::FailedStep {
             node: "p.py:a".into(),
             message: "ValueError: bad\n  File \"p.py\", line 4, in a\n    raise".into(),
             phase: None,

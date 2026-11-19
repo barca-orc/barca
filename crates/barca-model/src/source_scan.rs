@@ -5,8 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod module_graph;
+
 #[derive(Debug, PartialEq)]
-pub(crate) enum Tok {
+pub enum Tok {
     Str(String, usize),
     Ident(String),
     Punct(char),
@@ -14,12 +16,12 @@ pub(crate) enum Tok {
 
 /// A small Rust lexer: string literals (plain, byte, raw), identifiers and punctuation;
 /// comments, char literals, lifetimes and numbers are dropped.
-pub(crate) fn lex(src: &str) -> Vec<Tok> {
+pub fn lex(src: &str) -> Vec<Tok> {
     lex_with_lines(src).0
 }
 
 /// [`lex`], with the line each token starts on (a parallel vector).
-pub(crate) fn lex_with_lines(src: &str) -> (Vec<Tok>, Vec<usize>) {
+pub fn lex_with_lines(src: &str) -> (Vec<Tok>, Vec<usize>) {
     let s: Vec<char> = src.chars().collect();
     let (mut i, mut line, mut out) = (0usize, 1usize, Vec::new());
     let mut lines = Vec::new();
@@ -146,7 +148,7 @@ pub(crate) fn lex_with_lines(src: &str) -> (Vec<Tok>, Vec<usize>) {
     (out, lines)
 }
 
-pub(crate) fn is_cfg_test(toks: &[Tok], i: usize) -> bool {
+pub fn is_cfg_test(toks: &[Tok], i: usize) -> bool {
     let want = [
         Tok::Punct('#'),
         Tok::Punct('['),
@@ -161,7 +163,7 @@ pub(crate) fn is_cfg_test(toks: &[Tok], i: usize) -> bool {
 
 /// The index after the item that starts at `i`: its `;`, its `,` (a field or argument) or the
 /// `}` closing its first `{`; or at a `}` closing the enclosing block.
-pub(crate) fn skip_item(toks: &[Tok], mut i: usize) -> usize {
+pub fn skip_item(toks: &[Tok], mut i: usize) -> usize {
     let mut depth = 0i32;
     while i < toks.len() {
         match &toks[i] {
@@ -183,7 +185,7 @@ pub(crate) fn skip_item(toks: &[Tok], mut i: usize) -> usize {
     i
 }
 
-pub(crate) fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+pub fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
@@ -195,7 +197,7 @@ pub(crate) fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The files `#[cfg(test)] mod name;` in `file` may name.
-pub(crate) fn test_module_files(src_root: &Path, file: &Path, name: &str) -> Vec<String> {
+pub fn test_module_files(src_root: &Path, file: &Path, name: &str) -> Vec<String> {
     let rel = file.strip_prefix(src_root).unwrap();
     let stem = rel.file_stem().unwrap().to_str().unwrap();
     let parent = rel.parent().unwrap_or(Path::new(""));
@@ -214,7 +216,7 @@ pub(crate) fn test_module_files(src_root: &Path, file: &Path, name: &str) -> Vec
 }
 
 /// Every string literal in non-test code: (line, text). `#[cfg(test)]` items are skipped.
-pub(crate) fn string_literals(src: &str) -> Vec<(usize, String)> {
+pub fn string_literals(src: &str) -> Vec<(usize, String)> {
     let toks = lex(src);
     let mut out = Vec::new();
     let mut i = 0;
@@ -233,7 +235,7 @@ pub(crate) fn string_literals(src: &str) -> Vec<(usize, String)> {
 
 /// The index after the `#[cfg(test)]` item at `i` (further attributes included), and the
 /// module name when the item is `mod name;`.
-pub(crate) fn skip_cfg_test_item(toks: &[Tok], i: usize) -> (usize, Option<String>) {
+pub fn skip_cfg_test_item(toks: &[Tok], i: usize) -> (usize, Option<String>) {
     let mut j = i + 7;
     while toks.get(j) == Some(&Tok::Punct('#')) {
         j = skip_item(toks, j + 1);
@@ -249,7 +251,7 @@ pub(crate) fn skip_cfg_test_item(toks: &[Tok], i: usize) -> (usize, Option<Strin
 
 /// Every `.rs` file under `root` that is not a test module file (`#[cfg(test)] mod name;`
 /// pointing at it), as (path relative to `root`, source).
-pub(crate) fn non_test_sources(root: &Path) -> Vec<(String, String)> {
+pub fn non_test_sources(root: &Path) -> Vec<(String, String)> {
     let mut files = Vec::new();
     rust_files(root, &mut files);
     files.sort();

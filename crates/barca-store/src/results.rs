@@ -3,18 +3,18 @@
 //! These are data only. Each derives serde so the CLI, the server and their tests serialize the
 //! same shape; how a result is printed is the caller's job.
 
-use crate::step_result::OutputRef;
-use crate::warnings::PlanWarning;
+use barca_compile::warnings::PlanWarning;
+use barca_model::step_result::OutputRef;
 use serde::{Deserialize, Serialize};
 
-pub use crate::reports::{
+pub use barca_model::reports::{
     BatchExecution, BatchPlan, ExplainResult, ExplainSummary, KeySummary, PartitionSelectionReport,
     PartitionSummary, SelectedNode, StepReport, TargetOutcome, TargetPrediction, UploadsReport,
 };
-pub(crate) use crate::reports::{LISTED_KEYS, deserialize_targets};
+pub use barca_model::reports::{LISTED_KEYS, deserialize_targets};
 
 /// The key of a summarized partitioned `final_output` (#623).
-pub(crate) const KEY_SUMMARY: &str = "_barca_partitions";
+pub const KEY_SUMMARY: &str = "_barca_partitions";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -103,12 +103,12 @@ fn serialize_targets<S: serde::Serializer>(
 
 impl MultiResult {
     /// True when any target failed.
-    pub(crate) fn any_failed(&self) -> bool {
+    pub fn any_failed(&self) -> bool {
         self.targets.iter().any(|(_, t)| t.failed())
     }
 }
 
-pub(crate) const PLAN_VERSION: u32 = 1;
+pub const PLAN_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -153,7 +153,7 @@ pub struct PlanPhase {
     pub streams: Vec<PlanStream>,
 }
 
-/// [`crate::planner::PhaseReason`] as `barca plan` prints it.
+/// [`barca_compile::planner::PhaseReason`] as `barca plan` prints it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -162,11 +162,11 @@ pub enum PlanPhaseReason {
     FanIn { node_id: String },
 }
 
-impl From<&crate::planner::PhaseReason> for PlanPhaseReason {
-    fn from(r: &crate::planner::PhaseReason) -> Self {
+impl From<&barca_compile::planner::PhaseReason> for PlanPhaseReason {
+    fn from(r: &barca_compile::planner::PhaseReason) -> Self {
         match r {
-            crate::planner::PhaseReason::Initial => PlanPhaseReason::Initial,
-            crate::planner::PhaseReason::FanIn { node_id } => PlanPhaseReason::FanIn {
+            barca_compile::planner::PhaseReason::Initial => PlanPhaseReason::Initial,
+            barca_compile::planner::PhaseReason::FanIn { node_id } => PlanPhaseReason::FanIn {
                 node_id: node_id.clone(),
             },
         }
@@ -187,9 +187,9 @@ pub struct AssetSummary {
     /// Stable node id (continuity key), e.g. `pipeline.py:fetch`.
     pub id: String,
     /// Node kind: asset, sensor, or task.
-    pub kind: crate::NodeKind,
+    pub kind: barca_model::NodeKind,
     /// Freshness policy (always / manual / schedule).
-    pub freshness: crate::Freshness,
+    pub freshness: barca_model::Freshness,
     /// Upstream node ids this node depends on (direct + collected), sorted.
     pub inputs: Vec<String>,
     /// Declared environment variable names (`@asset(env=[...])`), in declaration order.
@@ -222,7 +222,7 @@ pub struct CacheReport {
 }
 
 /// Describe a previously validated graph without reading/importing source again.
-pub fn list_assets_from_dag(dag: &crate::dag::Dag) -> Vec<AssetSummary> {
+pub fn list_assets_from_dag(dag: &barca_compile::dag::Dag) -> Vec<AssetSummary> {
     dag.topo_order()
         .into_iter()
         .filter_map(|id| dag.get_node(id))
@@ -251,7 +251,7 @@ pub fn list_assets_from_dag(dag: &crate::dag::Dag) -> Vec<AssetSummary> {
 /// Select the first twenty keys in lexical order, without retaining every key.
 /// Taking a preview of each chunk and then previewing their union has the same result
 /// as previewing all keys, independently of worker chunk boundaries.
-pub(crate) fn key_preview(keys: impl IntoIterator<Item = String>) -> Vec<String> {
+pub fn key_preview(keys: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut preview = Vec::new();
     for key in keys {
         let pos = preview.binary_search(&key).unwrap_or_else(|pos| pos);
@@ -302,7 +302,7 @@ pub fn pointer_output(
 
 /// A result's `final_output` with each listed artifact as `read` gives it: its pointer
 /// ([`pointer_output`]) or its value (`values::read_task_output`).
-pub(crate) fn output_with(
+pub fn output_with(
     single: Option<&OutputRef>,
     keys: Option<&[(String, OutputRef)]>,
     summary: Option<&KeySummary>,
@@ -360,7 +360,7 @@ fn key_summary_hint(s: &KeySummary) -> String {
 
 /// The counts of a summarized partitioned `final_output` ([`keyed_output`]); `None` for any
 /// other value.
-pub(crate) fn parse_key_summary(output: &serde_json::Value) -> Option<KeySummary> {
+pub fn parse_key_summary(output: &serde_json::Value) -> Option<KeySummary> {
     let s = output.get(KEY_SUMMARY)?;
     let n = |k: &str| {
         s.get(k)
@@ -375,16 +375,16 @@ pub(crate) fn parse_key_summary(output: &serde_json::Value) -> Option<KeySummary
 }
 
 /// The error a multi-target run ends with: its first failed target, with the run so far.
-pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
+pub fn first_multi_failure(result: &MultiResult) -> Option<barca_model::BarcaError> {
     // The first failed target becomes the run's error: exit 1 with the error envelope.
     if let Some((name, t)) = result.targets.iter().find(|(_, t)| t.failed()) {
-        return Some(crate::BarcaError::WorkerFailed(Box::new(
-            crate::FailedStep {
+        return Some(barca_model::BarcaError::WorkerFailed(Box::new(
+            barca_model::FailedStep {
                 node: t.failed_node.clone().unwrap_or_else(|| name.clone()),
                 message: t.error.clone().unwrap_or_else(|| "unknown error".into()),
                 phase: t.failed_phase,
                 artifact_dir: None,
-                run: Some(Box::new(crate::PartialRun {
+                run: Some(Box::new(barca_model::PartialRun {
                     run_id: result.run_id.clone(),
                     elapsed_seconds: result.elapsed_seconds,
                     steps_executed: result.steps_executed,
@@ -449,7 +449,7 @@ mod wire_tests {
 
     #[test]
     fn failed_step_keeps_the_partial_run_and_complete_traceback() {
-        let failed: crate::FailedStep = roundtrip(json!({
+        let failed: barca_model::FailedStep = roundtrip(json!({
             "node": "p.py:a", "message": "ValueError: bad\n  File \"p.py\", line 4, in a\n    raise ValueError('bad')",
             "artifact_dir": "s3://bucket/p.py--a", "run": {
                 "run_id": "partial", "elapsed_seconds": 0.5, "steps_executed": 2, "phases": 1,
@@ -460,12 +460,12 @@ mod wire_tests {
         assert_eq!(failed.summary(), "ValueError: bad");
         assert!(failed.traceback().unwrap().contains("line 4"));
         let partial = failed.run.unwrap();
-        let restored: crate::PartialRun =
+        let restored: barca_model::PartialRun =
             serde_json::from_str(&serde_json::to_string(&partial).unwrap()).unwrap();
         assert_eq!(restored.steps[0].status.as_deref(), Some("ran"));
         assert_eq!(restored.steps[1].status.as_deref(), Some("failed"));
         assert_eq!(restored.steps_executed, 2);
-        let no_run: crate::FailedStep = roundtrip(
+        let no_run: barca_model::FailedStep = roundtrip(
             json!({"node":"p.py:a", "message":"SystemExit: 1", "artifact_dir":null, "run":null}),
         );
         assert!(no_run.run.is_none());

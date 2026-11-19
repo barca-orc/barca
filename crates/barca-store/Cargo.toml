@@ -1,0 +1,32 @@
+[package]
+name = "barca-store"
+version = "0.45.0"
+edition = "2024"
+description = "Storage layer — what is kept on disk, in the store and in the tables one feature owns: transfer, gc, backups, the ledger, pins, pauses, the run queue"
+
+# Above barca-db and barca-proc, below the decisions (#1056, C6). Never barca-engine.
+[dependencies]
+barca-model = { path = "../barca-model" }
+barca-compile = { path = "../barca-compile" }
+barca-db = { path = "../barca-db" }
+barca-proc = { path = "../barca-proc" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }
+libsql = { version = "=0.10.0", default-features = false, features = ["core"] }
+tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "process"] }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+libc = { workspace = true }
+indicatif = "0.18.4"
+reqwest = { workspace = true }
+rustls = { workspace = true }
+# Optional: TypeScript binding generation (enable with --features ts). Kept out
+# of the production binary; used only to regenerate ui/src/lib/generated/.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Generate TS type bindings for the frontend. Off by default.
+ts = ["dep:ts-rs", "barca-model/ts", "barca-compile/ts", "barca-db/ts"]

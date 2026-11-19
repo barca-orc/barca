@@ -1,3 +1,0 @@
-# What barca-core's leaf, storage, decisions and analysis layers name of barca-engine, through
-# the re-exports in lib.rs (see module_layering_tests.rs and docs/engineering/layering.md). One
-# line per module pair: `from -> engine module: the items named`. This list may only shrink.

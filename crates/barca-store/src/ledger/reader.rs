@@ -2,24 +2,24 @@
 //! command runs against a server, the answers its ledger gave ([`Ledger::prefetch`]). The
 //! server answers `POST /ledger/lookup` ([`super::lookup`]) with the same lookup over its own
 //! history, which is why the reader sits with the ledger and below the cache decisions
-//! (`crate::cache` names it as `cache::CacheReader` and `cache::lookup_cached`).
+//! (`barca_model::cache` names it as `cache::CacheReader` and `cache::lookup_cached`).
 
 use super::Ledger;
-use crate::db;
-use crate::step_result::OutputRef;
+use barca_db::db;
+use barca_model::step_result::OutputRef;
 
 /// One phase's cache lookups: the metadata DB's [`db::CacheReader`] and, when this command runs
 /// against a server, its ledger, which answers them in place of this machine's history
 /// (RFC-0007 section 4.1). It is the database reader everywhere one is expected.
-pub(crate) struct CacheReader {
+pub struct CacheReader {
     db: db::CacheReader,
     ledger: Option<Ledger>,
 }
 
 impl CacheReader {
-    pub(crate) async fn for_config(
-        cfg: &crate::config::ResolvedConfig,
-    ) -> Result<Self, crate::BarcaError> {
+    pub async fn for_config(
+        cfg: &barca_model::config::ResolvedConfig,
+    ) -> Result<Self, barca_model::BarcaError> {
         Ok(Self {
             db: db::CacheReader::for_config(cfg).await?,
             ledger: super::attached(cfg).cloned(),
@@ -27,8 +27,8 @@ impl CacheReader {
     }
 
     /// A reader of the database at `db_path`, with no ledger.
-    #[cfg(test)]
-    pub(crate) async fn open(db_path: &str) -> Result<Self, crate::BarcaError> {
+    #[doc(hidden)]
+    pub async fn open(db_path: &str) -> Result<Self, barca_model::BarcaError> {
         Ok(Self {
             db: db::CacheReader::open(db_path).await?,
             ledger: None,
@@ -36,7 +36,7 @@ impl CacheReader {
     }
 
     /// The server's ledger, when this command runs against one.
-    pub(crate) fn ledger(&self) -> Option<&Ledger> {
+    pub fn ledger(&self) -> Option<&Ledger> {
         self.ledger.as_ref()
     }
 }
@@ -51,8 +51,8 @@ impl std::ops::Deref for CacheReader {
 
 /// The most recent successful materialization of `node_id` with this run hash, if any. The row
 /// is the cache hit; whether its artifact can still be read is settled only when something
-/// needs to read it (see [`crate::recover`]).
-pub(crate) async fn lookup_cached(
+/// needs to read it (see [`barca_model::recover`]).
+pub async fn lookup_cached(
     cache: &CacheReader,
     node_id: &str,
     run_hash: &str,
@@ -104,8 +104,8 @@ pub(crate) async fn lookup_cached(
 
 /// A lookup the database could not answer is a miss: the step runs again, which costs time and
 /// never gives a wrong result. A `--read-only` server saw this beside a writer's `VACUUM` while
-/// barca dropped its own SQLite locks ([`crate::db::held_file`]).
+/// barca dropped its own SQLite locks ([`barca_db::db::held_file`]).
 fn lookup_failed(node_id: &str, e: libsql::Error) -> Option<OutputRef> {
-    crate::errln!("[barca] warning: cache lookup of {node_id} failed: {e}");
+    barca_model::errln!("[barca] warning: cache lookup of {node_id} failed: {e}");
     None
 }

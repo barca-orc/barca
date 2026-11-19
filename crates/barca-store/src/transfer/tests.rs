@@ -1,5 +1,5 @@
 use super::*;
-use crate::protocol::read_frame;
+use barca_proc::protocol::read_frame;
 
 // ── ArtifactLayout ──────────────────────────────────────────────────────
 
@@ -189,7 +189,7 @@ impl Fixture {
     async fn client(&self) -> TransferClient {
         let mut cmd = Command::new("python3");
         cmd.args(["-c", FAKE_HELPER]).env("FAKE_LOG", &self.log);
-        let sock = crate::protocol::socket_path(
+        let sock = barca_proc::protocol::socket_path(
             &format!("xfer-test-{}-{}", std::process::id(), rand_suffix()),
             "transfer",
         )
@@ -213,7 +213,7 @@ async fn within<T>(f: impl std::future::Future<Output = T>) -> T {
 }
 
 fn fresh_socket() -> PathBuf {
-    crate::protocol::socket_path(
+    barca_proc::protocol::socket_path(
         &format!("xfer-test-{}-{}", std::process::id(), rand_suffix()),
         "transfer",
     )
@@ -229,7 +229,7 @@ async fn a_deferred_client_starts_its_helper_at_the_first_request() {
     // A local copy with the recorded hash is checked here, with no helper.
     let local = fx.write_local("n/h.json", b"same");
     let store = fx.layout().store_for(&local).unwrap();
-    let sha = crate::hash::file_sha256(Path::new(&local)).unwrap();
+    let sha = barca_model::hash::file_sha256(Path::new(&local)).unwrap();
     assert!(c.has_local_copy(&store, Some(&sha)));
     assert!(c.has_local_copy(&store, None));
     assert!(!c.has_local_copy(&store, Some("other")));
@@ -598,7 +598,7 @@ async fn a_helper_that_never_connected_is_gone_after_stop_and_after_drop() {
                  time.sleep(60)",
         ])
         .arg(&pid_file);
-        let sock = crate::protocol::socket_path(
+        let sock = barca_proc::protocol::socket_path(
             &format!("xfer-test-idle-{}-{}", std::process::id(), rand_suffix()),
             "transfer",
         )
@@ -618,14 +618,14 @@ async fn a_helper_that_never_connected_is_gone_after_stop_and_after_drop() {
         if stopped {
             within(launching.stop()).await;
             assert!(
-                !crate::process::pid_alive(pid),
+                !barca_model::process::pid_alive(pid),
                 "alive after stop() returned"
             );
             assert!(!sock.exists());
         } else {
             drop(launching);
             // Killed on the spot; the runtime reaps it a moment later.
-            while crate::process::pid_alive(pid) {
+            while barca_model::process::pid_alive(pid) {
                 assert!(
                     Instant::now() < deadline,
                     "alive after its launch was dropped"
@@ -641,7 +641,7 @@ async fn spawn_reports_a_helper_that_exits_before_connecting() {
     let fx = Fixture::new();
     let mut cmd = Command::new("python3");
     cmd.args(["-c", "import sys; sys.exit(2)"]);
-    let sock = crate::protocol::socket_path(
+    let sock = barca_proc::protocol::socket_path(
         &format!("xfer-test-dead-{}", std::process::id()),
         "transfer",
     )
@@ -665,7 +665,7 @@ fn repo_python() -> Option<PathBuf> {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv/bin/python");
     let mut probe = std::process::Command::new(&p);
     probe.args(["-c", "import barca._transfer"]);
-    let ok = crate::helper_proc::output_std(&mut probe)
+    let ok = barca_proc::helper_proc::output_std(&mut probe)
         .ok()?
         .status
         .success();
@@ -675,13 +675,13 @@ fn repo_python() -> Option<PathBuf> {
 #[tokio::test]
 async fn hello_is_accepted_before_connect_even_after_slow_planning() {
     let Some(python) = repo_python() else {
-        crate::errln!("SKIP: no .venv with barca installed");
+        barca_model::errln!("SKIP: no .venv with barca installed");
         return;
     };
     let fx = Fixture::new();
     let mut cmd = Command::new(python);
     cmd.args(["-m", "barca._transfer"]);
-    let sock = crate::protocol::socket_path(
+    let sock = barca_proc::protocol::socket_path(
         &format!("xfer-test-slow-plan-{}", std::process::id()),
         "transfer",
     )
@@ -697,13 +697,13 @@ async fn hello_is_accepted_before_connect_even_after_slow_planning() {
 #[tokio::test]
 async fn real_helper_round_trip_through_plain_path_store() {
     let Some(python) = repo_python() else {
-        crate::errln!("SKIP: no .venv with barca installed");
+        barca_model::errln!("SKIP: no .venv with barca installed");
         return;
     };
     let fx = Fixture::new();
     let mut cmd = Command::new(python);
     cmd.args(["-m", "barca._transfer"]);
-    let sock = crate::protocol::socket_path(
+    let sock = barca_proc::protocol::socket_path(
         &format!("xfer-test-real-{}", std::process::id()),
         "transfer",
     )

@@ -4,11 +4,11 @@
 //! `Manual` one (a target that reads a paused node that has never been computed is skipped
 //! too). A request (`barca get`, `barca run`, `POST /runs`) that names a paused node is
 //! refused unless it says it means it (`--allow-paused`, `allow_paused`). The pauses
-//! themselves are rows of `asset_pauses` (`crate::db::get_asset_pauses`).
+//! themselves are rows of `asset_pauses` (`barca_db::db::get_asset_pauses`).
 
-use crate::BarcaError;
-use crate::dag::Dag;
-use crate::targets::{short_name, target_name_matches};
+use barca_compile::dag::Dag;
+use barca_compile::targets::{short_name, target_name_matches};
+use barca_model::BarcaError;
 use std::collections::{HashSet, VecDeque};
 
 /// The nodes a pause of `target` covers, in dependency order: the node `target` names (as a
@@ -37,7 +37,7 @@ pub fn scope(dag: &Dag, target: &str, downstream: bool) -> Result<Vec<String>, B
         ids
     } else {
         vec![
-            crate::targets::resolve_target(dag, Some(target), "")?
+            barca_compile::targets::resolve_target(dag, Some(target), "")?
                 .expect("a named target resolves"),
         ]
     };
@@ -77,7 +77,7 @@ pub fn below(dag: &Dag, ids: &[String]) -> Vec<String> {
 /// Matched by name, without the DAG: a name matches a paused id as a run target matches it.
 pub fn paused_target<'a>(
     names: &'a [String],
-    paused: &[crate::db::AssetPause],
+    paused: &[barca_db::db::AssetPause],
 ) -> Option<(&'a str, String)> {
     names.iter().flat_map(|n| n.split(',')).find_map(|name| {
         let name = name.trim();
@@ -101,7 +101,7 @@ pub async fn check_request(db_path: &str, targets: &[String]) -> Result<(), Barc
     if targets.is_empty() {
         return Ok(());
     }
-    let paused = crate::db::get_asset_pauses(db_path).await?;
+    let paused = barca_db::db::get_asset_pauses(db_path).await?;
     match paused_target(targets, &paused) {
         Some((_, id)) => Err(refused(&id)),
         None => Ok(()),
@@ -109,8 +109,8 @@ pub async fn check_request(db_path: &str, targets: &[String]) -> Result<(), Barc
 }
 
 /// Every paused node of the metadata DB at `db_path`, with when and through what it was paused.
-pub async fn list(db_path: &str) -> Result<Vec<crate::db::AssetPause>, BarcaError> {
-    crate::db::get_asset_pauses(db_path).await
+pub async fn list(db_path: &str) -> Result<Vec<barca_db::db::AssetPause>, BarcaError> {
+    barca_db::db::get_asset_pauses(db_path).await
 }
 
 /// One paused schedule (`barca pause --schedule`, `POST /schedule/{id}/pause`): since when,
@@ -131,7 +131,7 @@ pub async fn paused_schedules(db_path: &str, now: i64) -> Result<Vec<PausedSched
     if std::fs::metadata(db_path).map_or(true, |m| m.len() == 0) {
         return Ok(Vec::new());
     }
-    let mut paused: Vec<PausedSchedule> = crate::db::get_schedule_pauses(db_path)
+    let mut paused: Vec<PausedSchedule> = barca_db::db::get_schedule_pauses(db_path)
         .await?
         .into_iter()
         .filter(|(_, pause)| pause.until.is_none_or(|until| until > now))
@@ -186,23 +186,23 @@ pub fn parse_until(text: &str, now: chrono::DateTime<chrono::Utc>) -> Result<i64
 /// Pause `ids` (the [`scope`] of `via`, the target as given) at `now` (unix seconds), creating
 /// the metadata DB when there is none.
 pub async fn pause(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     ids: &[String],
     via: &str,
     now: i64,
 ) -> Result<(), BarcaError> {
-    crate::db::open_metadata(cfg).await?;
-    crate::db::pause_assets(&cfg.db_path, ids, via, now).await
+    barca_db::open::open_metadata(cfg).await?;
+    barca_db::db::pause_assets(&cfg.db_path, ids, via, now).await
 }
 
 /// Resume `ids` (every paused node with `None`) in the metadata DB at `db_path`. Answers the
 /// ids it resumed: those of `ids` that were paused.
 pub async fn resume(db_path: &str, ids: Option<Vec<String>>) -> Result<Vec<String>, BarcaError> {
-    let paused = crate::db::get_asset_pauses(db_path).await?;
+    let paused = barca_db::db::get_asset_pauses(db_path).await?;
     match ids {
         None => {
             let ids: Vec<String> = paused.into_iter().map(|p| p.id).collect();
-            crate::db::resume_assets(db_path, None).await?;
+            barca_db::db::resume_assets(db_path, None).await?;
             Ok(ids)
         }
         Some(ids) => {
@@ -210,7 +210,7 @@ pub async fn resume(db_path: &str, ids: Option<Vec<String>>) -> Result<Vec<Strin
                 .into_iter()
                 .filter(|id| paused.iter().any(|p| &p.id == id))
                 .collect();
-            crate::db::resume_assets(db_path, Some(&ids)).await?;
+            barca_db::db::resume_assets(db_path, Some(&ids)).await?;
             Ok(ids)
         }
     }
@@ -226,7 +226,7 @@ pub fn refused(id: &str) -> BarcaError {
 }
 
 /// The skipped step's detail for the paused node `id`.
-pub(crate) fn detail(id: &str) -> String {
+pub fn detail(id: &str) -> String {
     format!(
         "'{}' is paused; barca resume {} to let scheduled runs compute it",
         short_name(id),
@@ -244,7 +244,7 @@ mod tests {
             @asset(inputs={\"raw\": raw})\ndef clean(raw):\n    return raw\n\
             @asset(inputs={\"clean\": clean})\ndef report(clean):\n    return clean\n\
             @asset()\ndef other():\n    return 2\n";
-        Dag::build(&crate::parse::extract_nodes(src, "p.py").unwrap()).expect("valid dag")
+        Dag::build(&barca_compile::parse::extract_nodes(src, "p.py").unwrap()).expect("valid dag")
     }
 
     fn names(ids: &[String]) -> Vec<&str> {
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn a_request_naming_a_paused_node_is_found_by_name() {
-        let paused = vec![crate::db::AssetPause {
+        let paused = vec![barca_db::db::AssetPause {
             id: "p.py:clean".into(),
             paused_at: 1,
             via: "p.py:clean".into(),
