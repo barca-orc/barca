@@ -2,22 +2,23 @@ import { useMemo } from 'react'
 import { Age, KeyValue, Section, StatusBadge, Tag } from '@/components'
 import { useSchedule } from '@/hooks/useSchedule'
 import { usePinNotes } from '@/hooks/usePins'
-import { lastAttemptFailed, nodeStateDisplay, shownCacheState } from '@/lib/cacheStateDisplay'
+import { lastAttemptFailed, nodeStateDisplay } from '@/lib/cacheStateDisplay'
+import { usePauseCover } from '@/hooks/usePauses'
 import { blockerOf } from '@/lib/healthDisplay'
 import { shortName } from '@/lib/graph'
-import { blastRadius, type ScheduleRelation } from '@/lib/pauses'
-import type { ListNode, NodeState } from '@/lib/types'
+import { affectedSchedules, type PauseRelation } from '@/lib/pauses'
+import type { NodeState } from '@/lib/types'
 
-const RELATION: Record<ScheduleRelation, string> = {
+/** How a schedule's ticks touch the asset, in the server's word (`covers.schedules[].relation`). */
+const RELATION: Record<PauseRelation, string> = {
   self: 'this asset',
-  downstream: 'reads it',
-  upstream: 'reconciles it',
+  target: 'reconciles it',
+  input: 'reads it',
+  downstream: 'runs what is below it',
 }
 
 export interface BlastRadiusProps {
   id: string
-  /** The whole graph (`GET /assets`). */
-  graph: ListNode[]
   /** The states loaded with the panel, for the state of each downstream node when known. */
   states: ReadonlyMap<string, NodeState>
   paused: ReadonlySet<string>
@@ -26,13 +27,17 @@ export interface BlastRadiusProps {
 
 /**
  * What this asset reaches: every node downstream of it (what a failure here leaves stale or
- * blocked), and the schedules whose ticks compute it or what reads it, with their next run.
- * From `GET /assets` and `GET /schedule`.
+ * blocked), and the schedules whose ticks reach it or what is below it, with their next run.
+ * Which nodes and which schedules is the server's answer (`covers` of `GET /pauses?target=`,
+ * the scheduler's own walk); `GET /schedule` adds each schedule's next run.
  */
-export function BlastRadius({ id, graph, states, paused, onSelect }: BlastRadiusProps) {
+export function BlastRadius({ id, states, paused, onSelect }: BlastRadiusProps) {
   const { data: jobs } = useSchedule()
-  const radius = useMemo(() => blastRadius(id, graph, jobs ?? []), [id, graph, jobs])
+  const { data: cover } = usePauseCover(id)
+  const radius = useMemo(() => ({ downstream: cover?.downstream ?? [], schedules: affectedSchedules(cover, jobs ?? []) }), [cover, jobs])
   const pins = usePinNotes()
+  // Until the server has answered there is nothing to say, and "nothing downstream" would be a claim.
+  if (!cover) return <Section title="Blast radius">{null}</Section>
   return (
     <Section title="Blast radius">
       {/* Nothing it reaches: one line, not two rows of dashes. */}
@@ -44,7 +49,7 @@ export function BlastRadius({ id, graph, states, paused, onSelect }: BlastRadius
         <ul className="barca-blast-list" aria-label="Downstream nodes">
           {radius.downstream.map((d) => {
             const node = states.get(d)
-            const shown = node && nodeStateDisplay({ state: shownCacheState(node), lastFailed: lastAttemptFailed(node), blockedBy: blockerOf(node), pinned: pins.get(d) ?? null })
+            const shown = node && nodeStateDisplay({ state: node.cache.state, lastAttempt: node.last_attempt, lastFailed: lastAttemptFailed(node), blockedBy: blockerOf(node), pinned: pins.get(d) ?? null })
             return (
               <li key={d}>
                 <button type="button" className="barca-link" onClick={() => onSelect(d)}>{shortName(d)}</button>

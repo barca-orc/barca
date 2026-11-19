@@ -59,6 +59,8 @@ FIELDS = (
     "no_estimate",
     "refresh_path",
     "schedule",
+    "last_attempt",
+    "typical_run_seconds",
 )
 
 
@@ -106,6 +108,13 @@ def test_status_and_state_say_the_same_of_every_node(tmp_path, serve):
     reader = serve("--read-only")
     local = _local(tmp_path)
     assert local["orders"]["health"] != "ok", local
+    # What the web UI used to work out is served, by both, from one computation (#1056): how
+    # the newest attempt went, and the typical time of a run (the median of about 0 s and
+    # about 12 s; none for a node that never ran).
+    assert local["orders"]["last_attempt"] == "success", local
+    assert local["loose"]["last_attempt"] == "never_run", local
+    assert 5.5 < local["orders"]["typical_run_seconds"] < 9, local
+    assert local["loose"]["typical_run_seconds"] is None, local
     assert _picked(reader.get("/state")) == local
     assert _picked(reader.get("/nodes")["nodes"]) == local
     reader.stop()
@@ -145,3 +154,31 @@ def test_status_and_state_say_the_same_of_every_node(tmp_path, serve):
 
     served_roots, local_roots = _settled(both)
     assert served_roots == local_roots and local_roots
+
+    # What a pause would cover is one walk, the scheduler's: the CLI prints the route's answer.
+    cover = server.get("/pauses?target=orders&downstream=true")["covers"]
+    out = _ok(
+        barca(
+            tmp_path,
+            "pause",
+            "orders",
+            "--downstream",
+            "--dry-run",
+            "--server",
+            server.url,
+            "--json",
+            timeout=QUICK,
+        )
+    )
+    assert json.loads(out)["covers"] == cover
+    assert [t.rsplit(":", 1)[1] for t in cover["targets"]] == ["orders"]
+    assert [d.rsplit(":", 1)[1] for d in cover["downstream"]] == ["report"]
+    # `orders` is an `Always` asset below the scheduled sensor: a target of its ticks.
+    assert [(s["id"].rsplit(":", 1)[1], s["relation"]) for s in cover["schedules"]] == [
+        ("inbox", "target")
+    ]
+    # `loose` is `Manual` and nothing reads it: no tick reaches it.
+    assert server.get("/pauses?target=loose&downstream=true")["covers"]["schedules"] == []
+    # Nothing was paused by asking.
+    assert server.get("/pauses")["paused"] == []
+    assert "covers" not in server.get("/pauses")

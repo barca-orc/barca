@@ -9,7 +9,7 @@
  * pause control refetches `GET /state` when it has answered.
  */
 
-import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 import { sourceFile } from './pipeline'
 import { formatAbout, parseTime } from './time'
 import type { ListNode, NodeState } from './types'
@@ -32,7 +32,7 @@ export interface ScheduleRow {
   /** Its newest tick (`schedule.last_fired`, as the server writes it; `Age` draws it), and the
    * run that tick started: its status (`pending` while it waits in the run queue) and id. */
   last: { status: string | null; at: string; runId: string | null } | null
-  /** `cache.state`, in the CLI's word (`shownCacheState`); null until `/state` has the node. */
+  /** `cache.state`, in the CLI's word; null until `/state` has the node. */
   state: CacheState | null
   /** Its last attempt failed: a fact beside the state. */
   lastFailed: boolean
@@ -86,10 +86,6 @@ export function humanizeCron(cron: string): string | null {
   return null
 }
 
-/** The status of a tick's run in the page's words: a run that waits for a run slot is `queued`. */
-export function lastStatusLabel(status: string): string {
-  return status === 'pending' ? 'queued' : status
-}
 
 /** "late by 12m": how long ago the first missed slot was. */
 export function formatLate(sinceMs: number, nowMs: number): string {
@@ -141,7 +137,7 @@ export function scheduleRows(
           last: stands?.last_fired
             ? { status: stands.last_status, at: stands.last_fired, runId: stands.last_run_id }
             : null,
-          state: st ? shownCacheState(st) : null,
+          state: st ? st.cache.state : null,
           lastFailed: st ? lastAttemptFailed(st) : false,
           paused: stands?.paused ? { until: pausedUntilMs } : null,
           queueWait: stands && stands.typical_queue_wait_seconds > 0 ? formatAbout(stands.typical_queue_wait_seconds) : null,

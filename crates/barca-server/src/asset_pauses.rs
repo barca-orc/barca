@@ -6,7 +6,7 @@
 use crate::error::ApiError;
 use crate::read_cache::Reads;
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use barca_core::pauses;
 
 pub use barca_core::served::{PauseRequest, Pauses};
@@ -19,10 +19,34 @@ async fn body(reads: &Reads) -> Result<Pauses, ApiError> {
     Ok(Pauses::of(paused, schedules))
 }
 
+/// `GET /pauses?target=&downstream=`: the pause to describe, not to make.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct CoverQuery {
+    /// A node or a file, as `POST /pauses` takes it.
+    target: Option<String>,
+    /// What is below the target too.
+    #[serde(default)]
+    downstream: bool,
+}
+
 /// `GET /pauses` — every paused node, with when and through what it was paused, and every
-/// paused schedule.
-pub async fn list(State(reads): State<Reads>) -> Result<Json<Pauses>, ApiError> {
-    Ok(Json(body(&reads).await?))
+/// paused schedule. With `?target=` (and `&downstream=true`), also `covers`: what a pause of
+/// that target would cover (`barca_core::refresh_path::pause_cover`). It pauses nothing, so
+/// a read-only server answers it.
+pub async fn list(
+    State(reads): State<Reads>,
+    Query(query): Query<CoverQuery>,
+) -> Result<Json<Pauses>, ApiError> {
+    let mut pauses = body(&reads).await?;
+    if let Some(target) = query.target.as_deref().filter(|t| !t.is_empty()) {
+        let dag = reads.loaded_dag().await?;
+        pauses.covers = Some(barca_core::refresh_path::pause_cover(
+            &dag,
+            target,
+            query.downstream,
+        )?);
+    }
+    Ok(Json(pauses))
 }
 
 async fn scope(reads: &Reads, req: &PauseRequest) -> Result<Vec<String>, ApiError> {

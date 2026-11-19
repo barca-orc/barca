@@ -4,6 +4,7 @@
  * `GET /state`. Nothing here classifies, counts or attributes; it words and joins.
  */
 
+import { statusFailed } from './status'
 import { memberHealth, type GraphState } from './graphState'
 import type { RollupRoot } from './rollupView'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
@@ -17,7 +18,7 @@ export interface GraphLink {
 
 /** Whether `state` is the box of a node whose last attempt failed. */
 export function isFailed(state: GraphState): boolean {
-  return (state.kind === 'cache' && state.lastFailed) || (state.kind === 'run' && state.status === 'failed')
+  return (state.kind === 'cache' && state.lastFailed) || (state.kind === 'run' && statusFailed(state.status))
 }
 
 /** Each node's direct consumers. */

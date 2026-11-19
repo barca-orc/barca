@@ -193,6 +193,7 @@ pub(crate) async fn perform(
                         server,
                         pause.target.as_deref(),
                         pause.downstream,
+                        pause.dry_run,
                         pause.json,
                         env,
                     )

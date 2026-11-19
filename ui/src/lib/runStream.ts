@@ -10,6 +10,7 @@
 
 import { match } from 'ts-pattern'
 import { parseOutcome } from './runs'
+import { endedStatus } from './status'
 import type { RunEvent, LineWhen, LogLine, RunOutcome, StatusKind } from './types'
 
 /** A progress line, exactly as the CLI prints it on stderr. */
@@ -74,7 +75,7 @@ export function reduceRunEvent(state: RunStreamState, event: RunEvent): RunStrea
         ...state,
         statuses: {
           ...state.statuses,
-          [ev.node_id]: (ev.ok ? 'success' : 'failed') as StatusKind,
+          [ev.node_id]: endedStatus(ev.ok),
         },
         cached: cached ? { ...state.cached, [ev.node_id]: true as const } : state.cached,
         errors:

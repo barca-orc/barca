@@ -21,6 +21,29 @@ cache does not change it. It is `null` when the node never ran.
 `rows` is how many rows a successful tabular result holds, counted by the worker when the step
 wrote it ("Row counts" below); `null` when it was not counted.
 
+## Last attempt
+
+`last_attempt` says how the node's newest attempt went, in one word:
+
+| `last_attempt` | When |
+|---|---|
+| `failed` | its last materialization failed, or any of its keys last failed (`partitions.failed` is not 0) |
+| `never_run` | no execution is recorded for it (`last_materialization` is `null`) |
+| `success` | otherwise |
+
+A partitioned node's `last_materialization` is one key, the newest recorded, so its `status`
+can read `success` while other keys last failed; `last_attempt` is `failed` then. It is a fact
+of the row, beside `cache.state` and `health` and not in place of either: a `stale` or `blocked`
+node whose last run went well reads `success`, and a cache hit is not an attempt. A node that
+always runs (a task, a sensor) has no cache state to show, so a surface shows this word for it;
+the web UI does.
+
+```bash
+barca status pipeline.py --json | jq -r '.nodes[] | [.name, .cache.state, .last_attempt] | @tsv'
+```
+
+`last_attempt` is experimental with the rest of health.
+
 ## Row counts
 
 The worker records the rows of a result when that is cheap to know exactly, and never guesses:
@@ -576,6 +599,27 @@ barca sql "select name, health, stale_since, recheck_at from barca.nodes where h
 
 The times are experimental with the rest of health.
 
+## Typical run time
+
+`typical_run_seconds` is how long one run of the node typically takes, in seconds: the median
+of its recent successful executions (at most 20; the middle value, or the mean of the two
+middle values of an even count). Durations are recorded per key, whichever call computed the
+key, so for a partitioned node the figure is that median times its number of keys
+(`partitions.total`): a run over the whole node. It is rounded to a millisecond, and `null`
+when the node has no successful execution on record.
+
+It is an estimate of a run that computes every key. The next run computes only the keys that
+need it, which `expected_fresh_at` accounts for and this does not. For a node whose keys are
+computed in batched calls the per-key median is small and the product is the time of the
+calls; for keys that run side by side on several workers the wall time is shorter than the
+figure.
+
+```bash
+barca status pipeline.py --json | jq -r '.nodes[] | select(.typical_run_seconds) | [.name, .typical_run_seconds] | @tsv'
+```
+
+`typical_run_seconds` is experimental with the rest of health.
+
 ## Data signals and coverage
 
 `signals` lists what a node's recorded results say about its data, from facts the metadata DB
@@ -712,6 +756,8 @@ along its chain is `--key KEY` ([Partitions: Listing keys](/reference/partitions
       "expected_fresh_at": null,
       "recheck_at": null,
       "no_estimate": null,
+      "last_attempt": "success",
+      "typical_run_seconds": 0.54,
       "last_materialization": {"status": "success", "created_at": "2026-10-02 11:56:43", "elapsed_seconds": 0.54, "run_hash": "6db9...", "artifact": ".barca/artifacts/pipeline.py--orders/6db9....parquet", "format": "parquet", "size_bytes": 2182, "rows": 3},
       "shape": {"type": "table", "rows": 3, "columns": [{"name": "id", "type": "int64"}, {"name": "amount", "type": "double"}]}
     }

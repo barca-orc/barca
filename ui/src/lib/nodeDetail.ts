@@ -10,6 +10,7 @@ import type { AssetRunEntry, CacheStatus, FailureFacts, NodeState, PartitionStat
 import type { RunTotals } from './generated/RunTotals'
 import type { RunNodeSummary } from './generated/RunNodeSummary'
 import { formatSeconds } from './time'
+import { isSuccess } from './runs'
 
 /** Nodes that take `id` as an input, sorted by name. */
 export function downstreamOf<T extends { id: string; inputs: string[] }>(id: string, nodes: readonly T[]): T[] {
@@ -32,7 +33,7 @@ interface HistoryBar {
 export function historyBars(runs: AssetRunEntry[]): HistoryBar[] {
   const max = Math.max(0, ...runs.map((r) => r.elapsed_seconds ?? 0))
   return [...runs].reverse().map((r) => {
-    const failed = r.status !== 'success'
+    const failed = !isSuccess(r.status)
     const e = r.elapsed_seconds
     return {
       createdAt: r.created_at,
@@ -68,7 +69,7 @@ export function durationHistogram(
   binCount = 10,
 ): DurationBin[] {
   const xs = runs
-    .filter((r) => r.status === 'success' && r.elapsed_seconds !== null)
+    .filter((r) => isSuccess(r.status) && r.elapsed_seconds !== null)
     .map((r) => r.elapsed_seconds as number)
   if (xs.length < 2) return []
   const lo = Math.min(...xs)
@@ -255,7 +256,7 @@ export function previewRows(sample: unknown): { columns: string[]; rows: string[
 
 /** Whether every recorded run failed: the History has no successful run to summarize. */
 export function onlyFailures(runs: readonly AssetRunEntry[]): boolean {
-  return runs.length > 0 && runs.every((r) => r.status !== 'success')
+  return runs.length > 0 && runs.every((r) => !isSuccess(r.status))
 }
 
 /** `assets.py:136` (`in broken_report` in the title): where the project's own code raised. */
@@ -345,7 +346,7 @@ export function collapseRuns(runs: readonly AssetRunEntry[]): RunGroup[] {
   const out: RunGroup[] = []
   for (const run of runs) {
     const last = out.at(-1)
-    const same = last && run.status !== 'success' && last.run.status === run.status
+    const same = last && !isSuccess(run.status) && last.run.status === run.status
       && errorFirstLine(last.run.error_message) === errorFirstLine(run.error_message)
       && (last.run.keys ?? null) === (run.keys ?? null) && (last.run.failed_keys ?? null) === (run.failed_keys ?? null)
     if (last && same) {
@@ -423,7 +424,7 @@ export function dataKey(node: Pick<NodeState, 'partitioned' | 'last_materializat
   if (!node.partitioned) return { kind: 'whole' }
   const last = node.last_materialization
   if (!last?.partition) return { kind: 'none' }
-  return last.status === 'success' ? { kind: 'newest', key: last.partition } : { kind: 'cached', key: last.partition }
+  return isSuccess(last.status) ? { kind: 'newest', key: last.partition } : { kind: 'cached', key: last.partition }
 }
 
 /** The sentence over a partitioned node's output in the Data tab: which key, and why that one. */

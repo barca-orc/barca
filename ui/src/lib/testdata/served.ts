@@ -18,23 +18,24 @@
 import type { Cause } from '../generated/Cause'
 import type { Health } from '../generated/Health'
 import type { HealthReason } from '../generated/HealthReason'
+import type { LastAttempt } from '../generated/LastAttempt'
 import type { NodeState } from '../types'
 import table from './health-alone.json'
 import { row as served_row } from './project'
 
 type Verdict = 'health' | 'health_reason' | 'cause'
-type Classified = Verdict | 'measured' | 'root' | 'gap_seconds' | 'last_check' | 'refresh_path' | 'stale_since' | 'expected_fresh_at' | 'recheck_at' | 'no_estimate'
+type Classified = Verdict | 'measured' | 'root' | 'gap_seconds' | 'last_check' | 'refresh_path' | 'stale_since' | 'expected_fresh_at' | 'recheck_at' | 'no_estimate' | 'last_attempt' | 'typical_run_seconds'
 export type Unserved = Omit<NodeState, Classified> & Partial<Pick<NodeState, Classified>>
 
-const ALONE = table as Record<string, { health: Health; health_reason: HealthReason; cause: Cause | null }>
+const ALONE = table as Record<string, { health: Health; health_reason: HealthReason; cause: Cause | null; last_attempt: LastAttempt }>
 
 /** What `health::classify` says of `row` on its own: a lookup, by the facts the fixture states. */
-function alone(row: Unserved): [Health, HealthReason, Cause | null] {
+function alone(row: Unserved): [Health, HealthReason, Cause | null, LastAttempt] {
   const last = row.last_materialization === null ? 'none' : row.last_materialization.status
   const key = `${row.cache.state}|${last}|${(row.partitions?.failed ?? 0) > 0}`
   const found = ALONE[key]
   if (!found) throw new Error(`no row ${key} in health-alone.json: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
-  return [found.health, found.health_reason, found.cause]
+  return [found.health, found.health_reason, found.cause, found.last_attempt]
 }
 
 /** `row` with the health, reason and cause the server gives it on its own, unless the fixture states them. */
@@ -43,13 +44,13 @@ export function served(row: Unserved): NodeState {
   if (row.health !== undefined && (row.health_reason === undefined || row.cause === undefined)) {
     throw new Error(`${row.id} states its health without its health_reason or cause: state all three (blockedBy, LATE_SCHEDULE, or a row of project.ts)`)
   }
-  const [aloneHealth, aloneReason, aloneCause] = alone(row)
+  const [aloneHealth, aloneReason, aloneCause, aloneAttempt] = alone(row)
   const health = row.health ?? aloneHealth
   const health_reason = row.health_reason ?? aloneReason
   const cause = row.cause !== undefined ? row.cause : aloneCause
   // A failing node is its own root; a fixture about a node blocked by another states its `root`.
   const root = row.root ?? (health === 'failing' ? { id: `failure:${row.id}`, kind: 'failure' as const, node: row.id } : null)
-  return { ...row, root, cause, health, health_reason, gap_seconds: row.gap_seconds ?? 0, measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null, refresh_path: row.refresh_path ?? null, stale_since: row.stale_since ?? null, expected_fresh_at: row.expected_fresh_at ?? null, recheck_at: row.recheck_at ?? null, no_estimate: row.no_estimate ?? null }
+  return { ...row, root, cause, health, health_reason, gap_seconds: row.gap_seconds ?? 0, measured: row.measured ?? (row.kind === 'asset' ? false : null), last_check: row.last_check ?? null, refresh_path: row.refresh_path ?? null, stale_since: row.stale_since ?? null, expected_fresh_at: row.expected_fresh_at ?? null, recheck_at: row.recheck_at ?? null, no_estimate: row.no_estimate ?? null, last_attempt: row.last_attempt ?? aloneAttempt, typical_run_seconds: row.typical_run_seconds ?? null }
 }
 
 const verdict = ({ health, health_reason, cause }: NodeState): Pick<NodeState, Verdict> => ({ health, health_reason, cause })

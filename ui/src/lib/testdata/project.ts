@@ -39,8 +39,10 @@ import type { Rollup, RollupEntry, RollupRoot } from '../rollupView'
 import type { AssetPin, NodeState, RunExplanation, RunList, RunSummary, RunView } from '../types'
 import type { RunLine } from '../generated/RunLine'
 import type { RunNodeSummary } from '../generated/RunNodeSummary'
+import type { PauseCover } from '../pauses'
 import type { Pauses } from '../types'
 import pauses from './served/pauses.json'
+import pauseCovers from './served/pause-covers.json'
 import pins from './served/pins.json'
 import rollup from './served/rollup.json'
 import runDetails from './served/run-details.json'
@@ -68,6 +70,17 @@ export const RUNS_WITHOUT_SCHEDULE = runsWithoutSchedule as unknown as RunList
 export const RUN_DETAILS = runDetails as unknown as Record<string, RunView>
 /** `GET /pauses`. */
 export const PAUSES = pauses as unknown as Pauses
+
+/**
+ * `covers` of `GET /pauses?target=<id>&downstream=true` for the node named `name`: what a pause
+ * of it and everything below it would cover, by the scheduler's own walk.
+ */
+export function pauseCover(name: string): PauseCover {
+  const covers = pauseCovers as unknown as Record<string, PauseCover>
+  const id = Object.keys(covers).find((k) => k.endsWith(`:${name}`))
+  if (!id) throw new Error(`no node ${name} in served/pause-covers.json`)
+  return covers[id]!
+}
 /** `GET /state` once `fx_rates` is pinned, and `GET /pins` then. */
 export const STATE_PINNED = statePinned as unknown as NodeState[]
 export const PINS = pins as unknown as { pins: AssetPin[] }

@@ -194,6 +194,8 @@ pub(crate) struct QueueRequest {
 pub(crate) struct PauseRequest {
     pub(crate) target: Option<String>,
     pub(crate) downstream: bool,
+    /// `--dry-run`: pause nothing, answer what the pause would cover.
+    pub(crate) dry_run: bool,
     pub(crate) schedule: Option<String>,
     pub(crate) until: Option<String>,
     pub(crate) json: bool,
@@ -659,6 +661,7 @@ impl Request {
             Cli::Pause {
                 target,
                 downstream,
+                dry_run,
                 schedule,
                 until,
                 format,
@@ -667,6 +670,7 @@ impl Request {
             } => Request::Pause(PauseRequest {
                 target,
                 downstream,
+                dry_run,
                 schedule,
                 until,
                 json: is_json(format),

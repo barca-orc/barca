@@ -3,7 +3,7 @@
  * "Retry", the log filters of the run panel, and the incident summary a failed run copies.
  */
 import type { LogLine, RunRequest, RunStep, RunView } from './types'
-import { triggeredByLabel } from './runs'
+import { isFailure, triggeredByLabel } from './runs'
 
 // ─── re-running ─────────────────────────────────────────────────────────────
 
@@ -143,7 +143,7 @@ function seconds(s: number | null): string {
 
 /** The run's failed steps, as recorded. */
 export function failedSteps(run: Pick<RunView, 'steps'>): RunStep[] {
-  return run.steps.filter((s) => s.status === 'failed')
+  return run.steps.filter((s) => isFailure(s.status))
 }
 
 /**

@@ -22,6 +22,7 @@
     "id": "billing.py:invoices",
     "inputs": [],
     "kind": "asset",
+    "last_attempt": "failed",
     "last_check": null,
     "last_materialization": {
       "artifact": null,
@@ -59,7 +60,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T00:40:01Z"
+    "stale_since": "2026-11-17T00:40:01Z",
+    "typical_run_seconds": 2.8
   },
   {
     "cache": {
@@ -82,6 +84,7 @@
       "billing.py:invoices"
     ],
     "kind": "task",
+    "last_attempt": "failed",
     "last_check": null,
     "last_materialization": {
       "artifact": null,
@@ -119,7 +122,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-16T10:00:01Z"
+    "stale_since": "2026-11-16T10:00:01Z",
+    "typical_run_seconds": null
   },
   {
     "cache": {
@@ -149,6 +153,7 @@
       "billing.py:invoices"
     ],
     "kind": "asset",
+    "last_attempt": "success",
     "last_check": null,
     "last_materialization": {
       "artifact": ".barca/artifacts/billing.py--invoice_totals/0000000000000000000000000000000000000000000000000000000000000025.json",
@@ -186,7 +191,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T00:40:01Z"
+    "stale_since": "2026-11-17T00:40:01Z",
+    "typical_run_seconds": 1.9
   },
   {
     "cache": {
@@ -209,6 +215,7 @@
       "billing.py:invoice_totals"
     ],
     "kind": "asset",
+    "last_attempt": "never_run",
     "last_check": null,
     "last_materialization": null,
     "last_success_at": null,
@@ -229,7 +236,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T00:40:01Z"
+    "stale_since": "2026-11-17T00:40:01Z",
+    "typical_run_seconds": null
   },
   {
     "cache": {
@@ -254,6 +262,7 @@
     "id": "orders.py:nightly_export",
     "inputs": [],
     "kind": "task",
+    "last_attempt": "success",
     "last_check": {
       "at": "2026-11-16T06:00:03Z",
       "outcome": "rebuilt",
@@ -323,7 +332,8 @@
     },
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T06:00:00Z"
+    "stale_since": "2026-11-17T06:00:00Z",
+    "typical_run_seconds": 2.6
   },
   {
     "cache": {
@@ -344,6 +354,7 @@
     "id": "orders.py:forecast",
     "inputs": [],
     "kind": "asset",
+    "last_attempt": "never_run",
     "last_check": null,
     "last_materialization": null,
     "last_success_at": null,
@@ -364,7 +375,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T13:10:00Z"
+    "stale_since": "2026-11-17T13:10:00Z",
+    "typical_run_seconds": null
   },
   {
     "cache": {
@@ -390,6 +402,7 @@
     "id": "orders.py:fx_rates",
     "inputs": [],
     "kind": "asset",
+    "last_attempt": "success",
     "last_check": null,
     "last_materialization": {
       "artifact": ".barca/artifacts/orders.py--fx_rates/56279612f46df4096401c15aaf8d4d9d90d3d653112503c6a4f8dc2dccefae87.json",
@@ -423,7 +436,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": null,
+    "typical_run_seconds": 0.6
   },
   {
     "cache": {
@@ -447,6 +461,7 @@
     "id": "orders.py:sales_by_day",
     "inputs": [],
     "kind": "asset",
+    "last_attempt": "failed",
     "last_check": null,
     "last_materialization": {
       "artifact": null,
@@ -485,7 +500,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T02:00:01Z"
+    "stale_since": "2026-11-17T02:00:01Z",
+    "typical_run_seconds": 2.5
   },
   {
     "cache": {
@@ -507,6 +523,7 @@
       "orders.py:sales_by_day"
     ],
     "kind": "asset",
+    "last_attempt": "never_run",
     "last_check": null,
     "last_materialization": null,
     "last_success_at": null,
@@ -527,7 +544,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T02:00:01Z"
+    "stale_since": "2026-11-17T02:00:01Z",
+    "typical_run_seconds": null
   },
   {
     "cache": {
@@ -553,6 +571,7 @@
     "id": "orders.py:customers",
     "inputs": [],
     "kind": "asset",
+    "last_attempt": "success",
     "last_check": null,
     "last_materialization": {
       "artifact": ".barca/artifacts/orders.py--customers/e9c6a64621e09f7457c6fe3d093c6c8b5ea81b9afda32c7a8bf8143ae32bee5a.json",
@@ -586,7 +605,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": null,
+    "typical_run_seconds": 1.1
   },
   {
     "cache": {
@@ -611,6 +631,7 @@
     "id": "orders.py:orders_feed",
     "inputs": [],
     "kind": "sensor",
+    "last_attempt": "success",
     "last_check": {
       "at": "2026-11-17T14:45:03Z",
       "outcome": "rebuilt",
@@ -676,7 +697,8 @@
     },
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": null,
+    "typical_run_seconds": 0.4
   },
   {
     "cache": {
@@ -704,6 +726,7 @@
       "orders.py:orders_feed"
     ],
     "kind": "asset",
+    "last_attempt": "success",
     "last_check": null,
     "last_materialization": {
       "artifact": ".barca/artifacts/orders.py--orders/daebb2a2f927f91315cc16f36f7d6c40add56340ef4c26dd5a03308083ff1a63.json",
@@ -744,7 +767,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": null,
+    "typical_run_seconds": 3.2
   },
   {
     "cache": {
@@ -772,6 +796,7 @@
       "orders.py:orders"
     ],
     "kind": "asset",
+    "last_attempt": "success",
     "last_check": null,
     "last_materialization": {
       "artifact": ".barca/artifacts/orders.py--orders_enriched/0000000000000000000000000000000000000000000000000000000000000025.json",
@@ -816,7 +841,8 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": null,
+    "typical_run_seconds": 6.0
   },
   {
     "cache": {
@@ -846,6 +872,7 @@
       "orders.py:orders_enriched"
     ],
     "kind": "asset",
+    "last_attempt": "success",
     "last_check": {
       "at": "2026-11-17T13:00:03Z",
       "outcome": "rebuilt",
@@ -915,7 +942,8 @@
     },
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": null,
+    "typical_run_seconds": 8.0
   },
   {
     "cache": {
@@ -942,6 +970,7 @@
       "orders.py:revenue_hourly"
     ],
     "kind": "task",
+    "last_attempt": "success",
     "last_check": null,
     "last_materialization": {
       "artifact": ".barca/artifacts/orders.py--publish_dashboard/a61ff96c0a92ea44a27f7745129f55fb5fac991a032b07a4c0b5b9b2043b8016.json",
@@ -982,6 +1011,7 @@
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": null,
+    "typical_run_seconds": 1.4
   }
 ]

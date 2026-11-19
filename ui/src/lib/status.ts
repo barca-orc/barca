@@ -31,6 +31,21 @@ export function statusMeta(status: StatusKind): StatusMeta {
   return { tone, label, live, glyph, ...toneMeta(tone) }
 }
 
+/** Whether a status of the run lifecycle is the failed one: an alert, not a status line. */
+export function statusFailed(status: StatusKind): boolean {
+  return status === 'failed'
+}
+
+/** How a step that reported its end reads in the run lifecycle. */
+export function endedStatus(ok: boolean): StatusKind {
+  return ok ? 'success' : 'failed'
+}
+
+/** A node no run is on, in the run lifecycle's words: its last attempt failed, or nothing to say. */
+export function restingStatus(failed: boolean): StatusKind {
+  return failed ? 'failed' : 'skipped'
+}
+
 /** The glyph of a run status. */
 export function statusGlyph(status: StatusKind): Glyph {
   return statusMeta(status).glyph

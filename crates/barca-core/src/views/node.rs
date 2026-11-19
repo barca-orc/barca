@@ -120,6 +120,21 @@ pub struct NodeStatus {
     /// for a fresh node and one that has an estimate.
     #[serde(default)]
     pub no_estimate: Option<super::NoEstimate>,
+    /// How its newest attempt went, in one word (`barca docs status-fields`, "Last attempt"):
+    /// `failed` when its last materialization failed or any of its keys last failed
+    /// (`partitions.failed`), `never_run` when no execution is recorded, else `success`. A
+    /// fact beside `cache.state` and `health`: a blocked or stale node whose last run went
+    /// well reads `success`, and a cache hit is not an attempt.
+    #[serde(default)]
+    pub last_attempt: super::LastAttempt,
+    /// How long one run of the node typically takes, seconds (`barca docs status-fields`,
+    /// "Typical run time"): the median of its recent successful executions, times its number
+    /// of keys for a partitioned node (durations are recorded per key, and a run of the node
+    /// computes each key). An estimate of a run over every key, not of the next run, which
+    /// computes only the keys that need it. Rounded to a millisecond. `null` when it has no
+    /// successful execution on record.
+    #[serde(default)]
+    pub typical_run_seconds: Option<f64>,
     /// Per-key cache state of a partitioned node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partitions: Option<PartitionState>,
@@ -274,7 +289,8 @@ pub struct LastMaterialization {
     /// SHA-256 of the serialized artifact, absent for legacy materializations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
-    /// `success` or `failed`.
+    /// `success` or `failed` (the generated `MaterializationStatus` is the vocabulary; a row
+    /// recorded by another release is served as it is).
     pub status: String,
     /// When it was recorded (UTC, `YYYY-MM-DD HH:MM:SS`).
     pub created_at: String,

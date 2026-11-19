@@ -26,6 +26,7 @@ nodes[].health_reason : string
 nodes[].id : string
 nodes[].inputs : array
 nodes[].kind : string
+nodes[].last_attempt : string
 nodes[].last_bytes_change : object
 nodes[].last_bytes_change.content_hash : string
 nodes[].last_bytes_change.created_at : string
@@ -53,6 +54,7 @@ nodes[].shape : object
 nodes[].shape.type : string
 nodes[].signals : array
 nodes[].stale_since : null
+nodes[].typical_run_seconds : number
 rollup : object
 rollup.also_in : array
 rollup.asset_causes : object

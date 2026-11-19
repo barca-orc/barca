@@ -199,6 +199,8 @@ export const api = {
     request<SchedulePauseAnswer>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   /** The paused assets (`barca pause`): scheduled runs skip them until resumed. */
   pauses: () => request<Pauses>('/pauses'),
+  /** `barca pause TARGET --downstream --dry-run --json`: the pauses, with `covers`, what a pause of `target` and everything below it would cover. Nothing is paused. */
+  pauseCover: (target: string) => request<Pauses>(`/pauses?target=${encodeURIComponent(target)}&downstream=true`),
   /** Every pinned asset (`barca pin`). */
   pins: () => request<Pins>('/pins'),
   /** Pause a node (with `downstream`, everything below it) or a file. 403 on a read-only server. */

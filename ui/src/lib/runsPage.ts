@@ -11,7 +11,7 @@ import { match } from 'ts-pattern'
 import { shortName } from './graph'
 import type { RunsQuery } from './types'
 import { only, type Next } from './program'
-import { parseRunStatus, runNodeIdle } from './runs'
+import { isFailure, parseRunStatus, runNodeIdle } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone, formatSeconds } from './time'
 import type { ActivityHour, RunNodeSummary, RunStep } from './types'
 
@@ -215,7 +215,7 @@ export function groupRunSteps(steps: readonly RunStep[], nodes: readonly RunNode
   }
   return nodes.map((summary) => ({
     summary,
-    steps: (byNode.get(summary.node_id) ?? []).slice().sort((a, b) => Number(b.status === 'failed') - Number(a.status === 'failed')),
+    steps: (byNode.get(summary.node_id) ?? []).slice().sort((a, b) => Number(isFailure(b.status)) - Number(isFailure(a.status))),
   }))
 }
 
@@ -237,7 +237,7 @@ export function runNodeTime(n: RunNodeSummary, format: (seconds: number) => stri
 
 /** A run's listed steps by outcome: the failed ones (first), then the rest. */
 export function splitRunSteps(steps: readonly RunStep[]): { failed: RunStep[]; ok: RunStep[] } {
-  return { failed: steps.filter((s) => s.status === 'failed'), ok: steps.filter((s) => s.status !== 'failed') }
+  return { failed: steps.filter((s) => isFailure(s.status)), ok: steps.filter((s) => !isFailure(s.status)) }
 }
 
 /**

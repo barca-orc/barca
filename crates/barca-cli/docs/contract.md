@@ -158,6 +158,7 @@ stability; the row adds the keys and routes that go with it.
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key`, and the JSON of `barca status NODE --grid` and `--key KEY`, which print them | new in 0.42 (the commands in 0.44, #990): every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | `GET /assets/{name}/partitions/keys` and `GET /assets/{name}/partitions/overview`, and the JSON of `barca status NODE --keys` and `--overview`, which print them; `needs_run` in `GET /assets/{name}/partitions/key`; `causes` and `fresh` of each entry of `files` in `GET /state/rollup` and `barca status --rollup --json` | new in 0.44.1 (#1036): the keys of a partitioned node filtered, ordered and paged by the server, and its keys in one picture; the route's parameters, the page size (at most 1000 keys), the bound on a served `selection` (5,000 keys or values) and on the overview's rows (200,000 cells) may change after field use |
 | `barca pause --schedule`, `barca pause --until`, `barca resume --schedule`, their JSON (the schedule's `GET /schedule` entry), `schedules` in `barca pause --json` and `GET /pauses`, and a duration as `?until=` of `POST /schedule/{id}/pause` | new in 0.44 (#989, `barca docs scheduling`, "Pausing one schedule"): the entry's keys follow `GET /schedule` |
+| `nodes[].last_attempt` and `nodes[].typical_run_seconds` in `status --json` (and `GET /state`, `GET /nodes`), `barca pause --dry-run` and `covers` in its JSON (`GET /pauses?target=`) | new in 0.46.0 (#1056, `barca docs status-fields`, "Last attempt" and "Typical run time"; `barca docs incidents`, "What a pause would cover"): the words of `last_attempt` and of `covers.schedules[].relation` may grow, and what `typical_run_seconds` counts for a batched node may change after field use |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, `barca docs status-fields`, "Row counts"): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
 | Health: `health`, `health_reason`, `cause`, `root`, `gap_seconds`, `signals`, `measured`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at` and `no_estimate` of each node, and `data_coverage`, `as_of` and `rollup` beside `summary`, in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), `typical_queue_wait_seconds`, `typical_run_seconds` and `queue_bound` of a node's `schedule` (and of `GET /schedule`), `started_at`, `estimated_start_at` and `wait_seconds` of a run in `barca queue --json`, the `health`, `health_reason`, `cause`, `root_id`, `root_kind`, `root_node`, `gap_seconds`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at`, `recheck_at` and `no_estimate` columns of `barca.nodes`, the `Health:`, `Gap:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox`, `no refresh path`, `fresh ~15:05 UTC` or `overdue 16h` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #962, #963, #964, #968, #973, `barca docs status-fields`, "Health", "Cause", "Root", "Last check", "Refresh path" and "Times"): how an estimate is computed and rounded, which fact a root names and the order of the cause rules may change after field use; `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
@@ -528,6 +529,7 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<TARGET>` | - | - | experimental (with the command) | Node or file.py to pause; omit to list paused nodes and schedules |
 | `--downstream` | - | default `false` | experimental (with the command) | Also pause every node downstream of the target |
+| `--dry-run` | - | default `false` | experimental (with the command) | Pause nothing; print what the pause would cover |
 | `--schedule` | `NODE` | - | experimental (with the command) | Pause the schedule of this scheduled node instead of nodes |
 | `--until` | `WHEN` | - | experimental (with the command) | With --schedule: pause until a duration from now (2h) or an RFC 3339 time |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
@@ -576,7 +578,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `cause`, `root`, `gap_seconds`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `no_estimate`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `cause`, `root`, `gap_seconds`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `no_estimate`, `last_attempt`, `typical_run_seconds`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh |
 | `--cause` | `failing\|overdue\|no_refresh_path\|queued\|undecided\|catching_up` | - | experimental: experimental health inspection (#1043) | Keep nodes with this cause |
@@ -1782,6 +1784,7 @@ fetched) is still exit 3.
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | object | always |
 | `nodes[].last_materialization.artifact` | string | always |
@@ -1810,6 +1813,7 @@ fetched) is still exit 3.
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null | always |
+| `nodes[].typical_run_seconds` | number | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |
@@ -2273,6 +2277,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | null \| object | always |
 | `nodes[].last_materialization.artifact` | null \| string | always |
@@ -2315,6 +2320,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null \| string | always |
+| `nodes[].typical_run_seconds` | null \| number | always |
 | `nodes[].undeclared_env` | array | sometimes |
 | `nodes[].undeclared_env[]` | string | always |
 | `rollup` | object | always |
@@ -2622,6 +2628,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | null \| object | always |
 | `nodes[].last_materialization.artifact` | null | always |
@@ -2653,6 +2660,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].shape` | null | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | string | always |
+| `nodes[].typical_run_seconds` | null | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |
@@ -3247,6 +3255,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | null \| object | always |
 | `nodes[].last_materialization.artifact` | string | always |
@@ -3275,6 +3284,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | string | always |
+| `nodes[].typical_run_seconds` | null \| number | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |
@@ -4456,6 +4466,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_bytes_change` | object | always |
 | `nodes[].last_bytes_change.content_hash` | string | always |
 | `nodes[].last_bytes_change.created_at` | string | always |
@@ -4483,6 +4494,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null | always |
+| `nodes[].typical_run_seconds` | number | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |

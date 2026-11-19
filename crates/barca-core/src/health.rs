@@ -501,6 +501,9 @@ pub fn classify(nodes: &mut [NodeStatus], evidence: Evidence<'_>) {
         node.root = root;
         node.gap_seconds = crate::causes::gap_seconds(node, gap_at);
         node.no_estimate = no_estimate(node, evidence);
+        node.last_attempt = crate::views::LastAttempt::of(node);
+        node.typical_run_seconds =
+            crate::estimates::node_run_seconds(node, evidence.timing.durations);
     }
 }
 
@@ -838,9 +841,9 @@ async fn from_db(
         recorded_queue(db_path, dag, &ticks, &seen, &observed, now.timestamp()).await?,
         cfg.server_max_runs,
     );
-    // The typical durations are what an estimate is made of where a scheduler is seen
-    // firing, and what the rollup's roots cost.
-    let durations = if (rollup || observed.running) && exists {
+    // The typical durations: what each row's `typical_run_seconds` is, what an estimate is
+    // made of where a scheduler is seen firing, and what the rollup's roots cost.
+    let durations = if exists {
         let ids: Vec<String> = result.nodes.iter().map(|n| n.id.clone()).collect();
         durations(db::recent_durations(db_path, &ids, DURATION_WINDOW).await?)
     } else {
@@ -1052,6 +1055,39 @@ mod tests {
             behind: missing - failed,
         });
         n
+    }
+
+    #[test]
+    fn the_last_attempt_is_a_fact_of_the_row_whatever_its_health() {
+        use crate::views::LastAttempt;
+        let word = |mut n: NodeStatus| {
+            classify(std::slice::from_mut(&mut n), Evidence::none(0));
+            n.last_attempt
+        };
+        // No execution on record: a task that always runs reads `never_run`, as an asset does.
+        assert_eq!(
+            word(node("p.py:t", &[], CacheState::AlwaysRuns)),
+            LastAttempt::NeverRun
+        );
+        assert_eq!(
+            word(node("p.py:a", &[], CacheState::NeverRun)),
+            LastAttempt::NeverRun
+        );
+        // It ran, and went well: `success`, though the node is stale now.
+        let mut stale = node("p.py:a", &[], CacheState::Stale);
+        stale.last_materialization = last("success");
+        assert_eq!(word(stale), LastAttempt::Success);
+        assert_eq!(
+            word(failed(node("p.py:a", &[], CacheState::Stale))),
+            LastAttempt::Failed
+        );
+        // A partitioned node's last materialization is one key: a failed key elsewhere counts.
+        let mut some = keys(node("p.py:k", &[], CacheState::Partial), 4, 2, 1);
+        some.last_materialization = last("success");
+        assert_eq!(word(some), LastAttempt::Failed);
+        let mut none = keys(node("p.py:k", &[], CacheState::Partial), 4, 2, 0);
+        none.last_materialization = last("success");
+        assert_eq!(word(none), LastAttempt::Success);
     }
 
     fn age(newest: (i64, &str), at: &str, rows: RowFacts) -> NodeAge {

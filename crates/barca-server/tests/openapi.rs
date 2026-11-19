@@ -2080,7 +2080,36 @@ async fn asset_pauses_match_contract() {
     let schema = json!({"$ref": "#/components/schemas/Pauses"});
     let none = checked(&router, "GET", "/pauses", "/pauses", 200).await;
     assert_eq!(none["total"], 0);
+    assert!(none.get("covers").is_none(), "{none}");
     checked(&router, "HEAD", "/pauses", "/pauses", 200).await;
+    // What a pause would cover: asked with `target`, and nothing is paused by asking.
+    let would = checked(
+        &router,
+        "GET",
+        "/pauses?target=first&downstream=true",
+        "/pauses",
+        200,
+    )
+    .await;
+    let names = |ids: &Value| -> Vec<String> {
+        ids.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().rsplit(':').next().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&would["covers"]["targets"]), ["first"], "{would}");
+    let below = names(&would["covers"]["downstream"]);
+    assert_eq!(below.len(), 2, "{would}");
+    assert!(below.contains(&"second".to_string()) && below.contains(&"publish".to_string()));
+    assert!(would["covers"]["schedules"].is_array(), "{would}");
+    assert_eq!(would["total"], 0, "{would}");
+    let alone = checked(&router, "GET", "/pauses?target=first", "/pauses", 200).await;
+    assert_eq!(alone["covers"]["downstream"], json!([]), "{alone}");
+    checked(&router, "GET", "/pauses?target=nope", "/pauses", 404).await;
+    // It pauses nothing, so a read-only server answers it.
+    let read_only = app(config(dir.path(), true));
+    checked(&read_only, "GET", "/pauses?target=first", "/pauses", 200).await;
     let (status, paused) = request_json(
         &router,
         "POST",

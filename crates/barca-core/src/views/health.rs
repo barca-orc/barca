@@ -548,6 +548,35 @@ pub struct Checks {
     pub misses: HashMap<String, Vec<(String, f64)>>,
 }
 
+/// How a node's newest attempt went, in one word (`last_attempt` of a status row): the fact
+/// a surface shows beside `cache.state`, read off the row and nothing else.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum LastAttempt {
+    /// No execution is recorded for it (`last_materialization` is `null`).
+    #[default]
+    NeverRun,
+    /// Its last materialization succeeded and none of its keys last failed.
+    Success,
+    /// Its last materialization failed, or (a partitioned node's last materialization is one
+    /// key) some of its keys last failed (`partitions.failed`).
+    Failed,
+}
+
+impl LastAttempt {
+    /// The word for `node`: [`last_attempt_failed`] first, then whether it ever ran.
+    pub fn of(node: &NodeStatus) -> Self {
+        if last_attempt_failed(node) {
+            LastAttempt::Failed
+        } else if node.last_materialization.is_none() {
+            LastAttempt::NeverRun
+        } else {
+            LastAttempt::Success
+        }
+    }
+}
+
 /// `last_attempt_failed`: its last materialization failed, or (a partitioned node's last
 /// materialization is one key) some of its keys did.
 pub fn last_attempt_failed(node: &NodeStatus) -> bool {

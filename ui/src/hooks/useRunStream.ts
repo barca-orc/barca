@@ -1,3 +1,4 @@
+import { isSuccess } from '@/lib/runs'
 import { useEffect, useState } from 'react'
 import { reduceRunEvent, endRunStream, isNewFrame, EMPTY_RUN_STATE, type RunStreamState } from '@/lib/runStream'
 import { followEvents } from '@/lib/eventStream'
@@ -45,7 +46,7 @@ export function useRunStream(handle: string | null): RunStreamState {
     }, reason => update(state => ({ ...endRunStream(state), ...(reason ? { notice: reason } : {}) })), controller.signal, {
       onGap: () => update(state => ({ ...state, notice: 'Event replay is incomplete. Following this run’s outcome; recorded logs remain available.' })),
       onRestart: () => { lastId = null; update(() => ({ ...STARTING, notice: 'This run has a new attempt. Following its new stream.' })) },
-      onOutcome: body => update(state => reduceRunEvent(state, { type: 'run_finished', run_id: handle, ok: body.status === 'success', outcome: body.outcome })),
+      onOutcome: body => update(state => reduceRunEvent(state, { type: 'run_finished', run_id: handle, ok: isSuccess(body.status), outcome: body.outcome })),
     })
 
     return () => controller.abort()

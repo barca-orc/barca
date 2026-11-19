@@ -176,6 +176,23 @@ pub(crate) fn work(node: &NodeStatus, durations: &HashMap<String, f64>, default:
     one * keys as f64
 }
 
+/// `typical_run_seconds` of a row: how long one run of `node` typically takes, seconds. Its
+/// typical duration ([`Timing::durations`]: the median of its recent successful executions,
+/// one key's for a partitioned node), once per key for a partitioned node. Unlike [`work`]
+/// it counts every key, cached or not, and takes no default: `None` for a node with no
+/// successful execution on record. Rounded to a millisecond: the figure is an estimate, and a
+/// short decimal reads back the same on every host (a float's last bit does not survive every
+/// JSON reader).
+pub fn node_run_seconds(node: &NodeStatus, durations: &HashMap<String, f64>) -> Option<f64> {
+    let one = durations.get(&node.id).copied()?.max(0.0);
+    let keys = node
+        .partitions
+        .as_ref()
+        .filter(|_| node.partitioned)
+        .map_or(1, |p| p.total);
+    Some((one * keys as f64 * 1000.0).round() / 1000.0)
+}
+
 /// When `input`'s result first changed after `own` (unix seconds: when the node reading it
 /// last succeeded): the earliest of its recorded value changes ([`crate::db::NodeAge::changed_at`])
 /// that is newer. A sensor polled again with the same observation, and a rerun that wrote
@@ -906,6 +923,34 @@ def loose(): ...
         world.classify(&mut nodes);
         // Three keys to compute at the project's median of 10s, after the 2s poll.
         assert_eq!(fresh_after_tick(&nodes, "orders"), Some(35));
+    }
+
+    #[test]
+    fn a_typical_run_is_the_median_once_per_key_and_null_without_a_sample() {
+        let mut world = World::new();
+        let mut nodes = rows(&world.dag, &[("orders", "partial")]);
+        let orders = nodes.iter_mut().find(|n| n.name == "orders").unwrap();
+        orders.partitioned = true;
+        orders.partitions = Some(
+            serde_json::from_value(
+                serde_json::json!({"total": 5, "cached": 2, "missing": 3, "missing_keys": []}),
+            )
+            .unwrap(),
+        );
+        let one = world.durations[&id("orders")];
+        world.classify(&mut nodes);
+        // Every key counts, cached or not: a run over the whole node.
+        assert_eq!(of(&nodes, "orders").typical_run_seconds, Some(one * 5.0));
+        // A node without keys: its median as it is.
+        let other = nodes.iter().find(|n| !n.partitioned).unwrap();
+        assert_eq!(
+            other.typical_run_seconds,
+            world.durations.get(&other.id).copied()
+        );
+        // No sample, no figure: the project's median stands in for an estimate, never here.
+        world.durations.remove(&id("orders"));
+        world.classify(&mut nodes);
+        assert_eq!(of(&nodes, "orders").typical_run_seconds, None);
     }
 
     #[test]

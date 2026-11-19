@@ -1,4 +1,5 @@
 /** Fetch SSE so the same scoped bearer credentials cover streams and ordinary requests. */
+import { runIsLive } from './runs'
 import { serverFetch } from './credentials'
 
 export interface Frame { id: string; data: string }
@@ -78,7 +79,7 @@ export async function followEvents(path: string, onFrame: (frame: Frame) => bool
     return run
   }
   const ended = (run: CanonicalRun) => {
-    if (run.status === 'pending' || run.status === 'running') return false
+    if (runIsLive(run.status)) return false
     if (options.onOutcome) options.onOutcome(run)
     else onStop()
     return true
