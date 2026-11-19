@@ -309,13 +309,18 @@ pub struct DbHandle {
 #[derive(Debug)]
 pub(crate) struct FileLock {
     _file: fs::File,
+    lock_path: String,
+    /// The lock file's stamp when this hold began ([`Turn`]).
+    stamp: Option<SystemTime>,
     since: Instant,
 }
 
 impl FileLock {
-    fn held(file: fs::File) -> Self {
+    fn held(file: fs::File, lock_path: String) -> Self {
         Self {
+            stamp: stamp_of(&file),
             _file: file,
+            lock_path,
             since: Instant::now(),
         }
     }
@@ -324,7 +329,68 @@ impl FileLock {
 impl Drop for FileLock {
     fn drop(&mut self) {
         note_lock_hold(self.since.elapsed());
+        let mut turns = TURNS.lock().unwrap();
+        // One entry per database this process used; a test process uses thousands.
+        if turns.len() >= 64 {
+            turns.retain(|_, turn| turn.released.elapsed() < TURN_RECENT);
+        }
+        turns.insert(
+            std::mem::take(&mut self.lock_path),
+            Turn {
+                released: Instant::now(),
+                stamp: self.stamp,
+            },
+        );
     }
+}
+
+/// Taking turns. The lock is a `flock` that waiters poll, so a process that takes it again
+/// right after releasing it (a run recording step after step, a trim working through its
+/// batches) leaves a gap of microseconds that a waiter almost never finds: a `barca gc` beside
+/// a server's two recording runs timed out after 60 s without one turn (#1054), though no
+/// single hold was long.
+///
+/// So a waiter says it is waiting, in the one place every process already looks: it sets the
+/// lock file's modification time each time it finds the lock held ([`stamp`]). A process
+/// about to take the lock again within [`TURN_RECENT`] of releasing it compares the file's
+/// time with the one it saw when its last hold began; a different one means somebody waited
+/// during that hold or since, and it leaves the lock free for [`TURN`] first, which is longer
+/// than a waiter's longest pause between tries ([`WAIT_POLL_MAX`]). The file stays empty and
+/// nothing else is written. A process of an earlier release neither stamps nor gives way: it
+/// gets and gives the turns it always did.
+#[derive(Clone, Copy)]
+struct Turn {
+    released: Instant,
+    stamp: Option<SystemTime>,
+}
+
+/// This process's last hold of each lock file, by path.
+static TURNS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Turn>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// How long a process that sees a waiter leaves the lock free before taking it again.
+const TURN: Duration = Duration::from_millis(8);
+/// A release longer ago than this already left the lock free for any waiter.
+const TURN_RECENT: Duration = Duration::from_millis(100);
+/// The longest pause of a waiter between two tries: shorter than [`TURN`].
+const WAIT_POLL_MAX: Duration = Duration::from_millis(5);
+
+fn stamp_of(file: &fs::File) -> Option<SystemTime> {
+    file.metadata().and_then(|m| m.modified()).ok()
+}
+
+/// Say that this process is waiting for the lock `file` is ([`Turn`]). Best effort.
+fn stamp(file: &fs::File) {
+    let _ = file.set_modified(SystemTime::now());
+}
+
+/// Whether another process waited for `lock_path` during this process's last hold of it or
+/// since, when that hold ended a moment ago.
+fn waiter_seen(lock_path: &str, file: &fs::File) -> bool {
+    let Some(last) = TURNS.lock().unwrap().get(lock_path).copied() else {
+        return false;
+    };
+    last.released.elapsed() < TURN_RECENT && stamp_of(file) != last.stamp
 }
 
 /// Take the cross-process lock for `db_path` (a `<db>.lock` file next to it), waiting
@@ -338,9 +404,14 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<FileLock, Ba
         .write(true)
         .open(&lock_path)
         .map_err(|e| BarcaError::Db(format!("failed to open lock file {lock_path}: {e}")))?;
+    // Somebody waited while this process had the lock: their turn first.
+    if waiter_seen(&lock_path, &file) {
+        note_turn_given();
+        tokio::time::sleep(TURN).await;
+    }
     // Uncontended (every operation of a one-shot command): one `flock`, no clock read.
     match file.try_lock() {
-        Ok(()) => return Ok(FileLock::held(file)),
+        Ok(()) => return Ok(FileLock::held(file, lock_path)),
         Err(fs::TryLockError::WouldBlock) => {}
         Err(fs::TryLockError::Error(e)) => {
             return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
@@ -348,7 +419,7 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<FileLock, Ba
     }
     let started = Instant::now();
     let deadline = started + wait;
-    let mut delay = Duration::from_millis(2);
+    let mut delay = Duration::from_millis(1);
     loop {
         if Instant::now() >= deadline {
             let holder = match lock_holder(&file) {
@@ -365,15 +436,17 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<FileLock, Ba
                 wait.as_secs_f32()
             )));
         }
-        // Back off with a little jitter so waiters don't wake in lockstep.
+        // Tell the holder somebody is waiting, then back off with a little jitter so waiters
+        // don't wake in lockstep.
+        stamp(&file);
         let jitter =
-            Duration::from_micros((barca_model::time::unix_nanos(SystemTime::now()) % 2000) as u64);
+            Duration::from_micros((barca_model::time::unix_nanos(SystemTime::now()) % 1000) as u64);
         tokio::time::sleep(delay + jitter).await;
-        delay = (delay * 2).min(Duration::from_millis(40));
+        delay = (delay * 2).min(WAIT_POLL_MAX - Duration::from_millis(1));
         match file.try_lock() {
             Ok(()) => {
                 note_lock_wait(started.elapsed());
-                return Ok(FileLock::held(file));
+                return Ok(FileLock::held(file, lock_path));
             }
             Err(fs::TryLockError::WouldBlock) => {}
             Err(fs::TryLockError::Error(e)) => {
@@ -381,6 +454,18 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<FileLock, Ba
             }
         }
     }
+}
+
+/// Times this process left the lock free for a waiter ([`Turn`]).
+static TURNS_GIVEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn note_turn_given() {
+    TURNS_GIVEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How often this process gave way to a waiter before taking the lock again.
+pub fn turns_given() -> u64 {
+    TURNS_GIVEN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Contended acquisitions of the cross-process lock in this process: how many, their total
@@ -1064,6 +1149,88 @@ mod tests {
             "{before:?} {after:?}"
         );
         assert!(after.longest >= std::time::Duration::from_millis(50));
+    }
+
+    /// A holder that takes the lock again the moment it releases it (a trim's batches, a run
+    /// recording step after step) left a waiter gaps of microseconds between holds of
+    /// milliseconds, and the waiter's tries almost never landed in one: `barca gc` beside a
+    /// busy server timed out after 60 s (#1054). The waiter now stamps the lock file and the
+    /// holder, seeing the stamp, leaves the lock free for a moment before its next hold.
+    #[tokio::test]
+    async fn a_holder_that_takes_the_lock_again_at_once_gives_a_waiter_its_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Stops the holder however this test ends.
+        struct Stop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _stop = Stop(stop.clone());
+        // On a thread and a runtime of its own, as another process is.
+        let holder = std::thread::spawn({
+            let (db_path, stop) = (db_path.clone(), stop.clone());
+            move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let mut holds = 0u32;
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let held = acquire_file_lock(&db_path, Duration::from_secs(5))
+                            .await
+                            .unwrap();
+                        // The work of one batch: no pause the waiter could use.
+                        std::thread::sleep(Duration::from_millis(20));
+                        drop(held);
+                        holds += 1;
+                    }
+                    holds
+                })
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let given = turns_given();
+        let mut waits = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            let lock = acquire_file_lock(&db_path, Duration::from_secs(10))
+                .await
+                .expect("the waiter gets a turn");
+            waits.push(started.elapsed());
+            drop(lock);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let holds = holder.join().unwrap();
+        // One hold of the holder, the turn it then leaves, and the scheduler's slack: far from
+        // the seconds a waiter spent finding a gap by chance.
+        let longest = waits.iter().max().unwrap();
+        assert!(*longest < Duration::from_millis(1500), "{waits:?}");
+        assert!(turns_given() > given, "the holder gave way");
+        assert!(holds >= 5, "the holder went on between the turns: {holds}");
+    }
+
+    /// Nobody waiting: taking the lock again costs no pause.
+    #[tokio::test]
+    async fn a_holder_alone_never_pauses_between_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let started = Instant::now();
+        for _ in 0..200 {
+            let held = acquire_file_lock(&db_path, Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert!(!waiter_seen(&held.lock_path, &held._file));
+            drop(held);
+        }
+        // 200 turns given would be 1.6 s.
+        assert!(started.elapsed() < Duration::from_millis(800));
+        let lock_path = format!("{db_path}.lock");
+        assert_eq!(std::fs::metadata(&lock_path).unwrap().len(), 0);
     }
 
     #[tokio::test]

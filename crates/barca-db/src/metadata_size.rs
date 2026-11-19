@@ -43,6 +43,9 @@ const KEPT_RUNS: i64 = 1000;
 /// Row ids one batch looks at, and runs one batch changes.
 const ID_SPAN: i64 = 2000;
 const RUN_BATCH: i64 = 200;
+/// How long one batch of step 4 deletes for before it lets the lock go: a run's logs can be
+/// thousands of lines, and 200 runs of 100 lines each held the lock for 0.4 to 1.1 s.
+const RUN_BATCH_TIME: Duration = Duration::from_millis(100);
 
 /// What the metadata database may use of `limit` (`None`: `[cache] max_size` is off).
 pub fn allowance(limit: Option<u64>) -> u64 {
@@ -181,6 +184,8 @@ async fn run_batch(conn: &Connection) -> Result<u64, BarcaError> {
         runs.push(row.get::<String>(0).map_err(failed("find runs"))?);
     }
     drop(rows);
+    let started = Instant::now();
+    let mut deleted = 0;
     for run in &runs {
         db::runs::delete_logs(conn, run)
             .await
@@ -188,8 +193,13 @@ async fn run_batch(conn: &Connection) -> Result<u64, BarcaError> {
         db::runs::delete_run(conn, run)
             .await
             .map_err(failed("delete runs"))?;
+        deleted += 1;
+        // The rest are found again by the next batch, under its own hold of the lock.
+        if started.elapsed() >= RUN_BATCH_TIME {
+            break;
+        }
     }
-    Ok(runs.len() as u64)
+    Ok(deleted)
 }
 
 /// Definitions no remaining row names. Only with no run alive: a starting run writes its
