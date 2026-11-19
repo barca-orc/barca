@@ -14,10 +14,6 @@ use crate::freshness::{Planned, pin_manual};
 use crate::model::kind_str;
 use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
 use crate::recover::{self, Work};
-use crate::report::{
-    RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
-    fmt_eta, reconcile_total,
-};
 use crate::sizing::{planned_weights, sizing_for, warn_over_capacity};
 use crate::step_status::StepStatus;
 use crate::targets::{
@@ -52,6 +48,7 @@ mod bookkeeping;
 mod finalize;
 mod phase;
 mod prepare;
+mod progress;
 mod republish;
 mod select;
 mod workers;
@@ -60,6 +57,10 @@ use finalize::*;
 pub(crate) use phase::note;
 use phase::*;
 use prepare::*;
+use progress::{
+    RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
+    fmt_eta, reconcile_total,
+};
 use select::*;
 pub(crate) use workers::upload_pending;
 use workers::*;
@@ -599,7 +600,7 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
             .dag
             .graph
             .node_weights()
-            .filter(|n| n.extracted.freshness == crate::model::Freshness::Manual)
+            .filter(|n| n.decl.freshness == crate::model::Freshness::Manual)
             .map(|n| n.id.clone())
             .collect(),
         wrote_nothing: session.state.steps_executed == 0 && session.store.is_none(),
@@ -884,7 +885,7 @@ async fn open_run<'a, 'r>(
                     || prepared
                         .dag
                         .get_node(id)
-                        .is_some_and(|n| n.extracted.freshness != crate::model::Freshness::Manual)
+                        .is_some_and(|n| n.decl.freshness != crate::model::Freshness::Manual)
             })
             .map(|(id, _)| id.clone())
             .collect(),
@@ -965,7 +966,7 @@ fn computed_by_other_runs(
         session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
         // Not executed here: no attempts of this run's.
         session.state.results.attempts.remove(&node_id);
-        crate::report::computed_by_another_run(
+        crate::cache::computed_by_another_run(
             &mut session.state.results.reports,
             &node_id,
             phase_outputs.get(&node_id).map(|o| o.path.as_str()),
@@ -1228,7 +1229,7 @@ fn plan_calls(
         let Some(node) = dag.get_node(base) else {
             continue;
         };
-        if node.extracted.batch.is_none() {
+        if node.decl.batch.is_none() {
             continue;
         }
         let i = *index.entry(base.to_string()).or_insert_with(|| {
@@ -1265,7 +1266,7 @@ fn plan_calls(
             crate::batch::Grouping::By { source_text, .. } => {
                 match crate::batch::evaluate_labels(
                     python,
-                    &node.extracted.source_file,
+                    &node.invoke.python().source_file,
                     source_text,
                     &keys,
                 ) {

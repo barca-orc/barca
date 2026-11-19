@@ -1,7 +1,7 @@
 //! Transport-neutral error classification, remediation, and rendering.
 
 use crate::BarcaError;
-use crate::dispatch::ErrorPhase;
+use crate::step_result::ErrorPhase;
 use crate::step_status::StepStatus;
 pub use crate::text::shell_quote;
 use serde::{Deserialize, Serialize};

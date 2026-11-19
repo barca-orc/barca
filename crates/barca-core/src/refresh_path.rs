@@ -47,7 +47,7 @@ impl Paths {
             .into_iter()
             .filter(|id| {
                 dag.get_node(id)
-                    .is_some_and(|n| matches!(n.extracted.freshness, crate::Freshness::Schedule(_)))
+                    .is_some_and(|n| matches!(n.decl.freshness, crate::Freshness::Schedule(_)))
             })
             .collect();
         let manual: HashSet<String> = dag
@@ -55,7 +55,7 @@ impl Paths {
             .into_iter()
             .filter(|id| {
                 dag.get_node(id)
-                    .is_some_and(|n| matches!(n.extracted.freshness, crate::Freshness::Manual))
+                    .is_some_and(|n| matches!(n.decl.freshness, crate::Freshness::Manual))
             })
             .map(str::to_string)
             .collect();

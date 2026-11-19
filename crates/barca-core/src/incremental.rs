@@ -141,7 +141,7 @@ impl Incremental {
                         up,
                         if crate::cache::is_cutoff(dag, up)
                             || dag.get_node(up).is_some_and(|n| {
-                                matches!(n.extracted.freshness, Freshness::Manual)
+                                matches!(n.decl.freshness, Freshness::Manual)
                                     && n.kind() == NodeKind::Asset
                             })
                         {
@@ -153,15 +153,15 @@ impl Incremental {
                 })
                 .collect();
             upstream.sort_by_key(|(id, _)| *id);
-            let env = crate::envdeps::hash_input(&crate::envdeps::resolve(&n.extracted.env));
+            let env = crate::envdeps::hash_input(&crate::envdeps::resolve(&n.decl.env));
             let bytes = serde_json::to_vec(
                 &serde_json::to_value(&(
-                    n.definition_hash.as_str(),
+                    n.fingerprint.definition_hash.as_str(),
                     &n.resolved_inputs,
                     &n.resolved_collected,
-                    &n.extracted.freshness,
-                    &n.extracted.sinks,
-                    &n.extracted.partitions,
+                    &n.decl.freshness,
+                    &n.decl.sinks,
+                    &n.decl.partitions,
                     env,
                     upstream,
                 ))
@@ -202,7 +202,7 @@ impl Incremental {
 
     fn count(&self, dag: &Dag, id: &str, original: &Phase) -> usize {
         match dag.get_node(id) {
-            Some(node) if node.extracted.partitions.is_empty() => return 1,
+            Some(node) if node.decl.partitions.is_empty() => return 1,
             Some(_) => {
                 if let Some((_, source)) = self.source_for(dag, id) {
                     return source.count;
@@ -227,18 +227,18 @@ impl Incremental {
         };
         if old.signature != self.signatures[id]
             || n.kind() != NodeKind::Asset
-            || matches!(n.extracted.freshness, Freshness::Manual)
-            || n.extracted.partitions.len() > 1
+            || matches!(n.decl.freshness, Freshness::Manual)
+            || n.decl.partitions.len() > 1
             || self.held.contains(id)
         {
             return Change::All;
         }
-        let dim = n.extracted.partitions.keys().next();
+        let dim = n.decl.partitions.keys().next();
         let mut changed = HashSet::new();
         for up in dag.upstream(id) {
             // Inherited partitions carry membership, not the whole source value. The
             // aligned data edge already carries the key's version through its chain.
-            if !n.extracted.inherited_partitions.is_empty()
+            if !n.decl.inherited_partitions.is_empty()
                 && dag.partition_sources(id).contains(&up)
                 && !n.resolved_inputs.values().any(|input| input == up)
             {
@@ -246,9 +246,9 @@ impl Incremental {
             }
             let keyed_source = dim
                 .filter(|dim| {
-                    !n.extracted.inherited_partitions.contains(*dim)
+                    !n.decl.inherited_partitions.contains(*dim)
                         && matches!(
-                            n.extracted.partitions.get(*dim),
+                            n.decl.partitions.get(*dim),
                             Some(PartitionSpec::DerivedFrom { .. })
                         )
                         && dag.partition_sources(id).contains(&up)
@@ -328,7 +328,7 @@ impl Incremental {
                 self.cached.insert(id.to_owned(), cached);
                 omitted += cached;
                 let node = dag.get_node(id);
-                let partitioned = node.is_some_and(|n| !n.extracted.partitions.is_empty());
+                let partitioned = node.is_some_and(|n| !n.decl.partitions.is_empty());
                 reports.push(StepReport {
                     id: id.to_owned(),
                     kind: crate::model::kind_str(node.map(|n| n.kind())),
@@ -344,9 +344,7 @@ impl Incremental {
                         self.next.nodes[id].output.as_ref().map(|o| o.path.clone())
                     },
                     env: crate::cache::env_report(dag, id),
-                    undeclared_env: node
-                        .map(|n| n.extracted.undeclared_env())
-                        .filter(|v| !v.is_empty()),
+                    undeclared_env: node.map(|n| n.undeclared_env()).filter(|v| !v.is_empty()),
                     partitions: partitioned.then_some(PartitionSummary {
                         total: cached,
                         cached,
@@ -478,7 +476,7 @@ impl Incremental {
 
     pub(crate) fn target_keys(&self, dag: &Dag, id: &str) -> Option<Vec<PartitionKey>> {
         let n = dag.get_node(id)?;
-        let dim = n.extracted.partitions.keys().next()?;
+        let dim = n.decl.partitions.keys().next()?;
         if let Some((_, source)) = self.source_for(dag, id) {
             return Some(
                 source
@@ -491,7 +489,7 @@ impl Incremental {
                     .collect(),
             );
         }
-        match n.extracted.partitions.get(dim)? {
+        match n.decl.partitions.get(dim)? {
             PartitionSpec::Static { values } => Some(
                 values
                     .iter()
@@ -592,7 +590,7 @@ impl Incremental {
                 continue;
             };
             for dim in self.templates[base].pending_partitions.keys() {
-                if !node.extracted.inherited_partitions.contains(dim)
+                if !node.decl.inherited_partitions.contains(dim)
                     && let Some(value) = key.0.get(dim)
                 {
                     selected
@@ -657,7 +655,7 @@ impl Incremental {
                         if !source.is_keyed() {
                             continue;
                         }
-                        let inherited = node.extracted.inherited_partitions.contains(dim);
+                        let inherited = node.decl.inherited_partitions.contains(dim);
                         let named = step
                             .inputs
                             .iter()
@@ -758,7 +756,7 @@ impl Incremental {
             }
             let partitioned = dag
                 .get_node(base)
-                .is_some_and(|n| !n.extracted.partitions.is_empty());
+                .is_some_and(|n| !n.decl.partitions.is_empty());
             if !report.steps.iter().any(|s| s.node.base_id == *base) {
                 report.steps.push(StepReport {
                     node_id: base.clone(),

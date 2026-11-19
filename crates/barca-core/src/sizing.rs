@@ -72,16 +72,13 @@ fn sizing_with(
 }
 
 /// [`sizing`] for a run with this configuration, under the capacity its host shares between
-/// its runs, when `barca serve` shares one.
+/// its runs: `shared` is that capacity and where it was set, `None` for a run on its own (a
+/// prediction included). The caller reads it from its host, so this names no host.
 pub(crate) fn sizing_for(
     cfg: &crate::config::ResolvedConfig,
-    host: &dyn crate::run_host::RunHost,
+    shared: Option<(usize, &'static str)>,
 ) -> Sizing {
-    sizing(
-        cfg.capacity,
-        cfg.pool_size,
-        host.shared_capacity().map(|s| (s.total as usize, s.source)),
-    )
+    sizing(cfg.capacity, cfg.pool_size, shared)
 }
 
 /// The planned nodes whose `weight=` is above 1, by node id.

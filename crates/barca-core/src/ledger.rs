@@ -28,8 +28,8 @@
 
 use crate::BarcaError;
 use crate::db;
-use crate::dispatch::OutputRef;
 use crate::envelope::ErrorEnvelope;
+use crate::step_result::OutputRef;
 /// A boxed `Send` future, the return type of the [`Ledger`] and [`ObjectStat`] methods (what
 /// `futures::future::BoxFuture` spells; barca-cli implements the traits without `futures`).
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;

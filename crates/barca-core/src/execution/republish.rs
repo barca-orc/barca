@@ -49,12 +49,7 @@ pub(super) async fn republish_sinks<'p>(
         let base = recover::base_of(id);
         if let Some(node) = dag.get_node(base) {
             let pairs = wanted.entry(base.to_string()).or_default();
-            pairs.extend(
-                node.extracted
-                    .sinks
-                    .iter()
-                    .map(|s| (id.clone(), s.path.clone())),
-            );
+            pairs.extend(node.decl.sinks.iter().map(|s| (id.clone(), s.path.clone())));
         }
     }
     let published =
@@ -68,7 +63,7 @@ pub(super) async fn republish_sinks<'p>(
             continue;
         };
         let mut sinks = Vec::new();
-        for sink in &node.extracted.sinks {
+        for sink in &node.decl.sinks {
             match published.verdict(&host, id, &sink.path, run_hash) {
                 Verdict::Current => {}
                 Verdict::Adopt => session.state.results.publications.push(Publication {
@@ -132,7 +127,7 @@ pub(super) async fn republish_sinks<'p>(
                 "node_id": id,
                 "path": output.path,
                 "format": output.format,
-                "frame_type": node.extracted.return_type.map(|t| t.as_str()),
+                "frame_type": node.invoke.python().return_type.map(|t| t.as_str()),
                 "source_file": node.source_file(),
                 "partition": partition,
                 "sinks": sinks,
@@ -226,7 +221,7 @@ pub(super) async fn republish_sinks<'p>(
             .prepared
             .dag
             .get_node(&base)
-            .is_some_and(|n| !n.extracted.partitions.is_empty())
+            .is_some_and(|n| !n.decl.partitions.is_empty())
         {
             format!(
                 "{count} cached {} of {name}",
@@ -248,7 +243,7 @@ pub(super) async fn republish_sinks<'p>(
 fn fail_republish(session: &mut RunSession<'_, '_>, id: &str, message: String) {
     let message = format!("SinkError: {message}");
     if session.request.agent_mode {
-        crate::run_line!(Agent, "{}", crate::report::failed_step_line(id, &message));
+        crate::run_line!(Agent, "{}", super::failed_step_line(id, &message));
     }
     session
         .state
