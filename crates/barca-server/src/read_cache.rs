@@ -291,7 +291,7 @@ pub struct ReadCache {
     caught_up: tokio::sync::watch::Sender<u64>,
     /// Held while a status result is computed, so that concurrent polls compute it once.
     computing: tokio::sync::Mutex<()>,
-    /// When `GET /state` was last asked (unix seconds): [`keep_warm`] works only while
+    /// When `GET /state` was last asked (unix seconds): `health_view::keep_warm` works only while
     /// someone is looking.
     last_poll: std::sync::atomic::AtomicI64,
     /// The last key grids computed (`GET /assets/{name}/partitions/grid`), by node, with what
@@ -1348,7 +1348,12 @@ mod tests {
                     .set_modified(SystemTime::now() + Duration::from_secs(3600)),
             )
             .unwrap();
-        assert!(!state.reads.db_state().still_for(Duration::from_secs(1)));
+        assert!(
+            !state
+                .reads
+                .db_state()
+                .still_for(crate::health_view::WARM_AFTER_STILL)
+        );
         let warming = tokio::spawn(crate::health_view::keep_warm(state.clone()));
         let warmed = tokio::time::timeout(Duration::from_secs(5), async {
             while loads(&state).1 == 0 {

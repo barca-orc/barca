@@ -94,16 +94,8 @@ async fn queue_of(
     let facts = published_ticks(state).await.unwrap_or_default();
     let queue = crate::queue_view::estimate(state, &facts.ticks, now);
     let cfg = &state.config.resolved;
-    let workers = barca_core::sizing(
-        cfg.capacity,
-        cfg.pool_size,
-        state
-            .runs
-            .capacity
-            .as_ref()
-            .map(|c| (c.total() as usize, c.source())),
-    )
-    .pool_size;
+    let workers =
+        barca_core::sizing(cfg.capacity, cfg.pool_size, state.runs.server_capacity()).pool_size;
     let runs = runs
         .iter()
         .map(|run| barca_core::estimates::PlannedRun {
@@ -355,7 +347,7 @@ const WARM_WHILE_POLLED: Duration = Duration::from_secs(60);
 
 /// How long the metadata DB must have been still before [`keep_warm`] computes for it: a run
 /// writes it many times a second, and its polls compute what they need.
-const WARM_AFTER_STILL: Duration = Duration::from_secs(1);
+pub(crate) const WARM_AFTER_STILL: Duration = Duration::from_secs(1);
 
 /// `barca serve`'s background task: compute `GET /state` once the server is up (and its
 /// database still), and again

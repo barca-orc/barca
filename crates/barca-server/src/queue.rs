@@ -7,7 +7,7 @@
 //! extra slot of its own, so an interactive `get` never waits behind cron work.
 //!
 //! A run leaves the queue when it has recorded how it ended. A server that starts resumes the runs
-//! it finds queued, in order ([`resume_at_startup`]). A run the stopping server stopped at its
+//! it finds queued, in order (`runs::resume_at_startup`). A run the stopping server stopped at its
 //! drain deadline goes back to its place ([`crate::runs`], `requeue`) and starts again from the
 //! beginning after the restart: steps that finished are cache hits then, so a run is executed
 //! at least once, and a step that was interrupted runs again.

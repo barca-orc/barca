@@ -196,7 +196,7 @@ pub(crate) async fn recorded_view(state: &AppState) -> Result<QueueView, ApiErro
         let dag = state.reads.inspect_dag().await?;
         crate::schedule_view::recorded_queue(state, &dag, &snapshot.path, now).await?
     };
-    // What each row's description says: this server wrote it ([`store`]).
+    // What each row's description says: this server wrote it ([`crate::queue::store`]).
     let rows = rows
         .into_iter()
         .filter_map(|row| {

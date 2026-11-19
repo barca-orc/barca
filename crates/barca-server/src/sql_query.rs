@@ -18,16 +18,16 @@
 //!
 //! **Size.** The helper refuses a query whose rows pass a few megabytes
 //! (`MAX_ANSWER_BYTES` in the helper), and this side reads no line of it longer than
-//! [`MAX_LINE`]: a longer one is a helper that lost the protocol, and is replaced. DuckDB's
+//! `sql_helper::MAX_LINE`: a longer one is a helper that lost the protocol, and is replaced. DuckDB's
 //! memory limit bounds only its own buffers; these bound what Python and the server hold.
 //!
 //! **Tables.** [`SOURCES`] lists them. A table is handed to the helper when a query names it
 //! and it is not loaded for the current state: the metadata database on disk
-//! ([`crate::read_cache::Reads::db_state`]) and, for a table computed from the graph, the inspected graph
-//! ([`crate::read_cache::Reads::inspect_dag`]). A query on an unchanged server sends the helper nothing but
+//! (`Reads::db_state`) and, for a table computed from the graph, the inspected graph
+//! (`Reads::inspect_dag`). A query on an unchanged server sends the helper nothing but
 //! the query. A new table is one more entry in [`SOURCES`].
 //!
-//! **Time.** A query has [`TIMEOUT`], waiting for the helper and loading tables included. Past
+//! **Time.** A query has `sql_helper::TIMEOUT`, waiting for the helper and loading tables included. Past
 //! it the helper is told to interrupt the query; if it has not answered [`CANCEL_GRACE`]
 //! later it is killed. Either way the answer is `408` and no query keeps running.
 
@@ -87,7 +87,7 @@ pub(crate) struct Source {
     /// (column, DuckDB type), in order: the columns `barca sql` gives the table.
     pub(crate) columns: &'static [(&'static str, &'static str)],
     /// Whether its rows are computed from the graph as well as the database. Such a table is
-    /// loaded again when the inspected graph changes, and at least every [`STATUS_MAX_AGE`]
+    /// loaded again when the inspected graph changes, and at least every `STATUS_MAX_AGE`
     /// (what it shows also moves with the clock: a schedule turning late).
     pub(crate) graph: bool,
     /// Whether its rows are the server's own state in memory (the run queue), which neither

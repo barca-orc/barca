@@ -68,7 +68,7 @@ pub struct StateQuery {
 
 /// `GET /state` — every node's cache state (would `barca get` reuse it?), latest
 /// attempt, typical durations, and next scheduled run. Read-only by
-/// construction: the cache check reads the DB through read-only connections ([`SnapshotDb`]).
+/// construction: the cache check reads the DB through read-only connections ([`crate::snapshot::SnapshotDb`]).
 ///
 /// The cache states and durations are kept until the sources or the database change
 /// ([`crate::read_cache`]); what runs now and the next fire times are read for every request.
