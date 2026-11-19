@@ -32,7 +32,7 @@ import { blockerOf } from '@/lib/healthDisplay'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { signalDisplay, signalLine } from '@/lib/dataSignals'
 import { EDITOR_ROOTS_KEY, changedSummary, collapseRuns, dataKey, dataKeyNote, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, errorFirstLine, failuresOnlyNote, formatBytes, historyBars, keyFigures, onlyFailures, rowsLabel, raisedAtLabel, runPace, runsRecorded, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
-import { consumersOf, downstreamIds, headline, isFailed, streakLabel } from '@/lib/health'
+import { consumersOf, downstreamIds, isFailed, streakLabel } from '@/lib/health'
 import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
 import type { AssetRunEntry, KeyArtifact, ListNode, NodeState, NodeStatus } from '@/lib/types'
@@ -275,7 +275,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                     const failedKeys = up?.partitions?.failed ?? 0
                     return failedKeys > 0 && up?.partitions
                       ? `${failedKeys.toLocaleString()} of ${up.partitions.total.toLocaleString()} keys failed`
-                      : headline(up?.last_materialization?.error)
+                      // Its error in a line, as the root list words it (`detail` of the root that holds this node).
+                      : heldBy?.detail ?? ''
                   })()}</span>
                 </li>
               ))}

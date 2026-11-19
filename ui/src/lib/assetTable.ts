@@ -40,6 +40,8 @@ export interface AssetRow {
   keys: { failed: number; total: number; blocked: number; blockedOn: string | null } | null
   /** The failed node upstream that keeps it from running (`blocked`); null when none. */
   blockedBy: string | null
+  /** The id of what holds it (`root.id`): the rollup's root of that id says it in a line. Null when it is fresh. */
+  root: string | null
   /** Pinned (`barca pin`): what it is pinned to, in a line; null when not pinned. Reads `pinned`. */
   pinned: string | null
   /** Why, in words — the server's own explanation (`cache.detail`, a tooltip). */
@@ -122,6 +124,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         lastFailed: lastAttemptFailed(n),
         keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total, blocked: n.partitions.blocked ?? 0, blockedOn: n.partitions.blocked_on ?? null } : null,
         blockedBy: blockerOf(n),
+        root: n.root?.id ?? null,
         pinned: pins.get(n.id) ?? null,
         stateHint: n.cache.detail,
         last: last

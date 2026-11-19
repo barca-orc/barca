@@ -117,7 +117,11 @@ export function streakLabel(failures: number): string {
   return failures === 1 ? '1 failed run' : `${failures.toLocaleString()} failed runs in a row`
 }
 
-/** An error's one line: its first, or a bare traceback's last; no frames. */
+/**
+ * An error's one line: its first, or a bare traceback's last; no frames. For the summary of
+ * `ErrorLine`, which shows errors no route serves a line for (a key's, a step's, a request's). A
+ * failing node's line is served: `detail` of its root in the rollup (`rollup::headline`).
+ */
 export function headline(error: string | null | undefined): string {
   const lines = (error ?? '').split('\n').map((l) => l.trim()).filter((l) => l !== '')
   const first = lines[0]

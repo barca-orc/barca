@@ -36,7 +36,7 @@ const KIND_WORD: Record<NodeKind, string> = { asset: 'asset', task: 'task', sens
 
 export interface SidebarViewProps {
   model: SidebarModel
-  /** Nodes of the counted kind in the whole project, as the rollup counts them (`kinds`); null until it and the graph have loaded. */
+  /** Nodes of the counted kind in the whole project; null while the graph loads. */
   total: number | null
   /** What the counts are of: `asset`, `task` or `sensor`. */
   counted?: NodeKind
@@ -94,7 +94,7 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, overal
         <span className="barca-sect-note">{word}s</span>
       </div>
       <div className="barca-pipes">
-        {total === null && pipelines.length === 0 && <span className="barca-pipe-empty">loading…</span>}
+        {total === null && <span className="barca-pipe-empty">loading…</span>}
         {total !== null && pipelines.length === 0 && (
           <span className="barca-pipe-empty">{total === 0 ? `no ${word}s served` : 'no pipelines served'}</span>
         )}
@@ -104,7 +104,7 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, overal
             <button
               type="button"
               className="barca-pipe"
-              title={`All pipelines${total === null ? '' : ` · ${plural(total, word)}`}${overall ? ` · ${overall.label}` : ''}`}
+              title={`All pipelines · ${plural(total ?? 0, word)}${overall ? ` · ${overall.label}` : ''}`}
               aria-label="All pipelines"
               onClick={() => onSelect(null)}
             >
@@ -145,7 +145,7 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, overal
                 </button>
                 <button
                   className="barca-pipe"
-                  title={`${p.file}${p.total === null ? '' : ` · ${plural(p.total, word)}`}${p.shown ? ` · ${p.shown.label}` : ''}`}
+                  title={`${p.file} · ${plural(p.total, word)}${p.shown ? ` · ${p.shown.label}` : ''}`}
                   data-active={filtering && selected === p.file ? '' : undefined}
                   aria-pressed={selected === p.file}
                   onClick={() => onSelect(selected === p.file ? null : p.file)}
@@ -155,7 +155,7 @@ export function SidebarView({ model, total, counted = 'asset', pipelines, overal
                     ? (p.shown.part ? <CauseDot part={p.shown.part} /> : <StatusGlyph glyph={p.shown.glyph} live={p.shown.live} size={12} />)
                     : <span className="barca-pipe-nodot" />}
                   <span className="barca-pipe-name">{p.name}</span>
-                  {p.total !== null && <span className="barca-pipe-count">{p.total}</span>}
+                  <span className="barca-pipe-count">{p.total}</span>
                 </button>
               </div>
               {open && groups.map((g) => (
@@ -365,17 +365,18 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const pipelines = useMemo(() => listedPipelines(summaries, selected), [summaries, selected])
   const scope = params.get('group')
 
-  // The nodes by kind, in the open pipeline: the file's sums of the rollup (`files`), or the
-  // project's (`kinds`). None until it has loaded.
-  const kinds = rollup.loaded ? (selected === null ? rollup.tree.kinds : rollup.tree.files.get(selected)?.kinds ?? null) : null
-  // Each section's count: what its page lists. The rollup has no count of schedules; the
-  // Schedules page lists the scheduled nodes of `GET /assets`, so that one is their number.
-  const counts = useMemo(() => ({
-    assets: kinds?.asset.nodes,
-    tasks: kinds?.task.nodes,
-    sensors: kinds?.sensor.nodes,
-    schedules: assets?.filter((a) => inPipeline(a.id, selected) && a.freshness === 'schedule' && a.schedule !== undefined).length,
-  }), [kinds, assets, selected])
+  // Each section's count, in the open pipeline: what its page lists.
+  const counts = useMemo(() => {
+    if (!assets) return {}
+    const shown = assets.filter((a) => inPipeline(a.id, selected))
+    const of = (k: NodeKind) => shown.filter((a) => a.kind === k).length
+    return {
+      assets: of('asset'),
+      tasks: of('task'),
+      sensors: of('sensor'),
+      schedules: shown.filter((a) => a.freshness === 'schedule' && a.schedule !== undefined).length,
+    }
+  }, [assets, selected])
 
   const select = (file: string | null) => {
     const next = new URLSearchParams(params)
@@ -397,7 +398,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   return (
     <SidebarView
       model={model}
-      total={assets && rollup.loaded ? rollup.tree.kinds?.[kind].nodes ?? null : null}
+      total={assets ? assets.filter((a) => a.kind === kind).length : null}
       counted={kind}
       pipelines={pipelines}
       overall={overall}

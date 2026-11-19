@@ -53,30 +53,34 @@ export function fileShown(sums: Pick<FileRollup, 'running' | 'causes'>): FileDis
 
 /** A pipeline (source file) as the sidebar shows it, for the nodes of one kind. */
 export interface PipelineSummary extends Pipeline {
-  /** Its nodes of the counted kind, as the rollup counts them (`kinds`); null until it has loaded. */
-  total: number | null
-  /** Its one state (`fileShown`); null until the rollup has loaded, or for a file with no node of the kind. */
+  /** Its nodes of the counted kind, from graph metadata: known before any state is. */
+  total: number
+  /** Its one state (`fileShown`); null until the rollup has loaded, or for a file it has no node of. */
   shown: FileDisplay | null
   /** How many of its nodes a run is working on now. */
   running: number
 }
 
 /**
- * One line per source file of the project, in file order: the files are the graph's
- * (`GET /assets`), and each one's count of `kind` (the page's: Assets counts assets) and its one
- * state are its sums in the rollup's `files` (both null before it loads). Nothing is counted
- * here. A file with none of that kind is here at 0; the sidebar leaves it out (`listedPipelines`).
+ * One line per source file of the project, in file order: how many of its nodes are of `kind`
+ * (the page's: Assets counts assets), from the graph (`GET /assets`), and its one state from
+ * the rollup's `files` (null before it loads). A file with none of that kind is here at 0; the
+ * sidebar leaves it out (`listedPipelines`).
  */
 export function pipelineSummaries(
   files: ReadonlyMap<string, FileRollup> | null,
-  listed: readonly Pick<ListNode, 'id'>[],
+  listed: readonly Pick<ListNode, 'id' | 'kind'>[],
   kind: NodeKind,
 ): PipelineSummary[] {
-  return [...new Set(listed.map((node) => sourceFile(node.id)))]
-    .map((file) => {
-      const sums = files?.get(file)
-      const total = sums ? sums.kinds[kind].nodes : null
-      return { file, name: pipelineName(file), total, running: sums?.running ?? 0, shown: sums && sums.kinds[kind].nodes > 0 ? fileShown(sums) : null }
+  const totals = new Map<string, number>()
+  for (const node of listed) {
+    const file = sourceFile(node.id)
+    totals.set(file, (totals.get(file) ?? 0) + (node.kind === kind ? 1 : 0))
+  }
+  return [...totals]
+    .map(([file, total]) => {
+      const sums = total > 0 ? files?.get(file) : undefined
+      return { file, name: pipelineName(file), total, running: sums?.running ?? 0, shown: sums ? fileShown(sums) : null }
     })
     .sort((a, b) => a.file.localeCompare(b.file))
 }
