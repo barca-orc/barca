@@ -15,13 +15,13 @@ use crate::cache::{
 use crate::dag::Dag;
 use crate::db;
 use crate::dispatch;
-use crate::dispatch::OutputRef;
 use crate::freshness::{Planned, pin_manual};
 use crate::model::kind_str;
 use crate::planner::{Phase, ResourceConfig};
 use crate::recover;
 use crate::results::{ExplainResult, ExplainSummary, StepReport, TargetPrediction};
 use crate::sizing::{planned_weights, sizing_for, warn_over_capacity};
+use crate::step_result::OutputRef;
 use crate::targets::{plan_for_targets, resolve_targets, short_name, validate_refresh_names};
 use crate::transfer::ArtifactLayout;
 use std::collections::HashMap;
@@ -109,7 +109,7 @@ pub(crate) async fn explain_dag_with_keys(
     let Planned { cone, pinned, .. } =
         pin_manual(dag, &mut targets, cfg, &policy, rules, file_args).await?;
     let target_ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
-    let pool_size = sizing_for(cfg, &crate::run_host::LocalHost).pool_size;
+    let pool_size = sizing_for(cfg, None).pool_size;
     let config = ResourceConfig {
         pool_size,
         concurrency_groups: HashMap::new(),
@@ -275,12 +275,8 @@ pub(crate) async fn explain_dag_with_keys(
     for r in &mut steps {
         r.weight = weights.get(recover::base_of(&r.id)).copied();
     }
-    let capacity = sizing_for(cfg, &crate::run_host::LocalHost).capacity;
-    warn_over_capacity(
-        &weights,
-        capacity,
-        sizing_for(cfg, &crate::run_host::LocalHost).capacity_source,
-    );
+    let capacity = sizing_for(cfg, None).capacity;
+    warn_over_capacity(&weights, capacity, sizing_for(cfg, None).capacity_source);
     // Results of an earlier run still waiting for the store: the real run uploads them first.
     let uploads = if cfg.remote_artifacts() {
         crate::pending_uploads::report(&crate::pending_uploads::list(&cfg.db_path).await?, None)

@@ -13,7 +13,7 @@
 use crate::cache::{CachePolicy, compute_run_hash_with};
 use crate::dag::Dag;
 use crate::db;
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 use crate::targets::{refresh_name_matches, short_name};
 use crate::{Freshness, NodeKind};
 use std::collections::{HashMap, HashSet, VecDeque};

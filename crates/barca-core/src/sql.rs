@@ -104,18 +104,7 @@ pub enum Origin {
     },
 }
 
-/// The query's result: column names in order, one object per row, and how many rows the query
-/// returns in all (`truncated` when only the first `limit` are in `rows`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SqlResult {
-    pub columns: Vec<String>,
-    pub rows: Vec<serde_json::Value>,
-    pub total: u64,
-    pub truncated: bool,
-    /// Notes for stderr (stale views, renamed views); not part of the JSON result.
-    #[serde(skip)]
-    pub notes: Vec<String>,
-}
+pub use crate::results::SqlResult;
 
 #[derive(Deserialize)]
 struct HelperError {

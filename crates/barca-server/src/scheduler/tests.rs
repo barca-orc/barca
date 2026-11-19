@@ -1338,11 +1338,13 @@ async fn collect_jobs_discovers_scheduled_nodes_from_source() {
     )
     .unwrap();
 
-    let jobs = barca_core::schedule::collect_jobs(
+    let summaries = barca_core::queries::list_assets(
         &[path.display().to_string()],
         &barca_core::commands::find_python(),
     )
-    .await;
+    .await
+    .unwrap();
+    let jobs = jobs_from_summaries(summaries);
 
     assert_eq!(
         jobs.len(),

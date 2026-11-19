@@ -126,7 +126,14 @@ pub(super) async fn prepare_run(
             .join(",")
     });
 
-    let sizing = sizing_for(request.cfg, request.options.host.as_ref());
+    let sizing = sizing_for(
+        request.cfg,
+        request
+            .options
+            .host
+            .shared_capacity()
+            .map(|s| (s.total as usize, s.source)),
+    );
     let pool_size = sizing.pool_size;
     let config = ResourceConfig {
         pool_size,

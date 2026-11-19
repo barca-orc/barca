@@ -248,7 +248,7 @@ pub(super) async fn republish_sinks<'p>(
 fn fail_republish(session: &mut RunSession<'_, '_>, id: &str, message: String) {
     let message = format!("SinkError: {message}");
     if session.request.agent_mode {
-        crate::run_line!(Agent, "{}", crate::report::failed_step_line(id, &message));
+        crate::run_line!(Agent, "{}", super::failed_step_line(id, &message));
     }
     session
         .state
