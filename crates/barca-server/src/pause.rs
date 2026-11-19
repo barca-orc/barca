@@ -115,7 +115,7 @@ async fn set(
         }
     );
     let facts = crate::handlers::published_ticks(state).await?;
-    let body = schedule_at(state, chrono::Utc::now(), &facts.ticks);
+    let body = schedule_at(state, chrono::Utc::now(), &facts);
     let entry = body
         .as_array()
         .into_iter()

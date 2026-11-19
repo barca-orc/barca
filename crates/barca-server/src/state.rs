@@ -296,16 +296,7 @@ impl From<barca_core::db::RunTotals> for LastRun {
     }
 }
 
-/// Median and p95 wall time over a node's most recent successful materializations.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct Durations {
-    pub median_seconds: f64,
-    pub p95_seconds: f64,
-    /// How many materializations these are computed from (at most 20).
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub samples: usize,
-}
+pub use barca_core::health::Durations;
 
 pub(crate) use crate::replay::RunChannel;
 

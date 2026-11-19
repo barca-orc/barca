@@ -126,7 +126,6 @@ pub(crate) async fn node_status(
         .await
         .map_err(|e| ApiError::run(e, context("status", state)))?;
     let mut result = (*kept).clone();
-    crate::handlers::attach_live_schedules(state, &mut result.nodes, dag, &snapshot.path).await?;
     let now = chrono::Utc::now();
     let running =
         crate::handlers::attach_health_at(state, &mut result, dag, db_state, &snapshot.path, now)
