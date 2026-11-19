@@ -37,7 +37,10 @@ TRAEFIK="barca-proxy-traefik-$$"
 cleanup() {
     docker rm -f "$NGINX" "$TRAEFIK" >/dev/null 2>&1 || true
     [ -n "${SERVE_PID:-}" ] && kill "$SERVE_PID" 2>/dev/null || true
-    rm -rf "$TMP"
+    # Wait for the server to exit: it writes under .barca until it does, and a file created
+    # during the removal fails it with "Directory not empty".
+    [ -n "${SERVE_PID:-}" ] && wait "$SERVE_PID" 2>/dev/null || true
+    rm -rf "$TMP" || true
 }
 trap cleanup EXIT
 
