@@ -209,14 +209,14 @@ The other site pages are written by hand, and no test compares them with the man
 
 ## What CI runs
 
-`.depot/examples/ci.yml` runs on every pull request into `main` and on every merge group in
+`.depot/workflows/ci.yml` runs on every pull request into `main` and on every merge group in
 the merge queue. It does not run on push to `main`: `main` only moves to a merge group's
 commit, which the queue has just tested. The required checks are `CI / test` and
 `CI / backends`. Each is a job that passes when the jobs it needs succeeded.
 
-UI-only diffs (`ui/**`, plus optional `CHANGELOG.md`) run the UI tier on both pull requests and merge groups: repository checks, one wheel build for the real-server browser tests, and UI typecheck, lint, unit and Playwright tests. Clippy, Rust tests, Python suites, proxy tests and performance tests are skipped. Mixed changes retain the tiers below. Releases and `ci-full` override UI scoping; missing diff history retains the broader gates.
+UI-only diffs (`ui/**`, plus optional `CHANGELOG.md`) run the UI tier on both pull requests and merge groups: repository checks, one wheel build for the real-server browser tests, and UI typecheck, lint, unit and Playwright tests. Clippy, Python suites, proxy tests and performance tests are skipped. So are the Rust tests, except in a merge group whose diff a Rust test reads (a fixture in `ui/src/lib/testdata/`, `ui/demo/modeling.py`, the generated types): that merge group runs those tests ([which Rust tests run](#which-rust-tests-run)). Mixed changes retain the tiers below. Releases and `ci-full` override UI scoping; missing diff history retains the broader gates.
 
-Site-only diffs (`site/**`, plus optional `CHANGELOG.md` and `.github/workflows/site.yml`) build no wheel and run no clippy, Python suites or performance tests. On a pull request (the `site` tier) they run the repository checks, which include building the site; in a merge group (`site-merge`) they also run the Rust tests, which read site pages (the sidebar, the pages generated from manual topics, the decorator-argument table and the repository-wide unused-input sweep). A diff that touches `site/src/content/docs/recipes/ordering-only-deps.md`, which a Python test executes, runs the normal tiers. Releases and `ci-full` override site scoping too.
+Site-only diffs (`site/**`, plus optional `CHANGELOG.md` and `.github/workflows/site.yml`) build no wheel and run no clippy, Python suites or performance tests. On a pull request (the `site` tier) they run the repository checks, which include building the site; in a merge group (`site-merge`) they also run the Rust tests that read site pages (the CLI crate's tests for the sidebar and the pages generated from manual topics, the decorator-argument table and the repository-wide unused-input sweep; [which Rust tests run](#which-rust-tests-run)). A diff that touches `site/src/content/docs/recipes/ordering-only-deps.md`, which a Python test executes, runs the normal tiers. Releases and `ci-full` override site scoping too.
 
 Other changes run in three tiers. A pull request runs the fast tier, so it can enter the queue about a
 minute after a push. A merge group runs the merge tier, which gates the merge, in about two
@@ -229,8 +229,8 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **checks**: the CHANGELOG check, the specification checks, the prek hooks of `prek.toml` (`uvx prek run --all-files`: ruff and ruff format, ty on `python/barca/`, `cargo fmt --check`, the version sync, `uv lock --check`, whitespace and YAML/TOML checks) and the TLA+ models (the jar is cached, its SHA-256 checked each run) | test | yes | yes | yes |
 | **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes | yes |
 | **changes**: the tier and its optional parts; every test file is in exactly one shard (`scripts/ci-shards.py --check`) and every file in `scripts/fast-tests.txt` exists | backends | yes | yes | yes |
-| **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes | yes |
-| **rust-tests**, generated types: `ui/scripts/regen-types.sh` (what `pnpm gen:types` runs), then `git diff --exit-code` on `ui/src/lib/generated`, so the UI's wire types cannot drift from Rust | test | | yes | yes |
+| **rust-tests**: `cargo nextest run --workspace`, each test in its own process. The merge tier runs only the tests the diff can affect, and skips the job when there are none (see below) | test | | affected | yes |
+| **rust-tests**, generated types: `ui/scripts/regen-types.sh` (what `pnpm gen:types` runs), then `git diff --exit-code` on `ui/src/lib/generated`, so the UI's wire types cannot drift from Rust. In the merge tier, when a crate with a `ts` feature, the generated files or the script changed | test | | affected | yes |
 | **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes | yes |
 | **python (fast)**: the quick subset in `scripts/fast-tests.txt`, about 20 s of tests | backends | | yes | |
 | **perf**: the performance budgets, `scripts/perf-gate.py` against that wheel (see below) | test | | yes | yes |
@@ -240,12 +240,51 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **python (1/3 .. 3/3, duckdb 1.x)**: the whole Python suite in shards, with the emulators, the duckdb 1.x rerun and the minute checkpoint test | backends | | | yes |
 | **durations**: merges the shards' JUnit reports into `scripts/ci-test-durations.json` and uploads it as the `ci-test-durations` artifact (not gating; see below) | | | | yes |
 
-The trade: a merge to `main` is checked by the Rust tests and the quick Python subset only, so
-a failure the full tier finds on a release pull request is in one of the pull requests merged
-since the previous release. Fix it there (or revert) and push to the release branch. Release
+The trade: a merge to `main` is checked by the Rust tests its diff can affect and the quick
+Python subset only, so a failure the full tier finds on a release pull request is in one of
+the pull requests merged since the previous release. Fix it there (or revert) and push to the release branch. Release
 wheels are built by the release workflow with `--release`, not by CI.
 
 No crate has a runnable doctest, so `cargo test --doc` does not run.
+
+### Which Rust tests run
+
+The full tier runs every Rust test. The merge tier and `scripts/check-fast.sh` run the tests
+the diff can affect, chosen by `scripts/ci-rust-tests.py`. Each changed file selects one of:
+
+| The file | Selects |
+| --- | --- |
+| Is inside a crate (`crates/<dir>/`) | Every test of that crate and of every crate that depends on it, directly or not. The crates and their dependencies (normal, dev and build) are read from `cargo metadata`, so a new crate needs no entry anywhere |
+| Is read by a test in another crate | That test alone, in its own crate. The script's `READERS` table lists them: the guards in `barca-core` and `barca-engine` that scan every crate's sources and manifests, the CLI crate's tests of the site, `README.md` and `SKILL.md`, the tests of `specs/interfaces/artifact-formats.md` and `specs/interfaces/server-api.openapi.yaml`, the UI fixtures in `ui/src/lib/testdata/`, and the unused-input sweep over every pipeline in `examples/`, `benchmarks/`, `python/`, the manual and the site |
+| Is the root `Cargo.toml`, `Cargo.lock`, a toolchain file, `.cargo/`, anything under `.depot/` (the CI workflow and its actions), the selection or tier scripts and their tests, `python/barca/` or `pyproject.toml` | The whole workspace |
+| Is known to affect no Rust test (the rest of `site/`, `ui/`, `specs/`, `docs/`, `scripts/`, `python/tests/`, the root documents) | Nothing |
+| Is anything else: a new top-level directory, a file under `crates/` that no crate owns, a workflow the script does not list | The whole workspace |
+
+So the merge tier no longer runs, for example, the `barca-model`, `barca-compile` and
+`barca-db` tests for a change inside `barca-server`, any Rust test for a change only under
+`docs/engineering/` or `python/tests/snapshots/`, or more than the two server test binaries that validate
+responses against the OpenAPI document for a change to that document. A test broken by a change
+the selection considers unrelated to it is found by the next release's full tier, not at the
+merge. At v0.45.0 the workspace has 1,578 tests; a change inside `barca-server` runs 300 of
+them and a site page 95.
+
+The build is still `cargo nextest run --workspace` with a filter (`-E`): cargo does not
+rebuild a crate nothing changed under, and `-p` would resolve features for the named packages
+alone and rebuild their dependencies. Without cargo-nextest, `check-fast.sh` runs
+`cargo test -p <crate> ...`, which has no filter and so runs every test of a crate with one
+selected test.
+
+The `changes` job prints the selection to its log and its summary, and `check-fast.sh` prints
+it before the tests: one line per crate, with the files that selected it or `not run: no
+changed file can affect its tests`. `scripts/check-fast.sh --rust-all` runs every Rust test.
+When the selection cannot be computed (`cargo metadata` or the diff fails), the whole
+workspace runs.
+
+A Rust test that starts reading a file outside its crate must be added to `READERS` with the
+paths it reads, or a change to those paths will not run it. `scripts/test-ci-rust-tests.py`,
+which the `changes` job runs on every pull request, fails when a source under `crates/` uses
+`CARGO_MANIFEST_DIR` with a parent path, or includes a file from outside its crate, and is not
+listed; it also fails when a listed test or path no longer exists.
 
 **perf** runs `scripts/perf-gate.py` on a 4-CPU sandbox against the wheel. It checks the
 budgets in `specs/behavior/performance.md` ("Gates"): the one-asset pipeline of

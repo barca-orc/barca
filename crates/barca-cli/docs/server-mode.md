@@ -21,6 +21,84 @@ No shared artifact store is needed for this path. Turn on project tokens ("Opt-i
 tokens" below), or keep the server on a private network or behind an authenticating proxy
 (https://barca.sh/deploying/).
 
+## In the server's own project: the project socket
+
+A `barca` command typed in the project directory a `barca serve` is running in goes to that
+server. Nothing is configured: the server listens on a Unix socket beside its metadata
+database, `.barca/serve.sock` (`.barca/envs/<env>/serve.sock` for `--env <env>`), and a
+command finds it there. The server says so when it starts, and the command says so once on
+stderr:
+
+```
+[barca] project socket .barca/serve.sock (barca commands in this project use this server; --local runs them here)
+[barca] server .barca/serve.sock (this project's barca serve; --local runs on this machine)
+```
+
+Why: the server is the one process that writes this project's metadata database. A second
+process beside it has to wait for the database's lock each time the server writes, and behind
+a server that is recording runs that wait can end after 60 seconds in
+`timed out ... waiting for .barca/metadata.db.lock` (the error names the process holding the
+lock: its pid and command line, on Linux).
+
+With a server running here, and neither `--local` nor `--server` on the command line:
+
+| Command | What happens |
+|---|---|
+| `status`, `history`, `stats`, `logs`, `queue`, `pause`, `resume`, `pin`, `unpin`, `cancel` | answered by, or sent to, the server, as with `--server` |
+| `sql` | a query over barca's own tables is answered by the server; a query over results runs here, over the artifacts in `.barca/` |
+| `get`, `run` | join the server's run queue; the command follows the run and prints its result, as with `--server` |
+| `gc` | run by the server (`POST /gc`), between its own writes |
+| `state restore`, `state reset` | refused (exit 3), naming the server: stop it first, or for a reset use `POST /state/reset` or the web UI |
+| `list`, `plan`, `doctor`, `docs`, `tokens`, `state backups`, `history --reconcile` | run here, as without a server |
+
+```bash
+barca get daily_report            # queued on this project's server; its result prints here
+barca status                      # the server's answer
+barca gc                          # the server evicts, between its own writes
+barca get daily_report --local    # run in this process instead, beside the server
+barca gc --local --dry-run        # this process measures and plans the eviction itself
+```
+
+What that means for `get` and `run`:
+
+- **The server runs its deployed files**, the ones it loaded when it started (or reloaded with
+  `--watch`), not an edit it has not loaded. A command that names no file uses all of them; a
+  file the server did not deploy is a usage error listing the deployed files. To run an edit
+  the server has not loaded, pass `--local`.
+- The run waits for a run slot like any other (`barca queue`), and Ctrl-C cancels it on the
+  server.
+- `-o url` is not available on a server yet; pass `--local` for it.
+- A command a step starts (`barca.get(...)` inside a task) does not go to the server: it runs
+  in the step's own process, as it did before the socket, so it never waits for a run slot its
+  caller holds.
+
+`--local` runs any of these in the command's own process, as before the socket existed. It
+still shares the database lock with the server, so behind a busy server it can wait.
+`--server URL` names a server explicitly and is unchanged. The socket takes precedence over a
+configured server (`BARCA_SERVER`, `[server] url`).
+
+**No token.** The socket is owner-only (mode `0600`). A command sent over it needs no `BARCA_SERVER_TOKEN`, even when the server has project
+tokens on, because a user who can open the socket can already write the database beside it.
+The server's TCP address asks for a token as before.
+
+**A read-only server** (`barca serve --read-only`) opens the socket too. Reads are answered by
+it; a write (`get`, `run`, `gc`, `pause`, `pin`, ...) is refused with its read-only error and a
+pointer to `--local`. Nothing falls back to this machine on its own.
+
+**No socket, or a dead one.** With no server there is no socket file and the check costs one
+or two `stat` calls. A server that was killed (SIGKILL, a crash, a power cut) leaves its
+socket file behind; nothing listens on it, so a command ignores it and runs here, and the next
+server on the project replaces it. A socket that accepts a connection but does not answer
+within 5 seconds is ignored with a warning. A server stopped normally removes its socket.
+
+Limits: only the server that holds the environment (the first one started on it) opens the
+socket, so a second server on the same environment is reachable by its URL only. A project
+path so long that the socket path exceeds what the system allows (107 bytes on Linux, 103 on
+macOS) leaves the server without a socket; it warns at startup, and commands then behave as
+before. Not run so far: a second user of the machine, another container sharing the project
+directory, a network filesystem, and macOS. There is no route for taking a metadata backup on
+request; the server takes its own (`barca docs backup`).
+
 ## Local computation with shared results
 
 Sharing results between machines means one `barca serve` that everyone points at. **The server
@@ -370,6 +448,8 @@ the server still stops the run.
 | Situation | Exit | Message names |
 |---|---|---|
 | the server cannot be reached, answers with something that is not barca, or speaks another API version | 3 | the server URL (and the request); remediation `--local` for a configured server |
+| this project's own server (the project socket) stops answering mid-command, or is `--read-only` and the command writes | 3 (unreachable), 2 (read-only) | the socket path; remediation `--local` |
+| a command waits 60 seconds for the metadata database's lock (`--local` beside a busy server) | 3 | the lock file and the process holding it (pid and command line, Linux only) |
 | the server writes to another store (or another environment) than this project's `[remote]` (a local run) | 2 | both stores |
 | a server is configured and the project has no `[remote]` (a local run) | 2 | the missing `[remote]` section |
 | the post after a local run is refused or does not arrive | 0 (the run's own code) | the run id and why, on stderr |

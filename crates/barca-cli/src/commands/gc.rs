@@ -21,12 +21,17 @@ pub(crate) async fn gc_cmd(
         env: env.map(String::from),
     };
     let result = barca_core::gc::gc(&cfg, &opts).await.map_err(engine)?;
-    if json {
-        barca_core::outln!("{}", serde_json::to_string_pretty(&result).unwrap());
-    } else {
-        render(&result);
-    }
+    print_gc(&result, json);
     Ok(())
+}
+
+/// The result of an eviction, as `barca gc` prints it wherever it ran.
+pub(crate) fn print_gc(result: &GcResult, json: bool) {
+    if json {
+        barca_core::outln!("{}", serde_json::to_string_pretty(result).unwrap());
+    } else {
+        render(result);
+    }
 }
 
 fn render(r: &GcResult) {

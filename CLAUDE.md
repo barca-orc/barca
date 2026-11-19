@@ -130,9 +130,11 @@ maturin develop --uv --release --extras test       # release profile (fat LTO), 
 cargo test
 
 # Before pushing: CI's always-on gates locally (changelog, specs, prek hooks incl. pinned ruff
-# and ty, clippy -D warnings, cargo test or nextest, rebuild the venv's barca if Rust changed,
-# Python tests picked from the diff), with a pass/fail summary. Exit 1 if any step failed.
-scripts/check-fast.sh                # --python-all for the whole Python suite, --no-python
+# and ty, clippy -D warnings, the Rust tests the diff can affect, rebuild the venv's barca if
+# Rust changed, Python tests picked from the diff), with a pass/fail summary. Exit 1 if any
+# step failed.
+scripts/check-fast.sh                # --python-all for the whole Python suite, --no-python,
+                                     # --rust-all for every Rust test
 BARCA_POOL_SIZE=2 scripts/check-fast.sh   # reproduce CI-only worker-pool failures
 
 # Benchmarks
@@ -230,19 +232,29 @@ changes `site/` or `CHANGELOG.md` redeploys barca.sh.
   specification checks and the prek hooks of `prek.toml`, so ruff, ruff format, ty, cargo fmt,
   the version sync and `uv lock --check` gate every PR; `clippy`; `changes`) so it enters the
   queue within about a minute. A merge group runs the merge tier, which gates the merge: the
-  fast set plus the Rust tests (and the UI's generated types against Rust), the wheel, the
-  quick Python subset in `scripts/fast-tests.txt` and `perf` (the performance budgets,
-  `scripts/perf-gate.py`), about two minutes. `scripts/check-fast.sh` runs the same gates
-  locally except `perf` and the generated types, and fails with one line when the tree has no
-  `.venv` to run the Python tests against. A release runs the full tier: everything,
-  including integration, the UI checks, the proxy tests, the Python shards, the object-store
+  fast set plus the Rust tests the diff can affect (and the UI's generated types against Rust
+  when a crate that exports them changed), the wheel, the quick Python subset in
+  `scripts/fast-tests.txt` and `perf` (the performance budgets, `scripts/perf-gate.py`),
+  about two minutes. The merge tier does not run the whole Rust workspace:
+  `scripts/ci-rust-tests.py` selects the crates that own a changed file, the crates that
+  depend on them (from `cargo metadata`) and the tests that read a changed file from outside
+  their crate (its `READERS` table: site pages, specifications, UI fixtures, the guards that
+  scan every crate), runs no Rust test for a diff that can affect none, runs everything for
+  the root manifest, `Cargo.lock`, `.depot/`, `python/barca/` or a path it does not know, and
+  prints the reason for each crate in the `changes` job. A Rust test that reads a file outside
+  its crate must be listed in `READERS` (`scripts/test-ci-rust-tests.py` fails otherwise).
+  `scripts/check-fast.sh` runs the same gates locally, with the same Rust selection
+  (`--rust-all` for the whole workspace), except `perf` and the generated types, and fails
+  with one line when the tree has no `.venv` to run the Python tests against. A release runs
+  the full tier: everything, the whole Rust workspace included, with integration, the UI
+  checks, the proxy tests, the Python shards, the object-store
   emulator tests, the duckdb 1.x rerun and the real minute checkpoint test
   (`test_minute_checkpoints.py`, about 2 min), as the `release/v*` PR's own run and again in
   its merge group (head commit `chore(release): ...`); its `durations` job uploads the suite's
   per-file durations, which `scripts/release.sh` merges into `scripts/ci-test-durations.json`.
   A PR labelled `ci-full` runs the full tier too. A site-only diff (`site/**`, optionally
   `CHANGELOG.md`) skips clippy, the wheel, Python and perf: its PR runs `checks` (which builds
-  the site) and its merge group adds the Rust tests, which read site pages
+  the site) and its merge group adds the Rust tests that read site pages
   (`scripts/ci-tier.py`). Nothing runs on push to main: main only
   moves to a merge group's commit, which the queue has tested. The one exception is the
   site: `.github/workflows/site.yml` deploys barca.sh when a commit on main changes `site/`

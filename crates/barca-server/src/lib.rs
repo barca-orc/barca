@@ -18,11 +18,13 @@ mod asset_pauses;
 pub mod auth;
 mod auth_http;
 mod error;
+mod gc;
 mod handlers;
 mod inspect;
 mod ledger;
 mod pause;
 mod pins;
+mod project_socket;
 mod queue;
 mod read_cache;
 mod replay;
@@ -182,6 +184,22 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // `barca state restore` refuses to replace the database under a running server.
     let _serve_lock =
         barca_core::backup::ServeLock::acquire(&config.resolved, &format!("http://{addr}"));
+    // The project socket belongs to the server that holds the environment: a second server
+    // on it (a read-only one beside a writer) leaves the first one's alone.
+    let mut project_socket = match &_serve_lock {
+        Some(_) => match project_socket::ProjectSocket::open(&config.resolved.db_path) {
+            Ok(socket) => Some(socket),
+            Err(why) => {
+                barca_core::errln!(
+                    "[barca] warning: no project socket ({why}); barca commands run in this \
+                     project will not find this server and will open its database beside it. \
+                     Pass them --server http://{addr}, or serve the project from a shorter path"
+                );
+                None
+            }
+        },
+        None => None,
+    };
     let backups = (!read_only && config.resolved.backup_uri.is_some())
         .then(|| (config.python.clone(), config.resolved.clone()));
 
@@ -271,6 +289,13 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         if n_files == 1 { "" } else { "s" },
         if watch { " · watch" } else { "" },
     );
+    if let Some(socket) = &project_socket {
+        barca_core::errln!(
+            "[barca] project socket {} (barca commands in this project use this server; \
+             --local runs them here)",
+            socket.path().display()
+        );
+    }
     if telemetry.is_some() {
         stop.telemetry = Some(telemetry::FINISH_LIMIT);
     }
@@ -290,8 +315,27 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // the 503s). Once the runs are over the server stops accepting connections and waits
     // for the open ones, for at most [`CONNECTION_GRACE`].
     use futures::FutureExt;
-    let server =
+    // The same API on the project socket; a request over it is marked, so it needs no token.
+    let on_socket = project_socket
+        .as_mut()
+        .and_then(project_socket::ProjectSocket::listener)
+        .map(|listener| {
+            let app = app
+                .clone()
+                .layer(axum::Extension(project_socket::ViaProjectSocket));
+            axum::serve(listener, app).with_graceful_shutdown(stopping.clone().cancelled_owned())
+        });
+    let on_tcp =
         axum::serve(listener, app).with_graceful_shutdown(stopping.clone().cancelled_owned());
+    let server = async move {
+        use std::future::IntoFuture;
+        match on_socket {
+            Some(on_socket) => {
+                tokio::try_join!(on_tcp.into_future(), on_socket.into_future()).map(|_| ())
+            }
+            None => on_tcp.await,
+        }
+    };
     let lifecycle = {
         let state = state.clone();
         let stopping = stopping.clone();
@@ -321,6 +365,8 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         } => {}
     }
     let stopped = lifecycle.await;
+    // No longer answering: a command run from here on finds no server.
+    drop(project_socket);
     backup_stop.cancel();
     if let Some(task) = backup_task {
         let _ = tokio::time::timeout(stop.backup + barca_core::backup::SLACK, task).await;

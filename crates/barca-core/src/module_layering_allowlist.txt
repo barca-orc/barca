@@ -2,15 +2,5 @@
 # docs/engineering/layering.md). One edge per line: `from -> to: the items of `to` that `from`
 # names`. This list may only shrink: delete a line when its edge is cut.
 execution -> report: RunOutcome, batch_line, cached_step_line, computed_by_another_run, end_of_run_line, env_suffix, failed_step_line, fmt_eta, reconcile_total
-ledger -> cache: CacheReader, checks_bytes, lookup_cached
-ledger -> envelope: ErrorEnvelope
-ledger -> outcome: API_VERSION
-ledger -> persist: record_post
-pins -> cache: CacheReader
 run_explanation -> outcome: RunView
 schedule -> queries: list_assets
-store_inspect -> cache: CacheReader, lookup_cached
-store_inspect -> status: NodeStatus
-store_sync -> cache: BLOCKED_ARTIFACT_PATH
-store_sync -> mismatch: describe
-store_sync -> recover: on_disk

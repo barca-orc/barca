@@ -57,7 +57,7 @@ Options:
           Use a server (URL or configured); get/run execute its deployed code
 
       --local
-          Use independent local state; ignore the configured server
+          Run on this machine; ignore a configured server and this project's barca serve
 
   -h, --help
           Show concise command help
@@ -83,7 +83,7 @@ Examples:
   barca run check_a,check_b pipeline.py                # several tasks in one run; shared upstream runs once
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
-  barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
+  barca run deploy pipeline.py --local                 # run in this process: not on this project's barca serve, nothing posted to a configured server
   barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 

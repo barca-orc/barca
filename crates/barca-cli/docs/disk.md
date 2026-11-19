@@ -161,6 +161,16 @@ evicts only that environment's results (leftovers are shared; every environment'
 which files are named). A file that cannot be deleted is skipped with one warning; `barca gc`
 exits 3 only when a metadata DB cannot be read.
 
+In a project where `barca serve` is running, `barca gc` is run by the server (`POST /gc`): the
+command sends its flags over the project's socket and prints the server's result. The eviction
+then takes its turn with the server's own writes instead of waiting on the database lock from
+outside, where behind a server that was recording runs it could wait 60 seconds and fail
+(`barca docs server-mode`, "In the server's own project"). The server knows what its own runs
+in flight hold, so it protects those results one by one, where a second process beside a run
+considers only leftovers and superseded results (`restricted` in the JSON). `barca gc --local`
+evicts in the command's own process as before; `barca gc --server URL` asks another server to
+evict its own cache. A `--read-only` server refuses (exit 2).
+
 When `barca gc` cannot get down to its target, a `held by:` line says what holds the rest, and
 `held` in the JSON lists it, largest first, as `{what, bytes, evictable}`: `results` (files a
 result names), `unreferenced` (files none names, kept for now), `metadata` (the metadata DBs),

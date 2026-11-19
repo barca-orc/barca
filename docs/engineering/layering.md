@@ -13,12 +13,12 @@ count of wrong-way edges from growing.
 
 | Rank | Layer | Modules | Holds |
 |---|---|---|---|
-| 0 | leaf | `db`, `http`, `results`, `text` | the metadata database (`barca-db`, re-exported), the HTTPS client, the result types a run and a plan return, text every layer formats the same way |
+| 0 | leaf | `db`, `envelope`, `http`, `results`, `text` | the metadata database (`barca-db`, re-exported), the error envelope and the API version a client and the server share, the HTTPS client, the result types a run and a plan return, text every layer formats the same way |
 | 1 | storage | `backup`, `gc`, `ledger`, `pauses`, `pins`, `run_queue`, `store_inspect`, `store_sync`, `transfer`, `verified_copies` | what is kept on disk, in the store and in the tables one feature owns |
 | 2 | decisions | `cache`, `changes`, `freshness`, `plan_reasons`, `predict`, `recover`, `schedule`, `sizing` | run hash, cache and freshness verdicts, why a step runs, what a run would do (the dry-run prediction), what it computes again because an artifact is gone, its pool size and capacity, when a schedule fires |
 | 3 | engine | `commands`, `execution`, `incremental`, `mismatch`, `persist`, `telemetry` | executes a plan and records what happened |
 | 3 | analysis | `causes`, `estimates`, `health`, `history_filter`, `key_query`, `liveness`, `partition_grid`, `refresh_path`, `rollup`, `run_explanation`, `run_list`, `schedule_standing`, `status`, `views` | read models over what was recorded |
-| 4 | service | `diagnostics`, `envelope`, `outcome`, `queries`, `report`, `serve`, `sql`, `values` | one operation per command, its typed result, its text |
+| 4 | service | `diagnostics`, `outcome`, `queries`, `report`, `serve`, `sql`, `values` | one operation per command, its typed result, its text |
 
 ## The rule
 
@@ -46,6 +46,25 @@ were read:
   `schedule_standing` read it for `barca status` on a machine that serves nothing.
   `serve::run_queue` still names it for `barca-server`.
 - **`http` is listed** (leaf). The plan's table left it out; every module must have a layer.
+- **`envelope` is a leaf, not service** (C4). It names no module of this crate but `text`: it is
+  the error a command ends with, as data, and the wire form of that error. The ledger client
+  (storage) reads it from the server's answers, so in service it was a wrong-way edge.
+  `API_VERSION` moved into it from `outcome` for the same reason; `outcome::API_VERSION` still
+  names it for the CLI and the server.
+
+## The order inside storage
+
+The storage layer has rows of its own (`STORAGE_ROWS` in the test, checked by
+`storage_modules_name_only_the_storage_rows_above_their_own`). A storage module names only
+storage modules of the rows above its own, so the layer has no cycle and no allowlist.
+
+| Row | Modules | Names, of storage |
+|---|---|---|
+| 0 | `pauses`, `run_queue`, `transfer`, `verified_copies` | nothing |
+| 1 | `backup`, `store_sync` | `transfer`; `store_sync` also `verified_copies` |
+| 2 | `gc`, `store_inspect` | `backup`, `transfer` |
+| 3 | `ledger` | `store_inspect`, `transfer` |
+| 4 | `pins` | `ledger` (the cache reader), `store_inspect` |
 
 ## The test
 
@@ -76,7 +95,8 @@ line to the allowlist is not.
 |---|---|---|
 | v0.45.0, with the table above | 42 | 38 modules |
 | after C1 | 16 | 29 modules |
-| after C2 and C3 | 13 | 29 modules (see "The order inside analysis") |
+| after C4 (stores) | 6 | 19 modules |
+| after C2 and C3 | 3 | 16 modules |
 
 Under the plan's original table (`results` in service, no leaf) the same v0.45.0 source has
 more wrong-way edges, since every engine module that returns a result names `results`.
@@ -105,23 +125,14 @@ more wrong-way edges, since every engine module that returns a result names `res
 
 Each line of the allowlist, grouped by the item of the plan that removes it.
 
-- **C4, stores below the engine.** `ledger -> cache`, `pins -> cache`, `store_inspect ->
-  cache`, `store_sync -> cache` (the cache reader and its lookup sit in decisions and read
-  the stores); `store_sync -> mismatch`, `store_sync -> recover`, `ledger -> persist`.
-  `store_inspect -> status` (`NodeStatus`): the store check edits status rows in place, so
-  cutting it means returning facts for `status` to apply, not moving a type.
-- **C5, rendering.** `execution -> report` (9 items: the progress and end-of-run lines). `run_explanation -> outcome` (`RunView`) waits on the typed views
+- **C5, rendering.** `execution -> report` (9 items: the progress and end-of-run lines).
+  `run_explanation -> outcome` (`RunView`) waits on the typed views
   of B3.
-- **Needs a decision.** `ledger -> envelope` (`ErrorEnvelope`) and `ledger -> outcome`
-  (`API_VERSION`): the ledger is a client of the server's HTTP API, so the question is where
-  the wire vocabulary lives. `schedule -> queries` (`list_assets`): only
+- **Needs a decision.** `schedule -> queries` (`list_assets`): only
   `schedule::collect_jobs` uses it, and only a server test calls that; delete it or move it.
 
 Inside one layer, so not on the allowlist, but part of the cycle:
 
-- `gc <-> backup`: `gc` asks `backup::owned_local_file` which files are backups, and `backup`
-  calls `gc::forget_survey` after a restore. Either the local-file layout or the survey has
-  to move, and neither is a plain move.
 - `outcome -> report`: `Outcome` renders through `report`. Splitting the run request from the
   rendered outcome is C5. (`outcome` names `serve::ServeHost` only in a doc comment.)
 - `liveness` writes `server_state` (`record_serving`, `record_scheduler`, `heartbeat`). Those
@@ -129,6 +140,35 @@ Inside one layer, so not on the allowlist, but part of the cycle:
   and read by `observe` in the same module: the record's format and its reader are one
   module on purpose. With `run_queue` in storage the edge is legal; splitting writer from
   reader is a C3 question.
+
+## What C4 moved
+
+No storage module names a higher layer, and none is in the cycle any more.
+
+- **The cache reader is the ledger's.** `CacheReader` (this machine's history, or the answers
+  a server's ledger gave) and `lookup_cached` moved from `cache` to `ledger::reader`. The
+  reader holds a `Ledger`, and the server answers `POST /ledger/lookup` with the same lookup,
+  so `cache -> ledger -> cache` was a cycle of two; `cache::{CacheReader, lookup_cached}`
+  still name them for the layers above. `pins` reads through `ledger::CacheReader`.
+- **`ledger` off `persist` and `cache::checks_bytes`.** `record_post` is `barca-db`'s
+  (`recording`); `persist` only re-exported it. `checks_bytes` reads a node's declaration and
+  nothing else, so it is `DagNode::checks_bytes` in `barca-model`, and `cache::checks_bytes`
+  calls it.
+- **`store_inspect` answers with facts.** `check_store_copies` and `read_shapes`, which choose
+  the results to ask about (through the cache reader) and write the answer into `NodeStatus`
+  rows, are `status::store_check` (a file of `status`, the code unchanged). `store_inspect`
+  keeps the questions and their answers: `inspect_copies`, `classify`, `stat_objects`,
+  `artifact_shapes`, `run_json_helper`. With no reader in it, it sits below `ledger`, which
+  uses its `stat_objects`.
+- **`store_sync` owns what it used from above.** `on_disk` (from `recover`), the text of a
+  mismatched copy (`mismatch::describe`, now `store_sync::describe_mismatch`) and
+  `BLOCKED_ARTIFACT_PATH` (from `cache`). `recover::on_disk` and
+  `cache::BLOCKED_ARTIFACT_PATH` still name them.
+- **`gc` names `backup`, not the reverse.** `backup` owns the layout of the backup
+  directories, and `gc`, which accounts for everything under `.barca/`, asks it
+  (`owned_local_file`). The file `gc` keeps its last walk in is named in `barca-model`'s
+  `layout` (`GC_STATE_FILE`, `forget_gc_survey`), which `backup` calls after it replaces the
+  database; `gc::forget_survey` is gone.
 
 `short_name` is not one function. `targets::short_name` (barca-compile) drops a partition
 key and then the file (`p.py:a[k=1]` gives `a`); `step_trace::short_name` (barca-engine,
@@ -215,10 +255,11 @@ before `health`. `health::attach`, the one path every host classifies through
 calls it. So the rollup's sums are below health, and what tied `rollup` back to `health` and
 `status` (the types, `last_attempt_failed`, the `--rollup` entry point) moved instead.
 
-The largest cycle is still 29 modules: `predict` joined it and `key_query` left. Nothing in
-it is held together by an edge inside analysis any more. Every path from a lower layer back
-up goes through an allowlisted edge (`schedule -> queries`, `ledger -> outcome`,
-`execution -> report`, `store_inspect -> status`, `run_explanation -> outcome`, ...), and
-with those 13 edges gone the largest cycle would be `cache`, `changes`, `freshness` and
-`plan_reasons`, inside decisions. So the number falls with C4, C5 and the two decisions
-listed above, not with more moves here.
+The largest cycle is 16 modules, down from 19: `partition_grid` left it, and `cache`,
+`changes`, `freshness`, `plan_reasons`, `predict` and `recover` are not in it. No edge inside
+analysis holds it together. Eight read models are still in it because of the three
+allowlisted edges: `schedule -> queries` takes `liveness`, and so everything above it, back
+up to the service layer, `execution -> report` does the same for the engine, and
+`run_explanation -> outcome` for the run views. With those three gone no cycle crosses a
+layer. So the number falls with C5 and the decision on `schedule::collect_jobs`, not with
+more moves here.

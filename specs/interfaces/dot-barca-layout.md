@@ -1,6 +1,6 @@
 # The `.barca/` directory
 
-Status: implemented. Specification version: 1 (#800).
+Status: implemented. Specification version: 2 (#800; `serve.sock`, #1056).
 Scope: every path barca creates under a project's `.barca/`, which process owns it (creates
 and removes it), and whether `barca gc` and the cache size budget (`[cache] max_size`) count
 it. What the files contain is owned elsewhere: the metadata DB by
@@ -9,11 +9,13 @@ backups by the backup manual (`barca docs backup`), disk use by `barca docs disk
 project root by `barca docs layout`.
 Conformance: `python/tests/test_dot_barca_layout.py` (the top-level entries a pipeline run,
 `barca sql`, `barca status` and `barca gc` leave are a subset of the table below),
+`python/tests/test_project_socket.py` (`serve.sock`: created owner-only, nothing left of its
+`.serve-<pid>/`, removed on exit),
 `crates/barca-core/src/gc/tests.rs` (what `barca gc` evicts and measures).
 
 `.barca/` is in the project root (`barca docs layout`). The default
 environment uses `.barca/` itself; a named environment `<env>` keeps its own `metadata.db*`,
-`artifacts/`, `backups/` and `live-logs/` under `.barca/envs/<env>/`, with the same rules.
+`serve.lock`, `serve.sock`, `artifacts/`, `backups/` and `live-logs/` under `.barca/envs/<env>/`, with the same rules.
 Everything else is shared by the project's environments.
 
 ## Rules
@@ -47,6 +49,7 @@ Everything else is shared by the project's environments.
 | `live-logs/` | Rust (`run_logs.rs`) | `<run_id>.jsonl`, a run's output spooled while it runs | the run, once its lines are in the DB; a killed run's file stays | no | yes |
 | `run-owners/` | Rust (`run_owner.rs`) | `<token>.fifo`, held open while a process has a run in flight | its process; a later `get`/`run` removes one an hour after no `running` run names it | no | yes |
 | `serve.lock` | Rust (`barca serve`) | held by a running server so `barca state restore` refuses to run | never (empty) | no | yes |
+| `serve.sock` | Rust (`barca serve`, `project_socket.rs`) | a Unix socket, mode `0600`, on which the server that holds `serve.lock` serves its HTTP API; a `barca` command in the project finds the server by it ([execution](../behavior/execution.md#a-command-beside-a-server)). While it is bound, `.serve-<pid>/` (mode `0700`) holds it for an instant | its server, on exit; a killed server's stays, refuses connections and is replaced by the next server | no | yes (0 bytes) |
 | `gc-state.json` | Rust (`gc/mod.rs`) | what the last measurement found; `gc-state.json.tmp` while it is replaced | `barca state reset`/`restore` clear it | no | no |
 | `envs/` | Rust (`layout::ensure_env_dirs`) | `<env>/` per named environment, holding that environment's `metadata.db*`, `artifacts/`, `backups/`, `live-logs/` | the user | as for the default environment | as for the default environment |
 | `staging/` | Python (`_artifacts._staging_dir`) and Rust (`result_journal.rs`, `transfer::upload_snapshot_prefix`) | `<pid>/` per process: a worker's files in transit (uploads, downloads, sink staging) and the coordinator's result journals and upload snapshots | the next worker start (`_artifacts.clean_staging`) removes dead processes' directories | yes: a dead process's directory, as a leftover | yes |
@@ -67,3 +70,5 @@ written by barca 0.25 and earlier. Current barca neither writes nor reads them.
 - A killed worker's `.batch-<pid>-<call>/` at the top level and a killed run's
   `live-logs/<run_id>.jsonl` are measured but never removed by barca.
 - `inspection-cache/` is never deleted by barca; its writer keeps it under 8 MiB.
+- A killed server's `serve.sock` stays until the next server on that environment replaces it.
+  Commands ignore it (the connection is refused).

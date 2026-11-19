@@ -560,6 +560,15 @@ fn store_root_dir(cfg: &ResolvedConfig, store_dir: &str) -> Option<PathBuf> {
     Some(root)
 }
 
+/// The metadata database was replaced: the sizes the cache size limit recorded on its last full
+/// walk of `.barca/` no longer describe the files on disk, so it walks again next time. The
+/// project is the current directory (the CLI and `serve` run from the project root).
+fn forget_gc_survey() {
+    if let Ok(root) = std::env::current_dir() {
+        crate::layout::forget_gc_survey(&root.join(".barca"));
+    }
+}
+
 /// `python -m barca._state`, with the resolved storage options (the one place it is launched).
 pub(crate) fn state_helper(python: &Path, cfg: &ResolvedConfig) -> tokio::process::Command {
     crate::helper_proc::python_module(python, "barca._state", cfg.storage_options_json.as_deref())
@@ -1089,7 +1098,7 @@ async fn swap(db_path: &str, staged: &Path) -> Result<Option<String>, BarcaError
         .map_err(|e| io(format!("sync {}", staged.display()), e))?;
     std::fs::rename(staged, db_path)
         .map_err(|e| io(format!("move {} to {db_path}", staged.display()), e))?;
-    crate::gc::forget_survey();
+    forget_gc_survey();
     if let Some(parent) = Path::new(db_path).parent() {
         let parent = if parent.as_os_str().is_empty() {
             Path::new(".")
@@ -1183,7 +1192,7 @@ pub async fn reset<E: From<BarcaError>>(
         moved_to = Some(aside);
     }
     crate::db::init_locked(db_path).await?;
-    crate::gc::forget_survey();
+    forget_gc_survey();
     if let Some(parent) = Path::new(db_path).parent() {
         let parent = if parent.as_os_str().is_empty() {
             Path::new(".")

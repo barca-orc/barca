@@ -556,7 +556,7 @@ def test_bare_server_with_nothing_configured_and_server_on_local_commands_are_us
     for argv in (
         ["get", "total", "--server", "--json"],
         ["plan", "--server"],
-        ["gc", "--server", "http://127.0.0.1:1"],
+        ["state", "backups", "--server", "http://127.0.0.1:1"],
         ["serve", "--local"],
         ["get", "total", "--server", "ftp://nowhere", "--json"],
     ):

@@ -12,7 +12,6 @@ use crate::cache_state::CacheState;
 use crate::db;
 use crate::results::StepReport;
 use crate::step_status::StepStatus;
-use crate::store_inspect;
 use crate::targets::short_name;
 use crate::text::trace_since;
 pub use crate::views::{
@@ -21,6 +20,8 @@ pub use crate::views::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+mod store_check;
 
 // barca-server names this path (`handlers.rs`); the helper lives in `time`.
 pub use crate::time::rfc3339_secs;
@@ -649,7 +650,7 @@ pub(crate) async fn status_from_dag_with_membership(
     // With a store, `cached` means this machine's copy, the store's object and the recorded
     // digest all agree (RFC-0009); anything else is `unsynced` with its reason.
     let verified_local = if cfg.remote_artifacts() && Path::new(&cfg.db_path).exists() {
-        store_inspect::check_store_copies(python, cfg, &mut nodes).await
+        store_check::check_store_copies(python, cfg, &mut nodes).await
     } else {
         HashSet::new()
     };
@@ -657,7 +658,7 @@ pub(crate) async fn status_from_dag_with_membership(
     trace_since("status: store check", t0);
     let t0 = std::time::Instant::now();
     if shape {
-        store_inspect::read_shapes(python, cfg, &mut nodes, sample, false, &verified_local).await;
+        store_check::read_shapes(python, cfg, &mut nodes, sample, false, &verified_local).await;
     }
     trace_since("status: shapes", t0);
 
@@ -943,11 +944,11 @@ pub async fn read_schemas(
     sample: usize,
 ) {
     let verified_local = if cfg.remote_artifacts() && Path::new(&cfg.db_path).exists() {
-        store_inspect::check_store_copies(python, cfg, nodes).await
+        store_check::check_store_copies(python, cfg, nodes).await
     } else {
         HashSet::new()
     };
-    store_inspect::read_shapes(python, cfg, nodes, sample, true, &verified_local).await;
+    store_check::read_shapes(python, cfg, nodes, sample, true, &verified_local).await;
 }
 
 /// `barca status --rollup` on this machine: the status of the targets' upstream cones (the

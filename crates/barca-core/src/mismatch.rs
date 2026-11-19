@@ -19,19 +19,9 @@ use crate::results::StepReport;
 use crate::step_status::StepStatus;
 use std::collections::HashMap;
 
-/// The finding in words, without the `[barca] warning: <step>:` prefix of the stderr line:
-/// `at` is the store location, `more` the number of further partitions of the step it holds
-/// for.
-pub(crate) fn describe(base: &str, at: &str, more: usize) -> String {
-    let others = match more {
-        0 => String::new(),
-        n => format!(" (and {n} more of its partitions)"),
-    };
-    format!(
-        "the copy at {at}{others} is not the one this result was recorded with (another run \
-         overwrote it, or it was changed). Using it. Recompute with --refresh {base}."
-    )
-}
+// The finding in words is written where it is made, when a fetch returns other bytes.
+#[cfg(test)]
+use crate::store_sync::describe_mismatch as describe;
 
 /// The upstream node ids `id` reads as data: its inputs and `collect()` inputs, less the
 /// `_`-prefixed ones, which are there for ordering only and are never loaded.
@@ -51,7 +41,7 @@ fn data_inputs<'d>(dag: &'d Dag, id: &str) -> Vec<&'d str> {
     ups
 }
 
-/// Put each mismatch (base step id -> [`describe`] text) on the report of the step it belongs
+/// Put each mismatch (base step id -> [`crate::store_sync::describe_mismatch`] text) on the report of the step it belongs
 /// to and on the reports of the steps that read it in this run.
 pub(crate) fn mark(dag: &Dag, reports: &mut [StepReport], mismatched: &HashMap<String, String>) {
     if mismatched.is_empty() {

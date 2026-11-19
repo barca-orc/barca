@@ -94,7 +94,8 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
     port = serve.port
     cli = None
     try:
-        cli = _start(tmp_path, "get", "slow", log="cli.log")
+        # `--local`: without it the command would join the server's own queue (#1056).
+        cli = _start(tmp_path, "get", "slow", "--local", log="cli.log")
         wait_until(
             lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run"
         )
@@ -172,15 +173,16 @@ def test_history_says_what_a_run_in_flight_is_working_on_here_and_through_a_serv
     cli = None
     try:
         # Nothing in flight: no run, and so no `now`.
-        assert _in_flight(tmp_path) == []
-        cli = _start(tmp_path, "get", "slow", log="cli.log")
+        assert _in_flight(tmp_path, "--local") == []
+        # `--local` throughout: beside a server, a command without it goes to the server.
+        cli = _start(tmp_path, "get", "slow", "--local", log="cli.log")
         wait_until(
             lambda: (tmp_path / "cli.started").exists() or cli.poll() is not None, "the CLI run"
         )
         assert cli.poll() is None, (tmp_path / "cli.log").read_text()
 
         # On this machine, from what the run recorded: its target has no result yet.
-        [here] = _in_flight(tmp_path)
+        [here] = _in_flight(tmp_path, "--local")
         now = here["now"]
         assert now["running"] == [], now
         assert (now["queued"], now["keys"], now["groups"]) == (1, None, []), now
@@ -192,17 +194,17 @@ def test_history_says_what_a_run_in_flight_is_working_on_here_and_through_a_serv
         [route] = _get(serve.port, "/runs?status=running")["runs"]
         assert route["now"] == now
         # The table prints it under the run's row; `--fields` selects it.
-        table = _history(tmp_path, "--status", "running", "--pretty")
+        table = _history(tmp_path, "--status", "running", "--pretty", "--local")
         assert "\n  now: 1 waiting\n" in table.stdout, table.stdout
-        fields = _in_flight(tmp_path, "--fields", "run_id,now")
+        fields = _in_flight(tmp_path, "--fields", "run_id,now", "--local")
         assert fields == [{"run_id": here["run_id"], "now": now}]
         # Not asked for the runs in progress: the list stays as it was.
-        listed = json.loads(_history(tmp_path, "--json").stdout)["runs"]
+        listed = json.loads(_history(tmp_path, "--json", "--local").stdout)["runs"]
         assert all("now" not in run for run in listed), listed
 
         (tmp_path / "release").write_text("")
         assert cli.wait(timeout=RUN) == 0, (tmp_path / "cli.log").read_text()
-        assert _in_flight(tmp_path) == []
+        assert _in_flight(tmp_path, "--local") == []
         assert _in_flight(tmp_path, *server) == []
     finally:
         (tmp_path / "release").write_text("")

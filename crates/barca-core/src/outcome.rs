@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-/// The major version of the server's HTTP API, reported by `GET /health`. A client refuses
-/// another major; additive fields do not bump it.
-pub const API_VERSION: u32 = 1;
+// The API's version is declared with the rest of the wire vocabulary a client of the server
+// shares with it; barca-cli and barca-server name this path.
+pub use crate::envelope::API_VERSION;
 
 pub use crate::trigger::{MAX_REASON_CHARS, Trigger, TriggeredBy};
 

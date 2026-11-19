@@ -165,6 +165,24 @@ impl Http {
         })
     }
 
+    /// The server behind the Unix socket at `path` (this project's `barca serve`). No
+    /// credential is sent: the socket's file permission is the access rule.
+    #[cfg(unix)]
+    pub(super) fn over_socket(path: &std::path::Path, timeout: Duration) -> Result<Self, CliError> {
+        let client = barca_core::http::unix_socket_client(path, timeout)
+            .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
+        // The host is never resolved: every connection is the socket.
+        let raw = "http://localhost";
+        Ok(Self {
+            client,
+            base: Url::parse(raw).expect("a fixed URL"),
+            shown: path.display().to_string(),
+            raw: raw.into(),
+            authorization: None,
+            secrets: Vec::new(),
+        })
+    }
+
     pub(super) fn shown_url(&self) -> &str {
         &self.shown
     }

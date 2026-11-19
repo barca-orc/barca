@@ -38,6 +38,9 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+mod reader;
+pub(crate) use reader::{CacheReader, lookup_cached};
+
 // ─── Wire types ──────────────────────────────────────────────────────────────
 
 /// One `(node id, run hash)` pair: a node id with a partition suffix for a partition key.
@@ -268,14 +271,14 @@ impl Ledger {
             .await
             .map_err(|e| unreachable_error(&url, "GET /health", &e))?;
         match health.api_version {
-            Some(crate::outcome::API_VERSION) => {}
+            Some(crate::envelope::API_VERSION) => {}
             other => {
                 return Err(BarcaError::Other(format!(
                     "the barca server at {url} speaks API version {}, this barca speaks {}\n\
                      Use a barca release that matches the server, or pass --local to run \
                      against this machine's ledger only.",
                     other.map_or("(none)".to_string(), |v| v.to_string()),
-                    crate::outcome::API_VERSION
+                    crate::envelope::API_VERSION
                 )));
             }
         }
@@ -631,10 +634,7 @@ async fn build_post(
     let mut bytes_unchecked: Vec<String> = steps
         .iter()
         .map(|step| crate::StepId::parse(&step.node_id).base_id().to_string())
-        .filter(|base| {
-            dag.get_node(base)
-                .is_some_and(|n| !crate::cache::checks_bytes(n))
-        })
+        .filter(|base| dag.get_node(base).is_some_and(|n| !n.checks_bytes()))
         .collect();
     bytes_unchecked.sort();
     bytes_unchecked.dedup();
@@ -987,11 +987,11 @@ pub async fn lookup(
                 .collect(),
         });
     }
-    let cache = crate::cache::CacheReader::for_config(cfg).await?;
+    let cache = CacheReader::for_config(cfg).await?;
     let mut results = Vec::with_capacity(request.hashes.len());
     for key in &request.hashes {
         results.push(
-            match crate::cache::lookup_cached(&cache, &key.node_id, &key.run_hash).await {
+            match lookup_cached(&cache, &key.node_id, &key.run_hash).await {
                 Some(found) => LookupEntry {
                     node_id: key.node_id.clone(),
                     run_hash: key.run_hash.clone(),
@@ -1153,7 +1153,7 @@ pub async fn accept(
             }
         }
     }
-    Ok(crate::persist::record_post(&cfg.db_path, post).await?)
+    Ok(barca_db::recording::record_post(&cfg.db_path, post).await?)
 }
 
 /// The server run id an earlier post of `client_run_id` was recorded under.
@@ -1255,12 +1255,16 @@ mod tests {
         let mut first = post(&[]);
         first.steps.truncate(1);
         first.steps[0].observation_hash = Some("observation1".into());
-        crate::persist::record_post(&path, &first).await.unwrap();
+        barca_db::recording::record_post(&path, &first)
+            .await
+            .unwrap();
         let mut next = first.clone();
         next.run.run_id = "r2".into();
         next.steps[0].observation_hash = Some("observation2".into());
-        crate::persist::record_post(&path, &next).await.unwrap();
-        let cache = crate::cache::CacheReader::open(&path).await.unwrap();
+        barca_db::recording::record_post(&path, &next)
+            .await
+            .unwrap();
+        let cache = CacheReader::open(&path).await.unwrap();
         let revisions = db::last_output_hashes(&cache, &[first.steps[0].node_id.as_str()])
             .await
             .unwrap();
