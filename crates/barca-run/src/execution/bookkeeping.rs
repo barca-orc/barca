@@ -3,11 +3,11 @@
 //! Execution owns decisions and resource lifetimes. This module records facts from finished
 //! work and builds borrowed views of them; it does not dispatch, publish or write to storage.
 
-use crate::cache::DecideState;
-use crate::dag::Dag;
-use crate::dispatch::{OutputRef, StepFailure};
 use crate::persist::RunLedger;
-use crate::results::{BatchExecution, StepReport};
+use barca_compile::dag::Dag;
+use barca_compile::dispatch::{OutputRef, StepFailure};
+use barca_decide::cache::DecideState;
+use barca_store::results::{BatchExecution, StepReport};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Default)]
@@ -15,8 +15,8 @@ pub(super) struct RunResults {
     pub(super) outputs: HashMap<String, OutputRef>,
     pub(super) reports: Vec<StepReport>,
     pub(super) sinks: HashMap<String, String>,
-    /// What each step's sinks hold after this run (`crate::sink_publications`).
-    pub(super) publications: Vec<crate::sink_publications::Publication>,
+    /// What each step's sinks hold after this run (`barca_db::sink_publications`).
+    pub(super) publications: Vec<barca_db::sink_publications::Publication>,
     pub(super) timings: HashMap<String, (Option<f64>, Option<u64>)>,
     /// Rows each executed step's tabular result holds, when its worker counted them.
     pub(super) rows: HashMap<String, u64>,
@@ -39,7 +39,7 @@ pub(super) struct RunResults {
 /// sees the same final results and measured costs as the terminal write.
 pub(super) struct RunEvidence {
     components: HashMap<String, String>,
-    cost_snapshot: Vec<(String, crate::cost::NodeEstimate)>,
+    cost_snapshot: Vec<(String, barca_engine::cost::NodeEstimate)>,
 }
 
 impl RunEvidence {
@@ -48,7 +48,7 @@ impl RunEvidence {
         dag: &Dag,
         decisions: &DecideState,
         cached: &HashSet<String>,
-        costs: &crate::cost::CostModel,
+        costs: &barca_engine::cost::CostModel,
     ) -> Self {
         let cost_snapshot = costs
             .persistence_snapshot()
@@ -59,7 +59,7 @@ impl RunEvidence {
             .keys()
             .filter(|id| !cached.contains(*id))
             .filter_map(|id| {
-                crate::changes::step_components_json(dag, decisions, id)
+                barca_decide::changes::step_components_json(dag, decisions, id)
                     .map(|components| (id.clone(), components))
             })
             .collect();
@@ -158,17 +158,16 @@ impl RunResults {
         if artifact_val.get("batch").is_none() {
             return;
         }
-        let base = crate::StepId::parse(node_id).base_id().to_string();
+        let base = barca_model::StepId::parse(node_id).base_id().to_string();
         let total = self.batch_execution.entry(base).or_default();
         total.keys += 1;
         total.write_seconds += artifact_val
             .get("write_seconds")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
-        let Some(phases) = artifact_val
-            .get("batch_phases")
-            .and_then(|v| serde_json::from_value::<crate::protocol::BatchPhases>(v.clone()).ok())
-        else {
+        let Some(phases) = artifact_val.get("batch_phases").and_then(|v| {
+            serde_json::from_value::<barca_proc::protocol::BatchPhases>(v.clone()).ok()
+        }) else {
             return;
         };
         total.calls += 1;
@@ -187,12 +186,12 @@ impl RunResults {
             let Some(run_hash) = run_hashes.get(id) else {
                 continue;
             };
-            let Some(node) = dag.get_node(crate::StepId::parse(id).base_id()) else {
+            let Some(node) = dag.get_node(barca_model::StepId::parse(id).base_id()) else {
                 continue;
             };
             for sink in &node.decl.sinks {
                 self.publications
-                    .push(crate::sink_publications::Publication {
+                    .push(barca_db::sink_publications::Publication {
                         node_id: id.clone(),
                         sink: sink.path.clone(),
                         run_hash: run_hash.clone(),
@@ -208,17 +207,18 @@ impl RunResults {
         message: String,
         attempts: u32,
         clock: Option<(std::time::SystemTime, std::time::Duration)>,
-        phase: Option<crate::dispatch::ErrorPhase>,
+        phase: Option<barca_compile::dispatch::ErrorPhase>,
     ) -> &StepFailure {
         self.failures.push(StepFailure {
             node_id,
-            error: crate::dispatch::StepError {
+            error: barca_compile::dispatch::StepError {
                 error_type: error_type.to_string(),
                 message,
                 traceback: String::new(),
                 phase,
                 attempts,
-                started_unix_ns: clock.map(|(started, _)| crate::time::unix_nanos(started) as u64),
+                started_unix_ns: clock
+                    .map(|(started, _)| barca_model::time::unix_nanos(started) as u64),
                 elapsed_seconds: clock.map(|(_, wall)| wall.as_secs_f64()),
             },
         });
@@ -243,7 +243,7 @@ impl RunResults {
     pub(super) fn annotate_reports(&self, step_reports: &mut [StepReport]) {
         let mut attempts_by_base: HashMap<String, u32> = HashMap::new();
         for (node, attempts) in &self.attempts {
-            let id = crate::StepId::parse(node);
+            let id = barca_model::StepId::parse(node);
             if id.partition.0.contains_key("_branch") {
                 continue;
             }
@@ -253,7 +253,7 @@ impl RunResults {
         }
         let mut sinks_by_base: HashMap<String, f64> = HashMap::new();
         for (node, seconds) in &self.sink_seconds {
-            let id = crate::StepId::parse(node);
+            let id = barca_model::StepId::parse(node);
             if !id.partition.0.contains_key("_branch") {
                 *sinks_by_base.entry(id.base_id().to_string()).or_default() += seconds;
             }
@@ -280,7 +280,7 @@ impl RunResults {
             run_id: run.run_id,
             status: run.status,
             command: run.command,
-            files: crate::db::encode_files(run.files),
+            files: barca_db::db::encode_files(run.files),
             target: run.target,
             job: run.job,
             steps_total: run.steps_total,

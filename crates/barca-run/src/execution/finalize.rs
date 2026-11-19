@@ -10,7 +10,7 @@ pub(super) async fn finalize_outputs(
     targets: &[(String, String)],
     exec_plan: &ExecutionPlan,
     keep_going: bool,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&barca_compile::selection::PartitionSelection>,
     all_outputs: &HashMap<String, dispatch::OutputRef>,
     all_failures: &[dispatch::StepFailure],
     step_reports: Vec<StepReport>,
@@ -26,7 +26,7 @@ pub(super) async fn finalize_outputs(
         Vec<(String, TargetOutcome)>,
         Option<OutputRef>,
         Option<Vec<(String, OutputRef)>>,
-        Option<crate::results::KeySummary>,
+        Option<barca_store::results::KeySummary>,
     ),
     BarcaError,
 > {
@@ -82,17 +82,17 @@ pub(super) async fn finalize_outputs(
     // Many keys: `final_output` lists the computed ones and counts the rest (#623).
     for ((_, tid), (_, outcome)) in targets.iter().zip(outcomes.iter_mut()) {
         outcome.key_summary = outcome.partitions.as_deref().and_then(|keys| {
-            crate::results::KeySummary::of(tid, keys, selection.is_some(), cached)
+            barca_store::results::KeySummary::of(tid, keys, selection.is_some(), cached)
         });
     }
 
     let returned_node = returned_node(exec_plan, &target_ids, keep_going);
-    let partitions = returned_node
-        .as_deref()
-        .and_then(|node| crate::selection::partition_outputs(dag, node, all_outputs, selection));
+    let partitions = returned_node.as_deref().and_then(|node| {
+        barca_compile::selection::partition_outputs(dag, node, all_outputs, selection)
+    });
     let key_summary = match (&returned_node, &partitions) {
         (Some(node), Some(keys)) => {
-            crate::results::KeySummary::of(node, keys, selection.is_some(), cached)
+            barca_store::results::KeySummary::of(node, keys, selection.is_some(), cached)
         }
         _ => None,
     };
@@ -154,7 +154,7 @@ pub(super) fn returned_node(
         [one] => Some(one.to_string()),
         _ if several_targets => None,
         _ => Some(
-            crate::planner::returned_step(exec_plan)?
+            barca_compile::planner::returned_step(exec_plan)?
                 .step_id
                 .base_id()
                 .to_string(),
@@ -163,17 +163,17 @@ pub(super) fn returned_node(
 }
 
 /// The keys a single-target run (or a run with no target) returns when the node it returns
-/// is partitioned; see [`crate::selection::partition_outputs`].
+/// is partitioned; see [`barca_compile::selection::partition_outputs`].
 pub(super) fn returned_partitions(
     dag: &Dag,
     exec_plan: &ExecutionPlan,
     target_ids: &[&str],
     several_targets: bool,
     all_outputs: &HashMap<String, OutputRef>,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&barca_compile::selection::PartitionSelection>,
 ) -> Option<Vec<(String, OutputRef)>> {
     let node = returned_node(exec_plan, target_ids, several_targets)?;
-    crate::selection::partition_outputs(dag, &node, all_outputs, selection)
+    barca_compile::selection::partition_outputs(dag, &node, all_outputs, selection)
 }
 
 pub(super) struct FinalizeRun<'a> {
@@ -182,7 +182,7 @@ pub(super) struct FinalizeRun<'a> {
     pub(super) proven_cached: usize,
     /// What the run read ([`crate::persist::RunLedger::touched`]).
     pub(super) touched: &'a [String],
-    pub(super) pool: crate::io_loop::WorkerPool,
+    pub(super) pool: barca_engine::io_loop::WorkerPool,
     pub(super) recorder: StepRecorder,
     pub(super) pb: &'a Option<indicatif::ProgressBar>,
     pub(super) agent_mode: bool,
@@ -195,18 +195,18 @@ pub(super) struct FinalizeRun<'a> {
     pub(super) store: &'a mut Option<StoreSync>,
     pub(super) store_paths: &'a mut HashMap<String, String>,
     pub(super) transfer_error: &'a mut Option<String>,
-    pub(super) uploads: &'a mut Option<crate::results::UploadsReport>,
+    pub(super) uploads: &'a mut Option<barca_store::results::UploadsReport>,
     pub(super) metadata_seconds: &'a mut Option<f64>,
     pub(super) cached_node_ids: &'a std::collections::HashSet<String>,
     pub(super) t0: Instant,
-    pub(super) cost_model: &'a crate::cost::CostModel,
+    pub(super) cost_model: &'a barca_engine::cost::CostModel,
     pub(super) run_id: &'a str,
     pub(super) command_label: &'a str,
     pub(super) file_args: &'a [String],
     pub(super) target_label: &'a Option<String>,
     pub(super) decide_state: &'a DecideState,
     pub(super) db_path: &'a str,
-    pub(super) logs_buffer: &'a mut crate::run_logs::Recorder,
+    pub(super) logs_buffer: &'a mut barca_db::run_logs::Recorder,
     pub(super) telemetry: &'a [(String, Box<dyn crate::telemetry::Integration>)],
     pub(super) dag: &'a Dag,
     pub(super) run_started: std::time::SystemTime,
@@ -216,9 +216,9 @@ pub(super) struct FinalizeRun<'a> {
     pub(super) targets: &'a [(String, String)],
     pub(super) repaired_mismatches: &'a mut Vec<String>,
     pub(super) python: &'a std::path::Path,
-    pub(super) cfg: &'a crate::config::ResolvedConfig,
-    pub(super) interrupt: &'a crate::interrupt::Interrupt,
-    pub(super) trigger: &'a crate::trigger::Trigger,
+    pub(super) cfg: &'a barca_model::config::ResolvedConfig,
+    pub(super) interrupt: &'a barca_engine::interrupt::Interrupt,
+    pub(super) trigger: &'a barca_model::trigger::Trigger,
     pub(super) server_owned: bool,
 }
 
@@ -309,7 +309,7 @@ pub(super) async fn finalize_run(
         && s.client.started()
     {
         // What is already pending was retried before the run; it is not repaired twice.
-        let pending: std::collections::HashSet<String> = crate::pending_uploads::list(db_path)
+        let pending: std::collections::HashSet<String> = barca_db::pending_uploads::list(db_path)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -329,7 +329,7 @@ pub(super) async fn finalize_run(
     let mut upload_error = None;
     let store_location = store
         .as_ref()
-        .map(|s| crate::transfer::diagnostic_uri(s.layout.store_root()));
+        .map(|s| barca_store::transfer::diagnostic_uri(s.layout.store_root()));
     let mut was_cancelled = drain_store(
         DrainStore {
             store,
@@ -350,10 +350,10 @@ pub(super) async fn finalize_run(
         p.run_hash = decide_state.run_hashes().get(&p.node_id).cloned();
         p.run_id = Some(run_id.to_string());
     }
-    crate::pending_uploads::record(db_path, &pending).await?;
+    barca_db::pending_uploads::record(db_path, &pending).await?;
     // A transfer that failed: the next run checks the store again (#593).
     if store_location.is_some() && (upload_error.is_some() || transfer_error.is_some()) {
-        crate::gc::forget_store_check(cfg);
+        barca_store::gc::forget_store_check(cfg);
     }
 
     let steps_cached = cached_node_ids.len() + proven_cached;
@@ -366,7 +366,7 @@ pub(super) async fn finalize_run(
     let recorder_error = recorder.finish().await.err();
     trace_point!("recorder_stopped");
 
-    // Each sink a step wrote holds its run hash (`crate::sink_publications`).
+    // Each sink a step wrote holds its run hash (`barca_db::sink_publications`).
     results.note_written_sinks(dag, decide_state.run_hashes());
     // Build the immutable terminal projection only after uploads and recorder shutdown.
     let evidence = RunEvidence::new(results, dag, decide_state, cached_node_ids, cost_model);
@@ -403,11 +403,11 @@ pub(super) async fn finalize_run(
         let line = format!("[barca] metadata {seconds:.1}s recording this run's results");
         logs_buffer.push_note(line.clone());
         if pb.is_some() || agent_mode {
-            crate::run_line!(Always, "{line}");
+            barca_model::run_line!(Always, "{line}");
         }
     }
     if let Some(error) = recorder_error {
-        crate::run_line!(
+        barca_model::run_line!(
             Always,
             "[barca] {error}; terminal results have been recorded"
         );
@@ -415,7 +415,7 @@ pub(super) async fn finalize_run(
     // Why the run was cancelled, when whoever cancelled it said (`barca serve` stopping
     // before its drain finished): a line in the run's logs and `barca.reason` on its span.
     let cancel_reason = was_cancelled
-        .then(crate::interrupt::cancel_reason)
+        .then(barca_engine::interrupt::cancel_reason)
         .flatten();
     if let Some(reason) = &cancel_reason {
         logs_buffer.push_note(format!("[barca] run cancelled: {reason}"));
@@ -481,9 +481,9 @@ pub(super) async fn finalize_run(
         && store.as_ref().is_some_and(|s| {
             s.client.uploads_queued() == 0 && s.unchanged_observations == steps_executed
         })
-        && crate::backup::covered(cfg, run_id).await;
+        && barca_store::backup::covered(cfg, run_id).await;
     if nothing_new {
-        crate::backup::mark_covered(cfg, run_id);
+        barca_store::backup::mark_covered(cfg, run_id);
         trace_point!("backup_skipped (no new result)");
     }
     if cfg.backup_uri.is_some() && !nothing_new {
@@ -492,9 +492,9 @@ pub(super) async fn finalize_run(
                 python,
                 cfg,
                 request: if server_owned {
-                    crate::backup::Request::Routine
+                    barca_store::backup::Request::Routine
                 } else {
-                    crate::backup::Request::Final
+                    barca_store::backup::Request::Final
                 },
                 run_id,
                 ledger: &mut ledger,
@@ -507,7 +507,7 @@ pub(super) async fn finalize_run(
         {
             Ok(None) => {}
             Ok(Some(why)) => {
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] warning: the metadata backup was not uploaded: {why}; the run is \
                      recorded on this machine, a copy is in {}, and the next backup uploads it",
@@ -523,7 +523,7 @@ pub(super) async fn finalize_run(
             Err(e) => {
                 let e = e.to_string();
                 let e = e.lines().next().unwrap_or_default().to_string();
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] warning: the metadata backup failed: {e}; the run is recorded on \
                      this machine and the next backup tries again"
@@ -533,7 +533,7 @@ pub(super) async fn finalize_run(
         }
     }
     if store_location.is_some() || publish_error.is_some() {
-        let left = crate::pending_uploads::list(db_path).await?;
+        let left = barca_db::pending_uploads::list(db_path).await?;
         if !pending.is_empty() {
             let mut nodes: Vec<&str> = pending.iter().map(|p| p.node_id.as_str()).collect();
             nodes.sort_unstable();
@@ -547,7 +547,7 @@ pub(super) async fn finalize_run(
                 0 => String::new(),
                 n => format!(" and {n} more"),
             };
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] warning: {} result{} not uploaded to {} ({shown}{more}): {}; {}, the \
                  results are kept on this machine (`unsynced`, local only) and the next command \
@@ -571,7 +571,7 @@ pub(super) async fn finalize_run(
             (Some(u), Some(p)) => Some(format!("{u}; {p}")),
             (u, p) => u.or(p),
         };
-        *uploads = crate::pending_uploads::report(&left, error);
+        *uploads = barca_db::pending_uploads::report(&left, error);
     }
 
     // Propagate cancellation/worker error after persisting partial results.
@@ -593,11 +593,11 @@ pub(super) async fn finalize_run(
 /// What to do when the artifact store cannot be reached before a run: the second line of the
 /// error, so it is the envelope's `remediation` instead of the generic infra one.
 pub(super) const STORE_PREFLIGHT_FIX: &str =
-    concat!("Nothing ran. ", crate::store_sync::store_check_fix!());
+    concat!("Nothing ran. ", barca_store::store_sync::store_check_fix!());
 
 pub(super) struct StopProgress<'a> {
     pub(super) batch_lines: &'a [String],
-    pub(super) pool: crate::io_loop::WorkerPool,
+    pub(super) pool: barca_engine::io_loop::WorkerPool,
     pub(super) pb: &'a Option<indicatif::ProgressBar>,
     pub(super) agent_mode: bool,
     pub(super) steps_executed: usize,
@@ -638,11 +638,11 @@ pub(super) async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
     // The ten most repeated get a line each, so the summary cannot become the noise it removes.
     const SUMMARY_LINES: usize = 10;
     for (text, n) in repeated_warnings.iter().take(SUMMARY_LINES) {
-        crate::run_line!(Always, "[barca] {n} more: {text}");
+        barca_model::run_line!(Always, "[barca] {n} more: {text}");
     }
     if repeated_warnings.len() > SUMMARY_LINES {
         let rest = &repeated_warnings[SUMMARY_LINES..];
-        crate::run_line!(
+        barca_model::run_line!(
             Always,
             "[barca] {} more: {} other repeated warnings",
             rest.iter().map(|(_, n)| n).sum::<u64>(),
@@ -651,7 +651,7 @@ pub(super) async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
     }
     if (pb.is_some() || agent_mode) && steps_executed > 0 {
         for line in batch_lines {
-            crate::run_line!(Always, "{line}");
+            barca_model::run_line!(Always, "{line}");
         }
         let outcome = if cancel.is_cancelled() {
             RunOutcome::Cancelled
@@ -660,7 +660,7 @@ pub(super) async fn stop_workers(ctx: StopProgress<'_>, trace: &impl Fn(&str)) {
         } else {
             RunOutcome::Done
         };
-        crate::run_line!(
+        barca_model::run_line!(
             Always,
             "{}",
             end_of_run_line(completed_steps, total_steps, wall_seconds, outcome)
@@ -679,7 +679,7 @@ pub(super) struct DrainStore<'a> {
     pub(super) store_paths: &'a mut HashMap<String, String>,
     /// Uploads that failed, or were abandoned by a cancel: kept pending, their steps recorded
     /// (#390, #1002).
-    pub(super) pending: &'a mut Vec<crate::pending_uploads::PendingUpload>,
+    pub(super) pending: &'a mut Vec<barca_db::pending_uploads::PendingUpload>,
     /// The first upload failure's message, for the run's warning and `uploads.error`.
     pub(super) upload_error: &'a mut Option<String>,
 }
@@ -708,9 +708,9 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
         Some(s) if !was_cancelled => {
             let queued = s.client.pending_uploads();
             let t_drain = Instant::now();
-            let location = crate::transfer::diagnostic_uri(s.layout.store_root());
+            let location = barca_store::transfer::diagnostic_uri(s.layout.store_root());
             if queued > 0 {
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] uploading {queued} artifacts to {location} (timeout {timeout_secs}s per attempt); waiting for confirmation"
                 );
@@ -726,7 +726,7 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
                     biased;
                     _ = cancel.cancelled() => break None,
                     report = &mut drain => break Some(report),
-                    _ = progress.tick(), if queued > 0 => crate::run_line!(Always,
+                    _ = progress.tick(), if queued > 0 => barca_model::run_line!(Always,
                         "[barca] still waiting for artifact uploads to {location} ({:.0}s)",
                         t_drain.elapsed().as_secs_f64()
                     ),
@@ -766,7 +766,7 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
                     // An executed step's location is in `store_paths`; a cached target's repair
                     // upload (`repair_targets`) has none there, and keeps none.
                     Some(at) if std::path::Path::new(&oref.path).is_file() => {
-                        pending.push(crate::pending_uploads::PendingUpload {
+                        pending.push(barca_db::pending_uploads::PendingUpload {
                             store_path: at,
                             node_id: node,
                             run_hash: None,
@@ -791,12 +791,12 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
             }
         }
         if report.transferred > 0 {
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] uploaded {} artifact{} ({}); waited {:.1}s at end of run",
                 report.transferred,
                 if report.transferred == 1 { "" } else { "s" },
-                crate::text::human(report.bytes),
+                barca_store::text::human(report.bytes),
                 t_drain.elapsed().as_secs_f64()
             );
         }
@@ -809,7 +809,7 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
             for f in &report.failures {
                 let error = format!(
                     "upload to {} failed ({} attempt{}): {}",
-                    crate::transfer::diagnostic_uri(&f.store),
+                    barca_store::transfer::diagnostic_uri(&f.store),
                     f.attempts,
                     if f.attempts == 1 { "" } else { "s" },
                     f.message
@@ -823,7 +823,7 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
                 let Some(oref) = all_outputs.get(&f.key) else {
                     continue;
                 };
-                pending.push(crate::pending_uploads::PendingUpload {
+                pending.push(barca_db::pending_uploads::PendingUpload {
                     store_path: f.store.clone(),
                     node_id: f.key.clone(),
                     run_hash: None,
@@ -840,14 +840,14 @@ pub(super) async fn drain_store(ctx: DrainStore<'_>, trace: &impl Fn(&str)) -> b
 
 /// The backup at the end of a run. `Ok(Some(why))` when only its upload failed. Ctrl-C during it
 /// cancels the command (the run is recorded as cancelled); a cancelled run's wrap-up backup
-/// gets [`crate::interrupt::WRAP_UP_LIMIT`], and a second Ctrl-C ends it at once.
+/// gets [`barca_engine::interrupt::WRAP_UP_LIMIT`], and a second Ctrl-C ends it at once.
 pub(super) struct FinalBackup<'a, 'run> {
     pub(super) python: &'a std::path::Path,
-    pub(super) cfg: &'a crate::config::ResolvedConfig,
-    pub(super) request: crate::backup::Request,
+    pub(super) cfg: &'a barca_model::config::ResolvedConfig,
+    pub(super) request: barca_store::backup::Request,
     pub(super) run_id: &'a str,
     pub(super) ledger: &'a mut RunLedger<'run>,
-    pub(super) interrupt: &'a crate::interrupt::Interrupt,
+    pub(super) interrupt: &'a barca_engine::interrupt::Interrupt,
     pub(super) cancelled: &'a mut bool,
 }
 
@@ -867,24 +867,26 @@ pub(super) async fn final_backup(
     macro_rules! trace_point { ($($arg:tt)*) => { trace(&format!($($arg)*)); }; }
     let started = Instant::now();
     let until = if *cancelled {
-        crate::process::Until {
+        barca_model::process::Until {
             cancel: Some(&interrupt.abandon),
-            deadline: Some(Instant::now() + crate::interrupt::WRAP_UP_LIMIT),
+            deadline: Some(Instant::now() + barca_engine::interrupt::WRAP_UP_LIMIT),
         }
     } else {
-        crate::process::Until::cancelled(&interrupt.cancel)
+        barca_model::process::Until::cancelled(&interrupt.cancel)
     };
     let wrap_up = *cancelled;
     // Whether `until` fired: the backup (its copy, or the upload of a copy already taken) was
     // stopped, which is not a store failure.
     let stopped = || {
         if wrap_up {
-            interrupt.abandon.is_cancelled() || started.elapsed() >= crate::interrupt::WRAP_UP_LIMIT
+            interrupt.abandon.is_cancelled()
+                || started.elapsed() >= barca_engine::interrupt::WRAP_UP_LIMIT
         } else {
             interrupt.cancel.is_cancelled()
         }
     };
-    let taken = match crate::backup::take_requested(python, cfg, Some(run_id), request, until).await
+    let taken = match barca_store::backup::take_requested(python, cfg, Some(run_id), request, until)
+        .await
     {
         Ok(taken) if !(matches!(taken.upload, Some(Err(_))) && stopped()) => taken,
         Ok(_) | Err(BarcaError::Cancelled) => {
@@ -894,20 +896,23 @@ pub(super) async fn final_backup(
                 ledger.status = "cancelled";
                 cancel_recorded_run(&cfg.db_path, ledger).await?;
                 *cancelled = true;
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] the metadata backup was stopped; the run is recorded on this \
                      machine and the next backup takes it"
                 );
             } else {
-                crate::run_line!(
+                barca_model::run_line!(
                     Always,
                     "[barca] the metadata backup did not finish ({}); the run is recorded on \
                      this machine and the next backup takes it",
                     if interrupt.abandon.is_cancelled() {
                         "stopped by a second interrupt".to_string()
                     } else {
-                        format!("not within {}s", crate::interrupt::WRAP_UP_LIMIT.as_secs())
+                        format!(
+                            "not within {}s",
+                            barca_engine::interrupt::WRAP_UP_LIMIT.as_secs()
+                        )
                     }
                 );
             }
@@ -918,16 +923,16 @@ pub(super) async fn final_backup(
     trace_point!("backup_done (written={})", taken.name.is_some());
     match taken.upload {
         Some(Ok(at)) if taken.name.is_some() => {
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] backed up the metadata DB ({}) to {at} in {:.2}s",
-                crate::text::human(taken.size_bytes),
+                barca_store::text::human(taken.size_bytes),
                 started.elapsed().as_secs_f64()
             );
             Ok(None)
         }
         Some(Err(why)) if wrap_up => {
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] the metadata backup was not uploaded ({why}); the next backup uploads it"
             );
@@ -974,7 +979,7 @@ pub(super) async fn repair_targets(
         if pending.contains(&store) || checks.iter().any(|c| c.2 == store) {
             continue;
         }
-        let Ok(local_sha) = crate::hash::file_sha256(local) else {
+        let Ok(local_sha) = barca_model::hash::file_sha256(local) else {
             continue;
         };
         if oref.content_hash.as_deref().is_some_and(|h| h != local_sha) {
@@ -999,7 +1004,7 @@ pub(super) async fn repair_targets(
             // The store cannot say: leave it. `barca status` reports what it finds.
             Err(_) => continue,
         };
-        crate::run_line!(
+        barca_model::run_line!(
             Always,
             "[barca] {id}: {}; uploading this machine's copy to {}",
             if differs {
@@ -1007,7 +1012,7 @@ pub(super) async fn repair_targets(
             } else {
                 "not in the artifact store"
             },
-            crate::transfer::diagnostic_uri(&store)
+            barca_store::transfer::diagnostic_uri(&store)
         );
         s.client.upload(id, &oref.path);
         if differs {

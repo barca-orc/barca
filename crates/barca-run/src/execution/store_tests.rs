@@ -20,8 +20,8 @@ fn upload_snapshot_cleanup_preserves_another_live_runs_directory() {
 }
 
 use super::*;
-use crate::cache::{CacheHit, resolve_cache_hit};
-use crate::transfer::ArtifactLayout;
+use barca_decide::cache::{CacheHit, resolve_cache_hit};
+use barca_store::transfer::ArtifactLayout;
 
 fn oref(path: &str) -> dispatch::OutputRef {
     dispatch::OutputRef {

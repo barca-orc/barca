@@ -9,18 +9,18 @@
 //! The decision is made where a phase is prepared, before its cache decisions: the blocked keys
 //! are dropped from the phase's steps and reported `skipped` with reason `upstream_key_failed`,
 //! the rest run. The same rule as `--partition` uses to tell a narrowed consumer from a fan-in
-//! (`crate::selection`): a consumer's keys line up with an input's when both have exactly the
+//! (`barca_compile::selection`): a consumer's keys line up with an input's when both have exactly the
 //! same dimension names and the input is not collected.
 
-use crate::dag::Dag;
-use crate::model::kind_str;
-use crate::planner::Phase;
-use crate::results::StepReport;
-use crate::step_status::StepStatus;
-use crate::targets::{blocking_failure, short_name};
+use barca_compile::dag::Dag;
+use barca_compile::planner::Phase;
+use barca_compile::targets::{blocking_failure, short_name};
+use barca_model::model::kind_str;
+use barca_model::step_status::StepStatus;
+use barca_store::results::StepReport;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-/// Partition keys as `dim=value` suffixes ([`crate::PartitionKey::suffix`]), by base id.
+/// Partition keys as `dim=value` suffixes ([`barca_model::PartitionKey::suffix`]), by base id.
 pub(super) type Keys = HashMap<String, HashSet<String>>;
 
 /// What this run knows about failures so far.
@@ -246,7 +246,7 @@ def whole(forecast: list) -> dict:
 def other_dim(region: str, forecast: dict) -> dict:
     return {}
 "#;
-        Dag::build(&crate::parse::extract_nodes(src, "p.py").unwrap()).unwrap()
+        Dag::build(&barca_compile::parse::extract_nodes(src, "p.py").unwrap()).unwrap()
     }
 
     fn keys(base: &str, keys: &[&str]) -> Keys {

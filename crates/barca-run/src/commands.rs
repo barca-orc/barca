@@ -6,11 +6,9 @@
 //! parsing, dynamic-partition subprocesses) runs via `spawn_blocking`.
 
 use crate::execution::{ExecuteRequest, Executed, RunCommand, execute};
-use crate::{
-    BarcaError,
-    cache::CachePolicy,
-    results::{GetResult, MultiResult},
-};
+use barca_decide::cache::CachePolicy;
+use barca_model::BarcaError;
+use barca_store::results::{GetResult, MultiResult};
 use std::{env, path::PathBuf};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -41,13 +39,13 @@ pub fn find_python() -> PathBuf {
 /// Cancelling `cancel` stops the run mid-flight: workers are terminated,
 /// partial results are persisted, and the run row is marked `cancelled`.
 pub async fn get(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_name: Option<&str>,
     file_args: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
+    cancel: impl Into<barca_engine::interrupt::Interrupt>,
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(ExecuteRequest {
@@ -63,7 +61,7 @@ pub async fn get(
         event_tx: None,
         partition: None,
         options: Default::default(),
-        rules: crate::freshness::RunRules::request(),
+        rules: barca_decide::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -72,13 +70,13 @@ pub async fn get(
 /// `barca run` — execute a task (and its cone). The task always re-runs;
 /// upstream assets follow `policy` (`CacheAware` by default, like `barca get`).
 pub async fn run(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_name: &str,
     file_args: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
+    cancel: impl Into<barca_engine::interrupt::Interrupt>,
 ) -> Result<GetResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -93,26 +91,26 @@ pub async fn run(
         event_tx: None,
         partition: None,
         options: Default::default(),
-        rules: crate::freshness::RunRules::request(),
+        rules: barca_decide::freshness::RunRules::request(),
     })
     .await?
     .into_single()
 }
 
-/// Like [`get`] but streams live [`crate::RunEvent`]s to `event_tx` as the run
+/// Like [`get`] but streams live [`barca_model::RunEvent`]s to `event_tx` as the run
 /// progresses (logs, step completion). Logs are persisted to the DB regardless.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_streaming(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_name: Option<&str>,
     file_args: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
-    event_tx: Option<UnboundedSender<crate::RunEvent>>,
-    partition: Option<crate::selection::PartitionSelection>,
-    batch: crate::batch::BatchOverride,
+    cancel: impl Into<barca_engine::interrupt::Interrupt>,
+    event_tx: Option<UnboundedSender<barca_model::RunEvent>>,
+    partition: Option<barca_compile::selection::PartitionSelection>,
+    batch: barca_engine::batch::BatchOverride,
 ) -> Result<GetResult, BarcaError> {
     let names: Vec<String> = target_name.map(str::to_string).into_iter().collect();
     execute(ExecuteRequest {
@@ -131,25 +129,25 @@ pub async fn get_streaming(
             batch,
             ..Default::default()
         },
-        rules: crate::freshness::RunRules::request(),
+        rules: barca_decide::freshness::RunRules::request(),
     })
     .await?
     .into_single()
 }
 
-/// Like [`run`] but streams live [`crate::RunEvent`]s to `event_tx`.
+/// Like [`run`] but streams live [`barca_model::RunEvent`]s to `event_tx`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_streaming(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_name: &str,
     file_args: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
-    event_tx: Option<UnboundedSender<crate::RunEvent>>,
-    partition: Option<crate::selection::PartitionSelection>,
-    batch: crate::batch::BatchOverride,
+    cancel: impl Into<barca_engine::interrupt::Interrupt>,
+    event_tx: Option<UnboundedSender<barca_model::RunEvent>>,
+    partition: Option<barca_compile::selection::PartitionSelection>,
+    batch: barca_engine::batch::BatchOverride,
 ) -> Result<GetResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -167,7 +165,7 @@ pub async fn run_streaming(
             batch,
             ..Default::default()
         },
-        rules: crate::freshness::RunRules::request(),
+        rules: barca_decide::freshness::RunRules::request(),
     })
     .await?
     .into_single()
@@ -176,16 +174,16 @@ pub async fn run_streaming(
 /// Streaming counterpart that preserves the multi-target execution policy.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_many_streaming(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
-    event_tx: Option<UnboundedSender<crate::RunEvent>>,
-    partition: Option<crate::selection::PartitionSelection>,
-    batch: crate::batch::BatchOverride,
+    cancel: impl Into<barca_engine::interrupt::Interrupt>,
+    event_tx: Option<UnboundedSender<barca_model::RunEvent>>,
+    partition: Option<barca_compile::selection::PartitionSelection>,
+    batch: barca_engine::batch::BatchOverride,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -203,7 +201,7 @@ pub async fn get_many_streaming(
             batch,
             ..Default::default()
         },
-        rules: crate::freshness::RunRules::request(),
+        rules: barca_decide::freshness::RunRules::request(),
     })
     .await
     .map(Executed::into_multi)
@@ -213,16 +211,16 @@ pub async fn get_many_streaming(
 /// upstream assets follow `policy`, applied to the union of the cones. Events go to `event_tx`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_many_streaming(
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
     python: &std::path::Path,
     policy: CachePolicy,
     agent_mode: bool,
-    cancel: impl Into<crate::interrupt::Interrupt>,
-    event_tx: Option<UnboundedSender<crate::RunEvent>>,
-    partition: Option<crate::selection::PartitionSelection>,
-    batch: crate::batch::BatchOverride,
+    cancel: impl Into<barca_engine::interrupt::Interrupt>,
+    event_tx: Option<UnboundedSender<barca_model::RunEvent>>,
+    partition: Option<barca_compile::selection::PartitionSelection>,
+    batch: barca_engine::batch::BatchOverride,
 ) -> Result<MultiResult, BarcaError> {
     execute(ExecuteRequest {
         dag: None,
@@ -240,7 +238,7 @@ pub async fn run_many_streaming(
             batch,
             ..Default::default()
         },
-        rules: crate::freshness::RunRules::request(),
+        rules: barca_decide::freshness::RunRules::request(),
     })
     .await
     .map(Executed::into_multi)
@@ -256,8 +254,8 @@ pub enum RunResult {
 /// A run `barca serve` starts over its loaded graph (no source is parsed again). Progress
 /// lines are printed as for `--agent` and streamed as `line` events to `event_tx`.
 pub struct ServedRun<'a> {
-    pub dag: std::sync::Arc<crate::dag::Dag>,
-    pub cfg: &'a crate::config::ResolvedConfig,
+    pub dag: std::sync::Arc<barca_compile::dag::Dag>,
+    pub cfg: &'a barca_model::config::ResolvedConfig,
     pub command: RunCommand,
     /// As given; one target is a single-target run, several a multi-target run, none every
     /// asset and sensor.
@@ -266,15 +264,15 @@ pub struct ServedRun<'a> {
     pub python: &'a std::path::Path,
     pub policy: CachePolicy,
     pub cancel: CancellationToken,
-    pub event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    pub event_tx: Option<UnboundedSender<barca_model::RunEvent>>,
     pub options: crate::execution::RunOptions,
     /// `--partition`: the keys every narrowed node of the cone computes (all keys when `None`;
-    /// see [`crate::selection`]).
-    pub partition: Option<crate::selection::PartitionSelection>,
-    /// The freshness rules (RFC-0008): [`crate::freshness::RunRules::request`] for a run
-    /// asked for with the CLI's flags (`POST /runs`), [`crate::freshness::RunRules::tick`] for
+    /// see [`barca_compile::selection`]).
+    pub partition: Option<barca_compile::selection::PartitionSelection>,
+    /// The freshness rules (RFC-0008): [`barca_decide::freshness::RunRules::request`] for a run
+    /// asked for with the CLI's flags (`POST /runs`), [`barca_decide::freshness::RunRules::tick`] for
     /// a scheduled tick, the default (nothing pinned) for the older trigger routes.
-    pub rules: crate::freshness::RunRules,
+    pub rules: barca_decide::freshness::RunRules,
 }
 
 /// Execute a [`ServedRun`]. A single-target run that stops at a failed step is an `Err`, as
@@ -303,12 +301,12 @@ pub async fn serve_run(run: ServedRun<'_>) -> Result<RunResult, BarcaError> {
     }
 }
 
-/// Upload this host's pending results ([`crate::pending_uploads`]) among `store_paths` now (see
+/// Upload this host's pending results ([`barca_db::pending_uploads`]) among `store_paths` now (see
 /// [`crate::execution::upload_pending`]): `barca get -o url` calls it before signing, so a
 /// `local only` result is uploaded and then signed rather than reported missing.
 pub async fn upload_pending_now(
     python: &std::path::Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     store_paths: &[String],
     cancel: &CancellationToken,
 ) -> Result<(), BarcaError> {

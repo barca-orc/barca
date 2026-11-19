@@ -1,9 +1,9 @@
 use super::*;
-use crate::dag::Dag;
-use crate::planner::{ResourceConfig, decompose, plan};
+use barca_compile::dag::Dag;
+use barca_compile::planner::{ResourceConfig, decompose, plan};
 
 fn dag_of(src: &str) -> Dag {
-    Dag::build(&crate::parse::extract_nodes(src, "p.py").unwrap()).unwrap()
+    Dag::build(&barca_compile::parse::extract_nodes(src, "p.py").unwrap()).unwrap()
 }
 
 fn phase_of(dag: &Dag) -> Phase {

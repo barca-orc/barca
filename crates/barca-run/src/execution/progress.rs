@@ -3,7 +3,7 @@
 //! output, not a view of a result, so they live with the orchestrator that prints them
 //! (`docs/engineering/layering.md`, C5). Each function returns the text; the caller emits it.
 
-use crate::dag::Dag;
+use barca_compile::dag::Dag;
 
 /// Format seconds as a fixed-width time string for progress display.
 /// Always 8 chars wide: "   5s   ", " 2m 30s ", " 1h 05m ", "2d 03h  "
@@ -30,8 +30,8 @@ pub(super) fn reconcile_total(total_steps: usize, completed_steps: usize) -> usi
 
 /// The `--agent` step-line suffix for `node_id`'s declared env (empty when none is declared).
 pub(super) fn env_suffix(dag: &Dag, node_id: &str) -> String {
-    dag.get_node(crate::StepId::parse(node_id).base_id())
-        .map(|n| crate::envdeps::agent_suffix(&crate::envdeps::resolve(&n.decl.env)))
+    dag.get_node(barca_model::StepId::parse(node_id).base_id())
+        .map(|n| barca_model::envdeps::agent_suffix(&barca_model::envdeps::resolve(&n.decl.env)))
         .unwrap_or_default()
 }
 
@@ -44,7 +44,7 @@ pub(super) enum RunOutcome {
 }
 
 /// A batched node's calls in a run, so its per-key `step:` lines read as one computation.
-pub(super) fn batch_line(node: &str, b: &crate::results::BatchExecution) -> String {
+pub(super) fn batch_line(node: &str, b: &barca_store::results::BatchExecution) -> String {
     let calls = if b.calls == 1 { "call" } else { "calls" };
     let keys = if b.keys == 1 { "key" } else { "keys" };
     format!(

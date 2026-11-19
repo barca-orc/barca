@@ -1,7 +1,8 @@
 //! Replacement of generation-scoped freshness evidence, separate from history recording.
 //! The caller retains its CacheReader guards through preparation and this transaction.
 use super::{Proof, db_error, generation};
-use crate::{BarcaError, db};
+use barca_db::db;
+use barca_model::BarcaError;
 use std::collections::HashMap;
 
 /// Publish only evidence prepared against an unchanged metadata generation. The write

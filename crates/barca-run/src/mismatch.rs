@@ -13,15 +13,15 @@
 //! The key is absent everywhere else. It is a finding of this run, made when an artifact is
 //! fetched; a dry run, which does not contact the store, never has it.
 
-use crate::dag::Dag;
-use crate::recover::base_of;
-use crate::results::StepReport;
-use crate::step_status::StepStatus;
+use barca_compile::dag::Dag;
+use barca_decide::recover::base_of;
+use barca_model::step_status::StepStatus;
+use barca_store::results::StepReport;
 use std::collections::HashMap;
 
 // The finding in words is written where it is made, when a fetch returns other bytes.
 #[cfg(test)]
-use crate::store_sync::describe_mismatch as describe;
+use barca_store::store_sync::describe_mismatch as describe;
 
 /// The upstream node ids `id` reads as data: its inputs and `collect()` inputs, less the
 /// `_`-prefixed ones, which are there for ordering only and are never loaded.
@@ -41,7 +41,7 @@ fn data_inputs<'d>(dag: &'d Dag, id: &str) -> Vec<&'d str> {
     ups
 }
 
-/// Put each mismatch (base step id -> [`crate::store_sync::describe_mismatch`] text) on the report of the step it belongs
+/// Put each mismatch (base step id -> [`barca_store::store_sync::describe_mismatch`] text) on the report of the step it belongs
 /// to and on the reports of the steps that read it in this run.
 pub(crate) fn mark(dag: &Dag, reports: &mut [StepReport], mismatched: &HashMap<String, String>) {
     if mismatched.is_empty() {
@@ -60,7 +60,10 @@ pub(crate) fn mark(dag: &Dag, reports: &mut [StepReport], mismatched: &HashMap<S
         if read_inputs {
             for up in data_inputs(dag, base) {
                 if let Some(w) = mismatched.get(up) {
-                    notes.push(format!("input {}: {w}", crate::targets::short_name(up)));
+                    notes.push(format!(
+                        "input {}: {w}",
+                        barca_compile::targets::short_name(up)
+                    ));
                 }
             }
         }
@@ -79,7 +82,7 @@ pub(crate) fn mark(dag: &Dag, reports: &mut [StepReport], mismatched: &HashMap<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::extract_nodes;
+    use barca_compile::parse::extract_nodes;
 
     const SRC: &str = r#"
 from barca import asset, collect, partitions, partitions_from, task

@@ -1,44 +1,44 @@
 //! Run preparation, phase dispatch, and finalization.
-use crate::BarcaError;
-use crate::cache::{
-    BLOCKED_ARTIFACT_PATH, CachePolicy, DecideState, Decision, decide_step, in_dependency_order,
-    localize_decision,
-};
-use crate::cache::{merge_partition_reports, report_for, stale_warning};
-use crate::dag::Dag;
-use crate::db;
-use crate::db::materializations::NewMaterialization;
-use crate::dispatch;
-use crate::dispatch::OutputRef;
-use crate::freshness::{Planned, pin_manual};
-use crate::model::kind_str;
-use crate::planner::{ExecutionPlan, Phase, ResourceConfig};
-use crate::recover::{self, Work};
-use crate::sizing::{planned_weights, sizing_for, warn_over_capacity};
-use crate::step_status::StepStatus;
-use crate::targets::{
+use barca_compile::dag::Dag;
+use barca_compile::dispatch;
+use barca_compile::dispatch::OutputRef;
+use barca_compile::planner::{ExecutionPlan, Phase, ResourceConfig};
+use barca_compile::targets::{
     blocking_failure, final_output_of, plan_for_targets, resolve_targets, short_name,
     skipped_tasks_note, target_outcomes, validate_refresh_names,
 };
-use crate::transfer::TransferClient;
+use barca_db::db;
+use barca_db::db::materializations::NewMaterialization;
+use barca_decide::cache::{
+    BLOCKED_ARTIFACT_PATH, CachePolicy, DecideState, Decision, decide_step, in_dependency_order,
+    localize_decision,
+};
+use barca_decide::cache::{merge_partition_reports, report_for, stale_warning};
+use barca_decide::freshness::{Planned, pin_manual};
+use barca_decide::recover::{self, Work};
+use barca_decide::sizing::{planned_weights, sizing_for, warn_over_capacity};
+use barca_model::BarcaError;
+use barca_model::model::kind_str;
+use barca_model::step_status::StepStatus;
+use barca_store::transfer::TransferClient;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use crate::load::build_dag;
-use crate::results::{GetResult, MultiResult, StepReport, TargetOutcome};
+use barca_compile::load::build_dag;
+use barca_store::results::{GetResult, MultiResult, StepReport, TargetOutcome};
 
 use crate::persist::{
     BackupCheckpoints, RunLedger, StepRecorder, cancel_recorded_run, canonical_job, persist_run,
     telemetry_report,
 };
-use crate::store_sync::{StoreSync, transfer_remedy};
+use barca_store::store_sync::{StoreSync, transfer_remedy};
 
 macro_rules! trace_point {
     ($trace:expr, $($arg:tt)*) => {
         if $trace.enabled {
-            crate::errln!("[trace] {:>8.1}ms  {}  [db opens {}, cpu {:.1}ms]", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*), db::opens(), trace_cpu_ms());
+            barca_model::errln!("[trace] {:>8.1}ms  {}  [db opens {}, cpu {:.1}ms]", $trace.start.elapsed().as_secs_f64() * 1000.0, format_args!($($arg)*), db::opens(), trace_cpu_ms());
         }
     };
 }
@@ -89,7 +89,7 @@ fn phase_step_count(phase: &Phase) -> usize {
 pub(crate) struct Executed {
     result: GetResult,
     targets: Vec<(String, TargetOutcome)>,
-    step_failure: Option<crate::FailedStep>,
+    step_failure: Option<barca_model::FailedStep>,
 }
 
 impl Executed {
@@ -99,7 +99,7 @@ impl Executed {
         match self.step_failure {
             Some(mut failed) => {
                 let r = self.result;
-                failed.run = Some(Box::new(crate::PartialRun {
+                failed.run = Some(Box::new(barca_model::PartialRun {
                     run_id: r.run_id,
                     elapsed_seconds: r.elapsed_seconds,
                     steps_executed: r.steps_executed,
@@ -135,22 +135,22 @@ impl Executed {
 
 pub(crate) struct ExecuteRequest<'a> {
     pub(crate) dag: Option<std::sync::Arc<Dag>>,
-    pub(crate) cfg: &'a crate::config::ResolvedConfig,
+    pub(crate) cfg: &'a barca_model::config::ResolvedConfig,
     pub(crate) target_names: &'a [String],
     pub(crate) file_args: &'a [String],
     pub(crate) python: &'a std::path::Path,
     pub(crate) agent_mode: bool,
     pub(crate) policy: CachePolicy,
     pub(crate) command_label: &'a str,
-    pub(crate) interrupt: crate::interrupt::Interrupt,
-    pub(crate) event_tx: Option<UnboundedSender<crate::RunEvent>>,
+    pub(crate) interrupt: barca_engine::interrupt::Interrupt,
+    pub(crate) event_tx: Option<UnboundedSender<barca_model::RunEvent>>,
     /// `--partition`: the keys every narrowed node of the cone computes (all keys when `None`).
-    pub(crate) partition: Option<crate::selection::PartitionSelection>,
+    pub(crate) partition: Option<barca_compile::selection::PartitionSelection>,
     /// The run id to use and what started the run.
     pub(crate) options: RunOptions,
     /// Freshness rules (RFC-0008): whether `Manual` upstreams are read as they are, and
     /// whether this is a scheduled tick.
-    pub(crate) rules: crate::freshness::RunRules,
+    pub(crate) rules: barca_decide::freshness::RunRules,
 }
 
 struct Trace {
@@ -164,7 +164,7 @@ struct UploadSnapshots {
 }
 impl UploadSnapshots {
     fn new(run_id: &str) -> Result<Self, BarcaError> {
-        let prefix = crate::transfer::upload_snapshot_prefix(run_id)?;
+        let prefix = barca_store::transfer::upload_snapshot_prefix(run_id)?;
         std::fs::create_dir_all(prefix.parent().expect("snapshot prefix has a parent"))
             .map_err(|e| BarcaError::Other(format!("create upload staging: {e}")))?;
         Ok(Self { prefix })
@@ -202,7 +202,7 @@ struct RunStart {
     run_id: String,
     run_started: std::time::SystemTime,
     telemetry: Vec<(String, Box<dyn crate::telemetry::Integration>)>,
-    transfer_start: Option<crate::transfer::Launching>,
+    transfer_start: Option<barca_store::transfer::Launching>,
     /// The artifact store was checked less than five minutes ago and this run does not
     /// refresh: its transfer helper is started only if the run transfers something (#593).
     store_checked: bool,
@@ -239,7 +239,7 @@ impl RunStart {
         let store_checked = cfg.remote_artifacts()
             && matches!(request.policy, CachePolicy::CacheAware)
             && !cfg.check_store
-            && crate::gc::store_checked_recently(cfg);
+            && barca_store::gc::store_checked_recently(cfg);
         let transfer_start = match cfg.remote_artifacts() && !store_checked {
             true => Some(TransferClient::launch(python, cfg, &run_id)?),
             false => None,
@@ -267,7 +267,7 @@ struct RunState {
     usage_error: Option<String>,
     step_failure: Option<(String, String)>,
     /// Where `step_failure` failed, when its worker said so.
-    step_failure_phase: Option<crate::dispatch::ErrorPhase>,
+    step_failure_phase: Option<barca_compile::dispatch::ErrorPhase>,
     failed_bases: std::collections::HashSet<String>,
     skipped_bases: std::collections::HashSet<String>,
     /// The keys whose step failed, by base (`PartitionKey::suffix`), and whether a step failed
@@ -276,7 +276,7 @@ struct RunState {
     whole_failure: bool,
     /// The keys not computed because the same key of an input failed or was blocked, by base.
     blocked_keys: blocked::Keys,
-    logs_buffer: crate::run_logs::Recorder,
+    logs_buffer: barca_db::run_logs::Recorder,
     steps_executed: usize,
     total_steps: usize,
     total_estimated: f64,
@@ -285,7 +285,7 @@ struct RunState {
     store_paths: HashMap<String, String>,
     transfer_error: Option<String>,
     /// What this run left unpublished in the artifact store (#390), for the run JSON.
-    uploads: Option<crate::results::UploadsReport>,
+    uploads: Option<barca_store::results::UploadsReport>,
     /// Coordinator time recording results, when the run made a batched call, for the run JSON.
     metadata_seconds: Option<f64>,
     /// Targets whose copy here and copy in the store differed, re-uploaded from here without
@@ -294,13 +294,13 @@ struct RunState {
     cached_steps: recover::CachedSteps,
     held_cached_lines: Vec<String>,
     /// The results this run holds while it is in flight (the cache size limit leaves them).
-    pin: Option<crate::gc::Pin>,
+    pin: Option<barca_store::gc::Pin>,
     /// Artifact paths (as recorded) handed to steps as inputs: `last_read_at` moves for them.
     read_paths: std::collections::HashSet<String>,
     /// `--partition`: the plan's narrowing, with the counts of keys known once a source ran.
-    narrowing: Option<crate::selection::Narrowing>,
+    narrowing: Option<barca_compile::selection::Narrowing>,
     /// Every key of each partitioned asset with a dataset sink, for deleting removed keys.
-    dataset_keys: HashMap<String, crate::dataset_sinks::DatasetKeys>,
+    dataset_keys: HashMap<String, barca_engine::dataset_sinks::DatasetKeys>,
     /// The next run-local batched call number (RFC-0013).
     next_call: u64,
     /// A cache hit's sink could not be republished: the step failed (`republish`).
@@ -312,17 +312,17 @@ struct RunSession<'a, 'r> {
     prepared: &'a Prepared,
     state: RunState,
     recorder: Option<StepRecorder>,
-    pool: Option<crate::io_loop::WorkerPool>,
+    pool: Option<barca_engine::io_loop::WorkerPool>,
     /// The run's Datadog exporter, when that integration is on.
     datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
     store: Option<StoreSync>,
     pb: Option<indicatif::ProgressBar>,
-    cost_model: crate::cost::CostModel,
+    cost_model: barca_engine::cost::CostModel,
     started: RunStart,
 }
 
 pub(crate) async fn execute(request: ExecuteRequest<'_>) -> Result<Executed, BarcaError> {
-    let lines = crate::lines::Lines::new(request.event_tx.clone());
+    let lines = barca_model::lines::Lines::new(request.event_tx.clone());
     // Boxed: the run's future is large, and a debug build would copy it through the stack.
     lines.scope(Box::pin(execute_run(request))).await
 }
@@ -332,7 +332,7 @@ async fn execute_run(request: ExecuteRequest<'_>) -> Result<Executed, BarcaError
     // run's state machine is large, and wrapping it inline in the task-local scope doubled the
     // future a serve run task carries, which overflowed a worker thread's stack in debug builds.
     let run_id = started.run_id.clone();
-    crate::jsonlog::in_run(run_id, Box::pin(execute_started(request, started))).await
+    barca_model::jsonlog::in_run(run_id, Box::pin(execute_started(request, started))).await
 }
 
 async fn execute_started(
@@ -341,7 +341,7 @@ async fn execute_started(
 ) -> Result<Executed, BarcaError> {
     // Held from before anything is decided: until the plan is known, eviction in this process
     // keeps to leftovers and superseded results.
-    let pin = crate::gc::pin(&started.run_id);
+    let pin = barca_store::gc::pin(&started.run_id);
     let prepared = prepare_run(request.dag.take(), &request, |point| {
         trace_point!(started.trace, "{point}")
     })
@@ -381,10 +381,10 @@ async fn execute_started(
     // With a server, its ledger answers the cache lookups (RFC-0007 section 4.1): check the
     // server, post what this machine could not post before, then ask once for every run hash
     // known before anything runs.
-    if let Some(ledger) = crate::ledger::attached(request.cfg) {
+    if let Some(ledger) = barca_store::ledger::attached(request.cfg) {
         ledger.prepare(request.cfg, true).await?;
         ledger
-            .prefetch(crate::cache::cone_keys(
+            .prefetch(barca_decide::cache::cone_keys(
                 &prepared.dag,
                 &prepared.exec_plan.phases,
             ))
@@ -462,10 +462,10 @@ async fn execute_started(
     drop(session);
     // The cache size limit after a run: evict if `.barca/` is over its limit. What the run
     // produced, read or returns is never evicted.
-    executed.result.cache = crate::gc::after_command(cfg, &own, pin.as_ref()).await;
+    executed.result.cache = barca_store::gc::after_command(cfg, &own, pin.as_ref()).await;
     if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
         let waits = db::lock_waits();
-        crate::errln!(
+        barca_model::errln!(
             "[trace] metadata db opens {}, lock waits {} (total {:.1}ms, longest {:.1}ms)",
             db::opens(),
             waits.waits,
@@ -517,12 +517,12 @@ fn trace_resources() {
                 .and_then(|n| n.parse::<i64>().ok())
         })
         .unwrap_or(peak_kib);
-    crate::errln!("[trace] coordinator resources peak_kib={peak_kib} cpu_ms={cpu_ms:.3}");
+    barca_model::errln!("[trace] coordinator resources peak_kib={peak_kib} cpu_ms={cpu_ms:.3}");
 }
 #[cfg(not(unix))]
 fn trace_resources() {}
 
-/// Delete the keys that assets with a dataset sink no longer have (`crate::dataset_sinks`).
+/// Delete the keys that assets with a dataset sink no longer have (`barca_engine::dataset_sinks`).
 /// Not after a cancelled or broken run: its key sets may be incomplete.
 async fn prune_dataset_sinks(session: &mut RunSession<'_, '_>) {
     let datasets = std::mem::take(&mut session.state.dataset_keys);
@@ -534,7 +534,7 @@ async fn prune_dataset_sinks(session: &mut RunSession<'_, '_>) {
     {
         return;
     }
-    let lines = crate::dataset_sinks::prune(
+    let lines = barca_engine::dataset_sinks::prune(
         datasets,
         session.request.python,
         session.request.cfg.storage_options_json.as_deref(),
@@ -547,7 +547,7 @@ async fn prune_dataset_sinks(session: &mut RunSession<'_, '_>) {
 
 /// What a run protects from the cache size limit: everything it produced, read or returns (as
 /// recorded paths), its run hashes, and the `Manual` nodes of its DAG.
-fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crate::gc::Own {
+fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> barca_store::gc::Own {
     // Every path `get` prints or returns, including each partition key of a partitioned target.
     let returned = executed
         .result
@@ -569,7 +569,7 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
         .collect();
     read.sort();
     read.dedup();
-    crate::gc::Own {
+    barca_store::gc::Own {
         nodes: session
             .state
             .incremental
@@ -600,7 +600,7 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
             .dag
             .graph
             .node_weights()
-            .filter(|n| n.decl.freshness == crate::model::Freshness::Manual)
+            .filter(|n| n.decl.freshness == barca_model::model::Freshness::Manual)
             .map(|n| n.id.clone())
             .collect(),
         wrote_nothing: session.state.steps_executed == 0 && session.store.is_none(),
@@ -614,7 +614,7 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
     if session.prepared.pinned.is_empty() || request.rules.tick.is_some() {
         return Ok(());
     }
-    let cache = crate::cache::CacheReader::for_config(request.cfg).await?;
+    let cache = barca_decide::cache::CacheReader::for_config(request.cfg).await?;
     let dag = &session.prepared.dag;
     let state = &session.state.decide_state;
     let mut found: Vec<(&str, bool)> = Vec::new();
@@ -625,7 +625,7 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
         if pin.user.is_some() {
             continue;
         }
-        let stale = crate::freshness::is_stale(
+        let stale = barca_decide::freshness::is_stale(
             &cache,
             dag,
             id,
@@ -641,7 +641,7 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
         if stale {
             note(
                 &session.pb,
-                &crate::freshness::stale_note(dag, id, request.file_args),
+                &barca_decide::freshness::stale_note(dag, id, request.file_args),
             );
         }
         if let Some(report) = session
@@ -651,7 +651,11 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
             .iter_mut()
             .find(|r| r.id == id)
         {
-            report.detail = Some(crate::cache::Held::Manual { stale }.detail().to_string());
+            report.detail = Some(
+                barca_decide::cache::Held::Manual { stale }
+                    .detail()
+                    .to_string(),
+            );
         }
     }
     Ok(())
@@ -664,20 +668,20 @@ async fn open_state(
     request: &ExecuteRequest<'_>,
     prepared: &Prepared,
     started: &mut RunStart,
-) -> Result<(crate::cost::CostModel, AvgTimes, AvgTimes), BarcaError> {
+) -> Result<(barca_engine::cost::CostModel, AvgTimes, AvgTimes), BarcaError> {
     let cfg = request.cfg;
     let run_id = &started.run_id;
     let command_label = request.command_label;
     let file_args = request.file_args;
     let target_label = &prepared.target_label;
     let exec_plan = &prepared.exec_plan;
-    crate::layout::ensure_env_dirs(&cfg.env)?;
+    barca_model::layout::ensure_env_dirs(&cfg.env)?;
     let db_path = cfg.db_path.clone();
 
     // One visit to the database: initialize it, record the run, and read the cost estimates
     // and the average step times the progress bar's ETA is made of.
     let (node_ids, base_ids) = eta_ids(exec_plan);
-    let definitions = crate::changes::definition_rows(
+    let definitions = barca_decide::changes::definition_rows(
         &prepared.dag,
         exec_plan
             .phases
@@ -710,7 +714,7 @@ async fn open_state(
     )
     .await?;
     if let Some(tx) = &request.event_tx {
-        let _ = tx.send(crate::RunEvent::RunStarted {
+        let _ = tx.send(barca_model::RunEvent::RunStarted {
             run_id: run_id.clone(),
         });
     }
@@ -724,7 +728,7 @@ async fn open_state(
     // Measured-cost model: seed from persisted estimates so batch sizing is
     // pre-warmed — the cold-start probe is paid once ever per stable node,
     // not once per run.
-    let mut cost_model = crate::cost::CostModel::new();
+    let mut cost_model = barca_engine::cost::CostModel::new();
     cost_model.seed(cost_estimates);
 
     Ok((cost_model, avg_elapsed, partitioned_avg_elapsed))
@@ -798,7 +802,7 @@ fn prepare_progress(
         bar.set_message("");
         // Every stderr line from here on (the store check, a fetch, a warning) is written above
         // the bar, not into it.
-        crate::term::above_progress_bar(&bar);
+        barca_model::term::above_progress_bar(&bar);
         Some(bar)
     } else {
         None
@@ -811,7 +815,7 @@ async fn open_run<'a, 'r>(
     prepared: &'a Prepared,
     mut started: RunStart,
 ) -> Result<RunSession<'a, 'r>, BarcaError> {
-    if let Some(wait) = crate::test_hooks::before_start_workers() {
+    if let Some(wait) = barca_model::test_hooks::before_start_workers() {
         tokio::time::sleep(wait).await;
     }
     let (cost_model, avg_times, partitioned_avg_times) =
@@ -834,7 +838,7 @@ async fn open_run<'a, 'r>(
                 } else {
                     "failed"
                 };
-                let line = match crate::interrupt::cancel_reason() {
+                let line = match barca_engine::interrupt::cancel_reason() {
                     Some(reason) if matches!(error, BarcaError::Cancelled) => {
                         format!("[barca] run cancelled: {reason}")
                     }
@@ -843,7 +847,7 @@ async fn open_run<'a, 'r>(
                 db::insert_logs(
                     &request.cfg.db_path,
                     &started.run_id,
-                    &[crate::run_logs::RecordedLine::barca(line)],
+                    &[barca_db::run_logs::RecordedLine::barca(line)],
                 )
                 .await?;
                 db::finish_run(
@@ -865,7 +869,7 @@ async fn open_run<'a, 'r>(
         ..Default::default()
     };
     // Lines are spooled as they arrive, so `barca logs -f` can read a run still in progress.
-    state.logs_buffer.spool_to(crate::run_logs::spool_path(
+    state.logs_buffer.spool_to(barca_db::run_logs::spool_path(
         &request.cfg.db_path,
         &started.run_id,
     ));
@@ -885,7 +889,7 @@ async fn open_run<'a, 'r>(
                     || prepared
                         .dag
                         .get_node(id)
-                        .is_some_and(|n| n.decl.freshness != crate::model::Freshness::Manual)
+                        .is_some_and(|n| n.decl.freshness != barca_model::model::Freshness::Manual)
             })
             .map(|(id, _)| id.clone())
             .collect(),
@@ -912,7 +916,7 @@ async fn dispatch_ready(
     provided: &HashMap<String, dispatch::ProvidedInput>,
     phase_idx: usize,
     calls: Vec<(String, Vec<String>)>,
-) -> crate::coordinator::Coordinator {
+) -> barca_engine::coordinator::Coordinator {
     session.state.steps_executed += phase_step_count(filtered_phase);
 
     let (coord, phase_err, phase_elapsed, phase_completed, phase_total) =
@@ -966,13 +970,13 @@ fn computed_by_other_runs(
         session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
         // Not executed here: no attempts of this run's.
         session.state.results.attempts.remove(&node_id);
-        crate::cache::computed_by_another_run(
+        barca_decide::cache::computed_by_another_run(
             &mut session.state.results.reports,
             &node_id,
             phase_outputs.get(&node_id).map(|o| o.path.as_str()),
         );
         if session.request.agent_mode {
-            crate::run_line!(
+            barca_model::run_line!(
                 Agent,
                 "{}",
                 cached_step_line(&session.prepared.dag, &node_id)
@@ -983,7 +987,7 @@ fn computed_by_other_runs(
 }
 fn collect_outputs(
     session: &mut RunSession<'_, '_>,
-    coord: &crate::coordinator::Coordinator,
+    coord: &barca_engine::coordinator::Coordinator,
 ) -> HashMap<String, OutputRef> {
     // Collect results from coordinator
     let mut phase_outputs: HashMap<String, dispatch::OutputRef> = HashMap::new();
@@ -996,7 +1000,7 @@ fn collect_outputs(
             .record_output(&node_id, artifact_val, item.attempts);
         // A sensor's or `Manual` asset's output hash: its consumers, decided in a later
         // phase, fold it into their run hashes (#183, #548).
-        if crate::cache::folds_output(&session.prepared.dag, item.step_id.base_id())
+        if barca_decide::cache::folds_output(&session.prepared.dag, item.step_id.base_id())
             && session
                 .state
                 .decide_state
@@ -1004,7 +1008,7 @@ fn collect_outputs(
                 .contains_key(&node_id)
             && let Some(h) = artifact_val.get("content_hash").and_then(|v| v.as_str())
         {
-            let revision = crate::observation::from_artifact(
+            let revision = barca_engine::observation::from_artifact(
                 artifact_val,
                 session.state.decide_state.sensor_outputs.get(&node_id),
                 &session.started.run_id,
@@ -1024,7 +1028,7 @@ fn collect_outputs(
 }
 async fn collect_failures(
     session: &mut RunSession<'_, '_>,
-    coord: &crate::coordinator::Coordinator,
+    coord: &barca_engine::coordinator::Coordinator,
 ) {
     // Collect failures — parallel branch failures (group members) are
     // contained within the group and surfaced as ParallelError to the parent,
@@ -1077,7 +1081,7 @@ async fn collect_failures(
             continue;
         }
         if session.request.agent_mode {
-            crate::run_line!(
+            barca_model::run_line!(
                 Agent,
                 "{}{}",
                 failed_step_line(&node_id, error_msg),
@@ -1193,8 +1197,8 @@ fn finish_queue(session: &mut RunSession<'_, '_>, queue: &mut VecDeque<Work<'_>>
                 .is_some_and(|i| i.unseeded_fresh(&id))
                 && !session.state.results.attempts.contains_key(&id))
         {
-            crate::run_line!(Agent, "{}", cached_step_line(&session.prepared.dag, &id));
-            crate::lines::Lines::current().cached_step(&id);
+            barca_model::run_line!(Agent, "{}", cached_step_line(&session.prepared.dag, &id));
+            barca_model::lines::Lines::current().cached_step(&id);
         }
     }
 }
@@ -1214,7 +1218,7 @@ struct BatchKeys {
 /// raises, `strict=True` with a key in no group) is returned with why, to be failed.
 fn plan_calls(
     dag: &Dag,
-    over: &crate::batch::BatchOverride,
+    over: &barca_engine::batch::BatchOverride,
     phase: &Phase,
     python: &std::path::Path,
     next_call: &mut u64,
@@ -1259,12 +1263,12 @@ fn plan_calls(
         ordered.sort_by_key(|(position, _)| *position);
         let keys: Vec<String> = ordered.into_iter().map(|(_, key)| key).collect();
         let node = dag.get_node(&base).expect("found above");
-        let Some(grouping) = crate::batch::effective(node, over) else {
+        let Some(grouping) = barca_engine::batch::effective(node, over) else {
             continue;
         };
         let labels = match &grouping {
-            crate::batch::Grouping::By { source_text, .. } => {
-                match crate::batch::evaluate_labels(
+            barca_engine::batch::Grouping::By { source_text, .. } => {
+                match barca_engine::batch::evaluate_labels(
                     python,
                     &node.invoke.python().source_file,
                     source_text,
@@ -1279,7 +1283,7 @@ fn plan_calls(
             }
             _ => None,
         };
-        let groups = match crate::batch::group_keys(&keys, &grouping, labels.as_deref()) {
+        let groups = match barca_engine::batch::group_keys(&keys, &grouping, labels.as_deref()) {
             Ok(groups) => groups,
             Err(e) => {
                 errors.push((base.clone(), format!("could not group the keys: {e}")));
@@ -1526,7 +1530,7 @@ async fn return_outputs(
     };
     // With a server, the run is posted to its ledger now that its uploads are confirmed. A
     // step the ledger already held with other bytes gets the same warning.
-    if let Some(ledger) = crate::ledger::attached(session.request.cfg) {
+    if let Some(ledger) = barca_store::ledger::attached(session.request.cfg) {
         for node in ledger
             .record_run(
                 session.request.cfg,
@@ -1545,16 +1549,20 @@ async fn return_outputs(
     // every time, and a `Manual` asset is refreshed by hand to pick up new data (#548): none
     // of them is a nondeterministic function.
     changed.retain(|node| {
-        let base = crate::StepId::parse(node).base_id().to_string();
+        let base = barca_model::StepId::parse(node).base_id().to_string();
         session
             .prepared
             .dag
             .get_node(&base)
-            .is_none_or(crate::cache::checks_bytes)
+            .is_none_or(barca_decide::cache::checks_bytes)
     });
     for node in changed.iter().chain(&session.state.repaired_mismatches) {
-        crate::run_line!(Always, "{}", crate::ledger::bytes_changed_warning(node));
-        let base = crate::StepId::parse(node).base_id().to_string();
+        barca_model::run_line!(
+            Always,
+            "{}",
+            barca_store::ledger::bytes_changed_warning(node)
+        );
+        let base = barca_model::StepId::parse(node).base_id().to_string();
         if let Some(report) = step_reports.iter_mut().find(|report| report.id == base) {
             report.bytes_changed = Some(true);
         }
@@ -1590,21 +1598,19 @@ async fn return_outputs(
             .into_iter()
             .chain(session.prepared.blocked.iter().cloned())
             .collect(),
-        step_failure: session
-            .state
-            .step_failure
-            .take()
-            .map(|(node, message)| crate::FailedStep {
+        step_failure: session.state.step_failure.take().map(|(node, message)| {
+            barca_model::FailedStep {
                 phase: session.state.step_failure_phase,
                 artifact_dir: Some(format!(
                     "{}/{}",
                     session.request.cfg.artifact_root.trim_end_matches('/'),
-                    crate::safe_node_id(&node)
+                    barca_model::safe_node_id(&node)
                 )),
                 node,
                 message,
                 run: None,
-            }),
+            }
+        }),
     })
 }
 
@@ -1632,23 +1638,23 @@ impl RunCommand {
 pub struct RunOptions {
     /// The run id to use; a new one when `None`.
     pub run_id: Option<String>,
-    pub trigger: crate::trigger::Trigger,
-    /// What hosts the run: [`crate::run_host::LocalHost`] for a run on its own, a
-    /// [`crate::serve::ServeHost`] for a run of `barca serve`, whose runs share a capacity
+    pub trigger: barca_model::trigger::Trigger,
+    /// What hosts the run: [`barca_engine::run_host::LocalHost`] for a run on its own, a
+    /// [`barca_model::serve::ServeHost`] for a run of `barca serve`, whose runs share a capacity
     /// (#628) and in-flight asset steps (#654) and whose end is routine (the server owns the
     /// final shutdown backup).
-    pub host: std::sync::Arc<dyn crate::run_host::RunHost>,
+    pub host: std::sync::Arc<dyn barca_engine::run_host::RunHost>,
     /// `--batch` (RFC-0013): the run's override of the `batch=` of the nodes that declare one.
-    pub batch: crate::batch::BatchOverride,
+    pub batch: barca_engine::batch::BatchOverride,
 }
 
 impl Default for RunOptions {
     fn default() -> Self {
         Self {
             run_id: None,
-            trigger: crate::trigger::Trigger::default(),
-            host: crate::run_host::LocalHost::shared(),
-            batch: crate::batch::BatchOverride::default(),
+            trigger: barca_model::trigger::Trigger::default(),
+            host: barca_engine::run_host::LocalHost::shared(),
+            batch: barca_engine::batch::BatchOverride::default(),
         }
     }
 }

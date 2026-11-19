@@ -11,7 +11,7 @@ pub(super) async fn start_workers(
 ) -> Result<
     (
         Option<StoreSync>,
-        crate::io_loop::WorkerPool,
+        barca_engine::io_loop::WorkerPool,
         Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
         StepRecorder,
     ),
@@ -32,7 +32,7 @@ pub(super) async fn start_workers(
     // A store checked in the last five minutes is not checked again (#593): the client starts
     // its helper at the first transfer, and a run that transfers nothing starts none. Results
     // an earlier command could not upload end that: they are retried first, as below.
-    if started.store_checked && !crate::pending_uploads::list(db_path).await?.is_empty() {
+    if started.store_checked && !barca_db::pending_uploads::list(db_path).await?.is_empty() {
         started.store_checked = false;
         started.transfer_start = Some(TransferClient::launch(python, cfg, run_id)?);
     }
@@ -40,7 +40,7 @@ pub(super) async fn start_workers(
         trace_point!(
             started.trace,
             "store_check_skipped (checked within {}s)",
-            crate::gc::STORE_CHECK_WINDOW.as_secs()
+            barca_store::gc::STORE_CHECK_WINDOW.as_secs()
         );
         Some(
             StoreSync::new(
@@ -54,8 +54,8 @@ pub(super) async fn start_workers(
     } else if let Some(start) = started.transfer_start.take() {
         let mut client = start.connect().await?;
         let limit = std::time::Duration::from_secs(cfg.transfer_timeout_secs.min(10));
-        let location = crate::transfer::diagnostic_uri(&cfg.artifact_root);
-        crate::run_line!(
+        let location = barca_store::transfer::diagnostic_uri(&cfg.artifact_root);
+        barca_model::run_line!(
             Always,
             "[barca] checking artifact store {location} (timeout {}s)",
             limit.as_secs()
@@ -76,15 +76,15 @@ pub(super) async fn start_workers(
         };
         if let Err(error) = checked {
             client.abort().await;
-            crate::gc::forget_store_check(cfg);
+            barca_store::gc::forget_store_check(cfg);
             return Err(error);
         }
-        crate::gc::remember_store_check(cfg);
+        barca_store::gc::remember_store_check(cfg);
         // Results an earlier command computed here and could not upload go first (#390), and
         // with a server, the runs they held back are posted to its ledger (#507).
         match retry_pending_uploads(&mut client, db_path, cancel, &location, None).await {
             Ok(settled) => {
-                if let Some(ledger) = crate::ledger::attached(cfg) {
+                if let Some(ledger) = barca_store::ledger::attached(cfg) {
                     ledger.post_uploaded(cfg, &settled).await;
                 }
             }
@@ -122,7 +122,7 @@ pub(super) async fn start_workers(
     // Persistent worker pool: one pool for the whole run, shared across
     // phases so workers keep their interpreter (and imported user modules)
     // warm between phases.
-    let io_config = crate::io_loop::IoConfig {
+    let io_config = barca_engine::io_loop::IoConfig {
         upload_snapshot_prefix: started
             .upload_snapshots
             .as_ref()
@@ -137,7 +137,8 @@ pub(super) async fn start_workers(
         storage_options_json: cfg.storage_options_json.clone(),
         agent_mode: request.agent_mode,
     };
-    let mut pool = crate::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
+    let mut pool =
+        barca_engine::io_loop::WorkerPool::start(io_config).map_err(BarcaError::Other)?;
     // Finished steps are written to the local metadata DB while the run goes on (#214), and,
     // with a store, backed up on the minute checkpoint (RFC-0009).
     let backups = cfg.backup_uri.is_some().then(|| BackupCheckpoints {
@@ -149,7 +150,7 @@ pub(super) async fn start_workers(
     {
         // A step that runs for a while must not look hung: report it periodically.
         let bar = pb.clone();
-        let lines = crate::lines::Lines::current();
+        let lines = barca_model::lines::Lines::current();
         pool.on_running(Box::new(move |running| match &bar {
             Some(bar) if !bar.is_hidden() => {
                 if let Some((id, secs)) = running.first() {
@@ -159,7 +160,7 @@ pub(super) async fn start_workers(
             _ => {
                 for (id, secs) in running {
                     lines.print(
-                        crate::lines::LineWhen::Always,
+                        barca_model::lines::LineWhen::Always,
                         format_args!("[barca] still running ({}s): {id}", *secs as u64),
                     );
                 }
@@ -183,8 +184,8 @@ pub(super) async fn retry_pending_uploads(
     location: &str,
     only: Option<&std::collections::HashSet<&str>>,
 ) -> Result<std::collections::HashSet<String>, BarcaError> {
-    use crate::pending_uploads::Settled;
-    let mut pending = crate::pending_uploads::list(db_path).await?;
+    use barca_db::pending_uploads::Settled;
+    let mut pending = barca_db::pending_uploads::list(db_path).await?;
     if let Some(only) = only {
         pending.retain(|p| only.contains(p.store_path.as_str()));
     }
@@ -198,7 +199,7 @@ pub(super) async fn retry_pending_uploads(
         // The store moved (another `[remote] uri`): this object no longer belongs anywhere.
         let same_store = client.layout().store_for(&p.local_path).as_deref() == Some(&p.store_path);
         if !here || !same_store {
-            crate::run_line!(
+            barca_model::run_line!(
                 Always,
                 "[barca] warning: dropped the pending upload of {}: {}",
                 p.node_id,
@@ -207,7 +208,7 @@ pub(super) async fn retry_pending_uploads(
                 } else {
                     format!(
                         "it belongs to another store ({})",
-                        crate::transfer::diagnostic_uri(&p.store_path)
+                        barca_store::transfer::diagnostic_uri(&p.store_path)
                     )
                 }
             );
@@ -219,7 +220,7 @@ pub(super) async fn retry_pending_uploads(
         }
     }
     if !queued.is_empty() {
-        crate::run_line!(
+        barca_model::run_line!(
             Always,
             "[barca] uploading {} pending result{} to {location} from an earlier run",
             queued.len(),
@@ -241,7 +242,7 @@ pub(super) async fn retry_pending_uploads(
         for f in report.failures {
             let error = format!(
                 "upload to {} failed ({} attempt{}): {}",
-                crate::transfer::diagnostic_uri(&f.store),
+                barca_store::transfer::diagnostic_uri(&f.store),
                 f.attempts,
                 if f.attempts == 1 { "" } else { "s" },
                 f.message
@@ -251,25 +252,25 @@ pub(super) async fn retry_pending_uploads(
         }
         let uploaded = queued.len() - failed;
         match first_error {
-            None => crate::run_line!(
+            None => barca_model::run_line!(
                 Always,
                 "[barca] uploaded {uploaded} pending result{}",
                 if uploaded == 1 { "" } else { "s" }
             ),
-            Some(why) => crate::run_line!(
+            Some(why) => barca_model::run_line!(
                 Always,
                 "[barca] {failed} pending result{} still not uploaded ({uploaded} uploaded): {why}",
                 if failed == 1 { "" } else { "s" }
             ),
         }
     }
-    crate::pending_uploads::settle(db_path, &settled).await?;
+    barca_db::pending_uploads::settle(db_path, &settled).await?;
     let dropped: std::collections::HashSet<String> = settled
         .iter()
         .filter(|(_, s)| matches!(s, Settled::Dropped))
         .map(|(at, _)| at.clone())
         .collect();
-    crate::ledger::posts::forget_steps(db_path, &dropped).await?;
+    barca_store::ledger::posts::forget_steps(db_path, &dropped).await?;
     Ok(settled
         .into_iter()
         .filter(|(_, s)| !matches!(s, Settled::Failed(_)))
@@ -283,7 +284,7 @@ pub(super) async fn retry_pending_uploads(
 /// stays pending with its new error, and the caller finds it still missing from the store.
 pub(crate) async fn upload_pending(
     python: &std::path::Path,
-    cfg: &crate::config::ResolvedConfig,
+    cfg: &barca_model::config::ResolvedConfig,
     store_paths: &[String],
     cancel: &CancellationToken,
 ) -> Result<(), BarcaError> {
@@ -291,7 +292,7 @@ pub(crate) async fn upload_pending(
         return Ok(());
     }
     let wanted: std::collections::HashSet<&str> = store_paths.iter().map(String::as_str).collect();
-    let pending = crate::pending_uploads::list(&cfg.db_path).await?;
+    let pending = barca_db::pending_uploads::list(&cfg.db_path).await?;
     if !pending
         .iter()
         .any(|p| wanted.contains(p.store_path.as_str()))
@@ -301,13 +302,13 @@ pub(crate) async fn upload_pending(
     let mut client = TransferClient::launch(python, cfg, &db::generate_run_id())?
         .connect()
         .await?;
-    let location = crate::transfer::diagnostic_uri(&cfg.artifact_root);
+    let location = barca_store::transfer::diagnostic_uri(&cfg.artifact_root);
     let retried =
         retry_pending_uploads(&mut client, &cfg.db_path, cancel, &location, Some(&wanted)).await;
     match retried {
         Ok(settled) => {
             client.shutdown().await;
-            if let Some(ledger) = crate::ledger::attached(cfg) {
+            if let Some(ledger) = barca_store::ledger::attached(cfg) {
                 ledger.post_uploaded(cfg, &settled).await;
             }
             Ok(())

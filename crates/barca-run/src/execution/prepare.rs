@@ -15,16 +15,16 @@ pub(super) struct Prepared {
     /// The capacity the run's steps share (#436).
     pub(super) capacity: usize,
     pub(super) exec_plan: ExecutionPlan,
-    pub(super) plan_warnings: Vec<crate::warnings::PlanWarning>,
+    pub(super) plan_warnings: Vec<barca_compile::warnings::PlanWarning>,
     /// `Manual` nodes read as they are (RFC-0008), by id.
-    pub(super) pinned: HashMap<String, crate::freshness::Pin>,
+    pub(super) pinned: HashMap<String, barca_decide::freshness::Pin>,
     /// Under a tick: the targets that read a `Manual` node that has never been computed.
     pub(super) blocked: Vec<(String, TargetOutcome)>,
-    /// Under a tick: the paused nodes (`crate::pauses`); a blocked target whose `failed_node`
+    /// Under a tick: the paused nodes (`barca_store::pauses`); a blocked target whose `failed_node`
     /// is one of them was skipped because it is paused.
     pub(super) paused: HashSet<String>,
     /// `--partition`: what the selection narrowed and skipped.
-    pub(super) narrowing: Option<crate::selection::Narrowing>,
+    pub(super) narrowing: Option<barca_compile::selection::Narrowing>,
 }
 
 /// The step reports of a tick's targets blocked on a `Manual` node that has never been
@@ -111,7 +111,7 @@ pub(super) async fn prepare_run(
         && target_ids.is_empty()
         && let Some(note) = skipped_tasks_note(&dag, file_args)
     {
-        crate::run_line!(Always, "{note}");
+        barca_model::run_line!(Always, "{note}");
     }
     // Several targets: a step failure stops only what depends on it, so every target that can
     // still run does (one run reports every failure). One target keeps the stop-at-first-failure
@@ -142,7 +142,7 @@ pub(super) async fn prepare_run(
     let mut exec_plan = match &cone {
         Some(cone) => {
             let cone: Vec<&str> = cone.iter().map(String::as_str).collect();
-            crate::planner::plan_for_nodes(&dag, &cone, &config, partition)
+            barca_compile::planner::plan_for_nodes(&dag, &cone, &config, partition)
         }
         None => plan_for_targets(&dag, &target_ids, &config, command_label, partition),
     };
@@ -150,7 +150,7 @@ pub(super) async fn prepare_run(
         Some(selection) => Some(selection.apply(&dag, &mut exec_plan, &target_ids)?),
         None => None,
     };
-    crate::pins::prune_partition_inputs(&dag, &mut exec_plan, &target_ids, &user_pins);
+    barca_store::pins::prune_partition_inputs(&dag, &mut exec_plan, &target_ids, &user_pins);
     trace("planned");
 
     if let CachePolicy::RefreshSelective { names, .. } = policy {
@@ -169,13 +169,13 @@ pub(super) async fn prepare_run(
         }
     }
     if let Some(note) = narrowing.as_ref().and_then(|n| n.note()) {
-        crate::run_line!(Always, "{note}");
+        barca_model::run_line!(Always, "{note}");
     }
     // A planned step whose file imports a helper that does not parse cannot run (#550).
     dag.check_imports(exec_plan.step_ids())?;
     // Plan-time warnings for the steps this command planned, before anything runs.
-    let plan_warnings = crate::warnings::for_plan(&dag, &exec_plan);
-    crate::warnings::print(&plan_warnings);
+    let plan_warnings = barca_compile::warnings::for_plan(&dag, &exec_plan);
+    barca_compile::warnings::print(&plan_warnings);
     let capacity = sizing.capacity;
     warn_over_capacity(
         &planned_weights(&exec_plan),

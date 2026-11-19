@@ -6,10 +6,10 @@ use super::*;
 pub(super) struct DecidePhase<'a> {
     pub(super) dag: &'a Dag,
     pub(super) policy: &'a CachePolicy,
-    pub(super) cfg: &'a crate::config::ResolvedConfig,
+    pub(super) cfg: &'a barca_model::config::ResolvedConfig,
     pub(super) phase_ref: &'a Phase,
     pub(super) decide_state: &'a mut DecideState,
-    pub(super) cost_model: &'a mut crate::cost::CostModel,
+    pub(super) cost_model: &'a mut barca_engine::cost::CostModel,
     pub(super) store: &'a mut Option<StoreSync>,
     pub(super) step_reports: &'a mut Vec<StepReport>,
     pub(super) all_outputs: &'a mut HashMap<String, OutputRef>,
@@ -38,32 +38,36 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
         agent_mode,
     } = ctx;
     decide_state.register_phase(phase_ref);
-    let mut uncached_streams: Vec<crate::planner::WorkerStream> = Vec::new();
+    let mut uncached_streams: Vec<barca_compile::planner::WorkerStream> = Vec::new();
 
     // With a server, ask its ledger about this phase's run hashes the first lookup could not
     // know (below a sensor, or dynamic partitions), before the database is opened.
-    if let Some(ledger) = crate::ledger::attached(cfg) {
+    if let Some(ledger) = barca_store::ledger::attached(cfg) {
         ledger
-            .prefetch(crate::cache::phase_keys(dag, phase_ref, decide_state))
+            .prefetch(barca_decide::cache::phase_keys(
+                dag,
+                phase_ref,
+                decide_state,
+            ))
             .await?;
     }
     // Open the DB only for this phase's cache lookups and release it before any
     // step runs, so other barca processes can use the metadata DB while Python
     // executes.
-    let cache = crate::cache::CacheReader::for_config(cfg).await?;
+    let cache = barca_decide::cache::CacheReader::for_config(cfg).await?;
 
     // Decide all upstream chunks before any consumer, independently of the worker split.
-    let mut uncached: Vec<Vec<crate::planner::StreamStep>> =
+    let mut uncached: Vec<Vec<barca_compile::planner::StreamStep>> =
         vec![Vec::new(); phase_ref.streams.len()];
     let mut due_costs = Vec::new();
     // The steps that run because they had no cache hit: their history says why (#925).
-    let mut missed = crate::plan_reasons::Missed::default();
+    let mut missed = barca_decide::plan_reasons::Missed::default();
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
-        if step.kind == crate::NodeKind::Sensor {
+        if step.kind == barca_model::NodeKind::Sensor {
             let id = step.step_id.display();
             if let Some((revision, output)) = cache.previous_observation(&id).await? {
-                let output = crate::cache::accept_cache_hit(store, &id, output);
+                let output = barca_decide::cache::accept_cache_hit(store, &id, output);
                 decide_state.sensor_outputs.insert(id.clone(), revision);
                 decide_state.sensor_previous.insert(id, output);
             }
@@ -76,7 +80,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
             Decision::Run(reason) => {
                 let base = step.step_id.base_id();
                 let steps = step.partition_keys.len().max(1) as u64;
-                match crate::plan_reasons::of_run_reason(base, reason) {
+                match barca_decide::plan_reasons::of_run_reason(base, reason) {
                     Some(why) => decide_state.plan_tally.add(base, &[why], steps),
                     None if step.partition_keys.is_empty() => missed.steps.push(display_id.clone()),
                     None => missed.keys.push((
@@ -98,7 +102,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                 let base = step.step_id.base_id();
                 match refresh
                     .as_ref()
-                    .and_then(|r| crate::plan_reasons::of_run_reason(base, r))
+                    .and_then(|r| barca_decide::plan_reasons::of_run_reason(base, r))
                 {
                     // A refresh forces every key it names; the others are not refreshed.
                     Some(why) => decide_state
@@ -124,7 +128,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                     && step.partition_keys.is_empty()
                     && dag
                         .get_node(step.step_id.base_id())
-                        .is_some_and(|n| n.kind() == crate::NodeKind::Sensor)
+                        .is_some_and(|n| n.kind() == barca_model::NodeKind::Sensor)
                     && let Some(run_hash) = decide_state.run_hashes().get(&display_id)
                     && let Some(known) = db::confirmed_object(&cache, &display_id, run_hash).await
                 {
@@ -153,8 +157,8 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                     if StoreSync::known_absent(store.as_ref(), &oref.path) {
                         held_cached_lines.push(display_id.clone());
                     } else {
-                        crate::run_line!(Agent, "{}", cached_step_line(dag, &display_id));
-                        crate::lines::Lines::current().cached_step(&display_id);
+                        barca_model::run_line!(Agent, "{}", cached_step_line(dag, &display_id));
+                        barca_model::lines::Lines::current().cached_step(&display_id);
                     }
                 }
                 all_outputs.insert(display_id.clone(), oref);
@@ -163,7 +167,10 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                 // are not planned.
                 if !matches!(
                     held,
-                    Some(crate::cache::Held::Manual { .. } | crate::cache::Held::Pinned)
+                    Some(
+                        barca_decide::cache::Held::Manual { .. }
+                            | barca_decide::cache::Held::Pinned
+                    )
                 ) {
                     cached_steps.remember(step);
                 }
@@ -203,10 +210,10 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
     if !due_costs.is_empty() {
         cost_model.seed_exact(db::cost_estimates_for(cache.conn(), &due_costs).await?);
     }
-    crate::plan_reasons::explain(&cache, dag, decide_state, missed).await;
+    barca_decide::plan_reasons::explain(&cache, dag, decide_state, missed).await;
     for (stream, uncached_steps) in phase_ref.streams.iter().zip(uncached) {
         if !uncached_steps.is_empty() {
-            uncached_streams.push(crate::planner::WorkerStream {
+            uncached_streams.push(barca_compile::planner::WorkerStream {
                 stream_id: stream.stream_id.clone(),
                 steps: uncached_steps,
             });
@@ -225,7 +232,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
 /// (stderr is not a terminal, as when an agent or CI drives barca) silently swallows
 /// `ProgressBar::println`, which used to make warnings vanish.
 pub(crate) fn note(pb: &Option<indicatif::ProgressBar>, msg: &str) {
-    crate::lines::Lines::current().note(pb.as_ref(), msg);
+    barca_model::lines::Lines::current().note(pb.as_ref(), msg);
 }
 
 pub(super) struct DispatchPhase<'a> {
@@ -233,10 +240,10 @@ pub(super) struct DispatchPhase<'a> {
     /// The batched calls of this phase (RFC-0013), as [`plan_calls`] made them.
     pub(super) calls: Vec<(String, Vec<String>)>,
     pub(super) provided: &'a HashMap<String, dispatch::ProvidedInput>,
-    pub(super) pool: &'a mut crate::io_loop::WorkerPool,
+    pub(super) pool: &'a mut barca_engine::io_loop::WorkerPool,
     /// The run's Datadog exporter, when that integration is on.
     pub(super) datadog: Option<std::sync::Arc<crate::telemetry::datadog::Dispatch>>,
-    pub(super) cost_model: &'a mut crate::cost::CostModel,
+    pub(super) cost_model: &'a mut barca_engine::cost::CostModel,
     pub(super) decide_state: &'a DecideState,
     pub(super) store: &'a mut Option<StoreSync>,
     pub(super) recorder: &'a StepRecorder,
@@ -249,8 +256,8 @@ pub(super) struct DispatchPhase<'a> {
     pub(super) elapsed_so_far: f64,
     pub(super) completed_steps: usize,
     pub(super) total_steps: usize,
-    pub(super) event_tx: &'a Option<UnboundedSender<crate::RunEvent>>,
-    pub(super) logs_buffer: &'a mut crate::run_logs::Recorder,
+    pub(super) event_tx: &'a Option<UnboundedSender<barca_model::RunEvent>>,
+    pub(super) logs_buffer: &'a mut barca_db::run_logs::Recorder,
     pub(super) step_durations: &'a mut HashMap<String, (f64, f64)>,
     pub(super) cancel: &'a CancellationToken,
 }
@@ -258,7 +265,7 @@ pub(super) struct DispatchPhase<'a> {
 pub(super) async fn dispatch_phase(
     ctx: DispatchPhase<'_>,
 ) -> (
-    crate::coordinator::Coordinator,
+    barca_engine::coordinator::Coordinator,
     Result<(), String>,
     f64,
     usize,
@@ -288,7 +295,7 @@ pub(super) async fn dispatch_phase(
         step_durations,
         cancel,
     } = ctx;
-    let mut coord = crate::coordinator::Coordinator::new();
+    let mut coord = barca_engine::coordinator::Coordinator::new();
     coord.assign_calls(calls);
     let loaded = coord.load_phase(filtered_phase, provided);
     coord.sensor_previous(&decide_state.sensor_previous);
@@ -311,7 +318,7 @@ pub(super) async fn dispatch_phase(
 
     // Progress callback — update bar as each step completes.
     let run_hashes = decide_state.run_hashes();
-    let on_step_cb: crate::io_loop::StepCallback<'_> = Box::new(
+    let on_step_cb: barca_engine::io_loop::StepCallback<'_> = Box::new(
         |node_id: &str, artifact: &serde_json::Value, attempts: u32| {
             let handling = std::time::Instant::now();
             // The step's trace goes out now, not at the end of the run. parallel() children
@@ -330,13 +337,13 @@ pub(super) async fn dispatch_phase(
             {
                 recorder.record(
                     NewMaterialization::from_artifact(node_id, run_hash, artifact, attempts)
-                        .with_observation(crate::observation::from_artifact(
+                        .with_observation(barca_engine::observation::from_artifact(
                             artifact,
                             decide_state.sensor_outputs.get(node_id),
                             run_id,
                             node_id,
                         ))
-                        .with_components(crate::changes::step_components_json(
+                        .with_components(barca_decide::changes::step_components_json(
                             dag,
                             decide_state,
                             node_id,
@@ -368,13 +375,13 @@ pub(super) async fn dispatch_phase(
                 }
                 let record = recorder.after_upload(
                     NewMaterialization::from_artifact(node_id, run_hash, artifact, attempts)
-                        .with_observation(crate::observation::from_artifact(
+                        .with_observation(barca_engine::observation::from_artifact(
                             artifact,
                             decide_state.sensor_outputs.get(node_id),
                             run_id,
                             node_id,
                         ))
-                        .with_components(crate::changes::step_components_json(
+                        .with_components(barca_decide::changes::step_components_json(
                             dag,
                             decide_state,
                             node_id,
@@ -449,7 +456,7 @@ pub(super) async fn dispatch_phase(
                 }
                 bar.set_message(format!("{short_name} done"));
             } else if agent_mode {
-                crate::run_line!(
+                barca_model::run_line!(
                     Agent,
                     "[barca] step:{} completed {:.1}s ({}/{}){}{}",
                     node_id,
@@ -472,44 +479,45 @@ pub(super) async fn dispatch_phase(
     // event live to the caller's channel (the HTTP server) if present.
     let event_tx_phase = event_tx.clone();
     let logs_sink = logs_buffer;
-    let on_event_cb: crate::io_loop::EventCallback<'_> = Box::new(move |ev: crate::RunEvent| {
-        if let crate::RunEvent::Log {
-            ref node_id,
-            ref line,
-            stream,
-            ref ts,
-        } = ev
-        {
-            // Under `BARCA_LOG=json`, stdout becomes a JSON line; stderr was already written
-            // to the worker's own stderr as it is.
-            if stream == crate::LogStream::Stdout {
-                crate::jsonlog::step_output(node_id, line);
-            }
-            logs_sink.push(crate::run_logs::RecordedLine {
-                node_id: node_id.clone(),
-                line: line.clone(),
+    let on_event_cb: barca_engine::io_loop::EventCallback<'_> =
+        Box::new(move |ev: barca_model::RunEvent| {
+            if let barca_model::RunEvent::Log {
+                ref node_id,
+                ref line,
                 stream,
-                ts: ts.clone(),
-            });
-        }
-        if let crate::RunEvent::StepFinished {
-            ref node_id,
-            elapsed_seconds: Some(elapsed),
-            import_seconds,
-            ..
-        } = ev
-        {
-            let id = crate::StepId::parse(node_id);
-            if !id.partition.0.contains_key("_branch") {
-                let duration = step_durations.entry(id.base_id().to_string()).or_default();
-                duration.0 += elapsed;
-                duration.1 += import_seconds.unwrap_or(0.0);
+                ref ts,
+            } = ev
+            {
+                // Under `BARCA_LOG=json`, stdout becomes a JSON line; stderr was already written
+                // to the worker's own stderr as it is.
+                if stream == barca_model::LogStream::Stdout {
+                    barca_model::jsonlog::step_output(node_id, line);
+                }
+                logs_sink.push(barca_db::run_logs::RecordedLine {
+                    node_id: node_id.clone(),
+                    line: line.clone(),
+                    stream,
+                    ts: ts.clone(),
+                });
             }
-        }
-        if let Some(ref tx) = event_tx_phase {
-            let _ = tx.send(ev);
-        }
-    });
+            if let barca_model::RunEvent::StepFinished {
+                ref node_id,
+                elapsed_seconds: Some(elapsed),
+                import_seconds,
+                ..
+            } = ev
+            {
+                let id = barca_model::StepId::parse(node_id);
+                if !id.partition.0.contains_key("_branch") {
+                    let duration = step_durations.entry(id.base_id().to_string()).or_default();
+                    duration.0 += elapsed;
+                    duration.1 += import_seconds.unwrap_or(0.0);
+                }
+            }
+            if let Some(ref tx) = event_tx_phase {
+                let _ = tx.send(ev);
+            }
+        });
 
     // Drive this phase against the persistent pool. The cost model both
     // sizes the batch pulls and absorbs the timings coming back.

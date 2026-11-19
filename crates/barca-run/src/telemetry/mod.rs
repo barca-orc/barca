@@ -15,7 +15,7 @@ pub mod slack;
 pub use history::JobHistory;
 pub mod dogstatsd;
 
-use crate::step_status::StepStatus;
+use barca_model::step_status::StepStatus;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -48,8 +48,8 @@ impl StepOutcome {
     }
 }
 
-pub(crate) use crate::step_trace::node_contexts;
-pub use crate::step_trace::{NodeContext, short_name};
+pub(crate) use barca_engine::step_trace::node_contexts;
+pub use barca_engine::step_trace::{NodeContext, short_name};
 
 /// One step of a finished run. Times are Unix nanoseconds.
 #[derive(Debug, Clone)]
@@ -114,7 +114,7 @@ pub struct RunReport {
     pub steps: Vec<StepReport>,
     /// What started the run (`barca.trigger`), and for a scheduled run the tick
     /// (`barca.scheduled_at`) and the schedule (`barca.schedule_id`).
-    pub trigger: crate::trigger::Trigger,
+    pub trigger: barca_model::trigger::Trigger,
 }
 
 /// A server lifecycle signal, independent of materialization runs.
@@ -210,7 +210,7 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
             // Switched off by its own settings: nothing to send, nothing to say.
             Some(Ok(None)) => {}
             Some(Err(e)) => {
-                crate::warnings::warn_once(&format!("telemetry '{name}' is off: {e}"));
+                barca_compile::warnings::warn_once(&format!("telemetry '{name}' is off: {e}"));
             }
             None => {
                 let hint = if name == slack::NAME {
@@ -218,7 +218,7 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
                 } else {
                     String::new()
                 };
-                crate::warnings::warn_once(&format!(
+                barca_compile::warnings::warn_once(&format!(
                     "unknown telemetry integration '{name}' in BARCA_TELEMETRY (known: {}){hint}",
                     KNOWN.join(", ")
                 ));
@@ -230,7 +230,7 @@ pub fn configured() -> Vec<(String, Box<dyn Integration>)> {
         Ok(Some(slack)) => out.push((slack::NAME.to_string(), Box::new(slack))),
         Ok(None) => {}
         Err(e) => {
-            crate::warnings::warn_once(&format!("telemetry '{}' is off: {e}", slack::NAME));
+            barca_compile::warnings::warn_once(&format!("telemetry '{}' is off: {e}", slack::NAME));
         }
     }
     out
@@ -275,7 +275,7 @@ pub(crate) fn delivered(name: &str, what: &str, result: Result<(), String>) {
                 .map(|mut f| f.remove(name))
                 .unwrap_or(false)
             {
-                crate::errln!("[barca] telemetry '{name}' is receiving runs again");
+                barca_model::errln!("[barca] telemetry '{name}' is receiving runs again");
             }
         }
         Err(problem) => {
@@ -284,7 +284,7 @@ pub(crate) fn delivered(name: &str, what: &str, result: Result<(), String>) {
                 .map(|mut f| f.insert(name.to_string()))
                 .unwrap_or(true)
             {
-                crate::errln!(
+                barca_model::errln!(
                     "[barca] warning: telemetry '{name}' did not receive {what}: {problem}"
                 );
             }
@@ -296,26 +296,27 @@ pub(crate) fn delivered(name: &str, what: &str, result: Result<(), String>) {
 pub async fn export_server(integrations: &[(String, Box<dyn Integration>)], server: &ServerReport) {
     for (name, integration) in integrations {
         let key = format!("{name}:serve");
-        let problem = match tokio::time::timeout(EXPORT_TIMEOUT, integration.export_server(server))
-            .await
-        {
-            Ok(Ok(())) => {
-                if failing()
-                    .lock()
-                    .map(|mut f| f.remove(&key))
-                    .unwrap_or(false)
-                {
-                    crate::errln!("[barca] telemetry '{name}' is receiving server signals again");
+        let problem =
+            match tokio::time::timeout(EXPORT_TIMEOUT, integration.export_server(server)).await {
+                Ok(Ok(())) => {
+                    if failing()
+                        .lock()
+                        .map(|mut f| f.remove(&key))
+                        .unwrap_or(false)
+                    {
+                        barca_model::errln!(
+                            "[barca] telemetry '{name}' is receiving server signals again"
+                        );
+                    }
+                    continue;
                 }
-                continue;
-            }
-            // Integration error strings may contain addresses or credentials. Lifecycle
-            // diagnostics deliberately report only the failure category.
-            Ok(Err(_)) => "delivery failed",
-            Err(_) => "no reply within 3s",
-        };
+                // Integration error strings may contain addresses or credentials. Lifecycle
+                // diagnostics deliberately report only the failure category.
+                Ok(Err(_)) => "delivery failed",
+                Err(_) => "no reply within 3s",
+            };
         if failing().lock().map(|mut f| f.insert(key)).unwrap_or(true) {
-            crate::errln!(
+            barca_model::errln!(
                 "[barca] warning: telemetry '{name}' did not receive server signal: {problem}"
             );
         }

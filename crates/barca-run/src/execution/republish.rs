@@ -1,15 +1,15 @@
 //! Republishing the sinks of cache hits (#662).
 //!
 //! A step served from cache does not run, so its `@sink`s are not written by a worker. Each
-//! sink records the run hash it last published (`crate::sink_publications`); a cache hit whose
+//! sink records the run hash it last published (`barca_db::sink_publications`); a cache hit whose
 //! run hash differs (code A -> B -> A) is republished from the cached artifact by
 //! `python -m barca._sinks republish`, without running the step. One that matches writes
 //! nothing. A sink that cannot be republished fails its step, as it does when the step runs.
 
 use super::{RunSession, Work, note};
-use crate::BarcaError;
-use crate::recover;
-use crate::sink_publications::{Publication, Verdict};
+use barca_db::sink_publications::{Publication, Verdict};
+use barca_decide::recover;
+use barca_model::BarcaError;
 use std::collections::{BTreeMap, VecDeque};
 
 #[derive(Debug, serde::Deserialize)]
@@ -53,10 +53,10 @@ pub(super) async fn republish_sinks<'p>(
         }
     }
     let published =
-        crate::sink_publications::published(&session.request.cfg.db_path, &wanted).await?;
-    let host = crate::process::local_host();
+        barca_db::sink_publications::published(&session.request.cfg.db_path, &wanted).await?;
+    let host = barca_model::process::local_host();
     let run_hashes = session.state.decide_state.run_hashes();
-    let mut stale: Vec<(String, Vec<crate::model::SinkDecl>)> = Vec::new();
+    let mut stale: Vec<(String, Vec<barca_model::model::SinkDecl>)> = Vec::new();
     for id in &ids {
         let (Some(run_hash), Some(node)) = (run_hashes.get(id), dag.get_node(recover::base_of(id)))
         else {
@@ -122,7 +122,7 @@ pub(super) async fn republish_sinks<'p>(
         .filter_map(|(id, sinks)| {
             let output = session.state.results.outputs.get(id)?;
             let node = dag.get_node(recover::base_of(id))?;
-            let partition: BTreeMap<String, String> = crate::StepId::parse(id).partition.0;
+            let partition: BTreeMap<String, String> = barca_model::StepId::parse(id).partition.0;
             Some(serde_json::json!({
                 "node_id": id,
                 "path": output.path,
@@ -134,15 +134,18 @@ pub(super) async fn republish_sinks<'p>(
             }))
         })
         .collect();
-    let mut cmd = crate::helper_proc::python_module(
+    let mut cmd = barca_proc::helper_proc::python_module(
         session.request.python,
         "barca._sinks",
         session.request.cfg.storage_options_json.as_deref(),
     );
     cmd.arg("republish").kill_on_drop(true);
-    let answer =
-        crate::helper_proc::run_json::<Answer>(cmd, &serde_json::json!({ "items": items }), None)
-            .await;
+    let answer = barca_proc::helper_proc::run_json::<Answer>(
+        cmd,
+        &serde_json::json!({ "items": items }),
+        None,
+    )
+    .await;
     if session.started.cancel.is_cancelled() {
         return Ok(());
     }
@@ -150,15 +153,15 @@ pub(super) async fn republish_sinks<'p>(
         Ok(answer) => answer.items,
         Err(e) => {
             let why = match e {
-                crate::helper_proc::JsonFailed::Spawn(e)
-                | crate::helper_proc::JsonFailed::Io(e) => e.to_string(),
-                crate::helper_proc::JsonFailed::TimedOut(limit) => {
+                barca_proc::helper_proc::JsonFailed::Spawn(e)
+                | barca_proc::helper_proc::JsonFailed::Io(e) => e.to_string(),
+                barca_proc::helper_proc::JsonFailed::TimedOut(limit) => {
                     format!("it did not finish within {}s", limit.as_secs())
                 }
-                crate::helper_proc::JsonFailed::Exited(stderr) => {
-                    crate::helper_proc::helper_cause(&stderr)
+                barca_proc::helper_proc::JsonFailed::Exited(stderr) => {
+                    barca_proc::helper_proc::helper_cause(&stderr)
                 }
-                crate::helper_proc::JsonFailed::Invalid(e) => e.to_string(),
+                barca_proc::helper_proc::JsonFailed::Invalid(e) => e.to_string(),
             };
             stale
                 .iter()
@@ -216,7 +219,7 @@ pub(super) async fn republish_sinks<'p>(
         }
     }
     for ((sink, base), count) in done {
-        let name = crate::targets::short_name(&base);
+        let name = barca_compile::targets::short_name(&base);
         let what = if session
             .prepared
             .dag
@@ -243,7 +246,7 @@ pub(super) async fn republish_sinks<'p>(
 fn fail_republish(session: &mut RunSession<'_, '_>, id: &str, message: String) {
     let message = format!("SinkError: {message}");
     if session.request.agent_mode {
-        crate::run_line!(Agent, "{}", super::failed_step_line(id, &message));
+        barca_model::run_line!(Agent, "{}", super::failed_step_line(id, &message));
     }
     session
         .state
@@ -252,7 +255,7 @@ fn fail_republish(session: &mut RunSession<'_, '_>, id: &str, message: String) {
     session.state.sink_failed = true;
     if session.state.step_failure.is_none() {
         session.state.step_failure = Some((id.to_string(), message.clone()));
-        session.state.step_failure_phase = Some(crate::dispatch::ErrorPhase::Sink);
+        session.state.step_failure_phase = Some(barca_compile::dispatch::ErrorPhase::Sink);
     }
     session.state.results.record_failure(
         id.to_string(),
@@ -260,6 +263,6 @@ fn fail_republish(session: &mut RunSession<'_, '_>, id: &str, message: String) {
         message,
         1,
         None,
-        Some(crate::dispatch::ErrorPhase::Sink),
+        Some(barca_compile::dispatch::ErrorPhase::Sink),
     );
 }

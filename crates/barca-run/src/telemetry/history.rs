@@ -101,8 +101,8 @@ impl JobHistory {
         let Some(db_path) = &self.db_path else {
             return Ok(None);
         };
-        let _g = crate::db::db_guard().await;
-        let (_db, conn) = crate::db::open_conn(db_path).await.map_err(failed)?;
+        let _g = barca_db::db::db_guard().await;
+        let (_db, conn) = barca_db::db::open_conn(db_path).await.map_err(failed)?;
         let mut record = JobRecord::default();
 
         let mut rows = conn
@@ -176,9 +176,9 @@ impl JobHistory {
         let Some(db_path) = &self.db_path else {
             return Ok(());
         };
-        let _g = crate::db::db_guard().await;
-        let (_db, conn) = crate::db::open_conn(db_path).await.map_err(failed)?;
-        crate::db::notifications::record_post(
+        let _g = barca_db::db::db_guard().await;
+        let (_db, conn) = barca_db::db::open_conn(db_path).await.map_err(failed)?;
+        barca_db::db::notifications::record_post(
             &conn,
             job,
             integration,
@@ -196,7 +196,7 @@ mod tests {
     use super::*;
 
     async fn finished(db_path: &str, run_id: &str, job: &str, status: &str, started: &str) {
-        let (_db, conn) = crate::db::open_conn(db_path).await.unwrap();
+        let (_db, conn) = barca_db::db::open_conn(db_path).await.unwrap();
         conn.execute(
             "INSERT INTO runs (run_id, command, files, status, job, started_at, finished_at) \
              VALUES (?1, 'get', '[]', ?2, ?3, ?4, ?4)",
@@ -210,7 +210,7 @@ mod tests {
     async fn reads_the_previous_run_the_failing_streak_and_the_last_post() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("m.db").display().to_string();
-        crate::db::init_db(&db_path).await.unwrap();
+        barca_db::db::init_db(&db_path).await.unwrap();
         let history = JobHistory::new(&db_path);
         let job = "p.py:a";
         finished(&db_path, "r1", job, "failed", "2026-10-18 05:00:00").await;

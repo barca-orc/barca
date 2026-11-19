@@ -3,24 +3,22 @@
 mod publication;
 use publication::publish_proofs;
 
-use crate::{
-    BarcaError,
-    cache::CachePolicy,
-    dag::Dag,
-    db,
-    dispatch::OutputRef,
-    model::{Freshness, NodeKind, PartitionKey, PartitionSpec},
-    planner::{ExecutionPlan, Phase, StreamStep},
-    results::{KeySummary, LISTED_KEYS, PartitionSummary, StepReport},
-};
+use barca_compile::dag::Dag;
+use barca_compile::dispatch::OutputRef;
+use barca_compile::planner::{ExecutionPlan, Phase, StreamStep};
+use barca_db::db;
+use barca_decide::cache::CachePolicy;
+use barca_model::BarcaError;
+use barca_model::model::{Freshness, NodeKind, PartitionKey, PartitionSpec};
+use barca_store::results::{KeySummary, LISTED_KEYS, PartitionSummary, StepReport};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::db::BY_NODE_RUN;
-use crate::source_observation::Source;
-use crate::step_status::StepStatus;
+use barca_db::db::BY_NODE_RUN;
+use barca_model::source_observation::Source;
+use barca_model::step_status::StepStatus;
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Proof {
     signature: String,
@@ -70,7 +68,7 @@ impl Incremental {
     pub(crate) async fn open(
         dag: &Dag,
         plan: &ExecutionPlan,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         policy: &CachePolicy,
         selected: bool,
         held: HashSet<String>,
@@ -98,7 +96,7 @@ impl Incremental {
                 serde_json::to_vec(&(&cfg.artifact_root, &cfg.local_artifact_dir)).unwrap()
             )
         );
-        let cache = crate::cache::CacheReader::for_config(cfg).await?;
+        let cache = barca_decide::cache::CacheReader::for_config(cfg).await?;
         let generation = generation(cache.conn()).await?;
         let mut previous = Snapshot::default();
         let mut lookup = db::prepare(
@@ -139,7 +137,7 @@ impl Incremental {
                 .map(|up| {
                     (
                         up,
-                        if crate::cache::is_cutoff(dag, up)
+                        if barca_decide::cache::is_cutoff(dag, up)
                             || dag.get_node(up).is_some_and(|n| {
                                 matches!(n.decl.freshness, Freshness::Manual)
                                     && n.kind() == NodeKind::Asset
@@ -153,7 +151,7 @@ impl Incremental {
                 })
                 .collect();
             upstream.sort_by_key(|(id, _)| *id);
-            let env = crate::envdeps::hash_input(&crate::envdeps::resolve(&n.decl.env));
+            let env = barca_model::envdeps::hash_input(&barca_model::envdeps::resolve(&n.decl.env));
             let bytes = serde_json::to_vec(
                 &serde_json::to_value(&(
                     n.fingerprint.definition_hash.as_str(),
@@ -331,7 +329,7 @@ impl Incremental {
                 let partitioned = node.is_some_and(|n| !n.decl.partitions.is_empty());
                 reports.push(StepReport {
                     id: id.to_owned(),
-                    kind: crate::model::kind_str(node.map(|n| n.kind())),
+                    kind: barca_model::model::kind_str(node.map(|n| n.kind())),
                     status: Some(StepStatus::Cached.to_string()),
                     run_hash: if partitioned {
                         None
@@ -343,7 +341,7 @@ impl Incremental {
                     } else {
                         self.next.nodes[id].output.as_ref().map(|o| o.path.clone())
                     },
-                    env: crate::cache::env_report(dag, id),
+                    env: barca_decide::cache::env_report(dag, id),
                     undeclared_env: node.map(|n| n.undeclared_env()).filter(|v| !v.is_empty()),
                     partitions: partitioned.then_some(PartitionSummary {
                         total: cached,
@@ -416,10 +414,10 @@ impl Incremental {
                 // A sensor runs every time, but consumers depend on what it observed.
                 if dag
                     .get_node(id)
-                    .is_some_and(|n| crate::cache::folds_output(dag, &n.id))
+                    .is_some_and(|n| barca_decide::cache::folds_output(dag, &n.id))
                     && proof.output_hash.is_some()
                     && self.previous.nodes.get(id).is_some_and(|old| {
-                        (crate::cache::is_cutoff(dag, id)
+                        (barca_decide::cache::is_cutoff(dag, id)
                             || (old.signature == proof.signature && old.run_hash == proof.run_hash))
                             && old.observation_hash.as_ref().or(old.output_hash.as_ref())
                                 == proof
@@ -438,7 +436,7 @@ impl Incremental {
         &self,
         base: &str,
         source: &str,
-    ) -> Option<(usize, crate::keyed::SourceKeys)> {
+    ) -> Option<(usize, barca_model::keyed::SourceKeys)> {
         let (_, selected) = self.filters.get(base)?;
         let source = self.next.nodes.get(source)?.source.as_ref()?;
         Some((source.count, source.project(selected).ok()?))
@@ -497,8 +495,8 @@ impl Incremental {
                         PartitionKey(std::collections::BTreeMap::from([(
                             dim.clone(),
                             match v {
-                                crate::model::PartitionValue::Str(v) => v.clone(),
-                                crate::model::PartitionValue::Int(v) => v.to_string(),
+                                barca_model::model::PartitionValue::Str(v) => v.clone(),
+                                barca_model::model::PartitionValue::Int(v) => v.to_string(),
                             },
                         )]))
                     })
@@ -513,13 +511,13 @@ impl Incremental {
     pub(crate) async fn seed(
         &mut self,
         dag: &Dag,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         ids: Vec<(String, Option<PartitionKey>)>,
-        state: &mut crate::cache::DecideState,
+        state: &mut barca_decide::cache::DecideState,
         outputs: &mut HashMap<String, OutputRef>,
         cached_ids: &mut HashSet<String>,
-        cached_steps: &mut crate::recover::CachedSteps,
-        store: &mut Option<crate::store_sync::StoreSync>,
+        cached_steps: &mut barca_decide::recover::CachedSteps,
+        store: &mut Option<barca_store::store_sync::StoreSync>,
     ) -> Result<(), BarcaError> {
         if self.previous.nodes.is_empty() {
             return Ok(());
@@ -540,7 +538,7 @@ impl Incremental {
         }
         let needs_rows = cfg.remote_artifacts() || ids.iter().any(|(_, key)| key.is_some());
         let cache = if needs_rows {
-            Some(crate::cache::CacheReader::for_config(cfg).await?)
+            Some(barca_decide::cache::CacheReader::for_config(cfg).await?)
         } else {
             None
         };
@@ -561,7 +559,7 @@ impl Incremental {
                     &needed
                         .iter()
                         .filter_map(|id| {
-                            let step = crate::model::StepId::parse(id);
+                            let step = barca_model::model::StepId::parse(id);
                             self.previous
                                 .nodes
                                 .get(step.base_id())?
@@ -604,7 +602,8 @@ impl Incremental {
             .into_iter()
             .filter_map(|(id, selected)| {
                 let source = self.next.nodes.get(&id)?.source.as_ref()?;
-                let crate::keyed::SourceKeys::Keyed(_, hashes) = source.project(&selected).ok()?
+                let barca_model::keyed::SourceKeys::Keyed(_, hashes) =
+                    source.project(&selected).ok()?
                 else {
                     return None;
                 };
@@ -640,7 +639,7 @@ impl Incremental {
             }) else {
                 continue;
             };
-            let output = crate::cache::accept_cache_hit(store, &display, output);
+            let output = barca_decide::cache::accept_cache_hit(store, &display, output);
             self.seeded.insert(display.clone());
             let template = &self.templates[&base];
             let mut step = template.with_keys(key.into_iter().collect());
@@ -665,13 +664,13 @@ impl Incremental {
                             None
                         } else {
                             Some(named.unwrap_or_else(|| {
-                                crate::targets::short_name(source_id).to_owned()
+                                barca_compile::targets::short_name(source_id).to_owned()
                             }))
                         };
                         if let Some(param) = &param {
                             step.inputs.remove(param);
                         }
-                        sources.push(crate::keyed::KeyedSource {
+                        sources.push(barca_model::keyed::KeyedSource {
                             dim: dim.clone(),
                             source_id: source_id.to_owned(),
                             path: self.next.nodes[source_id]
@@ -783,7 +782,7 @@ impl Incremental {
 
     pub(crate) async fn save(
         &self,
-        cfg: &crate::config::ResolvedConfig,
+        cfg: &barca_model::config::ResolvedConfig,
         run_id: &str,
         materialized: bool,
         hashes: &HashMap<String, String>,
@@ -799,7 +798,7 @@ impl Incremental {
         {
             return Ok(());
         }
-        let cache = crate::cache::CacheReader::for_config(cfg).await?;
+        let cache = barca_decide::cache::CacheReader::for_config(cfg).await?;
         let generation = generation(cache.conn()).await?;
         let mut proofs = self.next.nodes.clone();
         // A held node's result was read, not decided: its proof is deleted (`discarded`).
@@ -837,7 +836,7 @@ impl Incremental {
             })
             .collect();
         for (id, hash) in hashes.iter().filter(|(id, _)| !self.seeded.contains(*id)) {
-            let base = crate::model::StepId::parse(id).base_id().to_owned();
+            let base = barca_model::model::StepId::parse(id).base_id().to_owned();
             let Some(proof) = proofs.get_mut(&base) else {
                 continue;
             };
@@ -893,7 +892,7 @@ async fn generation(conn: &libsql::Connection) -> Result<i64, BarcaError> {
 }
 /// Fetch only needed identities, in bounded SQL calls rather than one call per returned key.
 async fn latest_many(
-    cache: &crate::cache::CacheReader,
+    cache: &barca_decide::cache::CacheReader,
     ids: &[String],
     through: i64,
     selected: &HashMap<String, String>,
@@ -907,7 +906,7 @@ async fn latest_many(
             .join(",");
         let sql = format!(
             "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m {BY_NODE_RUN} ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
-            crate::cache::READ_STAMP_REFRESH
+            barca_decide::cache::READ_STAMP_REFRESH
         );
         let params = std::iter::once(libsql::Value::Integer(through))
             .chain(chunk.iter().flat_map(|id| {

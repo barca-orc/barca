@@ -1,5 +1,5 @@
 use super::*;
-use crate::trace_ids::{log_ids, span_id};
+use barca_model::trace_ids::{log_ids, span_id};
 
 #[test]
 fn malformed_agent_url_diagnostics_do_not_echo_secret_values() {
@@ -37,7 +37,7 @@ fn node(base: &str) -> Arc<NodeContext> {
 }
 
 fn step(node_id: &str, outcome: StepOutcome) -> StepReport {
-    let id = crate::StepId::parse(node_id);
+    let id = barca_model::StepId::parse(node_id);
     StepReport {
         node_id: node_id.to_string(),
         node: node(id.base_id()),
@@ -187,7 +187,7 @@ fn tags_split_on_commas_and_spaces() {
 #[test]
 fn a_scheduled_run_names_its_trigger_tick_and_schedule() {
     let mut scheduled = run("success", Vec::new());
-    scheduled.trigger = crate::outcome::Trigger::schedule("p.py:publish", 1_800_000_000);
+    scheduled.trigger = barca_model::trigger::Trigger::schedule("p.py:publish", 1_800_000_000);
     let root = root(&scheduled);
     assert_eq!(root["meta"]["barca.trigger"], "schedule");
     assert_eq!(root["meta"]["barca.scheduled_at"], "2027-01-15T08:00:00Z");
@@ -393,28 +393,28 @@ fn node_names_are_short_unless_two_files_share_one() {
             .map(|n| format!("@asset\ndef {n}():\n    return 1\n"))
             .collect::<String>()
     };
-    let mut nodes = crate::parse::extract_nodes(
+    let mut nodes = barca_compile::parse::extract_nodes(
         &format!("from barca import asset\n{}", source(&["orders", "rates"])),
         "a.py",
     )
     .unwrap();
     nodes.extend(
-        crate::parse::extract_nodes(
+        barca_compile::parse::extract_nodes(
             &format!("from barca import asset\n{}", source(&["orders"])),
             "b.py",
         )
         .unwrap(),
     );
-    let mut dag = crate::dag::Dag::build(&nodes).unwrap();
+    let mut dag = barca_compile::dag::Dag::build(&nodes).unwrap();
     dag.groups = vec![
-        crate::groups::NodeGroup {
+        barca_compile::groups::NodeGroup {
             id: "group:a.py:outer".into(),
             name: "Outer".into(),
             description: String::new(),
             members: vec!["group:a.py:inner".into()],
             output: "a.py:rates".into(),
         },
-        crate::groups::NodeGroup {
+        barca_compile::groups::NodeGroup {
             id: "group:a.py:inner".into(),
             name: "Inner".into(),
             description: String::new(),
@@ -615,7 +615,7 @@ fn dispatch() -> Dispatch {
 fn a_worker_gets_its_steps_trace_root_resource_and_tags() {
     let dispatch = dispatch();
     let run_id = "dispatch-test";
-    let ctx = dispatch.context(&crate::StepId::parse("p.py:orders"), 2);
+    let ctx = dispatch.context(&barca_model::StepId::parse("p.py:orders"), 2);
     assert_eq!(ctx["trace_id"], step_trace_id(run_id, "p.py:orders"));
     assert_eq!(
         ctx["trace_id_high"],
@@ -634,7 +634,7 @@ fn a_worker_gets_its_steps_trace_root_resource_and_tags() {
 
     // A key joins the key's own trace, however many keys the node has.
     for i in 0..3_000 {
-        let key = crate::StepId::parse(&format!("p.py:weekly[week=w{i}]"));
+        let key = barca_model::StepId::parse(&format!("p.py:weekly[week=w{i}]"));
         let ctx = dispatch.context(&key, 1);
         assert_eq!(ctx["trace_id"], step_trace_id(run_id, &key.display()));
         assert_eq!(ctx["parent_id"], step_span_id(run_id, &key.display()));
@@ -668,7 +668,7 @@ fn a_finished_step_is_reported_by_its_workers_clock_and_what_it_wrote() {
     assert_eq!(step.max_rss_bytes, Some(4096));
 
     // Without the worker's clock the step ends now and lasts its elapsed seconds.
-    let before = crate::time::unix_nanos(std::time::SystemTime::now()) as u64;
+    let before = barca_model::time::unix_nanos(std::time::SystemTime::now()) as u64;
     let step = dispatch.finished_report("p.py:orders", &json!({"elapsed_seconds": 1.0}), 1, "h");
     assert!(step.start_unix_ns + step.duration_ns >= before);
     assert_eq!(step.duration_ns, 1_000_000_000);
@@ -692,9 +692,9 @@ fn a_steps_span_ends_after_its_sinks_which_are_outside_its_own_time() {
 #[test]
 fn a_failed_step_is_reported_from_its_first_attempt_with_its_exception() {
     let dispatch = dispatch();
-    let failure = crate::dispatch::StepFailure {
+    let failure = barca_compile::dispatch::StepFailure {
         node_id: "p.py:orders".to_string(),
-        error: crate::dispatch::StepError {
+        error: barca_compile::dispatch::StepError {
             error_type: "WorkerError".to_string(),
             // As a worker reports an exception: `Type: message`, then the frames.
             message: "ValueError: no orders\n  File \"p.py\", line 3, in orders\n    raise ValueError(\"no orders\")".to_string(),

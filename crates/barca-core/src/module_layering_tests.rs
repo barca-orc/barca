@@ -9,18 +9,6 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
     // The facade over `barca_db::db`.
     ("leaf", 0, &["db"]),
     (
-        "engine",
-        3,
-        &[
-            "commands",
-            "execution",
-            "incremental",
-            "mismatch",
-            "persist",
-            "telemetry",
-        ],
-    ),
-    (
         "service",
         4,
         &[
@@ -36,7 +24,7 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
     ),
 ];
 
-const LARGEST_CYCLE: usize = 2;
+const LARGEST_CYCLE: usize = 1;
 
 fn layer_of(module: &str) -> Option<(&'static str, u8)> {
     LAYERS

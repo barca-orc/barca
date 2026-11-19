@@ -37,20 +37,14 @@
 // Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
-pub mod commands;
 pub mod db;
 pub mod diagnostics;
-pub(crate) mod execution;
-mod incremental;
-mod mismatch;
 pub mod outcome;
-mod persist;
 pub mod queries;
 pub mod report;
 pub mod serve;
 pub mod served;
 pub mod sql;
-pub mod telemetry;
 pub mod values;
 
 // The model layer lives in `barca-model` (#905 step 4); its modules and root items keep their
@@ -59,19 +53,12 @@ pub mod values;
 pub use barca_model::artifact_format;
 pub use barca_model::cache_state;
 pub use barca_model::config;
-pub(crate) use barca_model::envdeps;
 pub use barca_model::hash;
 pub use barca_model::jsonlog;
-pub(crate) use barca_model::keyed;
-pub(crate) use barca_model::layout;
 pub use barca_model::lines;
 pub use barca_model::model;
-pub(crate) use barca_model::model::*;
 pub use barca_model::model::{CronExpr, Freshness, NodeKind, StepId};
-pub(crate) use barca_model::node_estimate;
-pub(crate) use barca_model::process;
 pub use barca_model::run_explain;
-use barca_model::source_observation;
 #[cfg(test)]
 use barca_model::source_scan;
 pub use barca_model::step_status;
@@ -79,13 +66,13 @@ pub use barca_model::suggest;
 pub use barca_model::term;
 pub use barca_model::test_hooks;
 pub use barca_model::time;
-pub(crate) use barca_model::trace_ids;
 pub(crate) use barca_model::trigger;
 pub use barca_model::{
     BarcaError, CancellationToken, FailedStep, LogStream, RunEvent, errln, outln,
     release_free_memory,
 };
-pub(crate) use barca_model::{PartialRun, run_line, safe_node_id};
+#[cfg(test)]
+pub(crate) use barca_model::PartialRun;
 
 // The compile layer lives in `barca-compile` (#905 step 4); the modules callers of `barca-core`
 // name keep their `barca_core::` paths.
@@ -102,27 +89,17 @@ pub use barca_compile::warnings;
 
 // The metadata database layer lives in `barca-db` (#905 step 4); its modules keep their
 // `barca_core::` paths.
-pub(crate) use barca_db::pending_uploads;
 pub use barca_db::run_logs;
-use barca_db::run_owner;
-use barca_db::sink_publications;
 pub(crate) use barca_db::state_validate;
 
 // The engine layer lives in `barca-engine` (#905 step 4); its modules keep their `barca_core::`
 // paths.
 pub use barca_engine::batch;
-pub(crate) use barca_engine::coordinator;
-pub(crate) use barca_engine::cost;
-use barca_engine::dataset_sinks;
 pub use barca_engine::interrupt;
-pub(crate) use barca_engine::io_loop;
-use barca_engine::observation;
 pub(crate) use barca_engine::run_host;
-pub(crate) use barca_engine::step_trace;
 
 // The process layer lives in `barca-proc` (#1056, C6).
 pub use barca_proc::helper_proc;
-pub(crate) use barca_proc::protocol;
 
 pub use sizing::sizing;
 
@@ -154,7 +131,6 @@ pub use barca_store::pins;
 pub use barca_store::results;
 pub use barca_store::run_queue;
 pub(crate) use barca_store::store_inspect;
-use barca_store::store_sync;
 pub use barca_store::text;
 pub use barca_store::transfer;
 
@@ -162,9 +138,7 @@ pub use barca_store::transfer;
 pub use barca_decide::cache;
 pub(crate) use barca_decide::changes;
 pub use barca_decide::freshness;
-pub(crate) use barca_decide::plan_reasons;
 pub(crate) use barca_decide::predict;
-use barca_decide::recover;
 pub use barca_decide::schedule;
 pub(crate) use barca_decide::sizing;
 
@@ -183,3 +157,8 @@ pub use barca_analysis::run_list;
 pub use barca_analysis::schedule_standing;
 pub use barca_analysis::status;
 pub(crate) use barca_analysis::views;
+
+// The run layer lives in `barca-run` (#1056, C6).
+pub use barca_run::commands;
+pub(crate) use barca_run::execution;
+pub use barca_run::telemetry;

@@ -94,15 +94,15 @@ impl Slack {
         };
         // Test hooks, not part of the contract: a fake webhook speaks plain HTTP, and the
         // reminder is due sooner.
-        let allow_http = crate::test_hooks::slack_allow_http();
-        let remind_after = crate::test_hooks::slack_remind_after().unwrap_or(REMIND_AFTER);
+        let allow_http = barca_model::test_hooks::slack_allow_http();
+        let remind_after = barca_model::test_hooks::slack_remind_after().unwrap_or(REMIND_AFTER);
         if !webhook_ok(&webhook, allow_http) {
             return Err(format!("{WEBHOOK_VAR} is not an https:// URL"));
         }
         let mode = match env_var("BARCA_SLACK_NOTIFY") {
             None => Mode::Changes,
             Some(raw) => Mode::parse(&raw).unwrap_or_else(|| {
-                crate::warnings::warn_once(
+                barca_compile::warnings::warn_once(
                     "BARCA_SLACK_NOTIFY must be changes, failures or all; using changes",
                 );
                 Mode::Changes
@@ -120,7 +120,7 @@ impl Slack {
     /// Built on the first post, not at startup: most runs post nothing.
     fn client(&self) -> Result<&reqwest::Client, String> {
         self.client
-            .get_or_init(|| crate::http::client(EXPORT_TIMEOUT))
+            .get_or_init(|| barca_store::http::client(EXPORT_TIMEOUT))
             .as_ref()
             .map_err(Clone::clone)
     }
@@ -344,7 +344,7 @@ impl Slack {
         if let Some(env) = &run.env {
             context.push(format!("env {env}"));
         }
-        let host = crate::process::local_host();
+        let host = barca_model::process::local_host();
         if !host.is_empty() {
             context.push(format!("host {host}"));
         }

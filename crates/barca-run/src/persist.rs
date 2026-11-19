@@ -2,16 +2,16 @@
 //! backup of the metadata DB (RFC-0009). Also the telemetry report a finished run hands to the
 //! configured integration.
 
-use crate::db::materializations::{NewMaterialization, StepInsert};
-use crate::db::runs::advance_steps_executed;
+use barca_db::db::materializations::{NewMaterialization, StepInsert};
+use barca_db::db::runs::advance_steps_executed;
 pub(crate) use barca_db::recording;
 pub(crate) use recording::RunLedger;
 use recording::write_terminal_ledger;
 
-use crate::BarcaError;
-use crate::dag::Dag;
-use crate::db;
-use crate::dispatch;
+use barca_compile::dag::Dag;
+use barca_compile::dispatch;
+use barca_db::db;
+use barca_model::BarcaError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,7 +53,7 @@ const RECORD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50
 /// at [`StepRecorder::finish`] are made good at the end.
 ///
 /// With a store, the recorder also backs the database up on a minute checkpoint
-/// ([`crate::backup::take`]) when it has recorded something since the last one.
+/// ([`barca_store::backup::take`]) when it has recorded something since the last one.
 const CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 const CHECKPOINT_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -63,7 +63,7 @@ const CHECKPOINT_FAILURES_REPORTED: u32 = 3;
 /// What the recorder needs to back the database up on the minute checkpoint.
 pub(crate) struct BackupCheckpoints {
     pub(crate) python: std::path::PathBuf,
-    pub(crate) cfg: crate::config::ResolvedConfig,
+    pub(crate) cfg: barca_model::config::ResolvedConfig,
     pub(crate) cancel: CancellationToken,
 }
 
@@ -147,7 +147,7 @@ impl StepRecorder {
                         let writing = std::time::Instant::now();
                         let recorded = record_steps_with_until(
                             &db_path, &run_id, &pending, plan_pending.as_deref(),
-                            crate::process::Until::cancelled(&stopped),
+                            barca_model::process::Until::cancelled(&stopped),
                         ).await;
                         add_busy(&writes, writing);
                         if let Ok(inserted) = recorded {
@@ -165,7 +165,7 @@ impl StepRecorder {
                         }
                         let snapshot_generation = generation;
                         let b = backups.as_ref().expect("backups enabled");
-                        let outcome = crate::backup::take_requested(&b.python, &b.cfg, Some(&run_id), crate::backup::Request::Routine, crate::process::Until {
+                        let outcome = barca_store::backup::take_requested(&b.python, &b.cfg, Some(&run_id), barca_store::backup::Request::Routine, barca_model::process::Until {
                             cancel: Some(&stopped),
                             deadline: Some(std::time::Instant::now() + CHECKPOINT_BUDGET),
                         }).await;
@@ -186,7 +186,7 @@ impl StepRecorder {
                             Some(why) => {
                                 failures += 1;
                                 if failures >= CHECKPOINT_FAILURES_REPORTED && !std::mem::replace(&mut warned, true) {
-                                    crate::errln!(
+                                    barca_model::errln!(
                                         "[barca] warning: the metadata backup failed {failures} checkpoints in a row ({why}); the run goes on, its results are recorded on this machine, and the next checkpoint tries again"
                                     );
                                 }
@@ -279,7 +279,14 @@ async fn record_steps(
     run_id: &str,
     rows: &[NewMaterialization],
 ) -> Result<u64, BarcaError> {
-    record_steps_with_until(db_path, run_id, rows, None, crate::process::Until::done()).await
+    record_steps_with_until(
+        db_path,
+        run_id,
+        rows,
+        None,
+        barca_model::process::Until::done(),
+    )
+    .await
 }
 
 async fn record_steps_with_until(
@@ -287,7 +294,7 @@ async fn record_steps_with_until(
     run_id: &str,
     rows: &[NewMaterialization],
     plan: Option<&str>,
-    until: crate::process::Until<'_>,
+    until: barca_model::process::Until<'_>,
 ) -> Result<u64, BarcaError> {
     let _g = until.admit(db::db_guard()).await?;
     let (_db, conn) = db::open_conn_with_until(db_path, until).await?;
@@ -375,7 +382,7 @@ pub(crate) fn telemetry_report(
     } = run;
     let job = l.job;
     let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
-    let start_unix_ns = crate::time::unix_nanos(started) as u64;
+    let start_unix_ns = barca_model::time::unix_nanos(started) as u64;
     let duration_ns = ns(l.elapsed);
     let contexts: HashMap<String, Arc<NodeContext>> = crate::telemetry::node_contexts(dag)
         .into_iter()
@@ -390,7 +397,7 @@ pub(crate) fn telemetry_report(
     // Attempts are counted per step, not per partition key, so they are only attributed to
     // an unpartitioned step.
     let attempts = |node_id: &str| {
-        let id = crate::StepId::parse(node_id);
+        let id = barca_model::StepId::parse(node_id);
         (id.display() == id.base_id()).then(|| {
             l.all_attempts
                 .get(&id.display())
@@ -407,7 +414,7 @@ pub(crate) fn telemetry_report(
         ids
     };
     let step = |node_id: &str, outcome, start, duration| {
-        let id = crate::StepId::parse(node_id);
+        let id = barca_model::StepId::parse(node_id);
         StepReport {
             node_id: node_id.to_string(),
             node: context(id.base_id()),
@@ -465,7 +472,7 @@ pub(crate) fn telemetry_report(
             sink_seconds,
             ..step(node_id, outcome, step_start, step_duration)
         });
-        seen.insert(crate::StepId::parse(node_id).base_id().to_string());
+        seen.insert(barca_model::StepId::parse(node_id).base_id().to_string());
     }
     for failure in l.all_failures {
         let (error_type, error_message, error_traceback) = exception_of(&failure.error);
@@ -490,7 +497,11 @@ pub(crate) fn telemetry_report(
                 step_duration,
             )
         });
-        seen.insert(crate::StepId::parse(&failure.node_id).base_id().to_string());
+        seen.insert(
+            barca_model::StepId::parse(&failure.node_id)
+                .base_id()
+                .to_string(),
+        );
     }
     // A node that did not run at all; one with some keys done is reported by those keys.
     let mut not_run: Vec<&String> = skipped.iter().filter(|b| !seen.contains(*b)).collect();
@@ -557,7 +568,7 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
         return Err(error);
     }
     // Only a committed outcome replaces the process-liveness witness.
-    crate::run_owner::release(db_path, l.run_id);
+    barca_db::run_owner::release(db_path, l.run_id);
     Ok(())
 }
 
@@ -568,7 +579,7 @@ pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), 
 /// of every run that executed something.
 async fn upsert_cost_estimates(
     conn: &libsql::Connection,
-    snapshot: &[(String, crate::node_estimate::NodeEstimate)],
+    snapshot: &[(String, barca_model::node_estimate::NodeEstimate)],
 ) {
     if snapshot.is_empty() {
         return;
@@ -577,7 +588,7 @@ async fn upsert_cost_estimates(
         return;
     };
     for (node_id, est) in snapshot {
-        let base = crate::StepId::parse(node_id).base_id().to_string();
+        let base = barca_model::StepId::parse(node_id).base_id().to_string();
         upsert.run(node_id, &base, est).await.ok();
     }
 }
@@ -585,7 +596,7 @@ async fn upsert_cost_estimates(
 #[cfg(test)]
 mod persist_tests {
     use super::*;
-    use crate::dispatch::OutputRef;
+    use barca_compile::dispatch::OutputRef;
     use std::collections::HashSet;
     use std::time::Instant;
 
@@ -780,7 +791,7 @@ mod persist_tests {
             .unwrap()
             .get::<String>(0)
             .unwrap();
-        crate::run_owner::token_of(&owner).map(|token| {
+        barca_db::run_owner::token_of(&owner).map(|token| {
             std::path::Path::new(db_path)
                 .parent()
                 .unwrap()
@@ -1050,7 +1061,7 @@ mod persist_tests {
     /// helper from this checkout. `outage` makes every backup upload fail while it exists.
     fn backup_test_config(
         dir: &tempfile::TempDir,
-    ) -> (crate::config::ResolvedConfig, std::path::PathBuf) {
+    ) -> (barca_model::config::ResolvedConfig, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../python")
@@ -1095,12 +1106,13 @@ sys.exit(_state.main())
         // Run the new script once before a test uses it: macOS assesses a newly written
         // executable on its first exec, which made the first backup start about 150ms late.
         // Without arguments it prints its usage and exits.
-        crate::helper_proc::output_std(&mut std::process::Command::new(&python)).unwrap();
-        let mut cfg = crate::config::resolve_with(None, root, crate::config::Vars::NONE).unwrap();
+        barca_proc::helper_proc::output_std(&mut std::process::Command::new(&python)).unwrap();
+        let mut cfg =
+            barca_model::config::resolve_with(None, root, barca_model::config::Vars::NONE).unwrap();
         cfg.db_path = root.join("meta/metadata.db").to_string_lossy().into_owned();
         cfg.backup_uri = Some(root.join("store").to_string_lossy().into_owned());
         cfg.backup_interval =
-            crate::config::BackupInterval(Some(std::time::Duration::from_millis(250)));
+            barca_model::config::BackupInterval(Some(std::time::Duration::from_millis(250)));
         std::fs::create_dir_all(root.join("meta")).unwrap();
         std::fs::create_dir_all(root.join("store")).unwrap();
         (cfg, python)
@@ -1112,7 +1124,7 @@ sys.exit(_state.main())
             .flatten()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| crate::backup::is_backup_name(n))
+            .filter(|n| barca_store::backup::is_backup_name(n))
             .collect();
         names.sort();
         names
@@ -1129,14 +1141,19 @@ sys.exit(_state.main())
         let dir = tempfile::tempdir().unwrap();
         let (mut cfg, python) = backup_test_config(&dir);
         cfg.backup_interval =
-            crate::config::BackupInterval(Some(std::time::Duration::from_secs(3600)));
+            barca_model::config::BackupInterval(Some(std::time::Duration::from_secs(3600)));
         db::init_db(&cfg.db_path).await.unwrap();
         db::create_run(&cfg.db_path, "r1", "get", "[]", None, Some(1))
             .await
             .unwrap();
-        crate::backup::take(&python, &cfg, Some("r1"), crate::process::Until::done())
-            .await
-            .unwrap();
+        barca_store::backup::take(
+            &python,
+            &cfg,
+            Some("r1"),
+            barca_model::process::Until::done(),
+        )
+        .await
+        .unwrap();
         let local = cfg.local_backup_dir();
         assert_eq!(backups_in(&local).len(), 1);
         // Every admission attempt opens (and creates) the lock file before it checks the
@@ -1300,7 +1317,7 @@ sys.exit(_state.main())
             fx.failures.push(failure);
             recorded.push(fx.row(&format!("f.py:p[k={k}]")));
         }
-        let estimate = crate::node_estimate::NodeEstimate {
+        let estimate = barca_model::node_estimate::NodeEstimate {
             estimate_seconds: 0.1,
             cpu_seconds: 0.1,
             max_rss_bytes: 1,
@@ -1683,8 +1700,10 @@ sys.exit(_state.main())
                       @asset(inputs={\"rates\": rates, \"raw\": raw})\ndef a(rates, raw): return raw\n\
                       @asset(inputs={\"raw\": raw})\ndef cached(raw): return raw\n\
                       @asset(inputs={\"a\": a})\ndef bad(a): return a\n";
-        let dag =
-            crate::dag::Dag::build(&crate::parse::extract_nodes(source, "f.py").unwrap()).unwrap();
+        let dag = barca_compile::dag::Dag::build(
+            &barca_compile::parse::extract_nodes(source, "f.py").unwrap(),
+        )
+        .unwrap();
         let report = telemetry_report(
             &fx.ledger("r1"),
             &dag,
@@ -1709,8 +1728,10 @@ sys.exit(_state.main())
                       @asset()\ndef cached(): return 1\n\
                       @asset(inputs={\"a\": a})\ndef bad(a): return a\n\
                       @asset(inputs={\"bad\": bad})\ndef after(bad): return bad\n";
-        let dag =
-            crate::dag::Dag::build(&crate::parse::extract_nodes(source, "f.py").unwrap()).unwrap();
+        let dag = barca_compile::dag::Dag::build(
+            &barca_compile::parse::extract_nodes(source, "f.py").unwrap(),
+        )
+        .unwrap();
         let skipped = HashSet::from(["f.py:after".to_string(), "f.py:part".to_string()]);
         let clocks = no_clocks();
         let files = vec!["f.py".to_string()];
@@ -1751,7 +1772,7 @@ sys.exit(_state.main())
         fx.failures[0].error.started_unix_ns = Some(started);
         fx.failures[0].error.elapsed_seconds = Some(270.25);
         fx.failures[0].error.attempts = 3;
-        let dag = crate::dag::Dag::build(&[]).unwrap();
+        let dag = barca_compile::dag::Dag::build(&[]).unwrap();
         let run_started = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(started);
         let report = telemetry_report(&fx.ledger("r1"), &dag, at(run_started, &no_clocks()));
         let bad = report

@@ -40,9 +40,9 @@
 
 use super::dogstatsd;
 use super::{Integration, NodeContext, RunReport, ServerReport, StepOutcome, StepReport};
-use crate::step_trace::{StepTrace, node_meta};
-pub use crate::trace_ids::step_trace_ref;
-pub(crate) use crate::trace_ids::{
+use barca_engine::step_trace::{StepTrace, node_meta};
+pub use barca_model::trace_ids::step_trace_ref;
+pub(crate) use barca_model::trace_ids::{
     run_span_id, step_span_id, step_trace_id, step_trace_id_high, trace_id, trace_id_high,
 };
 use serde_json::{Map, Value, json};
@@ -56,7 +56,7 @@ const INTAKE_PATH: &str = "/v0.4/traces";
 /// oversized payload makes the Agent refuse the trace, which loses the failed step.
 const MAX_MESSAGE_CHARS: usize = 2000;
 const MAX_STACK_CHARS: usize = 4000;
-pub(crate) use crate::step_trace::BARCA_VERSION;
+pub(crate) use barca_engine::step_trace::BARCA_VERSION;
 
 /// The first `max_chars` characters of `text`, marked when something was dropped.
 fn cut(text: &str, max_chars: usize) -> String {
@@ -243,7 +243,7 @@ pub(crate) struct Dispatch {
 }
 
 impl Dispatch {
-    pub fn new(dag: &crate::dag::Dag, job: &str, run_id: &str) -> Self {
+    pub fn new(dag: &barca_compile::dag::Dag, job: &str, run_id: &str) -> Self {
         let upstream = dag
             .topo_order()
             .into_iter()
@@ -279,12 +279,12 @@ impl Dispatch {
 
     /// The `datadog` object of a step sent to a worker ([`StepTrace::context`]).
     #[cfg(test)]
-    pub fn context(&self, reported: &crate::StepId, attempt: u32) -> Value {
+    pub fn context(&self, reported: &barca_model::StepId, attempt: u32) -> Value {
         self.trace.context(reported, attempt)
     }
 
     fn report(&self, node_id: &str, outcome: StepOutcome, start: u64, duration: u64) -> StepReport {
-        let id = crate::StepId::parse(node_id);
+        let id = barca_model::StepId::parse(node_id);
         StepReport {
             node_id: node_id.to_string(),
             node: self.node(id.base_id()),
@@ -327,7 +327,7 @@ impl Dispatch {
     ) -> StepReport {
         let ns = |seconds: f64| (seconds.max(0.0) * 1e9) as u64;
         let number = |key: &str| artifact.get(key).and_then(|v| v.as_f64());
-        let now = crate::time::unix_nanos(std::time::SystemTime::now()) as u64;
+        let now = barca_model::time::unix_nanos(std::time::SystemTime::now()) as u64;
         // Placed by the worker's clock: the function, writing its result and then its sinks
         // (`finished_at` and `wall_seconds` are taken before the sinks, #1004).
         let sinks = number("sink_seconds").unwrap_or(0.0).max(0.0);
@@ -353,15 +353,15 @@ impl Dispatch {
     }
 
     /// A step failed for good (its retries spent). Sends the step's trace.
-    pub(crate) fn step_failed(&self, failure: &crate::dispatch::StepFailure) {
+    pub(crate) fn step_failed(&self, failure: &barca_compile::dispatch::StepFailure) {
         self.send(self.failed_report(failure));
     }
 
     /// The report of a step that failed for good.
-    fn failed_report(&self, failure: &crate::dispatch::StepFailure) -> StepReport {
+    fn failed_report(&self, failure: &barca_compile::dispatch::StepFailure) -> StepReport {
         let (error_type, error_message, error_traceback) =
             crate::persist::exception_of(&failure.error);
-        let now = crate::time::unix_nanos(std::time::SystemTime::now()) as u64;
+        let now = barca_model::time::unix_nanos(std::time::SystemTime::now()) as u64;
         // From the first attempt's start to the failure, retries and backoff inside.
         let (start, duration) = match (failure.error.started_unix_ns, failure.error.elapsed_seconds)
         {

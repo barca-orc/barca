@@ -31,7 +31,7 @@ pub(super) async fn select_work<'p>(
                     .get(*id)
                     .is_some_and(|pin| pin.user.is_some())
             }) {
-                return Err(BarcaError::Usage(crate::freshness::pin_lost(id)));
+                return Err(BarcaError::Usage(barca_decide::freshness::pin_lost(id)));
             }
             match session.state.cached_steps.phase_for(&ids) {
                 Some(phase) => (phase, true),
@@ -141,7 +141,7 @@ pub(super) async fn seed_fresh_inputs(
             Some((dim, keys)) if step.partition_keys.is_empty() => keys
                 .iter()
                 .map(|v| {
-                    crate::PartitionKey(std::collections::BTreeMap::from([(
+                    barca_model::PartitionKey(std::collections::BTreeMap::from([(
                         dim.clone(),
                         v.clone(),
                     )]))
@@ -201,7 +201,7 @@ pub(super) async fn seed_fresh_targets(
             .is_some_and(|n| n.decl.partitions.is_empty())
         {
             needed.push((target.clone(), None));
-        } else if incremental.count_for(target) <= crate::results::LISTED_KEYS
+        } else if incremental.count_for(target) <= barca_store::results::LISTED_KEYS
             && let Some(keys) = incremental.target_keys(dag, target)
         {
             needed.extend(keys.into_iter().map(|key| (target.clone(), Some(key))));
@@ -377,7 +377,7 @@ pub(super) async fn expand_and_decide<'p>(
             .iter()
             .map(|(_, id)| id.as_str())
             .collect();
-        crate::pins::prune_expanded_inputs(
+        barca_store::pins::prune_expanded_inputs(
             &session.prepared.dag,
             expanded,
             &targets,
@@ -394,7 +394,7 @@ pub(super) async fn expand_and_decide<'p>(
                 && incremental.membership_changed(&session.prepared.dag, base)
                 && let Some(keys) = incremental.target_keys(&session.prepared.dag, base)
             {
-                crate::dataset_sinks::collect_membership(
+                barca_engine::dataset_sinks::collect_membership(
                     &mut session.state.dataset_keys,
                     base,
                     &node.decl.sinks,
@@ -403,7 +403,7 @@ pub(super) async fn expand_and_decide<'p>(
             }
         }
     }
-    crate::dataset_sinks::collect(&mut session.state.dataset_keys, phase_ref, |base| {
+    barca_engine::dataset_sinks::collect(&mut session.state.dataset_keys, phase_ref, |base| {
         session
             .state
             .incremental
@@ -514,7 +514,7 @@ pub(super) fn fail_step(
     error_type: &str,
 ) {
     if session.request.agent_mode {
-        crate::run_line!(Agent, "{}", failed_step_line(&base, &message));
+        barca_model::run_line!(Agent, "{}", failed_step_line(&base, &message));
     }
     session.state.failed_bases.insert(base.clone());
     session.state.whole_failure = true;
@@ -720,12 +720,12 @@ pub(super) async fn recover_phase_inputs<'p>(
                 .is_some_and(|o| evicted.contains(&o.path));
             recover::mark_recomputed(&mut session.state.results.reports, &id, false, was_evicted);
             let why = if was_evicted {
-                crate::run_explain::ReasonCategory::Evicted
+                barca_model::run_explain::ReasonCategory::Evicted
             } else {
-                crate::run_explain::ReasonCategory::ArtifactMissing
+                barca_model::run_explain::ReasonCategory::ArtifactMissing
             };
             session.state.decide_state.plan_tally.add(
-                crate::StepId::parse(&id).base_id(),
+                barca_model::StepId::parse(&id).base_id(),
                 &[(why, None)],
                 1,
             );
