@@ -10,12 +10,23 @@ use crate::time::rfc3339_millis as timestamp;
 use crate::trigger::{Trigger, TriggeredBy};
 use serde::{Deserialize, Serialize};
 
+/// The words of [`QueueEntry::status`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum QueueEntryStatus {
+    /// Accepted, waiting for a run slot.
+    Pending,
+    Running,
+}
+
 /// One run of `GET /queue`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct QueueEntry {
     pub run_id: String,
     /// `pending` (waiting to start) or `running`.
+    #[cfg_attr(feature = "ts", ts(as = "QueueEntryStatus"))]
     pub status: String,
     /// Its place among the waiting runs, 1 = next; `null` for a running run.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]

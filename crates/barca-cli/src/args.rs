@@ -439,6 +439,7 @@ const PAUSE_HELP: &str = "\
 Examples:
   barca pause clean --server               # scheduled runs skip clean until it is resumed
   barca pause clean --downstream --server  # clean and everything below it
+  barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
   barca pause pipeline.py --server         # every node of the file
   barca pause --server --json              # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
   barca pause --schedule nightly --server  # the schedule of `nightly` does not fire until resumed
@@ -1139,9 +1140,14 @@ pub(crate) enum Cli {
         #[arg(long, requires = "target")]
         #[arg(help = "Also pause every node downstream of the target", long_help = None)]
         downstream: bool,
+        /// Pause nothing: print what the pause would cover (`covers`: the nodes TARGET names,
+        /// what --downstream adds, and the schedules whose ticks reach them)
+        #[arg(long, requires = "target")]
+        #[arg(help = "Pause nothing; print what the pause would cover", long_help = None)]
+        dry_run: bool,
         /// Pause one schedule instead: the scheduled NODE's ticks do not fire until it is
         /// resumed (or --until passes). The ticks it skips are not caught up
-        #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream"])]
+        #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream", "dry_run"])]
         #[arg(help = "Pause the schedule of this scheduled node instead of nodes", long_help = None)]
         schedule: Option<String>,
         /// With --schedule: resume by itself at this time: a duration from now (30m, 2h, 7d)

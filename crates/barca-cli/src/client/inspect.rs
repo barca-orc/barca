@@ -712,18 +712,29 @@ async fn pending_posts(
         .collect())
 }
 
-/// `barca pause [TARGET] [--downstream]`: `POST /pauses`, or without a target `GET /pauses`,
-/// and the paused nodes as JSON or a table.
+/// `barca pause [TARGET] [--downstream] [--dry-run]`: `POST /pauses`, or without a target
+/// `GET /pauses`, and the paused nodes as JSON or a table. With `--dry-run`, `GET
+/// /pauses?target=`: nothing is paused, and the answer says what the pause would cover.
 pub(crate) async fn pause(
     server: &Server,
     target: Option<&str>,
     downstream: bool,
+    dry_run: bool,
     json: bool,
     env: Option<&str>,
 ) -> Result<(), CliError> {
     server.health(env).await?;
     let (path, text) = match target {
         None => ("GET /pauses", server.get_text("/pauses").await?),
+        Some(target) if dry_run => (
+            "GET /pauses",
+            server
+                .get_text(&format!(
+                    "/pauses?target={}&downstream={downstream}",
+                    super::encode(target)
+                ))
+                .await?,
+        ),
         Some(target) => (
             "POST /pauses",
             server
@@ -735,6 +746,10 @@ pub(crate) async fn pause(
         ),
     };
     let (body, pauses) = pauses_of(server, path, &text)?;
+    if dry_run {
+        print_cover(&body, &pauses, json);
+        return Ok(());
+    }
     if let Some(target) = target {
         let n = pauses.added.as_ref().map_or(0, Vec::len);
         barca_core::errln!(
@@ -1003,6 +1018,45 @@ pub(crate) async fn resume(
     );
     print_pauses(&body, &pauses, json);
     Ok(())
+}
+
+/// `barca pause TARGET --dry-run`: `body` as the server sent it with `--json`; else what the
+/// pause would cover (`covers`), in lines.
+fn print_cover(body: &Value, pauses: &Pauses, json: bool) {
+    if json {
+        barca_core::outln!(
+            "{}",
+            serde_json::to_string_pretty(body).expect("a JSON value prints")
+        );
+        return;
+    }
+    let cover = pauses.covers.clone().unwrap_or_default();
+    let mut out = format!(
+        "would pause {} node(s); nothing was paused\n",
+        cover.targets.len() + cover.downstream.len()
+    );
+    for id in &cover.targets {
+        out.push_str(&format!("  {id}\n"));
+    }
+    for id in &cover.downstream {
+        out.push_str(&format!("  {id} (downstream)\n"));
+    }
+    if !cover.schedules.is_empty() {
+        out.push_str(&format!(
+            "\n{} schedule(s) reach them\n\n{:<40} {}\n",
+            cover.schedules.len(),
+            "SCHEDULE",
+            "RELATION"
+        ));
+        for schedule in &cover.schedules {
+            let relation = serde_json::to_value(schedule.relation)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            out.push_str(&format!("{:<40} {relation}\n", schedule.id));
+        }
+    }
+    barca_core::term::stdout_str(&out);
 }
 
 /// `body`: the server's answer as it sent it, printed with `--json`; `pauses`: the same,

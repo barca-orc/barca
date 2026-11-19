@@ -794,6 +794,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
         Cli::Pause {
             target,
             downstream,
+            dry_run,
             schedule,
             until,
             format,
@@ -817,6 +818,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
                 server,
                 target.as_deref(),
                 downstream,
+                dry_run,
                 is_json(format),
                 env.as_deref(),
             )

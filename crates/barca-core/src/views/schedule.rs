@@ -213,3 +213,50 @@ impl RefreshPath {
         }
     }
 }
+
+/// How the ticks of one schedule touch what a pause would cover ([`PauseCover`]), the first
+/// that applies, in this order.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum PauseRelation {
+    /// The schedule is of a node the pause names.
+    #[serde(rename = "self")]
+    Itself,
+    /// A node the pause names is a target of its ticks: every tick brings it up to date.
+    Target,
+    /// Its ticks read a node the pause names (a target of the tick is below it).
+    Input,
+    /// Its ticks reach none of the named nodes, only nodes below them.
+    Downstream,
+}
+
+/// One schedule a pause would hold work back from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CoveredSchedule {
+    /// The scheduled node's id: what `barca pause --schedule` takes.
+    pub id: String,
+    pub relation: PauseRelation,
+}
+
+/// What a pause of one target would cover (`barca pause TARGET --dry-run`, `GET
+/// /pauses?target=`), from the graph alone: nothing is paused and no state is read. The
+/// schedules are found by the scheduler's own walk ([`crate::freshness::tick_reach`]), so
+/// this lists a schedule exactly when one of its ticks would plan a covered node. A node
+/// that is pinned or already paused stops that walk at run time and is not accounted for
+/// here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct PauseCover {
+    /// The nodes the target names, in dependency order: one node, or every node of a file.
+    pub targets: Vec<String>,
+    /// Every node below them, in dependency order: what `--downstream` adds. Empty when the
+    /// pause was asked for without it.
+    pub downstream: Vec<String>,
+    /// The schedules whose ticks reach a covered node (`targets`, and `downstream` when
+    /// asked for), sorted by id, each with how.
+    pub schedules: Vec<CoveredSchedule>,
+}

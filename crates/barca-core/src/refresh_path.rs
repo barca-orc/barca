@@ -22,6 +22,7 @@ use crate::schedule::{Zone, next_fire};
 use crate::schedule_standing::Standing;
 pub use crate::views::RefreshPath;
 use crate::views::ScheduleStatus;
+pub use crate::views::{CoveredSchedule, PauseCover, PauseRelation};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -88,6 +89,68 @@ impl Paths {
     pub fn schedules(&self, node: &str) -> &[String] {
         self.targets.get(node).map_or(&[], Vec::as_slice)
     }
+}
+
+/// What a pause of `target` would cover ([`PauseCover`]): the nodes [`crate::pauses::scope`]
+/// resolves it to, what is below them when `downstream`, and every schedule whose tick
+/// reaches one of those nodes ([`tick_reach`], as a target or as an input).
+pub fn pause_cover(
+    dag: &Dag,
+    target: &str,
+    downstream: bool,
+) -> Result<PauseCover, crate::BarcaError> {
+    let targets = crate::pauses::scope(dag, target, false)?;
+    let named: HashSet<&str> = targets.iter().map(String::as_str).collect();
+    let below: Vec<String> = if downstream {
+        crate::pauses::below(dag, &targets)
+            .into_iter()
+            .filter(|id| !named.contains(id.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let scheduled: Vec<&str> = dag
+        .topo_order()
+        .into_iter()
+        .filter(|id| {
+            dag.get_node(id)
+                .is_some_and(|n| matches!(n.extracted.freshness, crate::Freshness::Schedule(_)))
+        })
+        .collect();
+    let reach = tick_reach(dag, scheduled);
+    let mut found: std::collections::BTreeMap<String, PauseRelation> = Default::default();
+    let mut note = |schedule: &str, relation: PauseRelation| {
+        found
+            .entry(schedule.to_string())
+            .and_modify(|had| *had = (*had).min(relation))
+            .or_insert(relation);
+    };
+    for id in &targets {
+        for (schedule, how) in reach.get(id).map_or(&[][..], Vec::as_slice) {
+            note(
+                schedule,
+                match how {
+                    _ if schedule == id => PauseRelation::Itself,
+                    Reach::Target => PauseRelation::Target,
+                    Reach::Input => PauseRelation::Input,
+                },
+            );
+        }
+    }
+    for id in &below {
+        for (schedule, _) in reach.get(id).map_or(&[][..], Vec::as_slice) {
+            note(schedule, PauseRelation::Downstream);
+        }
+    }
+    let schedules = found
+        .into_iter()
+        .map(|(id, relation)| CoveredSchedule { id, relation })
+        .collect();
+    Ok(PauseCover {
+        targets,
+        downstream: below,
+        schedules,
+    })
 }
 
 /// One schedule as of one instant: the runtime half of a refresh path.
@@ -791,5 +854,67 @@ def both(slow, fast): ...
             line(path(None, false, false, 1)),
             "inbox is not firing, missed 1 tick"
         );
+    }
+
+    /// `pause_cover` of `target`: its downstream by name and its schedules as `(name, word)`.
+    fn cover(d: &Dag, target: &str, downstream: bool) -> (Vec<String>, Vec<(String, String)>) {
+        let cover = pause_cover(d, target, downstream).unwrap();
+        let name = |id: &String| crate::targets::short_name(id).to_string();
+        (
+            cover.downstream.iter().map(name).collect(),
+            cover
+                .schedules
+                .iter()
+                .map(|s| {
+                    let word = serde_json::to_value(s.relation).unwrap();
+                    (name(&s.id), word.as_str().unwrap().to_string())
+                })
+                .collect(),
+        )
+    }
+
+    fn pairs(of: &[(&str, &str)]) -> Vec<(String, String)> {
+        of.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_pause_covers_the_schedules_whose_ticks_reach_it_by_the_schedulers_walk() {
+        let d = dag(SHAPES);
+        // An `Always` asset below a scheduled sensor is a target of its ticks.
+        let (below, schedules) = cover(&d, "orders", true);
+        assert_eq!(below, ["reviewed", "report"]);
+        assert_eq!(schedules, pairs(&[("inbox", "target")]));
+        // The scheduled node itself, and a schedule whose tick polls it.
+        let (below, schedules) = cover(&d, "daily", true);
+        assert_eq!(below, ["reads_daily", "daily_rows"]);
+        assert_eq!(
+            schedules,
+            pairs(&[("daily", "self"), ("reads_daily", "input")])
+        );
+        // Without `downstream` nothing below is covered; the reading schedule still reads it.
+        let (below, schedules) = cover(&d, "feed", false);
+        assert!(below.is_empty());
+        assert_eq!(schedules, pairs(&[("hourly", "input")]));
+        // A `Manual` asset is read as it is: the tick above does not plan it, only what is
+        // below it. A walk of the graph alone would call the schedule above "upstream".
+        let (below, schedules) = cover(&d, "reviewed", true);
+        assert_eq!(below, ["report"]);
+        assert_eq!(schedules, pairs(&[("inbox", "downstream")]));
+        assert_eq!(cover(&d, "reviewed", false).1, pairs(&[]));
+        // No tick reaches it or what is below it.
+        assert_eq!(cover(&d, "loose", true).1, pairs(&[]));
+        // A file: every node of it, each schedule of it its own.
+        let all = pause_cover(&d, "p.py", false).unwrap();
+        assert_eq!(all.targets.len(), d.topo_order().len());
+        assert!(all.downstream.is_empty());
+        assert!(
+            all.schedules
+                .iter()
+                .all(|s| s.relation == PauseRelation::Itself)
+        );
+        assert_eq!(all.schedules.len(), 4);
+        assert!(pause_cover(&d, "no_such_node", true).is_err());
     }
 }

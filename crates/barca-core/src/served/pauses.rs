@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Pauses {
+    /// `GET /pauses?target=` only (`barca pause TARGET --dry-run`): what a pause of that
+    /// target would cover. Nothing is paused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub covers: Option<crate::views::PauseCover>,
     /// `POST /pauses` only: the ids it paused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
@@ -35,6 +40,7 @@ impl Pauses {
             total: paused.len(),
             paused,
             schedules,
+            covers: None,
             added: None,
             removed: None,
         }

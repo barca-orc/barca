@@ -633,6 +633,8 @@ pub(crate) async fn status_from_dag_with_membership(
             expected_fresh_at: None,
             recheck_at: None,
             no_estimate: None,
+            last_attempt: Default::default(),
+            typical_run_seconds: None,
             partitions: partitions.filter(|_| !node.extracted.partitions.is_empty()),
             last_materialization,
             // Only an asset's new bytes under the same run hash mean it is not deterministic.
@@ -1006,6 +1008,8 @@ mod tests {
             expected_fresh_at: None,
             recheck_at: None,
             no_estimate: None,
+            last_attempt: Default::default(),
+            typical_run_seconds: None,
             partitions: None,
             last_materialization: None,
             last_bytes_change: None,

@@ -17,7 +17,7 @@ mod server;
 mod wire_tests;
 
 pub use pauses::{PauseRequest, Pauses, Pins};
-pub use queue::{QueueEntry, QueueView, RecordedRun, recorded as recorded_queue};
+pub use queue::{QueueEntry, QueueEntryStatus, QueueView, RecordedRun, recorded as recorded_queue};
 pub use runs::{
     ActiveStep, Cancelling, FirstFailure, Flight, LiveRun, LiveStatus, LiveSteps,
     PartitionProgress, RunCancelling, RunDraft, RunHandle, RunList, RunListRequest, RunLogs,
