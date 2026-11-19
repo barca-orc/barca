@@ -5,6 +5,7 @@
 #   scripts/check-fast.sh                  # everything below, Python tests chosen by the diff
 #   scripts/check-fast.sh --python-all     # the whole Python suite instead of the selection
 #   scripts/check-fast.sh --no-python      # Rust and static checks only
+#   scripts/check-fast.sh --rust-all       # every Rust test, whatever changed
 #   scripts/check-fast.sh --base origin/main
 #
 # Steps, in order (each runs even when an earlier one failed; the summary lists them all):
@@ -15,8 +16,14 @@
 #               uv lock. The fixers may rewrite files: review and commit what they change.
 #                                                                             [CI: checks]
 #   clippy      cargo clippy --workspace --all-targets -- -D warnings         [CI: clippy]
-#   cargo-test  cargo nextest run --workspace + doc tests when cargo-nextest is installed,
-#               else cargo test                                               [CI: rust-tests]
+#   cargo-test  the Rust tests the change can affect (scripts/ci-rust-tests.py, the selection
+#               CI's merge tier uses): the crates that own a changed file, the crates that
+#               depend on them, and the tests that read a changed file from outside their
+#               crate. The reasons are printed, one line per crate. Skipped when no changed
+#               file can affect a Rust test; --rust-all runs the whole workspace, as the full
+#               tier does. cargo nextest run --workspace -E <filter> + doc tests when
+#               cargo-nextest is installed, else cargo test -p <crate> ... (every test of a
+#               crate with a selected test)                                   [CI: rust-tests]
 #   build       maturin develop --profile fast into the venv (the release optimization level
 #               without LTO, incremental; what CI's wheel uses), when Rust or UI sources are
 #               newer than the venv's barca binary (the Python tests run that binary). Without
@@ -43,12 +50,14 @@ cd "$ROOT" || exit 2
 
 BASE_REF=origin/main
 PYTHON_MODE=selected
+RUST_MODE=selected
 while [ $# -gt 0 ]; do
     case "$1" in
         --base) BASE_REF="$2"; shift 2 ;;
         --python-all) PYTHON_MODE=all; shift ;;
         --no-python) PYTHON_MODE=none; shift ;;
-        -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --rust-all) RUST_MODE=all; shift ;;
+        -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
     esac
 done
@@ -118,11 +127,43 @@ fi
 
 step clippy cargo clippy --workspace --all-targets -- -D warnings
 
-if cargo nextest --version >/dev/null 2>&1; then
-    cargo_tests() { cargo nextest run --workspace --no-fail-fast && cargo test --workspace --doc; }
+# The Rust tests the change can affect, shared with CI's merge tier. Anything but a complete
+# answer from the script (it failed, python3 is missing) leaves the whole workspace selected.
+RUST_TESTS=all RUST_FILTER="" RUST_PACKAGES=--workspace RUST_DOC=--workspace
+if [ "$RUST_MODE" = selected ]; then
+    SELECTION=$(python3 scripts/ci-rust-tests.py --files-from - <<<"$CHANGED") || SELECTION=""
+    if [ "$(grep -c '^rust_' <<<"$SELECTION")" -eq 5 ]; then
+        while IFS='=' read -r key value; do
+            case "$key" in
+                rust_tests) RUST_TESTS=$value ;;
+                rust_filter) RUST_FILTER=$value ;;
+                rust_packages) RUST_PACKAGES=$value ;;
+                rust_doc) RUST_DOC=$value ;;
+            esac
+        done <<<"$SELECTION"
+    else
+        echo "rust tests: the whole workspace (scripts/ci-rust-tests.py gave no selection)" >&2
+    fi
+else
+    echo "rust tests: the whole workspace (--rust-all)" >&2
+fi
+
+# $RUST_PACKAGES and $RUST_DOC are cargo arguments (`--workspace`, or `-p <crate> ...`): unquoted
+# on purpose.
+if [ "$RUST_TESTS" = none ]; then
+    skip cargo-test "no changed file can affect a Rust test; --rust-all runs them all"
+elif cargo nextest --version >/dev/null 2>&1; then
+    # --workspace with a filter, not -p: cargo does not rebuild a crate nothing changed under,
+    # and -p resolves features for the named packages alone.
+    cargo_tests() {
+        cargo nextest run --workspace --no-fail-fast ${RUST_FILTER:+-E "$RUST_FILTER"} || return 1
+        # shellcheck disable=SC2086
+        [ -z "$RUST_DOC" ] || cargo test $RUST_DOC --doc
+    }
     step cargo-test cargo_tests
 else
-    step cargo-test cargo test --workspace --no-fail-fast
+    # shellcheck disable=SC2086
+    step cargo-test cargo test $RUST_PACKAGES --no-fail-fast
 fi
 
 if [ "$PYTHON_MODE" = none ]; then
