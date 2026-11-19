@@ -3,7 +3,7 @@
 //! These are data only. Each derives serde so the CLI, the server and their tests serialize the
 //! same shape; how a result is printed is the caller's job.
 
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 use crate::warnings::PlanWarning;
 use serde::{Deserialize, Serialize};
 
@@ -238,11 +238,11 @@ pub fn list_assets_from_dag(dag: &crate::dag::Dag) -> Vec<AssetSummary> {
             AssetSummary {
                 id: node.id.clone(),
                 kind: node.kind(),
-                freshness: node.extracted.freshness.clone(),
+                freshness: node.decl.freshness.clone(),
                 inputs,
-                env: node.extracted.env.clone(),
-                file: node.extracted.source_file.clone(),
-                line: node.extracted.line,
+                env: node.decl.env.clone(),
+                file: node.invoke.python().source_file.clone(),
+                line: node.invoke.python().line,
             }
         })
         .collect()
@@ -261,6 +261,143 @@ pub(crate) fn key_preview(keys: impl IntoIterator<Item = String>) -> Vec<String>
         }
     }
     preview
+}
+
+/// A `barca sql` query's result: column names in order, one object per row, and how many rows the query
+/// returns in all (`truncated` when only the first `limit` are in `rows`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqlResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<serde_json::Value>,
+    pub total: u64,
+    pub truncated: bool,
+    /// Notes for stderr (stale views, renamed views); not part of the JSON result.
+    #[serde(skip)]
+    pub notes: Vec<String>,
+}
+
+// ─── the JSON form of a result's output ─────────────────────────────────────────
+
+/// The pointer a result gives for an artifact instead of its value.
+pub fn artifact_metadata(oref: &OutputRef) -> serde_json::Value {
+    serde_json::json!({
+        "_barca_artifact": {
+            "path": oref.path,
+            "format": oref.format,
+            "size_bytes": oref.size_bytes,
+        }
+    })
+}
+
+/// What `barca get --json` returns by default (#404): the artifact pointer, or for a
+/// partitioned target an object of pointers keyed by partition key ([`keyed_output`]). `None`
+/// when the run returned nothing (a `get` of every asset).
+pub fn pointer_output(
+    single: Option<&OutputRef>,
+    keys: Option<&[(String, OutputRef)]>,
+    summary: Option<&KeySummary>,
+) -> Option<serde_json::Value> {
+    output_with(single, keys, summary, artifact_metadata)
+}
+
+/// A result's `final_output` with each listed artifact as `read` gives it: its pointer
+/// ([`pointer_output`]) or its value (`values::read_task_output`).
+pub(crate) fn output_with(
+    single: Option<&OutputRef>,
+    keys: Option<&[(String, OutputRef)]>,
+    summary: Option<&KeySummary>,
+    read: impl Fn(&OutputRef) -> serde_json::Value,
+) -> Option<serde_json::Value> {
+    match KeySummary::listed(summary, keys) {
+        Some(keys) => Some(keyed_output(
+            keys.iter()
+                .map(|(key, oref)| (key.clone(), read(oref)))
+                .collect(),
+            summary,
+        )),
+        None => single.map(read),
+    }
+}
+
+/// A partitioned target's `final_output`: `entries` (key to pointer or value) as they are, or,
+/// with a summary (more than [`LISTED_KEYS`] keys), `{"_barca_partitions":
+/// {"keys", "computed", "cached", "outputs", "truncated", "hint"}}`, where `outputs` holds the
+/// entries of the keys the run computed.
+pub fn keyed_output(
+    entries: serde_json::Map<String, serde_json::Value>,
+    summary: Option<&KeySummary>,
+) -> serde_json::Value {
+    let Some(s) = summary else {
+        return serde_json::Value::Object(entries);
+    };
+    let truncated = entries.len() < s.computed;
+    serde_json::json!({
+        KEY_SUMMARY: {
+            "keys": s.keys,
+            "computed": s.computed,
+            "cached": s.keys - s.computed,
+            "outputs": entries,
+            "truncated": truncated,
+            "hint": key_summary_hint(s),
+        }
+    })
+}
+
+/// Why a partitioned output is summarized, and how to see the keys it leaves out.
+fn key_summary_hint(s: &KeySummary) -> String {
+    format!(
+        "{} keys, more than {}: outputs lists only the keys this run computed{}; select keys \
+         with --partition to list their paths, or read every key with barca sql",
+        s.keys,
+        LISTED_KEYS,
+        if s.computed > LISTED_KEYS {
+            format!(" (the first {})", LISTED_KEYS)
+        } else {
+            String::new()
+        }
+    )
+}
+
+/// The counts of a summarized partitioned `final_output` ([`keyed_output`]); `None` for any
+/// other value.
+pub(crate) fn parse_key_summary(output: &serde_json::Value) -> Option<KeySummary> {
+    let s = output.get(KEY_SUMMARY)?;
+    let n = |k: &str| {
+        s.get(k)
+            .and_then(serde_json::Value::as_u64)
+            .map(|n| n as usize)
+    };
+    Some(KeySummary {
+        keys: n("keys")?,
+        computed: n("computed")?,
+        listed: Vec::new(),
+    })
+}
+
+/// The error a multi-target run ends with: its first failed target, with the run so far.
+pub fn first_multi_failure(result: &MultiResult) -> Option<crate::BarcaError> {
+    // The first failed target becomes the run's error: exit 1 with the error envelope.
+    if let Some((name, t)) = result.targets.iter().find(|(_, t)| t.failed()) {
+        return Some(crate::BarcaError::WorkerFailed(Box::new(
+            crate::FailedStep {
+                node: t.failed_node.clone().unwrap_or_else(|| name.clone()),
+                message: t.error.clone().unwrap_or_else(|| "unknown error".into()),
+                phase: t.failed_phase,
+                artifact_dir: None,
+                run: Some(Box::new(crate::PartialRun {
+                    run_id: result.run_id.clone(),
+                    elapsed_seconds: result.elapsed_seconds,
+                    steps_executed: result.steps_executed,
+                    phases: result.phases,
+                    steps: result.steps.clone(),
+                    warnings: result.warnings.clone(),
+                    partitions: t.partitions.clone(),
+                    key_summary: t.key_summary.clone(),
+                })),
+            },
+        )));
+    }
+    None
 }
 
 #[cfg(test)]

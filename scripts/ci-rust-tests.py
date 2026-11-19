@@ -192,6 +192,7 @@ WORKSPACE_READERS = {
     "crates/barca-model/src/artifact_format.rs": "python/barca/_artifacts.py",
     "crates/barca-compile/src/load.rs": "python/ on PYTHONPATH",
     "crates/barca-core/src/backup.rs": "python/ on PYTHONPATH",
+    "crates/barca-core/src/ir_roundtrip_tests.rs": "python/ on PYTHONPATH",
     "crates/barca-core/src/persist.rs": "python/ on PYTHONPATH",
     "crates/barca-core/src/transfer/tests.rs": ".venv/bin/python (untracked)",
     "crates/barca-engine/src/wire.rs": "python/barca/_wire.py",

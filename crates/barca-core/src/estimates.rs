@@ -180,7 +180,9 @@ pub(crate) fn work(node: &NodeStatus, durations: &HashMap<String, f64>, default:
 /// typical duration ([`Timing::durations`]: the median of its recent successful executions,
 /// one key's for a partitioned node), once per key for a partitioned node. Unlike [`work`]
 /// it counts every key, cached or not, and takes no default: `None` for a node with no
-/// successful execution on record.
+/// successful execution on record. Rounded to a millisecond: the figure is an estimate, and a
+/// short decimal reads back the same on every host (a float's last bit does not survive every
+/// JSON reader).
 pub fn node_run_seconds(node: &NodeStatus, durations: &HashMap<String, f64>) -> Option<f64> {
     let one = durations.get(&node.id).copied()?.max(0.0);
     let keys = node
@@ -188,7 +190,7 @@ pub fn node_run_seconds(node: &NodeStatus, durations: &HashMap<String, f64>) -> 
         .as_ref()
         .filter(|_| node.partitioned)
         .map_or(1, |p| p.total);
-    Some(one * keys as f64)
+    Some((one * keys as f64 * 1000.0).round() / 1000.0)
 }
 
 /// When `input`'s result first changed after `own` (unix seconds: when the node reading it

@@ -730,7 +730,7 @@ fn write_expr(expr: &Expr, source: &str, out: &mut String) {
 
 /// The components of `node`'s definition hash and a digest of each: the counted decorator
 /// parts, the function, the helpers in its cone, the kind.
-pub fn definition_components(node: &barca_model::model::ExtractedNode) -> Vec<(String, String)> {
+pub fn definition_components(node: &crate::extracted::ExtractedNode) -> Vec<(String, String)> {
     let mut parts: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     let mut add = |key: String, text: &str| {

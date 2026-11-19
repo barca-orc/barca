@@ -70,7 +70,7 @@ pub fn source_dir(file: &std::path::Path) -> PathBuf {
 /// already in `loaded`, so nothing is read from disk. Paths are root-relative (the working
 /// directory), in the order found.
 fn imported_sources(
-    loaded_nodes: &[(String, Vec<barca_model::model::ExtractedNode>)],
+    loaded_nodes: &[(String, Vec<crate::extracted::ExtractedNode>)],
     loaded: &std::collections::HashSet<String>,
 ) -> Vec<String> {
     use barca_model::model::{NodeRef, PartitionSpec};
@@ -80,7 +80,7 @@ fn imported_sources(
             .to_string_lossy()
             .replace('\\', "/")
     };
-    let parse = |file: &str| -> Option<Vec<barca_model::model::ExtractedNode>> {
+    let parse = |file: &str| -> Option<Vec<crate::extracted::ExtractedNode>> {
         let source = fs::read_to_string(file).ok()?;
         extract_pipeline(&source, file, |_| None)
             .ok()
@@ -88,9 +88,8 @@ fn imported_sources(
     };
     let mut loaded: HashSet<String> = loaded.clone();
     // Files probed on disk: their nodes, `None` when missing or unparseable.
-    let mut probed: HashMap<String, Option<Vec<barca_model::model::ExtractedNode>>> =
-        HashMap::new();
-    let mut queue: Vec<(String, Vec<barca_model::model::ExtractedNode>)> = loaded_nodes.to_vec();
+    let mut probed: HashMap<String, Option<Vec<crate::extracted::ExtractedNode>>> = HashMap::new();
+    let mut queue: Vec<(String, Vec<crate::extracted::ExtractedNode>)> = loaded_nodes.to_vec();
     let mut added = Vec::new();
     while let Some((file, nodes)) = queue.pop() {
         for node in &nodes {
@@ -155,12 +154,23 @@ pub fn build_dag_blocking(
     load_blocking(file_args, python, false).map(|(dag, _)| dag)
 }
 
+/// [`build_dag_blocking`], with the Python frontend's nodes the graph was built from: what the
+/// parser extracted, cones hashed and partition keys evaluated. For tests that check the
+/// frontend against the graph; nothing that plans or runs reads extracted nodes.
+#[doc(hidden)]
+pub fn build_dag_and_extracted_blocking(
+    file_args: &[String],
+    python: &std::path::Path,
+) -> Result<(Dag, Vec<crate::extracted::ExtractedNode>), BarcaError> {
+    load_files(file_args, &[], python, false).map(|loaded| (loaded.0, loaded.2))
+}
+
 fn load_blocking(
     file_args: &[String],
     python: &std::path::Path,
     partial: bool,
 ) -> Result<(Dag, Vec<LoadError>), BarcaError> {
-    load_files(file_args, &[], python, partial)
+    load_files(file_args, &[], python, partial).map(|(dag, errors, _)| (dag, errors))
 }
 
 /// [`load_blocking`] of `file_args`, after `imported`: pipeline files read only because a
@@ -171,14 +181,14 @@ fn load_files(
     imported: &[String],
     python: &std::path::Path,
     partial: bool,
-) -> Result<(Dag, Vec<LoadError>), BarcaError> {
+) -> Result<(Dag, Vec<LoadError>, Vec<crate::extracted::ExtractedNode>), BarcaError> {
     let file_args: Vec<String> = imported.iter().chain(file_args).cloned().collect();
     let file_args = file_args.as_slice();
     let mut errors = Vec::new();
     // Read pipeline sources first, so discovery and hashing share the import-path cache.
     let mut sources: Vec<(PathBuf, std::rc::Rc<str>)> = Vec::with_capacity(file_args.len());
     let mut group_declarations = Vec::new();
-    let mut nodes_by_file: Vec<Vec<barca_model::model::ExtractedNode>> = Vec::new();
+    let mut nodes_by_file: Vec<Vec<crate::extracted::ExtractedNode>> = Vec::new();
     for arg in file_args {
         let path = PathBuf::from(arg);
         match fs::read_to_string(&path) {
@@ -223,7 +233,7 @@ fn load_files(
     }
     let import_errors = cones.validate_imports(&nodes_by_file);
     // Project modules that do not parse, by the pipeline file that imports them (#550). The
-    // file's steps are refused when a command plans one of them (`Dag::check_imports`).
+    // file's steps are refused when a command plans one of them (`cannot_run`).
     let broken_imports: std::collections::HashMap<String, _> = sources
         .iter()
         .enumerate()
@@ -236,7 +246,7 @@ fn load_files(
         return Err(BarcaError::Usage(error.clone()));
     }
     // Nodes in command-line order (the last asset is `get file.py`'s final value).
-    let mut all_nodes: Vec<barca_model::model::ExtractedNode> = Vec::new();
+    let mut all_nodes: Vec<crate::extracted::ExtractedNode> = Vec::new();
     // Each helper's environment reads, parsed once however many steps reach it.
     let mut env_scanned = std::collections::HashMap::new();
     for (index, nodes) in nodes_by_file.into_iter().enumerate() {
@@ -270,7 +280,7 @@ fn load_files(
     let files_read = cones.paths_probed();
 
     if !partial && imported.is_empty() {
-        let loaded_nodes: Vec<(String, Vec<barca_model::model::ExtractedNode>)> = sources
+        let loaded_nodes: Vec<(String, Vec<crate::extracted::ExtractedNode>)> = sources
             .iter()
             .map(|(path, _)| {
                 let file = path.to_string_lossy();
@@ -320,7 +330,7 @@ fn load_files(
     }
 
     if !partial {
-        crate::dag::validate_partition_dimensions(&all_nodes)?;
+        crate::link::validate_partition_dimensions(&all_nodes)?;
         // Like a file that does not parse: the command cannot plan with a node whose keys are
         // unknown, so it stops with the node named (exit 2).
         let unevaluated = resolve_dynamic_partitions(&mut all_nodes, python)?;
@@ -340,9 +350,9 @@ fn load_files(
         let groups = crate::groups::resolve(group_declarations, &all_nodes)?;
         let mut dag = Dag::build(&all_nodes)?;
         dag.groups = groups;
-        dag.broken_imports = broken_imports;
+        dag.cannot_run = cannot_run(&dag, &broken_imports);
         dag.files_read = files_read;
-        return Ok((dag, errors));
+        return Ok((dag, errors, all_nodes));
     }
     let failed_files = errors.iter().map(|e| e.file.clone()).collect::<Vec<_>>();
     let (dag, mut failures) = Dag::isolate(&all_nodes, &failed_files);
@@ -357,7 +367,7 @@ fn load_files(
         .collect();
     let unevaluated = resolve_dynamic_partitions(&mut healthy, python)?;
     let (mut dag, additional) = Dag::isolate_with(&healthy, &failed_files, unevaluated);
-    dag.broken_imports = broken_imports;
+    dag.cannot_run = cannot_run(&dag, &broken_imports);
     dag.files_read = files_read;
     failures.extend(additional);
     for (id, error) in failures {
@@ -412,7 +422,45 @@ fn load_files(
             }),
         }
     }
-    Ok((dag, errors))
+    Ok((dag, errors, retained))
+}
+
+/// The nodes of `dag` that cannot run because their file imports a project module that does
+/// not parse (#550), each with the message a command that plans it stops with: the worker's
+/// import of the file would fail, after the steps before it had run.
+fn cannot_run(
+    dag: &Dag,
+    broken_imports: &std::collections::HashMap<String, crate::project_modules::BrokenImport>,
+) -> std::collections::HashMap<String, String> {
+    if broken_imports.is_empty() {
+        return Default::default();
+    }
+    dag.graph
+        .node_weights()
+        .filter_map(|node| {
+            let (id, file) = (&node.id, node.source_file());
+            let broken = broken_imports.get(file)?;
+            let via = if broken.imported_by == *file {
+                String::new()
+            } else {
+                format!(" through {}", broken.imported_by)
+            };
+            let why = format!(
+                "syntax error in {}: {} (imported by {file}{via}, so step '{id}' cannot run)\n\
+                 {}:{}:{}:\n{}\n\
+                 Fix the syntax error: the worker imports {} when it loads {file}, so no step of \
+                 {file} can run until it parses.",
+                broken.file,
+                broken.problem,
+                broken.file,
+                broken.problem.line,
+                broken.problem.column,
+                broken.problem.excerpt(),
+                broken.file,
+            );
+            Some((id.clone(), why))
+        })
+        .collect()
 }
 
 /// A Python traceback on stderr as (its last line, the exception; the frames of the user's
@@ -448,7 +496,7 @@ fn user_traceback(stderr: &str) -> (String, String) {
 /// expression cannot be evaluated is returned as (node id, error) for a load error naming it,
 /// with the traceback (#628), instead of being left with no keys.
 fn resolve_dynamic_partitions(
-    nodes: &mut [barca_model::model::ExtractedNode],
+    nodes: &mut [crate::extracted::ExtractedNode],
     python: &std::path::Path,
 ) -> Result<Vec<(String, String)>, BarcaError> {
     let mut failures = Vec::new();
@@ -655,7 +703,7 @@ mod dynamic_key_tests {
             };
             for node in ["src", "other", "down", "further"] {
                 let id = format!("{}:{node}", files[0]);
-                match &dag.get_node(&id).expect(&id).extracted.partitions["key"] {
+                match &dag.get_node(&id).expect(&id).decl.partitions["key"] {
                     barca_model::model::PartitionSpec::Static { values } => {
                         assert_eq!(values.len(), 3, "partial={partial}: {node}")
                     }
@@ -704,16 +752,13 @@ mod source_dir_tests {
         .unwrap();
         let node = |name: &str| dag.get_node(&format!("{file}:{name}")).unwrap();
         assert_eq!(
-            node("reg").extracted.env_reads,
+            node("reg").findings.env_reads,
             ["*_REGISTRY_CSV", "APP_ROOT"]
         );
         // The pattern is covered by the declared name that matches it.
-        assert_eq!(node("reg").extracted.undeclared_env(), ["APP_ROOT"]);
-        assert_eq!(
-            node("plain").extracted.undeclared_env(),
-            ["TOKEN_A", "TOKEN_B"]
-        );
-        assert!(node("quiet").extracted.env_reads.is_empty());
+        assert_eq!(node("reg").undeclared_env(), ["APP_ROOT"]);
+        assert_eq!(node("plain").undeclared_env(), ["TOKEN_A", "TOKEN_B"]);
+        assert!(node("quiet").findings.env_reads.is_empty());
 
         let plan = crate::planner::plan_from_dag(
             &dag,

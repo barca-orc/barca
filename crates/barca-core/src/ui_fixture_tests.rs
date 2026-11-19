@@ -330,7 +330,12 @@ impl Project {
 
     /// The run hash of one key of a partitioned node with no inputs.
     fn key_hash(&self, node: &str, key: &str) -> String {
-        let definition = &self.dag.get_node(&self.id(node)).unwrap().definition_hash;
+        let definition = &self
+            .dag
+            .get_node(&self.id(node))
+            .unwrap()
+            .fingerprint
+            .definition_hash;
         barca_model::hash::run_hash(definition, Some(key), &[], None, None)
     }
 

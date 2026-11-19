@@ -123,8 +123,8 @@ last_attempt: LastAttempt,
  * "Typical run time"): the median of its recent successful executions, times its number
  * of keys for a partitioned node (durations are recorded per key, and a run of the node
  * computes each key). An estimate of a run over every key, not of the next run, which
- * computes only the keys that need it. `null` when it has no successful execution on
- * record.
+ * computes only the keys that need it. Rounded to a millisecond. `null` when it has no
+ * successful execution on record.
  */
 typical_run_seconds: number | null,
 /**

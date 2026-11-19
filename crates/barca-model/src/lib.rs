@@ -17,6 +17,7 @@ pub mod envdeps;
 #[doc(hidden)]
 pub mod events;
 pub mod hash;
+pub mod ir;
 pub mod jsonlog;
 #[doc(hidden)]
 pub mod keyed;

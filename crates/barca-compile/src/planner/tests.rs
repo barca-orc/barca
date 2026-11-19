@@ -1,4 +1,5 @@
 use super::*;
+use crate::extracted::{DeclaredInput, ExtractedNode};
 use barca_model::model::*;
 use smallvec::SmallVec;
 
@@ -914,19 +915,13 @@ fn a_sensor_runs_before_its_partitioned_consumer() {
         ("etag", &[], &[]),
         ("leaf", &["etag"], &[("k", &["a", "b", "c"])]),
     ]);
-    // build_partitioned_dag makes assets; rebuild with `etag` as a sensor.
-    let mut extracted: Vec<ExtractedNode> = dag_specs
-        .topo_order()
-        .iter()
-        .map(|id| dag_specs.get_node(id).unwrap().extracted.clone())
-        .collect();
-    for n in &mut extracted {
-        if n.function_name == "etag" {
-            n.kind = NodeKind::Sensor;
-            n.freshness = Freshness::Manual;
+    // build_partitioned_dag makes assets; make `etag` a sensor.
+    for n in dag_specs.graph.node_weights_mut() {
+        if n.function_name() == "etag" {
+            n.decl.kind = NodeKind::Sensor;
+            n.decl.freshness = Freshness::Manual;
         }
     }
-    dag_specs = Dag::build(&extracted).unwrap();
     for pool in [1, 2, 10] {
         let p = plan_from_dag(&dag_specs, &cfg(pool));
         let sensor_phase = positions(&p, "test.py:etag")[0].0;

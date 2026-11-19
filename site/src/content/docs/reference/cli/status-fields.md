@@ -605,8 +605,8 @@ The times are experimental with the rest of health.
 of its recent successful executions (at most 20; the middle value, or the mean of the two
 middle values of an even count). Durations are recorded per key, whichever call computed the
 key, so for a partitioned node the figure is that median times its number of keys
-(`partitions.total`): a run over the whole node. It is `null` when the node has no successful
-execution on record.
+(`partitions.total`): a run over the whole node. It is rounded to a millisecond, and `null`
+when the node has no successful execution on record.
 
 It is an estimate of a run that computes every key. The next run computes only the keys that
 need it, which `expected_fresh_at` accounts for and this does not. For a node whose keys are

@@ -6799,8 +6799,8 @@ components:
           description: How long one run of the node typically takes, seconds; the median of its
             recent successful executions (at most 20), times its number of keys for a
             partitioned node (durations are recorded per key). An estimate of a run over every
-            key, not of the next run, which computes only the keys that need it. null when it
-            has no successful execution on record. Experimental.
+            key, not of the next run, which computes only the keys that need it. Rounded to a
+            millisecond. null when it has no successful execution on record. Experimental.
         kind: &id047
           type: string
           enum:

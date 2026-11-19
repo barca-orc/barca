@@ -115,13 +115,7 @@ def test_status_and_state_say_the_same_of_every_node(tmp_path, serve):
     assert local["loose"]["last_attempt"] == "never_run", local
     assert 5.5 < local["orders"]["typical_run_seconds"] < 9, local
     assert local["loose"]["typical_run_seconds"] is None, local
-    served = _picked(reader.get("/state"))
-    assert served == local, {
-        (name, field): (served[name][field], local[name][field])
-        for name in local
-        for field in FIELDS
-        if served[name][field] != local[name][field]
-    }
+    assert _picked(reader.get("/state")) == local
     assert _picked(reader.get("/nodes")["nodes"]) == local
     reader.stop()
 
