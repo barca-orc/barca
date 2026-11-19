@@ -608,9 +608,9 @@ def test_collect_refuses_inline_values_from_an_older_coordinator():
 
 @pytest.mark.parametrize("value", [{"b": 1, "a": [1, 2]}, 10**30, None, "é", "x" * 5000])
 def test_all_json_branch_results_are_files(tmp_path, value, monkeypatch):
-    from barca import _worker
+    from barca import _runtime, _worker
 
-    monkeypatch.setattr(_worker, "_emit", lambda kind, **kw: None)
+    monkeypatch.setattr(_runtime, "emit_step_completed", lambda node_id, artifact: None)
     artifact = _worker._materialize(
         value, "branch", tmp_path, {"branch": True, "branch_path": str(tmp_path / "result")}, 0
     )

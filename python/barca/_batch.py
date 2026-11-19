@@ -22,8 +22,11 @@ dimension names, sorted.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 class Failed:
@@ -79,6 +82,21 @@ def _norm(key, dims: list[str]):
 
 
 # The formats DuckDB reads as a table; a pickle artifact is not one.
+@dataclass(frozen=True)
+class Keys:
+    """The keys of one batched call."""
+
+    dims: list[str]  # the partition dimensions, sorted
+    keys: list[Any]  # what the function sees for each step: a value, or a tuple of values
+    texts: list[str]  # `retailer=r7`, for messages
+
+    @classmethod
+    def of(cls, steps: list[dict]) -> Keys:
+        dims = key_dims(steps)
+        keys = [key_of(st, dims) for st in steps]
+        return cls(dims, keys, [key_text(k, dims) for k in keys])
+
+
 _TABULAR_FORMATS = ("parquet", "csv", "json")
 
 
@@ -425,3 +443,85 @@ def _split_duckdb(value, kind: str, dims: list[str], wanted: dict, staging: Path
             con.execute(f"drop view if exists {q(name)}")
         except Exception:
             pass
+
+
+# ─── Writing each key ───────────────────────────────────────────────────────
+
+
+def key_result(value: Any, explicit: str | None) -> tuple[Any, str | None]:
+    """One key's value as `split` left it: the value itself, or, for a key DuckDB wrote to
+    parquet, `(None, file)` when that file can be installed as the artifact as it is, else a
+    relation over the files."""
+    if not (isinstance(value, tuple) and len(value) == 2 and value[0] == "parquet"):
+        return value, None
+    files = value[1]
+    if (
+        len(files) == 1
+        and Path(files[0]).name != "__empty.parquet"
+        and explicit in (None, "parquet")
+    ):
+        return None, files[0]
+    import duckdb
+
+    return duckdb.read_parquet(files), None
+
+
+def write_keys(
+    batch: Keys,
+    steps: list[dict],
+    values: dict,
+    explicit: str | None,
+    write: Callable[[dict, Any, str | None], None],
+    elapsed: float,
+    *,
+    at: Any,
+    reported: set[str],
+) -> None:
+    """Write and report each key of a call that ran, on its own: `values` is what `split` made
+    of the call's result, `explicit` the step's declared serializer.
+
+    `write(step, value, prewritten)` writes one key's artifact and reports it (the worker's
+    `_materialize`). A key the call returned `barca.Failed` or nothing for, or whose write
+    fails, is reported as that key's error, and the keys after it are still written: the
+    worker goes on. `elapsed` is each key's share of the call's time. Every key dealt with
+    is added to `reported`, and `at.phase` is kept at where the key in hand is, so that
+    whoever catches what this lets through (an interrupt, a socket that is gone) knows which
+    keys are left and where the call was.
+    """
+    from barca import _failure, _runtime
+
+    for k, text, st in zip(batch.keys, batch.texts, steps, strict=True):
+        node_id = st["node_id"]
+        n_key = _norm(k, batch.dims)
+        # The call's own failure of this key (`barca.Failed`) is the step's.
+        at.phase = _failure.SPLIT_OUTPUT
+        try:
+            if n_key not in values:
+                raise BatchFailed(f"batch returned no result for {text}")
+            value = values[n_key]
+            if isinstance(value, Failed):
+                at.phase = _failure.USER_CODE
+                raise BatchFailed(value.reason or f"{text} failed")
+            value, prewritten = key_result(value, explicit)
+            at.phase = _failure.WRITE_OUTPUT
+            write(st, value, prewritten)
+            reported.add(node_id)
+        except (BrokenPipeError, ConnectionResetError):
+            raise
+        except Exception as exc:
+            reported.add(node_id)
+            if at.phase == _failure.WRITE_OUTPUT:
+                at.phase = _failure.output_phase(exc)
+            if isinstance(exc, BatchFailed):
+                error_type, traceback = "BatchKeyFailed", ""
+            else:
+                error_type, traceback = type(exc).__name__, _failure.traceback_for(exc, at.phase)
+            _runtime.emit_step_error(
+                node_id=node_id,
+                error_type=error_type,
+                message=str(exc),
+                traceback=traceback,
+                elapsed=elapsed,
+                worker_continues=True,
+                phase=at.phase,
+            )

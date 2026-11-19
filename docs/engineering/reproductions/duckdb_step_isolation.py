@@ -68,7 +68,11 @@ def main():
                     "run_hash": "probe",
                 }
                 with (
-                    patch.object(_worker, "_emit", lambda kind, **kw: reports.append((kind, kw))),
+                    patch.object(
+                        _runtime,
+                        "emit_step_completed",
+                        lambda node_id, artifact: reports.append(artifact),
+                    ),
                     patch.object(_runtime, "emit_step_error", lambda **kw: errors.append(kw)),
                     patch.object(_worker, "_ctrl_c_does_nothing"),
                     patch.object(_worker, "_ctrl_c_interrupts_the_step"),
@@ -76,7 +80,7 @@ def main():
                     ok = _worker._run_daemon_step(step, modules, str(root / "arts"), lru)
                 if not ok:
                     return None
-                artifact = reports[-1][1]["artifact"]
+                artifact = reports[-1]
                 return _artifacts.deserialize(artifact["path"], artifact["format"])
 
             before = run("consumer")
