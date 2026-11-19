@@ -283,7 +283,7 @@ pub fn plan_narrowed(
     dag: &Dag,
     topology: &Topology,
     config: &ResourceConfig,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&crate::partition_selection::PartitionSelection>,
 ) -> ExecutionPlan {
     let phase_assignment = assign_phases(topology);
     let phases = build_phases(dag, topology, &phase_assignment, config, selection);
@@ -421,7 +421,7 @@ fn build_phases(
     topology: &Topology,
     phase_assignment: &HashMap<usize, usize>,
     config: &ResourceConfig,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&crate::partition_selection::PartitionSelection>,
 ) -> Vec<Phase> {
     let max_phase = phase_assignment.values().copied().max().unwrap_or(0);
 
@@ -563,7 +563,7 @@ fn build_phases(
 fn chain_to_steps(
     dag: &Dag,
     chain: &Chain,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&crate::partition_selection::PartitionSelection>,
 ) -> Vec<StreamStep> {
     let mut steps = Vec::new();
 
@@ -826,7 +826,7 @@ pub fn plan_from_dag(dag: &Dag, config: &ResourceConfig) -> ExecutionPlan {
 pub fn plan_from_dag_narrowed(
     dag: &Dag,
     config: &ResourceConfig,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&crate::partition_selection::PartitionSelection>,
 ) -> ExecutionPlan {
     let topology = decompose(dag);
     plan_narrowed(dag, &topology, config, selection)
@@ -837,7 +837,7 @@ pub fn plan_for_nodes(
     dag: &Dag,
     nodes: &[&str],
     config: &ResourceConfig,
-    selection: Option<&crate::selection::PartitionSelection>,
+    selection: Option<&crate::partition_selection::PartitionSelection>,
 ) -> ExecutionPlan {
     let topology = decompose_ordered(dag, dag.order_for(nodes.iter().copied()));
     plan_narrowed(dag, &topology, config, selection)

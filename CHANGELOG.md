@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+- Internal: barca-compile's modules have a checked dependency order and no longer form a cycle (#1056); no behavior change.
+
 ### Documentation
 
 - **CI's merge tier runs the Rust tests a change can affect, not the whole workspace (#945, #1056).** `scripts/ci-rust-tests.py` maps a diff to the crates that own the changed files, the crates that depend on them (read from `cargo metadata`) and the tests that read a changed file from outside their crate (site pages, specifications, UI fixtures, the guards that scan every crate), and prints the reason for each crate in the `changes` job. A change inside `barca-server` runs 300 of the 1,578 tests and a site page 95; a diff no Rust test reads runs none. The root manifest, `Cargo.lock`, the CI workflow, `python/barca/` and any path the script does not know still run everything, as does a release (the full tier) and a pull request labelled `ci-full`. `scripts/check-fast.sh` uses the same selection; `--rust-all` runs every Rust test. A test broken by a change the selection considers unrelated is found by the next release's full tier, not at the merge.

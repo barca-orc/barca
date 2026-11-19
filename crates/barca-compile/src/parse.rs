@@ -9,9 +9,17 @@ use ruff_text_size::Ranged;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
+use crate::arg_values::{
+    Rejected, extract_string_literal, keyword, not_run, serializer_kind, snippet, unreadable,
+};
+use crate::decorators::{
+    extract_cutoff, is_unsafe_decorator, match_node_decorator, try_extract_sink,
+};
+use crate::file_names::{FileNames, dotted_expr};
+use crate::syntax_problem::SyntaxProblem;
 use barca_model::model::{
     CronExpr, DeclaredInput, ExtractedNode, Freshness, NodeKind, NodeRef, ParallelCall,
-    PartitionSpec, PartitionValue, SerializerKind, SinkDecl, ValueType,
+    PartitionSpec, PartitionValue, SinkDecl, ValueType,
 };
 
 /// Error from parsing a Python source file.
@@ -66,61 +74,6 @@ pub enum ParseError {
 /// The parser reports a byte range, which says nothing to someone looking at an editor.
 fn syntax_message(source: &str, error: &ruff_python_parser::ParseError) -> String {
     SyntaxProblem::of(source, error).to_string()
-}
-
-/// Where a file stops parsing, and why: `line 12, column 18: Expected ':', found newline`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SyntaxProblem {
-    /// 1-based.
-    pub line: usize,
-    /// 1-based, in characters.
-    pub column: usize,
-    /// The parser's message.
-    pub message: String,
-    /// The text of that line, without its newline.
-    pub text: String,
-}
-
-impl SyntaxProblem {
-    pub(crate) fn of(source: &str, error: &ruff_python_parser::ParseError) -> Self {
-        let offset = usize::from(error.location.start()).min(source.len());
-        let before = source.get(..offset).unwrap_or(source);
-        let line = before.matches('\n').count() + 1;
-        let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-        let text = source
-            .lines()
-            .nth(line - 1)
-            .unwrap_or("")
-            .trim_end()
-            .to_string();
-        SyntaxProblem {
-            line,
-            column,
-            message: error.error.to_string(),
-            text,
-        }
-    }
-
-    /// The line, and a caret under the column: what an editor would point at.
-    pub fn excerpt(&self) -> String {
-        let pad: String = self
-            .text
-            .chars()
-            .take(self.column.saturating_sub(1))
-            .map(|c| if c == '\t' { '\t' } else { ' ' })
-            .collect();
-        format!("    {}\n    {pad}^", self.text)
-    }
-}
-
-impl std::fmt::Display for SyntaxProblem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "line {}, column {}: {}",
-            self.line, self.column, self.message
-        )
-    }
 }
 
 /// Parse a Python source file and extract all barca-decorated nodes.
@@ -193,107 +146,6 @@ pub(crate) fn extract_pipeline(
         nodes,
         crate::groups::extract_body_with_names(body, file, &names)?,
     ))
-}
-
-/// What the top-level names of a file are bound to, for resolving `inputs=` references:
-/// functions defined in the file, names imported with `from M import x [as y]`, and modules
-/// imported with `import M [as m]`. Module names keep their leading dots (`.sources`).
-#[derive(Default)]
-pub(crate) struct FileNames {
-    local: std::collections::HashSet<String>,
-    /// local name -> (module, name in that module)
-    from_imports: HashMap<String, (String, String)>,
-    /// local dotted name -> module (`s` -> `pipelines.sources`, `a.b` -> `a.b`)
-    modules: HashMap<String, String>,
-    /// The decorator and helper names that are positively barca's, for the argument check.
-    pub(crate) barca: crate::decorator_args::BarcaNames,
-}
-
-impl FileNames {
-    pub(crate) fn collect(body: &[Stmt]) -> Self {
-        Self::with_barca(body, crate::decorator_args::BarcaNames::of(body))
-    }
-
-    fn with_barca(body: &[Stmt], barca: crate::decorator_args::BarcaNames) -> Self {
-        let mut names = FileNames {
-            barca,
-            ..FileNames::default()
-        };
-        for stmt in body {
-            match stmt {
-                Stmt::FunctionDef(f) => {
-                    names.local.insert(f.name.to_string());
-                }
-                Stmt::ImportFrom(imp) => {
-                    let module = format!(
-                        "{}{}",
-                        ".".repeat(imp.level as usize),
-                        imp.module.as_ref().map(|m| m.as_str()).unwrap_or("")
-                    );
-                    for alias in &imp.names {
-                        let name = alias.name.to_string();
-                        let local = alias
-                            .asname
-                            .as_ref()
-                            .map(|a| a.to_string())
-                            .unwrap_or_else(|| name.clone());
-                        names.from_imports.insert(local, (module.clone(), name));
-                    }
-                }
-                Stmt::Import(imp) => {
-                    for alias in &imp.names {
-                        let module = alias.name.to_string();
-                        let local = alias
-                            .asname
-                            .as_ref()
-                            .map(|a| a.to_string())
-                            .unwrap_or_else(|| module.clone());
-                        names.modules.insert(local, module);
-                    }
-                }
-                _ => {}
-            }
-        }
-        names
-    }
-
-    /// The node an `inputs=` value (or `collect(...)` / `partitions_from(...)` argument) refers
-    /// to: a function in this file, a name imported from a module, or `module.name`.
-    pub(crate) fn node_ref(&self, expr: &Expr) -> Option<NodeRef> {
-        match expr {
-            Expr::Name(n) => {
-                let id = n.id.to_string();
-                if self.local.contains(&id) {
-                    return Some(NodeRef::FunctionName(id));
-                }
-                Some(match self.from_imports.get(&id) {
-                    Some((module, name)) => NodeRef::Imported {
-                        module: module.clone(),
-                        name: name.clone(),
-                    },
-                    None => NodeRef::FunctionName(id),
-                })
-            }
-            Expr::Attribute(attr) => {
-                let dotted = dotted_expr(&attr.value)?;
-                let module = self.modules.get(&dotted)?;
-                Some(NodeRef::Imported {
-                    module: module.clone(),
-                    name: attr.attr.to_string(),
-                })
-            }
-            _ => None,
-        }
-    }
-}
-
-/// `a.b.c` as a string, for a chain of names.
-fn dotted_expr(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::Name(n) => Some(n.id.to_string()),
-        Expr::Attribute(a) => Some(format!("{}.{}", dotted_expr(&a.value)?, a.attr)),
-        _ => None,
-    }
 }
 
 fn try_extract_function(
@@ -607,106 +459,6 @@ fn classify_type(module: &str, name: &str) -> Option<ValueType> {
     }
 }
 
-pub(crate) fn is_unsafe_decorator(expr: &Expr, barca: &crate::decorator_args::BarcaNames) -> bool {
-    barca.recognized(expr) == Some("unsafe")
-}
-
-pub(crate) fn try_extract_sink(
-    expr: &Expr,
-    barca: &crate::decorator_args::BarcaNames,
-) -> Option<SinkDecl> {
-    if let Expr::Call(call) = expr
-        && barca.recognized(&call.func) == Some("sink")
-    {
-        let path = call
-            .arguments
-            .args
-            .first()
-            .and_then(extract_string_literal)?;
-        let serializer = call
-            .arguments
-            .keywords
-            .iter()
-            .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("serializer"))
-            // An unreadable serializer is reported by `sink_args::check`.
-            .and_then(|kw| serializer_kind(&kw.value, "", "sinks").ok().flatten());
-        let (partition_by, rows_per_file) = crate::sink_args::extract(call);
-        return Some(SinkDecl {
-            path,
-            serializer,
-            partition_by,
-            rows_per_file,
-            dims: Vec::new(),
-        });
-    }
-    None
-}
-
-/// The serializers `serializer=` names, matched without regard to case.
-fn serializer_named(name: &str) -> Option<SerializerKind> {
-    match name.to_lowercase().as_str() {
-        "json" => Some(SerializerKind::Json),
-        "parquet" => Some(SerializerKind::Parquet),
-        "csv" => Some(SerializerKind::Csv),
-        "pickle" => Some(SerializerKind::Pickle),
-        "text" => Some(SerializerKind::Text),
-        "yaml" => Some(SerializerKind::Yaml),
-        _ => None,
-    }
-}
-
-/// `serializer="json"` (or `None`, the default) on a node or a sink (#665): a string literal
-/// naming a serializer. A name, a call or an unknown format is refused rather than read as
-/// "not written", which would store the value in a format nobody asked for.
-pub(crate) fn serializer_kind(
-    expr: &Expr,
-    source: &str,
-    topic: &str,
-) -> Result<Option<SerializerKind>, Rejected> {
-    let fix = format!(
-        "Write it like `serializer=\"json\"`: one of \"json\", \"pickle\", \"parquet\" or \
-         \"csv\". See `barca docs {topic}`."
-    );
-    match expr {
-        Expr::NoneLiteral(_) => Ok(None),
-        Expr::StringLiteral(s) => match serializer_named(s.value.to_str()) {
-            Some(kind) => Ok(Some(kind)),
-            None => Err((
-                expr.range().start().to_usize(),
-                format!(
-                    "`serializer=` names no serializer barca has: {:?}",
-                    s.value.to_str()
-                ),
-                fix,
-            )),
-        },
-        _ => Err(unreadable(
-            source,
-            expr,
-            "serializer",
-            "a string literal",
-            fix,
-        )),
-    }
-}
-
-pub(crate) fn match_node_decorator<'a>(
-    expr: &'a Expr,
-    barca: &crate::decorator_args::BarcaNames,
-) -> Option<(NodeKind, Vec<&'a Keyword>)> {
-    let (callee, keywords) = match expr {
-        Expr::Call(call) => (call.func.as_ref(), call.arguments.keywords.iter().collect()),
-        _ => (expr, Vec::new()),
-    };
-    let kind = match barca.recognized(callee)? {
-        "asset" => NodeKind::Asset,
-        "sensor" => NodeKind::Sensor,
-        "task" => NodeKind::Task,
-        _ => return None,
-    };
-    Some((kind, keywords))
-}
-
 /// A `freshness=` argument: the policy, and `Schedule`'s `max_failures` and `timeout_seconds`.
 type FreshnessArgs = (Freshness, Option<u32>, Option<u64>);
 
@@ -814,58 +566,6 @@ fn extract_freshness(
     Ok(None)
 }
 
-/// A decorator value barca cannot read: the byte offset of the value, what is wrong, and what to
-/// write instead.
-pub(crate) type Rejected = (usize, String, String);
-
-/// How barca reads decorator arguments, for a message about one it cannot read.
-const NOT_RUN: &str = "barca reads decorator arguments from the source without running it, so it \
-                       cannot see what this is";
-
-/// The source text of `expr`, shortened to its first line and 60 characters.
-pub(crate) fn snippet(source: &str, expr: &Expr) -> String {
-    let range = expr.range();
-    let text = source
-        .get(range.start().to_usize()..range.end().to_usize())
-        .unwrap_or("?");
-    let first = text.lines().next().unwrap_or("");
-    if first.chars().count() > 60 {
-        format!("{}...", first.chars().take(57).collect::<String>())
-    } else if first.len() < text.len() {
-        format!("{first}...")
-    } else {
-        first.to_string()
-    }
-}
-
-/// "; barca reads ... without running it" after a value that is computed (a name, a call, an
-/// operator): nothing for a literal of the wrong kind, which barca reads well enough.
-pub(crate) fn not_run(expr: &Expr) -> String {
-    let literal = match expr {
-        Expr::UnaryOp(op) => matches!(op.operand.as_ref(), Expr::NumberLiteral(_)),
-        Expr::List(_) | Expr::Tuple(_) | Expr::Set(_) | Expr::Dict(_) => true,
-        e => e.is_literal_expr(),
-    };
-    if literal {
-        String::new()
-    } else {
-        format!("; {NOT_RUN}")
-    }
-}
-
-/// `arg=` holds `expr`, which is not `wants`.
-fn unreadable(source: &str, expr: &Expr, arg: &str, wants: &str, fix: String) -> Rejected {
-    (
-        expr.range().start().to_usize(),
-        format!(
-            "`{arg}=` must be {wants}, got `{}`{}",
-            snippet(source, expr),
-            not_run(expr)
-        ),
-        fix,
-    )
-}
-
 /// Whether `callee` may be one of barca's `exports` without barca being able to tell: the name
 /// is rebound or comes from elsewhere (`partitions = load_partitions`, `cron.Schedule`), or
 /// the file reassigns barca's export. Such a `partitions=` or `freshness=` value is left
@@ -881,14 +581,6 @@ fn unidentified_helper(
         _ => return false,
     };
     exports.contains(&name) || barca.uncertain(exports)
-}
-
-/// The keyword `name=` of a decorator, when it is written.
-fn keyword<'a>(keywords: &[&'a Keyword], name: &str) -> Option<&'a Keyword> {
-    keywords
-        .iter()
-        .find(|kw| kw.arg.as_ref().is_some_and(|a| a.as_str() == name))
-        .copied()
 }
 
 const INPUTS_FIX: &str = "Write it like `inputs={\"param\": upstream}`: a dict literal whose keys are \
@@ -1239,19 +931,6 @@ fn extract_deterministic(keywords: &[&Keyword], source: &str) -> Result<bool, (u
     ))
 }
 
-/// Whether `func` is an `@asset(cutoff=True)` (#628), read from its decorators alone: for the
-/// dependency cone (`crate::cone`, rule 8), which sees functions before nodes are extracted.
-pub(crate) fn is_cutoff_asset(
-    func: &ast::StmtFunctionDef,
-    barca: &crate::decorator_args::BarcaNames,
-) -> bool {
-    func.decorator_list.iter().any(|d| {
-        match_node_decorator(&d.expression, barca).is_some_and(|(kind, keywords)| {
-            kind == NodeKind::Asset && extract_cutoff(&keywords, "").unwrap_or(false)
-        })
-    })
-}
-
 /// `cutoff=True|False` on `@asset` (#628): a boolean literal, `False` when not written.
 /// Anything else is refused with the byte offset of the value: a cutoff that silently did
 /// nothing would rerun everything below the asset, and one read as on by mistake would change
@@ -1354,28 +1033,6 @@ fn extract_schedule_batch(
     Ok(Some(value))
 }
 
-fn extract_cutoff(keywords: &[&Keyword], source: &str) -> Result<bool, (usize, String)> {
-    let Some(kw) = keywords
-        .iter()
-        .find(|kw| kw.arg.as_ref().map(|a| a.as_str()) == Some("cutoff"))
-    else {
-        return Ok(false);
-    };
-    if let Expr::BooleanLiteral(b) = &kw.value {
-        return Ok(b.value);
-    }
-    let range = kw.value.range();
-    Err((
-        range.start().to_usize(),
-        format!(
-            "cutoff= must be True or False, got `{}`",
-            source
-                .get(range.start().to_usize()..range.end().to_usize())
-                .unwrap_or("?")
-        ),
-    ))
-}
-
 /// `name="..."` / `description="..."` (#665): a string literal, or `None` (not written).
 fn optional_string(
     keywords: &[&Keyword],
@@ -1452,14 +1109,6 @@ fn extract_int_kwarg(keywords: &[&Keyword], name: &str) -> Option<u32> {
         }
     }
     None
-}
-
-fn extract_string_literal(expr: &Expr) -> Option<String> {
-    if let Expr::StringLiteral(s) = expr {
-        Some(s.value.to_string())
-    } else {
-        None
-    }
 }
 
 /// Scan a task function body for `parallel(...)` and `parallel_map(...)` calls.
@@ -1691,6 +1340,7 @@ fn extract_refs_from_starred(expr: &Expr, refs: &mut Vec<NodeRef>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use barca_model::model::SerializerKind;
 
     #[test]
     fn a_node_records_the_line_of_its_first_decorator() {

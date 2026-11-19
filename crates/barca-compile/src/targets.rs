@@ -5,19 +5,7 @@ use barca_model::step_result;
 use barca_model::{BarcaError, reports::TargetOutcome, step_result::OutputRef};
 use std::collections::HashMap;
 
-/// Does a target `name` identify node `id`? A name is a function name (`deploy`), a full id
-/// (`pipeline.py:deploy`), or a path-suffixed id (`p.py:deploy` for `sub/p.py:deploy`). It
-/// matches only at a `:` or `/` boundary, never as the tail of a longer name, so `deploy` does
-/// not select `prod_deploy`.
-pub fn target_name_matches(id: &str, name: &str) -> bool {
-    if id == name {
-        return true;
-    }
-    match id.strip_suffix(name) {
-        Some(prefix) => prefix.ends_with(':') || (name.contains(':') && prefix.ends_with('/')),
-        None => false,
-    }
-}
+pub use crate::names::{refresh_name_matches, short_name, target_name_matches};
 
 /// Why a name cannot be the target of a command. The one place that decides it: `barca get`,
 /// `barca run` and the server's `POST /get/{target}` and `POST /run/{target}` all go through
@@ -351,12 +339,6 @@ pub fn target_outcomes(
         .collect()
 }
 
-/// Does the asset part of a `--refresh` selector (short name or full id) identify `node_id`?
-pub fn refresh_name_matches(node_id: &str, name: &str) -> bool {
-    let name = name.split('[').next().unwrap_or(name);
-    node_id == name || node_id.ends_with(&format!(":{name}"))
-}
-
 /// "Did you mean ...?" for an unknown target `name` among node ids `available`: compared with
 /// the function names, or with the full ids when `name` is one (`pipeline.py:amount`).
 pub fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
@@ -365,12 +347,6 @@ pub fn target_suggestion(name: &str, available: &[&str]) -> Option<String> {
     } else {
         barca_model::suggest::suggestion(name, available.iter().map(|id| short_name(id)))
     }
-}
-
-/// The function name of a node id (`pipeline.py:src` -> `src`, `pipeline.py:p[k=v]` -> `p`).
-pub fn short_name(node_id: &str) -> &str {
-    let base = node_id.split('[').next().unwrap_or(node_id);
-    base.rsplit(':').next().unwrap_or(base)
 }
 
 /// Fail before running anything when `--refresh` names something that is not an upstream
@@ -472,6 +448,34 @@ pub fn final_output_of(
         matches.sort_by_key(|(k, _)| (*k).clone());
         matches.first().map(|(_, v)| (*v).clone())
     })
+}
+
+/// `--batch node=V` against the graph, as [`validate_refresh_names`] is for `--refresh`: the
+/// value is the frontend's ([`crate::batch_spec`]), the check needs the graph.
+impl crate::batch_spec::BatchOverride {
+    /// Every named node must be in the graph and declare `batch=`. A usage error otherwise.
+    pub fn check(&self, dag: &Dag) -> Result<(), String> {
+        for (name, _) in &self.nodes {
+            let found: Vec<&barca_model::model::DagNode> = dag
+                .graph
+                .node_weights()
+                .filter(|n| crate::batch_spec::names_node(n, name))
+                .collect();
+            let Some(node) = found.first() else {
+                return Err(format!(
+                    "--batch {name}=...: no node named '{name}' in the loaded pipeline"
+                ));
+            };
+            if node.extracted.batch.is_none() {
+                return Err(format!(
+                    "--batch {name}=...: '{name}' does not declare batch=, so its function takes \
+                     a single key; add batch= to it to batch it (barca docs partitions, \
+                     \"Processing many keys per call\")"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

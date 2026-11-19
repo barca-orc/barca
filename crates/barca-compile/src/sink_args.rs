@@ -68,8 +68,8 @@ fn check_call(call: &ast::ExprCall, dims: &[String], source: &str) -> Option<Pro
                 offset: other.range().start().to_usize(),
                 message: format!(
                     "the path of @sink must be a string literal, got `{}`{}",
-                    crate::parse::snippet(source, other),
-                    crate::parse::not_run(other)
+                    crate::arg_values::snippet(source, other),
+                    crate::arg_values::not_run(other)
                 ),
                 fix: format!(
                     "Write the path as a string literal, like `@sink(\"exports/report.parquet\")`. \
@@ -81,7 +81,7 @@ fn check_call(call: &ast::ExprCall, dims: &[String], source: &str) -> Option<Pro
     };
     if let Some(kw) = keyword(call, "serializer")
         && let Err((offset, message, fix)) =
-            crate::parse::serializer_kind(&kw.value, source, "sinks")
+            crate::arg_values::serializer_kind(&kw.value, source, "sinks")
     {
         return Some(Problem {
             offset,
