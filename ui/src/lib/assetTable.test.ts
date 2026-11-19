@@ -13,15 +13,14 @@ import {
   typicalText,
   filterRows,
   formatAgo,
-  formatSeconds,
   nextSort,
   parseSort,
   sortRows,
-  summarize,
   typicalLabel,
   typicalSeconds,
   type Sort,
 } from './assetTable'
+import { formatSeconds } from './time'
 
 const NOW = Date.parse('2026-10-02T12:00:00Z')
 
@@ -252,19 +251,6 @@ describe('filterRows', () => {
   })
   it('an empty query keeps everything', () => {
     expect(filterRows(rows, '  ').length).toBe(2)
-  })
-})
-
-describe('summarize', () => {
-  it('counts every state, including zeroes, and failed last attempts beside them', () => {
-    const rows = buildRows(
-      [node({ id: 'a' }), node({ id: 'b', last_materialization: failedAttempt }), node({ id: 'c', cache: cache('stale', 'changed') })],
-      NOW,
-    )
-    expect(summarize(rows)).toEqual({
-      states: { blocked: 0, stale: 1, partial: 0, unsynced: 0, unknown: 0, never_run: 0, always_runs: 0, cached: 2 },
-      lastFailed: 1,
-    })
   })
 })
 

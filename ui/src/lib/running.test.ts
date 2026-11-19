@@ -10,7 +10,6 @@ import {
   LARGE_SCOPE,
   elapsedLabel,
   runningBadge,
-  runningCount,
   runsInProgress,
   runsInProgressLabel,
   statePollInterval,
@@ -76,8 +75,6 @@ describe('running state from /state', () => {
     expect(queued).toMatchObject({ kind: 'cache', label: 'fresh' })
     const waiting = node('p.py:b', run({ step: 'waiting' }))
     expect(graphState(waiting)).toMatchObject({ kind: 'cache', label: 'fresh' })
-    const rows = [waiting, node('p.py:c', run({ step: 'queued' })), node('p.py:d', run())]
-    expect(runningCount(rows.map(n => n.id), new Map(rows.map(n => [n.id, n])))).toBe(1)
     // No run: the resting state, in its own word.
     expect(graphState(node('p.py:a'))).toMatchObject({ kind: 'cache', state: 'cached', label: 'fresh', tone: 'success' })
   })
@@ -135,8 +132,6 @@ describe('running state from /state', () => {
       ['p.py', 1],
       ['q.py', 0],
     ])
-    const byId = new Map(nodes.map((n) => [n.id, n]))
-    expect(runningCount(['p.py:a', 'p.py:b', 'q.py:c'], byId)).toBe(1)
     // A failure inside a running group leads: running is shown beside it, never instead (#925).
     const group = groupHealth(groupScope({ failing: 1 }, 1, 1))
     expect(group).toMatchObject({ kind: 'group', tone: 'failed', label: '1 failing' })

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { failedKeyNodes, keysLine, consumersOf, downstreamIds, failures, headline, healthLabel, healthParts, partCount, streakLabel, relativeTraceback, pathBreaks, type ScopeHealth } from './health'
+import { failedKeyNodes, keysLine, consumersOf, downstreamIds, failures, headline, streakLabel, relativeTraceback, pathBreaks } from './health'
 import { blockerOf } from './healthDisplay'
-import { counts, failureRoot } from './testdata/rollup'
+import { failureRoot } from './testdata/rollup'
 import type { NodeState, PartitionKeys } from './types'
 import { blockedBy, served } from './testdata/served'
 
@@ -31,20 +31,6 @@ const consumers = consumersOf(nodes)
 const roots = [failureRoot('p.py:raw', "KeyError: 'currency'", 2), failureRoot('p.py:orphan', 'ZeroDivisionError: division by zero')]
 
 describe('health', () => {
-  it('words a rollup entry: a failure first, then run work, then the rest by severity', () => {
-    // The scope's entry, as served: 5 nodes, of which a run is working on one.
-    const scope: ScopeHealth = { health: counts({ failing: 2, blocked: 1, ok: 2 }), nodes: 5, running: 1 }
-    expect(healthLabel(scope)).toBe('2 failing · 1 running · 1 blocked · 2 ok')
-    expect(healthParts(scope, 2)).toEqual([
-      { key: 'failing', tone: 'failed', glyph: 'failed', count: 2, word: 'failing', text: '2 failing' },
-      { key: 'running', tone: 'running', glyph: 'running', count: 1, word: 'running', text: '1 running' },
-    ])
-    expect(healthLabel(scope, 1)).toBe('2 failing')
-    expect(partCount(scope, 'blocked')).toBe(1)
-    expect(healthLabel({ health: counts(), nodes: 0, running: 0 })).toBe('')
-    expect(healthLabel({ health: counts({ suspect: 1, never_run: 2 }), nodes: 3, running: 0 })).toBe('1 suspect data · 2 never run')
-  })
-
   it('lists the failure roots as served, each with its row and how many nodes it holds', () => {
     const list = failures(roots, byId)
     expect(list.map((f) => [f.name, f.held, f.heldAssets, f.headline, f.group])).toEqual([

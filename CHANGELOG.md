@@ -12,6 +12,16 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Internal: the modules inside barca-core have layers and a test that holds them (`docs/engineering/layering.md`, #1056); 26 of the 42 edges that pointed the wrong way are cut and the largest dependency cycle is 29 modules, down from 38. No behavior change.
 
+### Bug Fixes
+
+- The web UI reads four more answers from the server in place of working them out (#1056): a
+  grouped page's `N running` is its scope's `running` in the rollup, a partitioned node's
+  waiting keys on the graph are its served `behind` and `blocked`, the Schedules page reads a
+  schedule's standing, next slot and pause from `GET /state` alone, and a failing row's error
+  line on Assets, Tasks and Sensors (and a blocker's in the node panel) is its root's `detail`.
+  A node declared in several groups now counts as running only under the group the rollup
+  counts it in, as the health bar beside it already did. Code with no importer is gone.
+
 ## 0.45.0 (2026-11-19)
 
 - Run counts reflect active worker steps. Queue and history rows summarize multi-target runs, the queue explains its extra requested-run slot, and run details distinguish attempts, steps, planned nodes and unreached work (#1042).

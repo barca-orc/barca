@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { keysHref, keysParams, keysQuery, keysSearch, NO_FILTER, toggleSort, toggleState, withValues } from './keysPage'
+import { keysHref, keysParams, keysQuery, keysSearch, NO_FILTER, toggleSort, withValues } from './keysPage'
 
 describe('the key explorer address', () => {
   it('round-trips a node, a key and every filter', () => {
@@ -32,10 +32,7 @@ describe('the key explorer address', () => {
     expect(keysHref('p.py:events', { filter: { states: ['failed'] } })).toBe('/keys?node=p.py%3Aevents&state=failed')
   })
 
-  it('toggles states in the chips order and clears a dimension with no values', () => {
-    const f = toggleState(toggleState(NO_FILTER, 'fresh'), 'failed')
-    expect(f.states).toEqual(['failed', 'fresh'])
-    expect(toggleState(f, 'fresh').states).toEqual(['failed'])
+  it('clears a dimension with no values', () => {
     expect(withValues(withValues(NO_FILTER, 'region', ['apac']), 'region', []).values).toEqual({})
   })
 

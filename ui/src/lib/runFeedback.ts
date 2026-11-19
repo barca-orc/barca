@@ -8,9 +8,9 @@
  */
 
 import { match } from 'ts-pattern'
-import { formatSeconds } from './assetTable'
 import { parseRunStatus, runStatus } from './runs'
 import type { StatusKind, LogLine, RunView } from './types'
+import { formatSeconds } from './time'
 
 export type RunFeedback =
   | { kind: 'idle' }

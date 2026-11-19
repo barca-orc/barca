@@ -14,7 +14,6 @@ import { ApiError, metadataUnusable } from '@/lib/api'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { plural } from '@/lib/plural'
 import { shortName } from '@/lib/graph'
-import { headline } from '@/lib/health'
 import { isLive, liveGraphState } from '@/lib/graphState'
 import { fileShown, pipelineName } from '@/lib/pipeline'
 import { useRollup } from '@/hooks/useRollup'
@@ -112,6 +111,8 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const grouped = !pipeline
   // A file header's state is the file's sums of the project's rollup: the query the sidebar holds.
   const rollup = useRollup(null)
+  // A failing row's error in a line is its root's `detail` in the rollup: the server's one line of it.
+  const rootDetail = useMemo(() => new Map(rollup.tree.roots.map((root) => [root.id, root.detail])), [rollup.tree.roots])
   const lines = useMemo(() => tableLines(visible, grouped, new Set(collapsed)), [visible, grouped, collapsed])
   // Columns that say something on this page: Typical when a node takes 0.1s or more, Next run when one has a schedule.
   const columns = assetColumns(rows)
@@ -267,7 +268,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
                       {r.lastFailed && r.keys && r.keys.failed > 0 ? (
                         <span className="barca-cell-why">{r.keys.failed.toLocaleString()} of {plural(r.keys.total, 'key')} failed</span>
                       ) : r.lastFailed ? (
-                        r.last?.error && <span className="barca-cell-why" title={r.last.error}>{headline(r.last.error)}</span>
+                        r.last?.error && r.root !== null && rootDetail.has(r.root) && <span className="barca-cell-why" title={r.last.error}>{rootDetail.get(r.root)}</span>
                       ) : r.pinned !== null ? (
                         <span className="barca-cell-why" title={r.pinned}>{r.pinned}</span>
                       ) : !r.blockedBy && r.keys && r.keys.blocked > 0 ? (

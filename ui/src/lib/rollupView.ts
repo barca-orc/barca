@@ -7,7 +7,6 @@
  * entry, and words.
  */
 
-import { HEALTH_ORDER, isUnhealthy, type Health } from './healthDisplay'
 import { MAP_PARTS, keyBandPart, type MapPart } from './causeDisplay'
 import type { HeldBy } from './generated/HeldBy'
 import { formatSpan, parseTime } from './time'
@@ -54,11 +53,6 @@ export function indexRollup(rollup: Rollup): RollupTree {
   return { entries: new Map(rollup.entries.map((e) => [e.id, e])), roots: rollup.roots, coverage: rollup.data_coverage, files: new Map(rollup.files.map((f) => [f.file, f])), kinds: rollup.kinds, asOf: rollup.as_of }
 }
 
-/** The most severe health an entry counts (the served order); `ok` for an empty one. */
-export function worstOf(counts: HealthCounts): Health {
-  return HEALTH_ORDER.find((h) => counts[h] > 0) ?? 'ok'
-}
-
 /** The path from the root to `id`, root first; empty when `id` is not in the tree. */
 export function treePath(tree: RollupTree, id: string): RollupEntry[] {
   const out: RollupEntry[] = []
@@ -90,12 +84,6 @@ export function rootsWithin(tree: RollupTree, id: string): RollupRoot[] {
   if (id === ROOT) return [...tree.roots]
   const within = new Set(leafIds(tree, id))
   return tree.roots.filter((r) => within.has(r.node))
-}
-
-/** `3 failing · 169 blocked · 12 behind`: the unhealthy counts of a scope, worst first. */
-export function healthSummary(counts: HealthCounts, limit = HEALTH_ORDER.length): string {
-  const parts = HEALTH_ORDER.filter((h) => isUnhealthy(h) && counts[h] > 0).map((h) => `${counts[h].toLocaleString()} ${h}`)
-  return parts.slice(0, limit).join(' · ')
 }
 
 /**

@@ -26,9 +26,6 @@ export type { Health }
 /** Most severe first: what sorts first, what a scope's colour is. */
 export const HEALTH_ORDER: readonly Health[] = ['failing', 'blocked', 'suspect', 'behind', 'undecided', 'never_run', 'ok']
 
-/** Health that is a problem: what a health map sizes by and a causes list explains. */
-export const UNHEALTHY: readonly Health[] = ['failing', 'blocked', 'suspect', 'behind']
-
 interface HealthDisplay {
   label: string
   tone: Tone
@@ -66,10 +63,6 @@ export function healthDisplay(health: Health): HealthDisplay {
 /** Where `health` sorts: 0 is the most severe (the served order, `HEALTH_ORDER`). */
 export function healthRank(health: Health): number {
   return HEALTH_ORDER.indexOf(health)
-}
-
-export function isUnhealthy(health: Health): boolean {
-  return UNHEALTHY.includes(health)
 }
 
 /**

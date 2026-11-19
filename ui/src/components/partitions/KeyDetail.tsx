@@ -8,12 +8,12 @@ import { StatusGlyph } from '@/components/StatusGlyph'
 import { ErrorLine } from '@/components/ErrorLine'
 import { Age } from '@/components/Age'
 import { artifactSchema } from '@/lib/artifactSchema'
-import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
 import { formatBytes, previewRows, truncateCell } from '@/lib/nodeDetail'
 import { plural } from '@/lib/plural'
 import { keyStateDisplay, keyStateOfCode } from '@/lib/keyStateDisplay'
 import type { KeyArtifact, PartitionKeyDetail } from '@/lib/types'
+import { formatSeconds } from '@/lib/time'
 
 /** A key's result or input: its type and columns, and its first rows. */
 function Shape({ artifact, label }: { artifact: KeyArtifact; label: string }) {

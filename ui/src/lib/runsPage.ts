@@ -8,12 +8,11 @@
  */
 
 import { match } from 'ts-pattern'
-import { formatSeconds } from './assetTable'
 import { shortName } from './graph'
 import type { RunsQuery } from './api'
 import { only, type Next } from './program'
 import { parseRunStatus, runNodeIdle } from './runs'
-import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
+import { formatHour, hourOf, parseTime, zoneName, type TimeZone, formatSeconds } from './time'
 import type { ActivityHour, RunNodeSummary, RunStep } from './types'
 
 const RUNS_PAGE_SIZE = 100

@@ -31,11 +31,6 @@ export function statusMeta(status: StatusKind): StatusMeta {
   return { tone, label, live, glyph, ...toneMeta(tone) }
 }
 
-/** The tone of a run status. */
-export function statusTone(status: StatusKind): Tone {
-  return statusMeta(status).tone
-}
-
 /** The glyph of a run status. */
 export function statusGlyph(status: StatusKind): Glyph {
   return statusMeta(status).glyph

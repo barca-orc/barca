@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { recovering } from '@/hooks/polling'
 import { api } from '@/lib/api'
-import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
 import { plural } from '@/lib/plural'
 import { elapsedLabel, runHref } from '@/lib/running'
@@ -12,6 +11,7 @@ import { MiddleName } from '../MiddleName'
 import { Section } from '../SidePanel'
 import { StatusGlyph } from '../StatusGlyph'
 import { RunReasons } from './RunReasons'
+import { formatSeconds } from '@/lib/time'
 
 /** How many nodes the overview lists as executing now. */
 const ACTIVE_SHOWN = 8

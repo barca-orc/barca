@@ -10,10 +10,10 @@
 
 import { blockerOf } from './healthDisplay'
 import { match } from 'ts-pattern'
-import { CACHE_STATES, lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
 import { mapPartOf, mapPartRank } from './causeDisplay'
 import { streakLabel } from './health'
-import { formatAgo, parseTime } from './time'
+import { formatAgo, parseTime, formatSeconds } from './time'
 import type { CacheStatus, NodeRunning, NodeState } from './types'
 
 export { formatAgo } from './time'
@@ -40,6 +40,8 @@ export interface AssetRow {
   keys: { failed: number; total: number; blocked: number; blockedOn: string | null } | null
   /** The failed node upstream that keeps it from running (`blocked`); null when none. */
   blockedBy: string | null
+  /** The id of what holds it (`root.id`): the rollup's root of that id says it in a line. Null when it is fresh. */
+  root: string | null
   /** Pinned (`barca pin`): what it is pinned to, in a line; null when not pinned. Reads `pinned`. */
   pinned: string | null
   /** Why, in words — the server's own explanation (`cache.detail`, a tooltip). */
@@ -72,12 +74,6 @@ export interface AssetRow {
   expected_fresh_at: string | null
   recheck_at: string | null
   no_estimate: NodeState['no_estimate']
-}
-
-/** `40 of 3,077 keys failed`, for a node with failed keys. */
-export function failedKeysLabel(node: NodeState): string | null {
-  const p = node.partitions
-  return p?.failed ? `${p.failed.toLocaleString()} of ${p.total.toLocaleString()} keys failed` : null
 }
 
 /**
@@ -128,6 +124,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         lastFailed: lastAttemptFailed(n),
         keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total, blocked: n.partitions.blocked ?? 0, blockedOn: n.partitions.blocked_on ?? null } : null,
         blockedBy: blockerOf(n),
+        root: n.root?.id ?? null,
         pinned: pins.get(n.id) ?? null,
         stateHint: n.cache.detail,
         last: last
@@ -223,23 +220,6 @@ export function filterRows(rows: AssetRow[], query: string): AssetRow[] {
   const q = query.trim().toLowerCase()
   if (!q) return rows
   return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
-}
-
-/** Count of rows per state (every state present, zero or not), and how many last attempts failed. */
-export function summarize(rows: AssetRow[]): { states: Record<CacheState, number>; lastFailed: number } {
-  const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
-  let lastFailed = 0
-  for (const r of rows) {
-    states[r.state] += 1
-    if (r.lastFailed) lastFailed += 1
-  }
-  return { states, lastFailed }
-}
-
-export function formatSeconds(s: number): string {
-  if (s < 60) return `${s.toFixed(1)}s`
-  if (s < 3600) return `${(s / 60).toFixed(1)}m`
-  return `${(s / 3600).toFixed(1)}h`
 }
 
 // ── One line a row ────────────────────────────────────────────────────────────

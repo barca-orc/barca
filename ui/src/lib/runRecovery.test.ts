@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { LogLine, RunStep, RunView } from './types'
 import {
-  filterLogs, highlightParts, incidentSummary, traceUrl, isErrorLine, logsText, NO_LOG_FILTER, partitionArg, raisedAt,
+  filterLogs, highlightParts, type LogFilter, incidentSummary, traceUrl, isErrorLine, logsText, partitionArg, raisedAt,
   rerunAllRequest, rerunFailedRequest, retryStepRequest, splitStepId,
 } from './runRecovery'
 
@@ -12,6 +12,8 @@ const lines: LogLine[] = [
   { nodeId: 'p.py:load', text: 'Traceback (most recent call last):', stream: 'stderr' },
   { nodeId: 'p.py:other', text: 'ValueError: bad row', stream: 'stdout' },
 ]
+
+const NO_LOG_FILTER: LogFilter = { step: null, query: '', errorsOnly: false }
 
 describe('log filters', () => {
   it('keeps a step\'s own lines, and every key\'s for a node id without one', () => {

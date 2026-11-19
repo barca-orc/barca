@@ -1,8 +1,7 @@
 import { match } from 'ts-pattern'
-import { statusGlyph, statusTone } from './status'
+import { statusGlyph } from './status'
 import type { Glyph } from './glyph'
 import { formatAbsolute, type TimeZone } from './time'
-import type { Tone } from './tone'
 import { shortName } from './graph'
 import type { ErrorEnvelope, RunNodeSummary, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
@@ -35,11 +34,6 @@ export function runStatus(status: string): StatusKind {
     // Stopped by the operator or a server shutdown: inert, not an error.
     .with('cancelled', 'interrupted', () => 'cancelled')
     .exhaustive()
-}
-
-/** The colour of a run's status. */
-export function runTone(status: string): Tone {
-  return statusTone(runStatus(status))
 }
 
 /** The glyph of a run's status. */

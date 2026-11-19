@@ -87,18 +87,6 @@ export function cacheStateGlyph(state: CacheState): Glyph {
   return DISPLAY[state].glyph
 }
 
-/** A state's place in `CACHE_STATES`: lower is more urgent. */
-export function cacheStateRank(state: CacheState): number {
-  return CACHE_STATES.indexOf(state)
-}
-
-/** The state that needs attention most among `states`; null for none. */
-export function worstCacheState(states: Iterable<CacheState>): CacheState | null {
-  let worst: CacheState | null = null
-  for (const state of states) if (worst === null || cacheStateRank(state) < cacheStateRank(worst)) worst = state
-  return worst
-}
-
 /** The tone of the fact "its last attempt failed", wherever that fact is shown. */
 export const FAILED_TONE: Tone = 'failed'
 
@@ -107,8 +95,8 @@ export const LAST_ATTEMPT_FAILED = 'failing'
 
 /**
  * The word of the fact "a failed node upstream keeps it from running": `blocked`, in the warning
- * tone with the blocked glyph. It is derived on the client from the graph (`blockedBy` in
- * `graphView`), never sent as a cache state; the cache state stays in the tooltip and the panel.
+ * tone with the blocked glyph. The server says which node (`blockerOf` in `healthDisplay`: the
+ * `root` of a row whose `health` is `blocked`); the cache state stays in the tooltip and the panel.
  */
 export const BLOCKED_UPSTREAM = 'blocked'
 
