@@ -11,7 +11,7 @@ use crate::source_scan::{
 use std::path::Path;
 
 /// Owners: a file here, or under a directory here, may write. Paths are as
-/// [`metadata_writes_go_through_an_owner`] names them: barca-core's under its `src/`, another
+/// [`metadata_writes_go_through_an_owner`] names them: barca-service's under its `src/`, another
 /// crate's as `<crate>/src/...`.
 const OWNERS: &[&str] = &["barca-db/src/db/", "sql/"];
 
@@ -80,13 +80,13 @@ fn metadata_writes_go_through_an_owner() {
         .collect();
     names.sort();
     assert!(
-        names.iter().any(|n| n == "barca-db") && names.iter().any(|n| n == "barca-core"),
+        names.iter().any(|n| n == "barca-db") && names.iter().any(|n| n == "barca-service"),
         "the scan finds the crates: {names:?}"
     );
     let mut test_files = Vec::new();
     let mut found = Vec::new();
     for krate in &names {
-        let prefix = if krate == "barca-core" {
+        let prefix = if krate == "barca-service" {
             String::new()
         } else {
             format!("{krate}/src/")

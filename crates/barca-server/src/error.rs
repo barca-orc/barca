@@ -9,8 +9,8 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use barca_core::BarcaError;
-use barca_core::envelope::{Context, ErrorEnvelope, ErrorKind};
+use barca_service::BarcaError;
+use barca_service::envelope::{Context, ErrorEnvelope, ErrorKind};
 
 /// Error type returned by route handlers. Implements `IntoResponse` so handlers
 /// can use `?` directly.
@@ -120,7 +120,7 @@ fn engine(err: BarcaError, ctx: &Context) -> (StatusCode, ErrorEnvelope) {
             ErrorKind::StepFailed | ErrorKind::Infra => StatusCode::INTERNAL_SERVER_ERROR,
         },
     };
-    (status, barca_core::outcome::envelope_of(err, ctx))
+    (status, barca_service::outcome::envelope_of(err, ctx))
 }
 
 impl IntoResponse for ApiError {

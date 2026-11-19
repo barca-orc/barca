@@ -15,9 +15,9 @@
 use crate::error::ApiError;
 pub(crate) use crate::run_model::RunSpec;
 use crate::state::AppState;
-use barca_core::BarcaError;
-use barca_core::envelope::Context;
-use barca_core::outcome::RunCommand;
+use barca_service::BarcaError;
+use barca_service::envelope::Context;
+use barca_service::outcome::RunCommand;
 use std::time::Duration;
 
 mod admission;
@@ -45,7 +45,7 @@ pub(crate) fn run_timeout(state: &AppState, spec: &RunSpec) -> Option<(Duration,
             secs,
             format!(
                 "Schedule(timeout_seconds=) of {}",
-                barca_core::telemetry::short_name(node)
+                barca_service::telemetry::short_name(node)
             ),
         ),
         _ => {
@@ -59,7 +59,7 @@ pub(crate) fn run_timeout(state: &AppState, spec: &RunSpec) -> Option<(Duration,
 // ─── starting runs ──────────────────────────────────────────────────────────
 
 /// Check a trigger's target before a run is started for it, with the function `barca get`
-/// and `barca run` use (`barca_core::targets::resolve_target_among`), so the server refuses what the
+/// and `barca run` use (`barca_service::targets::resolve_target_among`), so the server refuses what the
 /// command line refuses, in the same words: an unknown name is `404`, a name that matches
 /// several nodes `409`, the wrong verb for the node's kind `400`. So is source that does not
 /// parse or a DAG that cannot be built. Returns the full node id the name resolved to.
@@ -86,32 +86,36 @@ async fn check_target_as(
     wording: Wording,
 ) -> Result<String, ApiError> {
     let dag = state.reads.loaded_dag().await?;
-    let nodes: Vec<(String, barca_core::NodeKind)> =
-        barca_core::queries::list_assets_from_dag(&dag)
+    let nodes: Vec<(String, barca_service::NodeKind)> =
+        barca_service::queries::list_assets_from_dag(&dag)
             .into_iter()
             .map(|n| (n.id, n.kind))
             .collect();
     let nodes = nodes.iter().map(|(id, kind)| (id.as_str(), *kind));
-    match barca_core::targets::resolve_target_among(nodes, name, verb) {
+    match barca_service::targets::resolve_target_among(nodes, name, verb) {
         Ok(node) => Ok(node),
         // The CLI's error and remediation (`Run `barca list` ...`).
-        Err(barca_core::targets::TargetError::NotFound { name, available }) => Err(ApiError::run(
-            BarcaError::AssetNotFound(name, available.join(", ")),
-            Context {
-                command: verb_command(verb),
-                files: Vec::new(),
-            },
-        )),
+        Err(barca_service::targets::TargetError::NotFound { name, available }) => {
+            Err(ApiError::run(
+                BarcaError::AssetNotFound(name, available.join(", ")),
+                Context {
+                    command: verb_command(verb),
+                    files: Vec::new(),
+                },
+            ))
+        }
         // The CLI's error and remediation: `barca list` for an ambiguous name, `barca <cmd>
         // --help` for the wrong kind (#492).
-        Err(e @ barca_core::targets::TargetError::Ambiguous { .. }) => Err(ApiError::run(
+        Err(e @ barca_service::targets::TargetError::Ambiguous { .. }) => Err(ApiError::run(
             BarcaError::from(e),
             Context {
                 command: verb_command(verb),
                 files: Vec::new(),
             },
         )),
-        Err(e @ barca_core::targets::TargetError::WrongKind { .. }) if wording == Wording::Cli => {
+        Err(e @ barca_service::targets::TargetError::WrongKind { .. })
+            if wording == Wording::Cli =>
+        {
             Err(ApiError::run(
                 BarcaError::from(e),
                 Context {
@@ -120,9 +124,9 @@ async fn check_target_as(
                 },
             ))
         }
-        Err(barca_core::targets::TargetError::WrongKind { name, kind }) => {
+        Err(barca_service::targets::TargetError::WrongKind { name, kind }) => {
             let (what, endpoint) = match kind {
-                barca_core::NodeKind::Task => ("a task", "run"),
+                barca_service::NodeKind::Task => ("a task", "run"),
                 _ => ("an asset", "get"),
             };
             Err(ApiError::BadRequest(format!(
@@ -142,9 +146,9 @@ pub(crate) fn verb_command(verb: &str) -> &'static str {
 /// Refuse a run of every asset and sensor when no asset or sensor loaded.
 pub(crate) async fn check_any_asset(state: &AppState) -> Result<(), ApiError> {
     let dag = state.reads.loaded_dag().await?;
-    if !barca_core::queries::list_assets_from_dag(&dag)
+    if !barca_service::queries::list_assets_from_dag(&dag)
         .iter()
-        .any(|n| n.kind != barca_core::NodeKind::Task)
+        .any(|n| n.kind != barca_service::NodeKind::Task)
     {
         return Err(ApiError::BadRequest(
             "no loaded assets or sensors to run; inspect /health load_errors".into(),

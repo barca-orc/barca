@@ -59,11 +59,11 @@ def slow() -> None:
 "#,
     )
     .unwrap();
-    let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
+    let mut resolved = barca_service::config::resolve_in(None, dir).unwrap();
     resolved.db_path = dir.join("metadata.db").display().to_string();
     resolved.artifact_root = dir.join("artifacts").display().to_string();
     resolved.local_artifact_dir = resolved.artifact_root.clone();
-    let python = barca_core::commands::find_python();
+    let python = barca_service::commands::find_python();
     // Plain cargo test runs before CI installs a wheel. Follow api.rs's repository
     // launcher convention, scoped to children instead of changing parallel tests' env.
     #[cfg(unix)]
@@ -218,7 +218,7 @@ fn cache_state_enum_matches_the_rust_enum() {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-    let rust: Vec<&str> = barca_core::cache_state::CacheState::ALL
+    let rust: Vec<&str> = barca_service::cache_state::CacheState::ALL
         .iter()
         .map(|s| s.as_str())
         .collect();
@@ -291,7 +291,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(!step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":false})));
     assert!(!step.is_valid(&json!({"id":"p.py:a", "kind":"asset", "bytes_changed":"true"})));
     let uploads = validator(&json!({"$ref":"#/components/schemas/Uploads"}));
-    let pending = barca_core::results::UploadsReport {
+    let pending = barca_service::results::UploadsReport {
         pending: 1,
         error: Some("denied".into()),
         nodes: vec!["p.py:a".into()],
@@ -314,23 +314,23 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let queue = validator(&json!({"$ref":"#/components/schemas/Queue"}));
     let mut view = json!({"paused":false,"paused_at":null,"draining":false,"max_runs":4,"slots":"0 of 4 running","running":[],"queued":[],"capacity":null});
     assert!(queue.is_valid(&view));
-    let capacity = barca_core::serve::capacity::SharedCapacity::new(4, "--capacity");
+    let capacity = barca_service::serve::capacity::SharedCapacity::new(4, "--capacity");
     assert!(capacity.try_acquire("r1", "p.py:a", 3));
     assert!(!capacity.try_acquire("r2", "p.py:b", 2));
     assert!(!capacity.try_acquire_as(
         "r3",
         "p.py:c",
         2,
-        barca_core::serve::capacity::Origin::Scheduled
+        barca_service::serve::capacity::Origin::Scheduled
     ));
     view["capacity"] = serde_json::to_value(capacity.snapshot()).unwrap();
     assert!(queue.is_valid(&view), "{view}");
     assert_eq!(view["capacity"]["admission"], "requested_first");
     assert_eq!(view["capacity"]["waiting"][1]["origin"], "scheduled");
-    let first_come = barca_core::serve::capacity::SharedCapacity::with_admission(
+    let first_come = barca_service::serve::capacity::SharedCapacity::with_admission(
         4,
         "--capacity",
-        barca_core::serve::capacity::Admission::FirstCome,
+        barca_service::serve::capacity::Admission::FirstCome,
     );
     view["capacity"] = serde_json::to_value(first_come.snapshot()).unwrap();
     assert!(queue.is_valid(&view), "{view}");
@@ -400,13 +400,13 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(!load_error.is_valid(&json!({"file":"p.py","error":"broken"})));
     assert!(!load_error.is_valid(&json!({"file":"p.py","error":"broken","affected_nodes":[1]})));
     for event in [
-        barca_core::RunEvent::RunStarted { run_id: "r".into() },
-        barca_core::RunEvent::log(
+        barca_service::RunEvent::RunStarted { run_id: "r".into() },
+        barca_service::RunEvent::log(
             "p.py:a".into(),
             "hello".into(),
-            barca_core::LogStream::Stderr,
+            barca_service::LogStream::Stderr,
         ),
-        barca_core::RunEvent::StepFinished {
+        barca_service::RunEvent::StepFinished {
             node_id: "p.py:a".into(),
             ok: false,
             cached: false,
@@ -414,16 +414,16 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
             error: Some("failed".into()),
             import_seconds: Some(1.25),
         },
-        barca_core::RunEvent::RunFinished {
+        barca_service::RunEvent::RunFinished {
             run_id: "r".into(),
             ok: false,
             outcome: None,
         },
-        barca_core::RunEvent::Line {
+        barca_service::RunEvent::Line {
             line: "[barca] step:p.py:a cached".into(),
-            when: barca_core::lines::LineWhen::Agent,
+            when: barca_service::lines::LineWhen::Agent,
         },
-        barca_core::RunEvent::StepFinished {
+        barca_service::RunEvent::StepFinished {
             node_id: "p.py:a".into(),
             ok: true,
             cached: true,
@@ -431,7 +431,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
             error: None,
             import_seconds: None,
         },
-        barca_core::RunEvent::RunFinished {
+        barca_service::RunEvent::RunFinished {
             run_id: "r".into(),
             ok: false,
             outcome: Some(
@@ -1503,10 +1503,11 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
     assert_eq!(ids, [1, 2, 3, 4]);
     assert_eq!(queue["queued"][3]["run_id"], body["run_id"]);
     // Recorded: the next server resumes them.
-    let recorded =
-        barca_core::serve::run_queue::list(&dir.path().join("metadata.db").display().to_string())
-            .await
-            .unwrap();
+    let recorded = barca_service::serve::run_queue::list(
+        &dir.path().join("metadata.db").display().to_string(),
+    )
+    .await
+    .unwrap();
     assert_eq!(recorded.len(), 4);
     let health = checked(&router, "GET", "/health", "/health", 200).await;
     assert_eq!(health["queue"]["queued"], 4);
@@ -1576,19 +1577,22 @@ async fn queue_pause_and_resume_match_contract() {
     // A server started on the same database keeps the pause and the queued run.
     let db = dir.path().join("metadata.db").display().to_string();
     assert!(
-        barca_core::serve::run_queue::paused_at(&db)
+        barca_service::serve::run_queue::paused_at(&db)
             .await
             .unwrap()
             .is_some()
     );
     assert_eq!(
-        barca_core::serve::run_queue::list(&db).await.unwrap().len(),
+        barca_service::serve::run_queue::list(&db)
+            .await
+            .unwrap()
+            .len(),
         1
     );
     let resumed = checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;
     assert_eq!(resumed["paused"], false);
     assert!(
-        barca_core::serve::run_queue::paused_at(&db)
+        barca_service::serve::run_queue::paused_at(&db)
             .await
             .unwrap()
             .is_none()
@@ -1596,7 +1600,7 @@ async fn queue_pause_and_resume_match_contract() {
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
     assert_eq!(done["status"], "complete", "{done}");
     assert!(
-        barca_core::serve::run_queue::list(&db)
+        barca_service::serve::run_queue::list(&db)
             .await
             .unwrap()
             .is_empty(),
@@ -1856,10 +1860,10 @@ async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_b
         .find(|n| n["name"] == "first")
         .unwrap();
     assert!(first["last_materialization"].is_null(), "{first}");
-    assert_eq!(barca_core::db::count_runs(&moved).await.unwrap(), 2);
+    assert_eq!(barca_service::db::count_runs(&moved).await.unwrap(), 2);
 
     // The moved file restores (with the server stopped, as the CLI says).
-    let restored = barca_core::backup::restore(&cfg.python, &cfg.resolved, Some(moved.as_str()))
+    let restored = barca_service::backup::restore(&cfg.python, &cfg.resolved, Some(moved.as_str()))
         .await
         .unwrap();
     assert_eq!(restored.from, "file");
@@ -1878,12 +1882,12 @@ async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_b
     checked(&router, "GET", "/state/reset", "/state/reset", 405).await;
 }
 
-/// `Cache.reason` lists exactly what barca-core writes ([`CACHE_REASONS`], which a
-/// barca-core test checks against `status.rs` itself); `Cache.state` is checked against the
+/// `Cache.reason` lists exactly what barca-service writes ([`CACHE_REASONS`], which a
+/// barca-service test checks against `status.rs` itself); `Cache.state` is checked against the
 /// `CacheState` enum in `cache_state_enum_matches_the_rust_enum`.
 #[test]
 fn cache_reason_enum_matches_the_code() {
-    use barca_core::status::CACHE_REASONS;
+    use barca_service::status::CACHE_REASONS;
     let props = &contract()["components"]["schemas"]["Cache"]["properties"];
     let listed = |key: &str| -> Vec<String> {
         props[key]["enum"]

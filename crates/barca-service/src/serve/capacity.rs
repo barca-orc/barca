@@ -1008,7 +1008,7 @@ mod tests {
         assert!(cap.try_acquire_as("r", "b1", 1, Requested));
     }
 
-    /// The numbers in the #951 report: `cargo test -p barca-core --lib sim_report -- --ignored
+    /// The numbers in the #951 report: `cargo test -p barca-service --lib sim_report -- --ignored
     /// --nocapture`.
     #[test]
     #[ignore = "prints a table"]

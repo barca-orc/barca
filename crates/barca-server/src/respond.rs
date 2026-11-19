@@ -4,13 +4,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 /// The stdout text of a rendering, without its final newline.
-pub(crate) fn stdout_of(rendered: barca_core::report::RenderedOutput) -> String {
+pub(crate) fn stdout_of(rendered: barca_service::report::RenderedOutput) -> String {
     let mut text: String = rendered
         .chunks
         .into_iter()
         .filter_map(|c| match c {
-            barca_core::report::OutputChunk::Stdout(s) => Some(s),
-            barca_core::report::OutputChunk::Stderr(_) => None,
+            barca_service::report::OutputChunk::Stdout(s) => Some(s),
+            barca_service::report::OutputChunk::Stderr(_) => None,
         })
         .collect();
     if text.ends_with('\n') {

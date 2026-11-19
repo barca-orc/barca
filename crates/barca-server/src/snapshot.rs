@@ -1,6 +1,6 @@
 //! The metadata DB as a read-only request reads it.
 
-use barca_core::{BarcaError, db};
+use barca_service::{BarcaError, db};
 
 /// A metadata DB a read-only request may query: the real one read in place
 /// ([`db::ReadView`]) when this release uses it as it is; otherwise a private

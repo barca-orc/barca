@@ -1,5 +1,5 @@
 //! The web UI only renders (#959; DIRECTION.md "The UI", `specs/behavior/health.md`): every
-//! derived answer is computed in `barca-core`, and an agent on the CLI can get everything the
+//! derived answer is computed in `barca-service`, and an agent on the CLI can get everything the
 //! UI shows. The table of that rule is `crates/barca-cli/ui-layering.json`, held from two sides:
 //!
 //! - `scripts/check-ui-layering.py` (a prek hook: every pull request, every merge group,
@@ -15,7 +15,7 @@
 //!
 //! Neither can check that a command prints the same JSON as its route: the table is a claim a
 //! reviewer reads. Adding a CLI command for an exempted route, or moving a derivation into
-//! `barca-core`, is the fix for a failure here; widening the table is not. How to extend it:
+//! `barca-service`, is the fix for a failure here; widening the table is not. How to extend it:
 //! `site/src/content/docs/contributing/ui-layering.md`.
 
 use super::*;

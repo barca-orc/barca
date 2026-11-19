@@ -63,7 +63,7 @@ fn source_id_of(dag: &crate::dag::Dag, node: &str, source_name: &str) -> Option<
 /// ([`barca_model::keyed`]). A step whose source cannot be read is left out and listed in
 /// [`Expansion::failures`].
 ///
-/// Tests only (here and in `barca-core`), so compiled always.
+/// Tests only (here and in `barca-service`), so compiled always.
 #[doc(hidden)]
 pub fn expand_pending_partitions(
     dag: &crate::dag::Dag,

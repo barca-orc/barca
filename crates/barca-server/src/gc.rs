@@ -5,7 +5,7 @@
 //! give up (#1054). Inside the server the eviction takes its turn like any other write.
 //!
 //! The body is `barca gc`'s flags and the answer is `barca gc --json`'s
-//! (`barca_core::gc::GcResult`). What this server's runs in flight hold is left alone result by
+//! (`barca_service::gc::GcResult`). What this server's runs in flight hold is left alone result by
 //! result (the runs pin it in this process), where a second process beside a run can only
 //! hold back every current result (`restricted`).
 
@@ -14,7 +14,7 @@ use crate::guards::refuse_if_read_only;
 use crate::read_cache::Reads;
 use axum::Json;
 use axum::extract::State;
-use barca_core::gc::{GcOptions, GcResult};
+use barca_service::gc::{GcOptions, GcResult};
 use serde::Deserialize;
 
 /// `barca gc`'s flags. Unknown fields are refused, so a misspelt `dry_run` never evicts.
@@ -48,7 +48,7 @@ pub async fn gc(
     let max_size = request
         .max_size
         .as_deref()
-        .map(barca_core::gc::size::parse)
+        .map(barca_service::gc::size::parse)
         .transpose()
         .map_err(|e| ApiError::BadRequest(format!("max_size: {e}")))?;
     let cfg = &reads.config.resolved;
@@ -64,9 +64,9 @@ pub async fn gc(
         dry_run: request.dry_run,
         env: request.env,
     };
-    let result = barca_core::gc::gc(cfg, &opts).await?;
+    let result = barca_service::gc::gc(cfg, &opts).await?;
     if !result.dry_run {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] gc on request: evicted {} file{} ({} bytes)",
             result.evicted_files,
             if result.evicted_files == 1 { "" } else { "s" },

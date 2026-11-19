@@ -10,7 +10,7 @@
 //!   sees an edit, and, for a graph with dynamic partition keys (`partitions(<expression>)`,
 //!   which can read anything), at least every [`DYNAMIC_KEYS_MAX_AGE`].
 //! - **The metadata DB to read** ([`Reads::read_snapshot`]): the database itself, read in
-//!   place beside the runs writing it ([`barca_core::db::ReadView`]), or for a
+//!   place beside the runs writing it ([`barca_service::db::ReadView`]), or for a
 //!   database this release would migrate first, one private copy shared by every
 //!   request until the database or its WAL changes on disk.
 //! - **Status results** ([`Reads::cached_status`]): what `barca status` computes, per graph,
@@ -26,10 +26,10 @@
 use crate::config::ServeConfig;
 use crate::snapshot::SnapshotDb;
 use crate::sources::{SOURCES_SETTLED, Sources};
-use barca_core::BarcaError;
-use barca_core::dag::Dag;
-use barca_core::health::Durations;
-use barca_core::status::StatusResult;
+use barca_service::BarcaError;
+use barca_service::dag::Dag;
+use barca_service::health::Durations;
+use barca_service::status::StatusResult;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -90,7 +90,7 @@ impl Stamp {
                 .into_iter()
                 .map(|p| {
                     // An empty write-ahead log holds nothing: the same state as none. A reader
-                    // of the live database ([`barca_core::db::ReadView`]) creates an empty one
+                    // of the live database ([`barca_service::db::ReadView`]) creates an empty one
                     // where the last writer removed it, and that is not a change.
                     let state = FileState::of(&p)
                         .filter(|s| !(s.len == 0 && p.to_string_lossy().ends_with("-wal")));
@@ -145,7 +145,7 @@ fn source_paths(files: &[String], dag: &Dag) -> Vec<PathBuf> {
         .collect();
     let dirs: Vec<PathBuf> = paths
         .iter()
-        .map(|p| barca_core::load::source_dir(p))
+        .map(|p| barca_service::load::source_dir(p))
         .collect();
     paths.extend(dirs);
     paths.sort();
@@ -168,20 +168,20 @@ struct SharedSnapshot {
 }
 
 /// Every node's age, shared by the polls of one database state.
-type NodeAges = Arc<HashMap<String, barca_core::db::NodeAge>>;
+type NodeAges = Arc<HashMap<String, barca_service::db::NodeAge>>;
 type Pinned = Arc<std::collections::HashSet<String>>;
 /// When each source file of a graph was last modified, unix seconds, by the file part of a
-/// node id (`barca_core::estimates::source_times_of`).
+/// node id (`barca_service::estimates::source_times_of`).
 pub(crate) type SourceTimes = Arc<HashMap<String, i64>>;
-/// What the newest ticks found about every node (`barca_core::health::checks`).
-type Checks = Arc<barca_core::health::Checks>;
+/// What the newest ticks found about every node (`barca_service::health::checks`).
+type Checks = Arc<barca_service::health::Checks>;
 
 /// What the metadata database records of every schedule, shared by the polls of one database
 /// state: its ticks and its failed ticks.
 #[derive(Default)]
 pub(crate) struct ScheduleFacts {
-    pub(crate) ticks: HashMap<String, barca_core::schedule_standing::Ticks>,
-    pub(crate) failures: HashMap<String, barca_core::db::ScheduleFailures>,
+    pub(crate) ticks: HashMap<String, barca_service::schedule_standing::Ticks>,
+    pub(crate) failures: HashMap<String, barca_service::db::ScheduleFailures>,
 }
 
 /// Schedule facts as kept: the database state they are of and the schedules they were read for.
@@ -272,7 +272,7 @@ pub struct ReadCache {
     paused_nodes: tokio::sync::Mutex<Option<(Stamp, Pinned)>>,
     /// Which schedules reach each node of the inspected graph as a target
     /// ([`Reads::cached_paths`]): the scheduler's walk, kept for as long as the graph is.
-    paths: tokio::sync::Mutex<Option<(Arc<Dag>, Arc<barca_core::refresh_path::Paths>)>>,
+    paths: tokio::sync::Mutex<Option<(Arc<Dag>, Arc<barca_service::refresh_path::Paths>)>>,
     /// When each source file of the loaded graph was last modified
     /// ([`Reads::cached_source_times`]).
     source_times: Mutex<Option<(Arc<Dag>, SourceTimes)>>,
@@ -285,8 +285,8 @@ pub struct ReadCache {
     /// ([`Reads::cached_checks`]).
     checks: tokio::sync::Mutex<Option<(StatusKey, Checks)>>,
     /// What node ages are folded from, kept so that a read after a run recorded a few rows
-    /// reads those rows only ([`barca_core::db::NodeAgesIndex`]).
-    ages_index: Arc<tokio::sync::Mutex<barca_core::db::NodeAgesIndex>>,
+    /// reads those rows only ([`barca_service::db::NodeAgesIndex`]).
+    ages_index: Arc<tokio::sync::Mutex<barca_service::db::NodeAgesIndex>>,
     /// Bumped each time a recomputation of the latest results ends.
     caught_up: tokio::sync::watch::Sender<u64>,
     /// Held while a status result is computed, so that concurrent polls compute it once.
@@ -296,7 +296,7 @@ pub struct ReadCache {
     last_poll: std::sync::atomic::AtomicI64,
     /// The last key grids computed (`GET /assets/{name}/partitions/grid`), by node, with what
     /// they were computed from: kept until the graph or the database changes.
-    grids: Mutex<HashMap<String, (StatusKey, Arc<barca_core::partition_grid::PartitionGrid>)>>,
+    grids: Mutex<HashMap<String, (StatusKey, Arc<barca_service::partition_grid::PartitionGrid>)>>,
     /// How many times a graph was loaded for inspection and a status was computed (tests).
     pub(crate) dag_loads: std::sync::atomic::AtomicUsize,
     pub(crate) status_computes: std::sync::atomic::AtomicUsize,
@@ -406,7 +406,8 @@ impl Reads {
             (targets.to_vec(), 0, false),
             move || async move {
                 let _snapshot = snapshot;
-                barca_core::status::status_from_dag(&cfg, &names, &graph, &python, 0, false).await
+                barca_service::status::status_from_dag(&cfg, &names, &graph, &python, 0, false)
+                    .await
             },
         )
         .await
@@ -479,7 +480,7 @@ impl Reads {
         dag: &Arc<Dag>,
         db: &Stamp,
         id: &str,
-    ) -> Option<Arc<barca_core::partition_grid::PartitionGrid>> {
+    ) -> Option<Arc<barca_service::partition_grid::PartitionGrid>> {
         let key = StatusKey {
             dag: dag.clone(),
             db: db.clone(),
@@ -497,7 +498,7 @@ impl Reads {
         &self,
         dag: &Arc<Dag>,
         db: &Stamp,
-        grid: Arc<barca_core::partition_grid::PartitionGrid>,
+        grid: Arc<barca_service::partition_grid::PartitionGrid>,
     ) {
         if !db.settled(SystemTime::now(), DB_SETTLED) {
             return;
@@ -698,7 +699,7 @@ impl Reads {
     }
 
     /// The ids of the pinned assets for the database in state `db`, kept until it changes: what
-    /// health reads to stop a failure at a pin (`barca_core::health`).
+    /// health reads to stop a failure at a pin (`barca_service::health`).
     pub(crate) async fn cached_pinned(
         &self,
         db: &Stamp,
@@ -711,7 +712,7 @@ impl Reads {
             return Ok(pinned.clone());
         }
         let pinned: Pinned = Arc::new(
-            barca_core::pins::list(db_path)
+            barca_service::pins::list(db_path)
                 .await?
                 .into_iter()
                 .map(|pin| pin.node_id)
@@ -723,7 +724,7 @@ impl Reads {
 
     /// The ids of the paused nodes (`barca pause`) for the database in state `db`, kept until
     /// it changes: a tick skips a paused node, so it has no refresh path
-    /// (`barca_core::refresh_path`).
+    /// (`barca_service::refresh_path`).
     pub(crate) async fn cached_paused_nodes(
         &self,
         db: &Stamp,
@@ -736,7 +737,7 @@ impl Reads {
             return Ok(paused.clone());
         }
         let paused: Pinned = Arc::new(
-            barca_core::pauses::list(db_path)
+            barca_service::pauses::list(db_path)
                 .await?
                 .into_iter()
                 .map(|pause| pause.id)
@@ -746,14 +747,14 @@ impl Reads {
         Ok(paused)
     }
 
-    /// Which schedules reach each node of `dag` as a target (`barca_core::refresh_path::Paths`,
+    /// Which schedules reach each node of `dag` as a target (`barca_service::refresh_path::Paths`,
     /// the scheduler's own walk). It depends on the graph alone and takes seconds on a graph
     /// of thousands of nodes and dozens of schedules, so it runs once per loaded graph, off
     /// the runtime's workers, and never per poll.
     pub(crate) async fn cached_paths(
         &self,
         dag: &Arc<Dag>,
-    ) -> Result<Arc<barca_core::refresh_path::Paths>, BarcaError> {
+    ) -> Result<Arc<barca_service::refresh_path::Paths>, BarcaError> {
         let mut kept = self.cache.paths.lock().await;
         if let Some((of, paths)) = kept.as_ref()
             && Arc::ptr_eq(of, dag)
@@ -765,14 +766,16 @@ impl Reads {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let graph = dag.clone();
         let paths = Arc::new(
-            off_the_workers(move || async move { Ok(barca_core::refresh_path::Paths::of(&graph)) })
-                .await?,
+            off_the_workers(
+                move || async move { Ok(barca_service::refresh_path::Paths::of(&graph)) },
+            )
+            .await?,
         );
         *kept = Some((dag.clone(), paths.clone()));
         Ok(paths)
     }
 
-    /// When each source file of `dag` was last modified (`barca_core::estimates`: what dates
+    /// When each source file of `dag` was last modified (`barca_service::estimates`: what dates
     /// a code change), read once per loaded graph: an edit loads a new graph.
     pub(crate) fn cached_source_times(&self, dag: &Arc<Dag>) -> SourceTimes {
         let mut kept = self.cache.source_times.lock().unwrap();
@@ -781,13 +784,13 @@ impl Reads {
         {
             return times.clone();
         }
-        let times = Arc::new(barca_core::estimates::source_times_of(dag));
+        let times = Arc::new(barca_service::estimates::source_times_of(dag));
         *kept = Some((dag.clone(), times.clone()));
         times
     }
 
     /// What the database in state `db` records of `schedules` (scheduled node ids): their
-    /// ticks ([`barca_core::schedule_standing::recorded`]) and failed ticks. `GET /schedule`,
+    /// ticks ([`barca_service::schedule_standing::recorded`]) and failed ticks. `GET /schedule`,
     /// `GET /state` and `GET /nodes` all read where a schedule stands from it. Read once per
     /// database state.
     pub(crate) async fn cached_ticks(
@@ -812,8 +815,8 @@ impl Reads {
         let ticks = Arc::new(
             off_the_workers(move || async move {
                 Ok(ScheduleFacts {
-                    ticks: barca_core::schedule_standing::recorded(&db_path, &ids).await?,
-                    failures: barca_core::db::get_schedule_failures(&db_path).await?,
+                    ticks: barca_service::schedule_standing::recorded(&db_path, &ids).await?,
+                    failures: barca_service::db::get_schedule_failures(&db_path).await?,
                 })
             })
             .await?,
@@ -823,7 +826,7 @@ impl Reads {
     }
 
     /// What the tick record says about the nodes of `dag` for the database in state `db`
-    /// (`barca_core::health::checks`: two bounded reads for the whole graph), kept until
+    /// (`barca_service::health::checks`: two bounded reads for the whole graph), kept until
     /// either changes, so a poll that finds nothing changed reads nothing. A verdict's expiry
     /// is a time it carries, compared with the clock on each answer.
     pub(crate) async fn cached_checks(
@@ -850,7 +853,7 @@ impl Reads {
         let (graph, ages, db_path) = (dag.clone(), ages.clone(), db_path.to_string());
         let checks = Arc::new(
             off_the_workers(move || async move {
-                barca_core::health::checks(&db_path, &graph, &ages, &zone).await
+                barca_service::health::checks(&db_path, &graph, &ages, &zone).await
             })
             .await?,
         );
@@ -987,7 +990,7 @@ fn has_dynamic_keys(dag: &Dag) -> bool {
             n.decl
                 .partitions
                 .values()
-                .any(|p| matches!(p, barca_core::model::PartitionSpec::Dynamic { .. }))
+                .any(|p| matches!(p, barca_service::model::PartitionSpec::Dynamic { .. }))
         })
     })
 }
@@ -1009,7 +1012,7 @@ mod tests {
         let file = dir.join("pipeline.py");
         std::fs::write(&file, PIPELINE).unwrap();
         std::fs::write(dir.join("helpers.py"), "def compute():\n    return 1\n").unwrap();
-        let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
+        let mut resolved = barca_service::config::resolve_in(None, dir).unwrap();
         // Match the production layout: WAL sidecar churn belongs below .barca,
         // outside the import directory stamps whose changes invalidate the graph.
         std::fs::create_dir_all(dir.join(".barca")).unwrap();
@@ -1021,7 +1024,7 @@ mod tests {
         // edit of a source directory, and the graph is rightly not kept. Create it before any
         // test here waits for its sources to be still.
         crate::test_support::leave_source_tree();
-        barca_core::db::ensure_env_dirs(&resolved.env).unwrap();
+        barca_service::db::ensure_env_dirs(&resolved.env).unwrap();
         AppState::new(crate::ServeConfig {
             files: vec![file.display().to_string()],
             host: "127.0.0.1".parse().unwrap(),
@@ -1060,7 +1063,7 @@ mod tests {
     async fn an_unchanged_poll_reuses_the_graph_and_the_status() {
         let dir = tempfile::tempdir().unwrap();
         let state = state_in(dir.path());
-        barca_core::db::init_db(&state.config.resolved.db_path)
+        barca_service::db::init_db(&state.config.resolved.db_path)
             .await
             .unwrap();
         std::thread::sleep(SOURCES_SETTLED + Duration::from_millis(100));
@@ -1104,7 +1107,7 @@ mod tests {
         std::thread::sleep(SOURCES_SETTLED + Duration::from_millis(100));
         poll(&state).await;
         let before = loads(&state);
-        barca_core::db::upsert_schedule_state(&state.config.resolved.db_path, "p.py:first", 1)
+        barca_service::db::upsert_schedule_state(&state.config.resolved.db_path, "p.py:first", 1)
             .await
             .unwrap();
         poll(&state).await;
@@ -1118,7 +1121,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = state_in(dir.path());
         let db = state.config.resolved.db_path.clone();
-        barca_core::db::init_db(&db).await.unwrap();
+        barca_service::db::init_db(&db).await.unwrap();
         let dag = state.reads.inspect_dag().await.unwrap();
         let id = dag
             .topo_order()
@@ -1129,7 +1132,7 @@ mod tests {
         let tick = |slot: i64, run: &'static str| {
             let (db, id) = (db.clone(), id.clone());
             async move {
-                use barca_core::db::{NewTick, TickDecision, TickTargetOutcome};
+                use barca_service::db::{NewTick, TickDecision, TickTargetOutcome};
                 let new = NewTick {
                     schedule_id: &id,
                     scheduled_at: slot,
@@ -1137,9 +1140,9 @@ mod tests {
                     skipped_for: None,
                     run_id: Some(run),
                 };
-                barca_core::db::record_tick(&db, new).await.unwrap();
+                barca_service::db::record_tick(&db, new).await.unwrap();
                 let targets = [(id.clone(), TickTargetOutcome::UpToDate)];
-                barca_core::db::record_tick_finished(
+                barca_service::db::record_tick_finished(
                     &db,
                     &id,
                     slot,
@@ -1163,7 +1166,7 @@ mod tests {
         assert_eq!(check.schedule, id);
         assert_eq!(
             check.outcome,
-            barca_core::db::TickTargetOutcome::UpToDate,
+            barca_service::db::TickTargetOutcome::UpToDate,
             "{rows:?}"
         );
         let after_first = reads(&state);
@@ -1231,7 +1234,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = state_in(dir.path());
         let db_path = state.config.resolved.db_path.clone();
-        barca_core::db::init_db(&db_path).await.unwrap();
+        barca_service::db::init_db(&db_path).await.unwrap();
         let dag = state.reads.inspect_dag().await.unwrap();
         let snapshot = state.reads.read_snapshot().await.unwrap();
         let base = (*state
@@ -1264,7 +1267,7 @@ mod tests {
         let write = |run: &'static str| {
             let db_path = db_path.clone();
             async move {
-                barca_core::db::create_run(&db_path, run, "get", "[]", None, Some(1))
+                barca_service::db::create_run(&db_path, run, "get", "[]", None, Some(1))
                     .await
                     .unwrap();
             }
@@ -1322,12 +1325,12 @@ mod tests {
         for read_only in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let state = state_with(dir.path(), read_only);
-            barca_core::db::init_db(&state.config.resolved.db_path)
+            barca_service::db::init_db(&state.config.resolved.db_path)
                 .await
                 .unwrap();
             let snapshot = state.reads.read_snapshot().await.unwrap();
             assert!(
-                barca_core::db::is_read_view(&snapshot.path),
+                barca_service::db::is_read_view(&snapshot.path),
                 "read_only = {read_only}"
             );
         }
@@ -1337,7 +1340,7 @@ mod tests {
     async fn read_only_warms_at_start_even_when_the_writer_never_settles() {
         let dir = tempfile::tempdir().unwrap();
         let state = state_with(dir.path(), true);
-        barca_core::db::init_db(&state.config.resolved.db_path)
+        barca_service::db::init_db(&state.config.resolved.db_path)
             .await
             .unwrap();
         // A future mtime makes the database persistently unsettled without a racing writer.
@@ -1396,7 +1399,7 @@ mod tests {
             source.push_str(&format!("@asset()\ndef node_{i}():\n    return {i}\n"));
         }
         std::fs::write(&state.config.files[0], source).unwrap();
-        barca_core::db::init_db(&state.config.resolved.db_path)
+        barca_service::db::init_db(&state.config.resolved.db_path)
             .await
             .unwrap();
         let computing = tokio::spawn({

@@ -327,7 +327,7 @@
         },
         {
           "what": "`sinceLastSuccess`: which of five sentences says what differs between a failed attempt and the last success, decided by comparing three served run hashes (`failure.run_hash`, `failure.last_success.run_hash`, `cache.run_hash`)",
-          "reason": "a real derivation with no served field: two facts make a third. Owed to barca-core as a word on the failure facts (#1056, F3 \"what changed\"); left out of this change to keep its new fields few",
+          "reason": "a real derivation with no served field: two facts make a third. Owed to barca-service as a word on the failure facts (#1056, F3 \"what changed\"); left out of this change to keep its new fields few",
           "issue": 1056
         }
       ]
@@ -574,7 +574,7 @@
       "derives": [
         {
           "what": "`affectedSchedules`: the served schedules of a pause's cover, soonest next tick first",
-          "reason": "presentation: an order of a served list by a served time (`next_fire` of `GET /schedule`); which schedules a pause covers, and how each touches the node, is computed in barca-core (`refresh_path::pause_cover`, the scheduler's own walk)",
+          "reason": "presentation: an order of a served list by a served time (`next_fire` of `GET /schedule`); which schedules a pause covers, and how each touches the node, is computed in barca-service (`refresh_path::pause_cover`, the scheduler's own walk)",
           "sees": [
             "order"
           ],
@@ -596,7 +596,7 @@
       "derives": [
         {
           "what": "`runOutcomeSummary`: `7 keys failed`, the sum of a finished run's per-node `failed` counts (or its failed key steps)",
-          "reason": "a sum over served rows that no field serves as one number (`steps_failed` counts steps that are not keys too). Owed to barca-core as a field of the run view",
+          "reason": "a sum over served rows that no field serves as one number (`steps_failed` counts steps that are not keys too). Owed to barca-service as a field of the run view",
           "sees": [
             "count"
           ],

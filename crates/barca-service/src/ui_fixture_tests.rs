@@ -32,7 +32,7 @@
 //! files, review the diff (it is what the UI will be told), and the UI's fixtures follow:
 //!
 //! ```text
-//! BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture
+//! BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture
 //! ```
 
 use crate::cache_state::CacheState;
@@ -147,7 +147,7 @@ fn the_ui_fixture_health_table_is_what_classify_says() {
         expected == actual,
         "{} is not what `health::classify` says of a row alone. The UI's fixtures read it \
          (ui/src/lib/testdata/served.ts): regenerate it with \
-         `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`, then run the UI's \
+         `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture`, then run the UI's \
          unit tests (`pnpm --dir ui test`).",
         path.display()
     );
@@ -178,7 +178,7 @@ fn the_ui_fixture_weights_are_the_rollups() {
         expected == actual,
         "{} is not what `Cause::weight` and `FRESH_WEIGHT` say. The UI's fixtures read it \
          (ui/src/lib/testdata/rollup.ts): regenerate it with \
-         `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`, then run the UI's \
+         `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture`, then run the UI's \
          unit tests (`pnpm --dir ui test`).",
         path.display()
     );
@@ -1486,10 +1486,10 @@ async fn the_ui_fixture_project_is_what_a_server_serves() {
     }
     assert!(
         stale.is_empty(),
-        "{stale:?} in {} are not what barca-core says of the fixture project \
-         (crates/barca-core/testdata/ui_fixture). The UI's unit tests and kit read them \
+        "{stale:?} in {} are not what barca-service says of the fixture project \
+         (crates/barca-service/testdata/ui_fixture). The UI's unit tests and kit read them \
          (ui/src/lib/testdata/project.ts): regenerate them with \
-         `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`, review the diff, then \
+         `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture`, review the diff, then \
          run the UI's unit tests (`pnpm --dir ui test`).",
         dir.display()
     );

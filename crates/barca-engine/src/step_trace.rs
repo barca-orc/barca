@@ -1,7 +1,7 @@
 //! What a step's trace says about it: where its node sits in the pipeline ([`NodeContext`])
 //! and the trace context a worker's `barca.execute` span joins ([`StepTrace::context`]). The
 //! worker loop attaches it to each step it sends; the Datadog exporter
-//! (`barca_core::telemetry::datadog`) sends the traces themselves.
+//! (`barca_service::telemetry::datadog`) sends the traces themselves.
 
 use barca_model::trace_ids::{step_span_id, step_trace_id, step_trace_id_high};
 use serde_json::{Map, Value, json};

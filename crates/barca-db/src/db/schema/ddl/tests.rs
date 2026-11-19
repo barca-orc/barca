@@ -508,7 +508,7 @@ fn unusable(error: BarcaError) -> (String, String) {
 }
 
 /// A database this release cannot use is `MetadataUnusable` naming it (#513), and is left as it
-/// was. Its envelope (the `metadata_unusable` reason and a remediation) is barca-core's
+/// was. Its envelope (the `metadata_unusable` reason and a remediation) is barca-service's
 /// `outcome::metadata_envelope_tests`.
 #[tokio::test]
 async fn a_database_barca_cannot_use_is_named_and_left_alone() {

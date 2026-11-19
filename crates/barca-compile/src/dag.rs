@@ -417,7 +417,7 @@ impl Dag {
 /// is and refreshed by hand with the same code and inputs, so its run hash stays the same when
 /// a refresh gives new bytes; its output is what tells what reads it that it changed.
 ///
-/// And an `@asset(cutoff=True)` (#628, `barca_core::cache::is_cutoff`), whose output replaces its run hash.
+/// And an `@asset(cutoff=True)` (#628, `barca_service::cache::is_cutoff`), whose output replaces its run hash.
 /// Either way the node ends its chain in the planner and its consumers are decided in a later
 /// phase, once its output is known.
 pub fn folds_output(dag: &Dag, id: &str) -> bool {

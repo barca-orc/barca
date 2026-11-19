@@ -54,7 +54,7 @@ pub enum RunEvent {
         import_seconds: Option<f64>,
     },
     /// The run finished. Terminal: nothing follows it. `outcome` is the run's full result
-    /// (`barca_core::outcome`), absent only from events recorded by an older server.
+    /// (`barca_service::outcome`), absent only from events recorded by an older server.
     RunFinished {
         run_id: String,
         ok: bool,

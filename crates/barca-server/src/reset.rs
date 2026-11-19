@@ -3,7 +3,7 @@
 //! aside to `<db>.reset-<UTC>` and an empty one takes its place. Nothing is deleted.
 //!
 //! The server owns the database: every handler opens a short-lived connection under
-//! barca-core's database lock, and no connection is kept between requests, so the swap is
+//! barca-service's database lock, and no connection is kept between requests, so the swap is
 //! made under that lock and the next request opens the new file. What the server keeps from
 //! the database in memory (the paused schedules, the finished runs it still lists) is cleared
 //! with it.
@@ -14,7 +14,7 @@ use crate::run_model::RunStatus;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
-use barca_core::backup::Reset;
+use barca_service::backup::Reset;
 
 /// `POST /state/reset`. `403` on a `--read-only` server, `503` while it drains, `409` while a
 /// run is pending or running (this server's, or a local run's on this machine).
@@ -22,7 +22,7 @@ pub async fn reset(State(state): State<AppState>) -> Result<Json<Reset>, ApiErro
     refuse_if_read_only(&state.config)?;
     refuse_if_draining(&state.lifecycle, &state.config)?;
     let cfg = &state.config.resolved;
-    let reset = barca_core::backup::reset(cfg, |running| {
+    let reset = barca_service::backup::reset(cfg, |running| {
         // Checked under the database's lock: a run admitted after this check writes nothing
         // until the swap is done, and then writes to the new database.
         let mut in_flight: Vec<String> = state
@@ -74,7 +74,7 @@ pub async fn reset(State(state): State<AppState>) -> Result<Json<Reset>, ApiErro
         .runs
         .events
         .retain(|id, _| state.runs.registry.contains_key(id));
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] reset the metadata database{}",
         match &reset.moved_to {
             Some(moved) => format!(": the old one is {moved}"),

@@ -1,6 +1,6 @@
 //! No bare step-status literal outside the vocabulary (`barca_model::step_status`): a source
-//! scan over `barca-model`, `barca-compile`, `barca-db`, `barca-engine` and `barca-core`, which
-//! lives here beside `source_scan`.
+//! scan over every library crate below the hosts (`barca-model` up to `barca-service`), which
+//! lives here, above them all.
 
 use crate::source_scan;
 use std::path::Path;
@@ -88,8 +88,13 @@ fn no_bare_step_status_literal_outside_the_vocabulary() {
         "barca-model",
         "barca-compile",
         "barca-db",
+        "barca-proc",
         "barca-engine",
-        "barca-core",
+        "barca-store",
+        "barca-decide",
+        "barca-run",
+        "barca-analysis",
+        "barca-service",
     ]
     .iter()
     .flat_map(|krate| source_scan::non_test_sources(&crates.join(krate).join("src")));

@@ -10,23 +10,23 @@ pub(crate) async fn run_cmd(
     targets: Vec<String>,
     files: Vec<PathBuf>,
     python: &std::path::Path,
-    policy: barca_core::cache::CachePolicy,
+    policy: barca_service::cache::CachePolicy,
     dry_run: bool,
     mode: OutputMode,
     agent: bool,
     fields: Option<&[String]>,
-    ledger: Option<barca_core::ledger::Ledger>,
-    partition: Option<barca_core::selection::PartitionSelection>,
-    batch: barca_core::batch::BatchOverride,
+    ledger: Option<barca_service::ledger::Ledger>,
+    partition: Option<barca_service::selection::PartitionSelection>,
+    batch: barca_service::batch::BatchOverride,
     allow_paused: bool,
-) -> Result<(), barca_core::BarcaError> {
-    let mut cfg = barca_core::config::resolve(env)?;
+) -> Result<(), barca_service::BarcaError> {
+    let mut cfg = barca_service::config::resolve(env)?;
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
-    cfg.ledger = ledger.map(barca_core::ledger::Ledger::attach);
+    cfg.ledger = ledger.map(barca_service::ledger::Ledger::attach);
     // The server backs up the ledger; this machine backs up nothing (barca docs server-mode).
     cfg.as_server_client();
     if let Some(line) = cfg.startup_line() {
-        barca_core::errln!("{line}");
+        barca_service::errln!("{line}");
     }
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if dry_run {
@@ -45,11 +45,11 @@ pub(crate) async fn run_cmd(
         .await;
     }
     if !allow_paused {
-        barca_core::pauses::check_request(&cfg.db_path, &targets).await?;
+        barca_service::pauses::check_request(&cfg.db_path, &targets).await?;
     }
     let (events, log_task) = super::execute::user_logs(!matches!(mode, OutputMode::Json));
     if targets.len() > 1 {
-        let result = barca_core::commands::run_many_streaming(
+        let result = barca_service::commands::run_many_streaming(
             &cfg,
             &targets,
             &file_args,
@@ -67,7 +67,7 @@ pub(crate) async fn run_cmd(
         return print_multi(&result, mode, "ran", fields, &cfg, python).await;
     }
     let target = targets.into_iter().next().unwrap_or_default();
-    let result = barca_core::commands::run_streaming(
+    let result = barca_service::commands::run_streaming(
         &cfg,
         &target,
         &file_args,
@@ -82,7 +82,7 @@ pub(crate) async fn run_cmd(
     .await;
     let _ = log_task.await;
     let result = result.inspect_err(|e| print_failed_run(e, mode))?;
-    let output = barca_core::values::task_output(
+    let output = barca_service::values::task_output(
         python,
         &cfg,
         result.final_output.as_ref(),
@@ -90,7 +90,7 @@ pub(crate) async fn run_cmd(
         result.key_summary.as_ref(),
     )
     .await;
-    super::emit(barca_core::report::render_run(
+    super::emit(barca_service::report::render_run(
         &result,
         &target,
         output,

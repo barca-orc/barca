@@ -1,6 +1,6 @@
 use super::follow::dropped;
 use super::*;
-use barca_core::cache_state::CacheState;
+use barca_service::cache_state::CacheState;
 use serde_json::json;
 
 #[test]
@@ -18,7 +18,7 @@ fn a_newer_servers_unknown_cache_state_still_parses() {
         "summary": {"cached": 0, "unsynced": 0, "stale": 0, "never_run": 0, "partial": 0,
                     "blocked": 0, "unknown": 1, "always_runs": 0}
     });
-    let result: barca_core::status::StatusResult = serde_json::from_value(body).unwrap();
+    let result: barca_service::status::StatusResult = serde_json::from_value(body).unwrap();
     let cache = &result.nodes[0].cache;
     assert_eq!(cache.state, CacheState::Unknown);
     assert_eq!(
@@ -51,7 +51,7 @@ fn unexpected_answers_and_dropped_streams_keep_credentials_out_of_every_error_fi
         "http://host/proxy/health"
     );
     assert_eq!(
-        barca_core::ledger::LedgerTransport::url(&server),
+        barca_service::ledger::LedgerTransport::url(&server),
         "http://alice:secret@host/proxy"
     );
 }

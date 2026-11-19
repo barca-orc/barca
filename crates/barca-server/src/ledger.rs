@@ -1,7 +1,7 @@
 //! The ledger routes (RFC-0007 section 3.4 "The ledger"): what a `barca get` on another
 //! machine asks before it runs (`POST /ledger/lookup`) and posts after (`POST /ledger/runs`).
 //! The server is the only writer of its database; a post is verified against the store before
-//! anything from it is recorded. The logic is `barca_core::ledger`'s; this is its HTTP face.
+//! anything from it is recorded. The logic is `barca_service::ledger`'s; this is its HTTP face.
 
 use crate::error::ApiError;
 use crate::guards::refuse_if_read_only;
@@ -11,7 +11,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use barca_core::ledger::{self, HelperStat, LedgerPost, LookupRequest, Rejection};
+use barca_service::ledger::{self, HelperStat, LedgerPost, LookupRequest, Rejection};
 
 /// `POST /ledger/lookup` — for each `{node_id, run_hash}`, the latest successful result the
 /// ledger holds (`exists`, `path`, `format`, `size_bytes`, `digest`) or `exists: false`.

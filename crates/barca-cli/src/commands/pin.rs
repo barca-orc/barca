@@ -5,7 +5,7 @@ use crate::print::{print_pinned, print_pins, print_unpinned, print_versions};
 use crate::request::{PinAction, read_supplied};
 use std::path::PathBuf;
 
-fn engine(e: barca_core::BarcaError) -> CliError {
+fn engine(e: barca_service::BarcaError) -> CliError {
     CliError::from_barca(e, &Default::default())
 }
 
@@ -16,20 +16,22 @@ pub(crate) async fn pin_cmd(
     json: bool,
     python: &std::path::Path,
 ) -> Result<(), CliError> {
-    let cfg = barca_core::config::resolve(env).map_err(engine)?;
+    let cfg = barca_service::config::resolve(env).map_err(engine)?;
     if let PinAction::List = action {
-        let pins = barca_core::pins::list(&cfg.db_path).await.map_err(engine)?;
+        let pins = barca_service::pins::list(&cfg.db_path)
+            .await
+            .map_err(engine)?;
         print_pins(&pins, json);
         return Ok(());
     }
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-    let dag = barca_core::load::build_dag(&file_args, python)
+    let dag = barca_service::load::build_dag(&file_args, python)
         .await
         .map_err(engine)?;
     match action {
         PinAction::List => unreachable!(),
         PinAction::Versions { target, limit } => {
-            let versions = barca_core::pins::versions(&cfg.db_path, &dag, target, *limit)
+            let versions = barca_service::pins::versions(&cfg.db_path, &dag, target, *limit)
                 .await
                 .map_err(engine)?;
             print_versions(&versions, json);
@@ -39,16 +41,16 @@ pub(crate) async fn pin_cmd(
             choice,
             reason,
         } => {
-            barca_core::queries::open_metadata(&cfg)
+            barca_service::queries::open_metadata(&cfg)
                 .await
                 .map_err(engine)?;
-            let pinned = barca_core::pins::pin(
+            let pinned = barca_service::pins::pin(
                 &cfg.db_path,
                 &dag,
                 target,
                 choice,
                 reason.clone(),
-                barca_core::pins::local_actor(),
+                barca_service::pins::local_actor(),
             )
             .await
             .map_err(engine)?;
@@ -60,17 +62,17 @@ pub(crate) async fn pin_cmd(
             reason,
         } => {
             let supplied = read_supplied(path)?;
-            barca_core::queries::open_metadata(&cfg)
+            barca_service::queries::open_metadata(&cfg)
                 .await
                 .map_err(engine)?;
-            let pinned = barca_core::pins::pin_upload(
+            let pinned = barca_service::pins::pin_upload(
                 &cfg,
                 python,
                 &dag,
                 target,
                 supplied,
                 reason.clone(),
-                barca_core::pins::local_actor(),
+                barca_service::pins::local_actor(),
             )
             .await
             .map_err(engine)?;
@@ -87,12 +89,12 @@ pub(crate) async fn unpin_cmd(
     json: bool,
     python: &std::path::Path,
 ) -> Result<(), CliError> {
-    let cfg = barca_core::config::resolve(env).map_err(engine)?;
+    let cfg = barca_service::config::resolve(env).map_err(engine)?;
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-    let dag = barca_core::load::build_dag(&file_args, python)
+    let dag = barca_service::load::build_dag(&file_args, python)
         .await
         .map_err(engine)?;
-    let unpinned = barca_core::pins::unpin(&cfg.db_path, &dag, target)
+    let unpinned = barca_service::pins::unpin(&cfg.db_path, &dag, target)
         .await
         .map_err(engine)?;
     print_unpinned(&unpinned, json);

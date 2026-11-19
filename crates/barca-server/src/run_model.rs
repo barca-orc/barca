@@ -1,10 +1,10 @@
 //! A run as the server holds it: what was asked for ([`RunSpec`]), and its live record while
 //! it waits, runs and for a while after ([`RunState`]).
 
-use barca_core::CancellationToken;
-use barca_core::cache::CachePolicy;
-use barca_core::outcome::{RunCommand, Trigger};
-use barca_core::results::GetResult;
+use barca_service::CancellationToken;
+use barca_service::cache::CachePolicy;
+use barca_service::outcome::{RunCommand, Trigger};
+use barca_service::results::GetResult;
 use serde::Serialize;
 
 /// Lifecycle of an async run tracked by the server.
@@ -46,7 +46,7 @@ pub struct RunState {
     pub nodes: Vec<String>,
     /// What started the run.
     #[serde(skip)]
-    pub trigger: barca_core::outcome::Trigger,
+    pub trigger: barca_service::outcome::Trigger,
     /// The run was asked to compute again what is cached (`--refresh`, `--refresh-all`): a
     /// cached node of it is not one it will serve from cache.
     #[serde(skip)]
@@ -66,7 +66,7 @@ pub struct RunState {
     pub finished_at: Option<f64>,
     /// The run's full result once it finished.
     #[serde(skip)]
-    pub outcome: Option<barca_core::outcome::Outcome>,
+    pub outcome: Option<barca_service::outcome::Outcome>,
     /// Cancels this run's execution future. `DELETE /runs/{id}` triggers it;
     /// the run task observes it, terminates workers, and marks the run
     /// cancelled. Not part of the JSON status payload.
@@ -77,7 +77,7 @@ pub struct RunState {
     pub cancel_requested: bool,
     /// Who cancelled it and whether it had started (#925), recorded with its outcome.
     #[serde(skip)]
-    pub cancellation: Option<barca_core::run_explain::Cancellation>,
+    pub cancellation: Option<barca_service::run_explain::Cancellation>,
 }
 
 /// A run to start: what to run, how, and what asked for it.
@@ -94,12 +94,12 @@ pub(crate) struct RunSpec {
     /// `get -o value`: the outcome's `final_output` holds values, not pointers.
     pub values: bool,
     /// `get --partition`.
-    pub partition: Option<barca_core::selection::PartitionSelection>,
+    pub partition: Option<barca_service::selection::PartitionSelection>,
     /// `--batch` (RFC-0013), each as the flag takes it.
     pub batch: Vec<String>,
     /// The freshness rules (RFC-0008): a `Manual` node read as it is (`POST /runs`, as the CLI
     /// does), and whether this is a scheduled tick.
-    pub rules: barca_core::freshness::RunRules,
+    pub rules: barca_service::freshness::RunRules,
     /// `Schedule(..., timeout_seconds=N)` of the tick that started it: how long the run may
     /// take (0: no limit). `None`: the server's run timeout (`runs::run_timeout`).
     pub timeout: Option<u64>,
@@ -122,7 +122,7 @@ impl RunSpec {
             partition: None,
             batch: Vec::new(),
             // The older trigger routes compute what they are asked for, as before RFC-0008.
-            rules: barca_core::freshness::RunRules::default(),
+            rules: barca_service::freshness::RunRules::default(),
             timeout: None,
             kill_requeues: 0,
         }

@@ -41,7 +41,7 @@ fn barca(cwd: &Path, args: &[&str]) -> Output {
         .env_remove("BARCA_OUTPUT")
         .env_remove("BARCA_REMOTE_URI");
     // Through helper_proc's lock, as every child process of barca's tests is started.
-    barca_core::helper_proc::output_std(&mut cmd).expect("barca runs")
+    barca_service::helper_proc::output_std(&mut cmd).expect("barca runs")
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -75,7 +75,7 @@ const SOURCE_MTIME: u64 = 1_700_000_000;
 fn normalized_status(stdout: String) -> String {
     let mut status: Value = serde_json::from_str(&stdout).unwrap();
     let as_of = chrono::DateTime::parse_from_rfc3339(status["as_of"].as_str().unwrap()).unwrap();
-    let gap = barca_core::causes::gap_instant(as_of.timestamp()) - SOURCE_MTIME as i64;
+    let gap = barca_service::causes::gap_instant(as_of.timestamp()) - SOURCE_MTIME as i64;
     let nodes = status["nodes"].as_array_mut().unwrap();
     let total = gap * nodes.len() as i64;
     for node in nodes {
@@ -130,7 +130,7 @@ fn server_mode_without_python() {
 
     // The real server, in this process, on the served copy.
     std::env::set_current_dir(&served).unwrap();
-    let resolved = barca_core::config::resolve(None).unwrap();
+    let resolved = barca_service::config::resolve(None).unwrap();
     let config = barca_server::ServeConfig {
         files: vec!["pipeline.py".into()],
         host: [127, 0, 0, 1].into(),
@@ -138,7 +138,7 @@ fn server_mode_without_python() {
         watch: false,
         schedule: false,
         timezone: "local".into(),
-        python: barca_core::commands::find_python(),
+        python: barca_service::commands::find_python(),
         resolved,
         read_only: false,
     };
@@ -261,7 +261,7 @@ fn server_mode_without_python() {
         .env_remove("BARCA_OUTPUT")
         .env_remove("BARCA_REMOTE_URI")
         .env("BARCA_SERVER_RECONNECT", "2");
-    let out = barca_core::helper_proc::output_std(&mut cmd).expect("barca runs");
+    let out = barca_service::helper_proc::output_std(&mut cmd).expect("barca runs");
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
     assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
     assert!(text(&out.stderr).contains("did not come back within 2s"));

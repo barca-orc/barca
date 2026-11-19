@@ -1,5 +1,5 @@
 //! Inspection in the CLI's shapes (RFC-0007 §3.4 "Inspection"): each body is the `--json`
-//! output of the matching command, built by the same `barca_core::report` function, so a
+//! output of the matching command, built by the same `barca_service::report` function, so a
 //! client prints it as it would print a local command's. Every read goes through a private
 //! snapshot of the metadata DB.
 
@@ -11,8 +11,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use barca_core::envelope::Context;
-use barca_core::served::{Project, ProjectFile, ProjectTelemetry};
+use barca_service::envelope::Context;
+use barca_service::served::{Project, ProjectFile, ProjectTelemetry};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -27,9 +27,9 @@ fn root() -> Option<String> {
 /// `GET /list` — `barca list --json --all` (the client applies `--limit` and `--fields`).
 pub async fn list(State(reads): State<Reads>) -> Result<Response, ApiError> {
     let dag = reads.loaded_dag().await?;
-    let assets = barca_core::queries::list_assets_from_dag(&dag);
+    let assets = barca_service::queries::list_assets_from_dag(&dag);
     let next_fires = crate::schedule_view::next_fires(&dag);
-    let rendered = barca_core::report::render_list(
+    let rendered = barca_service::report::render_list(
         &assets,
         assets.len(),
         &next_fires,
@@ -67,8 +67,8 @@ pub async fn nodes(
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect();
-    let filter = barca_core::status::StatusFilter {
-        states: barca_core::status::StatusFilter::parse_states(
+    let filter = barca_service::status::StatusFilter {
+        states: barca_service::status::StatusFilter::parse_states(
             &query.state.iter().cloned().collect::<Vec<_>>(),
         )
         .map_err(|e| ApiError::BadRequest(format!("state: {e}")))?,
@@ -93,11 +93,13 @@ pub async fn nodes(
     )
     .await?;
     let disk_cfg = state.config.resolved.clone();
-    result.disk_usage = tokio::task::spawn_blocking(move || barca_core::gc::disk_usage(&disk_cfg))
-        .await
-        .unwrap_or_default();
+    result.disk_usage =
+        tokio::task::spawn_blocking(move || barca_service::gc::disk_usage(&disk_cfg))
+            .await
+            .unwrap_or_default();
     filter.apply(&mut result);
-    let rendered = barca_core::report::render_status(result, true, None, None, root().as_deref());
+    let rendered =
+        barca_service::report::render_status(result, true, None, None, root().as_deref());
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }
 
@@ -142,8 +144,8 @@ pub async fn history(
         .as_deref()
         .is_some_and(|v| !matches!(v, "" | "0" | "false"));
     let limit = if all { None } else { query.limit };
-    let filter = barca_core::history_filter::HistoryFilter::parse(
-        barca_core::history_filter::HistoryFlags {
+    let filter = barca_service::history_filter::HistoryFilter::parse(
+        barca_service::history_filter::HistoryFlags {
             status: query.status.as_deref(),
             target: query.target.as_deref(),
             triggered_by: query.triggered_by.as_deref(),
@@ -156,7 +158,7 @@ pub async fn history(
     )
     .map_err(ApiError::BadRequest)?;
     let snapshot = state.reads.snapshot_db().await?;
-    let (runs, total) = barca_core::queries::history_at(&snapshot.path, limit, &filter).await?;
+    let (runs, total) = barca_service::queries::history_at(&snapshot.path, limit, &filter).await?;
     // Asked for the runs in progress: each with what it is working on now (#991).
     let now = if filter.statuses.iter().any(|s| s == "running")
         && runs.iter().any(|r| r.status == "running")
@@ -165,8 +167,8 @@ pub async fn history(
     } else {
         Default::default()
     };
-    let extras = barca_core::report::HistoryExtras::now(now);
-    let rendered = barca_core::report::render_history(&runs, total, true, None, &extras);
+    let extras = barca_service::report::HistoryExtras::now(now);
+    let rendered = barca_service::report::render_history(&runs, total, true, None, &extras);
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }
 
@@ -177,13 +179,13 @@ pub struct SqlViewsQuery {
 }
 
 /// `GET /sql/views?files=a.py,b.py` — which result each `barca sql` view reads in the
-/// server's ledger ([`barca_core::sql::Catalog`]): the client runs the query on its own machine
+/// server's ledger ([`barca_service::sql::Catalog`]): the client runs the query on its own machine
 /// over those store paths. The server runs no SQL over results or files
 /// ([`crate::sql_query`] answers queries over barca's own tables).
 pub async fn sql_views(
     State(reads): State<Reads>,
     Query(query): Query<SqlViewsQuery>,
-) -> Result<Json<barca_core::sql::Catalog>, ApiError> {
+) -> Result<Json<barca_service::sql::Catalog>, ApiError> {
     let files: Vec<String> = query
         .files
         .iter()
@@ -197,7 +199,7 @@ pub async fn sql_views(
     let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let catalog =
-        barca_core::sql::catalog_from_dag(&cfg, &dag, &reads.config.python, |id: &str| {
+        barca_service::sql::catalog_from_dag(&cfg, &dag, &reads.config.python, |id: &str| {
             files.is_empty()
                 || id
                     .split_once(':')
@@ -228,7 +230,7 @@ pub async fn materializations(
     let limit = query.limit.unwrap_or(1000).min(MATERIALIZATIONS_MAX);
     let offset = query.offset.unwrap_or(0);
     let snapshot = reads.snapshot_db().await?;
-    let (rows, total) = barca_core::db::read_step_rows(&snapshot.path, limit, offset).await?;
+    let (rows, total) = barca_service::db::read_step_rows(&snapshot.path, limit, offset).await?;
     Ok(Json(json!({
         "materializations": rows,
         "total": total,
@@ -256,19 +258,19 @@ pub async fn partitions(
     State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<PartitionsQuery>,
-) -> Result<Json<barca_core::db::PartitionKeys>, ApiError> {
+) -> Result<Json<barca_service::db::PartitionKeys>, ApiError> {
     let dag = reads.loaded_dag().await?;
-    let id = barca_core::targets::find_target_id(&dag, &name)
+    let id = barca_service::targets::find_target_id(&dag, &name)
         .map_err(|e| ApiError::run(e, context("partitions", &reads)))?;
     let snapshot = reads.snapshot_db().await?;
-    let filter = barca_core::db::PartitionKeysFilter {
+    let filter = barca_service::db::PartitionKeysFilter {
         status: query.status,
         query: query.q.filter(|q| !q.is_empty()),
         limit: query.limit.unwrap_or(100).min(PARTITION_KEYS_MAX),
         offset: query.offset.unwrap_or(0),
     };
     Ok(Json(
-        barca_core::db::partition_keys(&snapshot.path, &id, &filter).await?,
+        barca_service::db::partition_keys(&snapshot.path, &id, &filter).await?,
     ))
 }
 
@@ -278,9 +280,9 @@ pub async fn partitions(
 async fn kept_partition_grid(
     reads: &Reads,
     name: &str,
-) -> Result<std::sync::Arc<barca_core::partition_grid::PartitionGrid>, ApiError> {
+) -> Result<std::sync::Arc<barca_service::partition_grid::PartitionGrid>, ApiError> {
     let dag = reads.loaded_dag().await?;
-    let id = barca_core::partition_grid::partitioned_target(&dag, name)
+    let id = barca_service::partition_grid::partitioned_target(&dag, name)
         .map_err(|e| ApiError::run(e, context("status", reads)))?;
     let db = reads.db_state();
     if let Some(grid) = reads.kept_grid(&dag, &db, &id) {
@@ -290,7 +292,7 @@ async fn kept_partition_grid(
     let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let grid = std::sync::Arc::new(
-        barca_core::partition_grid::partition_grid(&cfg, &dag, &id)
+        barca_service::partition_grid::partition_grid(&cfg, &dag, &id)
             .await
             .map_err(|e| ApiError::run(e, context("partitions grid", reads)))?,
     );
@@ -303,7 +305,7 @@ async fn kept_partition_grid(
 pub async fn partition_grid(
     State(reads): State<Reads>,
     Path(name): Path<String>,
-) -> Result<Json<std::sync::Arc<barca_core::partition_grid::PartitionGrid>>, ApiError> {
+) -> Result<Json<std::sync::Arc<barca_service::partition_grid::PartitionGrid>>, ApiError> {
     Ok(Json(kept_partition_grid(&reads, &name).await?))
 }
 
@@ -319,7 +321,7 @@ pub async fn partition_keys_page(
     State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(params): Query<Vec<(String, String)>>,
-) -> Result<Json<barca_core::key_query::KeysPage>, ApiError> {
+) -> Result<Json<barca_service::key_query::KeysPage>, ApiError> {
     let last = |key: &str| -> Option<&str> {
         params
             .iter()
@@ -343,18 +345,19 @@ pub async fn partition_keys_page(
         .filter(|(k, _)| k == "value")
         .map(|(_, v)| v.clone())
         .collect();
-    let query = barca_core::key_query::KeyQuery::parse(&barca_core::key_query::KeyQueryArgs {
-        states: &states,
-        needs_run: last("needs_run").is_some_and(|v| !matches!(v, "" | "0" | "false")),
-        values: &values,
-        range: last("range"),
-        error: number("error")?,
-        text: last("q"),
-        sort: last("sort"),
-        offset: number("offset")?.unwrap_or(0),
-        limit: Some(number("limit")?.unwrap_or(100).min(KEYS_PAGE_MAX)),
-    })
-    .map_err(ApiError::BadRequest)?;
+    let query =
+        barca_service::key_query::KeyQuery::parse(&barca_service::key_query::KeyQueryArgs {
+            states: &states,
+            needs_run: last("needs_run").is_some_and(|v| !matches!(v, "" | "0" | "false")),
+            values: &values,
+            range: last("range"),
+            error: number("error")?,
+            text: last("q"),
+            sort: last("sort"),
+            offset: number("offset")?.unwrap_or(0),
+            limit: Some(number("limit")?.unwrap_or(100).min(KEYS_PAGE_MAX)),
+        })
+        .map_err(ApiError::BadRequest)?;
     let grid = kept_partition_grid(&reads, &name).await?;
     // A pass over every key of the node, and a sort when an order is asked for: off the
     // async threads.
@@ -367,7 +370,7 @@ pub async fn partition_keys_page(
 
 #[derive(Debug, Default, Deserialize)]
 pub struct PartitionOverviewQuery {
-    /// Rows to return (default: as many as fit [`barca_core::key_query::OVERVIEW_CELLS_MAX`]).
+    /// Rows to return (default: as many as fit [`barca_service::key_query::OVERVIEW_CELLS_MAX`]).
     pub limit: Option<usize>,
 }
 
@@ -377,7 +380,7 @@ pub async fn partition_overview(
     State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<PartitionOverviewQuery>,
-) -> Result<Json<barca_core::key_query::KeysOverview>, ApiError> {
+) -> Result<Json<barca_service::key_query::KeysOverview>, ApiError> {
     let grid = kept_partition_grid(&reads, &name).await?;
     let overview = tokio::task::spawn_blocking(move || grid.overview(query.limit))
         .await
@@ -399,14 +402,14 @@ pub async fn partition_key(
     State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<PartitionKeyQuery>,
-) -> Result<Json<barca_core::partition_grid::PartitionKeyDetail>, ApiError> {
+) -> Result<Json<barca_service::partition_grid::PartitionKeyDetail>, ApiError> {
     let dag = reads.loaded_dag().await?;
-    let id = barca_core::targets::find_target_id(&dag, &name)
+    let id = barca_service::targets::find_target_id(&dag, &name)
         .map_err(|e| ApiError::run(e, context("partition key", &reads)))?;
     let snapshot = reads.snapshot_db().await?;
     let mut cfg = reads.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let detail = barca_core::partition_grid::partition_key_detail(
+    let detail = barca_service::partition_grid::partition_key_detail(
         &cfg,
         &dag,
         &reads.config.python,
@@ -415,12 +418,14 @@ pub async fn partition_key(
         query
             .sample
             .unwrap_or(5)
-            .min(barca_core::partition_grid::KEY_SAMPLE_MAX),
+            .min(barca_service::partition_grid::KEY_SAMPLE_MAX),
     )
     .await
     .map_err(|e| ApiError::run(e, context("partition key", &reads)))?;
     detail.map(Json).ok_or_else(|| {
-        ApiError::NotFound(barca_core::partition_grid::no_such_key(&name, &query.key))
+        ApiError::NotFound(barca_service::partition_grid::no_such_key(
+            &name, &query.key,
+        ))
     })
 }
 
@@ -430,11 +435,11 @@ pub async fn stats(
     Path(name): Path<String>,
 ) -> Result<Response, ApiError> {
     let dag = reads.loaded_dag().await?;
-    let id = barca_core::targets::find_target_id(&dag, &name)
+    let id = barca_service::targets::find_target_id(&dag, &name)
         .map_err(|e| ApiError::run(e, context("stats", &reads)))?;
     let snapshot = reads.snapshot_db().await?;
-    let stats = barca_core::db::get_asset_stats(&snapshot.path, &id).await?;
-    let rendered = barca_core::report::render_stats(&stats, true, None);
+    let stats = barca_service::db::get_asset_stats(&snapshot.path, &id).await?;
+    let rendered = barca_service::report::render_stats(&stats, true, None);
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
 }
 
@@ -449,7 +454,7 @@ pub async fn project(
     let mut files = Vec::new();
     for file in &reads.config.files {
         let bytes = std::fs::read(file).map_err(|e| {
-            ApiError::Barca(barca_core::BarcaError::Io(std::io::Error::new(
+            ApiError::Barca(barca_service::BarcaError::Io(std::io::Error::new(
                 e.kind(),
                 format!("cannot read deployed file {file}: {e}"),
             )))
@@ -463,22 +468,22 @@ pub async fn project(
         };
         files.push(ProjectFile {
             path,
-            sha256: barca_core::hash::sha256_hex(&bytes),
+            sha256: barca_service::hash::sha256_hex(&bytes),
         });
     }
     Ok(Json(Project {
-        api_version: barca_core::outcome::API_VERSION,
+        api_version: barca_service::outcome::API_VERSION,
         env: reads.config.resolved.env.clone(),
-        deployed_at: barca_core::outcome::rfc3339(lifecycle.started_at),
+        deployed_at: barca_service::outcome::rfc3339(lifecycle.started_at),
         commit: root.as_deref().and_then(git_commit),
         root,
         files,
         // Where a step's `trace_id` opens (`{datadog_url}/apm/trace/{trace_id}`): `null`
         // when no Datadog site is configured and the integration is off.
         telemetry: ProjectTelemetry {
-            datadog_url: barca_core::config::datadog_app_url(
+            datadog_url: barca_service::config::datadog_app_url(
                 &reads.config.resolved.project_root,
-                barca_core::telemetry::is_on("datadog"),
+                barca_service::telemetry::is_on("datadog"),
             )
             .ok()
             .flatten(),
@@ -532,6 +537,6 @@ pub async fn logs(
     Path(run_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let snap = reads.snapshot_db().await?;
-    let entries = barca_core::db::get_logs(&snap.path, &run_id).await?;
+    let entries = barca_service::db::get_logs(&snap.path, &run_id).await?;
     Ok(Json(json!({ "logs": entries })))
 }

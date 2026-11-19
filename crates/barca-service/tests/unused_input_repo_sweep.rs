@@ -20,8 +20,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use barca_core::NodeKind;
-use barca_core::parse::{ParseError, extract_nodes};
+use barca_service::NodeKind;
+use barca_service::parse::{ParseError, extract_nodes};
 use ruff_python_ast::Expr;
 use ruff_python_ast::visitor::{self, Visitor};
 

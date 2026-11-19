@@ -28,7 +28,7 @@ s.close()
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
-    barca_core::helper_proc::spawn_std(&mut cmd).unwrap()
+    barca_service::helper_proc::spawn_std(&mut cmd).unwrap()
 }
 
 #[tokio::test]
@@ -144,7 +144,7 @@ async fn accept_16_workers_with_barca_worker() {
             .env("BARCA_WORKER", "1")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
-        let child = barca_core::helper_proc::spawn_std(&mut cmd);
+        let child = barca_service::helper_proc::spawn_std(&mut cmd);
         match child {
             Ok(c) => children.push(c),
             Err(e) => {

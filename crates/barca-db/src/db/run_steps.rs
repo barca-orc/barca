@@ -1,6 +1,6 @@
 //! A run's recorded steps as `barca history RUN_ID` and `GET /runs/{run_id}` list them: a page
 //! of [`RunStep`]s ([`get_run_steps_page`]), each node's [`RunNodeSummary`] (which
-//! `barca_core::queries::planned_run_nodes` completes with the nodes the plan had that recorded none)
+//! `barca_service::queries::planned_run_nodes` completes with the nodes the plan had that recorded none)
 //! and a failed step's last output lines.
 
 use super::*;
@@ -432,7 +432,7 @@ async fn node_summaries(
 }
 
 /// [`StepsPage::nodes`] of `run_id` whatever its nodes' key counts: the input of
-/// `barca_core::queries::planned_run_nodes`.
+/// `barca_service::queries::planned_run_nodes`.
 pub async fn run_node_summaries(
     db_path: &str,
     run_id: &str,

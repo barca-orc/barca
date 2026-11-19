@@ -13,9 +13,9 @@
 //! at least once, and a step that was interrupted runs again.
 
 use crate::run_model::RunSpec;
-use barca_core::cache::CachePolicy;
-use barca_core::outcome::{RunCommand, Trigger, TriggeredBy};
-use barca_core::served::QueueView;
+use barca_service::cache::CachePolicy;
+use barca_service::outcome::{RunCommand, Trigger, TriggeredBy};
+use barca_service::served::QueueView;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -210,10 +210,10 @@ pub(crate) fn load(text: &str) -> Result<(RunSpec, f64), String> {
         values: stored.values,
         partition: stored
             .partition
-            .map(|value| barca_core::selection::PartitionSelection::parse(&value.to_string()))
+            .map(|value| barca_service::selection::PartitionSelection::parse(&value.to_string()))
             .transpose()?,
         batch: stored.batch,
-        rules: barca_core::freshness::RunRules {
+        rules: barca_service::freshness::RunRules {
             pin_manual: stored.pin_manual,
             tick: stored.tick,
             status: false,

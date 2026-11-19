@@ -1,4 +1,4 @@
-//! The local backend: a [`Request`] run on this machine, calling `barca_core`.
+//! The local backend: a [`Request`] run on this machine, calling `barca_service`.
 
 mod doctor;
 pub(crate) use doctor::*;
@@ -46,14 +46,14 @@ use std::path::PathBuf;
 /// reach here: `dispatch` answers them.
 pub(crate) async fn perform(
     request: Request,
-    ledger: Option<barca_core::ledger::Ledger>,
+    ledger: Option<barca_service::ledger::Ledger>,
     ctx: &Context,
 ) -> Result<(), CliError> {
-    let python = barca_core::commands::find_python();
-    let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
+    let python = barca_service::commands::find_python();
+    let engine = |e: barca_service::BarcaError| CliError::from_barca(e, ctx);
     // An unknown target ends with the `barca list` pointer, naming the files as typed.
     let hint_files: Vec<PathBuf> = ctx.files.iter().map(PathBuf::from).collect();
-    let target_error = |e: barca_core::BarcaError| get_run_error(e, ctx, &hint_files);
+    let target_error = |e: barca_service::BarcaError| get_run_error(e, ctx, &hint_files);
 
     match request {
         Request::Get { run, mode } => get_cmd(

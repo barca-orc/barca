@@ -1,5 +1,5 @@
 //! The body of a ledger post (`POST /ledger/runs`) and the answer to it: a finished run and its
-//! step rows as the posting machine recorded them. Plain data: `barca_core::ledger` sends and
+//! step rows as the posting machine recorded them. Plain data: `barca_service::ledger` sends and
 //! accepts them, and the metadata DB records them (`ledger_posts`, barca-db's `recording`).
 
 use serde::{Deserialize, Serialize};
@@ -66,7 +66,7 @@ pub struct LedgerPost {
     pub run: LedgerRun,
     pub steps: Vec<LedgerStep>,
     /// The base ids of the steps whose new bytes under an unchanged run hash are expected, not
-    /// a sign of a nondeterministic function (`barca_core::cache::checks_bytes`): a `Manual`
+    /// a sign of a nondeterministic function (`barca_service::cache::checks_bytes`): a `Manual`
     /// asset. Taken from the graph when the post is built and kept with it in `ledger_posts`,
     /// so a post sent later, when no graph is at hand (#570), warns for the same steps. Never
     /// sent to the server.

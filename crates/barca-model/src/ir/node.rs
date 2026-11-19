@@ -69,7 +69,7 @@ pub struct NodeDecl {
     pub deterministic: bool,
     /// `@asset(cutoff=True)`: what reads it folds in the content hash of its output instead of
     /// its run hash, so a rerun that writes the same bytes leaves them cached (#628). Not part
-    /// of its own run hash; see `barca_core::cache::is_cutoff`.
+    /// of its own run hash; see `barca_service::cache::is_cutoff`.
     pub cutoff: bool,
 }
 
@@ -85,7 +85,7 @@ pub struct Fingerprint {
     /// that count, and the kind).
     pub definition_hash: String,
     /// The definition's named components and a short digest of each (for Python: `code`,
-    /// `decorator ...`, `helper ...`, `kind`; see `barca_core::changes`), recorded with each
+    /// `decorator ...`, `helper ...`, `kind`; see `barca_service::changes`), recorded with each
     /// materialization to say which one changed (#558). Not part of any hash.
     pub components: Vec<(String, String)>,
 }
@@ -164,7 +164,7 @@ pub struct DagNode {
 impl DagNode {
     /// Whether new bytes under an unchanged run hash mean this node is not deterministic: only
     /// for an asset that is not `Manual` and not declared `@asset(deterministic=False)`
-    /// (#548, #627; `barca_core::cache::checks_bytes` has the reasons). A property of the
+    /// (#548, #627; `barca_service::cache::checks_bytes` has the reasons). A property of the
     /// declaration alone, so the ledger's post and the cache decision read the same answer.
     pub fn checks_bytes(&self) -> bool {
         self.decl.kind == NodeKind::Asset

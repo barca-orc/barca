@@ -2,7 +2,7 @@
 //! migrations, every write to it (`db/`, one file per table family), and the modules that decide
 //! about its rows (who owns a running run, what a restored copy may hold, sizes, sink
 //! publications, recorded logs, uploads still owed). It depends on `barca-model` only;
-//! `barca-core` re-exports each module, so its items keep their `barca_core::` paths.
+//! `barca-service` re-exports each module, so its items keep their `barca_service::` paths.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]

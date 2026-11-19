@@ -81,7 +81,7 @@ pub struct ExtractedNode {
     pub deterministic: bool,
     /// `@asset(cutoff=True)`: what reads it folds in the content hash of its output instead of
     /// its run hash, so a rerun that writes the same bytes leaves them cached (#628). Not part
-    /// of its own run hash; see `barca_core::cache::is_cutoff`.
+    /// of its own run hash; see `barca_service::cache::is_cutoff`.
     #[serde(default)]
     pub cutoff: bool,
     /// Base backoff in seconds between attempts; delay = `retry_backoff_seconds * attempt`.
@@ -107,7 +107,7 @@ pub struct ExtractedNode {
     /// Includes same-file definitions. Cross-file deps tracked by source_file content.
     pub cone_hash: String,
     /// A short digest of each definition in the cone, by label
-    /// (`barca_core::cone::cone_hash_and_parts`). Recorded with each materialization to say which
+    /// (`barca_service::cone::cone_hash_and_parts`). Recorded with each materialization to say which
     /// helper changed (#558); not part of any hash, and not serialized.
     #[serde(skip)]
     pub cone_parts: Vec<(String, String)>,
@@ -125,11 +125,11 @@ pub struct ExtractedNode {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<String>,
     /// Data inputs the function body never uses, found by static analysis while parsing
-    /// (see `barca_core::unused_inputs`). Reported as plan warnings; not part of any hash.
+    /// (see `barca_service::unused_inputs`). Reported as plan warnings; not part of any hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_inputs: Vec<String>,
     /// Environment variables the function and the helper code it reaches read, found by static
-    /// analysis (see `barca_core::env_reads`), sorted; a name built at run time is a `*` pattern.
+    /// analysis (see `barca_service::env_reads`), sorted; a name built at run time is a `*` pattern.
     /// Those not in [`Self::env`] are reported; not part of any hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_reads: Vec<String>,

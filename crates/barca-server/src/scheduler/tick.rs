@@ -4,8 +4,8 @@
 
 use crate::run_model::RunStatus;
 use crate::state::AppState;
-use barca_core::schedule::{ScheduledJob, Zone};
-use barca_core::{NodeKind, db};
+use barca_service::schedule::{ScheduledJob, Zone};
+use barca_service::{NodeKind, db};
 use chrono::{DateTime, TimeZone, Timelike};
 use std::time::Duration;
 

@@ -1,6 +1,6 @@
 //! Attempt-scoped serialized event windows. The hub owns eviction; readers hold one frame.
 use crate::error::CursorError;
-use barca_core::{BarcaError, RunEvent};
+use barca_service::{BarcaError, RunEvent};
 use futures::{StreamExt, stream::BoxStream};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -375,7 +375,7 @@ mod tests {
         RunEvent::log(
             "p.py:a".into(),
             number.to_string(),
-            barca_core::LogStream::Stdout,
+            barca_service::LogStream::Stdout,
         )
     }
     fn hub(events: usize, run_bytes: usize, total_bytes: usize) -> ReplayHub {
@@ -398,7 +398,7 @@ mod tests {
                 channel.emit(RunEvent::log(
                     "p.py:a".into(),
                     payload.clone(),
-                    barca_core::LogStream::Stdout,
+                    barca_service::LogStream::Stdout,
                 ));
             }
         }
@@ -435,7 +435,7 @@ mod tests {
                     .find(|line| line.starts_with("VmRSS:"))
                     .map(str::to_string)
             });
-        barca_core::outln!(
+        barca_service::outln!(
             "{}",
             serde_json::json!({
                 "emitted_events": 1024, "payload_bytes": payload.len(), "emission_us": emission_us,
@@ -560,7 +560,7 @@ mod tests {
             .clone();
         channel.emit(RunEvent::Line {
             line: "x".repeat(1024),
-            when: barca_core::lines::LineWhen::Always,
+            when: barca_service::lines::LineWhen::Always,
         });
         assert_eq!(channel.bytes(), 0);
         channel.emit(event(3));
@@ -610,7 +610,7 @@ mod http_tests {
             schedule: false,
             timezone: "utc".into(),
             python: "python".into(),
-            resolved: barca_core::config::resolve_in(None, root).unwrap(),
+            resolved: barca_service::config::resolve_in(None, root).unwrap(),
             read_only: true,
         })
     }
@@ -680,7 +680,7 @@ mod http_tests {
         let root = tempfile::tempdir().unwrap();
         let mut state = state(root.path());
         let mut config = (*state.config).clone();
-        config.resolved.server_auth = barca_core::serve::AuthMode::Token;
+        config.resolved.server_auth = barca_service::serve::AuthMode::Token;
         state.auth = Arc::new(crate::auth_http::Access::new(&config.resolved));
         state.config = Arc::new(config);
         let router = crate::routes::router(state);
@@ -710,7 +710,7 @@ mod http_tests {
             channel.emit(RunEvent::log(
                 "p.py:active".into(),
                 n.to_string(),
-                barca_core::LogStream::Stdout,
+                barca_service::LogStream::Stdout,
             ));
         }
         assert!(

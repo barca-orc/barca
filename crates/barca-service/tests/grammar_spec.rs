@@ -5,8 +5,8 @@
 //! They do not execute the Allium model or establish runtime behavior; those contracts
 //! and their integration tests are indexed in `specs/README.md`.
 
-use barca_core::model::*;
-use barca_core::parse::extract_nodes;
+use barca_service::model::*;
+use barca_service::parse::extract_nodes;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. Basic decorator forms
@@ -718,7 +718,7 @@ def dynamic_config() -> dict:
 
 #[test]
 fn dag_rejects_task_as_asset_input() {
-    use barca_core::dag::Dag;
+    use barca_service::dag::Dag;
 
     let src = r#"
 from barca import asset, task
@@ -740,7 +740,7 @@ def bad_asset(email) -> dict:
 
 #[test]
 fn dag_allows_asset_upstream_of_task() {
-    use barca_core::dag::Dag;
+    use barca_service::dag::Dag;
 
     let src = r#"
 from barca import asset, task
@@ -759,7 +759,7 @@ def deploy(d):
 
 #[test]
 fn dag_rejects_sensor_with_inputs() {
-    use barca_core::dag::Dag;
+    use barca_service::dag::Dag;
 
     let src = r#"
 from barca import asset, sensor
@@ -780,7 +780,7 @@ def bad_sensor(data):
 
 #[test]
 fn dag_rejects_duplicate_continuity_key() {
-    use barca_core::dag::Dag;
+    use barca_service::dag::Dag;
 
     let src = r#"
 from barca import asset
@@ -806,7 +806,7 @@ def asset_b(): return {}
 
 #[test]
 fn partitions_from_creates_partition_source_edge() {
-    use barca_core::dag::Dag;
+    use barca_service::dag::Dag;
 
     let src = r#"
 from barca import asset, partitions_from
@@ -858,7 +858,7 @@ def aggregate(all_data) -> dict:
 
 #[test]
 fn spaceflights_topology() {
-    use barca_core::dag::Dag;
+    use barca_service::dag::Dag;
 
     let src = r#"
 from barca import asset
@@ -1122,7 +1122,7 @@ def my_asset() -> dict:
 /// The error text for a source that must be rejected for a decorator argument.
 fn rejected(src: &str) -> String {
     match extract_nodes(src, "test.py") {
-        Err(e @ barca_core::parse::ParseError::InvalidArguments { .. }) => e.to_string(),
+        Err(e @ barca_service::parse::ParseError::InvalidArguments { .. }) => e.to_string(),
         other => panic!("expected InvalidArguments, got {other:?}\n{src}"),
     }
 }
@@ -2061,7 +2061,7 @@ def other():
     assert_eq!(node.tags.get("team").map(String::as_str), Some("a"));
     assert_eq!(
         node.artifact_serializer,
-        Some(barca_core::model::SerializerKind::Parquet)
+        Some(barca_service::model::SerializerKind::Parquet)
     );
     assert_eq!(node.timeout_seconds, 0);
     assert_eq!(node.retries, 1);

@@ -2,9 +2,9 @@
 
 use super::execute::{cancel_on_ctrl_c, explain_cmd};
 use crate::input::GetMode;
-use barca_core::dispatch::OutputRef;
-use barca_core::report::{GetShape, Returned, Shown, artifact_metadata};
-use barca_core::selection::PartitionSelection;
+use barca_service::dispatch::OutputRef;
+use barca_service::report::{GetShape, Returned, Shown, artifact_metadata};
+use barca_service::selection::PartitionSelection;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -20,18 +20,18 @@ pub(crate) async fn get_cmd(
     files: Vec<PathBuf>,
     python: &std::path::Path,
     mode: GetMode,
-    policy: barca_core::cache::CachePolicy,
+    policy: barca_service::cache::CachePolicy,
     partition: Option<PartitionSelection>,
-    batch: barca_core::batch::BatchOverride,
+    batch: barca_service::batch::BatchOverride,
     dry_run: bool,
     agent: bool,
     fields: Option<&[String]>,
-    ledger: Option<barca_core::ledger::Ledger>,
+    ledger: Option<barca_service::ledger::Ledger>,
     allow_paused: bool,
-) -> Result<(), barca_core::BarcaError> {
-    let mut cfg = barca_core::config::resolve(env)?;
+) -> Result<(), barca_service::BarcaError> {
+    let mut cfg = barca_service::config::resolve(env)?;
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
-    cfg.ledger = ledger.map(barca_core::ledger::Ledger::attach);
+    cfg.ledger = ledger.map(barca_service::ledger::Ledger::attach);
     // The server backs up the ledger; this machine backs up nothing (barca docs server-mode).
     cfg.as_server_client();
     if mode.url_expires.is_some() {
@@ -41,7 +41,7 @@ pub(crate) async fn get_cmd(
         cfg.check_store = true;
     }
     if let Some(line) = cfg.startup_line() {
-        barca_core::errln!("{line}");
+        barca_service::errln!("{line}");
     }
     let file_args: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
     if dry_run {
@@ -60,7 +60,7 @@ pub(crate) async fn get_cmd(
         .await;
     }
     if !allow_paused {
-        barca_core::pauses::check_request(&cfg.db_path, &targets).await?;
+        barca_service::pauses::check_request(&cfg.db_path, &targets).await?;
     }
     let (events, log_task) = super::execute::user_logs(mode.shape != GetShape::Json);
     let reader = Reader {
@@ -69,7 +69,7 @@ pub(crate) async fn get_cmd(
         mode,
     };
     if targets.len() > 1 {
-        let result = barca_core::commands::get_many_streaming(
+        let result = barca_service::commands::get_many_streaming(
             &cfg,
             &targets,
             &file_args,
@@ -97,16 +97,16 @@ pub(crate) async fn get_cmd(
                     .await?,
             );
         }
-        super::emit(barca_core::report::render_get_multi(
+        super::emit(barca_service::report::render_get_multi(
             &result, &returned, mode.shape, fields,
         ));
-        return match barca_core::report::first_multi_failure(&result) {
+        return match barca_service::report::first_multi_failure(&result) {
             Some(error) => Err(error),
             None => Ok(()),
         };
     }
     let target = targets.into_iter().next();
-    let result = barca_core::commands::get_streaming(
+    let result = barca_service::commands::get_streaming(
         &cfg,
         target.as_deref(),
         &file_args,
@@ -126,7 +126,7 @@ pub(crate) async fn get_cmd(
             // A partitioned target that stopped at a failed key still returns the keys that
             // succeeded; the failed ones are absent.
             let partial = match &e {
-                barca_core::BarcaError::WorkerFailed(f) => {
+                barca_service::BarcaError::WorkerFailed(f) => {
                     match f.run.as_ref().and_then(|r| r.partitions.as_deref()) {
                         // A link that cannot be signed is left out: the run's own failure is
                         // what this command reports.
@@ -144,7 +144,7 @@ pub(crate) async fn get_cmd(
                 }
                 _ => None,
             };
-            super::emit(barca_core::report::render_failed_get(
+            super::emit(barca_service::report::render_failed_get(
                 &e,
                 partial.as_ref(),
                 mode.shape,
@@ -160,7 +160,7 @@ pub(crate) async fn get_cmd(
             result.key_summary.as_ref(),
         )
         .await?;
-    super::emit(barca_core::report::render_get(
+    super::emit(barca_service::report::render_get(
         &result,
         target.as_deref(),
         &returned,
@@ -173,7 +173,7 @@ pub(crate) async fn get_cmd(
 /// Turns what a run returned into what the command prints.
 struct Reader<'a> {
     python: &'a std::path::Path,
-    cfg: &'a barca_core::config::ResolvedConfig,
+    cfg: &'a barca_service::config::ResolvedConfig,
     mode: GetMode,
 }
 
@@ -185,9 +185,9 @@ impl Reader<'_> {
         target: Option<&str>,
         single: Option<&OutputRef>,
         keys: Option<&[(String, OutputRef)]>,
-        summary: Option<&barca_core::results::KeySummary>,
-    ) -> Result<Returned, barca_core::BarcaError> {
-        let keys = barca_core::results::KeySummary::listed(summary, keys);
+        summary: Option<&barca_service::results::KeySummary>,
+    ) -> Result<Returned, barca_service::BarcaError> {
+        let keys = barca_service::results::KeySummary::listed(summary, keys);
         let items: Vec<(Option<&str>, &OutputRef)> = match keys {
             Some(keys) => keys.iter().map(|(k, o)| (Some(k.as_str()), o)).collect(),
             None => single.into_iter().map(|o| (None, o)).collect(),
@@ -210,13 +210,13 @@ impl Reader<'_> {
                 })
                 .collect()
         } else if self.mode.values {
-            barca_core::values::read_values(self.python, self.cfg, &refs)
+            barca_service::values::read_values(self.python, self.cfg, &refs)
                 .await
                 .into_iter()
                 .zip(&refs)
                 .map(|(value, oref)| {
                     value.unwrap_or_else(|e| {
-                        barca_core::errln!(
+                        barca_service::errln!(
                             "[barca] warning: could not read the value of {}: {e}; its path is \
                              returned instead",
                             oref.path
@@ -246,7 +246,7 @@ impl Reader<'_> {
             })
             .collect();
         let final_output = match keys {
-            Some(_) => Some(barca_core::report::keyed_output(
+            Some(_) => Some(barca_service::report::keyed_output(
                 items
                     .iter()
                     .zip(shown_values)
@@ -260,7 +260,7 @@ impl Reader<'_> {
             final_output,
             values: self.mode.values,
             shown,
-            key_summary: summary.map(barca_core::results::KeySummary::counts),
+            key_summary: summary.map(barca_service::results::KeySummary::counts),
         })
     }
 
@@ -271,11 +271,12 @@ impl Reader<'_> {
         target: Option<&str>,
         items: &[(Option<&str>, &OutputRef)],
         secs: u64,
-    ) -> Result<Vec<barca_core::values::Signed>, barca_core::BarcaError> {
-        use barca_core::BarcaError;
+    ) -> Result<Vec<barca_service::values::Signed>, barca_service::BarcaError> {
+        use barca_service::BarcaError;
         let local_root = std::fs::canonicalize(&self.cfg.local_artifact_dir)
             .unwrap_or_else(|_| PathBuf::from(&self.cfg.local_artifact_dir));
-        let layout = barca_core::transfer::ArtifactLayout::new(local_root, &self.cfg.artifact_root);
+        let layout =
+            barca_service::transfer::ArtifactLayout::new(local_root, &self.cfg.artifact_root);
         let mut requests = Vec::with_capacity(items.len());
         let mut names = Vec::with_capacity(items.len());
         for (key, oref) in items {
@@ -301,7 +302,7 @@ impl Reader<'_> {
                 .extension()
                 .map(|e| format!(".{}", e.to_string_lossy()))
                 .unwrap_or_default();
-            requests.push(barca_core::values::SignRequest {
+            requests.push(barca_service::values::SignRequest {
                 uri,
                 filename: format!("{node}{ext}"),
             });
@@ -311,15 +312,21 @@ impl Reader<'_> {
         // first, so it is signed rather than reported missing from the store.
         let stored: Vec<String> = requests.iter().map(|r| r.uri.clone()).collect();
         let interrupt = super::execute::cancel_on_ctrl_c();
-        barca_core::commands::upload_pending_now(self.python, self.cfg, &stored, &interrupt.cancel)
-            .await?;
-        let answers = barca_core::values::sign_urls(self.python, self.cfg, &requests, secs).await;
+        barca_service::commands::upload_pending_now(
+            self.python,
+            self.cfg,
+            &stored,
+            &interrupt.cancel,
+        )
+        .await?;
+        let answers =
+            barca_service::values::sign_urls(self.python, self.cfg, &requests, secs).await;
         let mut out = Vec::with_capacity(answers.len());
         for (answer, shown) in answers.into_iter().zip(&names) {
             match answer {
                 Ok(signed) => {
                     if let Some(note) = &signed.note {
-                        barca_core::errln!("[barca] warning: the link to {shown}: {note}");
+                        barca_service::errln!("[barca] warning: the link to {shown}: {note}");
                     }
                     out.push(signed);
                 }
@@ -348,8 +355,8 @@ fn node_name(target: Option<&str>, path: &str) -> String {
 }
 
 /// The error for one result that could not be signed: what, why, and what to run.
-fn sign_error(shown: &str, f: &barca_core::values::SignFailure) -> barca_core::BarcaError {
-    use barca_core::BarcaError;
+fn sign_error(shown: &str, f: &barca_service::values::SignFailure) -> barca_service::BarcaError {
+    use barca_service::BarcaError;
     let fix = match f.kind.as_str() {
         "usage" => {
             return BarcaError::Usage(format!("could not sign a URL for {shown}: {}", f.message));
@@ -375,7 +382,9 @@ fn sign_error(shown: &str, f: &barca_core::values::SignFailure) -> barca_core::B
 
 /// `-o url` needs a cloud store: no store, a shared directory, `file://` or `memory://` have
 /// no URL to share (exit 2).
-fn signable_store(cfg: &barca_core::config::ResolvedConfig) -> Result<(), barca_core::BarcaError> {
+fn signable_store(
+    cfg: &barca_service::config::ResolvedConfig,
+) -> Result<(), barca_service::BarcaError> {
     let root = &cfg.artifact_root;
     let scheme = root
         .split_once("://")
@@ -395,7 +404,7 @@ fn signable_store(cfg: &barca_core::config::ResolvedConfig) -> Result<(), barca_
     } else {
         format!("the artifact store {scheme}:// is not a cloud bucket")
     };
-    Err(barca_core::BarcaError::Usage(format!(
+    Err(barca_service::BarcaError::Usage(format!(
         "-o url needs a cloud artifact store: {why}\nSet [remote] uri in barca.toml (or \
          BARCA_REMOTE_URI) to an s3://, gs:// or abfs:// store (barca docs remote), or use \
          -o path."

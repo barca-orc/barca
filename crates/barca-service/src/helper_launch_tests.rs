@@ -1,6 +1,6 @@
 //! A source scan: every Python helper barca starts goes through `helper_proc`'s shared launch
 //! path and forwards the resolved storage options. It reads production sources of
-//! `barca-engine` (the worker) and `barca-core` (the inspectors and helpers), so it lives here,
+//! `barca-engine` (the worker) and `barca-service` (the inspectors and helpers), so it lives here,
 //! above both.
 
 /// Every production helper must use the shared launch path and pass the resolved options.

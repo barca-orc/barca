@@ -19,7 +19,7 @@ pub fn steps_limit(limit: Option<usize>, all: bool) -> Option<usize> {
     if all {
         None
     } else {
-        Some(limit.unwrap_or(barca_core::db::RUN_STEPS_LIMIT))
+        Some(limit.unwrap_or(barca_service::db::RUN_STEPS_LIMIT))
     }
 }
 
@@ -161,7 +161,7 @@ pub const DOCS_FIELDS: &[&str] = &["name", "summary", "content"];
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_core::report::{Page, project};
+    use barca_service::report::{Page, project};
     use serde_json::json;
     use std::collections::BTreeSet;
 
@@ -204,17 +204,19 @@ mod tests {
 
     #[test]
     fn list_fields_match_the_serialized_node() {
-        let node = barca_core::results::AssetSummary {
+        let node = barca_service::results::AssetSummary {
             id: "p.py:a".into(),
-            kind: barca_core::NodeKind::Asset,
-            freshness: barca_core::Freshness::Schedule(barca_core::CronExpr("0 6 * * *".into())),
+            kind: barca_service::NodeKind::Asset,
+            freshness: barca_service::Freshness::Schedule(barca_service::CronExpr(
+                "0 6 * * *".into(),
+            )),
             inputs: vec![],
             env: vec![],
             file: "p.py".into(),
             line: 3,
         };
         let next = "2026-01-01 06:00".to_string();
-        let v = barca_core::report::list_node_json(&node, Some(&next));
+        let v = barca_service::report::list_node_json(&node, Some(&next));
         assert_eq!(v["freshness"], "schedule");
         assert_eq!(v["schedule"], "0 6 * * *");
         assert_eq!(keys(&v), set(LIST_FIELDS));
@@ -222,7 +224,7 @@ mod tests {
 
     #[test]
     fn history_fields_match_the_serialized_run() {
-        let run = barca_core::db::RunRecord {
+        let run = barca_service::db::RunRecord {
             run_id: String::new(),
             command: String::new(),
             files: vec![],
@@ -245,7 +247,7 @@ mod tests {
             ..Default::default()
         };
         // `now` is added to a run in progress listed with `--status running`.
-        let mut item = keys(&barca_core::report::history_json(&run));
+        let mut item = keys(&barca_service::report::history_json(&run));
         item.insert("now".to_string());
         assert_eq!(item, set(HISTORY_FIELDS));
     }
@@ -253,7 +255,7 @@ mod tests {
     #[test]
     fn step_fields_match_a_fully_populated_step() {
         let s = || Some(String::new());
-        let step = barca_core::results::StepReport {
+        let step = barca_service::results::StepReport {
             id: String::new(),
             kind: String::new(),
             action: s(),
@@ -282,7 +284,7 @@ mod tests {
 
     #[test]
     fn stats_fields_match_the_serialized_entry() {
-        let e = barca_core::db::AssetRunEntry {
+        let e = barca_service::db::AssetRunEntry {
             elapsed_seconds: None,
             status: String::new(),
             created_at: String::new(),
@@ -301,7 +303,7 @@ mod tests {
 
     #[test]
     fn status_fields_match_a_fully_populated_node() {
-        use barca_core::status::{CacheStatus, NodeStatus, PartitionState};
+        use barca_service::status::{CacheStatus, NodeStatus, PartitionState};
         let node = NodeStatus {
             id: String::new(),
             name: String::new(),
@@ -309,7 +311,7 @@ mod tests {
             inputs: vec![],
             partitioned: true,
             cache: CacheStatus {
-                state: barca_core::cache_state::CacheState::Cached,
+                state: barca_service::cache_state::CacheState::Cached,
                 reason: String::new(),
                 detail: String::new(),
                 run_hash: None,
@@ -321,8 +323,8 @@ mod tests {
             health_reason: Default::default(),
             signals: vec![],
             measured: Some(true),
-            cause: Some(barca_core::health::Cause::Failing),
-            root: Some(barca_core::health::Root::failure("p.py:a")),
+            cause: Some(barca_service::health::Cause::Failing),
+            root: Some(barca_service::health::Root::failure("p.py:a")),
             gap_seconds: 0,
             last_check: None,
             refresh_path: None,
@@ -346,7 +348,7 @@ mod tests {
                 empty: 0,
             }),
             last_materialization: None,
-            last_bytes_change: Some(barca_core::db::BytesChange {
+            last_bytes_change: Some(barca_service::db::BytesChange {
                 node_id: String::new(),
                 run_hash: String::new(),
                 content_hash: String::new(),

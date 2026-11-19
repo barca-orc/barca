@@ -151,7 +151,7 @@ enum IoEvent {
     RetryReady {
         item_id: ItemId,
     },
-    /// Another run's claim on a step this run waited for ended (`barca_core::serve::claims`): with the
+    /// Another run's claim on a step this run waited for ended (`barca_service::serve::claims`): with the
     /// owner's artifact when it finished the step, `None` when this run must execute it.
     Settled {
         item_id: ItemId,

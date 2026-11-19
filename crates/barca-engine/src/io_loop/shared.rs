@@ -11,7 +11,7 @@ use super::{EventCallback, IoEvent, WorkerPool};
 use crate::coordinator::{Coordinator, ItemId};
 use barca_model::events::RunEvent;
 
-/// This run's part of a capacity the server's runs share (`barca_core::serve::capacity`).
+/// This run's part of a capacity the server's runs share (`barca_service::serve::capacity`).
 ///
 /// `held` is what the run has taken from it: the weight of the steps its workers have leased
 /// (as [`WorkerPool::running_weight`] counts them, against the shared capacity) plus `grant`,
@@ -36,7 +36,7 @@ impl Drop for Share {
     }
 }
 
-/// This run's claims on the asset steps the server's runs share (`barca_core::serve::claims`).
+/// This run's claims on the asset steps the server's runs share (`barca_service::serve::claims`).
 pub(super) struct Steps {
     pub(super) host: std::sync::Arc<dyn crate::run_host::RunHost>,
     pub(super) run_id: String,
@@ -81,7 +81,7 @@ pub(super) async fn share_changed(share: &mut Option<Share>) {
 
 impl WorkerPool {
     /// The steps another run of the server finished while this run waited for them
-    /// (`barca_core::serve::claims`), by display id, since the last call: cache hits for this run.
+    /// (`barca_service::serve::claims`), by display id, since the last call: cache hits for this run.
     pub fn take_from_other_runs(&mut self) -> Vec<String> {
         self.steps
             .as_mut()
@@ -128,7 +128,7 @@ impl WorkerPool {
         true
     }
 
-    /// Claim the asset steps of `batch` for this run (`barca_core::serve::claims`) and return the ones
+    /// Claim the asset steps of `batch` for this run (`barca_service::serve::claims`) and return the ones
     /// to lease. A step another run is executing is kept out: it waits for that run's claim
     /// to end ([`IoEvent::Settled`]), leased to no worker.
     pub(super) fn claim_batch(&mut self, coord: &Coordinator, batch: Vec<ItemId>) -> Vec<ItemId> {

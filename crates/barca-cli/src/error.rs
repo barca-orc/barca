@@ -12,7 +12,7 @@
 //! unchanged, with the remediation appended. Errors always go to stderr; stdout is for results.
 //! The schema is documented in `barca docs agents` (crates/barca-cli/docs/agents.md).
 
-pub use barca_core::envelope::{
+pub use barca_service::envelope::{
     Context, ErrorEnvelope as CliError, ErrorKind, list_hint, names_a_target, shell_quote,
 };
 
@@ -23,7 +23,7 @@ pub trait CliErrorExt {
 
 impl CliErrorExt for CliError {
     /// An argument-parser (clap) error for `argv`: always `usage`. A mistyped flag or
-    /// subcommand gets the one "Did you mean" rule (`barca_core::suggest`) in place of clap's
+    /// subcommand gets the one "Did you mean" rule (`barca_service::suggest`) in place of clap's
     /// `-- --flag` tip. `root` is the CLI's whole command (`Cli::command()`), passed in so this
     /// module names nothing above it.
     fn from_clap(e: &clap::Error, argv: &[String], root: clap::Command) -> Self {
@@ -42,11 +42,11 @@ impl CliErrorExt for CliError {
 
     /// Write the error to stderr and exit with its code.
     fn emit(&self, json: bool) -> ! {
-        barca_core::errln!("{}", self.render(json));
+        barca_service::errln!("{}", self.render(json));
         if let Some(line) = self.run_failure_line() {
-            barca_core::errln!("{line}");
+            barca_service::errln!("{line}");
         }
-        barca_core::term::exit(self.code())
+        barca_service::term::exit(self.code())
     }
 }
 
@@ -75,15 +75,15 @@ fn clap_prose(e: &clap::Error, argv: &[String], root: clap::Command) -> String {
                 .chain(["help"])
                 .map(str::to_string)
                 .collect();
-            let close = barca_core::suggest::closest(typed, longs.iter().map(String::as_str));
+            let close = barca_service::suggest::closest(typed, longs.iter().map(String::as_str));
             let flags: Vec<String> = close.iter().map(|l| format!("--{l}")).collect();
-            barca_core::suggest::did_you_mean(
+            barca_service::suggest::did_you_mean(
                 &flags.iter().map(String::as_str).collect::<Vec<_>>(),
                 '\'',
             )
         }),
         Kind::InvalidSubcommand => invalid(ContextKind::InvalidSubcommand).and_then(|name| {
-            barca_core::suggest::suggestion(
+            barca_service::suggest::suggestion(
                 name,
                 cmd.get_subcommands()
                     .filter(|c| !c.is_hide_set())
@@ -138,7 +138,7 @@ fn command_of(argv: &[String], root: clap::Command) -> clap::Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_core::BarcaError;
+    use barca_service::BarcaError;
     use serde_json::Value;
 
     #[test]
@@ -163,11 +163,11 @@ mod tests {
             (BarcaError::Usage("bad\nfix it like this".into()), "usage"),
             (BarcaError::Parse("p.py: invalid syntax".into()), "usage"),
             (
-                BarcaError::Dag(barca_core::dag::DagError::CycleDetected),
+                BarcaError::Dag(barca_service::dag::DagError::CycleDetected),
                 "usage",
             ),
             (
-                BarcaError::WorkerFailed(Box::new(barca_core::FailedStep {
+                BarcaError::WorkerFailed(Box::new(barca_service::FailedStep {
                     node: "p.py:a".into(),
                     message: "ValueError: no\n  File \"p.py\", line 3, in a\n    raise".into(),
                     phase: None,

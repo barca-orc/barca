@@ -1,15 +1,15 @@
 //! Pausing assets (`GET /pauses`, `POST /pauses`, `POST /pauses/resume`): an operator holds
 //! back a node, everything below it, or every node of a file, and scheduled ticks skip them
-//! (reason `paused`) until they are resumed (`barca_core::pauses`). Pauses are rows of the
+//! (reason `paused`) until they are resumed (`barca_service::pauses`). Pauses are rows of the
 //! metadata DB's `asset_pauses`, so a restart (a deploy) does not resume them.
 
 use crate::error::ApiError;
 use crate::read_cache::Reads;
 use axum::Json;
 use axum::extract::{Query, State};
-use barca_core::pauses;
+use barca_service::pauses;
 
-pub use barca_core::served::{PauseRequest, Pauses};
+pub use barca_service::served::{PauseRequest, Pauses};
 
 /// Every paused node, and every paused schedule (`POST /schedule/{id}/pause`).
 async fn body(reads: &Reads) -> Result<Pauses, ApiError> {
@@ -31,7 +31,7 @@ pub struct CoverQuery {
 
 /// `GET /pauses` — every paused node, with when and through what it was paused, and every
 /// paused schedule. With `?target=` (and `&downstream=true`), also `covers`: what a pause of
-/// that target would cover (`barca_core::refresh_path::pause_cover`). It pauses nothing, so
+/// that target would cover (`barca_service::refresh_path::pause_cover`). It pauses nothing, so
 /// a read-only server answers it.
 pub async fn list(
     State(reads): State<Reads>,
@@ -40,7 +40,7 @@ pub async fn list(
     let mut pauses = body(&reads).await?;
     if let Some(target) = query.target.as_deref().filter(|t| !t.is_empty()) {
         let dag = reads.loaded_dag().await?;
-        pauses.covers = Some(barca_core::refresh_path::pause_cover(
+        pauses.covers = Some(barca_service::refresh_path::pause_cover(
             &dag,
             target,
             query.downstream,
@@ -75,7 +75,7 @@ pub async fn pause(
     let cfg = &reads.config.resolved;
     let via = req.target.clone().unwrap_or_default();
     pauses::pause(cfg, &ids, &via, chrono::Utc::now().timestamp()).await?;
-    barca_core::errln!("[barca] paused {} node(s) via {via}", ids.len());
+    barca_service::errln!("[barca] paused {} node(s) via {via}", ids.len());
     Ok(Json(Pauses {
         added: Some(ids),
         ..body(&reads).await?
@@ -95,7 +95,7 @@ pub async fn resume(
     } else {
         pauses::resume(db_path, Some(scope(&reads, &req).await?)).await?
     };
-    barca_core::errln!("[barca] resumed {} node(s)", removed.len());
+    barca_service::errln!("[barca] resumed {} node(s)", removed.len());
     Ok(Json(Pauses {
         removed: Some(removed),
         ..body(&reads).await?

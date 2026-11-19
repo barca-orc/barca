@@ -10,7 +10,7 @@ use crate::runs::{dispatch, ensure_db};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
-use barca_core::serve::run_queue;
+use barca_service::serve::run_queue;
 
 /// `GET /queue` — the runs executing and the runs waiting, in order, and whether the queue is
 /// paused.
@@ -31,7 +31,7 @@ pub async fn pause(State(state): State<AppState>) -> Result<Json<QueueView>, Api
         ensure_db(&state).await?;
         run_queue::set_paused(&state.config.resolved.db_path, Some(now)).await?;
         state.runs.queue.set_paused(Some(now));
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] run queue paused: queued runs wait until it is resumed ({} queued, {} \
              running)",
             state.runs.queue.waiting_ids().len(),
@@ -54,7 +54,7 @@ pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, Ap
         ensure_db(&state).await?;
         run_queue::set_paused(&state.config.resolved.db_path, None).await?;
         state.runs.queue.set_paused(None);
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] run queue resumed ({} queued)",
             state.runs.queue.waiting_ids().len()
         );
@@ -70,9 +70,9 @@ mod tests {
     use crate::queue_view::{health, view};
     use crate::run_model::RunSpec;
     use crate::runs::{admit, resume_at_startup};
-    use barca_core::cache::CachePolicy;
-    use barca_core::db;
-    use barca_core::outcome::{RunCommand, Trigger};
+    use barca_service::cache::CachePolicy;
+    use barca_service::db;
+    use barca_service::outcome::{RunCommand, Trigger};
     use std::collections::{BTreeMap, BTreeSet};
 
     fn state(dir: &std::path::Path) -> AppState {
@@ -80,7 +80,7 @@ mod tests {
     }
 
     fn state_with(dir: &std::path::Path, read_only: bool) -> AppState {
-        let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
+        let mut resolved = barca_service::config::resolve_in(None, dir).unwrap();
         resolved.db_path = dir.join("metadata.db").display().to_string();
         resolved.server_max_runs = Some(1);
         AppState::new(crate::ServeConfig {
@@ -239,7 +239,7 @@ mod tests {
     fn queued_exact_keys_do_not_widen_after_reload() {
         let spec = RunSpec {
             partition: Some(
-                barca_core::selection::PartitionSelection::parse(
+                barca_service::selection::PartitionSelection::parse(
                     r#"[{"day":"d1","region":"east"},{"day":"d2","region":"west"}]"#,
                 )
                 .unwrap(),
@@ -273,13 +273,13 @@ mod tests {
             trigger: Trigger::schedule("p.py:report", 1_760_000_000),
             values: true,
             partition: Some(
-                barca_core::selection::PartitionSelection::parse(
+                barca_service::selection::PartitionSelection::parse(
                     &serde_json::to_string(&selection).unwrap(),
                 )
                 .unwrap(),
             ),
             batch: vec!["all".into()],
-            rules: barca_core::freshness::RunRules::tick("p.py:report"),
+            rules: barca_service::freshness::RunRules::tick("p.py:report"),
             timeout: None,
             kill_requeues: 0,
         };

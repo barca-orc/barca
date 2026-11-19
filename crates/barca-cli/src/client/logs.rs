@@ -7,9 +7,9 @@ use super::{Server, encode, reconnect_window};
 use crate::error::{CliError, Context, ErrorKind};
 use crate::print::{follow_ended, follow_exit_code, name_run};
 use crate::request::LogsArgs;
-use barca_core::BarcaError;
-use barca_core::RunEvent;
-use barca_core::outcome::Outcome;
+use barca_service::BarcaError;
+use barca_service::RunEvent;
+use barca_service::outcome::Outcome;
 
 /// `barca logs` against a server: the run's recorded lines from `GET /runs/{run_id}/logs`, and
 /// with `--follow` a running run's lines from `GET /runs/{run_id}/events` as they arrive.
@@ -26,11 +26,12 @@ pub(crate) async fn logs(
     let run_id = match run_id {
         Some(id) => id.to_string(),
         None => {
-            let limit = barca_core::queries::RUNNING_LOOKBACK;
+            let limit = barca_service::queries::RUNNING_LOOKBACK;
             let body = server.get_json(&format!("/history?limit={limit}")).await?;
-            let runs: Vec<barca_core::db::RunRecord> = serde_json::from_value(body["runs"].clone())
-                .map_err(|e| server.unexpected("GET /history", &e.to_string()))?;
-            let Some(run) = barca_core::queries::pick_run(runs, args.follow) else {
+            let runs: Vec<barca_service::db::RunRecord> =
+                serde_json::from_value(body["runs"].clone())
+                    .map_err(|e| server.unexpected("GET /history", &e.to_string()))?;
+            let Some(run) = barca_service::queries::pick_run(runs, args.follow) else {
                 return Err(CliError::from_prose(
                     ErrorKind::Usage,
                     format!(
@@ -48,12 +49,12 @@ pub(crate) async fn logs(
                 && here.run_id != run.run_id
                 && started_key(&here.started_at) > started_key(&run.started_at)
             {
-                barca_core::errln!(
+                barca_service::errln!(
                     "[barca] note: this machine has a newer run {} ({} {}, {}); barca logs \
                      --local reads it",
                     here.run_id,
                     here.command,
-                    barca_core::report::history_target(&here),
+                    barca_service::report::history_target(&here),
                     here.status
                 );
             }
@@ -76,7 +77,7 @@ pub(crate) async fn logs(
         if live {
             let status = follow_events(&mut follow, args).await?;
             follow_ended(&run_id, &status);
-            barca_core::term::exit(follow_exit_code(&status));
+            barca_service::term::exit(follow_exit_code(&status));
         }
     }
     let (status, lines) = match recorded_logs(server, &run_id, args).await {
@@ -89,7 +90,7 @@ pub(crate) async fn logs(
     args.print_all(&lines).map_err(engine)?;
     if args.follow {
         follow_ended(&run_id, &status);
-        barca_core::term::exit(follow_exit_code(&status));
+        barca_service::term::exit(follow_exit_code(&status));
     }
     Ok(())
 }
@@ -99,7 +100,7 @@ async fn recorded_logs(
     server: &Server,
     run_id: &str,
     args: LogsArgs<'_>,
-) -> Result<(String, Vec<barca_core::db::LogEntry>), CliError> {
+) -> Result<(String, Vec<barca_service::db::LogEntry>), CliError> {
     let mut query = Vec::new();
     if let Some(step) = args.step {
         query.push(format!("step={}", encode(step)));
@@ -151,7 +152,7 @@ async fn follow_events(follow: &mut Follow<'_>, args: LogsArgs<'_>) -> Result<St
                 stream,
                 ts,
             }) => {
-                let entry = barca_core::db::LogEntry {
+                let entry = barca_service::db::LogEntry {
                     node_id,
                     seq: seq as i64,
                     line,

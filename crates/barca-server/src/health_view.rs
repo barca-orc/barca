@@ -8,8 +8,8 @@ use crate::run_model::RunStatus;
 use crate::schedule_view::{Schedules, published_ticks, recorded_queue, schedules};
 use crate::state::AppState;
 use crate::views::NodeState;
-use barca_core::db;
-use barca_core::health::{DURATION_WINDOW, Durations};
+use barca_service::db;
+use barca_service::health::{DURATION_WINDOW, Durations};
 use std::time::Duration;
 
 /// The body of `GET /state`, also warmed at startup.
@@ -34,7 +34,7 @@ pub(crate) async fn state_rows_for_targets(
                 move || async move {
                     let ids: Vec<String> =
                         dag.topo_order().into_iter().map(str::to_string).collect();
-                    Ok(barca_core::health::durations(
+                    Ok(barca_service::health::durations(
                         db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
                     ))
                 }
@@ -53,7 +53,7 @@ pub(crate) async fn state_rows_for_targets(
             .collect::<Vec<_>>();
         let snapshot = snapshot.clone();
         let durations = crate::read_cache::off_the_workers(move || async move {
-            Ok(barca_core::health::durations(
+            Ok(barca_service::health::durations(
                 db::recent_durations(&snapshot.path, &ids, DURATION_WINDOW).await?,
             ))
         })
@@ -73,20 +73,20 @@ pub(crate) async fn state_rows_for_targets(
     Ok(rows(&status.nodes, &facts, running))
 }
 
-/// The run queue as the estimates read it ([`barca_core::health::Queue`]) as of `now` (unix
+/// The run queue as the estimates read it ([`barca_service::health::Queue`]) as of `now` (unix
 /// seconds): the `runs` in flight with where each is (its latest progress, or its estimated
 /// start in the run queue: [`crate::queue_view::estimate`]) and the worker pool. A read-only
 /// server holds no queue: it reads the one the serving server records. No read of its own
 /// beyond the schedules' recorded ticks, which are kept per database state.
 async fn queue_of(
     state: &AppState,
-    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    dag: &std::sync::Arc<barca_service::dag::Dag>,
     runs: &[crate::running::InFlight],
     now: i64,
     db_path: &str,
-) -> Result<barca_core::health::Queue, ApiError> {
+) -> Result<barca_service::health::Queue, ApiError> {
     if state.config.read_only {
-        return Ok(barca_core::health::Queue::recorded(
+        return Ok(barca_service::health::Queue::recorded(
             recorded_queue(state, dag, db_path, now).await?,
             None,
         ));
@@ -95,10 +95,10 @@ async fn queue_of(
     let queue = crate::queue_view::estimate(state, &facts.ticks, now);
     let cfg = &state.config.resolved;
     let workers =
-        barca_core::sizing(cfg.capacity, cfg.pool_size, state.runs.server_capacity()).pool_size;
+        barca_service::sizing(cfg.capacity, cfg.pool_size, state.runs.server_capacity()).pool_size;
     let runs = runs
         .iter()
-        .map(|run| barca_core::estimates::PlannedRun {
+        .map(|run| barca_service::estimates::PlannedRun {
             run_id: run.run_id.clone(),
             schedule: run.schedule_id.clone(),
             // A run's targets and everything above them; every node for a run of everything.
@@ -117,7 +117,7 @@ async fn queue_of(
             },
         })
         .collect();
-    Ok(barca_core::health::Queue {
+    Ok(barca_service::health::Queue {
         runs,
         clear_at: queue.clear_at,
         open: queue.open,
@@ -129,16 +129,16 @@ async fn queue_of(
 /// The `GET /state` rows: each node's status with its durations, its schedule, run and data
 /// signals, classified with `facts`.
 fn rows(
-    nodes: &[barca_core::status::NodeStatus],
+    nodes: &[barca_service::status::NodeStatus],
     facts: &HealthFacts,
     mut running: std::collections::HashMap<String, crate::views::NodeRunning>,
 ) -> Vec<NodeState> {
     // Health, signals and coverage are classified here, per answer: lateness moves with the
     // clock, so it is never kept with the status result. Late is the schedule's standing
-    // (`barca_core::schedule_standing::standing`), the one `GET /schedule` reports.
+    // (`barca_service::schedule_standing::standing`), the one `GET /schedule` reports.
     let health = facts.inputs().assemble();
     let mut nodes = nodes.to_vec();
-    barca_core::health::classify(&mut nodes, health.evidence());
+    barca_service::health::classify(&mut nodes, health.evidence());
     nodes
         .into_iter()
         .map(|mut n| {
@@ -163,14 +163,14 @@ fn rows(
 }
 
 /// Health, data signals, data coverage and each scheduled node's `schedule` block of `result`
-/// (`barca_core::health`), for every node in scope: called before a filter cuts `nodes`.
+/// (`barca_service::health`), for every node in scope: called before a filter cuts `nodes`.
 /// Lateness is each schedule's standing ([`schedules`]): read on the server's clock and in
 /// its `--timezone`, never for a paused schedule, and the value `GET /schedule` and the
 /// `schedule` block of `GET /state` report. Classified as of `now`.
 pub(crate) async fn attach_health_at(
     state: &AppState,
-    result: &mut barca_core::status::StatusResult,
-    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    result: &mut barca_service::status::StatusResult,
+    dag: &std::sync::Arc<barca_service::dag::Dag>,
     db_state: &crate::read_cache::Stamp,
     db_path: &str,
     now: chrono::DateTime<chrono::Utc>,
@@ -184,27 +184,27 @@ pub(crate) async fn attach_health_at(
     Ok(running)
 }
 
-/// What a status result is classified with (`barca_core::health::Inputs`), as this server
+/// What a status result is classified with (`barca_service::health::Inputs`), as this server
 /// holds it: the records kept per database state, the graph's reach kept per graph, the
 /// schedules, the run queue and the runs in flight read per answer.
 pub(crate) struct HealthFacts {
     ages: std::sync::Arc<std::collections::HashMap<String, db::NodeAge>>,
     pinned: std::sync::Arc<std::collections::HashSet<String>>,
-    checks: std::sync::Arc<barca_core::health::Checks>,
+    checks: std::sync::Arc<barca_service::health::Checks>,
     paused: std::sync::Arc<std::collections::HashSet<String>>,
-    paths: std::sync::Arc<barca_core::refresh_path::Paths>,
+    paths: std::sync::Arc<barca_service::refresh_path::Paths>,
     schedules: Schedules,
     durations: std::sync::Arc<std::collections::HashMap<String, Durations>>,
-    queue: barca_core::health::Queue,
+    queue: barca_service::health::Queue,
     source_times: crate::read_cache::SourceTimes,
     pub(crate) runs: Vec<crate::running::InFlight>,
 }
 
 impl HealthFacts {
     /// The inputs of the one computation every host shares
-    /// ([`barca_core::health::Inputs::assemble`]).
-    pub(crate) fn inputs(&self) -> barca_core::health::Inputs<'_> {
-        barca_core::health::Inputs {
+    /// ([`barca_service::health::Inputs::assemble`]).
+    pub(crate) fn inputs(&self) -> barca_service::health::Inputs<'_> {
+        barca_service::health::Inputs {
             ages: &self.ages,
             pinned: &self.pinned,
             paused: &self.paused,
@@ -222,7 +222,7 @@ impl HealthFacts {
 /// what `GET /state` reads.
 pub(crate) async fn health_facts(
     state: &AppState,
-    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    dag: &std::sync::Arc<barca_service::dag::Dag>,
     db_state: &crate::read_cache::Stamp,
     db_path: &str,
     now: chrono::DateTime<chrono::Utc>,
@@ -233,7 +233,7 @@ pub(crate) async fn health_facts(
             let (dag, db_path) = (dag.clone(), db_path.to_string());
             move || async move {
                 let ids: Vec<String> = dag.topo_order().into_iter().map(str::to_string).collect();
-                Ok(barca_core::health::durations(
+                Ok(barca_service::health::durations(
                     db::recent_durations(&db_path, &ids, DURATION_WINDOW).await?,
                 ))
             }
@@ -247,7 +247,7 @@ pub(crate) async fn health_facts(
 /// flight per answer.
 async fn gather(
     state: &AppState,
-    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    dag: &std::sync::Arc<barca_service::dag::Dag>,
     db_state: &crate::read_cache::Stamp,
     db_path: &str,
     now: chrono::DateTime<chrono::Utc>,
@@ -283,13 +283,13 @@ async fn gather(
 /// the nodes of `GET /nodes` and the rows of `barca.nodes` (`POST /sql/query`).
 pub(crate) async fn node_status(
     state: &AppState,
-    dag: &std::sync::Arc<barca_core::dag::Dag>,
+    dag: &std::sync::Arc<barca_service::dag::Dag>,
     db_state: &crate::read_cache::Stamp,
     snapshot: &std::sync::Arc<crate::snapshot::SnapshotDb>,
     targets: Vec<String>,
     sample: usize,
     files: Option<&str>,
-) -> Result<barca_core::status::StatusResult, ApiError> {
+) -> Result<barca_service::status::StatusResult, ApiError> {
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
     let python = state.config.python.clone();
@@ -300,13 +300,14 @@ pub(crate) async fn node_status(
         .reads
         .cached_status(dag, db_state, (targets, sample, true), move || async move {
             let _snapshot = kept_snapshot;
-            barca_core::status::status_from_dag(&cfg, &names, &graph, &python, sample, true).await
+            barca_service::status::status_from_dag(&cfg, &names, &graph, &python, sample, true)
+                .await
         })
         .await
         .map_err(|e| {
             ApiError::run(
                 e,
-                barca_core::envelope::Context {
+                barca_service::envelope::Context {
                     command: "status",
                     files: state.config.files.clone(),
                 },
@@ -318,22 +319,27 @@ pub(crate) async fn node_status(
     // `as_of` is in the body, so the clock to the second would change the `ETag` every second
     // and an unchanged poll would never be a `304`. It is the start of the minute, the instant
     // `gap_seconds` is read at; nothing else in the body moves with the second.
-    result.as_of = barca_core::time::rfc3339_secs(barca_core::causes::gap_instant(now.timestamp()));
+    result.as_of =
+        barca_service::time::rfc3339_secs(barca_service::causes::gap_instant(now.timestamp()));
     if let Some(files) = files {
         let files: std::collections::HashSet<_> = files.split(',').collect();
         result.nodes.retain(|n| {
             n.id.rsplit_once(':')
                 .is_some_and(|(f, _)| files.contains(f))
         });
-        result.data_coverage = barca_core::health::DataCoverage::of(&result.nodes);
+        result.data_coverage = barca_service::health::DataCoverage::of(&result.nodes);
         let actions = result
             .rollup
             .iter()
             .flat_map(|entry| &entry.held_by)
             .map(|held| (held.root.clone(), held.action_kind))
             .collect();
-        result.rollup = Some(barca_core::rollup::total(&result.nodes, &running, &actions));
-        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
+        result.rollup = Some(barca_service::rollup::total(
+            &result.nodes,
+            &running,
+            &actions,
+        ));
+        result.summary = barca_service::status::StatusSummary::of(&result.nodes);
     }
     Ok(result)
 }

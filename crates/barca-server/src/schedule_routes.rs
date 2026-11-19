@@ -9,8 +9,8 @@ use crate::schedule_view::{pauses, published_ticks, schedule_at, schedule_items}
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use barca_core::db::{self, SchedulePause};
-use barca_core::served::{ScheduleJob, SchedulePauseAnswer};
+use barca_service::db::{self, SchedulePause};
+use barca_service::served::{ScheduleJob, SchedulePauseAnswer};
 use serde::Deserialize;
 
 /// `GET /schedule` — list scheduled jobs with next fire time and last run status.
@@ -20,7 +20,7 @@ pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<Schedule
     crate::schedule_view::pauses(&state).await?;
     if state.config.read_only || !state.config.schedule {
         let dag = state.reads.loaded_dag().await?;
-        let jobs = barca_core::schedule::jobs_from_dag(&dag);
+        let jobs = barca_service::schedule::jobs_from_dag(&dag);
         let snap = state.reads.snapshot_db().await?;
         let facts = state
             .reads
@@ -37,7 +37,7 @@ pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<Schedule
             &facts,
             &[],
             jobs,
-            barca_core::liveness::recorded(&snap.path)
+            barca_service::liveness::recorded(&snap.path)
                 .await?
                 .zone()
                 .unwrap_or_else(|| crate::config::zone_of(&state.config)),
@@ -64,7 +64,7 @@ pub async fn pause(
     let until = query
         .until
         .as_deref()
-        .map(|text| barca_core::pauses::parse_until(text, chrono::Utc::now()))
+        .map(|text| barca_service::pauses::parse_until(text, chrono::Utc::now()))
         .transpose()
         .map_err(ApiError::BadRequest)?;
     set(
@@ -98,7 +98,7 @@ async fn set(
     crate::guards::refuse_if_read_only(&state.config)?;
     let node = scheduled_node(&state.reads, id).await?;
     let cfg = &state.config.resolved;
-    barca_core::queries::open_metadata(cfg).await?;
+    barca_service::queries::open_metadata(cfg).await?;
     db::set_schedule_pause(&cfg.db_path, &node, pause, now).await?;
     {
         let mut pauses = pauses(state).await?.write().unwrap();
@@ -107,10 +107,10 @@ async fn set(
             None => pauses.remove(&node),
         };
     }
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] schedule {node} {}",
         match pause.and_then(|p| p.until) {
-            Some(until) => format!("paused until {}", barca_core::outcome::rfc3339(until)),
+            Some(until) => format!("paused until {}", barca_service::outcome::rfc3339(until)),
             None if pause.is_some() => "paused until resumed".to_string(),
             None => "resumed".to_string(),
         }
@@ -135,8 +135,9 @@ async fn set(
 /// is not a scheduled node is `404`.
 async fn scheduled_node(reads: &Reads, id: &str) -> Result<String, ApiError> {
     let dag = reads.loaded_dag().await?;
-    let jobs =
-        barca_core::schedule::jobs_from_summaries(barca_core::queries::list_assets_from_dag(&dag));
+    let jobs = barca_service::schedule::jobs_from_summaries(
+        barca_service::queries::list_assets_from_dag(&dag),
+    );
     let matches: Vec<&str> = crate::resolve::matching(&jobs, |j| j.id.as_str(), id)
         .into_iter()
         .map(|j| j.id.as_str())

@@ -5,8 +5,8 @@
 
 use crate::error::ApiError;
 use crate::read_cache::{STATUS_MAX_AGE, Stamp};
-use barca_core::dag::Dag;
-use barca_core::sql::tables;
+use barca_service::dag::Dag;
+use barca_service::sql::tables;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -151,12 +151,12 @@ impl Process {
         cmd.current_dir(home.path()).env("HOME", home.path());
         // The terminal's Ctrl-C is the server's to act on. Stdin is the request channel and
         // the lifeline at once: only this process holds its other end.
-        barca_core::helper_proc::shield_from_ctrl_c(&mut cmd);
+        barca_service::helper_proc::shield_from_ctrl_c(&mut cmd);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(barca_core::term::child_output())
+            .stderr(barca_service::term::child_output())
             .kill_on_drop(true);
-        let mut child = barca_core::helper_proc::spawn(&mut cmd)
+        let mut child = barca_service::helper_proc::spawn(&mut cmd)
             .map_err(|e| Lost::Dead(format!("cannot run {}: {e}", python.display())))?;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
@@ -353,8 +353,8 @@ impl From<ApiError> for Ended {
     }
 }
 
-impl From<barca_core::BarcaError> for Ended {
-    fn from(e: barca_core::BarcaError) -> Self {
+impl From<barca_service::BarcaError> for Ended {
+    fn from(e: barca_service::BarcaError) -> Self {
         Ended::Api(e.into())
     }
 }

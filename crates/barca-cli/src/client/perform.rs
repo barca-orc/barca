@@ -4,8 +4,8 @@
 use super::{RunArgs, Server};
 use crate::error::{CliError, Context};
 use crate::request::{HistoryView, Request, StatusOpts, StatusView};
-use barca_core::outcome::RunCommand;
-use barca_core::report::{GetShape, ResultFormat};
+use barca_service::outcome::RunCommand;
+use barca_service::report::{GetShape, ResultFormat};
 
 /// Run `request` on `server`. `doctor` and the commands without a route never reach here:
 /// `dispatch` answers them on this machine.
@@ -224,9 +224,9 @@ pub(crate) async fn perform(
             server.health(cancel.env.as_deref()).await?;
             let answer = super::cancel_run(server, &cancel.run_id).await?;
             if cancel.json {
-                barca_core::outln!("{}", answer);
+                barca_service::outln!("{}", answer);
             } else {
-                barca_core::outln!(
+                barca_service::outln!(
                     "{}: {}",
                     cancel.run_id,
                     answer["status"].as_str().unwrap_or("cancelling")

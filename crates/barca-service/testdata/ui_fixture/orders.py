@@ -1,10 +1,10 @@
 """Half of the project the web UI's unit-test fixtures are generated from.
 
-`crates/barca-core/src/ui_fixture_tests.rs` copies this directory into a scratch project,
+`crates/barca-service/src/ui_fixture_tests.rs` copies this directory into a scratch project,
 records a history for it with a fixed clock, and writes what a server would answer about it
 to `ui/src/lib/testdata/served/`. Nothing here is executed: only the definitions are read.
 Each node is in one state the UI shows, named in its docstring. Changing a definition changes
-the generated files: `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`.
+the generated files: `BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture`.
 """
 
 from barca import Manual, Schedule, asset, group, partitions, sensor, task

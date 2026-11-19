@@ -1,4 +1,4 @@
-//! Writes of `freshness_proofs`. `barca_core::incremental`'s proof publication owns the guarded
+//! Writes of `freshness_proofs`. `barca_service::incremental`'s proof publication owns the guarded
 //! transaction (the generation and foreign-work checks) these run in.
 
 use crate::db;

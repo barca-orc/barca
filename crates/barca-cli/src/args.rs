@@ -18,7 +18,7 @@ pub(crate) enum OutputMode {
     Pretty,
 }
 
-impl From<OutputMode> for barca_core::report::ResultFormat {
+impl From<OutputMode> for barca_service::report::ResultFormat {
     fn from(mode: OutputMode) -> Self {
         match mode {
             OutputMode::Json => Self::Json,
@@ -74,7 +74,7 @@ pub(crate) enum LogStreamArg {
     Stderr,
 }
 
-impl From<LogStreamArg> for barca_core::LogStream {
+impl From<LogStreamArg> for barca_service::LogStream {
     fn from(arg: LogStreamArg) -> Self {
         match arg {
             LogStreamArg::Stdout => Self::Stdout,
@@ -1040,7 +1040,7 @@ pub(crate) enum Cli {
         files: Vec<PathBuf>,
         /// Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth
         #[arg(long)]
-        auth: Option<barca_core::serve::AuthMode>,
+        auth: Option<barca_service::serve::AuthMode>,
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
         port: u16,
@@ -1259,10 +1259,10 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "STATE", value_delimiter = ',')]
         state: Vec<String>,
         /// Keep nodes with this cause
-        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Cause::ALL.map(|v| v.as_str())))]
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_service::health::Cause::ALL.map(|v| v.as_str())))]
         cause: Option<String>,
         /// Keep nodes with this health
-        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Health::ALL.map(|v| v.as_str())))]
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_service::health::Health::ALL.map(|v| v.as_str())))]
         health: Option<String>,
         /// Keep nodes with this root id
         #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"])]
@@ -1482,5 +1482,5 @@ fn parse_capacity(value: &str) -> Result<usize, String> {
 }
 
 fn parse_timezone(value: &str) -> Result<String, String> {
-    barca_core::schedule::Zone::parse(value).map(|_| value.to_string())
+    barca_service::schedule::Zone::parse(value).map(|_| value.to_string())
 }

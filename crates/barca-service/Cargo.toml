@@ -1,44 +1,38 @@
 [package]
-name = "barca-core"
+name = "barca-service"
 version = "0.45.0"
 edition = "2024"
-description = "Core library — models, parsing, DAG, execution planning, hashing, dispatch, caching"
+description = "Service layer — one operation per command, its typed result and its text; the one crate barca-cli and barca-server import"
 
+# The top of the library crates (#1056, C6): it uses every one of them and re-exports what the
+# hosts name. What was barca-core is this crate and the layers below it (barca-store,
+# barca-decide, barca-run, barca-analysis).
 [dependencies]
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }
 barca-db = { path = "../barca-db" }
-barca-engine = { path = "../barca-engine" }
 barca-proc = { path = "../barca-proc" }
+barca-engine = { path = "../barca-engine" }
 barca-store = { path = "../barca-store" }
 barca-decide = { path = "../barca-decide" }
 barca-analysis = { path = "../barca-analysis" }
 barca-run = { path = "../barca-run" }
-ruff_python_parser = { workspace = true }
-ruff_python_ast = { workspace = true }
-ruff_text_size = { workspace = true }
-petgraph = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-sha2 = { workspace = true }
-croner = { workspace = true }
 chrono = { workspace = true }
-chrono-tz = { workspace = true }
-smallvec = { version = "1.13", features = ["serde"] }
 tempfile = { workspace = true }
-libsql = { version = "=0.10.0", default-features = false, features = ["core"] }
 tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "process"] }
-tokio-util = { workspace = true }
-futures = { workspace = true }
-indicatif = "0.18.4"
-libc = { workspace = true }
-toml = { workspace = true }
-reqwest = { workspace = true }
-rustls = { workspace = true }
 # Optional: TypeScript binding generation (enable with --features ts). Kept out
 # of the production binary; used only to regenerate ui/src/lib/generated/.
 ts-rs = { workspace = true, optional = true }
+
+# libsql only in tests (fixtures that write rows no owner writes); the manifest check and the
+# repository sweep read manifests and Python sources.
+[dev-dependencies]
+libsql = { version = "=0.10.0", default-features = false, features = ["core"] }
+toml = { workspace = true }
+ruff_python_parser = { workspace = true }
+ruff_python_ast = { workspace = true }
 
 [features]
 # Generate TS type bindings for the frontend. Off by default.

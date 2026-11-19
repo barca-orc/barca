@@ -33,8 +33,8 @@ fn fixture_config(dir: &std::path::Path) -> ServeConfig {
         watch: false,
         schedule: false,
         timezone: "local".to_string(),
-        python: barca_core::commands::find_python(),
-        resolved: barca_core::config::resolve_in(None, dir).unwrap(),
+        python: barca_service::commands::find_python(),
+        resolved: barca_service::config::resolve_in(None, dir).unwrap(),
         read_only: false,
     }
 }
@@ -1096,7 +1096,7 @@ async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
     std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
     config.python = launcher;
 
-    let summaries = barca_core::queries::list_assets(&config.files, &config.python)
+    let summaries = barca_service::queries::list_assets(&config.files, &config.python)
         .await
         .unwrap();
     let first = summaries.iter().find(|n| n.id.ends_with(":first")).unwrap();
@@ -1106,12 +1106,12 @@ async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
         r#"[{"order_id":1,"region":"East"},{"order_id":2,"region":null}]"#,
     )
     .unwrap();
-    barca_core::db::init_db(&config.resolved.db_path)
+    barca_service::db::init_db(&config.resolved.db_path)
         .await
         .unwrap();
     let outputs = std::collections::HashMap::from([(
         first.id.clone(),
-        barca_core::dispatch::OutputRef {
+        barca_service::dispatch::OutputRef {
             path: artifact.display().to_string(),
             format: "json".into(),
             size_bytes: 64,
@@ -1119,7 +1119,7 @@ async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
             content_hash: None,
         },
     )]);
-    barca_core::db::persist_outputs(&config.resolved.db_path, &outputs, &Default::default())
+    barca_service::db::persist_outputs(&config.resolved.db_path, &outputs, &Default::default())
         .await
         .unwrap();
     let object_path = dir.path().join("object.json");
@@ -1128,14 +1128,14 @@ async fn schema_reads_materialized_columns_and_reports_missing_artifacts() {
         .iter()
         .find(|n| n.id.ends_with(":second"))
         .unwrap();
-    let output = barca_core::dispatch::OutputRef {
+    let output = barca_service::dispatch::OutputRef {
         path: object_path.display().to_string(),
         format: "json".into(),
         size_bytes: 41,
         elapsed_seconds: None,
         content_hash: None,
     };
-    barca_core::db::persist_outputs(
+    barca_service::db::persist_outputs(
         &config.resolved.db_path,
         &std::collections::HashMap::from([(second.id.clone(), output)]),
         &Default::default(),
@@ -1167,27 +1167,27 @@ async fn runs_inspection_survives_server_restart_and_never_mutates_history() {
     let dir = tempfile::tempdir().unwrap();
     let config = isolated_config(dir.path(), true);
     let path = &config.resolved.db_path;
-    barca_core::db::init_db(path).await.unwrap();
+    barca_service::db::init_db(path).await.unwrap();
     for (id, command, target, status) in [
         ("cli", "get", "first", "success"),
         ("scheduled", "run", "second", "failed"),
     ] {
-        barca_core::db::create_run(path, id, command, "[\"old.py\"]", Some(target), Some(2))
+        barca_service::db::create_run(path, id, command, "[\"old.py\"]", Some(target), Some(2))
             .await
             .unwrap();
-        barca_core::db::insert_logs(
+        barca_service::db::insert_logs(
             path,
             id,
-            &[barca_core::run_logs::RecordedLine {
+            &[barca_service::run_logs::RecordedLine {
                 node_id: "old.py:first".into(),
                 line: format!("from {id}"),
-                stream: barca_core::LogStream::Stdout,
+                stream: barca_service::LogStream::Stdout,
                 ts: None,
             }],
         )
         .await
         .unwrap();
-        barca_core::db::finish_run(path, id, status, 1, 1, 0.25)
+        barca_service::db::finish_run(path, id, status, 1, 1, 0.25)
             .await
             .unwrap();
     }
@@ -2357,8 +2357,10 @@ async fn a_writer_serve_whose_metadata_db_cannot_be_used_fails_before_binding() 
     let junk = "not a database at all ".repeat(20);
     std::fs::write(&db, &junk).unwrap();
     let error = barca_server::serve(config).await.unwrap_err();
-    let barca_server::ServeError::Metadata(barca_core::BarcaError::MetadataUnusable { path, why }) =
-        &error
+    let barca_server::ServeError::Metadata(barca_service::BarcaError::MetadataUnusable {
+        path,
+        why,
+    }) = &error
     else {
         panic!("not a metadata error: {error}");
     };

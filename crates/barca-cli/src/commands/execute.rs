@@ -4,22 +4,22 @@ use crate::args::OutputMode;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn explain_cmd(
-    cfg: &barca_core::config::ResolvedConfig,
+    cfg: &barca_service::config::ResolvedConfig,
     targets: &[String],
     file_args: &[String],
     python: &std::path::Path,
-    policy: barca_core::cache::CachePolicy,
+    policy: barca_service::cache::CachePolicy,
     label: &str,
     mode: OutputMode,
     fields: Option<&[String]>,
-    partition: Option<&barca_core::selection::PartitionSelection>,
-    batch: &barca_core::batch::BatchOverride,
-) -> Result<(), barca_core::BarcaError> {
-    let result = barca_core::queries::explain(
+    partition: Option<&barca_service::selection::PartitionSelection>,
+    batch: &barca_service::batch::BatchOverride,
+) -> Result<(), barca_service::BarcaError> {
+    let result = barca_service::queries::explain(
         cfg, targets, file_args, python, policy, label, partition, batch,
     )
     .await?;
-    super::emit(barca_core::report::render_explain(
+    super::emit(barca_service::report::render_explain(
         &result,
         label,
         mode.into(),
@@ -36,17 +36,17 @@ pub(crate) async fn explain_cmd(
 /// Print a multi-target result. When any target failed this returns the first failure as a
 /// step failure (exit 1, and the error envelope on stderr), after the full result was printed.
 pub(crate) async fn print_multi(
-    result: &barca_core::results::MultiResult,
+    result: &barca_service::results::MultiResult,
     mode: OutputMode,
     verb: &str,
     fields: Option<&[String]>,
-    cfg: &barca_core::config::ResolvedConfig,
+    cfg: &barca_service::config::ResolvedConfig,
     python: &std::path::Path,
-) -> Result<(), barca_core::BarcaError> {
+) -> Result<(), barca_service::BarcaError> {
     let mut values = Vec::with_capacity(result.targets.len());
     for (_, target) in &result.targets {
         values.push(
-            barca_core::values::task_output(
+            barca_service::values::task_output(
                 python,
                 cfg,
                 target.final_output.as_ref(),
@@ -56,14 +56,14 @@ pub(crate) async fn print_multi(
             .await,
         );
     }
-    super::emit(barca_core::report::render_multi(
+    super::emit(barca_service::report::render_multi(
         result,
         &values,
         mode.into(),
         verb,
         fields,
     ));
-    match barca_core::report::first_multi_failure(result) {
+    match barca_service::report::first_multi_failure(result) {
         Some(error) => Err(error),
         None => Ok(()),
     }
@@ -72,8 +72,8 @@ pub(crate) async fn print_multi(
 /// On a failed run in JSON mode, still print the one-line result on stdout so agents need not
 /// parse stderr: `status: "failed"`, the failing step and its error, and what ran before it.
 /// The error itself still goes to stderr as the envelope.
-pub(crate) fn print_failed_run(err: &barca_core::BarcaError, mode: OutputMode) {
-    super::emit(barca_core::report::render_failed_run(err, mode.into()));
+pub(crate) fn print_failed_run(err: &barca_service::BarcaError, mode: OutputMode) {
+    super::emit(barca_service::report::render_failed_run(err, mode.into()));
 }
 
 /// The run's stop signals, driven by Ctrl-C (SIGINT) and by SIGTERM, which is what a
@@ -88,9 +88,9 @@ pub(crate) fn print_failed_run(err: &barca_core::BarcaError, mode: OutputMode) {
 /// `running` until a later command reported it `interrupted`. As process 1 of a container
 /// (`docker run image barca get`) the kernel discarded the signal instead, because process 1
 /// only receives signals it has a handler for (#289).
-pub(crate) fn cancel_on_ctrl_c() -> barca_core::interrupt::Interrupt {
+pub(crate) fn cancel_on_ctrl_c() -> barca_service::interrupt::Interrupt {
     use tokio::signal::unix::{SignalKind, signal};
-    let interrupt = barca_core::interrupt::Interrupt::new();
+    let interrupt = barca_service::interrupt::Interrupt::new();
     for kind in [SignalKind::interrupt(), SignalKind::terminate()] {
         let Ok(mut stream) = signal(kind) else {
             continue;
@@ -109,7 +109,7 @@ pub(crate) fn cancel_on_ctrl_c() -> barca_core::interrupt::Interrupt {
 pub(crate) fn user_logs(
     show: bool,
 ) -> (
-    tokio::sync::mpsc::UnboundedSender<barca_core::RunEvent>,
+    tokio::sync::mpsc::UnboundedSender<barca_service::RunEvent>,
     tokio::task::JoinHandle<()>,
 ) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -117,14 +117,14 @@ pub(crate) fn user_logs(
         while let Some(event) = rx.recv().await {
             // A step's stderr already reached this stderr from the worker, as it was written.
             if show
-                && let barca_core::RunEvent::Log {
+                && let barca_service::RunEvent::Log {
                     node_id,
                     line,
-                    stream: barca_core::LogStream::Stdout,
+                    stream: barca_service::LogStream::Stdout,
                     ..
                 } = event
             {
-                barca_core::errln!("[{node_id}] {line}");
+                barca_service::errln!("[{node_id}] {line}");
             }
         }
     });

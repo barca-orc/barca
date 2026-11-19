@@ -1,7 +1,7 @@
 //! The `runs` table: a run's row as it starts ([`start_run`]) and ends ([`finish_run`]), its
 //! stored outcome, the history read back ([`RunRecord`]), and deletions from run history (a
 //! `runs` row and the `logs` lines recorded under it, and the `outcome_json` of old runs).
-//! Recording a run's steps is `barca_core::persist`'s; who is running a `running` run is
+//! Recording a run's steps is `barca_service::persist`'s; who is running a `running` run is
 //! [`super::run_liveness`]'s.
 
 pub use super::run_filter::RunFilter;
@@ -273,11 +273,11 @@ pub struct NewRun<'a> {
     pub steps_total: Option<usize>,
     /// The canonical job id (`persist::canonical_job`), when known at the start. Written with
     /// the row, so a `barca serve` on the same project sees which nodes a running CLI run
-    /// covers and skips their ticks (#479). `barca_core::persist` writes it again at the end.
+    /// covers and skips their ticks (#479). `barca_service::persist` writes it again at the end.
     pub job: Option<&'a str>,
     pub trigger: &'a barca_model::trigger::Trigger,
     /// Whether the run's steps send a Datadog trace each (`runs.trace`): the caller asks
-    /// `barca_core::telemetry::is_on("datadog")`. An unstarted run sends none.
+    /// `barca_service::telemetry::is_on("datadog")`. An unstarted run sends none.
     pub traced: bool,
 }
 
@@ -309,7 +309,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             run.trigger.scheduled_at.clone().unwrap_or_default(),
             run.trigger.schedule_id.clone().unwrap_or_default(),
             run.job.unwrap_or("").to_string(),
-            // The run's steps are traced with the integration `barca_core::execution` starts for
+            // The run's steps are traced with the integration `barca_service::execution` starts for
             // the same `BARCA_TELEMETRY` (`execution::workers`).
             if run.traced {
                 "datadog".to_string()
@@ -1044,7 +1044,7 @@ pub async fn raise_steps_total(
     Ok(())
 }
 
-// ─── Recording (driven by `barca_core::persist`) ──────────────────────────────────
+// ─── Recording (driven by `barca_service::persist`) ──────────────────────────────────
 
 /// Count `written` more executed steps of `run_id`, while it is running. Rows updated: 1, or 0
 /// for a missing or finished run. Inside the caller's progress transaction.

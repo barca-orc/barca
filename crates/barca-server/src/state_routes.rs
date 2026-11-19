@@ -7,7 +7,7 @@ use crate::state::AppState;
 use crate::views::NodeState;
 use axum::Json;
 use axum::extract::{Query, State};
-use barca_core::served::{CacheSize, Capabilities, HealthStatus, ServerHealth};
+use barca_service::served::{CacheSize, Capabilities, HealthStatus, ServerHealth};
 
 /// `GET /health` — liveness (or `draining`), version, the API version a client checks, the
 /// environment and artifact store this server uses, whether it is read-only, whether it runs
@@ -27,7 +27,7 @@ pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
         // The run queue: paused or not, how many runs wait and how many execute.
         queue: crate::queue_view::health(&state),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        api_version: barca_core::outcome::API_VERSION,
+        api_version: barca_service::outcome::API_VERSION,
         capabilities: Capabilities { event_resume: 1 },
         env: cfg.env.clone(),
         // The artifact store this server writes to, so a client can refuse a mismatched
@@ -45,7 +45,7 @@ pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
         metadata_error: state.reads.metadata_error.read().unwrap().clone(),
         // `.barca/` against its size limit, as last measured after a run or on the minute
         // checkpoint (RFC-0012); null before the first measurement or with the limit off.
-        cache: barca_core::gc::last_measured()
+        cache: barca_service::gc::last_measured()
             .filter(|_| !state.config.read_only)
             .map(|(size_bytes, limit_bytes)| CacheSize {
                 size_bytes,
@@ -106,7 +106,7 @@ async fn scope_targets(reads: &Reads, query: &StateQuery) -> Result<Vec<String>,
 
 /// `GET /state/rollup` — the rows of `GET /state` summed into one tree (root, group, file,
 /// node), each level the exact sum of its children, in nodes and in assets
-/// ([`barca_core::rollup`]). It takes the scope of `GET /state` and sums the status result
+/// ([`barca_service::rollup`]). It takes the scope of `GET /state` and sums the status result
 /// that route's rows are built from ([`crate::read_cache`]): no status is computed for it
 /// alone. Health is classified per answer, on the server's clock, exactly as `GET /state`
 /// classifies it, so a node's health is the same word in both. `as_of` is the start of the
@@ -115,7 +115,7 @@ async fn scope_targets(reads: &Reads, query: &StateQuery) -> Result<Vec<String>,
 pub async fn rollup(
     State(state): State<AppState>,
     Query(query): Query<StateQuery>,
-) -> Result<Json<barca_core::rollup::Rollup>, ApiError> {
+) -> Result<Json<barca_service::rollup::Rollup>, ApiError> {
     state.reads.cache.polled();
     let targets = scope_targets(&state.reads, &query).await?;
     let dag = state.reads.inspect_dag().await?;
@@ -158,7 +158,7 @@ pub async fn rollup(
 /// `targets` with each group id replaced by the nodes in it (nested groups included), and
 /// every node of each of `files` added. An unknown group or file is `404`.
 fn expand_targets(
-    dag: &barca_core::dag::Dag,
+    dag: &barca_service::dag::Dag,
     targets: Vec<String>,
     files: &[String],
 ) -> Result<Vec<String>, ApiError> {
@@ -169,7 +169,7 @@ fn expand_targets(
             )));
         }
     }
-    let mut out = barca_core::status::group_targets(dag, &targets)
+    let mut out = barca_service::status::group_targets(dag, &targets)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     for file in files {
         let before = out.len();

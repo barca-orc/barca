@@ -1,7 +1,7 @@
 //! The compile layer of barca (#905): source in, `Dag` and `ExecutionPlan` out. Parsing (ruff's
 //! AST, no imports), the DAG, run-hash cones, targets, partition selection and planning. It
-//! depends on `barca-model` only; `barca-core` re-exports it, so its items keep their
-//! `barca_core::` paths.
+//! depends on `barca-model` only; `barca-service` re-exports it, so its items keep their
+//! `barca_service::` paths.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]

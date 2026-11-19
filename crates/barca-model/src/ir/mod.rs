@@ -22,7 +22,7 @@
 //! defined in [`crate::model`] and re-exported here, so this module lists everything a
 //! `barca-ir` crate would hold.
 //!
-//! The serde derives are internal (a round-trip test, `crates/barca-core/tests/ir_roundtrip.rs`).
+//! The serde derives are internal (a round-trip test, `crates/barca-service/tests/ir_roundtrip.rs`).
 //! No external format exists: nothing reads or writes this as a file.
 
 mod group;

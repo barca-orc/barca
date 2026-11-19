@@ -4,9 +4,9 @@
 
 use crate::run_model::RunStatus;
 use crate::state::AppState;
-use barca_core::db;
-use barca_core::schedule::ScheduledJob;
-use barca_core::step_status::StepStatus;
+use barca_service::db;
+use barca_service::schedule::ScheduledJob;
+use barca_service::step_status::StepStatus;
 use chrono::{DateTime, TimeZone};
 use std::collections::{HashMap, HashSet};
 
@@ -141,8 +141,8 @@ pub(super) async fn count_outcomes(
             continue;
         }
         if next.failures >= job.max_failures && before < job.max_failures {
-            barca_core::jsonlog::line(
-                barca_core::jsonlog::Level::Error,
+            barca_service::jsonlog::line(
+                barca_service::jsonlog::Level::Error,
                 Some(&job.id),
                 &format!(
                     "[barca] {} failing: {} consecutive failed ticks (max_failures={}); skipped \
@@ -198,8 +198,8 @@ pub(super) async fn reset_failing<Tz: TimeZone>(
         {
             continue;
         }
-        barca_core::jsonlog::line(
-            barca_core::jsonlog::Level::Info,
+        barca_service::jsonlog::line(
+            barca_service::jsonlog::Level::Info,
             Some(&job.id),
             &format!(
                 "[barca] {} no longer failing: something it failed on succeeded since",
@@ -218,6 +218,6 @@ pub(super) async fn persist_failures(
     failures: &db::ScheduleFailures,
 ) {
     if let Err(e) = db::set_schedule_failures(db_path, &job.id, failures).await {
-        barca_core::errln!("[barca] schedule_failures write failed for {}: {e}", job.id);
+        barca_service::errln!("[barca] schedule_failures write failed for {}: {e}", job.id);
     }
 }

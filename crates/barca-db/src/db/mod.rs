@@ -31,7 +31,7 @@ pub const BY_NODE_RUN: &str = by_node_run!();
 
 // The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
 // this directory (one file per table family); `recording.rs` drives the recording ones. The
-// boundary test is barca-core's `write_boundary_tests.rs` (it scans every crate).
+// boundary test is barca-service's `write_boundary_tests.rs` (it scans every crate).
 mod asset_pauses;
 mod cache_reader;
 pub mod cost_estimates;
@@ -220,7 +220,7 @@ thread_local! {
 
 /// How many statements [`prepare`] has prepared on this thread. Tests run on a current-thread
 /// runtime, so this counts only their own writes. Always compiled (one thread-local add per
-/// prepared statement): barca-core's tests count too, and a dependency's `cfg(test)` does not
+/// prepared statement): barca-service's tests count too, and a dependency's `cfg(test)` does not
 /// reach them.
 #[doc(hidden)]
 pub fn prepares() -> u64 {

@@ -1,7 +1,7 @@
 //! Owned, best-effort lifecycle telemetry. No inspection or run-history writes.
 use crate::state::AppState;
 
-use barca_core::{
+use barca_service::{
     CancellationToken,
     telemetry::{self, Integration, ServerPhase, ServerReport},
 };
@@ -51,7 +51,7 @@ fn report(state: &AppState, phase: ServerPhase) -> ServerReport {
         .unwrap_or(0);
     ServerReport {
         phase,
-        start_unix_ns: barca_core::time::now_nanos_u64(),
+        start_unix_ns: barca_service::time::now_nanos_u64(),
         files: state.config.files.len(),
         nodes,
         schedules,
@@ -88,7 +88,7 @@ async fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_core::telemetry::RunReport;
+    use barca_service::telemetry::RunReport;
     use std::sync::atomic::Ordering;
     use std::{future::Future, pin::Pin, sync::Arc};
     struct Recorder {
@@ -99,7 +99,7 @@ mod tests {
         fn export<'a>(
             &'a self,
             _: &'a RunReport,
-            _: &'a barca_core::telemetry::JobHistory,
+            _: &'a barca_service::telemetry::JobHistory,
         ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
             Box::pin(async { panic!("lifecycle must not export a run") })
         }
@@ -125,7 +125,7 @@ mod tests {
             schedule: false,
             timezone: "utc".into(),
             python: "missing-python".into(),
-            resolved: barca_core::config::resolve_in(None, dir).unwrap(),
+            resolved: barca_service::config::resolve_in(None, dir).unwrap(),
             read_only: true,
         })
     }

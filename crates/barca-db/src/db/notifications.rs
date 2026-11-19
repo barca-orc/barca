@@ -1,5 +1,5 @@
 //! Writes of `notifications`, the last post each integration made about a job
-//! (`barca_core::telemetry` owns when).
+//! (`barca_service::telemetry` owns when).
 
 use libsql::Connection;
 

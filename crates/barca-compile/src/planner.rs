@@ -270,7 +270,7 @@ fn detect_chains(dag: &Dag, topo: &[&str]) -> Vec<Chain> {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Generate an execution plan from a topology and resource config. For tests (here and in
-/// `barca-core`, which a `cfg(test)` item would not reach).
+/// `barca-service`, which a `cfg(test)` item would not reach).
 #[doc(hidden)]
 pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> ExecutionPlan {
     plan_narrowed(dag, topology, config, None)
@@ -815,7 +815,7 @@ fn topo_sort_indices(count: usize, deps: &HashMap<usize, HashSet<usize>>) -> Vec
 // Convenience: full pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Full pipeline: DAG → decompose → plan. For tests (here and in `barca-core`, which a
+/// Full pipeline: DAG → decompose → plan. For tests (here and in `barca-service`, which a
 /// `cfg(test)` item would not reach).
 #[doc(hidden)]
 pub fn plan_from_dag(dag: &Dag, config: &ResourceConfig) -> ExecutionPlan {

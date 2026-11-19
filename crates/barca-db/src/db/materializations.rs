@@ -2,7 +2,7 @@
 //! partitioned node's latest artifacts, evictions), the read times of the cache size limit, and
 //! the writes that change or remove rows (and the `definition_components` they name) after they
 //! were recorded: trimming, eviction marks and upload digests; and the statements that record
-//! rows, which `barca_core::persist` drives (its transactions, its eligibility rules). One-key
+//! rows, which `barca_service::persist` drives (its transactions, its eligibility rules). One-key
 //! cache lookups are [`super::CacheReader`]'s.
 
 use super::*;
@@ -167,11 +167,11 @@ pub async fn latest_success(cache: &CacheReader, node_id: &str) -> Option<Latest
 }
 
 /// The key of a recorded row's components that names its definition's
-/// (`definition_components`, `barca_core::changes`).
+/// (`definition_components`, `barca_service::changes`).
 pub const DEFINITION_KEY: &str = "@definition";
 
 /// The run-hash components the latest successful materialization of `node_id` (a display id)
-/// recorded (`barca_core::changes`); `None` when it recorded none (before 0.29) or never succeeded.
+/// recorded (`barca_service::changes`); `None` when it recorded none (before 0.29) or never succeeded.
 pub async fn last_success_components(cache: &CacheReader, node_id: &str) -> Option<String> {
     let mut rows = cache
         .conn()
@@ -376,7 +376,7 @@ pub async fn definition_components(cache: &CacheReader, definition_hash: &str) -
     row.get::<String>(0).ok()
 }
 
-/// Record the definitions a starting run may name (`barca_core::changes::definition_rows`). Most runs
+/// Record the definitions a starting run may name (`barca_service::changes::definition_rows`). Most runs
 /// find them all there and write nothing. Without its row a step says a plain `changed`, so a
 /// failure here is no reason to fail the run.
 pub(super) async fn record_definitions(
@@ -549,7 +549,7 @@ pub async fn persist_outputs(
     Ok(())
 }
 
-// ─── Recording (driven by `barca_core::persist`) ──────────────────────────────────
+// ─── Recording (driven by `barca_service::persist`) ──────────────────────────────────
 
 /// One successful step as a `materializations` row. Built when the step finishes (for the
 /// [`StepRecorder`]) and again from the ledger at the end of the run.
@@ -572,7 +572,7 @@ pub struct NewMaterialization {
     /// Digest of the producer-owned serialized bytes.
     pub output_hash: Option<String>,
     pub(crate) observation_hash: Option<String>,
-    /// The run hash's components (`barca_core::changes::step_components_json`).
+    /// The run hash's components (`barca_service::changes::step_components_json`).
     pub(crate) components: Option<String>,
     /// The batched call that computed it (RFC-0013).
     pub(crate) batch: Option<String>,
@@ -620,7 +620,7 @@ impl NewMaterialization {
         self
     }
 
-    /// With the run hash's components recorded (`barca_core::changes`).
+    /// With the run hash's components recorded (`barca_service::changes`).
     pub fn with_components(mut self, components: Option<String>) -> Self {
         self.components = components;
         self

@@ -1,6 +1,6 @@
-//! The metadata database as callers of `barca-core` see it: the reads `barca-cli` and
+//! The metadata database as callers of `barca-service` see it: the reads `barca-cli` and
 //! `barca-server` make directly, the few writes the server owns, and the row types they render.
-//! Everything else of `barca_db::db` stays inside `barca-core` (the glob below is
+//! Everything else of `barca_db::db` stays inside `barca-service` (the glob below is
 //! crate-private), so this list is the whole metadata surface callers get. An operation that is
 //! more than one call (open the database, then write; read, then decide) belongs in a core
 //! module instead: `pauses::{list, pause, resume}`, `serve::record_unstarted_run`. The one
@@ -8,7 +8,7 @@
 
 pub use barca_db::open::open_metadata;
 
-// Inside barca-core, `crate::db::<anything>` still names `barca_db::db`.
+// Inside barca-service, `crate::db::<anything>` still names `barca_db::db`.
 pub(crate) use barca_db::db::*;
 
 // Opening the database: `barca serve` checks and creates it before it binds, and its scheduler

@@ -1,4 +1,4 @@
-//! [`NodeEstimate`], one node's measured cost: what `barca_core::cost` updates on every task
+//! [`NodeEstimate`], one node's measured cost: what `barca_service::cost` updates on every task
 //! completion and the metadata DB keeps between runs (`cost_estimates`).
 
 /// One node's running estimate.

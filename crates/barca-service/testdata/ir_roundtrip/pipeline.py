@@ -1,4 +1,4 @@
-"""The IR round-trip fixture (`crates/barca-core/src/ir_roundtrip_tests.rs`): every kind of
+"""The IR round-trip fixture (`crates/barca-service/src/ir_roundtrip_tests.rs`): every kind of
 declaration the graph carries.
 
 Planned and never run: the bodies only have to parse and to read what they declare. One file,

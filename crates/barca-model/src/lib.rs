@@ -1,7 +1,7 @@
 //! The model layer of barca (#905): shared vocabulary every other barca crate uses. Values,
 //! ids, hashes, time, the terminal (`outln!` / `errln!`), the config file and the crate-root
-//! error type. It depends on no other barca crate; `barca-core` re-exports it, so its items keep
-//! their `barca_core::` paths.
+//! error type. It depends on no other barca crate; `barca-service` re-exports it, so its items keep
+//! their `barca_service::` paths.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
@@ -101,7 +101,7 @@ pub enum BarcaError {
 
     /// The metadata DB at `path` is there but this barca cannot use it: it is a directory, not
     /// a SQLite file, written by a newer release, or its schema is malformed (an empty file is
-    /// initialized instead, `barca_core::db::init_db_as`). Infra (exit 3);
+    /// initialized instead, `barca_service::db::init_db_as`). Infra (exit 3);
     /// its envelope's `reason` is `metadata_unusable`. A lock or I/O failure stays [`Db`].
     ///
     /// [`Db`]: BarcaError::Db
@@ -162,7 +162,7 @@ pub struct PartialRun {
     /// absent); `None` for an unpartitioned target.
     #[serde(default, skip)]
     pub partitions: Option<Vec<(String, step_result::OutputRef)>>,
-    /// See `barca_core::results::GetResult::key_summary`.
+    /// See `barca_service::results::GetResult::key_summary`.
     #[serde(default, skip)]
     pub key_summary: Option<reports::KeySummary>,
 }

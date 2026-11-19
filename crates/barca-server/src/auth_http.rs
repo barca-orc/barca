@@ -8,7 +8,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use barca_core::{
+use barca_service::{
     config::ResolvedConfig,
     envelope::{ErrorEnvelope, ErrorKind},
     serve::AuthMode,
@@ -34,7 +34,7 @@ impl Access {
         match &self.store {
             None => Err(ApiError::Forbidden("token authentication is off".into())),
             Some(Ok(store)) => Ok(store.clone()),
-            Some(Err(_)) => Err(ApiError::Barca(barca_core::BarcaError::Other(
+            Some(Err(_)) => Err(ApiError::Barca(barca_service::BarcaError::Other(
                 "project authentication state is unavailable".into(),
             ))),
         }
@@ -66,7 +66,7 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(operation)
         .await
         .map_err(|_| {
-            ApiError::Barca(barca_core::BarcaError::Other(
+            ApiError::Barca(barca_service::BarcaError::Other(
                 "authentication operation failed".into(),
             ))
         })?
@@ -74,7 +74,9 @@ async fn blocking<T: Send + 'static>(
             auth::Error::Full => ApiError::Conflict(error.to_string()),
             auth::Error::Name | auth::Error::Expiry => ApiError::BadRequest(error.to_string()),
             auth::Error::Invalid => ApiError::Forbidden(error.to_string()),
-            auth::Error::State => ApiError::Barca(barca_core::BarcaError::Other(error.to_string())),
+            auth::Error::State => {
+                ApiError::Barca(barca_service::BarcaError::Other(error.to_string()))
+            }
         })
 }
 /// The project token a request was authorized with, by name (`token:<name>`).
@@ -184,11 +186,11 @@ pub(crate) async fn authorize(
 }
 pub(crate) async fn status(State(access): State<Arc<Access>>) -> Response {
     no_store(
-        Json(barca_core::served::AuthStatus {
+        Json(barca_service::served::AuthStatus {
             mode: if access.store.is_none() {
-                barca_core::served::AuthMode::Off
+                barca_service::served::AuthMode::Off
             } else {
-                barca_core::served::AuthMode::Token
+                barca_service::served::AuthMode::Token
             },
         })
         .into_response(),
@@ -298,7 +300,7 @@ mod tests {
     async fn idle_streams_close_after_local_and_external_revocation() {
         for scenario in ["local", "external", "expiry"] {
             let root = tempfile::tempdir().unwrap();
-            let mut resolved = barca_core::config::resolve_in(None, root.path()).unwrap();
+            let mut resolved = barca_service::config::resolve_in(None, root.path()).unwrap();
             resolved.server_auth = AuthMode::Token;
             let state = crate::state::AppState::new(crate::ServeConfig {
                 files: Vec::new(),

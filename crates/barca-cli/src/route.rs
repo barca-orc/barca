@@ -1,6 +1,6 @@
 //! Where each command can run: the one table.
 //!
-//! A command runs in this process (calling `barca_core`), on a server named by `--server`
+//! A command runs in this process (calling `barca_service`), on a server named by `--server`
 //! (a URL, or bare for the configured one), on the `barca serve` running in this project
 //! (found by its socket), or, with a server configured and no flag, partly on that server.
 //! [`ROUTES`] says which of these each command takes. Everything else that needs the answer is

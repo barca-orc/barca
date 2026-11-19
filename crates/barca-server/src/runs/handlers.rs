@@ -20,14 +20,14 @@ use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
 use axum::{Json, http::StatusCode};
-use barca_core::cache::CachePolicy;
-use barca_core::envelope::Context;
-use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunRequest, RunView, Trigger};
-use barca_core::run_explain::{Cancellation, CancelledBy};
-use barca_core::served::{
+use barca_service::cache::CachePolicy;
+use barca_service::envelope::Context;
+use barca_service::outcome::{Outcome, OutcomeStatus, RunCommand, RunRequest, RunView, Trigger};
+use barca_service::run_explain::{Cancellation, CancelledBy};
+use barca_service::served::{
     ActiveStep, LiveRun, RunCancelling, RunHandle, RunLogs, RunSummary, RunViewStatus,
 };
-use barca_core::{BarcaError, db};
+use barca_service::{BarcaError, db};
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -56,15 +56,15 @@ fn api_trigger(principal: Option<String>, reason: Option<String>) -> Trigger {
 }
 
 /// `RunRequest.reason`, checked: trimmed, one line of at most
-/// [`barca_core::outcome::MAX_REASON_CHARS`] characters; empty is none.
+/// [`barca_service::outcome::MAX_REASON_CHARS`] characters; empty is none.
 fn reason_of(request: &RunRequest) -> Result<Option<String>, ApiError> {
     let Some(reason) = request.reason.as_deref().map(str::trim) else {
         return Ok(None);
     };
-    if reason.chars().count() > barca_core::outcome::MAX_REASON_CHARS {
+    if reason.chars().count() > barca_service::outcome::MAX_REASON_CHARS {
         return Err(ApiError::BadRequest(format!(
             "`reason` is longer than {} characters\nSay why in one short line.",
-            barca_core::outcome::MAX_REASON_CHARS
+            barca_service::outcome::MAX_REASON_CHARS
         )));
     }
     if reason.chars().any(char::is_control) {
@@ -108,10 +108,10 @@ async fn create_run(
     }
     // A request naming a paused node says it means it (`--allow-paused`).
     if !request.allow_paused {
-        let paused = barca_core::pauses::list(&state.config.resolved.db_path).await?;
+        let paused = barca_service::pauses::list(&state.config.resolved.db_path).await?;
         if let Some(id) = nodes.iter().find(|id| paused.iter().any(|p| &p.id == *id)) {
             return Err(ApiError::run(
-                barca_core::pauses::refused(id),
+                barca_service::pauses::refused(id),
                 Context {
                     command: crate::runs::verb_command(verb),
                     files: Vec::new(),
@@ -132,7 +132,7 @@ async fn create_run(
             partition,
             batch: request.batch.clone(),
             // The run contract runs what `barca get` / `barca run` would run here.
-            rules: barca_core::freshness::RunRules::request(),
+            rules: barca_service::freshness::RunRules::request(),
             timeout: None,
             kill_requeues: 0,
         },
@@ -155,14 +155,14 @@ async fn create_run(
 
 /// `partition`, parsed as `--partition` is; `400` when it does not parse.
 /// `RunRequest.batch`, checked (RFC-0013): a bad value is `400`.
-fn batch_of(request: &RunRequest) -> Result<barca_core::batch::BatchOverride, ApiError> {
-    barca_core::batch::BatchOverride::parse(&request.batch)
+fn batch_of(request: &RunRequest) -> Result<barca_service::batch::BatchOverride, ApiError> {
+    barca_service::batch::BatchOverride::parse(&request.batch)
         .map_err(|msg| ApiError::BadRequest(format!("error: {msg}")))
 }
 
 fn partition_of(
     request: &RunRequest,
-) -> Result<Option<barca_core::selection::PartitionSelection>, ApiError> {
+) -> Result<Option<barca_service::selection::PartitionSelection>, ApiError> {
     request
         .partition_selection()
         .map_err(|msg| ApiError::BadRequest(format!("error: {msg}")))
@@ -178,7 +178,7 @@ async fn dry_run(
     let snapshot = state.reads.snapshot_db().await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let result = barca_core::queries::explain(
+    let result = barca_service::queries::explain(
         &cfg,
         &request.targets,
         run_files(state, files),
@@ -190,10 +190,10 @@ async fn dry_run(
     )
     .await
     .map_err(|e| ApiError::run(e, context(request.command, files)))?;
-    let rendered = barca_core::report::render_explain(
+    let rendered = barca_service::report::render_explain(
         &result,
         request.command.as_str(),
-        barca_core::report::ResultFormat::Json,
+        barca_service::report::ResultFormat::Json,
         None,
     );
     Ok(json_text(StatusCode::OK, stdout_of(rendered)))
@@ -418,7 +418,7 @@ pub async fn logs(
 ) -> Result<Json<RunLogs>, ApiError> {
     let stream = match query.stream.as_deref() {
         None | Some("") => None,
-        Some(text) => Some(barca_core::LogStream::parse(text).ok_or_else(|| {
+        Some(text) => Some(barca_service::LogStream::parse(text).ok_or_else(|| {
             ApiError::BadRequest(format!(
                 "stream '{text}' is not a stream: use stdout or stderr"
             ))
@@ -446,7 +446,7 @@ A run recorded on another machine is \
     let step = query.step.as_deref().filter(|s| !s.is_empty());
     let lines = if record.is_some() {
         // Errors read as `barca logs` reports them here.
-        barca_core::queries::logs_at(
+        barca_service::queries::logs_at(
             &state.config.resolved.db_path,
             &snapshot.path,
             &id,
@@ -571,7 +571,7 @@ pub async fn output(
             match step["artifact"].as_str() {
                 Some(path) => (
                     path.to_string(),
-                    barca_core::artifact_format::format_of(path).to_string(),
+                    barca_service::artifact_format::format_of(path).to_string(),
                 ),
                 None => {
                     let snapshot = state.reads.snapshot_db().await?;
@@ -591,13 +591,13 @@ pub async fn output(
                 "the final artifact of run '{run_id}' cannot be read at {path}: {e}"
             ))
         })?;
-    let content_type = barca_core::artifact_format::content_type(&format);
+    let content_type = barca_service::artifact_format::content_type(&format);
     Ok(([(axum::http::header::CONTENT_TYPE, content_type)], bytes).into_response())
 }
 
 /// `GET /runs` — durable run history joined with this server's live runs: the runs in
 /// progress first, whatever `limit` lists (#941), then the newest
-/// ([`barca_core::served::run_list`]). The filters are the database's ([`RunsQuery`]): `total`
+/// ([`barca_service::served::run_list`]). The filters are the database's ([`RunsQuery`]): `total`
 /// counts the runs they keep.
 pub async fn list(
     State(state): State<AppState>,
@@ -611,13 +611,14 @@ pub async fn list(
     if filter.statuses == ["running"] {
         let rows = in_flight(&state, &db_state, &snapshot).await?;
         return Ok(Json(
-            barca_core::served::in_flight_list(&snapshot.path, rows, &filter, limit, now).await?,
+            barca_service::served::in_flight_list(&snapshot.path, rows, &filter, limit, now)
+                .await?,
         ));
     }
     // Clone after the snapshot: a new live run not yet in the snapshot stays visible.
     let live = live_runs(&state);
     Ok(Json(
-        barca_core::served::run_list(barca_core::served::RunListRequest {
+        barca_service::served::run_list(barca_service::served::RunListRequest {
             read_path: &snapshot.path,
             db_path: &state.config.resolved.db_path,
             limit,
@@ -636,16 +637,16 @@ pub async fn list(
 pub(crate) async fn in_flight_now(
     state: &AppState,
     snapshot: &std::sync::Arc<crate::snapshot::SnapshotDb>,
-) -> Result<barca_core::report::HistoryNow, ApiError> {
+) -> Result<barca_service::report::HistoryNow, ApiError> {
     let db_state = state.reads.db_state();
-    Ok(barca_core::served::in_flight_now(
+    Ok(barca_service::served::in_flight_now(
         in_flight(state, &db_state, snapshot).await?,
     ))
 }
 
 /// The runs in flight, newest first, each with the nodes it is working on now
 /// ([`crate::running`]): the rows of `GET /runs?status=running`
-/// ([`barca_core::served::in_flight`]). This fills which nodes each run works on.
+/// ([`barca_service::served::in_flight`]). This fills which nodes each run works on.
 async fn in_flight(
     state: &AppState,
     db_state: &crate::read_cache::Stamp,
@@ -674,7 +675,7 @@ async fn in_flight(
         .map(|(flight, live)| {
             let by_node =
                 crate::running::by_node(std::slice::from_ref(flight), &status.nodes, &dag);
-            barca_core::served::Flight {
+            barca_service::served::Flight {
                 run_id: &flight.run_id,
                 live: live.as_ref(),
                 active: status
@@ -691,5 +692,5 @@ async fn in_flight(
             }
         })
         .collect();
-    Ok(barca_core::served::in_flight(read_path, rows, &state.config.files, &dag.groups).await?)
+    Ok(barca_service::served::in_flight(read_path, rows, &state.config.files, &dag.groups).await?)
 }

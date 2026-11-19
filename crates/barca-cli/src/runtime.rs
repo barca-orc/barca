@@ -1,6 +1,6 @@
 //! The one Tokio runtime of the process, built when it is first needed.
 //!
-//! barca-core is async-native and runs on whatever runtime the caller provides. A command
+//! barca-service is async-native and runs on whatever runtime the caller provides. A command
 //! needs one event loop; jobs execute in Python processes and blocking I/O uses Tokio's
 //! separate blocking pool. `barca serve` also handles concurrent HTTP requests, so it gets
 //! worker threads. `version`, `docs` and `tokens` never build one.
@@ -36,7 +36,7 @@ impl Runtime {
             };
             builder.enable_all().build().unwrap_or_else(|e| {
                 CliError::from_barca(
-                    barca_core::BarcaError::Other(format!("failed to create runtime: {e}")),
+                    barca_service::BarcaError::Other(format!("failed to create runtime: {e}")),
                     &Context::default(),
                 )
                 .emit(json)
