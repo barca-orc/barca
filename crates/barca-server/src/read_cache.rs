@@ -965,6 +965,12 @@ mod tests {
         // outside the import directory stamps whose changes invalidate the graph.
         std::fs::create_dir_all(dir.join(".barca")).unwrap();
         resolved.db_path = dir.join(".barca/metadata.db").display().to_string();
+        // The graph's sources include the working directory (imports resolve from the project
+        // root), which every test of this binary shares. Tests that open the metadata create
+        // `.barca` in it, whatever `db_path` says, and a tree's first run has none yet: created
+        // while a test here polls, it is an edit of a source directory, and the graph is
+        // rightly not kept. Create it before any test here waits for its sources to be still.
+        barca_core::db::ensure_env_dirs(&resolved.env).unwrap();
         AppState::new(crate::ServeConfig {
             files: vec![file.display().to_string()],
             host: "127.0.0.1".parse().unwrap(),
