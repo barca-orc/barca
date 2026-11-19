@@ -599,7 +599,7 @@ fn cache_check_inputs(session: &RunSession<'_, '_>, executed: &Executed) -> crat
             .dag
             .graph
             .node_weights()
-            .filter(|n| n.extracted.freshness == crate::model::Freshness::Manual)
+            .filter(|n| n.decl.freshness == crate::model::Freshness::Manual)
             .map(|n| n.id.clone())
             .collect(),
         wrote_nothing: session.state.steps_executed == 0 && session.store.is_none(),
@@ -884,7 +884,7 @@ async fn open_run<'a, 'r>(
                     || prepared
                         .dag
                         .get_node(id)
-                        .is_some_and(|n| n.extracted.freshness != crate::model::Freshness::Manual)
+                        .is_some_and(|n| n.decl.freshness != crate::model::Freshness::Manual)
             })
             .map(|(id, _)| id.clone())
             .collect(),
@@ -1228,7 +1228,7 @@ fn plan_calls(
         let Some(node) = dag.get_node(base) else {
             continue;
         };
-        if node.extracted.batch.is_none() {
+        if node.decl.batch.is_none() {
             continue;
         }
         let i = *index.entry(base.to_string()).or_insert_with(|| {
@@ -1265,7 +1265,7 @@ fn plan_calls(
             crate::batch::Grouping::By { source_text, .. } => {
                 match crate::batch::evaluate_labels(
                     python,
-                    &node.extracted.source_file,
+                    &node.invoke.python().source_file,
                     source_text,
                     &keys,
                 ) {

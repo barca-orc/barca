@@ -101,11 +101,11 @@ pub(crate) fn env_report(
     base_id: &str,
 ) -> Option<std::collections::BTreeMap<String, Option<String>>> {
     let node = dag.get_node(base_id)?;
-    if node.extracted.env.is_empty() {
+    if node.decl.env.is_empty() {
         return None;
     }
     Some(crate::envdeps::report(&crate::envdeps::resolve(
-        &node.extracted.env,
+        &node.decl.env,
     )))
 }
 
@@ -125,7 +125,7 @@ pub(crate) fn report_for(
         env: env_report(dag, base_id),
         undeclared_env: dag
             .get_node(base_id)
-            .map(|n| n.extracted.undeclared_env())
+            .map(|n| n.undeclared_env())
             .filter(|names| !names.is_empty()),
         ..Default::default()
     };

@@ -729,7 +729,7 @@ pub(crate) fn reconcile_total(total_steps: usize, completed_steps: usize) -> usi
 /// The `--agent` step-line suffix for `node_id`'s declared env (empty when none is declared).
 pub(crate) fn env_suffix(dag: &Dag, node_id: &str) -> String {
     dag.get_node(crate::StepId::parse(node_id).base_id())
-        .map(|n| crate::envdeps::agent_suffix(&crate::envdeps::resolve(&n.extracted.env)))
+        .map(|n| crate::envdeps::agent_suffix(&crate::envdeps::resolve(&n.decl.env)))
         .unwrap_or_default()
 }
 

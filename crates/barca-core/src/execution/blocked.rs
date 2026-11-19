@@ -60,7 +60,7 @@ pub(super) fn how(f: &Failures<'_>, base: &str, dropped: &HashSet<String>) -> Bl
     let Some(node) = f.dag.get_node(base) else {
         return Blocked::Whole;
     };
-    if node.extracted.partitions.is_empty() {
+    if node.decl.partitions.is_empty() {
         return Blocked::Whole;
     }
     let tainted = |up: &str| {
@@ -73,10 +73,10 @@ pub(super) fn how(f: &Failures<'_>, base: &str, dropped: &HashSet<String>) -> Bl
     if node.resolved_collected.values().any(|up| tainted(up)) {
         return Blocked::Whole;
     }
-    let mine: BTreeSet<&String> = node.extracted.partitions.keys().collect();
+    let mine: BTreeSet<&String> = node.decl.partitions.keys().collect();
     let aligned = |up: &str| {
         f.dag.get_node(up).is_some_and(|u| {
-            let theirs: BTreeSet<&String> = u.extracted.partitions.keys().collect();
+            let theirs: BTreeSet<&String> = u.decl.partitions.keys().collect();
             !theirs.is_empty() && theirs == mine
         })
     };
@@ -127,7 +127,7 @@ pub(super) fn how(f: &Failures<'_>, base: &str, dropped: &HashSet<String>) -> Bl
 pub(super) fn cause(f: &Failures<'_>, base: &str, key: &str) -> BlockedKey {
     let node = f.dag.get_node(base);
     let mine: BTreeSet<&String> = node
-        .map(|n| n.extracted.partitions.keys().collect())
+        .map(|n| n.decl.partitions.keys().collect())
         .unwrap_or_default();
     let mut reads: Vec<&str> = node
         .into_iter()
@@ -135,7 +135,7 @@ pub(super) fn cause(f: &Failures<'_>, base: &str, key: &str) -> BlockedKey {
         .chain(f.dag.partition_sources(base))
         .filter(|up| {
             f.dag.get_node(up).is_some_and(|u| {
-                let theirs: BTreeSet<&String> = u.extracted.partitions.keys().collect();
+                let theirs: BTreeSet<&String> = u.decl.partitions.keys().collect();
                 theirs == mine
             })
         })

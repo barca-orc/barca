@@ -145,7 +145,7 @@ pub fn expand_pending_partitions_filtered(
             }
             let inherited = dag
                 .get_node(&base)
-                .map(|n| n.extracted.inherited_partitions.clone())
+                .map(|n| n.decl.inherited_partitions.clone())
                 .unwrap_or_default();
 
             let mut dim_values: HashMap<String, Vec<String>> = HashMap::new();
@@ -259,10 +259,7 @@ pub fn expand_pending_partitions_filtered(
                 no_keys,
                 order: None,
             };
-            if dag
-                .get_node(&base)
-                .is_some_and(|n| n.extracted.batch.is_some())
-            {
+            if dag.get_node(&base).is_some_and(|n| n.decl.batch.is_some()) {
                 step_keyed.remember_order(&pks);
             }
             all_expanded_steps.push(StreamStep {

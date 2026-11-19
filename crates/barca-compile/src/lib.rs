@@ -10,6 +10,7 @@
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
 mod arg_values;
+mod batch_override;
 #[doc(hidden)]
 pub mod batch_spec;
 #[doc(hidden)]
@@ -23,12 +24,16 @@ pub mod definition;
 pub mod discover;
 #[doc(hidden)]
 pub mod env_reads;
+#[doc(hidden)]
+pub mod extracted;
 mod file_names;
 pub mod groups;
 #[doc(hidden)]
 pub mod input_params;
 #[cfg(test)]
 mod layering_tests;
+#[doc(hidden)]
+pub mod link;
 pub mod load;
 mod names;
 mod node_refs;
