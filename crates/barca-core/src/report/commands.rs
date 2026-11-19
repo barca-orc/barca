@@ -1040,10 +1040,7 @@ fn history_rows(
             status,
             attempts.map_or_else(|| "-".to_string(), |n| n.to_string()),
             secs(Some(total)),
-            peak.map_or_else(
-                || "-".to_string(),
-                |b| crate::gc::size::human(b.max(0) as u64),
-            ),
+            peak.map_or_else(|| "-".to_string(), |b| crate::text::human(b.max(0) as u64)),
             "-".to_string(),
             format!("batch {b}"),
         ]);
@@ -1199,7 +1196,7 @@ pub fn render_run_detail(
                 (Some(path), format) => {
                     let mut about: Vec<String> = format.iter().cloned().collect();
                     if let Some(size) = s.artifact_size_bytes {
-                        about.push(crate::gc::size::human(size.max(0) as u64));
+                        about.push(crate::text::human(size.max(0) as u64));
                     }
                     if about.is_empty() {
                         path.clone()
@@ -1215,10 +1212,8 @@ pub fn render_run_detail(
                 s.attempts
                     .map_or_else(|| "-".to_string(), |n| n.to_string()),
                 secs(s.elapsed_seconds),
-                s.max_rss_bytes.map_or_else(
-                    || "-".to_string(),
-                    |b| crate::gc::size::human(b.max(0) as u64),
-                ),
+                s.max_rss_bytes
+                    .map_or_else(|| "-".to_string(), |b| crate::text::human(b.max(0) as u64)),
                 s.run_hash
                     .as_deref()
                     .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
@@ -1364,12 +1359,8 @@ pub fn render_stats(
         "Re-executed with unchanged inputs: {:.1}%",
         stats.cache_hit_rate * 100.0
     );
-    let mem = |v: Option<i64>| {
-        v.map_or_else(
-            || "-".to_string(),
-            |b| crate::gc::size::human(b.max(0) as u64),
-        )
-    };
+    let mem =
+        |v: Option<i64>| v.map_or_else(|| "-".to_string(), |b| crate::text::human(b.max(0) as u64));
     if stats.max_rss_bytes.is_some() {
         line!(
             rendered,
@@ -1651,7 +1642,7 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             if root.gap_seconds > 0 {
                 holds.push_str(&format!(
                     "; {} of gap across nodes (node-time)",
-                    crate::report::span(root.gap_seconds)
+                    crate::text::span(root.gap_seconds)
                 ));
             }
             if root.unbounded > 0 {
@@ -1660,12 +1651,10 @@ pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutp
             holds.push_str(&format!("; weight {}", root.weight));
             line!(rendered, "{pad}{holds}");
             line!(rendered, "{pad}why:  {}", root.detail);
-            let cost = root.action.estimated_seconds.map(|s| {
-                format!(
-                    " (about {} of compute)",
-                    crate::report::span(s.max(1) as i64)
-                )
-            });
+            let cost = root
+                .action
+                .estimated_seconds
+                .map(|s| format!(" (about {} of compute)", crate::text::span(s.max(1) as i64)));
             line!(
                 rendered,
                 "{pad}do:   {}{}{}",

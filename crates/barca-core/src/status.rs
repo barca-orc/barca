@@ -13,6 +13,8 @@ use crate::db;
 use crate::results::StepReport;
 use crate::step_status::StepStatus;
 use crate::store_inspect;
+use crate::targets::short_name;
+use crate::text::trace_since;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -248,7 +250,7 @@ impl ScheduleStatus {
     pub fn cell(&self) -> String {
         let state = if self.paused {
             match &self.paused_until {
-                Some(until) => format!("paused until {}", crate::report::utc_cell(until)),
+                Some(until) => format!("paused until {}", crate::text::utc_cell(until)),
                 None => "paused".to_string(),
             }
         } else if self.failing {
@@ -257,10 +259,10 @@ impl ScheduleStatus {
             let next = self
                 .next_fire
                 .as_deref()
-                .map(|t| format!("next {}", crate::report::utc_cell(t)))
+                .map(|t| format!("next {}", crate::text::utc_cell(t)))
                 .unwrap_or_else(|| "no next fire".to_string());
             let next = match self.late_since.as_deref().filter(|_| self.late) {
-                Some(since) => format!("late since {}, {next}", crate::report::utc_cell(since)),
+                Some(since) => format!("late since {}, {next}", crate::text::utc_cell(since)),
                 None if self.state == crate::schedule_standing::ScheduleState::Overrunning => {
                     format!("overrunning, {next}")
                 }
@@ -1202,17 +1204,6 @@ pub(crate) async fn status_from_dag_with_membership(
     ))
 }
 
-/// With `BARCA_TRACE_TIMING` set: one stderr line with how long `what` took since `t0`, so the
-/// cost of each part of `barca status` (and of a dry run) can be read without a profiler.
-pub(crate) fn trace_since(what: &str, t0: std::time::Instant) {
-    if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
-        crate::errln!(
-            "[timing] {what}: {:.1} ms",
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-}
-
 /// How many of `node`'s `missing` keys wait on a failed key of the same name: the node reads an
 /// input key for key (both have exactly the same dimension names and the input is not
 /// collected) whose keys failed, or are blocked in turn. Names the node whose keys failed.
@@ -1467,11 +1458,6 @@ fn causes(changed: Option<&[String]>, upstream_stale: bool) -> Option<Vec<String
 fn partition_of(node_id: &str) -> Option<String> {
     let start = node_id.find('[')?;
     Some(node_id[start + 1..].trim_end_matches(']').to_string())
-}
-
-fn short_name(node_id: &str) -> &str {
-    let base = node_id.split('[').next().unwrap_or(node_id);
-    base.rsplit(':').next().unwrap_or(base)
 }
 
 /// Inspect artifact schemas, including JSON object field and list element types.

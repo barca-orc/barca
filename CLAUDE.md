@@ -70,6 +70,11 @@ barca-model and barca-compile, never barca-db; barca-core uses all four; barca-c
 barca-server use only barca-core, which re-exports the lower crates' modules under their old
 paths (`barca_core::config`). Only barca-db and barca-core link libsql.
 
+Inside barca-core the modules are layered too (leaf, storage, decisions, engine beside
+analysis, service: `docs/engineering/layering.md`). `crates/barca-core/src/module_layering_tests.rs`
+checks every `crate::<module>` path against the layers; the exceptions are listed in
+`module_layering_allowlist.txt`, which may only shrink. A new module gets a layer there.
+
 ### How it works
 
 1. **Rust coordinator** (`barca get <file.py>`):

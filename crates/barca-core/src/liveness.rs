@@ -13,8 +13,8 @@
 //! schedule's own decisions establish liveness.
 
 use crate::BarcaError;
+use crate::run_queue::{set_state_value, state_value};
 use crate::schedule::{ScheduledJob, Zone, next_fire, prev_fire};
-use crate::serve::run_queue::{set_state_value, state_value};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -343,7 +343,7 @@ pub struct RecordedRun {
     pub refreshes: bool,
     /// The scheduled node whose tick started it; `None` for a run someone asked for.
     pub schedule: Option<String>,
-    pub triggered_by: Option<crate::outcome::TriggeredBy>,
+    pub triggered_by: Option<crate::trigger::TriggeredBy>,
     /// Its resolved target node ids; empty for a run of everything.
     pub targets: Vec<String>,
     /// It started executing (`run_queue` state `running` or `draining`).
@@ -364,12 +364,12 @@ pub async fn recorded_runs(db_path: &str) -> Result<Vec<RecordedRun>, BarcaError
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    let rows = crate::serve::run_queue::list(db_path).await?;
+    let rows = crate::run_queue::list(db_path).await?;
     let progress = if rows
         .iter()
-        .any(|r| r.state != crate::serve::run_queue::QueueState::Queued)
+        .any(|r| r.state != crate::run_queue::QueueState::Queued)
     {
-        crate::serve::run_queue::progress(db_path).await?
+        crate::run_queue::progress(db_path).await?
     } else {
         HashMap::new()
     };
@@ -377,7 +377,7 @@ pub async fn recorded_runs(db_path: &str) -> Result<Vec<RecordedRun>, BarcaError
         let Ok(spec) = serde_json::from_str::<serde_json::Value>(&row.spec) else {
             continue;
         };
-        let started = row.state != crate::serve::run_queue::QueueState::Queued;
+        let started = row.state != crate::run_queue::QueueState::Queued;
         let progress = progress.get(&row.run_id);
         out.push(RecordedRun {
             refreshes: spec["policy"]["kind"]

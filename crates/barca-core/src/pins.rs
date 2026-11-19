@@ -432,7 +432,7 @@ pub async fn pin_upload(
             "'{}' is {} bytes, more than the {} an upload may be",
             supplied.file_name,
             supplied.bytes.len(),
-            crate::gc::size::human(MAX_UPLOAD_BYTES as u64)
+            crate::text::human(MAX_UPLOAD_BYTES as u64)
         )));
     }
     let format = upload_format(&supplied.file_name, supplied.format.as_deref())?;

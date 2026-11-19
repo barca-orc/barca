@@ -558,7 +558,7 @@ impl LastCheck {
     /// `checked 3m ago, up to date`, as of `now` (unix seconds).
     pub fn line(&self, now: i64) -> String {
         let ago = chrono::DateTime::parse_from_rfc3339(&self.at)
-            .map(|at| crate::report::ago(now - at.timestamp()))
+            .map(|at| crate::text::ago(now - at.timestamp()))
             .unwrap_or_else(|_| self.at.clone());
         format!("checked {ago}, {}", Self::outcome_word(self.outcome))
     }
@@ -1208,7 +1208,7 @@ async fn from_db(
         .collect();
     // No run queue here either: the one the serving server records, with its run slots.
     let queue_paused = match Path::new(db_path).exists() {
-        true => crate::serve::run_queue::paused_at(db_path).await?.is_some(),
+        true => crate::run_queue::paused_at(db_path).await?.is_some(),
         false => false,
     };
     let queue = crate::liveness::recorded_timing(
@@ -1280,7 +1280,7 @@ pub async fn checks(
     }
     let misses = ticks.misses;
     let crons: HashMap<String, _> =
-        crate::schedule::jobs_from_summaries(crate::queries::list_assets_from_dag(dag))
+        crate::schedule::jobs_from_summaries(crate::results::list_assets_from_dag(dag))
             .into_iter()
             .map(|job| (job.id, job.cron))
             .collect();

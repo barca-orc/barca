@@ -536,7 +536,7 @@ impl PartitionGrid {
                 .collect(),
             state: name.to_string(),
             attempted_at: at(&self.attempted_at)
-                .map(|offset| crate::outcome::rfc3339(self.attempted_base + offset)),
+                .map(|offset| crate::time::rfc3339(self.attempted_base + offset)),
             elapsed_seconds: self
                 .elapsed_ms
                 .get(cell)
@@ -856,7 +856,7 @@ impl PartitionGrid {
                 .iter()
                 .flatten()
                 .max()
-                .map(|offset| crate::outcome::rfc3339(self.attempted_base + offset)),
+                .map(|offset| crate::time::rfc3339(self.attempted_base + offset)),
         }
     }
 }

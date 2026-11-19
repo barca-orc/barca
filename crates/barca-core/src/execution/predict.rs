@@ -92,7 +92,7 @@ pub(crate) async fn explain_dag_with_keys(
         concurrency_groups: HashMap::new(),
     };
     let mut exec_plan = match &cone {
-        Some(cone) => crate::queries::filter_plan_to_subgraph(
+        Some(cone) => super::filter_plan_to_subgraph(
             crate::planner::plan_from_dag_narrowed(dag, &config, partition),
             cone,
         ),
@@ -117,7 +117,7 @@ pub(crate) async fn explain_dag_with_keys(
 
     dag.check_imports(exec_plan.step_ids())?;
     let warnings = crate::warnings::for_plan(dag, &exec_plan);
-    crate::status::trace_since("dry run: plan", t0);
+    crate::text::trace_since("dry run: plan", t0);
 
     // With a server, the dry run is decided against its ledger: check the server (a dry run
     // posts nothing) and ask once for every run hash known before anything runs. The ledger's
@@ -216,13 +216,13 @@ pub(crate) async fn explain_dag_with_keys(
         narrowing: narrowing.as_mut(),
         held: rules.status.then_some(&mut held),
     };
-    crate::status::trace_since("dry run: sensor outputs and evictions", t0);
+    crate::text::trace_since("dry run: sensor outputs and evictions", t0);
     for (i, phase) in exec_plan.phases.iter().enumerate() {
         let tp = std::time::Instant::now();
         predict_phase(&mut prediction, phase).await?;
-        crate::status::trace_since(&format!("dry run: phase {}", i + 1), tp);
+        crate::text::trace_since(&format!("dry run: phase {}", i + 1), tp);
     }
-    crate::status::trace_since("dry run: decided", t0);
+    crate::text::trace_since("dry run: decided", t0);
 
     // The outputs the command was asked for are read by whoever ran it.
     let returned = all_outputs

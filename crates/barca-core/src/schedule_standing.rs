@@ -11,8 +11,8 @@
 //! (`schedule_ticks`, #960) for how long its runs waited and took ([`Ticks::queue_waits`],
 //! [`Ticks::run_seconds`]; #962).
 
+use crate::run_queue::{self, QueueState};
 use crate::schedule::{Zone, next_fire, prev_fire};
-use crate::serve::run_queue::{self, QueueState};
 use crate::{BarcaError, db};
 use chrono::{DateTime, Utc};
 use croner::Cron;
@@ -147,8 +147,8 @@ impl ScheduleState {
                 match (standing.typical_run_seconds, standing.interval_seconds) {
                     (Some(run), Some(interval)) => format!(
                         " (a run takes about {}, a slot comes every {})",
-                        crate::report::span(run.round() as i64),
-                        crate::report::span(interval)
+                        crate::text::span(run.round() as i64),
+                        crate::text::span(interval)
                     ),
                     _ => String::new(),
                 }

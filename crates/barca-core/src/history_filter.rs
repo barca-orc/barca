@@ -4,7 +4,7 @@
 //! keeps the runs ([`crate::db::RunFilter`]), and a limit applies to the runs they keep.
 
 use crate::db::{RunFilter, RunRecord};
-use crate::outcome::TriggeredBy;
+use crate::trigger::TriggeredBy;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
 /// The statuses a recorded run can have: how it ended, `running` while it is in progress, and
@@ -301,7 +301,21 @@ fn names_node(run: &RunRecord, node: &str) -> bool {
         .flat_map(|ids| ids.split(','))
         .map(str::trim)
         .filter(|id| !id.is_empty() && *id != "all")
-        .any(|id| id == node || crate::queries::step_matches(id, node))
+        .any(|id| id == node || step_matches(id, node))
+}
+
+/// Whether `--step <step>` selects the line of node `id`: its exact id, its base id (every
+/// partition key), or its function name.
+pub fn step_matches(id: &str, step: &str) -> bool {
+    let parsed = crate::StepId::parse(id);
+    if id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step) {
+        return true;
+    }
+    // One key by function name: `scored[retailer=r7]`.
+    let wanted = crate::StepId::parse(step);
+    !wanted.partition.is_empty()
+        && wanted.partition == parsed.partition
+        && parsed.base_id().rsplit(':').next() == Some(wanted.base_id())
 }
 
 /// `--since`: a duration back from `now` (`45s`, `30m`, `24h`, `7d`, `2w`), an RFC 3339 time

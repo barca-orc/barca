@@ -114,7 +114,7 @@ pub struct RunReport {
     pub steps: Vec<StepReport>,
     /// What started the run (`barca.trigger`), and for a scheduled run the tick
     /// (`barca.scheduled_at`) and the schedule (`barca.schedule_id`).
-    pub trigger: crate::outcome::Trigger,
+    pub trigger: crate::trigger::Trigger,
 }
 
 /// A server lifecycle signal, independent of materialization runs.

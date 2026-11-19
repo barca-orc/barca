@@ -60,7 +60,7 @@ struct StoreProbe {
 /// `.barca/` against its size limit (RFC-0012), and free space on its filesystem. Informational:
 /// over the limit is what eviction is for, not a failed check.
 fn cache_size(report: &mut DoctorReport, cfg: &config::ResolvedConfig) {
-    use crate::gc::size::human;
+    use crate::text::human;
     match crate::gc::usage(cfg) {
         Ok(usage) => {
             let limit = match usage.limit_bytes {

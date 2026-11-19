@@ -9,10 +9,11 @@
 //! recorded, so the wording can change without a migration. Experimental.
 
 use crate::db::{RunNodeSummary, RunRecord, RunStep};
-use crate::outcome::{RunView, TriggeredBy};
+use crate::outcome::RunView;
 use crate::run_explain::{Cancellation, CancelledBy, PlanReason, PlanReasons, ReasonCategory};
 use crate::step_status::StepStatus;
 use crate::targets::short_name;
+use crate::trigger::TriggeredBy;
 use serde::{Deserialize, Serialize};
 
 /// How many nodes [`RunExplanation::slowest`] lists.
@@ -556,7 +557,7 @@ fn run_counts(run: RunFacts<'_>, nodes: &[RunNodeSummary], steps: &[RunStep]) ->
 
 /// The size of an artifact in words, as `barca status` prints sizes.
 fn size_label(bytes: u64) -> String {
-    crate::gc::size::human(bytes)
+    crate::text::human(bytes)
 }
 
 /// One target's output from the pointer its run returned. `value`: the target's
@@ -584,7 +585,7 @@ fn output_of(node_id: &str, value: &serde_json::Value, steps: &[RunStep]) -> Opt
         (format, size, path, None, rows_of(node_id))
     } else {
         // A partitioned target: pointers by key, or the summary of a node with many keys.
-        let summary = object.get(crate::report::KEY_SUMMARY);
+        let summary = object.get(crate::results::KEY_SUMMARY);
         let listed = match summary {
             Some(s) => s.get("outputs").and_then(|o| o.as_object())?,
             None => object,

@@ -9,10 +9,10 @@
 //! This reads what a run recorded and writes nothing.
 
 use crate::groups::NodeGroup;
-use crate::outcome::TriggeredBy;
 use crate::rollup::headline;
 use crate::run_explanation::count;
 use crate::targets::short_name;
+use crate::trigger::TriggeredBy;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 

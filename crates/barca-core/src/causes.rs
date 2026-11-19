@@ -391,7 +391,7 @@ mod tests {
         fn new(source: &str) -> Self {
             let dag = Dag::build(&crate::parse::extract_nodes(source, "p.py").unwrap())
                 .expect("valid dag");
-            let nodes = crate::queries::list_assets_from_dag(&dag)
+            let nodes = crate::results::list_assets_from_dag(&dag)
                 .into_iter()
                 .map(|n| {
                     let kind = match n.kind {

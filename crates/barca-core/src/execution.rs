@@ -256,7 +256,7 @@ pub(crate) struct ExecuteRequest<'a> {
     /// `--partition`: the keys every narrowed node of the cone computes (all keys when `None`).
     pub(crate) partition: Option<crate::selection::PartitionSelection>,
     /// The run id to use and what started the run.
-    pub(crate) options: crate::outcome::RunOptions,
+    pub(crate) options: RunOptions,
     /// Freshness rules (RFC-0008): whether `Manual` upstreams are read as they are, and
     /// whether this is a scheduled tick.
     pub(crate) rules: crate::freshness::RunRules,
@@ -1708,6 +1708,103 @@ async fn return_outputs(
                 run: None,
             }),
     })
+}
+
+/// `plan` without the steps outside `subgraph_ids` (a target's cone), and without the streams
+/// and phases that leaves empty.
+pub(crate) fn filter_plan_to_subgraph(plan: ExecutionPlan, subgraph_ids: &[&str]) -> ExecutionPlan {
+    let subgraph_set: std::collections::HashSet<&str> = subgraph_ids.iter().copied().collect();
+    let exec_plan = ExecutionPlan {
+        phases: plan
+            .phases
+            .into_iter()
+            .map(|phase| {
+                let filtered_streams: Vec<crate::planner::WorkerStream> = phase
+                    .streams
+                    .into_iter()
+                    .map(|s| crate::planner::WorkerStream {
+                        stream_id: s.stream_id,
+                        steps: s
+                            .steps
+                            .into_iter()
+                            .filter(|st| {
+                                let base_id = st.step_id.base_id();
+                                subgraph_set.contains(base_id)
+                            })
+                            .collect(),
+                    })
+                    .filter(|s| !s.steps.is_empty())
+                    .collect();
+                Phase {
+                    reason: phase.reason,
+                    streams: filtered_streams,
+                }
+            })
+            .filter(|p| !p.streams.is_empty())
+            .collect(),
+        total_steps: 0,
+    };
+    ExecutionPlan {
+        total_steps: exec_plan
+            .phases
+            .iter()
+            .flat_map(|p| &p.streams)
+            .flat_map(|s| &s.steps)
+            .map(|st| {
+                if st.partition_keys.is_empty() {
+                    1
+                } else {
+                    st.partition_keys.len()
+                }
+            })
+            .sum(),
+        ..exec_plan
+    }
+}
+
+/// `get` or `run`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum RunCommand {
+    Get,
+    Run,
+}
+
+impl RunCommand {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunCommand::Get => "get",
+            RunCommand::Run => "run",
+        }
+    }
+}
+
+/// What a run is given besides its targets: the id to record it under (allocated by the
+/// caller, so the id a server answers with is the database id) and what started it.
+#[derive(Clone, Debug)]
+pub struct RunOptions {
+    /// The run id to use; a new one when `None`.
+    pub run_id: Option<String>,
+    pub trigger: crate::trigger::Trigger,
+    /// What hosts the run: [`crate::run_host::LocalHost`] for a run on its own, a
+    /// [`crate::serve::ServeHost`] for a run of `barca serve`, whose runs share a capacity
+    /// (#628) and in-flight asset steps (#654) and whose end is routine (the server owns the
+    /// final shutdown backup).
+    pub host: std::sync::Arc<dyn crate::run_host::RunHost>,
+    /// `--batch` (RFC-0013): the run's override of the `batch=` of the nodes that declare one.
+    pub batch: crate::batch::BatchOverride,
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            run_id: None,
+            trigger: crate::trigger::Trigger::default(),
+            host: crate::run_host::LocalHost::shared(),
+            batch: crate::batch::BatchOverride::default(),
+        }
+    }
 }
 
 #[cfg(test)]

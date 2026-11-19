@@ -410,7 +410,7 @@ pub async fn run(
         notes.push(format!(
             "fetched {n} remote artifact{} ({}) into {CACHE_DIR}/",
             if n == 1 { "" } else { "s" },
-            crate::gc::size::human(out.fetched.bytes)
+            crate::text::human(out.fetched.bytes)
         ));
     }
     for t in &tables {

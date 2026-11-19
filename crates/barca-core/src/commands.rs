@@ -5,7 +5,7 @@
 //! runtime is ever constructed in this crate; genuinely blocking work (source
 //! parsing, dynamic-partition subprocesses) runs via `spawn_blocking`.
 
-use crate::execution::{ExecuteRequest, Executed, execute};
+use crate::execution::{ExecuteRequest, Executed, RunCommand, execute};
 use crate::{
     BarcaError,
     cache::CachePolicy,
@@ -127,7 +127,7 @@ pub async fn get_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: crate::outcome::RunOptions {
+        options: crate::execution::RunOptions {
             batch,
             ..Default::default()
         },
@@ -163,7 +163,7 @@ pub async fn run_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: crate::outcome::RunOptions {
+        options: crate::execution::RunOptions {
             batch,
             ..Default::default()
         },
@@ -199,7 +199,7 @@ pub async fn get_many_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: crate::outcome::RunOptions {
+        options: crate::execution::RunOptions {
             batch,
             ..Default::default()
         },
@@ -236,7 +236,7 @@ pub async fn run_many_streaming(
         interrupt: cancel.into(),
         event_tx,
         partition,
-        options: crate::outcome::RunOptions {
+        options: crate::execution::RunOptions {
             batch,
             ..Default::default()
         },
@@ -258,7 +258,7 @@ pub enum RunResult {
 pub struct ServedRun<'a> {
     pub dag: std::sync::Arc<crate::dag::Dag>,
     pub cfg: &'a crate::config::ResolvedConfig,
-    pub command: crate::outcome::RunCommand,
+    pub command: RunCommand,
     /// As given; one target is a single-target run, several a multi-target run, none every
     /// asset and sensor.
     pub targets: &'a [String],
@@ -267,7 +267,7 @@ pub struct ServedRun<'a> {
     pub policy: CachePolicy,
     pub cancel: CancellationToken,
     pub event_tx: Option<UnboundedSender<crate::RunEvent>>,
-    pub options: crate::outcome::RunOptions,
+    pub options: crate::execution::RunOptions,
     /// `--partition`: the keys every narrowed node of the cone computes (all keys when `None`;
     /// see [`crate::selection`]).
     pub partition: Option<crate::selection::PartitionSelection>,
@@ -301,4 +301,16 @@ pub async fn serve_run(run: ServedRun<'_>) -> Result<RunResult, BarcaError> {
     } else {
         executed.into_single().map(RunResult::Single)
     }
+}
+
+/// Upload this host's pending results ([`crate::pending_uploads`]) among `store_paths` now (see
+/// [`crate::execution::upload_pending`]): `barca get -o url` calls it before signing, so a
+/// `local only` result is uploaded and then signed rather than reported missing.
+pub async fn upload_pending_now(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    store_paths: &[String],
+    cancel: &CancellationToken,
+) -> Result<(), BarcaError> {
+    crate::execution::upload_pending(python, cfg, store_paths, cancel).await
 }

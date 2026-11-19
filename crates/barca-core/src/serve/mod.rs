@@ -6,10 +6,12 @@
 pub mod capacity;
 pub mod claims;
 mod host;
-pub mod run_queue;
 pub mod ticks;
 
 pub use crate::config::AuthMode;
+// The queue's rows are storage (`crate::run_queue`), read by `barca status` as well; a server
+// names them here.
+pub use crate::run_queue;
 pub use host::ServeHost;
 
 /// A run the server accepted and never started, as [`record_unstarted_run`] records it.

@@ -13,6 +13,9 @@ pub use crate::reports::{
 };
 pub(crate) use crate::reports::{LISTED_KEYS, deserialize_targets};
 
+/// The key of a summarized partitioned `final_output` (#623).
+pub(crate) const KEY_SUMMARY: &str = "_barca_partitions";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct GetResult {
@@ -41,7 +44,7 @@ pub struct GetResult {
     /// Present when the check after the run found `.barca/` over its size limit (RFC-0012):
     /// what it evicted, and the size after.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache: Option<crate::gc::CacheReport>,
+    pub cache: Option<CacheReport>,
     /// Results computed here and not yet in the artifact store (#390). Absent when nothing is
     /// pending and nothing failed to publish.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,7 +82,7 @@ pub struct MultiResult {
     pub targets: Vec<(String, TargetOutcome)>,
     /// Present when the check after the run found `.barca/` over its size limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache: Option<crate::gc::CacheReport>,
+    pub cache: Option<CacheReport>,
     /// See [`GetResult::uploads`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploads: Option<UploadsReport>,
@@ -198,6 +201,66 @@ pub struct AssetSummary {
     /// 1-based line of the definition's first decorator.
     #[serde(default)]
     pub line: usize,
+}
+
+/// The `cache` object of a `get`/`run` result: present when the check after the run found the
+/// cache over its limit (with nothing evicted when nothing more could go).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CacheReport {
+    /// Bytes under `.barca/` after eviction.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub size_bytes: u64,
+    /// The limit, in bytes.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub limit_bytes: u64,
+    /// Files (and leftover directories) deleted.
+    pub evicted_files: usize,
+    /// Bytes deleted.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub evicted_bytes: u64,
+}
+
+/// Describe a previously validated graph without reading/importing source again.
+pub fn list_assets_from_dag(dag: &crate::dag::Dag) -> Vec<AssetSummary> {
+    dag.topo_order()
+        .into_iter()
+        .filter_map(|id| dag.get_node(id))
+        .map(|node| {
+            let mut inputs: Vec<String> = node
+                .resolved_inputs
+                .values()
+                .chain(node.resolved_collected.values())
+                .cloned()
+                .collect();
+            inputs.sort();
+            inputs.dedup();
+            AssetSummary {
+                id: node.id.clone(),
+                kind: node.kind(),
+                freshness: node.extracted.freshness.clone(),
+                inputs,
+                env: node.extracted.env.clone(),
+                file: node.extracted.source_file.clone(),
+                line: node.extracted.line,
+            }
+        })
+        .collect()
+}
+
+/// Select the first twenty keys in lexical order, without retaining every key.
+/// Taking a preview of each chunk and then previewing their union has the same result
+/// as previewing all keys, independently of worker chunk boundaries.
+pub(crate) fn key_preview(keys: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut preview = Vec::new();
+    for key in keys {
+        let pos = preview.binary_search(&key).unwrap_or_else(|pos| pos);
+        if pos < 20 {
+            preview.insert(pos, key);
+            preview.truncate(20);
+        }
+    }
+    preview
 }
 
 #[cfg(test)]

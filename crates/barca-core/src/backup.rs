@@ -1195,13 +1195,10 @@ pub async fn reset<E: From<BarcaError>>(
     let undo = moved_to.as_ref().map(|aside| {
         let mut cmd = format!(
             "barca state restore --from {}",
-            crate::envelope::shell_quote(aside)
+            crate::text::shell_quote(aside)
         );
         if cfg.env != crate::config::DEFAULT_ENV {
-            cmd.push_str(&format!(
-                " --env {}",
-                crate::envelope::shell_quote(&cfg.env)
-            ));
+            cmd.push_str(&format!(" --env {}", crate::text::shell_quote(&cfg.env)));
         }
         cmd
     });

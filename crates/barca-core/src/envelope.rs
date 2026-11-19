@@ -3,6 +3,7 @@
 use crate::BarcaError;
 use crate::dispatch::ErrorPhase;
 use crate::step_status::StepStatus;
+pub use crate::text::shell_quote;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -75,18 +76,6 @@ pub struct Context {
     pub command: &'static str,
     /// The `.py` files the user passed.
     pub files: Vec<String>,
-}
-
-/// Quote a word for display in a copy-pasteable shell command.
-pub fn shell_quote(s: &str) -> String {
-    let plain = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./:,=@+%".contains(c));
-    if plain {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', r"'\''"))
-    }
 }
 
 /// `barca list <files>`, quoted for the shell (plain `barca list`, the whole project, when no

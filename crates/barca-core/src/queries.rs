@@ -8,8 +8,7 @@ pub use planned_nodes::planned_run_nodes;
 use crate::BarcaError;
 use crate::db;
 use crate::load::build_dag;
-use crate::planner::Phase;
-use crate::planner::{self, ExecutionPlan, ResourceConfig};
+use crate::planner::{self, ResourceConfig};
 use crate::results::{AssetSummary, PlanPhase, PlanPhaseReason, PlanResult, PlanStream};
 use crate::targets::find_target_id;
 use std::collections::HashMap;
@@ -92,12 +91,7 @@ pub(crate) fn plan_selected(
 
 // ─── the metadata DB ──────────────────────────────────────────────────────────
 
-/// Make this environment's metadata DB usable for reads and writes: its directories exist and
-/// the database has barca's tables (a new project's first command creates it).
-pub async fn open_metadata(cfg: &crate::config::ResolvedConfig) -> Result<(), BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    db::init_db(&cfg.db_path).await
-}
+pub use crate::db::open_metadata;
 
 // ─── history ──────────────────────────────────────────────────────────────────
 
@@ -348,19 +342,7 @@ pub fn live_log_tail(db_path: &str, run_id: &str, n: usize) -> Vec<db::LogEntry>
         .collect()
 }
 
-/// Whether `--step <step>` selects the line of node `id`: its exact id, its base id (every
-/// partition key), or its function name.
-pub fn step_matches(id: &str, step: &str) -> bool {
-    let parsed = crate::StepId::parse(id);
-    if id == step || parsed.base_id() == step || parsed.base_id().rsplit(':').next() == Some(step) {
-        return true;
-    }
-    // One key by function name: `scored[retailer=r7]`.
-    let wanted = crate::StepId::parse(step);
-    !wanted.partition.is_empty()
-        && wanted.partition == parsed.partition
-        && parsed.base_id().rsplit(':').next() == Some(wanted.base_id())
-}
+pub use crate::history_filter::step_matches;
 
 /// The node ids `--step <step>` selects among a run's recorded lines and steps. A usage error
 /// when it selects none, or two different definitions.
@@ -511,84 +493,9 @@ pub async fn list_assets(
     Ok(list_assets_from_dag(&dag))
 }
 
-/// Describe a previously validated graph without reading/importing source again.
-pub fn list_assets_from_dag(dag: &crate::dag::Dag) -> Vec<AssetSummary> {
-    dag.topo_order()
-        .into_iter()
-        .filter_map(|id| dag.get_node(id))
-        .map(|node| {
-            let mut inputs: Vec<String> = node
-                .resolved_inputs
-                .values()
-                .chain(node.resolved_collected.values())
-                .cloned()
-                .collect();
-            inputs.sort();
-            inputs.dedup();
-            AssetSummary {
-                id: node.id.clone(),
-                kind: node.kind(),
-                freshness: node.extracted.freshness.clone(),
-                inputs,
-                env: node.extracted.env.clone(),
-                file: node.extracted.source_file.clone(),
-                line: node.extracted.line,
-            }
-        })
-        .collect()
-}
+pub use crate::results::list_assets_from_dag;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-pub(crate) fn filter_plan_to_subgraph(plan: ExecutionPlan, subgraph_ids: &[&str]) -> ExecutionPlan {
-    let subgraph_set: std::collections::HashSet<&str> = subgraph_ids.iter().copied().collect();
-    let exec_plan = ExecutionPlan {
-        phases: plan
-            .phases
-            .into_iter()
-            .map(|phase| {
-                let filtered_streams: Vec<crate::planner::WorkerStream> = phase
-                    .streams
-                    .into_iter()
-                    .map(|s| crate::planner::WorkerStream {
-                        stream_id: s.stream_id,
-                        steps: s
-                            .steps
-                            .into_iter()
-                            .filter(|st| {
-                                let base_id = st.step_id.base_id();
-                                subgraph_set.contains(base_id)
-                            })
-                            .collect(),
-                    })
-                    .filter(|s| !s.steps.is_empty())
-                    .collect();
-                Phase {
-                    reason: phase.reason,
-                    streams: filtered_streams,
-                }
-            })
-            .filter(|p| !p.streams.is_empty())
-            .collect(),
-        total_steps: 0,
-    };
-    ExecutionPlan {
-        total_steps: exec_plan
-            .phases
-            .iter()
-            .flat_map(|p| &p.streams)
-            .flat_map(|s| &s.steps)
-            .map(|st| {
-                if st.partition_keys.is_empty() {
-                    1
-                } else {
-                    st.partition_keys.len()
-                }
-            })
-            .sum(),
-        ..exec_plan
-    }
-}
 
 use crate::targets::skipped_tasks_note;
 use crate::{cache::CachePolicy, results::ExplainResult};

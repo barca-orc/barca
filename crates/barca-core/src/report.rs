@@ -25,6 +25,7 @@ pub use keys::{
 use crate::cache_state::CacheState;
 use crate::step_status::StepStatus;
 use crate::targets::short_name;
+pub use crate::text::utc_cell;
 use crate::{
     cache::{Decision, RunReason},
     dag::Dag,
@@ -193,41 +194,6 @@ pub fn list_node_json(
 }
 
 /// One row per node: NAME KIND STATE WHY LAST RUN SHAPE DEPS.
-/// A stored timestamp (always UTC: `datetime('now')`, or RFC 3339 with `Z`) for a human table,
-/// marked as UTC so it is not read as local time (#496). Empty stays empty.
-pub fn utc_cell(ts: &str) -> String {
-    let ts = ts.trim();
-    if ts.is_empty() {
-        return String::new();
-    }
-    format!(
-        "{} UTC",
-        ts.strip_suffix('Z').unwrap_or(ts).replacen('T', " ", 1)
-    )
-}
-
-/// How long ago, in the largest whole unit: `45s ago`, `3m ago`, `2h ago`, `6d ago`. A time
-/// not in the past (another machine's clock) is `just now`.
-pub(crate) fn ago(seconds: i64) -> String {
-    match seconds {
-        ..=0 => "just now".to_string(),
-        s if s < 60 => format!("{s}s ago"),
-        s if s < 3600 => format!("{}m ago", s / 60),
-        s if s < 86_400 => format!("{}h ago", s / 3600),
-        s => format!("{}d ago", s / 86_400),
-    }
-}
-
-/// A length of time in the largest whole unit: `45s`, `3m`, `16h`, `6d`.
-pub(crate) fn span(seconds: i64) -> String {
-    match seconds.max(0) {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
-}
-
 pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> String {
     use std::fmt::Write;
     let mut rendered = String::new();
@@ -474,12 +440,12 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
     }
     let usage = &result.disk_usage;
     let bytes = |n: Option<u64>| {
-        n.map(crate::gc::size::human)
+        n.map(crate::text::human)
             .unwrap_or_else(|| "unmeasured".to_string())
     };
     let limit = usage
         .limit_bytes
-        .map(crate::gc::size::human)
+        .map(crate::text::human)
         .unwrap_or_else(|| "off".to_string());
     writeln!(&mut rendered, "Cache: {} budgeted (limit {limit}); {} metadata backups outside the budget; {} physical total",
         bytes(usage.budget_bytes), bytes(usage.backup_bytes), bytes(usage.size_bytes)).unwrap();
@@ -587,8 +553,7 @@ fn output_with(
     }
 }
 
-/// The key of a summarized partitioned `final_output` (#623).
-pub(crate) const KEY_SUMMARY: &str = "_barca_partitions";
+pub(crate) use crate::results::{KEY_SUMMARY, key_preview};
 
 /// A partitioned target's `final_output`: `entries` (key to pointer or value) as they are, or,
 /// with a summary (more than [`crate::results::LISTED_KEYS`] keys), `{"_barca_partitions":
@@ -764,21 +729,6 @@ pub(crate) fn fmt_eta(secs: f64) -> String {
 /// the ETA subtraction.
 pub(crate) fn reconcile_total(total_steps: usize, completed_steps: usize) -> usize {
     total_steps.max(completed_steps)
-}
-
-/// Select the first twenty keys in lexical order, without retaining every key.
-/// Taking a preview of each chunk and then previewing their union has the same result
-/// as previewing all keys, independently of worker chunk boundaries.
-pub(crate) fn key_preview(keys: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut preview = Vec::new();
-    for key in keys {
-        let pos = preview.binary_search(&key).unwrap_or_else(|pos| pos);
-        if pos < 20 {
-            preview.insert(pos, key);
-            preview.truncate(20);
-        }
-    }
-    preview
 }
 
 /// A partitioned asset plans one step per key; report it as one line with a partition summary.

@@ -188,7 +188,7 @@ pub async fn pause(
     via: &str,
     now: i64,
 ) -> Result<(), BarcaError> {
-    crate::queries::open_metadata(cfg).await?;
+    crate::db::open_metadata(cfg).await?;
     crate::db::pause_assets(&cfg.db_path, ids, via, now).await
 }
 
