@@ -323,7 +323,7 @@
     },
     "health": {
       "kind": "format",
-      "does": "a scope's rollup entry and its roots as the words of a bar, a label and a failures list",
+      "does": "the rollup's failure roots joined with their rows as the failures list; an error's one line and its traceback's paths",
       "derives": [
         {
           "what": "`consumersOf`, `downstreamIds`: the node panel's downstream count and what a pause with `--downstream` would cover",
@@ -477,10 +477,9 @@
       {
         "file": "lib/health.ts",
         "words": [
-          "failing",
           "failure"
         ],
-        "reason": "`failing`: the order of a health bar's segments: failures, then run work, then the rest in the served order; nothing is decided about a node. `failure`: picks the failure roots the server lists for the failures list, which shows each failure's error"
+        "reason": "picks the failure roots the server lists for the failures list, which shows each failure's error"
       },
       {
         "file": "pages/GroupedPipelinePage.tsx",

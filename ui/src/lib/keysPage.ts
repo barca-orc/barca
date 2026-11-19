@@ -89,12 +89,6 @@ export function keysHref(node: string, extra: { key?: string; filter?: Partial<K
   return `/keys?${keysSearch({ node, key: extra.key ?? null, filter: { ...NO_FILTER, ...extra.filter }, all: false })}`
 }
 
-/** A state chip pressed: it is added to the shown states, or taken out of them. */
-export function toggleState(f: KeyFilter, state: KeyState): KeyFilter {
-  const states = f.states.includes(state) ? f.states.filter((s) => s !== state) : [...f.states, state]
-  return { ...f, states: KEY_STATES.filter((s) => states.includes(s)) }
-}
-
 /** One dimension's values set (none: every value). */
 export function withValues(f: KeyFilter, dim: string, values: readonly string[]): KeyFilter {
   const next = { ...f.values }

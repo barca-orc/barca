@@ -9,11 +9,10 @@
 import type { Connection } from '@/lib/connection'
 import { served } from '@/lib/testdata/served'
 import type { CacheState } from '@/lib/cacheStateDisplay'
-import type { Failure, ScopeHealth } from '@/lib/health'
+import type { Failure } from '@/lib/health'
 import type { BarScope } from '@/components/HealthBar'
 import type { CauseCounts } from '@/lib/causeDisplay'
-import { causeCounts, counts as healthCountsOf, weightsOf } from '@/lib/testdata/rollup'
-import type { Health } from '@/lib/healthDisplay'
+import { causeCounts, weightsOf } from '@/lib/testdata/rollup'
 import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Remote } from '@/lib/remote'
@@ -710,9 +709,6 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-/** A rollup entry as served: its nodes by health, how many there are, and run work beside them. */
-const scopeOf = (nodes: number, states: Partial<Record<Health, number>>, running = 0): ScopeHealth => ({ health: healthCountsOf(states), nodes, running })
-
 /** A scope as a bar reads it: its causes as the rollup entry states them, with the weights the server gives them. */
 const barOf = (nodes: number, causes: Partial<CauseCounts>, running = 0): BarScope => {
   const counted = causeCounts(causes)
@@ -729,17 +725,6 @@ export const barStates: Record<string, BarScope> = {
   'every cause': barOf(106, { failing: 4, overdue: 3, no_refresh_path: 7, queued: 2, undecided: 6, catching_up: 4 }),
   'nothing refreshes it': barOf(128, { no_refresh_path: 120 }),
   empty: barOf(0, {}),
-}
-
-/** A scope in each state the health bar distinguishes, and the mixes that matter. */
-export const healthStates: Record<string, ScopeHealth> = {
-  ok: scopeOf(504, { ok: 504 }),
-  'one failure in thousands': scopeOf(2412, { failing: 1, behind: 12, ok: 2399 }),
-  'failing and blocking': scopeOf(562, { failing: 3, blocked: 58, behind: 121, ok: 380 }),
-  running: scopeOf(504, { ok: 500, behind: 4 }, 40),
-  'every health': scopeOf(106, { failing: 2, blocked: 2, suspect: 1, behind: 8, undecided: 6, never_run: 7, ok: 80 }),
-  'not run yet': scopeOf(128, { never_run: 120, ok: 8 }),
-  empty: scopeOf(0, {}),
 }
 
 // ── Failures ──────────────────────────────────────────────────────────────────

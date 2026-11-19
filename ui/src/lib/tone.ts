@@ -7,8 +7,6 @@
 
 export type Tone = 'success' | 'warning' | 'failed' | 'running' | 'queued' | 'neutral'
 
-export const TONES: readonly Tone[] = ['success', 'warning', 'failed', 'running', 'queued', 'neutral']
-
 export interface ToneMeta {
   /** CSS var for the colour. */
   color: string

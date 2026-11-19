@@ -5,11 +5,11 @@
  */
 
 import { match } from 'ts-pattern'
-import { formatSeconds } from './assetTable'
 import { plural } from './plural'
 import type { AssetRunEntry, CacheStatus, FailureFacts, NodeState, PartitionState } from './types'
 import type { LastRun } from './generated/LastRun'
 import type { RunNodeSummary } from './generated/RunNodeSummary'
+import { formatSeconds } from './time'
 
 /** Nodes that take `id` as an input, sorted by name. */
 export function downstreamOf<T extends { id: string; inputs: string[] }>(id: string, nodes: readonly T[]): T[] {

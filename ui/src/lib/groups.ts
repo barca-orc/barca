@@ -5,10 +5,10 @@ import { shortName, type GraphEntry } from './graph'
 import { causeDisplay, causeParts, leadsRunWork, mapPartGlyph, mapPartLabel } from './causeDisplay'
 import type { GraphState, GroupPart } from './graphState'
 import { isCheck } from './status'
-import { formatSeconds } from './assetTable'
 
 import type { NodeGroup } from './types'
 import type { RollupEntry } from './generated/RollupEntry'
+import { formatSeconds } from './time'
 export type { NodeGroup } from './types'
 
 export interface GroupTree {

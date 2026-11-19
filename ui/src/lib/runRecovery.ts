@@ -74,8 +74,6 @@ export interface LogFilter {
   errorsOnly: boolean
 }
 
-export const NO_LOG_FILTER: LogFilter = { step: null, query: '', errorsOnly: false }
-
 const ERROR_TEXT = /^Traceback \(most recent call last\)|^\s*File ".*", line \d+|^[\w.]*(Error|Exception|Interrupt|Exit)\b(:|$)/
 
 /** A line about a failure: anything on stderr, or a traceback's lines on stdout. */

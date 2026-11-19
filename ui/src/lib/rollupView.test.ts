@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ROOT, arcPath, freshWithin, healthSummary, heldIds, indexRollup, leafIds, nearestInTree, noEstimate, ringRadii, rootsWithin, sunburst, treePath, worstOf } from './rollupView'
-import { causeCounts, counts, failureRoot, heldBy, nodeEntry, rollup, scopeEntry } from './testdata/rollup'
+import { ROOT, arcPath, freshWithin, heldIds, indexRollup, leafIds, nearestInTree, noEstimate, ringRadii, rootsWithin, sunburst, treePath } from './rollupView'
+import { causeCounts, failureRoot, heldBy, nodeEntry, rollup, scopeEntry } from './testdata/rollup'
 
 // a.py: raw (failing, 100 of 120 keys failed) → clean, report (blocked by it)
 // b.py: src (ok) → mart (never run, no refresh path); c.py: x (behind, catching up), waits (undecided)
@@ -29,11 +29,6 @@ describe('the rollup, indexed', () => {
   it('reads every count off the entry: nodes and assets are both there', () => {
     const root = byFile.entries.get(ROOT)!
     expect([root.nodes, root.assets, root.not_fresh]).toEqual([7, 7, 6])
-    expect(worstOf(root.health)).toBe('failing')
-    expect(worstOf(counts())).toBe('ok')
-    expect(healthSummary(root.health)).toBe('1 failing · 2 blocked · 1 behind')
-    expect(healthSummary(root.health, 2)).toBe('1 failing · 2 blocked')
-    expect(healthSummary(counts({ ok: 3 }))).toBe('')
   })
 
   it('finds the path to an entry, its leaves and the roots about them', () => {

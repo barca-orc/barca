@@ -1,7 +1,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { DagNode, DAG_NODE_WIDTH } from '@/components'
+import { DagNode } from '@/components'
 import { nodeKindLabel } from '@/lib/status'
-import type { GraphNode } from '@/lib/graph'
+import { DAG_NODE_WIDTH, type GraphNode } from '@/lib/graph'
 
 /**
  * Custom React Flow node: the design-system DagNode plus the source/target
