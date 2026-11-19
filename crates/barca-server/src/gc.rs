@@ -5,8 +5,9 @@
 //! give up (#1054). Inside the server the eviction takes its turn like any other write.
 //!
 //! The body is `barca gc`'s flags and the answer is `barca gc --json`'s
-//! (`barca_core::gc::GcResult`). What runs in flight hold is left alone, as when the command
-//! runs beside a run on one machine.
+//! (`barca_core::gc::GcResult`). What this server's runs in flight hold is left alone result by
+//! result (the runs pin it in this process), where a second process beside a run can only
+//! hold back every current result (`restricted`).
 
 use crate::error::ApiError;
 use crate::runs::refuse_if_read_only;

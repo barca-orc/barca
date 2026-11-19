@@ -2,16 +2,17 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '26'
-  description: 'Normative current wire contract; specification version 26 is independent of package versions.
+  version: '27'
+  description: 'Normative current wire contract; specification version 27 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
     consumes its own one-use local credential. No cookies or CORS credentials are accepted. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
-    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations) and its query route over barca''s own tables (POST /sql/query; the server never runs SQL over results or files), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs) and POST /state/reset, and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
+    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations) and its query route over barca''s own tables (POST /sql/query; the server never runs SQL over results or files), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs), POST /state/reset and POST /gc (barca gc run by the server), and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases retained for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release. Conformance: crates/barca-server/tests/openapi.rs
-    and python/tests/test_http_openapi_client.py.'
+    and python/tests/test_http_openapi_client.py. The same routes are served on the project socket
+    (x-project-socket).'
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 servers:
 - url: http://127.0.0.1:8274
@@ -20,6 +21,15 @@ security:
 - {}
 - projectToken: []
 x-authentication: Bearer authentication is mandatory when [server] auth is token; off preserves unauthenticated and proxy deployments.
+x-project-socket: 'A server that holds its environment (serve.lock) also listens on a Unix socket beside
+  its metadata database: .barca/serve.sock, or .barca/envs/<env>/serve.sock for a named environment
+  (specs/interfaces/dot-barca-layout.md). It serves every route of this document there, unchanged. The
+  socket file is owner-only (mode 0600) and that permission is its access rule: a request over it needs
+  no bearer token in token mode, 401 is never answered on it, and what records an actor names
+  project-socket (specs/behavior/server-authentication.md). A read-only server answers on it as on its
+  TCP address: reads, and 403 for every mutation. The socket is removed when the server exits; one a
+  killed server left refuses connections. barca commands run in the project use it (barca docs
+  server-mode). Conformance: crates/barca-server/src/project_socket.rs, python/tests/test_project_socket.py.'
 paths:
   /auth/status:
     get:
@@ -2399,6 +2409,61 @@ paths:
                 pattern: ^[1-9][0-9]*$
               description: Seconds to wait before retrying, the server's drain timeout
                 (at least 1)
+        '405':
+          description: Registered path with unsupported method; Allow header identifies supported methods
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          headers:
+            Allow:
+              schema:
+                type: string
+              description: Methods accepted by this route
+  /gc:
+    post:
+      summary: Evict cached results now, as barca gc does, in the server
+      operationId: post_gc
+      description: 'barca gc run by the server: evict to 80% of the cache size limit ([cache] max_size, or
+        max_size of the request), or with the limit off every leftover and superseded result. The eviction
+        takes its turn with the server''s own writes to the metadata database, so it does not wait on the
+        database lock from outside as a second process does; a barca gc typed in the server''s project is
+        sent here over the project socket. What this server's runs in flight hold is left alone, result by result; restricted is set only when another process has a run in progress on this project.
+        The body is optional: without one the configured limit applies and files are deleted. An unknown
+        field is refused. The answer is barca gc --json.'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GcRequest'
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: What was evicted (or with dry_run, what would be) and what holds the rest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GcResult'
+        '400':
+          description: max_size is not a size, or env is not the environment this server serves
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server deletes nothing and answers no dry run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: The metadata DB or the filesystem size could not be read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '405':
           description: Registered path with unsupported method; Allow header identifies supported methods
           content:
@@ -7972,6 +8037,95 @@ components:
           ok: *id043
           outcome:
             $ref: '#/components/schemas/Outcome'
+    GcRequest:
+      description: barca gc's flags
+      type: object
+      additionalProperties: false
+      properties:
+        max_size:
+          description: 'A limit for this pass in place of the configured one, as --max-size: 20GB, 500MB,
+            20GiB, bytes, 10% (of the filesystem) or off (only leftovers and superseded results)'
+          anyOf:
+          - type: string
+          - type: 'null'
+        dry_run:
+          description: Report what would be evicted and delete nothing
+          type: boolean
+          default: false
+        env:
+          description: 'Evict only this environment''s results (leftovers are shared), as --env. It must be
+            the environment the server serves. Without it every environment of the project is considered.'
+          anyOf:
+          - type: string
+          - type: 'null'
+    GcResult:
+      description: The result of barca gc (barca gc --json)
+      type: object
+      additionalProperties: false
+      required: [dry_run, size_bytes, budget_before_bytes, budget_after_bytes, backup_bytes, limit_bytes,
+        target_bytes, after_bytes, evicted_files, evicted_bytes, tiers, restricted, evicted, failed, held]
+      properties:
+        dry_run: {type: boolean}
+        size_bytes: {type: integer, minimum: 0, description: Bytes under .barca/ before}
+        budget_before_bytes: {type: integer, minimum: 0, description: Bytes subject to the cache limit before (metadata backups excluded)}
+        budget_after_bytes: {type: integer, minimum: 0}
+        backup_bytes: {type: integer, minimum: 0, description: Metadata backups, outside the limit}
+        limit_bytes:
+          description: The limit; null when it is off
+          anyOf: [{type: integer, minimum: 0}, {type: 'null'}]
+        target_bytes:
+          description: What eviction aims for, 80% of the limit; null when it is off
+          anyOf: [{type: integer, minimum: 0}, {type: 'null'}]
+        after_bytes: {type: integer, minimum: 0, description: Bytes under .barca/ after}
+        evicted_files: {type: integer, minimum: 0}
+        evicted_bytes: {type: integer, minimum: 0}
+        tiers:
+          description: Files and bytes per tier evicted, in eviction order
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [tier, files, bytes]
+            properties:
+              tier: {type: string, enum: [leftovers, superseded, store_held, current]}
+              files: {type: integer, minimum: 0}
+              bytes: {type: integer, minimum: 0}
+        restricted:
+          description: Why only leftovers and superseded results were considered (a run in progress); null otherwise
+          anyOf: [{type: string}, {type: 'null'}]
+        evicted:
+          description: Every entry, in eviction order, with paths relative to the project root
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [tier, path, bytes]
+            properties:
+              tier: {type: string, enum: [leftovers, superseded, store_held, current]}
+              path: {type: string}
+              bytes: {type: integer, minimum: 0}
+              node: {type: string, description: The node a result belongs to; absent for a leftover}
+        failed:
+          description: Entries that could not be deleted
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, error]
+            properties:
+              path: {type: string}
+              error: {type: string}
+        held:
+          description: What holds the space left, largest first
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [what, bytes, evictable]
+            properties:
+              what: {type: string, enum: [results, unreferenced, metadata, db_copies, backups, other]}
+              bytes: {type: integer, minimum: 0}
+              evictable: {type: boolean}
     ResetResult:
       type: object
       additionalProperties: false
