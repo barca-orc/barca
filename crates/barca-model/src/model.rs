@@ -623,6 +623,16 @@ pub struct DagNode {
 }
 
 impl DagNode {
+    /// Whether new bytes under an unchanged run hash mean this node is not deterministic: only
+    /// for an asset that is not `Manual` and not declared `@asset(deterministic=False)`
+    /// (#548, #627; `barca_core::cache::checks_bytes` has the reasons). A property of the
+    /// declaration alone, so the ledger's post and the cache decision read the same answer.
+    pub fn checks_bytes(&self) -> bool {
+        self.extracted.kind == NodeKind::Asset
+            && self.extracted.freshness != Freshness::Manual
+            && self.extracted.deterministic
+    }
+
     // Convenience accessors that forward to the extracted node.
     pub fn kind(&self) -> NodeKind {
         self.extracted.kind

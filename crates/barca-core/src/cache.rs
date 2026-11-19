@@ -491,9 +491,7 @@ pub(crate) fn is_cutoff(dag: &Dag, id: &str) -> bool {
 /// the same code and inputs (#627). Caching is unchanged; only the warning and the
 /// `bytes_changed` / `last_bytes_change` reports are left out.
 pub(crate) fn checks_bytes(node: &crate::model::DagNode) -> bool {
-    node.kind() == crate::NodeKind::Asset
-        && node.extracted.freshness != crate::Freshness::Manual
-        && node.extracted.deterministic
+    node.checks_bytes()
 }
 
 /// Record the output of `display_id` for its consumers' run hashes when its node folds its
@@ -1190,107 +1188,9 @@ async fn task_up_to_date(
     Some(last.output)
 }
 
-/// One phase's cache lookups: the metadata DB's [`db::CacheReader`] and, when this command runs
-/// against a server, its ledger, which answers them in place of this machine's history
-/// (RFC-0007 section 4.1). It is the database reader everywhere one is expected.
-pub(crate) struct CacheReader {
-    db: db::CacheReader,
-    ledger: Option<crate::ledger::Ledger>,
-}
-
-impl CacheReader {
-    pub(crate) async fn for_config(
-        cfg: &crate::config::ResolvedConfig,
-    ) -> Result<Self, crate::BarcaError> {
-        Ok(Self {
-            db: db::CacheReader::for_config(cfg).await?,
-            ledger: crate::ledger::attached(cfg).cloned(),
-        })
-    }
-
-    /// A reader of the database at `db_path`, with no ledger.
-    #[cfg(test)]
-    pub(crate) async fn open(db_path: &str) -> Result<Self, crate::BarcaError> {
-        Ok(Self {
-            db: db::CacheReader::open(db_path).await?,
-            ledger: None,
-        })
-    }
-
-    /// The server's ledger, when this command runs against one.
-    pub(crate) fn ledger(&self) -> Option<&crate::ledger::Ledger> {
-        self.ledger.as_ref()
-    }
-}
-
-impl std::ops::Deref for CacheReader {
-    type Target = db::CacheReader;
-
-    fn deref(&self) -> &db::CacheReader {
-        &self.db
-    }
-}
-
-/// The most recent successful materialization of `node_id` with this run hash, if any. The row
-/// is the cache hit; whether its artifact can still be read is settled only when something
-/// needs to read it (see [`crate::recover`]).
-pub(crate) async fn lookup_cached(
-    cache: &CacheReader,
-    node_id: &str,
-    run_hash: &str,
-) -> Option<dispatch::OutputRef> {
-    // With a server, its ledger answers, not this machine's history (RFC-0007 section 4.1).
-    // Every key a decision looks up was asked for before the phase was decided; one that was
-    // not is a miss, and the step runs here.
-    if let Some(ledger) = cache.ledger() {
-        return ledger.answer(node_id, run_hash).flatten();
-    }
-    // Prepared once per reader: a dry run of a 200k-key node asks 200k times, and compiling
-    // the statement each time cost more than the lookup.
-    const WITH_OUTPUT_HASH: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes, \
-         output_hash FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
-         AND status = 'success' ORDER BY id DESC";
-    // A database from before barca recorded output hashes has no such column.
-    const WITHOUT: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes \
-         FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
-         AND status = 'success' ORDER BY id DESC";
-    let statement = cache.lookup_statement(&[WITH_OUTPUT_HASH, WITHOUT]).await;
-    let mut rows = match statement
-        .query([node_id.to_string(), run_hash.to_string()])
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => return lookup_failed(node_id, e),
-    };
-    loop {
-        let row = match rows.next().await {
-            Ok(Some(row)) => row,
-            Ok(None) => return None,
-            Err(e) => return lookup_failed(node_id, e),
-        };
-        let Some(path) = row.get::<String>(0).ok() else {
-            continue;
-        };
-        if !cache.allows_artifact(&path) {
-            continue;
-        }
-        return Some(dispatch::OutputRef {
-            path,
-            format: row.get::<String>(1).ok()?,
-            size_bytes: row.get::<i64>(2).ok()? as u64,
-            elapsed_seconds: None,
-            content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
-        });
-    }
-}
-
-/// A lookup the database could not answer is a miss: the step runs again, which costs time and
-/// never gives a wrong result. A `--read-only` server saw this beside a writer's `VACUUM` while
-/// barca dropped its own SQLite locks ([`crate::db::held_file`]).
-fn lookup_failed(node_id: &str, e: libsql::Error) -> Option<dispatch::OutputRef> {
-    crate::errln!("[barca] warning: cache lookup of {node_id} failed: {e}");
-    None
-}
+// The reader a cache decision asks (this machine's history, or a server's ledger) and its one
+// lookup are the ledger's: the server answers `POST /ledger/lookup` with the same lookup.
+pub(crate) use crate::ledger::{CacheReader, lookup_cached};
 
 /// How a cache row's artifact is reached on this machine.
 pub(crate) enum CacheHit {
@@ -1400,10 +1300,7 @@ pub enum CachePolicy {
     RefreshSelective { names: Vec<String>, cascade: bool },
 }
 
-/// How an error starts when a directory at an artifact path could not be moved aside
-/// (`barca._storage.ArtifactPathError`): the state of barca's own artifact directory, not a
-/// fault of the step that was writing there.
-pub(crate) const BLOCKED_ARTIFACT_PATH: &str = "ArtifactPathError";
+pub(crate) use crate::store_sync::BLOCKED_ARTIFACT_PATH;
 
 #[cfg(test)]
 mod lookup_tests;

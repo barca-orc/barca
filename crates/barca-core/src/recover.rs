@@ -46,22 +46,9 @@ pub(crate) enum Work<'p> {
     Returned,
 }
 
-/// Whether the artifact recorded at `path` can be read from this machine as it is.
-///
-/// A file path (plain or `file://`) is looked up on disk. A remote URI cannot be: with a
-/// separate artifact store (`separate_store`) workers read only the local artifact directory,
-/// so a URI that is not in that store is out of reach; without one, the worker reads the URI
-/// itself and reports what it finds, so it is taken as readable.
-///
-/// An artifact is one file. A directory at the path, or a symlink that leads to one or to
-/// nothing, is not an artifact and counts as missing: the step is computed again, and whoever
-/// writes the file moves the directory out of the way first (`barca._storage.make_way`).
-pub(crate) fn on_disk(path: &str, separate_store: bool) -> bool {
-    match crate::transfer::local_path(path) {
-        Some(file) => file.is_file(),
-        None => !separate_store,
-    }
-}
+// Whether an artifact can be read from this machine as it is: the store's own question, asked
+// here for every cache hit of a phase.
+pub(crate) use crate::store_sync::on_disk;
 
 /// `test` of every item, in order. A handful is done in place; many are spread over a few
 /// threads, because each test is a file lookup and a partitioned asset has one per key.

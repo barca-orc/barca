@@ -46,3 +46,16 @@ pub fn ensure_env_dirs(env: &str) -> Result<LocalPaths, BarcaError> {
     }
     Ok(paths)
 }
+
+/// The file under `.barca/` in which the cache size limit keeps its last full walk of the
+/// directory (`gc`). It is named here, below both of its users: `gc` reads and writes it, and
+/// whatever replaces the metadata database (`barca state reset`, `barca state restore`)
+/// removes it with [`forget_gc_survey`].
+pub const GC_STATE_FILE: &str = "gc-state.json";
+
+/// Forget the last full walk of `barca_dir` (a project's `.barca/`), so the next check walks
+/// it again: the recorded sizes the fast estimate adds up no longer describe the files on
+/// disk. A missing file is already forgotten.
+pub fn forget_gc_survey(barca_dir: &Path) {
+    let _ = fs::remove_file(barca_dir.join(GC_STATE_FILE));
+}

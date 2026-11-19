@@ -71,7 +71,7 @@ const SQL_CACHE_GRACE: Duration = Duration::from_secs(300);
 pub(crate) const UNREFERENCED_GRACE: Duration = Duration::from_secs(60);
 
 /// What the last full walk found, kept in `.barca/gc-state.json`.
-const STATE_FILE: &str = "gc-state.json";
+const STATE_FILE: &str = crate::layout::GC_STATE_FILE;
 
 // `CacheReport`, the `cache` object of a `get`/`run` result, is declared with the results it
 // is part of.
@@ -556,17 +556,12 @@ fn record_measurement(project: &Project, measured: Measurement) {
     }
 }
 
-/// Forget the last full walk, so the next check walks `.barca/` again: the metadata database
-/// was replaced (`barca state reset`, `barca state restore`), and the recorded sizes the fast
-/// estimate adds up no longer describe the files on disk.
-pub(crate) fn forget_survey() {
-    if let Ok(project) = Project::here() {
-        forget_survey_in(&project);
-    }
-}
-
+/// Forget the last full walk, so the next check walks `.barca/` again. What replaces the
+/// metadata database (`barca state reset`, `barca state restore`) does the same through
+/// `backup`, which is below this module and so names the file's owner, `layout`, not `gc`.
+#[cfg(test)]
 fn forget_survey_in(project: &Project) {
-    let _ = std::fs::remove_file(project.barca.join(STATE_FILE));
+    crate::layout::forget_gc_survey(&project.barca);
 }
 
 fn read_state(project: &Project) -> Option<State> {
