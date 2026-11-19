@@ -590,8 +590,8 @@
       "why": {
         "groups": [
           {
-            "category": "refresh",
-            "label": "named in --refresh",
+            "category": "code_changed",
+            "label": "code changed",
             "rows": [
               {
                 "counts": "1 node",
@@ -607,7 +607,7 @@
             "steps": 1
           }
         ],
-        "headline": "1 step ran: 1 named in --refresh",
+        "headline": "1 step ran: 1 code changed",
         "omitted": 0,
         "partial": false
       }
@@ -643,7 +643,7 @@
       "omitted": 0,
       "reasons": [
         {
-          "category": "refresh",
+          "category": "code_changed",
           "example": "billing.py:invoices",
           "nodes": 1,
           "steps": 1,

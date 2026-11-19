@@ -10,28 +10,28 @@
       "also_in": [],
       "asset_causes": {
         "catching_up": 0,
-        "failing": 3,
-        "no_refresh_path": 3,
+        "failing": 5,
+        "no_refresh_path": 1,
         "overdue": 0,
-        "queued": 1,
+        "queued": 2,
         "undecided": 0
       },
       "asset_health": {
         "behind": 2,
-        "blocked": 1,
+        "blocked": 3,
         "failing": 2,
-        "never_run": 2,
-        "ok": 4,
+        "never_run": 1,
+        "ok": 3,
         "suspect": 0,
         "undecided": 0
       },
       "assets": 11,
       "causes": {
         "catching_up": 0,
-        "failing": 4,
-        "no_refresh_path": 4,
+        "failing": 6,
+        "no_refresh_path": 2,
         "overdue": 0,
-        "queued": 1,
+        "queued": 2,
         "undecided": 0
       },
       "children": [
@@ -45,12 +45,12 @@
         "suspect": 0
       },
       "fresh_by": "2026-11-17T14:57:10Z",
-      "gap_seconds": 474366,
+      "gap_seconds": 390364,
       "health": {
         "behind": 3,
-        "blocked": 1,
+        "blocked": 3,
         "failing": 3,
-        "never_run": 2,
+        "never_run": 1,
         "ok": 5,
         "suspect": 0,
         "undecided": 0
@@ -58,23 +58,43 @@
       "held_by": [
         {
           "action_kind": "start_server",
-          "assets": 1,
+          "assets": 0,
           "causes": {
             "catching_up": 0,
             "failing": 0,
-            "no_refresh_path": 2,
+            "no_refresh_path": 1,
             "overdue": 0,
             "queued": 0,
             "undecided": 0
           },
-          "cumulative_nodes": 2,
+          "cumulative_nodes": 1,
           "fresh_by": null,
-          "gap_seconds": 21240,
-          "nodes": 2,
+          "gap_seconds": 32220,
+          "nodes": 1,
           "root": "scheduler_off",
-          "stale_since": "2026-11-17T12:00:00Z",
-          "unbounded": 2,
-          "weight": 12
+          "stale_since": "2026-11-17T06:00:00Z",
+          "unbounded": 1,
+          "weight": 6
+        },
+        {
+          "action_kind": "fix_failure",
+          "assets": 3,
+          "causes": {
+            "catching_up": 0,
+            "failing": 3,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 4,
+          "fresh_by": null,
+          "gap_seconds": 154257,
+          "nodes": 3,
+          "root": "failure:billing.py:invoices",
+          "stale_since": "2026-11-17T00:40:01Z",
+          "unbounded": 3,
+          "weight": 18
         },
         {
           "action_kind": "fix_failure",
@@ -87,7 +107,7 @@
             "queued": 0,
             "undecided": 0
           },
-          "cumulative_nodes": 4,
+          "cumulative_nodes": 6,
           "fresh_by": null,
           "gap_seconds": 93238,
           "nodes": 2,
@@ -107,52 +127,12 @@
             "queued": 0,
             "undecided": 0
           },
-          "cumulative_nodes": 5,
+          "cumulative_nodes": 7,
           "fresh_by": null,
           "gap_seconds": 104219,
           "nodes": 1,
           "root": "failure:billing.py:check__invoices",
           "stale_since": "2026-11-16T10:00:01Z",
-          "unbounded": 1,
-          "weight": 6
-        },
-        {
-          "action_kind": "fix_failure",
-          "assets": 1,
-          "causes": {
-            "catching_up": 0,
-            "failing": 1,
-            "no_refresh_path": 0,
-            "overdue": 0,
-            "queued": 0,
-            "undecided": 0
-          },
-          "cumulative_nodes": 6,
-          "fresh_by": null,
-          "gap_seconds": 51419,
-          "nodes": 1,
-          "root": "failure:billing.py:invoices",
-          "stale_since": "2026-11-17T00:40:01Z",
-          "unbounded": 1,
-          "weight": 6
-        },
-        {
-          "action_kind": "add_schedule",
-          "assets": 1,
-          "causes": {
-            "catching_up": 0,
-            "failing": 0,
-            "no_refresh_path": 1,
-            "overdue": 0,
-            "queued": 0,
-            "undecided": 0
-          },
-          "cumulative_nodes": 7,
-          "fresh_by": null,
-          "gap_seconds": 197820,
-          "nodes": 1,
-          "root": "no_schedule:billing.py:ledger",
-          "stale_since": "2026-11-15T08:00:00Z",
           "unbounded": 1,
           "weight": 6
         },
@@ -178,51 +158,51 @@
         },
         {
           "action_kind": "wait",
-          "assets": 1,
+          "assets": 2,
           "causes": {
             "catching_up": 0,
             "failing": 0,
             "no_refresh_path": 0,
             "overdue": 0,
-            "queued": 1,
+            "queued": 2,
             "undecided": 0
           },
-          "cumulative_nodes": 9,
+          "cumulative_nodes": 10,
           "fresh_by": "2026-11-17T14:57:10Z",
           "gap_seconds": 10,
-          "nodes": 1,
+          "nodes": 2,
           "root": "input:orders.py:orders_enriched",
           "stale_since": null,
-          "unbounded": 0,
-          "weight": 2
+          "unbounded": 1,
+          "weight": 4
         }
       ],
       "id": "root",
       "kind": "root",
       "label": "all",
-      "nodes": 14,
-      "not_fresh": 9,
+      "nodes": 15,
+      "not_fresh": 10,
       "parent": null,
       "running": 0,
       "split": {
         "catching_up": 1,
-        "in_hand_nodes": 1,
-        "in_hand_weight": 2,
-        "need_someone": 6,
+        "in_hand_nodes": 2,
+        "in_hand_weight": 4,
+        "need_someone": 5,
         "need_someone_nodes": 8,
         "need_someone_weight": 48,
         "run_by_hand": 0
       },
-      "stale_since": "2026-11-15T08:00:00Z",
-      "unbounded": 8,
-      "weight": 55,
+      "stale_since": "2026-11-16T10:00:01Z",
+      "unbounded": 9,
+      "weight": 57,
       "weights": {
         "catching_up": 0,
-        "failing": 24,
+        "failing": 36,
         "fresh": 5,
-        "no_refresh_path": 24,
+        "no_refresh_path": 12,
         "overdue": 0,
-        "queued": 2,
+        "queued": 4,
         "undecided": 0
       }
     },
@@ -249,7 +229,7 @@
       "causes": {
         "catching_up": 0,
         "failing": 2,
-        "no_refresh_path": 1,
+        "no_refresh_path": 2,
         "overdue": 0,
         "queued": 1,
         "undecided": 0
@@ -258,6 +238,7 @@
         "orders.py:sales_by_day",
         "orders.py:sales_report",
         "orders.py:orders_enriched",
+        "orders.py:nightly_export",
         "orders.py:forecast",
         "orders.py:customers",
         "orders.py:fx_rates",
@@ -270,9 +251,9 @@
         "suspect": 0
       },
       "fresh_by": "2026-11-17T14:57:10Z",
-      "gap_seconds": 99668,
+      "gap_seconds": 131888,
       "health": {
-        "behind": 1,
+        "behind": 2,
         "blocked": 1,
         "failing": 1,
         "never_run": 1,
@@ -281,6 +262,26 @@
         "undecided": 0
       },
       "held_by": [
+        {
+          "action_kind": "start_server",
+          "assets": 0,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 1,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 1,
+          "fresh_by": null,
+          "gap_seconds": 32220,
+          "nodes": 1,
+          "root": "scheduler_off",
+          "stale_since": "2026-11-17T06:00:00Z",
+          "unbounded": 1,
+          "weight": 6
+        },
         {
           "action_kind": "fix_failure",
           "assets": 2,
@@ -292,7 +293,7 @@
             "queued": 0,
             "undecided": 0
           },
-          "cumulative_nodes": 2,
+          "cumulative_nodes": 3,
           "fresh_by": null,
           "gap_seconds": 93238,
           "nodes": 2,
@@ -312,7 +313,7 @@
             "queued": 0,
             "undecided": 0
           },
-          "cumulative_nodes": 3,
+          "cumulative_nodes": 4,
           "fresh_by": null,
           "gap_seconds": 6420,
           "nodes": 1,
@@ -332,7 +333,7 @@
             "queued": 1,
             "undecided": 0
           },
-          "cumulative_nodes": 4,
+          "cumulative_nodes": 5,
           "fresh_by": "2026-11-17T14:57:10Z",
           "gap_seconds": 10,
           "nodes": 1,
@@ -345,27 +346,27 @@
       "id": "file:orders.py",
       "kind": "file",
       "label": "orders.py",
-      "nodes": 8,
-      "not_fresh": 4,
+      "nodes": 9,
+      "not_fresh": 5,
       "parent": "root",
       "running": 0,
       "split": {
         "catching_up": 1,
         "in_hand_nodes": 1,
         "in_hand_weight": 2,
-        "need_someone": 2,
-        "need_someone_nodes": 3,
-        "need_someone_weight": 18,
+        "need_someone": 3,
+        "need_someone_nodes": 4,
+        "need_someone_weight": 24,
         "run_by_hand": 0
       },
       "stale_since": "2026-11-17T02:00:01Z",
-      "unbounded": 3,
-      "weight": 24,
+      "unbounded": 4,
+      "weight": 30,
       "weights": {
         "catching_up": 0,
         "failing": 12,
         "fresh": 4,
-        "no_refresh_path": 6,
+        "no_refresh_path": 12,
         "overdue": 0,
         "queued": 2,
         "undecided": 0
@@ -605,6 +606,81 @@
         "no_refresh_path": 0,
         "overdue": 0,
         "queued": 2,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 0,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 0,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 32220,
+      "health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:nightly_export",
+      "kind": "node",
+      "label": "nightly_export",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T06:00:00Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 0,
+        "no_refresh_path": 6,
+        "overdue": 0,
+        "queued": 0,
         "undecided": 0
       }
     },
@@ -987,26 +1063,26 @@
       "also_in": [],
       "asset_causes": {
         "catching_up": 0,
-        "failing": 1,
-        "no_refresh_path": 1,
+        "failing": 3,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
       },
       "asset_health": {
         "behind": 0,
-        "blocked": 0,
+        "blocked": 2,
         "failing": 1,
-        "never_run": 1,
-        "ok": 1,
+        "never_run": 0,
+        "ok": 0,
         "suspect": 0,
         "undecided": 0
       },
       "assets": 3,
       "causes": {
         "catching_up": 0,
-        "failing": 2,
-        "no_refresh_path": 1,
+        "failing": 4,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
@@ -1014,8 +1090,8 @@
       "children": [
         "billing.py:invoices",
         "billing.py:check__invoices",
-        "billing.py:ledger",
-        "billing.py:invoice_totals"
+        "billing.py:invoice_totals",
+        "billing.py:ledger"
       ],
       "data_coverage": {
         "assets": 3,
@@ -1023,17 +1099,37 @@
         "suspect": 0
       },
       "fresh_by": null,
-      "gap_seconds": 353458,
+      "gap_seconds": 258476,
       "health": {
         "behind": 0,
-        "blocked": 0,
+        "blocked": 2,
         "failing": 2,
-        "never_run": 1,
-        "ok": 1,
+        "never_run": 0,
+        "ok": 0,
         "suspect": 0,
         "undecided": 0
       },
       "held_by": [
+        {
+          "action_kind": "fix_failure",
+          "assets": 3,
+          "causes": {
+            "catching_up": 0,
+            "failing": 3,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 3,
+          "fresh_by": null,
+          "gap_seconds": 154257,
+          "nodes": 3,
+          "root": "failure:billing.py:invoices",
+          "stale_since": "2026-11-17T00:40:01Z",
+          "unbounded": 3,
+          "weight": 18
+        },
         {
           "action_kind": "fix_failure",
           "assets": 0,
@@ -1045,52 +1141,12 @@
             "queued": 0,
             "undecided": 0
           },
-          "cumulative_nodes": 1,
+          "cumulative_nodes": 4,
           "fresh_by": null,
           "gap_seconds": 104219,
           "nodes": 1,
           "root": "failure:billing.py:check__invoices",
           "stale_since": "2026-11-16T10:00:01Z",
-          "unbounded": 1,
-          "weight": 6
-        },
-        {
-          "action_kind": "fix_failure",
-          "assets": 1,
-          "causes": {
-            "catching_up": 0,
-            "failing": 1,
-            "no_refresh_path": 0,
-            "overdue": 0,
-            "queued": 0,
-            "undecided": 0
-          },
-          "cumulative_nodes": 2,
-          "fresh_by": null,
-          "gap_seconds": 51419,
-          "nodes": 1,
-          "root": "failure:billing.py:invoices",
-          "stale_since": "2026-11-17T00:40:01Z",
-          "unbounded": 1,
-          "weight": 6
-        },
-        {
-          "action_kind": "add_schedule",
-          "assets": 1,
-          "causes": {
-            "catching_up": 0,
-            "failing": 0,
-            "no_refresh_path": 1,
-            "overdue": 0,
-            "queued": 0,
-            "undecided": 0
-          },
-          "cumulative_nodes": 3,
-          "fresh_by": null,
-          "gap_seconds": 197820,
-          "nodes": 1,
-          "root": "no_schedule:billing.py:ledger",
-          "stale_since": "2026-11-15T08:00:00Z",
           "unbounded": 1,
           "weight": 6
         }
@@ -1099,26 +1155,26 @@
       "kind": "file",
       "label": "billing.py",
       "nodes": 4,
-      "not_fresh": 3,
+      "not_fresh": 4,
       "parent": "root",
       "running": 0,
       "split": {
         "catching_up": 0,
         "in_hand_nodes": 0,
         "in_hand_weight": 0,
-        "need_someone": 3,
-        "need_someone_nodes": 3,
-        "need_someone_weight": 18,
+        "need_someone": 2,
+        "need_someone_nodes": 4,
+        "need_someone_weight": 24,
         "run_by_hand": 0
       },
-      "stale_since": "2026-11-15T08:00:00Z",
-      "unbounded": 3,
-      "weight": 19,
+      "stale_since": "2026-11-16T10:00:01Z",
+      "unbounded": 4,
+      "weight": 24,
       "weights": {
         "catching_up": 0,
-        "failing": 12,
-        "fresh": 1,
-        "no_refresh_path": 6,
+        "failing": 24,
+        "fresh": 0,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
@@ -1278,17 +1334,17 @@
       "also_in": [],
       "asset_causes": {
         "catching_up": 0,
-        "failing": 0,
-        "no_refresh_path": 1,
+        "failing": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
       },
       "asset_health": {
         "behind": 0,
-        "blocked": 0,
+        "blocked": 1,
         "failing": 0,
-        "never_run": 1,
+        "never_run": 0,
         "ok": 0,
         "suspect": 0,
         "undecided": 0
@@ -1296,8 +1352,8 @@
       "assets": 1,
       "causes": {
         "catching_up": 0,
-        "failing": 0,
-        "no_refresh_path": 1,
+        "failing": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
@@ -1309,12 +1365,87 @@
         "suspect": 0
       },
       "fresh_by": null,
-      "gap_seconds": 197820,
+      "gap_seconds": 51419,
       "health": {
         "behind": 0,
-        "blocked": 0,
+        "blocked": 1,
         "failing": 0,
-        "never_run": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "billing.py:invoice_totals",
+      "kind": "node",
+      "label": "invoice_totals",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:billing.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T00:40:01Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 6,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 51419,
+      "health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
         "ok": 0,
         "suspect": 0,
         "undecided": 0
@@ -1336,88 +1467,13 @@
         "need_someone_weight": 6,
         "run_by_hand": 0
       },
-      "stale_since": "2026-11-15T08:00:00Z",
+      "stale_since": "2026-11-17T00:40:01Z",
       "unbounded": 1,
       "weight": 6,
       "weights": {
         "catching_up": 0,
-        "failing": 0,
+        "failing": 6,
         "fresh": 0,
-        "no_refresh_path": 6,
-        "overdue": 0,
-        "queued": 0,
-        "undecided": 0
-      }
-    },
-    {
-      "also_in": [],
-      "asset_causes": {
-        "catching_up": 0,
-        "failing": 0,
-        "no_refresh_path": 0,
-        "overdue": 0,
-        "queued": 0,
-        "undecided": 0
-      },
-      "asset_health": {
-        "behind": 0,
-        "blocked": 0,
-        "failing": 0,
-        "never_run": 0,
-        "ok": 1,
-        "suspect": 0,
-        "undecided": 0
-      },
-      "assets": 1,
-      "causes": {
-        "catching_up": 0,
-        "failing": 0,
-        "no_refresh_path": 0,
-        "overdue": 0,
-        "queued": 0,
-        "undecided": 0
-      },
-      "children": [],
-      "data_coverage": {
-        "assets": 1,
-        "measured": 0,
-        "suspect": 0
-      },
-      "fresh_by": null,
-      "gap_seconds": 0,
-      "health": {
-        "behind": 0,
-        "blocked": 0,
-        "failing": 0,
-        "never_run": 0,
-        "ok": 1,
-        "suspect": 0,
-        "undecided": 0
-      },
-      "held_by": [],
-      "id": "billing.py:invoice_totals",
-      "kind": "node",
-      "label": "invoice_totals",
-      "nodes": 1,
-      "not_fresh": 0,
-      "parent": "file:billing.py",
-      "running": 0,
-      "split": {
-        "catching_up": 0,
-        "in_hand_nodes": 0,
-        "in_hand_weight": 0,
-        "need_someone": 0,
-        "need_someone_nodes": 0,
-        "need_someone_weight": 0,
-        "run_by_hand": 0
-      },
-      "stale_since": null,
-      "unbounded": 0,
-      "weight": 1,
-      "weights": {
-        "catching_up": 0,
-        "failing": 0,
-        "fresh": 1,
         "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
@@ -1429,9 +1485,9 @@
       "asset_causes": {
         "catching_up": 0,
         "failing": 0,
-        "no_refresh_path": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
-        "queued": 0,
+        "queued": 1,
         "undecided": 0
       },
       "asset_health": {
@@ -1447,9 +1503,9 @@
       "causes": {
         "catching_up": 0,
         "failing": 0,
-        "no_refresh_path": 2,
+        "no_refresh_path": 0,
         "overdue": 0,
-        "queued": 0,
+        "queued": 1,
         "undecided": 0
       },
       "children": [
@@ -1462,64 +1518,64 @@
         "suspect": 0
       },
       "fresh_by": null,
-      "gap_seconds": 21240,
+      "gap_seconds": 0,
       "health": {
-        "behind": 2,
+        "behind": 1,
         "blocked": 0,
         "failing": 0,
         "never_run": 0,
-        "ok": 0,
+        "ok": 1,
         "suspect": 0,
         "undecided": 0
       },
       "held_by": [
         {
-          "action_kind": "start_server",
+          "action_kind": "wait",
           "assets": 1,
           "causes": {
             "catching_up": 0,
             "failing": 0,
-            "no_refresh_path": 2,
+            "no_refresh_path": 0,
             "overdue": 0,
-            "queued": 0,
+            "queued": 1,
             "undecided": 0
           },
-          "cumulative_nodes": 2,
+          "cumulative_nodes": 1,
           "fresh_by": null,
-          "gap_seconds": 21240,
-          "nodes": 2,
-          "root": "scheduler_off",
-          "stale_since": "2026-11-17T12:00:00Z",
-          "unbounded": 2,
-          "weight": 12
+          "gap_seconds": 0,
+          "nodes": 1,
+          "root": "input:orders.py:orders_enriched",
+          "stale_since": null,
+          "unbounded": 1,
+          "weight": 2
         }
       ],
       "id": "group:orders.py:reporting",
       "kind": "group",
       "label": "Reporting",
       "nodes": 2,
-      "not_fresh": 2,
+      "not_fresh": 1,
       "parent": "root",
       "running": 0,
       "split": {
-        "catching_up": 0,
-        "in_hand_nodes": 0,
-        "in_hand_weight": 0,
-        "need_someone": 1,
-        "need_someone_nodes": 2,
-        "need_someone_weight": 12,
+        "catching_up": 1,
+        "in_hand_nodes": 1,
+        "in_hand_weight": 2,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
         "run_by_hand": 0
       },
-      "stale_since": "2026-11-17T12:00:00Z",
-      "unbounded": 2,
-      "weight": 12,
+      "stale_since": null,
+      "unbounded": 1,
+      "weight": 3,
       "weights": {
         "catching_up": 0,
         "failing": 0,
-        "fresh": 0,
-        "no_refresh_path": 12,
+        "fresh": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
-        "queued": 0,
+        "queued": 2,
         "undecided": 0
       }
     },
@@ -1528,9 +1584,9 @@
       "asset_causes": {
         "catching_up": 0,
         "failing": 0,
-        "no_refresh_path": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
-        "queued": 0,
+        "queued": 1,
         "undecided": 0
       },
       "asset_health": {
@@ -1546,9 +1602,9 @@
       "causes": {
         "catching_up": 0,
         "failing": 0,
-        "no_refresh_path": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
-        "queued": 0,
+        "queued": 1,
         "undecided": 0
       },
       "children": [],
@@ -1558,7 +1614,7 @@
         "suspect": 0
       },
       "fresh_by": null,
-      "gap_seconds": 10620,
+      "gap_seconds": 0,
       "health": {
         "behind": 1,
         "blocked": 0,
@@ -1577,24 +1633,24 @@
       "parent": "group:orders.py:reporting",
       "running": 0,
       "split": {
-        "catching_up": 0,
-        "in_hand_nodes": 0,
-        "in_hand_weight": 0,
-        "need_someone": 1,
-        "need_someone_nodes": 1,
-        "need_someone_weight": 6,
+        "catching_up": 1,
+        "in_hand_nodes": 1,
+        "in_hand_weight": 2,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
         "run_by_hand": 0
       },
-      "stale_since": "2026-11-17T12:00:00Z",
+      "stale_since": null,
       "unbounded": 1,
-      "weight": 6,
+      "weight": 2,
       "weights": {
         "catching_up": 0,
         "failing": 0,
         "fresh": 0,
-        "no_refresh_path": 6,
+        "no_refresh_path": 0,
         "overdue": 0,
-        "queued": 0,
+        "queued": 2,
         "undecided": 0
       }
     },
@@ -1621,7 +1677,7 @@
       "causes": {
         "catching_up": 0,
         "failing": 0,
-        "no_refresh_path": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
@@ -1633,13 +1689,13 @@
         "suspect": 0
       },
       "fresh_by": null,
-      "gap_seconds": 10620,
+      "gap_seconds": 0,
       "health": {
-        "behind": 1,
+        "behind": 0,
         "blocked": 0,
         "failing": 0,
         "never_run": 0,
-        "ok": 0,
+        "ok": 1,
         "suspect": 0,
         "undecided": 0
       },
@@ -1648,26 +1704,26 @@
       "kind": "node",
       "label": "publish_dashboard",
       "nodes": 1,
-      "not_fresh": 1,
+      "not_fresh": 0,
       "parent": "group:orders.py:reporting",
       "running": 0,
       "split": {
         "catching_up": 0,
         "in_hand_nodes": 0,
         "in_hand_weight": 0,
-        "need_someone": 1,
-        "need_someone_nodes": 1,
-        "need_someone_weight": 6,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
         "run_by_hand": 0
       },
-      "stale_since": "2026-11-17T12:00:00Z",
-      "unbounded": 1,
-      "weight": 6,
+      "stale_since": null,
+      "unbounded": 0,
+      "weight": 1,
       "weights": {
         "catching_up": 0,
         "failing": 0,
-        "fresh": 0,
-        "no_refresh_path": 6,
+        "fresh": 1,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
@@ -1678,30 +1734,30 @@
     {
       "asset_health": {
         "behind": 0,
-        "blocked": 0,
+        "blocked": 2,
         "failing": 1,
-        "never_run": 1,
-        "ok": 1,
+        "never_run": 0,
+        "ok": 0,
         "suspect": 0,
         "undecided": 0
       },
       "assets": 3,
       "causes": {
         "catching_up": 0,
-        "failing": 2,
-        "no_refresh_path": 1,
+        "failing": 4,
+        "no_refresh_path": 0,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
       },
       "file": "billing.py",
-      "fresh": 1,
+      "fresh": 0,
       "health": {
         "behind": 0,
-        "blocked": 0,
+        "blocked": 2,
         "failing": 2,
-        "never_run": 1,
-        "ok": 1,
+        "never_run": 0,
+        "ok": 0,
         "suspect": 0,
         "undecided": 0
       },
@@ -1709,13 +1765,13 @@
         "asset": {
           "causes": {
             "catching_up": 0,
-            "failing": 1,
-            "no_refresh_path": 1,
+            "failing": 3,
+            "no_refresh_path": 0,
             "overdue": 0,
             "queued": 0,
             "undecided": 0
           },
-          "fresh": 1,
+          "fresh": 0,
           "nodes": 3
         },
         "sensor": {
@@ -1761,19 +1817,19 @@
       "causes": {
         "catching_up": 0,
         "failing": 2,
-        "no_refresh_path": 3,
+        "no_refresh_path": 2,
         "overdue": 0,
-        "queued": 1,
+        "queued": 2,
         "undecided": 0
       },
       "file": "orders.py",
-      "fresh": 4,
+      "fresh": 5,
       "health": {
         "behind": 3,
         "blocked": 1,
         "failing": 1,
         "never_run": 1,
-        "ok": 4,
+        "ok": 5,
         "suspect": 0,
         "undecided": 0
       },
@@ -1782,9 +1838,9 @@
           "causes": {
             "catching_up": 0,
             "failing": 2,
-            "no_refresh_path": 2,
+            "no_refresh_path": 1,
             "overdue": 0,
-            "queued": 1,
+            "queued": 2,
             "undecided": 0
           },
           "fresh": 3,
@@ -1811,11 +1867,11 @@
             "queued": 0,
             "undecided": 0
           },
-          "fresh": 0,
-          "nodes": 1
+          "fresh": 1,
+          "nodes": 2
         }
       },
-      "nodes": 10,
+      "nodes": 11,
       "running": 0,
       "worst": "failing"
     }
@@ -1824,13 +1880,13 @@
     "asset": {
       "causes": {
         "catching_up": 0,
-        "failing": 3,
-        "no_refresh_path": 3,
+        "failing": 5,
+        "no_refresh_path": 1,
         "overdue": 0,
-        "queued": 1,
+        "queued": 2,
         "undecided": 0
       },
-      "fresh": 4,
+      "fresh": 3,
       "nodes": 11
     },
     "sensor": {
@@ -1854,44 +1910,73 @@
         "queued": 0,
         "undecided": 0
       },
-      "fresh": 0,
-      "nodes": 2
+      "fresh": 1,
+      "nodes": 3
     }
   },
   "roots": [
     {
       "action": {
         "command": "barca serve",
-        "estimated_seconds": 10,
+        "estimated_seconds": 3,
         "kind": "start_server",
         "run_once": null
       },
-      "assets": 1,
+      "assets": 0,
       "causes": {
         "catching_up": 0,
         "failing": 0,
-        "no_refresh_path": 2,
+        "no_refresh_path": 1,
         "overdue": 0,
         "queued": 0,
         "undecided": 0
       },
-      "detail": "the running scheduler does not fire revenue_hourly: 1 schedule missed a slot",
+      "detail": "the running scheduler does not fire nightly_export: 1 schedule missed a slot",
       "error_group": null,
       "fresh_by": null,
-      "gap_seconds": 21240,
+      "gap_seconds": 32220,
       "id": "scheduler_off",
       "kind": "scheduler_off",
       "needs_someone": true,
       "node": "",
-      "nodes": 2,
-      "stale_since": "2026-11-17T12:00:00Z",
-      "unbounded": 2,
-      "weight": 12
+      "nodes": 1,
+      "stale_since": "2026-11-17T06:00:00Z",
+      "unbounded": 1,
+      "weight": 6
+    },
+    {
+      "action": {
+        "command": "barca get invoices --server",
+        "estimated_seconds": 8,
+        "kind": "fix_failure",
+        "run_once": null
+      },
+      "assets": 3,
+      "causes": {
+        "catching_up": 0,
+        "failing": 3,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "detail": "ValueError: 3 rows with a negative total",
+      "error_group": "ValueError: # rows with a negative total",
+      "fresh_by": null,
+      "gap_seconds": 154257,
+      "id": "failure:billing.py:invoices",
+      "kind": "failure",
+      "needs_someone": true,
+      "node": "billing.py:invoices",
+      "nodes": 3,
+      "stale_since": "2026-11-17T00:40:01Z",
+      "unbounded": 3,
+      "weight": 18
     },
     {
       "action": {
         "command": "barca get sales_by_day --server",
-        "estimated_seconds": 16,
+        "estimated_seconds": 18,
         "kind": "fix_failure",
         "run_once": null
       },
@@ -1948,64 +2033,6 @@
     },
     {
       "action": {
-        "command": "barca get invoices --server",
-        "estimated_seconds": 3,
-        "kind": "fix_failure",
-        "run_once": null
-      },
-      "assets": 1,
-      "causes": {
-        "catching_up": 0,
-        "failing": 1,
-        "no_refresh_path": 0,
-        "overdue": 0,
-        "queued": 0,
-        "undecided": 0
-      },
-      "detail": "ValueError: 3 rows with a negative total",
-      "error_group": "ValueError: # rows with a negative total",
-      "fresh_by": null,
-      "gap_seconds": 51419,
-      "id": "failure:billing.py:invoices",
-      "kind": "failure",
-      "needs_someone": true,
-      "node": "billing.py:invoices",
-      "nodes": 1,
-      "stale_since": "2026-11-17T00:40:01Z",
-      "unbounded": 1,
-      "weight": 6
-    },
-    {
-      "action": {
-        "command": null,
-        "estimated_seconds": null,
-        "kind": "add_schedule",
-        "run_once": "barca get ledger --server"
-      },
-      "assets": 1,
-      "causes": {
-        "catching_up": 0,
-        "failing": 0,
-        "no_refresh_path": 1,
-        "overdue": 0,
-        "queued": 0,
-        "undecided": 0
-      },
-      "detail": "no tick reaches ledger",
-      "error_group": null,
-      "fresh_by": null,
-      "gap_seconds": 197820,
-      "id": "no_schedule:billing.py:ledger",
-      "kind": "no_schedule",
-      "needs_someone": true,
-      "node": "billing.py:ledger",
-      "nodes": 1,
-      "stale_since": "2026-11-15T08:00:00Z",
-      "unbounded": 1,
-      "weight": 6
-    },
-    {
-      "action": {
         "command": null,
         "estimated_seconds": null,
         "kind": "add_schedule",
@@ -2036,17 +2063,17 @@
     {
       "action": {
         "command": null,
-        "estimated_seconds": 6,
+        "estimated_seconds": 14,
         "kind": "wait",
         "run_once": null
       },
-      "assets": 1,
+      "assets": 2,
       "causes": {
         "catching_up": 0,
         "failing": 0,
         "no_refresh_path": 0,
         "overdue": 0,
-        "queued": 1,
+        "queued": 2,
         "undecided": 0
       },
       "detail": "orders_enriched is out of date against what it reads",
@@ -2057,10 +2084,10 @@
       "kind": "input",
       "needs_someone": false,
       "node": "orders.py:orders_enriched",
-      "nodes": 1,
+      "nodes": 2,
       "stale_since": null,
-      "unbounded": 0,
-      "weight": 2
+      "unbounded": 1,
+      "weight": 4
     }
   ]
 }

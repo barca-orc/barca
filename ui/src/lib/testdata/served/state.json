@@ -1,11 +1,10 @@
 [
   {
     "cache": {
-      "artifact": ".barca/artifacts/billing.py--invoices/1ff289ee4b8708472ccf237ef27a400ccfad5a1a843f7252a120e63e12800349.json",
-      "detail": "a successful materialization matches this code and these inputs",
-      "reason": "materialized",
+      "detail": "last attempt failed: ValueError: 3 rows with a negative total",
+      "reason": "failed",
       "run_hash": "1ff289ee4b8708472ccf237ef27a400ccfad5a1a843f7252a120e63e12800349",
-      "state": "cached"
+      "state": "stale"
     },
     "cause": "failing",
     "consecutive_failures": 2,
@@ -124,13 +123,15 @@
   },
   {
     "cache": {
-      "artifact": ".barca/artifacts/billing.py--invoice_totals/26f102455ed8dadf27c0a6404495fd69a83c94e96817ef698c1104cc4414d8f3.json",
-      "detail": "a successful materialization matches this code and these inputs",
-      "reason": "materialized",
+      "change_causes": [
+        "upstream_stale"
+      ],
+      "detail": "upstream 'invoices' is not cached, so this node's inputs will change",
+      "reason": "upstream_stale",
       "run_hash": "26f102455ed8dadf27c0a6404495fd69a83c94e96817ef698c1104cc4414d8f3",
-      "state": "cached"
+      "state": "stale"
     },
-    "cause": null,
+    "cause": "failing",
     "consecutive_failures": 0,
     "durations": {
       "median_seconds": 1.9,
@@ -140,9 +141,9 @@
     "env": [],
     "expected_fresh_at": null,
     "failing_since": null,
-    "gap_seconds": 0,
-    "health": "ok",
-    "health_reason": "cached",
+    "gap_seconds": 51419,
+    "health": "blocked",
+    "health_reason": "upstream_failing",
     "id": "billing.py:invoice_totals",
     "inputs": [
       "billing.py:invoices"
@@ -150,13 +151,13 @@
     "kind": "asset",
     "last_check": null,
     "last_materialization": {
-      "artifact": ".barca/artifacts/billing.py--invoice_totals/26f102455ed8dadf27c0a6404495fd69a83c94e96817ef698c1104cc4414d8f3.json",
-      "content_hash": "out-26f102455ed8",
+      "artifact": ".barca/artifacts/billing.py--invoice_totals/0000000000000000000000000000000000000000000000000000000000000025.json",
+      "content_hash": "out-000000000000",
       "created_at": "2026-11-16 09:30:05",
       "elapsed_seconds": 1.9,
       "format": "json",
       "rows": null,
-      "run_hash": "26f102455ed8dadf27c0a6404495fd69a83c94e96817ef698c1104cc4414d8f3",
+      "run_hash": "0000000000000000000000000000000000000000000000000000000000000025",
       "size_bytes": 82,
       "status": "success"
     },
@@ -172,16 +173,20 @@
     "measured": false,
     "name": "invoice_totals",
     "next_run": null,
-    "no_estimate": null,
+    "no_estimate": "failing",
     "partitioned": false,
     "prev_run": null,
     "recheck_at": null,
     "refresh_path": null,
-    "root": null,
+    "root": {
+      "id": "failure:billing.py:invoices",
+      "kind": "failure",
+      "node": "billing.py:invoices"
+    },
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": null
+    "stale_since": "2026-11-17T00:40:01Z"
   },
   {
     "cache": {
@@ -190,15 +195,15 @@
       "run_hash": "00df4c9dd66ac2b59958b13ed5139eb91b30c5167f046ddd4aad7480de9b2008",
       "state": "never_run"
     },
-    "cause": "no_refresh_path",
+    "cause": "failing",
     "consecutive_failures": 0,
     "durations": null,
     "env": [],
     "expected_fresh_at": null,
     "failing_since": null,
-    "gap_seconds": 197820,
-    "health": "never_run",
-    "health_reason": "never_run",
+    "gap_seconds": 51419,
+    "health": "blocked",
+    "health_reason": "upstream_failing",
     "id": "billing.py:ledger",
     "inputs": [
       "billing.py:invoice_totals"
@@ -211,20 +216,114 @@
     "measured": false,
     "name": "ledger",
     "next_run": null,
-    "no_estimate": "no_path",
+    "no_estimate": "failing",
     "partitioned": false,
     "prev_run": null,
     "recheck_at": null,
     "refresh_path": null,
     "root": {
-      "id": "no_schedule:billing.py:ledger",
-      "kind": "no_schedule",
-      "node": "billing.py:ledger"
+      "id": "failure:billing.py:invoices",
+      "kind": "failure",
+      "node": "billing.py:invoices"
     },
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-15T08:00:00Z"
+    "stale_since": "2026-11-17T00:40:01Z"
+  },
+  {
+    "cache": {
+      "detail": "tasks always re-run",
+      "reason": "task",
+      "run_hash": "0cbd8d52f90ebca946b32c6c81b4b3a6d2482c9dfa68e1f4b42d285862e2fd58",
+      "state": "always_runs"
+    },
+    "cause": "no_refresh_path",
+    "consecutive_failures": 0,
+    "durations": {
+      "median_seconds": 2.6,
+      "p95_seconds": 2.6,
+      "samples": 1
+    },
+    "env": [],
+    "expected_fresh_at": null,
+    "failing_since": null,
+    "gap_seconds": 32220,
+    "health": "behind",
+    "health_reason": "schedule_late",
+    "id": "orders.py:nightly_export",
+    "inputs": [],
+    "kind": "task",
+    "last_check": {
+      "at": "2026-11-16T06:00:03Z",
+      "outcome": "rebuilt",
+      "schedule": "orders.py:nightly_export"
+    },
+    "last_materialization": {
+      "artifact": ".barca/artifacts/orders.py--nightly_export/0cbd8d52f90ebca946b32c6c81b4b3a6d2482c9dfa68e1f4b42d285862e2fd58.json",
+      "content_hash": "out-0cbd8d52f90e",
+      "created_at": "2026-11-16 06:00:03",
+      "elapsed_seconds": 2.6,
+      "format": "json",
+      "rows": null,
+      "run_hash": "0cbd8d52f90ebca946b32c6c81b4b3a6d2482c9dfa68e1f4b42d285862e2fd58",
+      "size_bytes": 82,
+      "status": "success"
+    },
+    "last_run": {
+      "calls": 0,
+      "elapsed_seconds": 2.6,
+      "failed": 0,
+      "keys": 1,
+      "run_id": "5c4ed0000600"
+    },
+    "last_success_at": "2026-11-16 06:00:03",
+    "late_since": 1794895200,
+    "measured": null,
+    "name": "nightly_export",
+    "next_run": 1794981600,
+    "no_estimate": "scheduler_off",
+    "partitioned": false,
+    "prev_run": 1794895200,
+    "recheck_at": null,
+    "refresh_path": {
+      "live": false,
+      "missed_ticks": 0,
+      "next_tick": null,
+      "paused": false,
+      "schedule": "orders.py:nightly_export",
+      "state": "late"
+    },
+    "root": {
+      "id": "scheduler_off",
+      "kind": "scheduler_off",
+      "node": ""
+    },
+    "running": null,
+    "schedule": {
+      "cron": "0 6 * * *",
+      "failing": false,
+      "failures": 0,
+      "last_fired": "2026-11-16T06:00:00Z",
+      "last_run_id": "5c4ed0000600",
+      "last_status": "success",
+      "late": true,
+      "late_since": "2026-11-17T06:00:00Z",
+      "live": false,
+      "max_failures": 5,
+      "next_fire": "2026-11-18T06:00:00Z",
+      "paused": false,
+      "paused_until": null,
+      "queue_bound": false,
+      "skip_reason": null,
+      "state": "late",
+      "state_detail": "no tick has been decided since the 2026-11-17T06:00:00Z slot: no scheduler is firing it",
+      "typical_queue_wait_seconds": 1,
+      "typical_run_seconds": 2
+    },
+    "shape": null,
+    "signals": [],
+    "stale_since": "2026-11-17T06:00:00Z"
   },
   {
     "cache": {
@@ -755,10 +854,10 @@
       ],
       "detail": "upstream 'orders_enriched' is not cached, so this node's inputs will change",
       "reason": "upstream_stale",
-      "run_hash": "2041a747e23fb909bbbeffd26291fe15325f6be10eb6ab6749592593470b2fbe",
+      "run_hash": "92d67827cc2c5e954a19c23a05ef310e165db278af33d9e2da7d93abc2bce068",
       "state": "stale"
     },
-    "cause": "no_refresh_path",
+    "cause": "queued",
     "consecutive_failures": 0,
     "durations": {
       "median_seconds": 8.0,
@@ -768,23 +867,23 @@
     "env": [],
     "expected_fresh_at": null,
     "failing_since": null,
-    "gap_seconds": 10620,
+    "gap_seconds": 0,
     "health": "behind",
-    "health_reason": "schedule_late",
+    "health_reason": "stale",
     "id": "orders.py:revenue_hourly",
     "inputs": [
       "orders.py:orders_enriched"
     ],
     "kind": "asset",
     "last_check": {
-      "at": "2026-11-17T11:00:03Z",
+      "at": "2026-11-17T13:00:03Z",
       "outcome": "rebuilt",
       "schedule": "orders.py:revenue_hourly"
     },
     "last_materialization": {
       "artifact": ".barca/artifacts/orders.py--revenue_hourly/0000000000000000000000000000000000000000000000000000000000000024.json",
       "content_hash": "out-000000000000",
-      "created_at": "2026-11-17 11:00:09",
+      "created_at": "2026-11-17 13:00:09",
       "elapsed_seconds": 8.0,
       "format": "json",
       "rows": null,
@@ -797,64 +896,64 @@
       "elapsed_seconds": 8.0,
       "failed": 0,
       "keys": 1,
-      "run_id": "5c4ed0001100"
+      "run_id": "5c4ed0001300"
     },
-    "last_success_at": "2026-11-17 11:00:09",
-    "late_since": 1794916800,
+    "last_success_at": "2026-11-17 13:00:09",
+    "late_since": null,
     "measured": false,
     "name": "revenue_hourly",
     "next_run": 1794927600,
-    "no_estimate": "scheduler_off",
+    "no_estimate": "not_promised",
     "partitioned": false,
     "prev_run": 1794924000,
-    "recheck_at": null,
+    "recheck_at": "2026-11-17T15:00:00Z",
     "refresh_path": {
-      "live": false,
+      "live": true,
       "missed_ticks": 0,
-      "next_tick": null,
+      "next_tick": "2026-11-17T15:00:00Z",
       "paused": false,
       "schedule": "orders.py:revenue_hourly",
-      "state": "late"
+      "state": "on_time"
     },
     "root": {
-      "id": "scheduler_off",
-      "kind": "scheduler_off",
-      "node": ""
+      "id": "input:orders.py:orders_enriched",
+      "kind": "input",
+      "node": "orders.py:orders_enriched"
     },
     "running": null,
     "schedule": {
       "cron": "0 * * * *",
       "failing": false,
       "failures": 0,
-      "last_fired": "2026-11-17T11:00:00Z",
-      "last_run_id": "5c4ed0001100",
-      "last_status": "success",
-      "late": true,
-      "late_since": "2026-11-17T12:00:00Z",
-      "live": false,
+      "last_fired": "2026-11-17T14:00:00Z",
+      "last_run_id": "5c4ed0001400",
+      "last_status": "pending",
+      "late": false,
+      "late_since": null,
+      "live": true,
       "max_failures": 5,
       "next_fire": "2026-11-17T15:00:00Z",
       "paused": false,
       "paused_until": null,
       "queue_bound": false,
       "skip_reason": null,
-      "state": "late",
-      "state_detail": "no tick has been decided since the 2026-11-17T12:00:00Z slot: no scheduler is firing it",
+      "state": "on_time",
+      "state_detail": null,
       "typical_queue_wait_seconds": 1,
       "typical_run_seconds": 2
     },
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T12:00:00Z"
+    "stale_since": null
   },
   {
     "cache": {
       "detail": "tasks always re-run",
       "reason": "task",
-      "run_hash": "12d3235943e97c74a8ab6ac7243c0b7ba2829d76cad3bcd9da217d67ac8b1810",
+      "run_hash": "a61ff96c0a92ea44a27f7745129f55fb5fac991a032b07a4c0b5b9b2043b8016",
       "state": "always_runs"
     },
-    "cause": "no_refresh_path",
+    "cause": null,
     "consecutive_failures": 0,
     "durations": {
       "median_seconds": 1.4,
@@ -864,9 +963,9 @@
     "env": [],
     "expected_fresh_at": null,
     "failing_since": null,
-    "gap_seconds": 10620,
-    "health": "behind",
-    "health_reason": "schedule_late",
+    "gap_seconds": 0,
+    "health": "ok",
+    "health_reason": "last_run_succeeded",
     "id": "orders.py:publish_dashboard",
     "inputs": [
       "orders.py:revenue_hourly"
@@ -874,13 +973,13 @@
     "kind": "task",
     "last_check": null,
     "last_materialization": {
-      "artifact": ".barca/artifacts/orders.py--publish_dashboard/12d3235943e97c74a8ab6ac7243c0b7ba2829d76cad3bcd9da217d67ac8b1810.json",
-      "content_hash": "out-12d3235943e9",
+      "artifact": ".barca/artifacts/orders.py--publish_dashboard/a61ff96c0a92ea44a27f7745129f55fb5fac991a032b07a4c0b5b9b2043b8016.json",
+      "content_hash": "out-a61ff96c0a92",
       "created_at": "2026-11-16 09:10:02",
       "elapsed_seconds": 1.4,
       "format": "json",
       "rows": null,
-      "run_hash": "12d3235943e97c74a8ab6ac7243c0b7ba2829d76cad3bcd9da217d67ac8b1810",
+      "run_hash": "a61ff96c0a92ea44a27f7745129f55fb5fac991a032b07a4c0b5b9b2043b8016",
       "size_bytes": 82,
       "status": "success"
     },
@@ -896,26 +995,22 @@
     "measured": null,
     "name": "publish_dashboard",
     "next_run": null,
-    "no_estimate": "scheduler_off",
+    "no_estimate": null,
     "partitioned": false,
     "prev_run": null,
-    "recheck_at": null,
+    "recheck_at": "2026-11-17T15:00:00Z",
     "refresh_path": {
-      "live": false,
+      "live": true,
       "missed_ticks": 0,
-      "next_tick": null,
+      "next_tick": "2026-11-17T15:00:00Z",
       "paused": false,
       "schedule": "orders.py:revenue_hourly",
-      "state": "late"
+      "state": "on_time"
     },
-    "root": {
-      "id": "scheduler_off",
-      "kind": "scheduler_off",
-      "node": ""
-    },
+    "root": null,
     "running": null,
     "shape": null,
     "signals": [],
-    "stale_since": "2026-11-17T12:00:00Z"
+    "stale_since": null
   }
 ]

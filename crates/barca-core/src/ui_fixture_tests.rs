@@ -317,7 +317,7 @@ impl Project {
         let mut files = Vec::new();
         for (name, changed) in [
             ("orders.py", "2026-11-17T13:10:00Z"),
-            ("billing.py", "2026-11-15T08:00:00Z"),
+            ("billing.py", "2026-11-16T23:50:00Z"),
         ] {
             let to = dir.path().join(name);
             std::fs::copy(source.join(name), &to).unwrap();
@@ -565,9 +565,10 @@ impl Project {
             reasons: Some(never_run(2, 2, "billing.py:invoices")),
         })
         .await;
-        self.ok(billing, "billing.py:invoices", "2026-11-16T09:30:03Z", 2.8)
+        // Its code was edited that night (the file's time): these results are no longer reused.
+        self.outdated(billing, "billing.py:invoices", "2026-11-16T09:30:03Z", 2.8)
             .await;
-        self.ok(
+        self.outdated(
             billing,
             "billing.py:invoice_totals",
             "2026-11-16T09:30:05Z",
@@ -604,7 +605,7 @@ impl Project {
                 id, command: "get", file: "billing.py", target: Some("invoice_totals"), status: "failed", steps: (2, 1, 0),
                 started, seconds: 0.9, by, principal, slot: None,
                 reasons: Some(serde_json::json!({"nodes": 1, "steps": 1, "omitted": 0, "reasons": [
-                    {"category": "refresh", "subject": null, "nodes": 1, "steps": 1, "example": "@/billing.py:invoices"},
+                    {"category": "code_changed", "subject": null, "nodes": 1, "steps": 1, "example": "@/billing.py:invoices"},
                 ]})),
             })
             .await;
@@ -681,7 +682,7 @@ impl Project {
         .await;
 
         // The schedules. `orders_feed` fires every 15 minutes and is on time; `revenue_hourly`
-        // last fired at 11:00 and has missed every slot since.
+        // fires on the hour: its 14:00 tick still waits for the one run slot.
         for (slot, run) in [
             ("2026-11-17T14:15:00Z", "5c4ed0001415"),
             ("2026-11-17T14:30:00Z", "5c4ed0001430"),
@@ -706,8 +707,8 @@ impl Project {
                 .await;
         }
         for (slot, run) in [
-            ("2026-11-17T10:00:00Z", "5c4ed0001000"),
-            ("2026-11-17T11:00:00Z", "5c4ed0001100"),
+            ("2026-11-17T12:00:00Z", "5c4ed0001200"),
+            ("2026-11-17T13:00:00Z", "5c4ed0001300"),
         ] {
             self.run(Run {
                 id: run,
@@ -752,12 +753,12 @@ impl Project {
             .into_iter()
             .map(|job| job.id)
             .collect();
-        crate::liveness::record_serving(self.db(), at("2026-11-16T08:55:00Z").timestamp(), 1, 4)
+        crate::liveness::record_serving(self.db(), at("2026-11-15T08:55:00Z").timestamp(), 1, 4)
             .await
             .unwrap();
         crate::liveness::record_scheduler(
             self.db(),
-            at("2026-11-16T08:55:00Z").timestamp(),
+            at("2026-11-15T08:55:00Z").timestamp(),
             schedules,
             "utc",
         )
@@ -766,16 +767,97 @@ impl Project {
         crate::liveness::heartbeat(self.db(), now - 20)
             .await
             .unwrap();
-        let spec = serde_json::json!({
-            "command": "get",
-            "policy": {"kind": "cache_aware"},
-            "trigger": {"triggered_by": "api", "principal": "token:ci-bot"},
-            "nodes": [self.id("orders.py:orders_enriched")],
-        });
+        // `nightly_export` fired yesterday at 06:00; no tick was decided for today's slot.
+        let nightly = ("2026-11-16T06:00:00Z", "5c4ed0000600");
+        self.run(Run {
+            id: nightly.1,
+            command: "run",
+            file: "orders.py",
+            target: Some("nightly_export"),
+            status: "success",
+            steps: (1, 1, 0),
+            started: nightly.0,
+            seconds: 3.0,
+            by: "schedule",
+            principal: None,
+            slot: Some(("orders.py:nightly_export", nightly.0)),
+            reasons: None,
+        })
+        .await;
+        self.ok(
+            nightly.1,
+            "orders.py:nightly_export",
+            "2026-11-16T06:00:03Z",
+            2.6,
+        )
+        .await;
+        self.tick("orders.py:nightly_export", nightly.0, nightly.1, "success")
+            .await;
+        // The slot is taken by a long backfill someone asked for at 13:58.
+        let backfill = "a1f0c0000008";
+        sql(
+            self.db(),
+            "INSERT INTO runs (run_id, command, files, target, job, status, steps_total, started_at, triggered_by) \
+             VALUES (?1, 'get', ?2, 'sales_report', ?3, 'running', 7, ?4, 'manual')",
+            vec![
+                text(backfill),
+                text(&serde_json::json!([self.id("orders.py")]).to_string()),
+                text(&self.id("orders.py:sales_report")),
+                text(&sql_time("2026-11-17T13:58:00Z")),
+            ],
+        )
+        .await;
+        let queued = |node: &str, trigger: serde_json::Value| {
+            serde_json::json!({
+                "command": "get", "policy": {"kind": "cache_aware"}, "trigger": trigger,
+                "nodes": [self.id(node)],
+            })
+            .to_string()
+        };
+        let by_hand = serde_json::json!({"triggered_by": "manual"});
         crate::run_queue::push(
             self.db(),
-            "a1f0c0000008",
-            &spec.to_string(),
+            backfill,
+            &queued("orders.py:sales_report", by_hand),
+            "2026-11-17T13:58:00Z",
+        )
+        .await
+        .unwrap();
+        crate::run_queue::mark_running(self.db(), backfill)
+            .await
+            .unwrap();
+        // Behind it: the 14:00 tick of `revenue_hourly`, then a run of `orders_enriched`.
+        let hourly = self.id("orders.py:revenue_hourly");
+        let slot = at("2026-11-17T14:00:00Z").timestamp();
+        crate::db::upsert_schedule_state(self.db(), &hourly, slot)
+            .await
+            .unwrap();
+        crate::db::record_tick(
+            self.db(),
+            crate::db::NewTick {
+                schedule_id: &hourly,
+                scheduled_at: slot,
+                action: crate::db::TickDecision::Fired,
+                skipped_for: None,
+                run_id: Some("5c4ed0001400"),
+            },
+        )
+        .await
+        .unwrap();
+        let tick = serde_json::json!({"triggered_by": "schedule", "schedule_id": hourly, "scheduled_at": "2026-11-17T14:00:00Z"});
+        crate::run_queue::push(
+            self.db(),
+            "5c4ed0001400",
+            &queued("orders.py:revenue_hourly", tick),
+            "2026-11-17T14:00:00Z",
+        )
+        .await
+        .unwrap();
+        let api = serde_json::json!({"triggered_by": "api", "principal": "token:ci-bot"});
+        crate::run_queue::push(
+            self.db(),
+            "a1f0c0000009",
+            &queued("orders.py:orders_enriched", api),
             "2026-11-17T14:56:30Z",
         )
         .await

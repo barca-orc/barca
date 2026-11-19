@@ -37,7 +37,7 @@ def orders_enriched(orders: list, customers: list) -> list[dict]:
 
 @asset(inputs={"orders": orders_enriched}, freshness=Schedule("0 * * * *"))
 def revenue_hourly(orders: list) -> dict:
-    """A schedule that is late: it missed its slots since 12:00."""
+    """On an hourly schedule whose 14:00 tick waits for a run slot; its input is stale."""
     return {"revenue": sum(o["amount"] for o in orders)}
 
 
@@ -79,6 +79,12 @@ def forecast() -> dict:
 def publish_dashboard(revenue: dict) -> None:
     """A task that ran: `always_runs`."""
     print("published", revenue)
+
+
+@task(freshness=Schedule("0 6 * * *"))
+def nightly_export() -> None:
+    """A schedule that is late: it fired yesterday, and nothing decided today's 06:00 slot."""
+    print("exported")
 
 
 reporting = group("Reporting", members=[revenue_hourly, publish_dashboard], output=revenue_hourly)
