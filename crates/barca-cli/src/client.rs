@@ -10,8 +10,9 @@
 //! `barca_core::ledger::LedgerTransport`), and `status`, `history` and `stats` answer from it.
 //! `--local` leaves the configured server untouched.
 //!
-//! This file is the façade: choosing the server and the one client of it. The rest is laid
-//! out by layer, one module each:
+//! This is the remote backend: [`perform`] takes a checked request (`crate::request`) and sends
+//! it to the server `dispatch` resolved. This file is the façade: choosing the server and the one
+//! client of it. The rest is laid out by layer, one module each:
 //!
 //! 1. **Choosing the server** ([`choose`], [`configured`]): the flags, `BARCA_SERVER` and
 //!    `[server] url`.
@@ -28,6 +29,8 @@
 //!    [`stats`], [`queue`], [`sql`]; [`logs`]): the CLI's `--json` bodies, rendered here with
 //!    this command's own `--limit`, `--fields` and output mode.
 //! 6. **Doctor** ([`doctor`]: [`doctor_checks`]): `barca doctor`'s checks of the server.
+//!
+//! Which commands come here at all is `crate::route`'s table; nothing in this module decides it.
 
 use crate::args::ServerFlags;
 use crate::error::{CliError, Context, ErrorKind};
