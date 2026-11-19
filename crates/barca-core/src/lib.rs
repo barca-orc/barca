@@ -88,6 +88,7 @@ pub mod text;
 pub mod transfer;
 pub mod values;
 mod verified_copies;
+pub(crate) mod views;
 
 // The model layer lives in `barca-model` (#905 step 4); its modules and root items keep their
 // `barca_core::` paths.

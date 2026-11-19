@@ -13,6 +13,9 @@
 
 use crate::run_queue::{self, QueueState};
 use crate::schedule::{Zone, next_fire, prev_fire};
+use crate::time::rfc3339_secs;
+pub use crate::views::ScheduleState;
+use crate::views::ScheduleStatus;
 use crate::{BarcaError, db};
 use chrono::{DateTime, Utc};
 use croner::Cron;
@@ -72,33 +75,6 @@ pub struct Ticks {
 /// one skip is a run that took long once (or a run someone asked for), three are a schedule
 /// that cannot keep its cron.
 pub const OVERRUN_SKIPS: usize = 3;
-
-/// Where a schedule stands, in one word (`specs/behavior/health.md`, "Schedule state"):
-/// what `GET /schedule`, the `schedule` block and a node's `refresh_path` all carry, so no
-/// surface words a schedule on its own. The first that applies, in this order.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-#[serde(rename_all = "snake_case")]
-pub enum ScheduleState {
-    /// Paused (`barca pause --schedule`): its ticks are skipped until it is resumed.
-    Paused,
-    /// Held after `max_failures` failed ticks in a row: its ticks are skipped until a run of
-    /// a node it failed on succeeds or an input of one changes. It is not late and has no
-    /// next run.
-    Held,
-    /// A slot passed with no decision recorded for it, longer ago than its grace and queue
-    /// wait ([`Standing::late`]): no scheduler is firing it.
-    Late,
-    /// Its runs outlast its interval: at least [`OVERRUN_SKIPS`] of its newest decided slots
-    /// were skipped because its own run was still in flight. The scheduler is running; the
-    /// schedule cannot keep its cron.
-    Overrunning,
-    /// None of the above.
-    #[default]
-    OnTime,
-}
 
 impl ScheduleState {
     /// The state of a schedule that stands as `standing`, paused or not, with `failures`
@@ -380,6 +356,50 @@ pub fn standing(
         skipped_in_flight,
         decided: decisions.len(),
         overrunning: skipped_in_flight >= OVERRUN_SKIPS,
+    }
+}
+
+impl ScheduleStatus {
+    /// `job`'s schedule as it stands (`standing`), with its failed ticks `(failures,
+    /// max_failures)` and its pause when one is on. Not `live`: the caller says whether a
+    /// scheduler fires it (its own, or [`crate::liveness::observe`]).
+    pub fn of(
+        job: &crate::schedule::ScheduledJob,
+        standing: crate::schedule_standing::Standing,
+        (failures, max_failures): (u32, u32),
+        pause: Option<&db::SchedulePause>,
+    ) -> Self {
+        let state = crate::schedule_standing::ScheduleState::of(
+            &standing,
+            pause.is_some(),
+            (failures, max_failures),
+        );
+        Self {
+            state,
+            state_detail: state.detail(
+                crate::targets::short_name(&job.id),
+                &standing,
+                (failures, max_failures),
+                job.kind == crate::NodeKind::Task,
+            ),
+            cron: job.cron_str.clone(),
+            next_fire: standing.next_fire.and_then(rfc3339_secs),
+            last_fired: standing.last_fired.and_then(rfc3339_secs),
+            last_status: standing.last_status,
+            last_run_id: standing.last_run_id,
+            late: standing.late,
+            late_since: standing.late_since.and_then(rfc3339_secs),
+            failures,
+            max_failures,
+            failing: failures >= max_failures,
+            paused: pause.is_some(),
+            paused_until: pause.and_then(|p| p.until).and_then(rfc3339_secs),
+            skip_reason: None,
+            live: false,
+            typical_queue_wait_seconds: standing.typical_queue_wait_seconds.round() as u64,
+            typical_run_seconds: standing.typical_run_seconds.map(|s| s.round() as u64),
+            queue_bound: standing.queue_bound,
+        }
     }
 }
 

@@ -85,6 +85,7 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
             "run_list",
             "schedule_standing",
             "status",
+            "views",
         ],
     ),
     (
@@ -103,10 +104,27 @@ const LAYERS: &[(&str, u8, &[&str])] = &[
     ),
 ];
 
+/// The order inside the analysis layer (#1056 C3), first row first: an analysis module may
+/// name the analysis modules of the rows before its own, and none of its own row or a later
+/// one. So the read models cannot form a cycle. Every analysis module of [`LAYERS`] is in one
+/// row.
+const ANALYSIS_ROWS: &[&[&str]] = &[
+    // The shared view types, and the modules that name no other read model.
+    &["views", "history_filter", "key_query", "run_explanation"],
+    &["schedule_standing", "partition_grid"],
+    &["liveness"],
+    &["refresh_path"],
+    &["estimates"],
+    &["causes"],
+    &["rollup"],
+    &["health", "run_list"],
+    &["status"],
+];
+
 /// The number of modules in the largest strongly connected component of the module graph
 /// (modules that all reach each other through `crate::` paths in non-test code). 38 before
 /// the cuts of #1056's C1.
-const LARGEST_CYCLE: usize = 30;
+const LARGEST_CYCLE: usize = 29;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
 
@@ -120,9 +138,19 @@ fn layer_of(module: &str) -> Option<(&'static str, u8)> {
         .map(|(name, rank, _)| (*name, *rank))
 }
 
+fn analysis_row(module: &str) -> Option<usize> {
+    ANALYSIS_ROWS.iter().position(|row| row.contains(&module))
+}
+
 /// Whether `from` may name `to`.
 fn allowed(from: &str, to: &str) -> bool {
     match (layer_of(from), layer_of(to)) {
+        (Some(("analysis", _)), Some(("analysis", _))) => {
+            match (analysis_row(from), analysis_row(to)) {
+                (Some(a), Some(b)) => b < a,
+                _ => false,
+            }
+        }
         (Some((a, ra)), Some((b, rb))) => a == b || rb < ra,
         _ => false,
     }
@@ -426,6 +454,30 @@ fn modules_name_only_their_own_layer_and_the_layers_below() {
         }
     }
 
+    let analysis = LAYERS
+        .iter()
+        .find(|(layer, _, _)| *layer == "analysis")
+        .map(|(_, _, listed)| *listed)
+        .unwrap_or_default();
+    for module in analysis {
+        if analysis_row(module).is_none() {
+            problems.push(format!(
+                "  analysis module `{module}` has no row: add it to ANALYSIS_ROWS"
+            ));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for module in ANALYSIS_ROWS.iter().flat_map(|row| row.iter()) {
+        if !analysis.contains(module) {
+            problems.push(format!(
+                "  ANALYSIS_ROWS names `{module}`, which is not an analysis module of LAYERS"
+            ));
+        }
+        if !seen.insert(*module) {
+            problems.push(format!("  ANALYSIS_ROWS names `{module}` twice"));
+        }
+    }
+
     for ((from, to), items) in &edges {
         if allowed(from, to) || layer_of(from).is_none() || layer_of(to).is_none() {
             continue;
@@ -532,4 +584,21 @@ fn the_rule_orders_the_layers() {
     assert!(!allowed("execution", "status"));
     assert!(!allowed("status", "execution"));
     assert!(!allowed("gc", "report"));
+}
+
+#[test]
+fn the_rows_order_the_analysis_layer() {
+    assert!(allowed("health", "views"));
+    assert!(allowed("status", "health"));
+    assert!(allowed("health", "rollup"));
+    assert!(allowed("run_list", "run_explanation"));
+    assert!(allowed("partition_grid", "key_query"));
+    // A later row, and the same row.
+    assert!(!allowed("rollup", "health"));
+    assert!(!allowed("views", "schedule_standing"));
+    assert!(!allowed("key_query", "partition_grid"));
+    assert!(!allowed("health", "run_list"));
+    // The layers below are open to every row.
+    assert!(allowed("views", "cache"));
+    assert!(!allowed("views", "report"));
 }

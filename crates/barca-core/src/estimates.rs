@@ -13,30 +13,53 @@
 //! the node has `recheck_at` alone.
 
 use crate::cache_state::CacheState;
-use crate::health::{DataSignal, Evidence, Health, HealthReason, recorded_at};
-use crate::status::NodeStatus;
+use crate::db::NodeAge;
+pub use crate::liveness::{PlannedRun, QueueRun, queue_starts, typical_run_seconds};
+use crate::views::{Checks, DataSignal, Health, HealthReason, NodeStatus, recorded_at};
 use std::collections::{HashMap, HashSet};
 
 /// Estimated times are rounded up to a multiple of this many seconds: an estimate is not
 /// known to the second.
 pub const ROUND_SECONDS: i64 = 5;
 
-/// A run in flight, as an estimate reads it.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PlannedRun {
-    pub run_id: String,
-    /// The scheduled node whose tick started it; `None` for a run someone asked for.
-    pub schedule: Option<String>,
-    /// The nodes it computes when they are out of date: its targets and everything above
-    /// them. `None` for a run of every node. Not read for a tick's run, whose nodes are its
-    /// schedule's targets ([`crate::refresh_path::Paths`]).
-    pub nodes: Option<HashSet<String>>,
-    /// It is executing; false while it waits for a run slot.
-    pub running: bool,
-    /// When what it has left starts, unix seconds: for a running run its latest progress
-    /// (its start, or the last step it finished); for a waiting run its estimated start
-    /// ([`queue_starts`]). `None` when that is not known (a paused or draining queue).
-    pub start: Option<i64>,
+/// What classification reads beyond the status rows themselves.
+#[derive(Clone, Copy)]
+pub struct Evidence<'a> {
+    /// Every node's age ([`db::node_ages`]): row counts and when each result was written.
+    pub ages: &'a HashMap<String, NodeAge>,
+    /// Pinned assets (`barca pin`): never blocked, and a failure above one does not pass it.
+    pub pinned: &'a HashSet<String>,
+    /// Scheduled nodes whose schedule is late ([`crate::schedule_standing::standing`]).
+    pub late: &'a HashSet<String>,
+    /// What the newest ticks found ([`checks`]).
+    pub checks: &'a Checks,
+    /// What a refresh path is read from ([`crate::refresh_path`]): the graph's reach, each
+    /// schedule now, the paused nodes and the pinned assets.
+    pub path: crate::refresh_path::PathEvidence<'a>,
+    /// What the times are estimated from ([`crate::estimates`]): typical durations, the runs
+    /// in flight, the run queue, the worker pool, when each source file changed.
+    pub timing: crate::estimates::Timing<'a>,
+    /// The instant of classification, unix seconds: a check's verdict expires.
+    pub now: i64,
+}
+
+impl Evidence<'static> {
+    /// No record, no schedule, no run: what a result classified from its rows alone reads.
+    pub fn none(now: i64) -> Self {
+        static AGES: std::sync::LazyLock<HashMap<String, NodeAge>> =
+            std::sync::LazyLock::new(HashMap::new);
+        static NODES: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
+        static CHECKS: std::sync::LazyLock<Checks> = std::sync::LazyLock::new(Checks::default);
+        Self {
+            ages: &AGES,
+            pinned: &NODES,
+            late: &NODES,
+            checks: &CHECKS,
+            path: crate::refresh_path::PathEvidence::none(),
+            timing: crate::estimates::Timing::none(),
+            now,
+        }
+    }
 }
 
 /// What the times are read from beyond the rows and [`Evidence`]: gathered once per status
@@ -610,68 +633,6 @@ pub fn line(node: &NodeStatus, now: i64) -> Option<String> {
         .as_deref()
         .and_then(|at| clock(at, now, false))
         .map(|at| format!("rechecked {at}"))
-}
-
-/// A run of the run queue, as [`queue_starts`] reads it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct QueueRun {
-    pub run_id: String,
-    /// When it started executing, unix seconds; `None` while it waits.
-    pub started_at: Option<i64>,
-    /// How long such a run typically takes, seconds.
-    pub typical_seconds: f64,
-}
-
-/// When each waiting run of the run queue is expected to start, unix seconds, and when a run
-/// that joined now would. `runs`: the running runs, then the waiting ones in the order they
-/// start. Each of `max_runs` slots is free when its run ends (its start plus its typical
-/// time, or `now` when that has passed); a waiting run takes the slot that frees first. The
-/// extra slot a run someone asked for may take past scheduled work is not modelled.
-pub fn queue_starts(runs: &[QueueRun], max_runs: usize, now: i64) -> (HashMap<String, i64>, i64) {
-    let mut slots: Vec<i64> = runs
-        .iter()
-        .filter_map(|run| {
-            run.started_at
-                .map(|at| (at + run.typical_seconds.ceil() as i64).max(now))
-        })
-        .collect();
-    while slots.len() < max_runs.max(1) {
-        slots.push(now);
-    }
-    let mut starts = HashMap::new();
-    for run in runs.iter().filter(|run| run.started_at.is_none()) {
-        let (slot, free) = slots
-            .iter()
-            .copied()
-            .enumerate()
-            .min_by_key(|(_, free)| *free)
-            .expect("at least one slot");
-        starts.insert(run.run_id.clone(), free);
-        slots[slot] = free + run.typical_seconds.ceil() as i64;
-    }
-    let clear = slots.into_iter().min().unwrap_or(now);
-    (starts, clear)
-}
-
-/// How long a run that `schedule`'s tick started typically takes, seconds: the median of its
-/// newest ticks' successful runs ([`crate::schedule_standing::Ticks::run_seconds`]). For a
-/// run no schedule started, and a schedule with none recorded: the median of the schedules
-/// that have one; 0 when none has.
-pub fn typical_run_seconds(
-    ticks: &HashMap<String, crate::schedule_standing::Ticks>,
-    schedule: Option<&str>,
-) -> f64 {
-    use crate::schedule_standing::median;
-    let of = |ticks: &crate::schedule_standing::Ticks| {
-        (!ticks.run_seconds.is_empty()).then(|| median(&ticks.run_seconds))
-    };
-    schedule
-        .and_then(|id| ticks.get(id))
-        .and_then(of)
-        .unwrap_or_else(|| {
-            let known: Vec<f64> = ticks.values().filter_map(of).collect();
-            median(&known)
-        })
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@
 use crate::groups::NodeGroup;
 use crate::rollup::headline;
 use crate::run_explanation::count;
+pub use crate::run_explanation::{target_ids, target_line};
 use crate::targets::short_name;
 use crate::trigger::TriggeredBy;
 use serde::{Deserialize, Serialize};
@@ -68,30 +69,6 @@ impl RunningStep {
             RunningStep::Waiting => "in this run",
             RunningStep::Queued => "in a queued run",
         }
-    }
-}
-
-/// A run's targets as given (`target`: comma-separated node ids; `None`, empty or `all` for a
-/// run of everything), one each.
-pub fn target_ids(target: Option<&str>) -> Vec<&str> {
-    target
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|id| !id.is_empty() && *id != "all")
-        .collect()
-}
-
-/// A run's targets in a few words, for a row of a list: `all assets` for a run of everything,
-/// the one target's id, or the first target's id and how many more (`billing.py:orders +21
-/// more`). A tick's first target is its scheduled node. Never the comma-joined list: that is
-/// `target`, for `--json` and a run's own page.
-pub fn target_line(target: Option<&str>) -> String {
-    let ids = target_ids(target);
-    match ids.as_slice() {
-        [] => "all assets".to_string(),
-        [one] => (*one).to_string(),
-        [first, rest @ ..] => format!("{first} +{} more", count(rest.len() as u64)),
     }
 }
 
@@ -408,7 +385,7 @@ pub fn run_now(active: &[ActiveNodeFacts<'_>], groups: &[NodeGroup]) -> RunNow {
 pub fn unfollowed_run_covers(
     command: &str,
     targets: &[String],
-    node: &crate::status::NodeStatus,
+    node: &crate::views::NodeStatus,
 ) -> bool {
     if targets.is_empty() {
         command != "get" || node.kind != "task"
@@ -419,7 +396,7 @@ pub fn unfollowed_run_covers(
 
 /// Whether such a run is past `node`: it recorded a result of it since it started
 /// (`started`: `YYYY-MM-DD HH:MM:SS`, UTC), and for a partitioned node every key has one.
-pub fn unfollowed_run_finished(started: &str, node: &crate::status::NodeStatus) -> bool {
+pub fn unfollowed_run_finished(started: &str, node: &crate::views::NodeStatus) -> bool {
     node.last_materialization
         .as_ref()
         .is_some_and(|m| !started.is_empty() && m.created_at.as_str() >= started)
@@ -432,7 +409,7 @@ pub fn unfollowed_run_now(
     command: &str,
     targets: &[String],
     started: &str,
-    nodes: &[crate::status::NodeStatus],
+    nodes: &[crate::views::NodeStatus],
     groups: &[NodeGroup],
 ) -> RunNow {
     let active: Vec<ActiveNodeFacts<'_>> = nodes
