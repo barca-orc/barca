@@ -37,11 +37,7 @@ pub struct AssetStats {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct AssetRunEntry {
     pub elapsed_seconds: Option<f64>,
-    /// `success` or `failed`.
-    #[cfg_attr(
-        feature = "ts",
-        ts(as = "barca_model::step_status::MaterializationStatus")
-    )]
+    /// `success` or `failed`, as the row recorded it.
     pub status: String,
     pub created_at: String,
     /// Error message for `status='failed'` rows (None for successes).

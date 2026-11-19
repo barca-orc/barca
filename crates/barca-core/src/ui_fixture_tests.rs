@@ -95,7 +95,8 @@ fn row(state: CacheState, last: &str, keys_failed: bool) -> NodeStatus {
     node
 }
 
-/// `{"<cache state>|<last attempt>|<keys failed>": {"health": …, "health_reason": …, "cause": …}}`.
+/// `{"<cache state>|<last attempt>|<keys failed>": {"health": …, "health_reason": …, "cause": …,
+/// "last_attempt": …}}`.
 fn table() -> String {
     let mut out: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     for state in STATES {
@@ -121,6 +122,7 @@ fn table() -> String {
                         "health": nodes[0].health,
                         "health_reason": nodes[0].health_reason,
                         "cause": nodes[0].cause,
+                        "last_attempt": nodes[0].last_attempt,
                     }),
                 );
             }
@@ -1434,6 +1436,18 @@ async fn the_ui_fixture_project_is_what_a_server_serves() {
         "paused": paused,
         "schedules": crate::pauses::paused_schedules(project.db(), now).await.unwrap(),
     });
+    // What a pause of each node and everything below it would cover: `covers` of `GET
+    // /pauses?target=<id>&downstream=true`, by node id.
+    let covers: BTreeMap<String, crate::refresh_path::PauseCover> = project
+        .dag
+        .topo_order()
+        .into_iter()
+        .map(|id| {
+            let cover = crate::refresh_path::pause_cover(&project.dag, id, true).unwrap();
+            (id.to_string(), cover)
+        })
+        .collect();
+    let covers = serde_json::to_value(covers).unwrap();
     // The same project once `fx_rates` is pinned.
     project.pin().await;
     let (pinned, _) = project.state().await;
@@ -1449,6 +1463,7 @@ async fn the_ui_fixture_project_is_what_a_server_serves() {
             project.text(&serde_json::Value::Object(details)),
         ),
         ("pauses.json", project.text(&pauses)),
+        ("pause-covers.json", project.text(&covers)),
         ("state-pinned.json", project.text(&pinned)),
         ("pins.json", project.text(&pins)),
     ];

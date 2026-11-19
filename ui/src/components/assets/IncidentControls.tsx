@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { Age, Button, ConfirmDialog, ErrorLine, KeyValue, Section, StatusBadge } from '@/components'
-import { usePauses, useTogglePause } from '@/hooks/usePauses'
+import { usePauseCover, usePauses, useTogglePause } from '@/hooks/usePauses'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useSchedule, useToggleSchedulePause } from '@/hooks/useSchedule'
 import { shortName } from '@/lib/graph'
-import { blastRadius, fileOf } from '@/lib/pauses'
+import { affectedSchedules, fileOf } from '@/lib/pauses'
 import type { ListNode } from '@/lib/types'
 
 interface Confirm {
@@ -46,7 +46,8 @@ export function IncidentControls({ node, graph, readOnly }: IncidentControlsProp
   const fileNodes = graph.filter(n => fileOf(n.id) === file)
   const wholeFilePaused = fileNodes.length > 0 && fileNodes.every(n => filePauses.some(p => p.id === n.id))
   const pause = pauses.data?.paused.find((p) => p.id === node.id) ?? null
-  const radius = useMemo(() => blastRadius(node.id, graph, jobs ?? []), [node.id, graph, jobs])
+  const { data: cover } = usePauseCover(node.id)
+  const radius = useMemo(() => ({ downstream: cover?.downstream ?? [], schedules: affectedSchedules(cover, jobs ?? []) }), [cover, jobs])
   const running = radius.schedules.filter((s) => !s.job.paused && s.job.state !== "held")
   const held = radius.schedules.filter((s) => s.job.paused)
   const queuePaused = queue.data?.paused ?? false

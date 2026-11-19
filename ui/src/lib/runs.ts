@@ -36,6 +36,34 @@ export function runStatus(status: string): StatusKind {
     .exhaustive()
 }
 
+/**
+ * Whether one recorded execution (a materialization, a run's step, a key's attempt: the
+ * generated `MaterializationStatus` and `StepStatus`) succeeded. The one place the word is read.
+ */
+export function isSuccess(status: string): boolean {
+  return status === 'success'
+}
+
+/** Whether one recorded execution failed. A status that is neither is not counted as either. */
+export function isFailure(status: string): boolean {
+  return status === 'failed'
+}
+
+/** A run that was accepted and has not started: it can still be taken out of the queue. */
+export function runIsWaiting(status: string): boolean {
+  return parseRunStatus(status) !== 'running'
+}
+
+/** The status of a tick's run in the page's words: a run that waits for a run slot is `queued`. */
+export function lastStatusLabel(status: string): string {
+  return status === 'pending' ? 'queued' : status
+}
+
+/** The error envelope of an outcome that is not a success; null for a success or no outcome. */
+export function outcomeEnvelope(outcome: RunOutcome | null): ErrorEnvelope | null {
+  return outcome && outcome.status !== 'success' ? outcome.envelope : null
+}
+
 /** The glyph of a run's status. */
 export function runGlyph(status: string): Glyph {
   return statusGlyph(runStatus(status))

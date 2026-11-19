@@ -16,7 +16,7 @@ import { plural } from '@/lib/plural'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
-import { outcomeResult, parseOutcome, runGlyph, runIsLive, runLabel, runNodeOutcome, stepGlyph, triggeredByLabel } from '@/lib/runs'
+import { isFailure, outcomeEnvelope, outcomeResult, parseOutcome, runGlyph, runIsLive, runIsWaiting, runLabel, runNodeOutcome, stepGlyph, triggeredByLabel } from '@/lib/runs'
 import { statusGlyph } from '@/lib/status'
 import { NO_STEPS_OPEN, activityBarLabel, activityTicks, canLoadMore, rerunLabel, runNodeTime, runStepRows, runsCommand, runsNarrowed, stepName, toggleStepsOpen, windowLabel, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { ActivityHour, RunActivity, RunList, RunNodeSummary, RunStep, RunView } from '@/lib/types'
@@ -85,7 +85,7 @@ function StepRow({ step, name, root, summarized }: { step: RunStep; name: string
       <span className="barca-step-name" title={step.node_id}>{name}</span>
       <StatusBadge size="sm" glyph={stepGlyph(step.status)} label={step.status} />
       <StepTimes step={step} />
-      <StepButtons stepId={step.node_id} failed={step.status === 'failed'} step={step} />
+      <StepButtons stepId={step.node_id} failed={isFailure(step.status)} step={step} />
     </div>
     <StepError step={step} root={root} summarized={summarized} />
   </div>
@@ -110,7 +110,7 @@ function StepListRow({ row, root, summarized, toggle }: { row: RunStepRow; root?
           <span className="barca-step-name" title={summary.node_id}>{shortName(summary.node_id)}</span>
           <StatusBadge size="sm" glyph={statusGlyph(outcome.kind)} label={outcome.label} />
           {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
-          <StepButtons stepId={step.node_id} failed={step.status === 'failed'} step={step} />
+          <StepButtons stepId={step.node_id} failed={isFailure(step.status)} step={step} />
         </div>
         <StepError step={step} root={root} summarized={summarized} />
       </div>
@@ -202,7 +202,7 @@ export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = nul
   return (
     <SidePanel label="Run details" title="Run details" subtitleMono subtitle={run.kind === 'ready' ? run.data.run_id : id} subtitleText={run.kind === 'ready' ? run.data.run_id : id}
       actions={<>
-        {run.kind === 'ready' && runIsLive(run.data.status) && <CancelRun key={run.data.run_id} id={run.data.run_id} queued={run.data.status !== 'running'} />}
+        {run.kind === 'ready' && runIsLive(run.data.status) && <CancelRun key={run.data.run_id} id={run.data.run_id} queued={runIsWaiting(run.data.status)} />}
         <IconButton label="Close run details" size="sm" onClick={() => dispatch({ type: 'panel_closed' })}><X size={14} /></IconButton>
       </>}>
       {match(run)
@@ -236,7 +236,7 @@ const SUMMARY_STEPS = 5
 function runSummaryError(data: RunView): string | null {
   if (failedSteps(data).length > 0) return null
   const outcome = parseOutcome(data.outcome)
-  return data.error ?? (outcome && outcome.status !== 'success' ? outcome.envelope?.error : null) ?? null
+  return data.error ?? outcomeEnvelope(outcome)?.error ?? null
 }
 
 /** One fact of a run: a muted label over its value; `wide` takes the whole line. */
@@ -288,7 +288,7 @@ function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: Run
 function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: RunView; eventGap: boolean; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void }) {
   const [logStep, setLogStep] = useState<string | null>(null)
   const outcome = parseOutcome(data.outcome)
-  const envelope = outcome && outcome.status !== 'success' ? outcome.envelope : null
+  const envelope = outcomeEnvelope(outcome)
   const result = outcomeResult(outcome)
   const nodes = data.steps_page?.nodes ?? []
   const { counts, outputs, target_outcomes: outcomes, steps: stepsLine, slowest } = data.explanation

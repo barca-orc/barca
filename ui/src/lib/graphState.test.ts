@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { graphState } from './graphState'
-import { CACHE_STATES, shownCacheState } from './cacheStateDisplay'
+import { CACHE_STATES } from './cacheStateDisplay'
 import { mapPartLabel, mapPartMeaning, mapPartOf } from './causeDisplay'
 import type { NodeState } from './types'
 import { blockedBy, served } from './testdata/served'
@@ -9,7 +9,7 @@ describe('graph state', () => {
   it.each(CACHE_STATES)('%s keeps the cache state the server says, and reads as its served cause', (cache) => {
     const node = state(cache)
     const box = graphState(node)
-    expect(box).toMatchObject({ kind: 'cache', state: shownCacheState(node), part: mapPartOf(node.cause), label: mapPartLabel(mapPartOf(node.cause)), lastFailed: false })
+    expect(box).toMatchObject({ kind: 'cache', state: node.cache.state, part: mapPartOf(node.cause), label: mapPartLabel(mapPartOf(node.cause)), lastFailed: false })
     // What the word means, then the server's own account of the node.
     expect(box.hint).toBe(`${mapPartMeaning(mapPartOf(node.cause))} reason`)
   })

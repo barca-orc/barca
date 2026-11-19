@@ -12,7 +12,7 @@ import { groupHealth, type GroupScope } from './groups'
 import type { Glyph } from './glyph'
 import { pipelineName, sourceFile } from './pipeline'
 import { only, type Next } from './program'
-import { runGlyph, runLabel as runWord, runStatus } from './runs'
+import { isFailure, runGlyph, runLabel as runWord, runStatus } from './runs'
 import { statusMeta } from './status'
 import { formatAgo } from './time'
 import type { Tone } from './tone'
@@ -86,7 +86,7 @@ function nodeItem(a: Pick<ListNode, 'id' | 'kind'>, states: PaletteStates): Pale
 
 function runState(status: string): PaletteState {
   const kind = runStatus(status)
-  return { glyph: runGlyph(status), label: runWord(status), live: kind === 'running', tone: statusMeta(kind).tone }
+  return { glyph: runGlyph(status), label: runWord(status), live: statusMeta(kind).live, tone: statusMeta(kind).tone }
 }
 
 /** `group:billing.py:raw` → `billing.py`. */
@@ -146,7 +146,7 @@ export function keyItems(hits: readonly KeyHits[], nowMs: number): PaletteItem[]
       detail: `${k.status} ${formatAgo(k.created_at, nowMs)}`,
       // The key explorer, at the key: its data, its error and the same key along its chain.
       target: { type: 'go', to: keysHref(node, { key: k.key }) },
-      state: k.status === 'failed'
+      state: isFailure(k.status)
         ? { glyph: 'failed', label: 'failed', live: false, tone: 'failed' }
         : { glyph: 'fresh', label: k.status, live: false, tone: 'success' },
     })),

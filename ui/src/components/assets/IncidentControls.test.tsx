@@ -6,6 +6,11 @@ import { BlastRadius } from './BlastRadius'
 import { IncidentControls, PausedTag } from './IncidentControls'
 import type { ListNode, NodeState } from '@/lib/types'
 import { blockedBy, served } from '@/lib/testdata/served'
+import type { PauseCover } from '@/lib/pauses'
+
+/** `GET /pauses?target=` as the query cache holds it: the pauses, with what a pause would cover. */
+const covers = (c: QueryClient, id: string, cover: PauseCover) => c.setQueryData(['pauses', 'cover', id], { total: 0, paused: [], schedules: [], covers: cover })
+const RAW: PauseCover = { targets: ['p.py:raw'], downstream: ['p.py:clean', 'p.py:report'], schedules: [{ id: 'p.py:report', relation: 'input' }] }
 
 const node = (id: string, inputs: string[] = []): ListNode => ({
   id, kind: 'asset', freshness: 'always', inputs, env: [], file: 'p.py', line: 1,
@@ -23,8 +28,8 @@ function render(ui: React.ReactNode, seed: (c: QueryClient) => void = () => {}) 
 describe('BlastRadius', () => {
   it('lists the downstream nodes and the schedules that would compute them', () => {
     const shown = render(
-      <BlastRadius id="p.py:raw" graph={graph} states={new Map()} paused={new Set(['p.py:report'])} onSelect={() => {}} />,
-      (c) => c.setQueryData(['schedule'], [{ id: 'p.py:report', kind: 'asset', next_fire: null, paused: true }]),
+      <BlastRadius id="p.py:raw" states={new Map()} paused={new Set(['p.py:report'])} onSelect={() => {}} />,
+      (c) => { covers(c, 'p.py:raw', RAW); c.setQueryData(['schedule'], [{ id: 'p.py:report', kind: 'asset', next_fire: null, paused: true }]) },
     )
     expect(shown).toContain('Blast radius')
     expect(shown).toContain('2 nodes')
@@ -38,7 +43,7 @@ describe('BlastRadius', () => {
     const st = (id: string, cache: NodeState['cache']['state'], failed = false): NodeState => served({ id, name: id, kind: 'asset', inputs: [], partitioned: false, cache: { state: cache, reason: 'no_record', detail: '' }, last_materialization: failed ? { status: 'failed', created_at: 'today', elapsed_seconds: null, run_hash: null, artifact: null, format: null, size_bytes: null, rows: null, error: 'boom' } : null, shape: null, env: [], durations: null, next_run: null, prev_run: null, late_since: null, signals: [], last_success_at: null, failing_since: null, consecutive_failures: 0, running: null })
     // Which failing node blocks each row is the server's answer on the row (`root`).
     const states = new Map([['p.py:raw', st('p.py:raw', 'never_run', true)], ['p.py:clean', { ...st('p.py:clean', 'never_run'), ...blockedBy('p.py:raw') }], ['p.py:report', { ...st('p.py:report', 'never_run'), ...blockedBy('p.py:raw') }]])
-    const shown = render(<BlastRadius id="p.py:raw" graph={graph} states={states} paused={new Set()} onSelect={() => {}} />, (c) => c.setQueryData(['pins'], { pins: [] }))
+    const shown = render(<BlastRadius id="p.py:raw" states={states} paused={new Set()} onSelect={() => {}} />, (c) => { covers(c, 'p.py:raw', RAW); c.setQueryData(['pins'], { pins: [] }) })
     expect(shown).toContain('clean blocked')
     expect(shown).toContain('report blocked')
     expect(shown).not.toContain('never run')
@@ -50,6 +55,7 @@ describe('IncidentControls', () => {
     const shown = render(<IncidentControls node={{ id: 'p.py:clean' }} graph={graph} readOnly={false} />, (c) => {
       c.setQueryData(['schedule'], [{ id: 'p.py:report', kind: 'asset', next_fire: 1, paused: false }])
       c.setQueryData(['pauses'], { total: 0, paused: [] })
+      covers(c, 'p.py:clean', { targets: ['p.py:clean'], downstream: ['p.py:report'], schedules: [{ id: 'p.py:report', relation: 'input' }] })
     })
     expect(shown).toContain('Pause this asset and downstream')
     expect(shown).toContain('Pause pipeline (file)')
@@ -60,6 +66,7 @@ describe('IncidentControls', () => {
   it('offers to resume a paused asset', () => {
     const shown = render(<IncidentControls node={{ id: 'p.py:clean' }} graph={graph} readOnly={false} />, (c) => {
       c.setQueryData(['pauses'], { total: 1, paused: [{ id: 'p.py:clean', paused_at: 1, via: 'p.py:clean' }] })
+      covers(c, 'p.py:clean', { targets: ['p.py:clean'], downstream: ['p.py:report'], schedules: [] })
     })
     expect(shown).toContain('Resume this asset')
     expect(shown).toContain('Resume it and downstream')

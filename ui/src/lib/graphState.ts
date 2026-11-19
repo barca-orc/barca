@@ -10,7 +10,7 @@
  * decides either.
  */
 
-import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 import { causeDisplay, mapPartGlyph, mapPartLabel, mapPartMeaning, mapPartOf, type MapPart } from './causeDisplay'
 import { blockerOf } from './healthDisplay'
 import { statusMeta } from './status'
@@ -78,7 +78,7 @@ export function cacheGraphState(node: NodeState): GraphState {
   const keys = p ? { total: p.total, failed: p.failed ?? 0, waiting: p.behind + (p.blocked ?? 0) } : undefined
   const blockedBy = blockerOf(node)
   const hint = [mapPartMeaning(part), node.cache.detail].filter(Boolean).join(' ')
-  return { kind: 'cache', tone: partTone(part), glyph: mapPartGlyph(part), label: mapPartLabel(part), hint, part, state: shownCacheState(node), lastFailed: lastAttemptFailed(node), ...(keys ? { keys } : {}), ...(blockedBy ? { blockedBy } : {}) }
+  return { kind: 'cache', tone: partTone(part), glyph: mapPartGlyph(part), label: mapPartLabel(part), hint, part, state: node.cache.state, lastFailed: lastAttemptFailed(node), ...(keys ? { keys } : {}), ...(blockedBy ? { blockedBy } : {}) }
 }
 
 /** A run working on the node now (whoever started it) outranks its resting state. */

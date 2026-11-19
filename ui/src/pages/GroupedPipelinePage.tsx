@@ -1,3 +1,4 @@
+import { isSuccess } from '@/lib/runs'
 import { StreamNotice } from '@/components/StreamNotice'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
@@ -130,7 +131,7 @@ export function GroupedPipelinePage() {
             return
           }
           api.asset(id).then(({ stats }) => {
-            const run = stats.recent_runs.find((r) => r.status !== 'success')?.run_id
+            const run = stats.recent_runs.find((r) => !isSuccess(r.status))?.run_id
             if (run) navigate(`/runs?run=${encodeURIComponent(run)}`)
             else dispatch({ type: 'action_failed', text: `No run is recorded for ${name}` })
           }, failed)

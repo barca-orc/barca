@@ -457,6 +457,13 @@
       "RootKind",
       "ActionKind"
     ],
+    "status_types": [
+      "RunViewStatus",
+      "StepStatus",
+      "MaterializationStatus",
+      "QueueEntryStatus",
+      "LastAttempt"
+    ],
     "ambiguous": [
       "ok",
       "unknown",

@@ -28,8 +28,8 @@ UI shows. This check holds the UI's sources to that, against the table in
    - The words of `vocabulary.status_types` (a run's, a step's, a queue entry's and a
      materialization's status, a node's last attempt) are also English (`failed`, `running`,
      `error`), a tone and a glyph. They are checked where a status is in hand: on a line that
-     names one (an identifier containing `status`, or `outcome`, `last_attempt`,
-     `lastAttempt`), and on the `.with(` lines of a `match(` over one.
+     names one (a variable or field whose name contains `status`, or `outcome`,
+     `last_attempt`, `lastAttempt`), and on the `.with(` lines of a `match(` over one.
    Either fails unless the table exempts that file and word with a reason.
 4. Derivations. A file the check can see computing something is registered: under `derives`
    of its module, or, outside `lib`, under the table's own `derives` by file. An entry says
@@ -545,8 +545,11 @@ def decisions(text: str, words: set[str]) -> list[tuple[int, str]]:
     return sorted(out)
 
 
-# A name that holds a status: `run.status`, `last_status`, `StatusKind`, `outcome`.
-STATUS_NAME = re.compile(r"\w*[sS]tatus\w*|\boutcome\b|\blast_attempt\b|\blastAttempt\b")
+# A name that holds a status: `run.status`, `last_status`, `feedbackStatus`, `outcome`. A name
+# that starts with a capital is a component or a type (`StatusGlyph`), not a value.
+STATUS_NAME = re.compile(
+    r"\b(?:status\w*|[a-z_]\w*Status\w*|[a-z_]\w*_status\w*|outcome|last_attempt|lastAttempt)\b"
+)
 STRING = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"")
 
 

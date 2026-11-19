@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ListNode, NodeState } from './types'
 import type { ScheduleStatus } from './generated/ScheduleStatus'
-import { formatLate, humanizeCron, lastStatusLabel, scheduleRows } from './schedules'
+import { formatLate, humanizeCron, scheduleRows } from './schedules'
+import { lastStatusLabel } from './runs'
 import { formatCountdown } from './time'
 import { served } from './testdata/served'
 

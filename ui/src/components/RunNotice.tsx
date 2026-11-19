@@ -4,7 +4,7 @@ import { X } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { shortName } from '@/lib/graph'
 import type { RunNotice as Notice } from '@/lib/runFeedback'
-import { statusMeta } from '@/lib/status'
+import { statusFailed, statusMeta } from '@/lib/status'
 import { IconButton } from './IconButton'
 import { StatusGlyph } from './StatusGlyph'
 
@@ -28,10 +28,10 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
     .with({ kind: 'running' }, (n) => `running · ${n.total === null ? plural(n.done, 'step') : `${n.done.toLocaleString()} of ${plural(n.total, 'step')}`}`)
     .with({ kind: 'finished' }, (n) => n.summary)
     .exhaustive()
-  const failed = notice.kind === 'rejected' || (notice.kind === 'finished' && notice.status === 'failed')
+  const failed = notice.kind === 'rejected' || (notice.kind === 'finished' && statusFailed(notice.status))
   return (
     <p role={failed ? 'alert' : 'status'} className="barca-note barca-run-notice">
-      <StatusGlyph glyph={statusMeta(status).glyph} live={status === 'running'} size={12} />
+      <StatusGlyph glyph={statusMeta(status).glyph} live={statusMeta(status).live} size={12} />
       {name && <strong title={notice.target ?? undefined}>{name}</strong>}
       {'runId' in notice && (
         <>

@@ -289,11 +289,8 @@ pub struct LastMaterialization {
     /// SHA-256 of the serialized artifact, absent for legacy materializations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
-    /// `success` or `failed`.
-    #[cfg_attr(
-        feature = "ts",
-        ts(as = "crate::step_status::MaterializationStatus")
-    )]
+    /// `success` or `failed` (the generated `MaterializationStatus` is the vocabulary; a row
+    /// recorded by another release is served as it is).
     pub status: String,
     /// When it was recorded (UTC, `YYYY-MM-DD HH:MM:SS`).
     pub created_at: String,

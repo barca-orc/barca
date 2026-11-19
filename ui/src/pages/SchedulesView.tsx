@@ -4,7 +4,8 @@ import { Age, Button, EmptyNote, StatusBadge } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
 import { inPipeline } from "@/lib/pipeline";
 import type { Remote } from "@/lib/remote";
-import { QUEUE_BOUND_HINT, lastStatusLabel, scheduleRows, type ScheduleRow } from "@/lib/schedules";
+import { QUEUE_BOUND_HINT, scheduleRows, type ScheduleRow } from "@/lib/schedules";
+import { isFailure, isSuccess, lastStatusLabel } from "@/lib/runs";
 import { nodeKindLabel } from "@/lib/status";
 import { formatInstant, formatSlot } from "@/lib/time";
 import type { ServerHealth, ListNode, NodeState } from "@/lib/types";
@@ -189,10 +190,10 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
             <td>
               {r.last ? (
                 <span
-                  className={r.last.status === "failed" ? "barca-cell-failed" : undefined}
+                  className={r.last.status !== null && isFailure(r.last.status) ? "barca-cell-failed" : undefined}
                   title={r.last.runId ? `run ${r.last.runId}` : undefined}
                 >
-                  {r.last.status !== null && r.last.status !== "success" && `${lastStatusLabel(r.last.status)} `}<Age at={r.last.at} nowMs={nowMs} />
+                  {r.last.status !== null && !isSuccess(r.last.status) && `${lastStatusLabel(r.last.status)} `}<Age at={r.last.at} nowMs={nowMs} />
                 </span>
               ) : (
                 "never"
