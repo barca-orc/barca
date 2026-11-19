@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { connection, connectionLabel, connectionTone } from './connection'
-import type { Health } from './types'
+import type { ServerHealth } from './types'
 
-const health = { version: '0.18.0' } as Health
+const health = { version: '0.18.0' } as ServerHealth
 
 describe('connection', () => {
   it('is connecting until the first health response, not offline', () => {

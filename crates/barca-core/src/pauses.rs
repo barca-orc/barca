@@ -115,10 +115,13 @@ pub async fn list(db_path: &str) -> Result<Vec<crate::db::AssetPause>, BarcaErro
 
 /// One paused schedule (`barca pause --schedule`, `POST /schedule/{id}/pause`): since when,
 /// and until when (unix seconds; `None`: until it is resumed).
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PausedSchedule {
     pub id: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub paused_at: i64,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub until: Option<i64>,
 }
 

@@ -12,6 +12,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use barca_core::envelope::Context;
+use barca_core::served::{Project, ProjectFile, ProjectTelemetry};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -493,7 +494,7 @@ pub async fn stats(
 /// `GET /project` — the deployed tree: `{api_version, root, env, deployed_at, commit,
 /// files: [{path, sha256}]}`. The files are hashed on each request, so an edit (or a
 /// `--watch` reload) shows at once.
-pub async fn project(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+pub async fn project(State(state): State<AppState>) -> Result<Json<Project>, ApiError> {
     let root = root();
     let mut files = Vec::new();
     for file in &state.config.files {
@@ -510,26 +511,29 @@ pub async fn project(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
                 .unwrap_or_else(|_| file.clone()),
             None => file.clone(),
         };
-        files.push(json!({"path": path, "sha256": barca_core::hash::sha256_hex(&bytes)}));
+        files.push(ProjectFile {
+            path,
+            sha256: barca_core::hash::sha256_hex(&bytes),
+        });
     }
-    Ok(Json(json!({
-        "api_version": barca_core::outcome::API_VERSION,
-        "root": root,
-        "env": state.config.resolved.env,
-        "deployed_at": barca_core::outcome::rfc3339(state.started_at),
-        "commit": root.as_deref().and_then(git_commit),
-        "files": files,
+    Ok(Json(Project {
+        api_version: barca_core::outcome::API_VERSION,
+        env: state.config.resolved.env.clone(),
+        deployed_at: barca_core::outcome::rfc3339(state.started_at),
+        commit: root.as_deref().and_then(git_commit),
+        root,
+        files,
         // Where a step's `trace_id` opens (`{datadog_url}/apm/trace/{trace_id}`): `null`
         // when no Datadog site is configured and the integration is off.
-        "telemetry": {
-            "datadog_url": barca_core::config::datadog_app_url(
+        telemetry: ProjectTelemetry {
+            datadog_url: barca_core::config::datadog_app_url(
                 &state.config.resolved.project_root,
                 barca_core::telemetry::is_on("datadog"),
             )
-                .ok()
-                .flatten(),
+            .ok()
+            .flatten(),
         },
-    })))
+    }))
 }
 
 /// The commit checked out at `root`, read from `.git` without running git: `HEAD`, the ref it

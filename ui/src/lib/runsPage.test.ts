@@ -81,11 +81,11 @@ describe('runs program', () => {
 
 describe('the filters are the server\'s', () => {
   it('asks GET /runs for what the model shows, by the names of barca history\'s flags', () => {
-    expect(runsQuery(INITIAL_RUNS)).toEqual({ limit: 100, status: null, not_triggered_by: 'schedule', since: null, until: null, search: null })
+    expect(runsQuery(INITIAL_RUNS)).toEqual({ limit: 100, status: null, triggered_by: null, not_triggered_by: 'schedule', since: null, until: null, search: null })
     const model = { ...INITIAL_RUNS, filter: 'failed' as const, query: ' orders ', window: HOUR, hideSchedule: false }
-    expect(runsQuery(model)).toEqual({ limit: 100, status: 'not_successful', not_triggered_by: null, since: HOUR.since, until: HOUR.until, search: 'orders' })
+    expect(runsQuery(model)).toEqual({ limit: 100, status: 'not_successful', triggered_by: null, not_triggered_by: null, since: HOUR.since, until: HOUR.until, search: 'orders' })
     expect(runsQuery({ ...INITIAL_RUNS, filter: 'live' }).status).toBe('running')
-    expect(everyRun(25)).toEqual({ limit: 25, status: null, not_triggered_by: null, since: null, until: null, search: null })
+    expect(everyRun(25)).toEqual({ limit: 25, status: null, triggered_by: null, not_triggered_by: null, since: null, until: null, search: null })
   })
 
   it('says the same in a terminal', () => {

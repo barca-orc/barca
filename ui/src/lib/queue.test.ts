@@ -230,10 +230,10 @@ describe('queuePollInterval', () => {
 describe('healthQueueLabel', () => {
   it('notes waiting runs and a pause; nothing for an empty open queue', () => {
     expect(healthQueueLabel(undefined)).toBeNull()
-    expect(healthQueueLabel({ paused: false, queued: 0, running: 1, max_runs: 4 })).toBeNull()
-    expect(healthQueueLabel({ paused: false, queued: 3, running: 4, max_runs: 4 })).toBe('3 queued')
-    expect(healthQueueLabel({ paused: true, queued: 3, running: 0, max_runs: 4 })).toBe('3 queued · paused')
-    expect(healthQueueLabel({ paused: true, queued: 0, running: 0, max_runs: 4 })).toBe('queue paused')
+    expect(healthQueueLabel({ paused: false, queued: 0, running: 1, max_runs: 4, capacity: null })).toBeNull()
+    expect(healthQueueLabel({ paused: false, queued: 3, running: 4, max_runs: 4, capacity: null })).toBe('3 queued')
+    expect(healthQueueLabel({ paused: true, queued: 3, running: 0, max_runs: 4, capacity: null })).toBe('3 queued · paused')
+    expect(healthQueueLabel({ paused: true, queued: 0, running: 0, max_runs: 4, capacity: null })).toBe('queue paused')
   })
 })
 

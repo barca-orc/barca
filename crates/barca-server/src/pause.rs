@@ -9,8 +9,8 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use barca_core::db::{self, SchedulePause};
+use barca_core::served::SchedulePauseAnswer;
 use serde::Deserialize;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -58,7 +58,7 @@ pub async fn pause(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<PauseQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SchedulePauseAnswer>, ApiError> {
     let now = chrono::Utc::now().timestamp();
     let until = query
         .until
@@ -83,7 +83,7 @@ pub async fn pause(
 pub async fn resume(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SchedulePauseAnswer>, ApiError> {
     let now = chrono::Utc::now().timestamp();
     set(&state, &id, None, now).await
 }
@@ -93,7 +93,7 @@ async fn set(
     id: &str,
     pause: Option<SchedulePause>,
     now: i64,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SchedulePauseAnswer>, ApiError> {
     crate::runs::refuse_if_read_only(state)?;
     let node = scheduled_node(state, id).await?;
     let cfg = &state.config.resolved;
@@ -115,22 +115,19 @@ async fn set(
         }
     );
     let facts = crate::handlers::published_ticks(state).await?;
-    let body = schedule_at(state, chrono::Utc::now(), &facts);
-    let entry = body
-        .as_array()
+    let entry = schedule_at(state, chrono::Utc::now(), &facts)
         .into_iter()
-        .flatten()
-        .find(|job| job["id"] == node.as_str())
-        .cloned();
+        .find(|job| job.id == node);
     // The scheduler has not published this job (it is off, or still starting): answer what
     // the pause is.
-    Ok(Json(entry.unwrap_or_else(|| {
-        serde_json::json!({
-            "id": node,
-            "paused": pause.is_some(),
-            "paused_until": pause.and_then(|p| p.until),
-        })
-    })))
+    Ok(Json(match entry {
+        Some(job) => SchedulePauseAnswer::Job(Box::new(job)),
+        None => SchedulePauseAnswer::Pause {
+            id: node,
+            paused: pause.is_some(),
+            paused_until: pause.and_then(|p| p.until),
+        },
+    }))
 }
 
 /// The scheduled node `id` names: its full id or its name, as for a run target. Anything that

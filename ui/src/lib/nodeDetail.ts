@@ -7,7 +7,7 @@
 import { match } from 'ts-pattern'
 import { plural } from './plural'
 import type { AssetRunEntry, CacheStatus, FailureFacts, NodeState, PartitionState } from './types'
-import type { LastRun } from './generated/LastRun'
+import type { RunTotals } from './generated/RunTotals'
 import type { RunNodeSummary } from './generated/RunNodeSummary'
 import { formatSeconds } from './time'
 
@@ -387,7 +387,7 @@ export type KeyFigure = { id: 'total' | 'cached' | 'empty' | 'rebuilt' | 'failed
 
 export function keyFigures(
   partitions: Pick<PartitionState, 'total' | 'cached' | 'empty'>,
-  lastRun: Pick<LastRun, 'keys' | 'failed'> | null | undefined,
+  lastRun: Pick<RunTotals, 'keys' | 'failed'> | null | undefined,
 ): KeyFigure[] {
   const figures: KeyFigure[] = [
     { id: 'total', label: 'keys', value: partitions.total },

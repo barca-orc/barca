@@ -8,12 +8,12 @@ import type { Health } from "./Health";
 import type { HealthReason } from "./HealthReason";
 import type { LastCheck } from "./LastCheck";
 import type { LastMaterialization } from "./LastMaterialization";
-import type { LastRun } from "./LastRun";
 import type { NoEstimate } from "./NoEstimate";
 import type { NodeRunning } from "./NodeRunning";
 import type { PartitionState } from "./PartitionState";
 import type { RefreshPath } from "./RefreshPath";
 import type { Root } from "./Root";
+import type { RunTotals } from "./RunTotals";
 import type { ScheduleStatus } from "./ScheduleStatus";
 
 /**
@@ -64,7 +64,7 @@ consecutive_failures: number,
  * Its newest run as a whole, the run `last_materialization` is from; absent until a run
  * recorded a row for it.
  */
-last_run?: LastRun,
+last_run?: RunTotals,
 /**
  * Node id, e.g. `pipeline.py:clean`.
  */
