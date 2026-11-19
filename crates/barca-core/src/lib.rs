@@ -76,6 +76,7 @@ pub mod status;
 pub(crate) mod store_inspect;
 mod store_sync;
 pub mod telemetry;
+pub mod text;
 pub mod transfer;
 pub mod values;
 mod verified_copies;
@@ -157,6 +158,8 @@ pub use execution::sizing;
 mod helper_launch_tests;
 #[cfg(test)]
 mod layering_tests;
+#[cfg(test)]
+mod module_layering_tests;
 #[cfg(test)]
 mod selection_tests;
 #[cfg(test)]
