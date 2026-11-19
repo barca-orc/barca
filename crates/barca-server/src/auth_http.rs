@@ -228,6 +228,13 @@ pub(crate) async fn bootstrap(
         Err(error) => no_store(error.into_response()),
     }
 }
+/// `GET /auth/tokens`: every project token, without its secret.
+#[derive(Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TokenList {
+    pub tokens: Vec<crate::auth::Metadata>,
+}
+
 pub(crate) async fn list(State(state): State<AppState>) -> Response {
     let result = async {
         let store = state.auth.store()?;
@@ -235,7 +242,7 @@ pub(crate) async fn list(State(state): State<AppState>) -> Response {
     }
     .await;
     no_store(match result {
-        Ok(tokens) => Json(serde_json::json!({"tokens": tokens})).into_response(),
+        Ok(tokens) => Json(TokenList { tokens }).into_response(),
         Err(error) => error.into_response(),
     })
 }
