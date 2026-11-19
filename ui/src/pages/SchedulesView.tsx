@@ -7,7 +7,7 @@ import type { Remote } from "@/lib/remote";
 import { QUEUE_BOUND_HINT, lastStatusLabel, scheduleRows, type ScheduleRow } from "@/lib/schedules";
 import { nodeKindLabel } from "@/lib/status";
 import { formatInstant, formatSlot } from "@/lib/time";
-import type { Health, ListNode, NodeState, ScheduleJob } from "@/lib/types";
+import type { Health, ListNode, NodeState } from "@/lib/types";
 
 export interface SchedulesViewProps {
   title: string;
@@ -18,8 +18,6 @@ export interface SchedulesViewProps {
   states: NodeState[] | undefined;
   /** When `states` was fetched: what "in 5m" is relative to. */
   dataUpdatedAt: number;
-  /** The scheduler's registry (which jobs are paused); without it rows show unpaused. */
-  jobs: ScheduleJob[] | undefined;
   health: Health | undefined;
   /** The server did not answer the last health poll: `health` is what it last said. */
   offline: boolean;
@@ -39,10 +37,10 @@ export interface SchedulesViewProps {
  * Every node with a cron schedule: when it runs (in words and as cron), when
  * it next fires, and how its last run went. Soonest first.
  */
-export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, jobs, health, offline, toggle, onOpen, onToggle, onRetry, actions }: SchedulesViewProps) {
+export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, health, offline, toggle, onOpen, onToggle, onRetry, actions }: SchedulesViewProps) {
   const rows =
     assets.kind === "ready" && states
-      ? scheduleRows(assets.data.filter((a) => inPipeline(a.id, pipeline)), states, jobs ?? [])
+      ? scheduleRows(assets.data.filter((a) => inPipeline(a.id, pipeline)), states)
       : null;
   // A count next to "not reachable" would be read as current; it is shown only with a live server.
   const current = !offline && assets.kind === "ready" && assets.refreshError === null;

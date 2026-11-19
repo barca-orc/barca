@@ -50,11 +50,13 @@ describe('sidebar program', () => {
 })
 
 describe('listedPipelines', () => {
-  const summary = (file: string, total: number): PipelineSummary => ({ file, name: file, total, shown: null, running: 0 })
+  const summary = (file: string, total: number | null): PipelineSummary => ({ file, name: file, total, shown: null, running: 0 })
   it('leaves out files with none of the kind, except the selected one', () => {
     const all = [summary('a.py', 3), summary('b.py', 0), summary('c.py', 0)]
     expect(listedPipelines(all, null).map((p) => p.file)).toEqual(['a.py'])
     expect(listedPipelines(all, 'c.py').map((p) => p.file)).toEqual(['a.py', 'c.py'])
+    // Before the rollup has loaded no count is known: every file is listed.
+    expect(listedPipelines([summary('a.py', null), summary('b.py', null)], null).map((p) => p.file)).toEqual(['a.py', 'b.py'])
   })
 })
 

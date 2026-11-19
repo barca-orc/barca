@@ -43,7 +43,6 @@ import {
   visibleFailures,
   type ParamChanges,
 } from '@/lib/groupedPage'
-import { runningCount } from '@/lib/running'
 import { shortName } from '@/lib/graph'
 import { FailuresView } from './FailuresView'
 import { GroupedTable, GroupPanel, LineagePicker } from './GroupedView'
@@ -157,8 +156,8 @@ export function GroupedPipelinePage() {
     ? selectedLeaves.some((id) => !byId.has(id)) && !stateQuery.isError && selectedGroupHealth.kind !== 'run'
       ? PENDING_GRAPH_STATE : selectedGroupHealth
     : undefined
-  // How many nodes in view a run is working on now, whoever started it.
-  const runningHere = runningCount(scopeIds, byId)
+  // How many nodes in view a run is working on now, whoever started it: the scope's entry says (`running`).
+  const runningHere = scopeEntry?.running ?? 0
 
   // Against the URL as it is when the change lands, never the render's copy: a navigation is a
   // transition, and a keystroke right after a click (a search typed after going up a level)

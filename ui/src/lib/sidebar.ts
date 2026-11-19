@@ -82,10 +82,11 @@ export function updateSidebar(model: SidebarModel, msg: SidebarMsg): Next<Sideba
 /**
  * The files the sidebar lists on a page: those with something of the page's kind, and the
  * selected one whatever it has (so the selection is always on screen). A file of none, listed
- * at 0, is only noise in a long list.
+ * at 0, is only noise in a long list. A file whose count is not known yet (the rollup has not
+ * loaded) is listed, without a count.
  */
 export function listedPipelines(pipelines: readonly PipelineSummary[], selected: string | null): PipelineSummary[] {
-  return pipelines.filter((p) => p.total > 0 || p.file === selected)
+  return pipelines.filter((p) => p.total === null || p.total > 0 || p.file === selected)
 }
 
 /** A group as a line of the tree. */

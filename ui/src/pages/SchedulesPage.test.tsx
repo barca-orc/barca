@@ -17,7 +17,7 @@ const noop = () => {}
 const page = (assets: SchedulesViewProps['assets'], offline = false) =>
   text(renderToStaticMarkup(
     <SchedulesView
-      title="Schedules" pipeline={null} assets={assets} states={[]} dataUpdatedAt={0} jobs={[]}
+      title="Schedules" pipeline={null} assets={assets} states={[]} dataUpdatedAt={0}
       health={{ version: '0.39.0', read_only: false, scheduler: true } as Health}
       offline={offline} toggle={{ busyId: null, error: null }} onOpen={noop} onToggle={noop} onRetry={noop}
     />,
