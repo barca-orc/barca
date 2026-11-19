@@ -1,6 +1,12 @@
 # Layers inside `barca-compile` (#1056, track D)
 
-Status: D1 and D2 done, 2026-11-19. Non-normative. The plan is
+Status: D1 and D2 done, 2026-11-19, and the three things this page separates are three crates
+since C6 ([crate-split-2.md](crate-split-2.md)): the graph (rows 0 to 2 below, less
+`partition_selection`) is `barca-model`'s (`dag`, `names`, `batch_override`), the frontend (rows
+3 to 9 and 13) is `barca-python`, and planning (rows 10 to 12, with `partition_selection` and
+`dispatch`) is what `barca-compile` keeps. Each crate checks its own rows
+(`crates/barca-python/src/layering_tests.rs`, `crates/barca-compile/src/layering_tests.rs`), and
+Cargo checks what the `Layer` rule did: planning names the frontend in tests only. Non-normative. The plan is
 [#1056](https://github.com/barca-orc/barca/issues/1056); the check is
 `crates/barca-compile/src/layering_tests.rs` (`cargo test -p barca-compile layering`), which is
 the authority when this page and the code disagree. What the graph is made of is in

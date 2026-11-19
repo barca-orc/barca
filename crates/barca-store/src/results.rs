@@ -153,7 +153,7 @@ pub struct PlanPhase {
     pub streams: Vec<PlanStream>,
 }
 
-/// [`barca_compile::planner::PhaseReason`] as `barca plan` prints it.
+/// [`crate::planner::PhaseReason`] as `barca plan` prints it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

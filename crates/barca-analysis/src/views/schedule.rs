@@ -244,7 +244,7 @@ pub struct CoveredSchedule {
 
 /// What a pause of one target would cover (`barca pause TARGET --dry-run`, `GET
 /// /pauses?target=`), from the graph alone: nothing is paused and no state is read. The
-/// schedules are found by the scheduler's own walk ([`barca_decide::freshness::tick_reach`]), so
+/// schedules are found by the scheduler's own walk ([`crate::freshness::tick_reach`]), so
 /// this lists a schedule exactly when one of its ticks would plan a covered node. A node
 /// that is pinned or already paused stops that walk at run time and is not accounted for
 /// here.

@@ -552,7 +552,7 @@ impl ActivityHour {
 
 /// The runs started in the last [`ACTIVITY_HOURS`] hours, hour by hour: the activity strip of
 /// the Runs page, `activity` of `GET /runs` and `barca history --activity`. Counted by the
-/// database over every run of the window ([`barca_db::db::run_activity`]), never over the runs a
+/// database over every run of the window ([`crate::db::run_activity`]), never over the runs a
 /// list happens to hold.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]

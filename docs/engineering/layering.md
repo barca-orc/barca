@@ -1,6 +1,9 @@
 # Layers inside barca-core (#1056 track C)
 
-Status: guard in place and the cheap cuts made, 2026-11-19. Non-normative. The plan is
+Status: done, 2026-11-19: every layer below is a crate of its own, and `barca-core` is gone
+([crate-split-2.md](crate-split-2.md) has the crates, their graph and the tests that replaced
+the one described here). This page is the record of how the modules were layered first; where
+it says `barca-core`, read the crate that holds the module now. Non-normative. The plan is
 [#1056](https://github.com/barca-orc/barca/issues/1056); the crate graph above this is in
 [crate-split.md](crate-split.md).
 
