@@ -18,7 +18,7 @@ from pathlib import Path
 from .helpers import QUICK, barca, wait_until
 
 # One schedule that never fires during the test, so its next tick is one fixed instant.
-PIPELINE = '''
+PIPELINE = """
 import time
 
 from barca import Always, Manual, Schedule, asset, sensor
@@ -43,7 +43,7 @@ def report(o: dict) -> dict:
 @asset(freshness=Manual)
 def loose() -> dict:
     return {}
-'''
+"""
 
 # What a node says of its health and when it will be fresh: every field classification and
 # the estimates fill (`barca_core::health::classify`).
