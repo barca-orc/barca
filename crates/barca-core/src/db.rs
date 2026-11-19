@@ -13,6 +13,78 @@ pub async fn open_metadata(cfg: &crate::config::ResolvedConfig) -> Result<(), cr
     init_db(&cfg.db_path).await
 }
 
+/// This environment's metadata DB for a command that only reads it: its configuration with
+/// `db_path` naming a [`ReadView`] of the database, kept open for as long as this lives.
+///
+/// Reads through a view take neither barca's cross-process lock nor the process-wide guard
+/// (#1056, A7): `barca status` beside a recording run, or beside a `barca serve` that the
+/// command was told not to use (`--local`), does not wait for a write and no write waits for
+/// it. A database that cannot be read in place (missing, written by an earlier release and
+/// not yet completed, not in WAL mode) is first opened as a writer opens it, under the lock
+/// and briefly ([`open_metadata`], or `init_db` when `create` is false and it exists), and
+/// then viewed. Only when it still has no view are the reads made on the database itself,
+/// under the lock, as every read was before.
+pub struct MetadataRead {
+    cfg: crate::config::ResolvedConfig,
+    _view: Option<ReadView>,
+}
+
+impl MetadataRead {
+    /// The configuration to read with: `db_path` is the path to read from.
+    pub fn cfg(&self) -> &crate::config::ResolvedConfig {
+        &self.cfg
+    }
+
+    /// The path to read from: a view's, or the database's own.
+    pub fn path(&self) -> &str {
+        &self.cfg.db_path
+    }
+
+    /// Whether the reads are made in place, without barca's lock.
+    pub fn in_place(&self) -> bool {
+        self._view.is_some()
+    }
+}
+
+/// [`MetadataRead`] of `cfg`'s database. With `create`, a missing database is created (what
+/// `barca history` in a new project has always done); without, it stays missing and the
+/// caller reads nothing.
+pub async fn read_metadata(
+    cfg: &crate::config::ResolvedConfig,
+    create: bool,
+) -> Result<MetadataRead, crate::BarcaError> {
+    let plain = |cfg: &crate::config::ResolvedConfig| MetadataRead {
+        cfg: cfg.clone(),
+        _view: None,
+    };
+    // Already a view (a server's route hands its own to the same functions).
+    if is_read_view(&cfg.db_path) {
+        return Ok(plain(cfg));
+    }
+    let viewed = |view: ReadView| {
+        let mut read = cfg.clone();
+        read.db_path = view.path().to_string();
+        MetadataRead {
+            cfg: read,
+            _view: Some(view),
+        }
+    };
+    if let Some(view) = ReadView::open(&cfg.db_path).await? {
+        return Ok(viewed(view));
+    }
+    if create {
+        open_metadata(cfg).await?;
+    } else if std::path::Path::new(&cfg.db_path).exists() {
+        init_db(&cfg.db_path).await?;
+    } else {
+        return Ok(plain(cfg));
+    }
+    Ok(match ReadView::open(&cfg.db_path).await? {
+        Some(view) => viewed(view),
+        None => plain(cfg),
+    })
+}
+
 // Inside barca-core, `crate::db::<anything>` still names `barca_db::db`.
 pub(crate) use barca_db::db::*;
 
@@ -64,3 +136,21 @@ pub use barca_db::db::{
 pub use barca_db::db::{
     create_run, db_guard, finish_run, insert_logs, is_read_view, persist_outputs,
 };
+
+/// With `BARCA_TRACE_TIMING` set: one stderr line with how often this process took a metadata
+/// database's lock and for how long, in total and at most. The longest hold is the longest
+/// another barca process can have waited for this one. Printed as a command ends.
+pub fn trace_lock_holds() {
+    if std::env::var_os("BARCA_TRACE_TIMING").is_none() {
+        return;
+    }
+    let holds = barca_db::db::lock_holds();
+    if holds.holds > 0 {
+        crate::errln!(
+            "[trace] metadata lock holds {} (total {:.1}ms, longest {:.1}ms)",
+            holds.holds,
+            holds.total.as_secs_f64() * 1000.0,
+            holds.longest.as_secs_f64() * 1000.0
+        );
+    }
+}

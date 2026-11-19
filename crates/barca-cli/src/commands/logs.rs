@@ -160,12 +160,14 @@ async fn follow_local(
         return Ok(run.status);
     }
     let spool = barca_core::run_logs::spool_path(&cfg.db_path, run_id);
+    // Every poll reads the run's row: in place, so following a run never makes it wait.
+    let read = barca_core::db::read_metadata(cfg, true).await?;
     // Lines seen so far (printed or not), which is the seq of the next one.
     let mut seen = 0usize;
     let mut offset = 0u64;
     let mut ended_at: Option<Instant> = None;
     loop {
-        let status = barca_core::db::get_run(&cfg.db_path, run_id)
+        let status = barca_core::db::get_run(read.path(), run_id)
             .await?
             .map_or_else(|| "interrupted".to_string(), |r| r.status);
         let (lines, at) = barca_core::run_logs::read_spool(&spool, offset)?;
@@ -185,7 +187,7 @@ async fn follow_local(
                 tokio::time::sleep(POLL).await;
                 continue;
             }
-            for entry in barca_core::db::get_logs(&cfg.db_path, run_id).await? {
+            for entry in barca_core::db::get_logs(read.path(), run_id).await? {
                 if entry.seq as usize >= seen {
                     seen = entry.seq as usize + 1;
                     if args.selects(&entry.node_id, entry.stream) {

@@ -807,6 +807,9 @@ pub async fn status(
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
+    // In place: `barca status` neither waits for a run's writes nor makes one wait.
+    let read = crate::db::read_metadata(cfg, false).await?;
+    let cfg = read.cfg();
     let mut result =
         status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape)
             .await?

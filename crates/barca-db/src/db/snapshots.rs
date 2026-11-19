@@ -46,7 +46,10 @@ impl ReadView {
         if !usable {
             return Ok(None);
         }
-        READ_VIEWS.lock().unwrap().insert(path.clone());
+        READ_VIEWS
+            .lock()
+            .unwrap()
+            .insert(path.clone(), target.display().to_string());
         Ok(Some(Self { path, _dir: dir }))
     }
 

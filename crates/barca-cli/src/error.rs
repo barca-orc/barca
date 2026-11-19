@@ -45,6 +45,7 @@ impl CliErrorExt for CliError {
         if let Some(line) = self.run_failure_line() {
             barca_core::errln!("{line}");
         }
+        barca_core::db::trace_lock_holds();
         barca_core::term::exit(self.code())
     }
 }

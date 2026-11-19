@@ -362,7 +362,8 @@ fn is_token(token: &str) -> bool {
 }
 
 fn dir_for(db_path: &str) -> PathBuf {
-    Path::new(db_path)
+    // A read view's link is in a temp dir: the markers are beside the database it reads.
+    Path::new(crate::db::database_of(db_path).as_ref())
         .parent()
         .unwrap_or_else(|| Path::new(""))
         .join(DIR)

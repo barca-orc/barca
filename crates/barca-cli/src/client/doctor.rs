@@ -309,11 +309,17 @@ async fn unsynced_posts(
     let Some(cfg) = cfg else {
         return;
     };
-    let posts = match barca_core::db::DbSnapshot::take(&cfg.db_path).await {
-        Ok(Some(snapshot)) => barca_core::ledger::posts::all(snapshot.path())
+    // In place when the database can be read so, else from a copy: never created or migrated.
+    let posts = match barca_core::db::ReadView::open(&cfg.db_path).await {
+        Ok(Some(view)) => barca_core::ledger::posts::all(view.path())
             .await
             .unwrap_or_default(),
-        _ => Vec::new(),
+        _ => match barca_core::db::DbSnapshot::take(&cfg.db_path).await {
+            Ok(Some(snapshot)) => barca_core::ledger::posts::all(snapshot.path())
+                .await
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        },
     };
     let pending: Vec<_> = posts
         .into_iter()

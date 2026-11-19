@@ -493,7 +493,8 @@ pub async fn grid_for_target(
 ) -> Result<PartitionGrid, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
     let id = partitioned_target(&dag, name)?;
-    partition_grid(cfg, &dag, &id).await
+    let read = crate::db::read_metadata(cfg, false).await?;
+    partition_grid(read.cfg(), &dag, &id).await
 }
 
 /// `barca status NODE --key KEY` on this machine; `None` when the node has no such key.
@@ -507,7 +508,8 @@ pub async fn key_for_target(
 ) -> Result<Option<PartitionKeyDetail>, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
     let id = partitioned_target(&dag, name)?;
-    partition_key_detail(cfg, &dag, python, &id, key, sample).await
+    let read = crate::db::read_metadata(cfg, false).await?;
+    partition_key_detail(read.cfg(), &dag, python, &id, key, sample).await
 }
 
 /// The most sample rows one key's detail reads from each artifact.

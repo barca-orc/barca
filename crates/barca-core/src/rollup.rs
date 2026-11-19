@@ -1621,6 +1621,8 @@ pub async fn rollup(
     python: &std::path::Path,
 ) -> Result<Rollup, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
+    let read = crate::db::read_metadata(cfg, false).await?;
+    let cfg = read.cfg();
     let mut result =
         crate::status::status_from_dag(cfg, target_names, &dag, python, 0, false).await?;
     crate::health::rollup_from_db(

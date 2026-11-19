@@ -242,13 +242,23 @@ pub async fn db_guard_for(db_path: &str) -> Option<MutexGuard<'static, ()>> {
     Some(DB_LOCK.lock().await)
 }
 
-/// The paths of the [`ReadView`]s open in this process.
-static READ_VIEWS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+/// The [`ReadView`]s open in this process: each one's path, and the database it reads.
+static READ_VIEWS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
 /// True when `db_path` names a [`ReadView`].
 pub fn is_read_view(db_path: &str) -> bool {
-    READ_VIEWS.lock().unwrap().contains(db_path)
+    READ_VIEWS.lock().unwrap().contains_key(db_path)
+}
+
+/// The database `db_path` is: itself, or for a [`ReadView`] the database the view reads. What
+/// lives beside a database (`live-logs/`, `run-owners/`) is beside this path, not beside a
+/// view's link in a temp dir.
+pub fn database_of(db_path: &str) -> std::borrow::Cow<'_, str> {
+    match READ_VIEWS.lock().unwrap().get(db_path) {
+        Some(database) => std::borrow::Cow::Owned(database.clone()),
+        None => std::borrow::Cow::Borrowed(db_path),
+    }
 }
 
 /// How long a connection waits on SQLite's own locks before `database is locked`
@@ -291,13 +301,36 @@ const DB_FILE_LOCK_WAIT: Duration = Duration::from_secs(60);
 pub struct DbHandle {
     _db: libsql::Database,
     /// None for a [`ReadView`], which reads without the lock.
-    _lock: Option<fs::File>,
+    _lock: Option<FileLock>,
+}
+
+/// The cross-process lock of one database, held: released when dropped (or when the process
+/// exits or crashes). How long it was held is counted ([`lock_holds`]).
+#[derive(Debug)]
+pub(crate) struct FileLock {
+    _file: fs::File,
+    since: Instant,
+}
+
+impl FileLock {
+    fn held(file: fs::File) -> Self {
+        Self {
+            _file: file,
+            since: Instant::now(),
+        }
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        note_lock_hold(self.since.elapsed());
+    }
 }
 
 /// Take the cross-process lock for `db_path` (a `<db>.lock` file next to it), waiting
 /// up to `wait` for another barca process to finish its operation. The lock is
 /// released when the returned file is dropped (or the process exits or crashes).
-async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, BarcaError> {
+async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<FileLock, BarcaError> {
     let lock_path = format!("{db_path}.lock");
     let file = fs::OpenOptions::new()
         .create(true)
@@ -307,7 +340,7 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
         .map_err(|e| BarcaError::Db(format!("failed to open lock file {lock_path}: {e}")))?;
     // Uncontended (every operation of a one-shot command): one `flock`, no clock read.
     match file.try_lock() {
-        Ok(()) => return Ok(file),
+        Ok(()) => return Ok(FileLock::held(file)),
         Err(fs::TryLockError::WouldBlock) => {}
         Err(fs::TryLockError::Error(e)) => {
             return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
@@ -340,7 +373,7 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
         match file.try_lock() {
             Ok(()) => {
                 note_lock_wait(started.elapsed());
-                return Ok(file);
+                return Ok(FileLock::held(file));
             }
             Err(fs::TryLockError::WouldBlock) => {}
             Err(fs::TryLockError::Error(e)) => {
@@ -363,6 +396,42 @@ fn note_lock_wait(waited: Duration) {
     LOCK_WAITS.fetch_add(1, Relaxed);
     LOCK_WAIT_MICROS.fetch_add(micros, Relaxed);
     LOCK_WAIT_LONGEST_MICROS.fetch_max(micros, Relaxed);
+}
+
+/// Holds of the cross-process lock by this process: how many, their total and the longest, in
+/// microseconds. The longest is how long another barca process can have waited for this one.
+static LOCK_HOLDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_HOLD_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_HOLD_LONGEST_MICROS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn note_lock_hold(held: Duration) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let micros = u64::try_from(held.as_micros()).unwrap_or(u64::MAX);
+    LOCK_HOLDS.fetch_add(1, Relaxed);
+    LOCK_HOLD_MICROS.fetch_add(micros, Relaxed);
+    LOCK_HOLD_LONGEST_MICROS.fetch_max(micros, Relaxed);
+}
+
+/// How long this process held a metadata database's lock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LockHolds {
+    /// Times the lock was taken.
+    pub holds: u64,
+    /// Their total.
+    pub total: Duration,
+    /// The longest one.
+    pub longest: Duration,
+}
+
+/// [`LockHolds`] so far (`BARCA_TRACE_TIMING` prints it at the end of a command).
+pub fn lock_holds() -> LockHolds {
+    use std::sync::atomic::Ordering::Relaxed;
+    LockHolds {
+        holds: LOCK_HOLDS.load(Relaxed),
+        total: Duration::from_micros(LOCK_HOLD_MICROS.load(Relaxed)),
+        longest: Duration::from_micros(LOCK_HOLD_LONGEST_MICROS.load(Relaxed)),
+    }
 }
 
 /// What this process waited for another process's hold on a metadata database's lock.
@@ -453,7 +522,7 @@ fn holder_pid(table: &str, inode: u64, me: u32) -> Option<u32> {
 /// The in-process guard and the cross-process lock of the database at `db_path`, for an
 /// operation that must see no other barca process touch the file. Held until dropped.
 pub struct DbLock {
-    _lock: fs::File,
+    _lock: FileLock,
     _guard: MutexGuard<'static, ()>,
 }
 

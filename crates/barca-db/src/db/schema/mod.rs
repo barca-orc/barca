@@ -23,6 +23,11 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 /// [`BarcaError::MetadataUnusable`]: a file that is not SQLite, a newer format, or a malformed
 /// schema. A lock or I/O failure is [`BarcaError::Db`].
 pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
+    // A read view is of a database this release reads as it is ([`ReadView::open`]), and is
+    // never written: nothing to initialize, and no write connection to open beside the lock.
+    if is_read_view(path) {
+        return Ok(crate::db::schema::ddl::VERSION);
+    }
     let _g = db_guard().await;
     initialized(path, shown)
         .await
