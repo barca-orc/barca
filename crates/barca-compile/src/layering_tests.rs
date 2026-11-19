@@ -381,16 +381,14 @@ fn module_files(src: &Path) -> BTreeMap<String, Vec<(std::path::PathBuf, bool)>>
     modules
 }
 
-/// `(from, to)` to the symbols `from` names in `to`, over the crate's non-test code.
-fn edges(
-    src: &Path,
-) -> (
-    BTreeSet<String>,
-    BTreeMap<(String, String), BTreeSet<String>>,
-) {
+/// `(from, to)` to the symbols `from` names in `to`.
+type Edges = BTreeMap<(String, String), BTreeSet<String>>;
+
+/// The crate's modules, and the edges between them in non-test code.
+fn edges(src: &Path) -> (BTreeSet<String>, Edges) {
     let files = module_files(src);
     let modules: BTreeSet<String> = files.keys().cloned().collect();
-    let mut edges: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    let mut edges = Edges::new();
     for (module, paths) in &files {
         for (path, top_level) in paths {
             let text = std::fs::read_to_string(path).unwrap();
