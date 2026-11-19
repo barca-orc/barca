@@ -132,6 +132,8 @@ fn main() {
     // Files typed after a `barca sql` query; without any, a server resolves every deployed file
     // (not the files discovery finds here).
     let sql_files_given = matches!(&cli, Cli::Sql { files, .. } if !files.is_empty());
+    // Likewise for a command sent to this project's own server (below).
+    let files_given = files_given(&cli);
     // Run from the project root (the nearest barca.toml at or above the cwd), so `.barca/`,
     // node ids and relative paths inside steps are the same wherever barca is invoked.
     if let Err(e) = enter_project_root(&mut cli) {
@@ -151,6 +153,44 @@ fn main() {
             Err(error) => CliError::from_prose(ErrorKind::Infra, error.to_string()).emit(false),
         }
         finish(false);
+    }
+
+    // A `barca serve` running in this project (its socket beside the metadata database): the
+    // command goes to it instead of opening the database beside it, where it would wait on
+    // the lock the server's writes hold (#1054). `get` and `run` join its queue; `--local`
+    // runs here. No server (no socket file) costs a `stat` or two and nothing else.
+    if sql_server.is_none()
+        && routes_to_project_server(&cli)
+        && let Some(server) =
+            server_flags(&cli).and_then(|flags| client::project_server(flags, env_of(&cli)))
+    {
+        let rt = runtime(json, false);
+        match rt.block_on(server.answers()) {
+            Ok(()) => {
+                server.announce();
+                if !files_given {
+                    // The server runs its deployed files, not the ones discovery found here.
+                    drop_discovered_files(&mut cli);
+                }
+                let sent = if matches!(cli, Cli::Sql { .. }) {
+                    rt.block_on(sql_on_server(cli, &server, sql_files_given))
+                } else {
+                    rt.block_on(run_on_server(cli, &server, &ctx))
+                };
+                if let Err(e) = sent {
+                    e.emit(json);
+                }
+                drop(rt);
+                finish(json);
+            }
+            // Something holds the socket and does not answer: as with no server at all.
+            Err(why) => barca_core::errln!(
+                "[barca] warning: this project's server did not answer on {} ({why}); running \
+                 on this machine",
+                server.shown()
+            ),
+        }
+        drop(rt);
     }
 
     // A configured server without `--server` (and without `--local`): `get` and `run` run here
@@ -261,6 +301,80 @@ fn status_filter(
     })
 }
 
+/// Whether a `barca serve` running in this project takes this command (`client::project_server`):
+/// every command a server has a route for, except `list` (it reads source only, never the
+/// database) and `history --reconcile` (it records a run on this machine).
+fn routes_to_project_server(cli: &Cli) -> bool {
+    match cli {
+        Cli::History { reconcile, .. } => reconcile.is_none(),
+        Cli::Get { .. }
+        | Cli::Run { .. }
+        | Cli::Status { .. }
+        | Cli::Stats { .. }
+        | Cli::Logs { .. }
+        | Cli::Sql { .. }
+        | Cli::Queue { .. }
+        | Cli::Pause { .. }
+        | Cli::Resume { .. }
+        | Cli::Pin { .. }
+        | Cli::Unpin { .. }
+        | Cli::Cancel { .. }
+        | Cli::Gc { .. } => true,
+        _ => false,
+    }
+}
+
+/// `--env` of a command that may go to this project's server.
+fn env_of(cli: &Cli) -> Option<&str> {
+    match cli {
+        Cli::Get { env, .. }
+        | Cli::Run { env, .. }
+        | Cli::Status { env, .. }
+        | Cli::History { env, .. }
+        | Cli::Stats { env, .. }
+        | Cli::Logs { env, .. }
+        | Cli::Sql { env, .. }
+        | Cli::Queue { env, .. }
+        | Cli::Pause { env, .. }
+        | Cli::Resume { env, .. }
+        | Cli::Pin { env, .. }
+        | Cli::Unpin { env, .. }
+        | Cli::Cancel { env, .. }
+        | Cli::Gc { env, .. } => env.as_deref(),
+        _ => None,
+    }
+}
+
+/// Whether the command line named files (before discovery fills them in at the project root).
+fn files_given(cli: &Cli) -> bool {
+    match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            !split_target_files(args.clone()).1.is_empty()
+        }
+        Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Sql { files, .. } => !files.is_empty(),
+        _ => false,
+    }
+}
+
+/// Forget the files discovery found for a command that named none ([`files_given`]): a server
+/// then uses every file it has deployed.
+fn drop_discovered_files(cli: &mut Cli) {
+    match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            let (target, _) = split_target_files(std::mem::take(args));
+            args.extend(target);
+        }
+        Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Sql { files, .. } => files.clear(),
+        _ => {}
+    }
+}
+
 /// The `--server` / `--local` flags of the commands that take them.
 fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
     match cli {
@@ -277,6 +391,7 @@ fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
         | Cli::Queue { server, .. }
         | Cli::Pause { server, .. }
         | Cli::Resume { server, .. }
+        | Cli::Gc { server, .. }
         | Cli::Sql { server, .. } => Some(server),
         _ => None,
     }
@@ -324,7 +439,7 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             if mode.url_expires.is_some() {
                 return Err(CliError::from_prose(
                     ErrorKind::Usage,
-                    "error: -o url cannot be used with --server yet\nRun the command on this \
+                    "error: -o url cannot be used on a server yet\nRun the command on this \
                      machine with --local, or leave out -o url.",
                 ));
             }
@@ -739,6 +854,22 @@ async fn run_on_server(cli: Cli, server: &client::Server, ctx: &Context) -> Resu
             )
             .await
         }
+        Cli::Gc {
+            max_size,
+            dry_run,
+            format,
+            env,
+            ..
+        } => {
+            client::gc(
+                server,
+                max_size.as_deref(),
+                dry_run,
+                is_json(format),
+                env.as_deref(),
+            )
+            .await
+        }
         _ => unreachable!("only the commands that take --server reach here"),
     }
 }
@@ -1052,6 +1183,7 @@ async fn run_cli(
             dry_run,
             format,
             env,
+            ..
         } => {
             gc_cmd(
                 env.as_deref(),

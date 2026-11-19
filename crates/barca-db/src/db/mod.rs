@@ -280,7 +280,7 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
 }
 
 // barca-server names these as `db::` paths; the `.barca/` layout is `barca_model::layout`'s.
-pub use barca_model::layout::{ensure_env_dirs, env_local_paths};
+pub use barca_model::layout::{ensure_env_dirs, env_local_paths, serve_socket_path};
 
 /// How long one barca process waits for another's DB operation before giving up.
 /// Operations are brief (a few queries), so hitting this means a stuck process.

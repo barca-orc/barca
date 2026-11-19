@@ -89,6 +89,7 @@ async fn mock(handler: impl Fn(&str) -> Reply + Send + 'static) -> Mock {
             http,
             source: None,
             implicit: false,
+            project: false,
         },
         calls,
         task,

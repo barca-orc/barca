@@ -89,6 +89,19 @@ pub(crate) async fn authorize(
     if access.store.is_none() {
         return next.run(request).await;
     }
+    // The project socket is owner-only: whoever can open it can already write the database
+    // and read the token state beside it (specs/behavior/server-authentication.md).
+    if request
+        .extensions()
+        .get::<crate::project_socket::ViaProjectSocket>()
+        .is_some()
+    {
+        let mut request = request;
+        request
+            .extensions_mut()
+            .insert(Principal("project-socket".to_string()));
+        return next.run(request).await;
+    }
     let path = request.uri().path();
     if ((request.method() == Method::GET || request.method() == Method::HEAD)
         && crate::ui::public(path))

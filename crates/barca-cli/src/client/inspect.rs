@@ -579,13 +579,17 @@ pub(crate) async fn sql(
     } else {
         "leave out --server to query this machine's own results"
     };
-    barca_core::ledger::same_store(
-        &cfg,
-        &server.shown_url,
-        health["store_uri"].as_str(),
-        instead,
-    )
-    .map_err(here)?;
+    // This project's own server keeps its artifacts where this command reads them: there is
+    // no second machine whose store must match.
+    if !server.project {
+        barca_core::ledger::same_store(
+            &cfg,
+            &server.shown_url,
+            health["store_uri"].as_str(),
+            instead,
+        )
+        .map_err(here)?;
+    }
 
     let pending = if server.implicit {
         pending_posts(&cfg, &server.url).await.map_err(here)?

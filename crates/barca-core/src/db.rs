@@ -13,7 +13,7 @@ pub(crate) use barca_db::db::*;
 // and queue create it on first use; read views are the snapshots routes read from.
 pub use barca_db::db::{
     DbSnapshot, ReadView, directory_check, ensure_env_dirs, env_local_paths, init_db, init_db_as,
-    probe_metadata, unusable_file,
+    probe_metadata, serve_socket_path, unusable_file,
 };
 
 // Runs: the run list, one run in full (steps, logs, outcome, trace ids), and what the server
