@@ -44,7 +44,7 @@ pub struct QueueEntry {
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub wait_seconds: Option<u64>,
     /// Where `run_queue` has it: `queued`, `running`, or `draining` (in flight when its server
-    /// began to stop). A column of `barca.queue` ([`crate::sql::tables::queue`]), not a key of
+    /// began to stop). A column of `barca.queue` ([`QueueEntry::table_row`]), not a key of
     /// `GET /queue`: `None` on an entry read back from a server's answer.
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
@@ -58,6 +58,27 @@ pub struct QueueEntry {
     /// next server); `null` otherwise. Experimental.
     #[serde(default)]
     pub waiting_for: Option<WaitingFor>,
+}
+
+impl QueueEntry {
+    /// The entry as a row of `barca.queue` ([`crate::sql::tables::QUEUE_COLUMNS`]): the keys
+    /// `GET /queue` serves that the table has, with `state` and `scheduled_at`.
+    pub fn table_row(&self) -> serde_json::Value {
+        serde_json::json!({
+            "run_id": self.run_id,
+            "position": self.position,
+            "state": self.state.map(|s| s.as_str()),
+            "queued_at": self.queued_at,
+            "started_at": self.started_at,
+            "estimated_start_at": self.estimated_start_at,
+            "wait_seconds": self.wait_seconds,
+            "command": self.command,
+            "target": self.target,
+            "triggered_by": self.triggered_by,
+            "schedule_id": self.schedule_id,
+            "scheduled_at": self.scheduled_at,
+        })
+    }
 }
 
 /// `GET /queue` (and the answer of pause and resume).

@@ -18,7 +18,7 @@ count of wrong-way edges from growing.
 | 2 | decisions | `cache`, `changes`, `freshness`, `plan_reasons`, `schedule` | run hash, cache and freshness verdicts, why a step runs, when a schedule fires |
 | 3 | engine | `commands`, `execution`, `incremental`, `mismatch`, `persist`, `recover`, `telemetry` | executes a plan and records what happened |
 | 3 | analysis | `causes`, `estimates`, `health`, `history_filter`, `key_query`, `liveness`, `partition_grid`, `refresh_path`, `rollup`, `run_explanation`, `run_list`, `schedule_standing`, `status` | read models over what was recorded |
-| 4 | service | `diagnostics`, `outcome`, `queries`, `report`, `serve`, `sql`, `values` | one operation per command, its typed result, its text |
+| 4 | service | `diagnostics`, `outcome`, `queries`, `report`, `serve`, `sql`, `values`, `views` | one operation per command, its typed result, its text |
 
 ## The rule
 
@@ -88,6 +88,40 @@ storage modules of the rows above its own, so the layer has no cycle and no allo
 
 The fix for a failure is to move the item down a layer or to pass it in as a value. Adding a
 line to the allowlist is not.
+
+## The typed views (B2, B3)
+
+`views` is a service module: the structs a host answers with and the functions that compute
+them, one definition per view. It imports analysis types (`refresh_path::ScheduleInputs`,
+`liveness::RecordedTiming`, `run_list::RunNow`) and moves none of them.
+
+| View | Computed by | A server adds |
+|---|---|---|
+| one run (`RunView`) | `views::run_view`, then `RunDraft::plan` over the graph the host has | its run in memory (`LiveRun`) and the events it streamed |
+| the run list (`RunList`) | `views::run_list` over `queries::history_at`; `views::in_flight` for the runs in flight | its runs in memory; which nodes each run in flight works on |
+| the queue (`QueueView`) | `views::recorded_queue` for the queue the database records; the live queue is the server's own | each row's decoded description (`RecordedRun`) |
+| a schedule (`ScheduleJob`) | `views::schedule_jobs` over `refresh_path::schedule_views` | its scheduler's last skipped tick (`JobSkips`) |
+| pauses, pins | `Pauses::of`, `Pins` over `pauses::list` and `pins::list` | nothing |
+| a server's health, `GET /project`, `GET /auth/status` | filled by the host; nothing is computed | every field |
+
+`barca history RUN_ID` calls `run_view` with no overlay, so a recorded run is the same run
+from either host (`python/tests/test_runs_parity.py`). `barca history` and `GET /history` print
+`history_at`'s rows as they are; `GET /runs` puts the overlay on top of the same rows.
+
+`views/wire_tests.rs` compares each struct that replaced a `json!` body with that body, byte
+for byte: `serde_json` writes a `json!` object's keys sorted, so those structs declare their
+fields in sorted order.
+
+Where two shapes of one concept still differ, on purpose (typed as served, not unified):
+
+- A schedule's times are unix seconds in `ScheduleJob` (`GET /schedule`) and RFC 3339 in
+  `status::ScheduleStatus` (the `schedule` block of `GET /state`); `ScheduleJob` also has
+  `last_run`, the older name of `last_run_id`.
+- A run in a list is a `RunSummary` in `GET /runs` (`id`, `first_failure`, times in RFC 3339)
+  and a `db::RunRecord` in `barca history --json` and `GET /history` (`run_id`, `failure`,
+  times as stored).
+- One run is flat in `GET /runs/{run_id}` (`RunView`) and `{run, steps, steps_page,
+  explanation}` in `barca history RUN_ID --json` (`queries::RunDetail`).
 
 ## Counts
 

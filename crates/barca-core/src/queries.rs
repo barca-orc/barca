@@ -216,52 +216,6 @@ pub struct RunDetail {
     pub outputs: Vec<crate::run_explanation::RunOutput>,
 }
 
-/// [`RunDetail`] of `run_id` in this environment; a usage error when it is not recorded.
-/// At most `limit` of its recorded steps (every one with `None`). A finished run's planned
-/// nodes, the skipped and cached ones included, are counted when the files it ran still plan
-/// what it ran, as a server counts them ([`planned_run_nodes`]).
-pub async fn run_detail(
-    cfg: &crate::config::ResolvedConfig,
-    run_id: &str,
-    limit: Option<usize>,
-    python: &std::path::Path,
-) -> Result<RunDetail, BarcaError> {
-    open_metadata(cfg).await?;
-    // The one definition of a run's detail ([`crate::views::run_view`]), with no server's
-    // overlay: what `GET /runs/{run_id}` answers for a run only the database knows.
-    let draft = crate::views::run_view(crate::views::RunViewRequest {
-        read_path: &cfg.db_path,
-        db_path: &cfg.db_path,
-        run_id,
-        limit,
-        offset: 0,
-        live: None,
-        events: None,
-        default_files: &[],
-        logs: false,
-    })
-    .await?;
-    let Some(mut draft) = draft else {
-        return Err(BarcaError::Usage(format!(
-            "run '{run_id}' was not found; use barca history --json to find a run id"
-        )));
-    };
-    // Planned over the files the run ran: no graph is deployed here.
-    if let Some(files) = draft.plans().map(|run| run.files.clone())
-        && !files.is_empty()
-        && let Ok(dag) = crate::load::build_dag(&files, python).await
-    {
-        draft.plan(&dag).await?;
-    }
-    let crate::views::RunViewed { view, record } = draft.finish();
-    Ok(RunDetail {
-        run: record.expect("a run read without an overlay is a recorded one"),
-        steps: view.steps,
-        steps_page: view.steps_page,
-        outputs: view.explanation.outputs,
-    })
-}
-
 /// Record a running row as interrupted after the operator has verified it stopped.
 /// This is the explicit write exception to ordinary, read-only history inspection.
 pub async fn reconcile_run(

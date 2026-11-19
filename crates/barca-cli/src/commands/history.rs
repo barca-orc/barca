@@ -91,7 +91,7 @@ pub(crate) async fn run_detail_cmd(
     python: &std::path::Path,
 ) -> Result<(), barca_core::BarcaError> {
     let cfg = barca_core::config::resolve(env)?;
-    let detail = barca_core::queries::run_detail(&cfg, run_id, limit, python).await?;
+    let detail = barca_core::views::run_detail(&cfg, run_id, limit, python).await?;
     super::emit(barca_core::report::render_run_detail(&detail, json, select));
     Ok(())
 }

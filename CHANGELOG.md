@@ -13,9 +13,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Internal: the modules inside barca-core have layers and a test that holds them (`docs/engineering/layering.md`, #1056); 26 of the 42 edges that pointed the wrong way are cut and the largest dependency cycle is 29 modules, down from 38. No behavior change.
 - Internal: barca-core's storage modules (`backup`, `gc`, `ledger`, `pins`, `store_inspect`, `store_sync`, `transfer` and the rest) name no higher layer and have a checked order among themselves (#1056); the wrong-way edges go from 16 to 6 and the largest dependency cycle from 29 modules to 19. No behavior change.
 
+- Internal: run detail, the run list, the run queue, a schedule's entry, pauses, pins and a server's health are typed views computed in barca-core (`barca_core::views`, #1056). `barca history RUN_ID` and `GET /runs/{run_id}` read one function, the server passing the runs it holds in memory as an overlay; `GET /runs` is `barca history`'s list with that overlay on top. `GET /health`, `/schedule`, `/pauses`, `/pins`, `/project`, `/auth/status`, `/auth/tokens`, `/runs/{run_id}/logs`, the `202` of `POST /runs` and the answer of `DELETE /runs/{run_id}` are structs in place of hand-built JSON, byte for byte what they were (a test compares each with the old body); the CLI renders `barca queue`, `barca pause` and `barca resume` from them and the web UI imports their generated TypeScript in place of 12 hand-written copies. No route's keys, types or words change; a schedule's times stay unix seconds in `GET /schedule` and RFC 3339 in `GET /state`.
+
 - Internal: the Python helpers Rust starts share one envelope (request, stdout guard, lifeline, exit), `barca sql` and the server's query helper share one tables module, and the worker's single-step and batched runners share one step lifecycle; no behavior change (#1056).
 
 ### Bug Fixes
+
+- **`barca history RUN_ID --json --limit N` says where the rest of a run's steps start, as a server does (#1056).** `steps_page.next_offset` (the position of the first step not listed) was set only when the run was read through a server; the same run read from this machine's database had `truncated: true` and no `next_offset`. Both read one function now. The key is absent, as before, when every step is listed.
 
 - The web UI reads four more answers from the server in place of working them out (#1056): a
   grouped page's `N running` is its scope's `running` in the rollup, a partitioned node's

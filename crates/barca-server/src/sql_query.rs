@@ -270,7 +270,10 @@ fn queue(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
     Box::pin(async move {
         let rows = crate::queue::table_rows(&inputs.state).await?;
         let total = rows.len();
-        Ok(rows_of(tables::queue(Some(&rows)), total))
+        Ok(rows_of(
+            tables::queue(Some(rows.iter().map(|row| row.table_row()).collect())),
+            total,
+        ))
     })
 }
 

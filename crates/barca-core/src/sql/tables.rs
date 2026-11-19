@@ -222,25 +222,6 @@ pub const QUEUE_COLUMNS: &[(&str, &str)] = &[
     ("scheduled_at", V),
 ];
 
-/// One run of a server's run queue as a row of `barca.queue`: the columns of
-/// [`QUEUE_COLUMNS`], read from the entry `GET /queue` lists.
-fn queue_row(e: &crate::views::QueueEntry) -> Value {
-    json!({
-        "run_id": e.run_id,
-        "position": e.position,
-        "state": e.state.map(|s| s.as_str()),
-        "queued_at": e.queued_at,
-        "started_at": e.started_at,
-        "estimated_start_at": e.estimated_start_at,
-        "wait_seconds": e.wait_seconds,
-        "command": e.command,
-        "target": e.target,
-        "triggered_by": e.triggered_by,
-        "schedule_id": e.schedule_id,
-        "scheduled_at": e.scheduled_at,
-    })
-}
-
 /// A table of the `barca` schema over rows already in its columns' shape (`None`: a
 /// placeholder): what a server's `POST /sql/query` answered for `select * from barca.<name>`.
 pub fn table(
@@ -436,13 +417,10 @@ fn tick_row(t: &TickRecord) -> Value {
 }
 
 /// `barca.queue`: one row per run in a server's run queue, started runs first, then the
-/// waiting ones in order.
-pub fn queue(rows: Option<&[crate::views::QueueEntry]>) -> Table {
-    table(
-        QUEUE,
-        QUEUE_COLUMNS,
-        rows.map(|rows| rows.iter().map(queue_row).collect()),
-    )
+/// waiting ones in order. A row is an entry of `GET /queue` in the table's columns
+/// (`views::QueueEntry::table_row`).
+pub fn queue(rows: Option<Vec<Value>>) -> Table {
+    table(QUEUE, QUEUE_COLUMNS, rows)
 }
 
 /// What stderr says when a query names `barca.queue` on a machine without a server.
@@ -532,7 +510,7 @@ pub async fn local(
         None
     };
     // Only a server holds a run queue: here the table exists and is empty, and says why.
-    let mut queue = queue(named(query, QUEUE).then_some(&[]));
+    let mut queue = queue(named(query, QUEUE).then(Vec::new));
     if queue.rows.is_some() {
         queue.note = Some(NO_QUEUE_HERE.to_string());
     }
@@ -715,7 +693,7 @@ mod tests {
             scheduled_at: Some("2026-11-17T15:00:00Z".into()),
             waiting_for: None,
         };
-        let table = queue(Some(&[row]));
+        let table = queue(Some(vec![row.table_row()]));
         let rows = table.rows.unwrap();
         assert_eq!(sorted_keys(&rows[0]), sorted_columns(QUEUE_COLUMNS));
         assert_eq!(rows[0]["triggered_by"], "schedule");

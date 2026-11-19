@@ -403,6 +403,52 @@ impl RunDraft {
     }
 }
 
+/// [`crate::queries::RunDetail`] of `run_id` in this environment; a usage error when it is not recorded.
+/// At most `limit` of its recorded steps (every one with `None`). A finished run's planned
+/// nodes, the skipped and cached ones included, are counted when the files it ran still plan
+/// what it ran, as a server counts them ([`crate::queries::planned_run_nodes`]).
+pub async fn run_detail(
+    cfg: &crate::config::ResolvedConfig,
+    run_id: &str,
+    limit: Option<usize>,
+    python: &std::path::Path,
+) -> Result<crate::queries::RunDetail, BarcaError> {
+    crate::db::open_metadata(cfg).await?;
+    // The one definition of a run's detail ([`run_view`]), with no server's
+    // overlay: what `GET /runs/{run_id}` answers for a run only the database knows.
+    let draft = run_view(RunViewRequest {
+        read_path: &cfg.db_path,
+        db_path: &cfg.db_path,
+        run_id,
+        limit,
+        offset: 0,
+        live: None,
+        events: None,
+        default_files: &[],
+        logs: false,
+    })
+    .await?;
+    let Some(mut draft) = draft else {
+        return Err(BarcaError::Usage(format!(
+            "run '{run_id}' was not found; use barca history --json to find a run id"
+        )));
+    };
+    // Planned over the files the run ran: no graph is deployed here.
+    if let Some(files) = draft.plans().map(|run| run.files.clone())
+        && !files.is_empty()
+        && let Ok(dag) = crate::load::build_dag(&files, python).await
+    {
+        draft.plan(&dag).await?;
+    }
+    let RunViewed { view, record } = draft.finish();
+    Ok(crate::queries::RunDetail {
+        run: record.expect("a run read without an overlay is a recorded one"),
+        steps: view.steps,
+        steps_page: view.steps_page,
+        outputs: view.explanation.outputs,
+    })
+}
+
 /// The words `RunView.status` and a run list row's `status` take: live while `pending` or
 /// `running`, terminal otherwise. The fields themselves are strings (a row recorded by another
 /// release is served as it is); this is their vocabulary, for a reader that switches on it.
