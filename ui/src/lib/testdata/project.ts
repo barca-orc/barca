@@ -21,23 +21,31 @@
  * | `orders.py:orders`, `customers`, `fx_rates` | fresh (`customers` is paused: `PAUSES`) |
  * | `orders.py:orders_feed` | a sensor on a 15-minute schedule, on time |
  * | `orders.py:orders_enriched` | stale, and a queued run covers it |
- * | `orders.py:revenue_hourly`, `publish_dashboard` | behind a schedule that is late (group `Reporting`) |
+ * | `orders.py:revenue_hourly` | stale below it, on an hourly schedule whose tick is queued (group `Reporting`) |
+ * | `orders.py:publish_dashboard` | a task that ran (group `Reporting`) |
+ * | `orders.py:nightly_export` | a task on a schedule that is late: nothing decided today's slot |
  * | `orders.py:sales_by_day` | partitioned: 3 keys cached, 1 failed, 1 never computed |
  * | `orders.py:sales_report` | partitioned, blocked by the failed key above it |
- * | `orders.py:forecast`, `billing.py:ledger` | never run |
- * | `billing.py:invoices`, `check__invoices` | failing (an asset and a task) |
- * | `billing.py:invoice_totals` | fresh below a failing node: its cached result is still valid |
+ * | `orders.py:forecast` | never run, and nothing would run it |
+ * | `billing.py:invoices`, `check__invoices` | failing (an asset whose code changed after its one success, and a task) |
+ * | `billing.py:invoice_totals`, `ledger` | blocked by `invoices` (one stale, one never run) |
  *
- * `STATE_PINNED` and `PINS` are the same project once `fx_rates` is pinned.
+ * `STATE_PINNED` and `PINS` are the same project once `fx_rates` is pinned. One run executes
+ * (a backfill of `sales_report`, since 13:58) and two wait behind it for the server's one run
+ * slot: the 14:00 tick of `revenue_hourly` and a run of `orders_enriched`.
  */
 
 import type { Rollup, RollupEntry, RollupRoot } from '../rollupView'
-import type { AssetPin, NodeState, RunList, RunSummary, RunView } from '../types'
+import type { AssetPin, NodeState, RunExplanation, RunList, RunSummary, RunView } from '../types'
+import type { RunLine } from '../generated/RunLine'
+import type { RunNodeSummary } from '../generated/RunNodeSummary'
 import type { Pauses } from '../pauses'
 import pauses from './served/pauses.json'
 import pins from './served/pins.json'
 import rollup from './served/rollup.json'
 import runDetails from './served/run-details.json'
+import runExplanations from './served/run-explanations.json'
+import runsWithoutSchedule from './served/runs-without-schedule.json'
 import runs from './served/runs.json'
 import statePinned from './served/state-pinned.json'
 import state from './served/state.json'
@@ -54,6 +62,8 @@ export const STATE = state as unknown as NodeState[]
 export const ROLLUP = rollup as unknown as Rollup
 /** `GET /runs`. */
 export const RUNS = runs as unknown as RunList
+/** `GET /runs?not_triggered_by=schedule`: what the Runs page asks for until told to show the schedule's runs. */
+export const RUNS_WITHOUT_SCHEDULE = runsWithoutSchedule as unknown as RunList
 /** `GET /runs/{run_id}` of the runs in `RUN_IDS`. */
 export const RUN_DETAILS = runDetails as unknown as Record<string, RunView>
 /** `GET /pauses`. */
@@ -61,6 +71,30 @@ export const PAUSES = pauses as unknown as Pauses
 /** `GET /state` once `fx_rates` is pinned, and `GET /pins` then. */
 export const STATE_PINNED = statePinned as unknown as NodeState[]
 export const PINS = pins as unknown as { pins: AssetPin[] }
+
+function found<T>(value: T | undefined, what: string): T {
+  if (value === undefined) throw new Error(`${what} is not in the generated fixture: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
+  return value
+}
+
+/**
+ * A run no recorded history holds (queued, in flight, cancelled, of 23,278 steps): the facts a
+ * server would have of it (`run`, `nodes`), stated in the Rust test, with the explanation and
+ * the list-row words `barca-core` gives for exactly those facts.
+ */
+export interface RunScenario {
+  run: Pick<RunView, 'status' | 'target' | 'job' | 'triggered_by' | 'principal' | 'attempts' | 'retries' | 'steps_total' | 'steps_executed' | 'steps_cached' | 'started_at' | 'plan_reasons' | 'cancellation' | 'error'> & Pick<RunSummary, 'first_failure'>
+  nodes: RunNodeSummary[]
+  explanation: RunExplanation
+  line: RunLine
+}
+const SCENARIOS = runExplanations as unknown as Record<string, RunScenario>
+export type RunScenarioName = keyof typeof runExplanations
+
+/** The run scenario `name`. */
+export function scenario(name: RunScenarioName): RunScenario {
+  return found(SCENARIOS[name], `run scenario ${name}`)
+}
 
 /** The runs with a detail, by what they are. */
 export const RUN_IDS = {
@@ -73,11 +107,6 @@ export const RUN_IDS = {
   /** A tick of `orders_feed`. */
   scheduled: '5c4ed0001445',
 } as const
-
-function found<T>(value: T | undefined, what: string): T {
-  if (value === undefined) throw new Error(`${what} is not in the generated fixture: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
-  return value
-}
 
 /** The `GET /state` row of `name` (`orders_enriched`, or a full id). */
 export function row(name: string, rows: readonly NodeState[] = STATE): NodeState {

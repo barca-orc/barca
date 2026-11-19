@@ -110,8 +110,10 @@ hook, run in CI on every pull request) checks it against `crates/barca-cli/ui-la
 - comparing against a health or cache-state word (`=== 'stale'`), or producing one, outside a
   display module (`healthDisplay.ts`, `causeDisplay.ts`, `cacheStateDisplay.ts`, `glyph.ts`, ...) fails: compute it
   in `barca-core` and read the field;
-- test fixtures take their health from `lib/testdata/health-alone.json`, which a Rust test
-  generates (`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`).
+- test fixtures take what the server computes from files a Rust test generates
+  (`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture`): a whole project as served
+  in `lib/testdata/served/` (read through `lib/testdata/project.ts`), and the health of a row
+  spelled by hand from `lib/testdata/health-alone.json`.
 
 The whole rule, what the checks cannot see and how to extend the table:
 [contributing/ui-layering](../site/src/content/docs/contributing/ui-layering.md).

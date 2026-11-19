@@ -1,0 +1,1067 @@
+{
+  "cancelled before it started": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": {
+        "detail": "Cancelled by token:ops while it waited in the queue; it executed nothing.",
+        "headline": "Not started: the same target was already running as run a7e8f06a4890.",
+        "run": "a7e8f06a4890"
+      },
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 0,
+        "outcome": "0 started · 0 cached",
+        "planned": "0 steps planned",
+        "ran": 0,
+        "retries": null,
+        "steps": 0,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "api · token:ops",
+      "slowest": [],
+      "steps": "0 started · 0 cached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "It was cancelled before it decided what to run.",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "0 started · 0 cached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 0 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": {
+        "by": "request",
+        "principal": "token:ops",
+        "same_as": "a7e8f06a4890",
+        "started": false,
+        "waiting_behind": [
+          "a7e8f06a4890"
+        ]
+      },
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": "token:ops",
+      "retries": null,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "cancelled",
+      "steps_cached": 0,
+      "steps_executed": 0,
+      "steps_total": 0,
+      "target": "revenue_daily",
+      "triggered_by": "api"
+    }
+  },
+  "cancelled by the server stopping": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": {
+        "detail": "Steps that finished before the cancel are cached.",
+        "headline": "Cancelled by the server stopping while it ran.",
+        "run": null
+      },
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 1,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 3,
+        "outcome": "3 started · 1 cached",
+        "planned": "4 steps planned",
+        "ran": 3,
+        "retries": null,
+        "steps": 4,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "3 started · 1 cached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "3 steps ran, but this run recorded no reasons (barca records them from 0.43).",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "3 started · 1 cached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 4 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": {
+        "by": "shutdown",
+        "principal": null,
+        "same_as": null,
+        "started": true,
+        "waiting_behind": []
+      },
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "cancelled",
+      "steps_cached": 1,
+      "steps_executed": 3,
+      "steps_total": 4,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
+  "error": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 4,
+        "not_reached_line": "4 steps not reached",
+        "not_reached_nodes": null,
+        "ok": 0,
+        "outcome": "0 started · 0 cached · 4 not reached",
+        "planned": "4 steps planned",
+        "ran": 0,
+        "retries": null,
+        "steps": 4,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "0 started · 0 cached · 4 not reached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "No step executed.",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": "could not start a worker: python3 not found",
+      "failure_detail": "could not start a worker: python3 not found",
+      "steps": "0 started · 0 cached · 4 not reached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 4 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": "could not start a worker: python3 not found",
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "error",
+      "steps_cached": 0,
+      "steps_executed": 0,
+      "steps_total": 4,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
+  "failed at a key": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 0,
+        "failed": 1,
+        "nodes": null,
+        "not_reached": 6454,
+        "not_reached_line": "6,454 steps not reached",
+        "not_reached_nodes": null,
+        "ok": 21949,
+        "outcome": "21,949 ok · 1 failed · 0 cached · 6,454 not reached",
+        "planned": "28,404 steps planned",
+        "ran": 21950,
+        "retries": null,
+        "steps": 28404,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "schedule",
+      "slowest": [],
+      "steps": "21,949 ok · 1 failed · 0 cached · 6,454 not reached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "21,950 steps ran, but this run recorded no reasons (barca records them from 0.43).",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": "sessionize: 1 key failed · KeyError: 'currency'",
+      "failure_detail": "pipeline.py:sessionize[day=2026-10-27]: KeyError: 'currency'",
+      "steps": "21,949 ok · 1 failed · 0 cached · 6,454 not reached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 28,404 steps planned · stopped at pipeline.py:sessionize[day=2026-10-27]",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": null,
+      "first_failure": {
+        "error": "KeyError: 'currency'",
+        "node_id": "pipeline.py:sessionize[day=2026-10-27]"
+      },
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "failed",
+      "steps_cached": 0,
+      "steps_executed": 21950,
+      "steps_failed": 1,
+      "steps_total": 28404,
+      "target": "revenue_daily",
+      "triggered_by": "schedule"
+    }
+  },
+  "failed with no step recorded": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 4,
+        "not_reached_line": "4 steps not reached",
+        "not_reached_nodes": null,
+        "ok": 0,
+        "outcome": "0 ok · 0 cached · 4 not reached",
+        "planned": "4 steps planned",
+        "ran": 0,
+        "retries": null,
+        "steps": 4,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "0 ok · 0 cached · 4 not reached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "No step executed.",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": "No failed step recorded: open the run",
+      "failure_detail": "No failed step recorded: open the run",
+      "steps": "0 ok · 0 cached · 4 not reached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 4 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T12:52:00Z",
+      "status": "failed",
+      "steps_cached": 0,
+      "steps_executed": 0,
+      "steps_total": 4,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
+  "finished, served mostly from cache": {
+    "explanation": {
+      "attempts": "3 attempts: one per step, none retried",
+      "cancellation": null,
+      "counts": {
+        "attempts": 3,
+        "attempts_line": "3 attempts: one per step, none retried",
+        "cached": 1,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 3,
+        "outcome": "3 ok · 1 cached",
+        "planned": "4 steps planned",
+        "ran": 3,
+        "retries": 0,
+        "steps": 4,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "3 ok · 1 cached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [
+          {
+            "category": "inputs_changed",
+            "label": "input changed",
+            "rows": [
+              {
+                "counts": "3 steps of 2 nodes",
+                "example": "pipeline.py:orders_clean",
+                "example_text": "e.g. orders_clean",
+                "line": "3 steps of 2 nodes: sensor pipeline.py:orders_feed",
+                "nodes": 2,
+                "share": 1.0,
+                "steps": 3,
+                "subject": "sensor pipeline.py:orders_feed"
+              }
+            ],
+            "steps": 3
+          }
+        ],
+        "headline": "3 steps ran: 3 input changed",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "3 ok · 1 cached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 4 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": 3,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": {
+        "nodes": 2,
+        "omitted": 0,
+        "reasons": [
+          {
+            "category": "inputs_changed",
+            "example": "pipeline.py:orders_clean",
+            "nodes": 2,
+            "steps": 3,
+            "subject": "sensor pipeline.py:orders_feed"
+          }
+        ],
+        "steps": 3
+      },
+      "principal": null,
+      "retries": 0,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "success",
+      "steps_cached": 1,
+      "steps_executed": 3,
+      "steps_total": 4,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
+  "full rebuild in flight": {
+    "explanation": {
+      "attempts": "19,461 attempts: 19,399 steps, 62 retries",
+      "cancellation": null,
+      "counts": {
+        "attempts": 19461,
+        "attempts_line": "19,461 attempts: 19,399 steps, 62 retries",
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 3879,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 19399,
+        "outcome": "19,399 ok · 3,879 left",
+        "planned": "23,278 steps planned",
+        "ran": 19399,
+        "retries": 62,
+        "steps": 23278,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": {
+        "cached": 0,
+        "done": 19399,
+        "eta": "about 1m left",
+        "eta_seconds": 71.98515387391103,
+        "executed": 19399,
+        "percent": 83,
+        "total": 23278
+      },
+      "requested_by": "api · token:ci-bot",
+      "slowest": [
+        {
+          "keys": 3120,
+          "node_id": "pipeline.py:sessionize",
+          "seconds": 1840.5
+        },
+        {
+          "keys": 1,
+          "node_id": "pipeline.py:ltv_by_account",
+          "seconds": 212.3
+        }
+      ],
+      "steps": "19,399 ok · 3,879 left",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [
+          {
+            "category": "code_changed",
+            "label": "code changed",
+            "rows": [
+              {
+                "counts": "21,104 steps of 412 nodes",
+                "example": "pipeline.py:ltv_by_account",
+                "example_text": "e.g. ltv_by_account",
+                "line": "21,104 steps of 412 nodes: helper pipelines/common.py:bucket_ltv",
+                "nodes": 412,
+                "share": 0.9066070968296246,
+                "steps": 21104,
+                "subject": "helper pipelines/common.py:bucket_ltv"
+              }
+            ],
+            "steps": 21104
+          },
+          {
+            "category": "new_keys",
+            "label": "new partition keys",
+            "rows": [
+              {
+                "counts": "1,205 steps of 2 nodes",
+                "example": "pipeline.py:sessionize",
+                "example_text": "e.g. sessionize",
+                "line": "1,205 steps of 2 nodes, e.g. sessionize",
+                "nodes": 2,
+                "share": 0.05176561560271501,
+                "steps": 1205,
+                "subject": null
+              }
+            ],
+            "steps": 1205
+          },
+          {
+            "category": "inputs_changed",
+            "label": "input changed",
+            "rows": [
+              {
+                "counts": "957 steps of 40 nodes",
+                "example": "pipeline.py:revenue_daily",
+                "example_text": "e.g. revenue_daily",
+                "line": "957 steps of 40 nodes: pipeline.py:orders_clean",
+                "nodes": 40,
+                "share": 0.041111779362488186,
+                "steps": 957,
+                "subject": "pipeline.py:orders_clean"
+              }
+            ],
+            "steps": 957
+          },
+          {
+            "category": "never_run",
+            "label": "never run",
+            "rows": [
+              {
+                "counts": "12 nodes",
+                "example": "pipeline.py:churn_model",
+                "example_text": "e.g. churn_model",
+                "line": "12 nodes, e.g. churn_model",
+                "nodes": 12,
+                "share": 0.0005155082051722657,
+                "steps": 12,
+                "subject": null
+              }
+            ],
+            "steps": 12
+          }
+        ],
+        "headline": "23,278 steps decided to run so far: 21,104 code changed, 1,205 new partition keys, 957 input changed, and 1 more reason",
+        "omitted": 3,
+        "partial": true
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "19,399 ok · 3,879 left",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 23,278 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [
+      {
+        "calls": 0,
+        "elapsed_seconds": 1840.5,
+        "failed": 0,
+        "keys": 3120,
+        "node_id": "pipeline.py:sessionize"
+      },
+      {
+        "calls": 0,
+        "elapsed_seconds": 212.3,
+        "failed": 0,
+        "keys": 1,
+        "node_id": "pipeline.py:ltv_by_account"
+      }
+    ],
+    "run": {
+      "attempts": 19461,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": {
+        "nodes": 469,
+        "omitted": 3,
+        "reasons": [
+          {
+            "category": "code_changed",
+            "example": "pipeline.py:ltv_by_account",
+            "nodes": 412,
+            "steps": 21104,
+            "subject": "helper pipelines/common.py:bucket_ltv"
+          },
+          {
+            "category": "new_keys",
+            "example": "pipeline.py:sessionize",
+            "nodes": 2,
+            "steps": 1205,
+            "subject": null
+          },
+          {
+            "category": "inputs_changed",
+            "example": "pipeline.py:revenue_daily",
+            "nodes": 40,
+            "steps": 957,
+            "subject": "input pipeline.py:orders_clean"
+          },
+          {
+            "category": "never_run",
+            "example": "pipeline.py:churn_model",
+            "nodes": 12,
+            "steps": 12,
+            "subject": null
+          }
+        ],
+        "steps": 23278
+      },
+      "principal": "token:ci-bot",
+      "retries": 62,
+      "started_at": "2026-11-17T14:51:00Z",
+      "status": "running",
+      "steps_cached": 0,
+      "steps_executed": 19399,
+      "steps_total": 23278,
+      "target": "revenue_daily",
+      "triggered_by": "api"
+    }
+  },
+  "interrupted": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 1,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 2,
+        "not_reached_line": "2 steps not reached",
+        "not_reached_nodes": null,
+        "ok": 1,
+        "outcome": "1 started · 1 cached · 2 not reached",
+        "planned": "4 steps planned",
+        "ran": 1,
+        "retries": null,
+        "steps": 4,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "1 started · 1 cached · 2 not reached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "1 step ran, but this run recorded no reasons (barca records them from 0.43).",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": "the server stopped while the run was in flight",
+      "failure_detail": "the server stopped while the run was in flight",
+      "steps": "1 started · 1 cached · 2 not reached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 4 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": "the server stopped while the run was in flight",
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "interrupted",
+      "steps_cached": 1,
+      "steps_executed": 1,
+      "steps_total": 4,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
+  "just started": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 23278,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 0,
+        "outcome": "0 ok · 23,278 left",
+        "planned": "23,278 steps planned",
+        "ran": 0,
+        "retries": null,
+        "steps": 23278,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": {
+        "cached": 0,
+        "done": 0,
+        "eta": null,
+        "eta_seconds": null,
+        "executed": 0,
+        "percent": 0,
+        "total": 23278
+      },
+      "requested_by": "schedule",
+      "slowest": [],
+      "steps": "0 ok · 23,278 left",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "No step decided to run yet.",
+        "omitted": 0,
+        "partial": true
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "0 ok · 23,278 left",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 23,278 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:56:56Z",
+      "status": "running",
+      "steps_cached": 0,
+      "steps_executed": 0,
+      "steps_total": 23278,
+      "target": "revenue_daily",
+      "triggered_by": "schedule"
+    }
+  },
+  "queued": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 0,
+        "outcome": "0 ok",
+        "planned": "0 steps planned",
+        "ran": 0,
+        "retries": null,
+        "steps": 0,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": {
+        "cached": 0,
+        "done": 0,
+        "eta": null,
+        "eta_seconds": null,
+        "executed": 0,
+        "percent": null,
+        "total": null
+      },
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "0 ok",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "No step decided to run yet.",
+        "omitted": 0,
+        "partial": true
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "0 ok",
+      "steps_detail": "A step is one node, or one key of a partitioned node",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:56:52Z",
+      "status": "pending",
+      "steps_cached": 0,
+      "steps_executed": 0,
+      "steps_total": null,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
+  "running": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 1,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 2,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 1,
+        "outcome": "1 ok · 2 left",
+        "planned": "4 steps planned",
+        "ran": 1,
+        "retries": null,
+        "steps": 4,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": {
+        "cached": 1,
+        "done": 2,
+        "eta": "about 6m left",
+        "eta_seconds": 384.0,
+        "executed": 1,
+        "percent": 50,
+        "total": 4
+      },
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "1 ok · 2 left",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "No step decided to run yet.",
+        "omitted": 0,
+        "partial": true
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "1 ok · 2 left",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 4 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "running",
+      "steps_cached": 1,
+      "steps_executed": 1,
+      "steps_total": 4,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
+  "sensors and no retries": {
+    "explanation": {
+      "attempts": "29 attempts: one per step, none retried",
+      "cancellation": null,
+      "counts": {
+        "attempts": 29,
+        "attempts_line": "29 attempts: one per step, none retried",
+        "cached": 0,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 0,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 29,
+        "outcome": "29 ok · 0 cached",
+        "planned": "29 steps planned",
+        "ran": 29,
+        "retries": 0,
+        "steps": 29,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": null,
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "29 ok · 0 cached",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [
+          {
+            "category": "sensor",
+            "label": "sensors (always run)",
+            "rows": [
+              {
+                "counts": "27 nodes",
+                "example": "pipeline.py:orders_feed",
+                "example_text": "e.g. orders_feed",
+                "line": "27 nodes, e.g. orders_feed",
+                "nodes": 27,
+                "share": 0.9310344827586207,
+                "steps": 27,
+                "subject": null
+              }
+            ],
+            "steps": 27
+          },
+          {
+            "category": "never_run",
+            "label": "never run",
+            "rows": [
+              {
+                "counts": "2 nodes",
+                "example": "pipeline.py:orders_clean",
+                "example_text": "e.g. orders_clean",
+                "line": "2 nodes, e.g. orders_clean",
+                "nodes": 2,
+                "share": 0.06896551724137931,
+                "steps": 2,
+                "subject": null
+              }
+            ],
+            "steps": 2
+          }
+        ],
+        "headline": "29 steps ran: 27 sensors (always run), 2 never run",
+        "omitted": 0,
+        "partial": false
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "29 ok · 0 cached",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 29 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": 29,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": {
+        "nodes": 29,
+        "omitted": 0,
+        "reasons": [
+          {
+            "category": "sensor",
+            "example": "pipeline.py:orders_feed",
+            "nodes": 27,
+            "steps": 27,
+            "subject": null
+          },
+          {
+            "category": "never_run",
+            "example": "pipeline.py:orders_clean",
+            "nodes": 2,
+            "steps": 2,
+            "subject": null
+          }
+        ],
+        "steps": 29
+      },
+      "principal": null,
+      "retries": 0,
+      "started_at": "2026-11-17T14:53:48Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 29,
+      "steps_total": 29,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  }
+}

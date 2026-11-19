@@ -8,7 +8,28 @@
 //! The weights of "Distance from fresh" (#1028) are kept the same way, in
 //! `ui/src/lib/testdata/weights.json`, which `ui/src/lib/testdata/rollup.ts` states a fixture
 //! entry's `weight` with: the app holds no weight table, and neither does a fixture.
-//! When the health table or a weight changes, regenerate the files and the UI's fixtures follow:
+//!
+//! A whole project is kept the same way (#1056 F4). `testdata/ui_fixture/` holds two pipeline
+//! files with a node in each state the UI shows; the test copies them into a scratch project,
+//! records a history for it (runs, failures, ticks, a pause, a pin, a queue) at fixed times,
+//! and writes what this crate says of it at one fixed instant to
+//! `ui/src/lib/testdata/served/`: the rows of `GET /state`, `GET /state/rollup`, the run list,
+//! four run details with their explanations, the pauses and the pins, and the explanations of
+//! runs no recorded history holds (`run-explanations.json`). `ui/src/lib/testdata/project.ts`
+//! types them; the UI's unit tests and kit assert on them instead of on values someone typed.
+//!
+//! What the files are, exactly: the computed values (cache state, health, reason, cause, root,
+//! estimates, schedule standing, every count, weight and line of the rollup, a run's
+//! explanation and list line, the activity) come from this crate's public functions, as a
+//! server that reads this database answers them (a read-only one: the schedules and the queue
+//! are the recorded ones, and the test checks its rows against `health::attach_from_db`, what
+//! `barca status` prints). The fields `barca-server` joins on in its own crate (`NodeState`
+//! beyond the status row, `RunSummary`, the record half of `RunView`) are joined here from the
+//! same reads, in this file: a field added there is added here by hand until those views
+//! are core functions (#1056 B2).
+//!
+//! When the health table, a weight, a wording or the fixture project changes, regenerate the
+//! files, review the diff (it is what the UI will be told), and the UI's fixtures follow:
 //!
 //! ```text
 //! BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture
@@ -1037,8 +1058,20 @@ impl Project {
     /// `GET /runs`: every recorded run, newest first, each with its `line`, and the activity
     /// of the 24 hours before [`NOW`]. The row is `barca-server`'s `RunSummary` of a recorded
     /// run nothing is working on.
-    async fn runs(&self) -> serde_json::Value {
-        let filter = crate::history_filter::HistoryFilter::default();
+    async fn runs(&self, not_triggered_by: Option<&str>) -> serde_json::Value {
+        let filter = crate::history_filter::HistoryFilter::parse(
+            crate::history_filter::HistoryFlags {
+                status: None,
+                target: None,
+                triggered_by: None,
+                not_triggered_by,
+                since: None,
+                until: None,
+                search: None,
+            },
+            at(NOW),
+        )
+        .unwrap();
         let kept = filter.run_filter();
         let records = crate::db::get_runs_filtered(self.db(), 100, &kept)
             .await
@@ -1187,6 +1220,192 @@ impl Project {
     }
 }
 
+/// Runs no recorded history holds (in flight, queued, cancelled) and runs of a size the fixture
+/// project has not: each is the facts a server would have of it, stated here, and the
+/// explanation `run_explanation::explain` gives for them. The kit shows the explanation with
+/// the facts it was made from; no line of it is written by hand.
+fn explanations() -> String {
+    let now = at(NOW).timestamp();
+    let started = |ago: i64| {
+        chrono::DateTime::from_timestamp(now - ago, 0)
+            .unwrap()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    };
+    let reason = |category: &str, subject: Option<&str>, nodes: u64, steps: u64, example: &str| serde_json::json!({"category": category, "subject": subject, "nodes": nodes, "steps": steps, "example": example});
+    let node = |id: &str, keys: u64, seconds: f64| serde_json::json!({"node_id": id, "keys": keys, "failed": 0, "elapsed_seconds": seconds, "calls": 0});
+    let get = "pipeline.py:orders_clean,pipeline.py:revenue_daily";
+    // (name, the run's facts, its per-node summary)
+    let scenarios = [
+        (
+            "queued",
+            serde_json::json!({"status": "pending", "triggered_by": "client", "started_at": started(8), "steps_total": null, "steps_executed": 0, "steps_cached": 0}),
+            vec![],
+        ),
+        (
+            "running",
+            serde_json::json!({"status": "running", "triggered_by": "client", "started_at": started(192), "steps_total": 4, "steps_executed": 1, "steps_cached": 1}),
+            vec![],
+        ),
+        (
+            "full rebuild in flight",
+            serde_json::json!({
+                "status": "running", "triggered_by": "api", "principal": "token:ci-bot", "started_at": started(360),
+                "steps_total": 23_278, "steps_executed": 19_399, "steps_cached": 0, "attempts": 19_461, "retries": 62,
+                "plan_reasons": {"nodes": 469, "steps": 23_278, "omitted": 3, "reasons": [
+                    reason("code_changed", Some("helper pipelines/common.py:bucket_ltv"), 412, 21_104, "pipeline.py:ltv_by_account"),
+                    reason("new_keys", None, 2, 1_205, "pipeline.py:sessionize"),
+                    reason("inputs_changed", Some("input pipeline.py:orders_clean"), 40, 957, "pipeline.py:revenue_daily"),
+                    reason("never_run", None, 12, 12, "pipeline.py:churn_model"),
+                ]},
+            }),
+            vec![
+                node("pipeline.py:sessionize", 3_120, 1_840.5),
+                node("pipeline.py:ltv_by_account", 1, 212.3),
+            ],
+        ),
+        (
+            "just started",
+            serde_json::json!({"status": "running", "triggered_by": "schedule", "started_at": started(4), "steps_total": 23_278, "steps_executed": 0, "steps_cached": 0}),
+            vec![],
+        ),
+        (
+            "finished, served mostly from cache",
+            serde_json::json!({
+                "status": "success", "triggered_by": "client", "started_at": started(192),
+                "steps_total": 4, "steps_executed": 3, "steps_cached": 1, "attempts": 3, "retries": 0,
+                "plan_reasons": {"nodes": 2, "steps": 3, "omitted": 0, "reasons": [
+                    reason("inputs_changed", Some("sensor pipeline.py:orders_feed"), 2, 3, "pipeline.py:orders_clean"),
+                ]},
+            }),
+            vec![],
+        ),
+        (
+            "sensors and no retries",
+            serde_json::json!({
+                "status": "success", "triggered_by": "client", "started_at": started(192),
+                "steps_total": 29, "steps_executed": 29, "steps_cached": 0, "attempts": 29, "retries": 0,
+                "plan_reasons": {"nodes": 29, "steps": 29, "omitted": 0, "reasons": [
+                    reason("sensor", None, 27, 27, "pipeline.py:orders_feed"),
+                    reason("never_run", None, 2, 2, "pipeline.py:orders_clean"),
+                ]},
+            }),
+            vec![],
+        ),
+        (
+            "cancelled before it started",
+            serde_json::json!({
+                "status": "cancelled", "triggered_by": "api", "principal": "token:ops", "started_at": started(192),
+                "steps_total": 0, "steps_executed": 0, "steps_cached": 0,
+                "cancellation": {"by": "request", "principal": "token:ops", "started": false, "waiting_behind": ["a7e8f06a4890"], "same_as": "a7e8f06a4890"},
+            }),
+            vec![],
+        ),
+        (
+            "cancelled by the server stopping",
+            serde_json::json!({
+                "status": "cancelled", "triggered_by": "client", "started_at": started(192),
+                "steps_total": 4, "steps_executed": 3, "steps_cached": 1,
+                "cancellation": {"by": "shutdown", "principal": null, "started": true, "waiting_behind": [], "same_as": null},
+            }),
+            vec![],
+        ),
+        (
+            "error",
+            serde_json::json!({"status": "error", "triggered_by": "client", "started_at": started(192), "steps_total": 4, "steps_executed": 0, "steps_cached": 0,
+                "error": "could not start a worker: python3 not found"}),
+            vec![],
+        ),
+        (
+            "interrupted",
+            serde_json::json!({"status": "interrupted", "triggered_by": "client", "started_at": started(192), "steps_total": 4, "steps_executed": 1, "steps_cached": 1,
+                "error": "the server stopped while the run was in flight"}),
+            vec![],
+        ),
+        // Two rows of a run list: steps failed and the run recorded no error of its own, and
+        // the same with no failed step on record.
+        (
+            "failed at a key",
+            serde_json::json!({"status": "failed", "triggered_by": "schedule", "started_at": started(192), "steps_total": 28_404, "steps_executed": 21_950, "steps_cached": 0, "steps_failed": 1,
+                "first_failure": {"node_id": "pipeline.py:sessionize[day=2026-10-27]", "error": "KeyError: 'currency'"}}),
+            vec![],
+        ),
+        (
+            "failed with no step recorded",
+            serde_json::json!({"status": "failed", "triggered_by": "client", "started_at": started(7_500), "steps_total": 4, "steps_executed": 0, "steps_cached": 0}),
+            vec![],
+        ),
+    ];
+    let mut out = serde_json::Map::new();
+    for (name, run, nodes) in scenarios {
+        let text = |key: &str| run[key].as_str();
+        let plan_reasons: Option<crate::run_explain::PlanReasons> =
+            serde_json::from_value(run["plan_reasons"].clone()).unwrap();
+        let cancellation: Option<crate::run_explain::Cancellation> =
+            serde_json::from_value(run["cancellation"].clone()).unwrap();
+        let summaries: Vec<crate::db::RunNodeSummary> = nodes
+            .iter()
+            .map(|n| serde_json::from_value(n.clone()).unwrap())
+            .collect();
+        let explanation = crate::run_explanation::explain(
+            crate::run_explanation::RunFacts {
+                status: text("status").unwrap(),
+                target: Some("revenue_daily"),
+                job: Some(get),
+                triggered_by: serde_json::from_value(run["triggered_by"].clone()).unwrap(),
+                principal: text("principal"),
+                attempts: run["attempts"].as_i64(),
+                retries: run["retries"].as_i64(),
+                steps_total: run["steps_total"].as_i64(),
+                steps_executed: run["steps_executed"].as_i64().unwrap(),
+                steps_cached: run["steps_cached"].as_i64().unwrap(),
+                steps_failed: run["steps_failed"].as_i64(),
+                started_at: text("started_at").unwrap(),
+                plan_reasons: plan_reasons.as_ref(),
+                cancellation: cancellation.as_ref(),
+            },
+            &summaries,
+            &[],
+            now as f64,
+        );
+        // Its row in a run list, in the same words.
+        let line = crate::run_list::run_line(crate::run_list::RunLineFacts {
+            status: text("status").unwrap(),
+            steps_total: run["steps_total"].as_i64(),
+            steps_executed: run["steps_executed"].as_i64().unwrap(),
+            steps_cached: run["steps_cached"].as_i64().unwrap(),
+            steps_failed: run["steps_failed"].as_i64(),
+            error: text("error"),
+            first_failure: run["first_failure"]["node_id"]
+                .as_str()
+                .zip(run["first_failure"]["error"].as_str()),
+            target: Some("revenue_daily"),
+        });
+        let mut run = run;
+        for key in [
+            "principal",
+            "attempts",
+            "retries",
+            "plan_reasons",
+            "cancellation",
+            "error",
+            "first_failure",
+        ] {
+            if run.get(key).is_none() {
+                run[key] = serde_json::Value::Null;
+            }
+        }
+        run["target"] = serde_json::json!("revenue_daily");
+        run["job"] = serde_json::json!(get);
+        out.insert(
+            name.to_string(),
+            serde_json::json!({"run": run, "nodes": nodes, "explanation": explanation, "line": line}),
+        );
+    }
+    let mut text = serde_json::to_string_pretty(&serde_json::Value::Object(out)).unwrap();
+    text.push('\n');
+    text
+}
+
 /// The runs whose detail the UI's tests read: a clean first run, a failed one with its log, a
 /// failed key of a partitioned node, and a scheduled one.
 const RUN_DETAILS: &[&str] = &[
@@ -1201,7 +1420,9 @@ async fn the_ui_fixture_project_is_what_a_server_serves() {
     let project = Project::new().await;
     project.record().await;
     let (state, rollup) = project.state().await;
-    let runs = project.runs().await;
+    let runs = project.runs(None).await;
+    // As the Runs page asks by default: `GET /runs?not_triggered_by=schedule`.
+    let by_people = project.runs(Some("schedule")).await;
     let mut details = serde_json::Map::new();
     for id in RUN_DETAILS {
         details.insert(id.to_string(), project.run_view(id).await);
@@ -1221,6 +1442,8 @@ async fn the_ui_fixture_project_is_what_a_server_serves() {
         ("state.json", project.text(&state)),
         ("rollup.json", project.text(&rollup)),
         ("runs.json", project.text(&runs)),
+        ("runs-without-schedule.json", project.text(&by_people)),
+        ("run-explanations.json", explanations()),
         (
             "run-details.json",
             project.text(&serde_json::Value::Object(details)),
