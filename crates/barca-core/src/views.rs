@@ -13,14 +13,16 @@ mod queue;
 mod runs;
 mod schedule;
 mod server;
+#[cfg(test)]
+mod wire_tests;
 
 pub use pauses::{PauseRequest, Pauses, Pins};
 pub use queue::{QueueEntry, QueueView, RecordedRun, recorded as recorded_queue};
 pub use runs::{
-    ActiveStep, FirstFailure, Flight, LiveRun, LiveStatus, LiveSteps, PartitionProgress,
-    RunCancelling, RunDraft, RunHandle, RunList, RunListRequest, RunLogs, RunSummary,
-    RunViewRequest, RunViewStatus, RunViewed, RunsQuery, in_flight, in_flight_list, in_flight_now,
-    run_list, run_view,
+    ActiveStep, Cancelling, FirstFailure, Flight, LiveRun, LiveStatus, LiveSteps,
+    PartitionProgress, RunCancelling, RunDraft, RunHandle, RunList, RunListRequest, RunLogs,
+    RunSummary, RunViewRequest, RunViewStatus, RunViewed, RunsQuery, in_flight, in_flight_list,
+    in_flight_now, run_list, run_view,
 };
 pub use schedule::{JobSkips, ScheduleJob, SchedulePauseAnswer, SkipReason, schedule_jobs};
 pub use server::{
