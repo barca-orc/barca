@@ -290,6 +290,20 @@ evidence)` answers the path's schedule with its `PathSchedule` (`next_tick`, `pa
 `failing` and the schedule's `Standing`: last tick, typical queue wait, lateness);
 `health::Evidence::path` carries that evidence into classification.
 
+What a pause would cover (#1056, implemented) is read from the same walk:
+`refresh_path::pause_cover(dag, target, downstream)` answers the nodes a pause of `target`
+names, the nodes below them when `downstream`, and every schedule whose tick reaches one of
+those nodes (`tick_reach`, as a target or as an input), each with how its ticks touch what the
+pause names: `self`, `target`, `input` or `downstream`, the first that applies. It is the
+`covers` of `GET /pauses?target=` and of `barca pause TARGET --dry-run`, and what the web UI's
+"Blast radius" lists. No surface walks the graph to decide which schedules a pause holds back:
+a walk of the edges alone says a schedule above a `Manual` asset reconciles it, and the
+scheduler does not. Like the reach it is static: a pinned or already paused node, which stops
+a tick's walk at run time, is not accounted for. Evidence:
+`a_pause_covers_the_schedules_whose_ticks_reach_it_by_the_schedulers_walk`
+(`crates/barca-core/src/refresh_path.rs`), `asset_pauses_match_contract`
+(`crates/barca-server/tests/openapi.rs`) and `python/tests/test_health_parity.py`.
+
 ### Cause (#963, #973)
 
 Implemented in `crates/barca-core/src/causes.rs` (`attribute`), called by `health::classify`.
@@ -470,6 +484,13 @@ overlapping schedules, `test_ticks_waiting_on_one_run_slot_name_the_queue_as_the
 | `recheck_at` | when a tick next evaluates the node | no refresh path, or its `next_tick` is `null` |
 | `last_check` | `{"at", "outcome", "schedule"}`: the newest finished tick that had the node as a target (implemented, "Last check") | no retained tick did |
 | `no_estimate` | why a node that is not fresh has no `expected_fresh_at`, in one word (#968, below) | fresh; or it has an estimate |
+| `typical_run_seconds` | how long one run of the node typically takes: the median of its recent successful executions, times its number of keys for a partitioned node (#1056, implemented: `estimates::node_run_seconds`) | it has no successful execution on record |
+
+`last_attempt` (#1056, implemented: `views::LastAttempt`) is beside them and never `null`: how
+the node's newest attempt went, `failed` (its last materialization failed, or a key last
+failed), `never_run` (no execution on record) or `success`. Both are read off the row and its
+typical duration alone, on every surface: no surface works either out from `durations`,
+`partitions` or `last_materialization` (`python/tests/test_health_parity.py`).
 
 - `stale_since` by root kind: a changed observation or input is the `created_at` of the root's
   current result; a failure is `failing_since`; code, environment and never-run use the time
@@ -649,6 +670,8 @@ All are fields of `NodeStatus`, so one struct serves every surface.
 | `gap_seconds` | number | yes | `gap_seconds` |
 | `signals` | array (today's `GET /state` shape) | yes (moves from `GET /state` only) | `signals` (list of kinds) |
 | `measured` | boolean, `null` for a task or sensor | yes | `measured` |
+| `last_attempt` | string enum | yes | none |
+| `typical_run_seconds` | number or `null` | yes | none (`barca.materializations` has each duration) |
 
 `measured` is whether the asset's latest successful result has a recorded row count (for a
 partitioned asset, any current key). An unmeasured asset raises no signal and is never `ok`

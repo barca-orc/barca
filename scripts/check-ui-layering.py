@@ -437,9 +437,7 @@ def check_derives(table: dict, files: dict[str, str], type_names: list[str]) -> 
         if rel not in files:
             problems.append(f"derives: {rel} is listed and does not exist")
         elif re.fullmatch(r"lib/[^/]+\.ts", rel):
-            problems.append(
-                f"derives: {rel} is a module of `lib`: its entries go under `modules`"
-            )
+            problems.append(f"derives: {rel} is a module of `lib`: its entries go under `modules`")
     for rel, text in files.items():
         lib = re.fullmatch(r"lib/([^/]+)\.ts", rel)
         entry = modules.get(lib.group(1), {}) if lib else {}
@@ -748,9 +746,7 @@ def self_test() -> list[str]:
     )
     seeded(
         "storage in a layout module",
-        {
-            "lib/table.ts": "export const width = () => Number(localStorage.getItem('w')) || 200\n"
-        },
+        {"lib/table.ts": "export const width = () => Number(localStorage.getItem('w')) || 200\n"},
         "lib/table.ts uses `localStorage`",
     )
     # ── a derivation is registered ──
@@ -773,7 +769,9 @@ def self_test() -> list[str]:
     )
     seeded(
         "a tally nobody registered",
-        {"lib/filters.ts": "export function tally(rows: Row[]) {\n  for (const r of rows) counts[r.kind] += 1\n}\n"},
+        {
+            "lib/filters.ts": "export function tally(rows: Row[]) {\n  for (const r of rows) counts[r.kind] += 1\n}\n"
+        },
         "lib/filters.ts:2: computes a count",
     )
     seeded(
@@ -792,7 +790,10 @@ def self_test() -> list[str]:
         "either the `issue` that removes them or `kept: true`",
         table_with(
             "table",
-            {**table["modules"]["table"], "derives": [{"what": "x", "reason": "y", "sees": ["order"]}]},
+            {
+                **table["modules"]["table"],
+                "derives": [{"what": "x", "reason": "y", "sees": ["order"]}],
+            },
         ),
     )
     seeded(
