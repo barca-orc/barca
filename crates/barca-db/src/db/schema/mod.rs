@@ -64,26 +64,31 @@ pub(super) async fn initialized(
     } else if let Some(why) = unusable_file(path) {
         return Err(unusable(why));
     }
-    if Path::new(path).exists() {
-        // A read-write SQLite connection may checkpoint on close, even after a failed
-        // schema check. Judge compatibility read-only before opening the writer.
-        let (_db, read) = connect_read_only(path).await?;
-        let version = crate::db::schema::ddl::check(&read).await?;
-        if version == crate::db::schema::ddl::VERSION {
-            crate::state_validate::Schema::read(&read)
-                .await?
-                .columns_fit(true)
-                .map_err(unusable)?;
-        } else {
-            crate::state_validate::legacy_schema(&read)
-                .await?
-                .map_err(unusable)?;
+    // The connection this process keeps to the database, when it has one ([`OWNED`]): no
+    // writer is opened, so there is nothing for a read-only look to protect.
+    let kept = if owns(path) { reusable(path) } else { None };
+    let (handle, conn) = match kept {
+        Some(conn) => (handle_of_kept(path, &conn, lock), conn),
+        None => {
+            if Path::new(path).exists() {
+                // A read-write SQLite connection may checkpoint on close, even after a failed
+                // schema check. Judge compatibility read-only before opening the writer.
+                let (_db, read) = connect_read_only(path).await?;
+                let version = crate::db::schema::ddl::check(&read).await?;
+                if version == crate::db::schema::ddl::VERSION {
+                    crate::state_validate::Schema::read(&read)
+                        .await?
+                        .columns_fit(true)
+                        .map_err(unusable)?;
+                } else {
+                    crate::state_validate::legacy_schema(&read)
+                        .await?
+                        .map_err(unusable)?;
+                }
+            }
+            let (db, conn) = connect_write(path).await?;
+            (handle_of_new(path, db, &conn, lock), conn)
         }
-    }
-    let (db, conn) = connect_write(path).await?;
-    let handle = DbHandle {
-        _db: db,
-        _lock: Some(lock),
     };
     let version = match init_schema(&conn).await {
         Ok(()) => crate::db::schema::ddl::read_version(&conn).await,

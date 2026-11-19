@@ -267,8 +267,9 @@ pub fn database_of(db_path: &str) -> std::borrow::Cow<'_, str> {
 const BUSY_WAIT: Duration = Duration::from_secs(5);
 
 /// How long [`fold_log`] tries again a checkpoint that a [`ReadView`]'s query kept from
-/// finishing: one query of a read route lasts milliseconds.
-const CHECKPOINT_BUSY_WAIT: Duration = Duration::from_secs(2);
+/// finishing: one query of a read route lasts milliseconds. As long as a connection waits on
+/// SQLite's own locks ([`BUSY_WAIT`]), which is how long one try used to block.
+const CHECKPOINT_BUSY_WAIT: Duration = BUSY_WAIT;
 
 /// A read-only connection to a [`ReadView`]'s database.
 async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
@@ -296,12 +297,282 @@ pub use barca_model::layout::{ensure_env_dirs, env_local_paths, serve_socket_pat
 /// Operations are brief (a few queries), so hitting this means a stuck process.
 const DB_FILE_LOCK_WAIT: Duration = Duration::from_secs(60);
 
-/// An open database plus the cross-process lock that makes it safe to open. Field
-/// order matters: the database is closed before the lock is released.
+/// A database open for one operation, plus the cross-process lock that makes it safe to use.
+/// Field order matters: a database opened for this operation alone is closed before the lock
+/// is released.
 pub struct DbHandle {
-    _db: libsql::Database,
+    /// The owner's connection this operation was handed ([`OWNED`]): looked at once more when
+    /// the handle is dropped, with the lock still held.
+    owned: Option<OwnedUse>,
+    /// The database of a connection opened for this operation alone: a [`ReadView`]'s, or one
+    /// of a file the owner does not keep a connection to ([`owns`]).
+    _db: Option<libsql::Database>,
     /// None for a [`ReadView`], which reads without the lock.
     _lock: Option<FileLock>,
+}
+
+impl DbHandle {
+    /// The handle of a connection opened for one operation.
+    fn of_one_operation(db: libsql::Database, lock: Option<FileLock>) -> Self {
+        Self {
+            owned: None,
+            _db: Some(db),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for DbHandle {
+    fn drop(&mut self) {
+        // Before the fields drop, so before the lock is released.
+        if let Some(used) = self.owned.take() {
+            release_owned(used);
+        }
+    }
+}
+
+// ─── The owner: one write connection per metadata database, per process ──────────────────────
+
+/// The write connections this process keeps open, by database path: one per metadata
+/// database, handed to each operation in turn by [`open_conn`] in place of a connection opened
+/// and closed for it (#1056, A8; `docs/engineering/metadata-owner.md`).
+///
+/// Opening a connection for every operation cost two opens (a read-only format check, then the
+/// writer) and, in a process with no other connection, a checkpoint and the deletion of the
+/// log at every close, with the log and its index created again by the next operation.
+///
+/// Nothing about the locks changes: an operation still takes the cross-process lock for itself
+/// and holds it until its [`DbHandle`] is dropped, so two operations never use the connection
+/// at once (the lock is a `flock` on a descriptor of each operation's own, which excludes a
+/// second holder in this process as it does one in another), other processes get their turns
+/// between operations, and a backup, a restore or a trim that holds the lock keeps every
+/// writer out.
+///
+/// What a kept connection adds is the question whether it is still a connection to the
+/// database at that path. Every handout answers it under the lock ([`reusable`]): the file at
+/// the path and its `-wal` must be the files the connection has open (device and inode), and
+/// no transaction may be open on it. A database a restore or a reset replaced, or one whose
+/// log was deleted under this process, gets a new connection, opened as every connection used
+/// to be.
+static OWNED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Owned>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// One kept connection. Field order: the connection closes before its database.
+struct Owned {
+    conn: libsql::Connection,
+    _db: libsql::Database,
+    /// The database file the connection was opened on.
+    main: FileId,
+    /// Its `-wal` when the connection was last released (or opened): the log the connection
+    /// has open. `None` while the database has none.
+    wal: Option<FileId>,
+    /// Which connection this is, of all this process kept: tests tell a kept one from a new.
+    serial: u64,
+}
+
+/// The serial of the connection kept for the database at `path`.
+#[cfg(test)]
+pub(crate) fn kept_serial(path: &str) -> Option<u64> {
+    OWNED.lock().unwrap().get(path).map(|entry| entry.serial)
+}
+
+static KEPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The owner's connection in the hands of one operation.
+struct OwnedUse {
+    path: String,
+    conn: libsql::Connection,
+}
+
+/// The copies [`DbSnapshot`]s made that still exist, by path: files named `metadata.db` in a
+/// temp dir, which the owner must not keep open past their snapshot.
+static SNAPSHOT_COPIES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Whether the owner keeps a connection to the file at `path`: an environment's metadata
+/// database (`metadata.db`, `specs/interfaces/dot-barca-layout.md`). A backup copy, a staged
+/// restore and a snapshot's copy are temporary files read once: a kept connection would hold
+/// their disk space after they are deleted.
+fn owns(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .is_some_and(|name| name == "metadata.db")
+        && !SNAPSHOT_COPIES.lock().unwrap().contains(path)
+}
+
+/// The device and inode of the file at `path`, if there is one.
+fn file_id(path: &str) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+fn wal_id(path: &str) -> Option<FileId> {
+    file_id(&format!("{path}-wal"))
+}
+
+/// The owner's connection to the database at `path`, if it has one that is still a connection
+/// to the files at that path with no transaction open. The caller holds the database's lock,
+/// so the files cannot be replaced by a barca process until it lets go. A connection that
+/// fails the check is dropped here: it closes, and SQLite neither checkpoints nor deletes the
+/// log of a database that is no longer at the path it was opened on.
+fn reusable(path: &str) -> Option<libsql::Connection> {
+    let mut stale = None;
+    let conn = {
+        let mut owned = OWNED.lock().unwrap();
+        let entry = owned.get(path)?;
+        if Some(entry.main) == file_id(path)
+            && entry.wal == wal_id(path)
+            && entry.conn.is_autocommit()
+        {
+            Some(entry.conn.clone())
+        } else {
+            stale = owned.remove(path);
+            None
+        }
+    };
+    // Closed outside the table's lock.
+    drop(stale);
+    conn
+}
+
+/// Keep `conn`, just opened on the database at `path` under its lock, for the operations to
+/// come. Connections to databases that are no longer at their paths (a test's temp dir, a
+/// database moved aside) are dropped first.
+fn keep(path: &str, main: FileId, db: libsql::Database, conn: libsql::Connection) -> OwnedUse {
+    let entry = Owned {
+        conn: conn.clone(),
+        _db: db,
+        main,
+        wal: wal_id(path),
+        serial: KEPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    };
+    let stale: Vec<Owned> = {
+        let mut owned = OWNED.lock().unwrap();
+        let gone: Vec<String> = owned
+            .iter()
+            .filter(|(at, entry)| file_id(at) != Some(entry.main))
+            .map(|(at, _)| at.clone())
+            .collect();
+        let mut stale: Vec<Owned> = gone.iter().filter_map(|at| owned.remove(at)).collect();
+        stale.extend(owned.insert(path.to_string(), entry));
+        stale
+    };
+    drop(stale);
+    OwnedUse {
+        path: path.to_string(),
+        conn,
+    }
+}
+
+/// The handle of an operation on a connection just opened on the database at `path` under
+/// `lock`: kept by the owner for the operations to come when the file is one it keeps a
+/// connection to ([`owns`]), else the operation's own.
+fn handle_of_new(
+    path: &str,
+    db: libsql::Database,
+    conn: &libsql::Connection,
+    lock: FileLock,
+) -> DbHandle {
+    match file_id(path).filter(|_| owns(path)) {
+        Some(main) => DbHandle {
+            owned: Some(keep(path, main, db, conn.clone())),
+            _db: None,
+            _lock: Some(lock),
+        },
+        None => DbHandle::of_one_operation(db, Some(lock)),
+    }
+}
+
+/// An operation is done with the owner's connection; its lock is still held. A connection left
+/// in a transaction (the operation's future was dropped between `BEGIN` and `COMMIT`) is not
+/// kept: it closes when the operation's own clone drops, and SQLite rolls the transaction
+/// back, as it did when every operation had a connection of its own.
+fn release_owned(used: OwnedUse) {
+    let mut dropped = None;
+    {
+        let mut owned = OWNED.lock().unwrap();
+        if !used.conn.is_autocommit() {
+            dropped = owned.remove(&used.path);
+        } else if let Some(entry) = owned.get_mut(&used.path) {
+            // The log the connection has open now: created by its first write in WAL mode,
+            // and never replaced while this process holds the lock.
+            entry.wal = wal_id(&used.path);
+        }
+    }
+    drop(dropped);
+    drop(used);
+}
+
+/// The connection for one operation on the database at `path`, whose lock the caller holds
+/// (`lock`): the owner's, kept or opened now, or for a file the owner does not keep one to
+/// ([`owns`]) a connection of the operation's own.
+async fn connection_for(
+    path: &str,
+    lock: FileLock,
+) -> Result<(DbHandle, libsql::Connection), BarcaError> {
+    if !owns(path) {
+        let (db, conn) = connect(path).await?;
+        return Ok((DbHandle::of_one_operation(db, Some(lock)), conn));
+    }
+    // As every open checked: a file that is not a database is not handed to SQLite.
+    if let Some(why) = unusable_file(path) {
+        return Err(unusable_at(unusable(why), path));
+    }
+    if let Some(conn) = reusable(path) {
+        // What every open read: a database a newer barca rewrote meanwhile is refused now.
+        if let Err(e) = crate::db::schema::ddl::check(&conn).await {
+            let dropped = OWNED.lock().unwrap().remove(path);
+            drop(dropped);
+            return Err(unusable_at(e, path));
+        }
+        return Ok((handle_of_kept(path, &conn, lock), conn));
+    }
+    let (db, conn) = connect(path).await?;
+    Ok((handle_of_new(path, db, &conn, lock), conn))
+}
+
+/// The handle of an operation on the owner's connection `conn` to the database at `path`.
+fn handle_of_kept(path: &str, conn: &libsql::Connection, lock: FileLock) -> DbHandle {
+    DbHandle {
+        owned: Some(OwnedUse {
+            path: path.to_string(),
+            conn: conn.clone(),
+        }),
+        _db: None,
+        _lock: Some(lock),
+    }
+}
+
+/// Close the connections this process keeps ([`OWNED`]), each under its database's lock when
+/// that is free right now: the last connection to close folds the log into the main file and
+/// deletes it, which is what every operation's close did. The CLI calls this as a command
+/// ends. A connection whose lock is held by another process is left to the exit: that process
+/// has the database open, and the log is its to fold.
+pub fn close_connections() {
+    close_kept(|_| true);
+}
+
+/// [`close_connections`] for the databases `which` picks.
+fn close_kept(which: impl Fn(&str) -> bool) {
+    let kept: Vec<(String, Owned)> = {
+        let mut owned = OWNED.lock().unwrap();
+        let paths: Vec<String> = owned.keys().filter(|path| which(path)).cloned().collect();
+        paths
+            .into_iter()
+            .filter_map(|path| owned.remove(&path).map(|entry| (path, entry)))
+            .collect()
+    };
+    for (path, entry) in kept {
+        let lock = fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{path}.lock"))
+            .ok()
+            .filter(|file| file.try_lock().is_ok());
+        match lock {
+            Some(_lock) => drop(entry),
+            None => std::mem::forget(entry),
+        }
+    }
 }
 
 /// The cross-process lock of one database, held: released when dropped (or when the process
@@ -683,7 +954,12 @@ pub async fn fold_log(db_path: &str) -> Result<(), BarcaError> {
         let (_db, conn) = connect(db_path).await?;
         // The lock keeps every writer out, not a [`ReadView`]: a reader in the middle of a
         // query holds the log until the query ends, so a busy checkpoint (and only that) is
-        // tried again for a moment.
+        // tried again for a moment. Each try answers at once: SQLite's own wait sleeps on
+        // this thread, and a reader on the same thread (a current-thread runtime) could then
+        // never finish. The log is rarely empty now that a process keeps its connection
+        // ([`OWNED`]), so a checkpoint really does wait for the readers of what is in it.
+        conn.busy_timeout(Duration::ZERO)
+            .map_err(|e| BarcaError::Db(format!("failed to set busy timeout: {e}")))?;
         let deadline = Instant::now() + CHECKPOINT_BUSY_WAIT;
         while checkpoint_once(&conn).await? {
             if Instant::now() >= deadline {
@@ -902,9 +1178,11 @@ pub fn empty_file(path: &str) -> bool {
     fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) && wal_is_clean(path)
 }
 
-/// Open the database at `db_path` and connect. Callers must hold [`db_guard`]
-/// for the duration of their work on the returned connection; the returned
-/// handle holds the cross-process lock until it is dropped.
+/// The connection for one operation on the database at `db_path`. Callers must hold
+/// [`db_guard`] for the duration of their work on the returned connection; the returned
+/// handle holds the cross-process lock until it is dropped. For a metadata database the
+/// connection is the one this process keeps ([`OWNED`]), not one opened for the operation:
+/// use it only while the handle lives.
 pub async fn open_conn(db_path: &str) -> Result<(DbHandle, libsql::Connection), BarcaError> {
     open_conn_with_until(db_path, barca_model::process::Until::done()).await
 }
@@ -916,26 +1194,13 @@ pub async fn open_conn_with_until(
     if is_read_view(db_path) {
         until.check()?;
         let (db, conn) = connect_view(db_path).await?;
-        return Ok((
-            DbHandle {
-                _db: db,
-                _lock: None,
-            },
-            conn,
-        ));
+        return Ok((DbHandle::of_one_operation(db, None), conn));
     }
     let lock = until
         .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
         .await??;
     until.check()?;
-    let (db, conn) = connect(db_path).await?;
-    Ok((
-        DbHandle {
-            _db: db,
-            _lock: Some(lock),
-        },
-        conn,
-    ))
+    connection_for(db_path, lock).await
 }
 
 /// Fold the write-ahead log into the main database file (`PRAGMA wal_checkpoint(TRUNCATE)`).
@@ -1273,6 +1538,9 @@ mod tests {
         assert!(!other.contains("outside barca"), "{other}");
     }
 }
+
+#[cfg(test)]
+mod owner_tests;
 
 #[cfg(test)]
 mod fold_log_tests {

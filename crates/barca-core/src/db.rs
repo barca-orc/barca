@@ -137,6 +137,15 @@ pub use barca_db::db::{
     create_run, db_guard, finish_run, insert_logs, is_read_view, persist_outputs,
 };
 
+/// What a command does with the metadata DB as it ends: the connections this process kept
+/// are closed (the last one to close folds the log into the main file, as the close of every
+/// operation used to), then the lock is reported ([`trace_lock_holds`]). The CLI calls this
+/// before every exit.
+pub fn end_of_command() {
+    barca_db::db::close_connections();
+    trace_lock_holds();
+}
+
 /// With `BARCA_TRACE_TIMING` set: one stderr line with how often this process took a metadata
 /// database's lock and for how long, in total and at most. The longest hold is the longest
 /// another barca process can have waited for this one. Printed as a command ends.

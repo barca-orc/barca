@@ -35,7 +35,7 @@ fn finish(json: bool) -> ! {
             &Context::default(),
         ).emit(json)
     }
-    barca_core::db::trace_lock_holds();
+    barca_core::db::end_of_command();
     barca_core::term::exit(0)
 }
 
