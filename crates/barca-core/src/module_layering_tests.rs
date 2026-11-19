@@ -145,6 +145,17 @@ const LARGEST_CYCLE: usize = 6;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
 
+/// What the layers below the engine still take from `barca-engine` through this crate's
+/// re-exports (`crate::dispatch`, `crate::helper_proc`, ...), in the format of the allowlist.
+/// The module scan above cannot see these: they are paths into another crate, and Cargo allows
+/// them while the layers are one crate. A crate made of the leaf, storage, decisions or analysis
+/// layer must not depend on `barca-engine`, so this list may only shrink too.
+const ENGINE_USES: &str = include_str!("engine_uses_allowlist.txt");
+
+/// The layers that may name `barca-engine`: the run orchestrator, and the service layer above
+/// it.
+const LAYERS_OVER_THE_ENGINE: &[&str] = &["engine", "service"];
+
 /// (from, to) -> the items of `to` that `from` names.
 type Edges = BTreeMap<(String, String), BTreeSet<String>>;
 
@@ -353,6 +364,45 @@ fn scan(src_root: &Path) -> (BTreeSet<String>, Edges) {
     (modules, edges)
 }
 
+/// The modules of `barca-engine` that `lib.rs` re-exports (`use barca_engine::m;`).
+fn engine_reexports(lib: &str) -> BTreeSet<String> {
+    let toks = lex(lib);
+    let mut out = BTreeSet::new();
+    for i in 0..toks.len() {
+        if toks[i] == Tok::Ident("barca_engine".into())
+            && is_path_sep(&toks, i + 1)
+            && let (Some(Tok::Ident(name)), Some(Tok::Punct(';'))) =
+                (toks.get(i + 3), toks.get(i + 4))
+        {
+            out.insert(name.clone());
+        }
+    }
+    out
+}
+
+/// (module of this crate, re-exported module of `barca-engine`) -> the items named, over the
+/// non-test source of the layers that may not name the engine.
+fn engine_uses(src_root: &Path) -> Edges {
+    let lib = std::fs::read_to_string(src_root.join("lib.rs")).unwrap();
+    let modules = declared_modules(&lib);
+    let engine = engine_reexports(&lib);
+    let mut edges = Edges::new();
+    for (rel, src) in non_test_sources(src_root) {
+        let from = module_of(&rel);
+        let below = layer_of(from).is_some_and(|(l, _)| !LAYERS_OVER_THE_ENGINE.contains(&l));
+        if !modules.contains(from) || !below {
+            continue;
+        }
+        for (to, items) in references(&src, &engine) {
+            edges
+                .entry((from.to_string(), to))
+                .or_default()
+                .extend(items);
+        }
+    }
+    edges
+}
+
 fn line_of(from: &str, to: &str, items: &BTreeSet<String>) -> String {
     let items: Vec<&str> = items.iter().map(String::as_str).collect();
     format!("{from} -> {to}: {}", items.join(", "))
@@ -557,6 +607,50 @@ fn modules_name_only_their_own_layer_and_the_layers_below() {
         problems.is_empty(),
         "module layers of barca-core (#1056, docs/engineering/layering.md; the allowlist is \
          crates/barca-core/src/module_layering_allowlist.txt and may only shrink):\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn the_layers_below_the_engine_name_barca_engine_only_where_listed() {
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let lib = std::fs::read_to_string(src_root.join("lib.rs")).unwrap();
+    let engine = engine_reexports(&lib);
+    assert!(
+        engine.contains("dispatch") && engine.contains("helper_proc"),
+        "lib.rs no longer re-exports barca-engine's modules as `use barca_engine::m;`: \
+         teach engine_reexports the new form ({engine:?})"
+    );
+    let found = engine_uses(&src_root);
+    let listed = parse_allowlist(ENGINE_USES);
+    let mut problems = Vec::new();
+    for ((from, to), items) in &found {
+        let layer = layer_of(from).map(|(l, _)| l).unwrap_or("?");
+        match listed.get(&(from.clone(), to.clone())) {
+            None => problems.push(format!(
+                "  new use, {layer} names barca-engine: {}",
+                line_of(from, to, items)
+            )),
+            Some(known) if known != items => problems.push(format!(
+                "  {from} -> {to} changed: the source has `{}`",
+                line_of(from, to, items)
+            )),
+            Some(_) => {}
+        }
+    }
+    for (from, to) in listed.keys() {
+        if !found.contains_key(&(from.clone(), to.clone())) {
+            problems.push(format!(
+                "  the list has {from} -> {to}, which the source no longer has: delete the line"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "what the leaf, storage, decisions and analysis layers of barca-core take from \
+         barca-engine (crates/barca-core/src/engine_uses_allowlist.txt, which may only shrink; \
+         docs/engineering/layering.md). A value type belongs in barca-model; name it there \
+         (`crate::step_result::OutputRef`). Behaviour is passed in or moved below:\n{}",
         problems.join("\n")
     );
 }

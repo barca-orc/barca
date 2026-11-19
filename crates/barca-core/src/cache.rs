@@ -118,7 +118,7 @@ pub(crate) fn cutoff_token(partition: &str, content_hash: &str) -> String {
 use crate::store_sync::StoreSync;
 use crate::targets::{refresh_name_matches, short_name};
 use crate::transfer::ArtifactLayout;
-use crate::{dag::Dag, db, dispatch, dispatch::OutputRef, planner::Phase};
+use crate::{dag::Dag, db, planner::Phase, step_result::OutputRef};
 
 // ─── Cache decisions ─────────────────────────────────────────────────────────
 //
@@ -314,7 +314,7 @@ pub(crate) struct DecideState {
     /// step finishes (it runs in an earlier phase than its consumers) or is served from cache;
     /// a dry run seeds it from each one's last recorded output.
     pub(crate) sensor_outputs: HashMap<String, String>,
-    pub(crate) sensor_previous: HashMap<String, crate::dispatch::OutputRef>,
+    pub(crate) sensor_previous: HashMap<String, OutputRef>,
     /// `Manual` nodes read as they are in this run (RFC-0008), by base id.
     pub(crate) pinned: HashMap<String, crate::freshness::Pin>,
     partition_pins: Option<BTreeMap<String, db::AssetPin>>,
@@ -1195,28 +1195,22 @@ pub(crate) use crate::ledger::{CacheReader, lookup_cached};
 /// How a cache row's artifact is reached on this machine.
 pub(crate) enum CacheHit {
     /// Use the output as recorded.
-    Local(dispatch::OutputRef),
+    Local(OutputRef),
     /// The row records a location in the artifact store; `local` points at
     /// its local mirror, which is fetched before anything reads it.
-    Store {
-        local: dispatch::OutputRef,
-        store: String,
-    },
+    Store { local: OutputRef, store: String },
 }
 
 /// Resolve a cache row against this run's artifact store (`layout` is Some
 /// when the store is separate from the local artifact dir). This only says
 /// where the artifact is read from; whether it is there is checked when
 /// something needs to read it (see [`crate::recover`]).
-pub(crate) fn resolve_cache_hit(
-    oref: dispatch::OutputRef,
-    layout: Option<&ArtifactLayout>,
-) -> CacheHit {
+pub(crate) fn resolve_cache_hit(oref: OutputRef, layout: Option<&ArtifactLayout>) -> CacheHit {
     match layout.and_then(|l| l.local_for(&oref.path)) {
         Some(local) => {
             let store = oref.path.clone();
             CacheHit::Store {
-                local: dispatch::OutputRef {
+                local: OutputRef {
                     path: local.to_string_lossy().into_owned(),
                     ..oref
                 },
@@ -1232,8 +1226,8 @@ pub(crate) fn resolve_cache_hit(
 pub(crate) fn accept_cache_hit(
     store: &mut Option<StoreSync>,
     node_id: &str,
-    oref: dispatch::OutputRef,
-) -> dispatch::OutputRef {
+    oref: OutputRef,
+) -> OutputRef {
     match resolve_cache_hit(oref, store.as_ref().map(|s| &s.layout)) {
         CacheHit::Local(o) => o,
         CacheHit::Store { local, store: at } => {
@@ -1713,7 +1707,7 @@ def report(m: list) -> int:
                 steps.any(|st| st.step_id.base_id() == "t.py:margin")
             })
             .expect("a phase with margin");
-        dispatch::expand_pending_partitions(dag, phase, &outputs, pool_size)
+        crate::dispatch::expand_pending_partitions(dag, phase, &outputs, pool_size)
             .phase
             .expect("expanded")
     }
@@ -2081,7 +2075,7 @@ def report(values: list) -> int:
             .phases
             .iter()
             .map(|phase| {
-                dispatch::expand_pending_partitions(&dag, phase, &outputs, pool)
+                crate::dispatch::expand_pending_partitions(&dag, phase, &outputs, pool)
                     .phase
                     .unwrap_or_else(|| phase.clone())
             })

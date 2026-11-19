@@ -22,10 +22,11 @@
 //! `predict::explain_dag` predicts it with [`predict_recomputes`].
 
 use crate::cache::RunReason;
-use crate::dispatch::{OutputRef, ProvidedInput, build_provided_inputs};
+use crate::dispatch::build_provided_inputs;
 use crate::model::NodeKind;
 use crate::planner::{ExecutionPlan, Phase, PhaseReason, StreamStep, WorkerStream, returned_step};
 use crate::results::{ExplainSummary, PartitionSummary, StepReport};
+use crate::step_result::{OutputRef, ProvidedInput};
 use crate::step_status::StepStatus;
 use crate::store_sync::StoreSync;
 use crate::transfer::ArtifactLayout;

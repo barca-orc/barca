@@ -111,6 +111,7 @@ pub(crate) use barca_model::process;
 pub(crate) use barca_model::reports;
 pub use barca_model::run_explain;
 use barca_model::source_observation;
+pub(crate) use barca_model::step_result;
 pub use barca_model::step_status;
 pub use barca_model::suggest;
 pub use barca_model::term;

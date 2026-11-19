@@ -21,6 +21,14 @@ pub struct OutputRef {
     pub content_hash: Option<String>,
 }
 
+/// A provided input — either a single artifact or a collected list of partition artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProvidedInput {
+    Single(OutputRef),
+    Collected(Vec<OutputRef>),
+}
+
 /// Where a step failed, as its worker reported it (the `phase` of a step error). Only
 /// [`ErrorPhase::UserCode`] is the step's own code; the others are barca's own work around it,
 /// whose failure keeps barca's frames in the traceback (#664).

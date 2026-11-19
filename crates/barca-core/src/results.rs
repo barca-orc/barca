@@ -3,7 +3,7 @@
 //! These are data only. Each derives serde so the CLI, the server and their tests serialize the
 //! same shape; how a result is printed is the caller's job.
 
-use crate::dispatch::OutputRef;
+use crate::step_result::OutputRef;
 use crate::warnings::PlanWarning;
 use serde::{Deserialize, Serialize};
 
