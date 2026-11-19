@@ -143,6 +143,8 @@ pub const STATUS_FIELDS: &[&str] = &[
     "expected_fresh_at",
     "recheck_at",
     "no_estimate",
+    "last_attempt",
+    "typical_run_seconds",
     "partitions",
     "last_materialization",
     "last_bytes_change",

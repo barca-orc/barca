@@ -2606,7 +2606,26 @@ paths:
     get:
       summary: Paused assets
       operationId: get_pauses
+      parameters:
+      - name: target
+        in: query
+        required: false
+        schema: {type: string}
+        description: A node or a source file, named as POST /pauses names it. The answer then
+          also carries covers, what a pause of it would cover (barca pause TARGET --dry-run).
+          Nothing is paused, so a read-only server answers it. Experimental.
+      - name: downstream
+        in: query
+        required: false
+        schema: {type: boolean}
+        description: With target; cover every node downstream of it too.
       responses:
+        '404':
+          description: target names no node of the project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -4866,6 +4885,8 @@ components:
           type: array
           items: {type: string}
           description: POST /pauses/resume only; the ids it resumed
+        covers:
+          $ref: '#/components/schemas/PauseCover'
         paused:
           type: array
           items:
@@ -4896,6 +4917,43 @@ components:
               until:
                 type: [integer, 'null']
                 description: Unix seconds at which the pause ends by itself; null until resumed
+    PauseCover:
+      type: object
+      additionalProperties: false
+      required: [targets, downstream, schedules]
+      description: GET /pauses?target= only; what a pause of that target would cover, from the
+        graph alone. The schedules are found by the scheduler's own walk, so one is listed
+        exactly when a tick of it would plan a covered node. A node that is pinned or already
+        paused stops that walk at run time and is not accounted for here. Experimental.
+      properties:
+        targets:
+          type: array
+          items: {type: string}
+          description: The nodes the target names, in dependency order; one node, or every node
+            of a file
+        downstream:
+          type: array
+          items: {type: string}
+          description: Every node below them, in dependency order; empty unless downstream was
+            asked for
+        schedules:
+          type: array
+          description: The schedules whose ticks reach a covered node, sorted by id
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, relation]
+            properties:
+              id:
+                type: string
+                description: The scheduled node's id
+              relation:
+                type: string
+                enum: [self, target, input, downstream]
+                description: How its ticks touch what the pause names, the first that applies;
+                  self (the schedule is of a named node), target (a named node is a target of its
+                  ticks, which bring it up to date), input (its ticks read a named node),
+                  downstream (its ticks reach only nodes below the named ones).
     Queue:
       type: object
       additionalProperties: false
@@ -6583,6 +6641,8 @@ components:
       - expected_fresh_at
       - recheck_at
       - no_estimate
+      - last_attempt
+      - typical_run_seconds
       - last_materialization
       - shape
       - env
@@ -6726,6 +6786,21 @@ components:
             no_scheduler_here, not_promised, null]
           description: Why a node that is not fresh has no expected_fresh_at, in one word; null
             for a fresh node and one that has an estimate. Experimental.
+        last_attempt: &id_last_attempt
+          type: string
+          enum: [never_run, success, failed]
+          description: How its newest attempt went, in one word. failed when its last
+            materialization failed or any of its keys last failed (partitions.failed); never_run
+            when no execution is recorded; else success. A fact beside cache.state and health,
+            read off the row alone; a blocked or stale node whose last run went well reads
+            success, and a cache hit is not an attempt. Experimental.
+        typical_run_seconds: &id_typical_run_seconds
+          type: [number, 'null']
+          description: How long one run of the node typically takes, seconds; the median of its
+            recent successful executions (at most 20), times its number of keys for a
+            partitioned node (durations are recorded per key). An estimate of a run over every
+            key, not of the next run, which computes only the keys that need it. null when it
+            has no successful execution on record. Experimental.
         kind: &id047
           type: string
           enum:
@@ -6885,6 +6960,8 @@ components:
       - expected_fresh_at
       - recheck_at
       - no_estimate
+      - last_attempt
+      - typical_run_seconds
       - last_materialization
       - shape
       - env
@@ -6918,6 +6995,8 @@ components:
         expected_fresh_at: *id_expected_fresh_at
         recheck_at: *id_recheck_at
         no_estimate: *id_no_estimate
+        last_attempt: *id_last_attempt
+        typical_run_seconds: *id_typical_run_seconds
         partitions: *id050
         last_materialization: *id051
         shape: *id052

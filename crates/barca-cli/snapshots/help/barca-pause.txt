@@ -7,6 +7,7 @@ Arguments:
 
 Options:
       --downstream       Also pause every node downstream of the target
+      --dry-run          Pause nothing; print what the pause would cover
       --schedule <NODE>  Pause the schedule of this scheduled node instead of nodes
       --until <WHEN>     With --schedule: pause until a duration from now (2h) or an RFC 3339 time
       --json             Emit JSON on stdout (the default when stdout is not a terminal)
@@ -20,7 +21,7 @@ Options:
 Examples:
   barca pause clean --server               # scheduled runs skip clean until it is resumed
   barca pause clean --downstream --server  # clean and everything below it
-  barca pause pipeline.py --server         # every node of the file
+  barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
 
 All examples: barca pause --examples
 More: barca docs incidents
