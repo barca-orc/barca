@@ -1,7 +1,7 @@
 //! How a run is told to stop.
 //!
 //! Ctrl-C has two stages, and the coordinator alone acts on them (its helpers are deaf to the
-//! signal, see [`crate::helper_proc`]):
+//! signal, see [`barca_proc::helper_proc`]):
 //!
 //! 1. The first cancels the run ([`Interrupt::cancel`]). Workers and transfers are stopped,
 //!    what finished is recorded, and the run wraps up: it pushes its record to the shared

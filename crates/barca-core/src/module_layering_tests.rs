@@ -142,7 +142,7 @@ const STORAGE_ROWS: &[&[&str]] = &[
 /// (modules that all reach each other through `crate::` paths in non-test code). 38 before
 /// the cuts of #1056's C1, 29 after them, 19 with the storage layer out of it (C4), 16 with the prediction in the
 /// decisions layer (C2).
-const LARGEST_CYCLE: usize = 5;
+const LARGEST_CYCLE: usize = 4;
 
 const ALLOWLIST: &str = include_str!("module_layering_allowlist.txt");
 
@@ -618,7 +618,7 @@ fn the_layers_below_the_engine_name_barca_engine_only_where_listed() {
     let lib = std::fs::read_to_string(src_root.join("lib.rs")).unwrap();
     let engine = engine_reexports(&lib);
     assert!(
-        engine.contains("dispatch") && engine.contains("helper_proc"),
+        engine.contains("coordinator") && engine.contains("io_loop"),
         "lib.rs no longer re-exports barca-engine's modules as `use barca_engine::m;`: \
          teach engine_reexports the new form ({engine:?})"
     );

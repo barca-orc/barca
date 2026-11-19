@@ -131,6 +131,7 @@ pub(crate) use barca_model::{PartialRun, run_line, safe_node_id};
 // name keep their `barca_core::` paths.
 pub use barca_compile::dag;
 pub use barca_compile::discover;
+pub use barca_compile::dispatch;
 pub use barca_compile::groups;
 pub use barca_compile::load;
 pub use barca_compile::parse;
@@ -154,14 +155,15 @@ pub use barca_engine::batch;
 pub(crate) use barca_engine::coordinator;
 pub(crate) use barca_engine::cost;
 use barca_engine::dataset_sinks;
-pub use barca_engine::dispatch;
-pub use barca_engine::helper_proc;
 pub use barca_engine::interrupt;
 pub(crate) use barca_engine::io_loop;
 use barca_engine::observation;
-pub(crate) use barca_engine::protocol;
 pub(crate) use barca_engine::run_host;
 pub(crate) use barca_engine::step_trace;
+
+// The process layer lives in `barca-proc` (#1056, C6).
+pub use barca_proc::helper_proc;
+pub(crate) use barca_proc::protocol;
 
 pub use sizing::sizing;
 

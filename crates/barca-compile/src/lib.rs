@@ -22,6 +22,7 @@ mod decorators;
 #[doc(hidden)]
 pub mod definition;
 pub mod discover;
+pub mod dispatch;
 #[doc(hidden)]
 pub mod env_reads;
 #[doc(hidden)]

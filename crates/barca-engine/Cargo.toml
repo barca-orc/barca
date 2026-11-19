@@ -8,6 +8,7 @@ description = "Engine layer — plan in, results out: the coordinator, the worke
 [dependencies]
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }
+barca-proc = { path = "../barca-proc" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

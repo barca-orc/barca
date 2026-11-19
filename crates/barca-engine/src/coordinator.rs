@@ -63,7 +63,7 @@ pub struct ItemSpec {
     /// determinism (mirrors `dispatch::build_provided_inputs`). Kept separate
     /// from `dag_inputs` (which is one artifact path per param) because a
     /// collected param resolves to a *list* of artifacts.
-    pub collected_inputs: HashMap<String, Vec<crate::dispatch::OutputRef>>,
+    pub collected_inputs: HashMap<String, Vec<barca_compile::dispatch::OutputRef>>,
     /// Parameter frame types from function annotations.
     pub param_types: HashMap<String, barca_model::model::ValueType>,
     /// Return frame type from the function's return annotation.
@@ -75,7 +75,7 @@ pub struct ItemSpec {
     /// The step's output is read by a `partitions_from(...)` for keys: the worker checks it is
     /// a list or a dict it can write as JSON (`barca_model::keyed`).
     pub partition_source: bool,
-    pub previous_sensor: Option<crate::dispatch::OutputRef>,
+    pub previous_sensor: Option<barca_compile::dispatch::OutputRef>,
 }
 
 impl ItemSpec {
@@ -260,7 +260,7 @@ pub struct Coordinator {
     /// then to the permanent failure, retries and backoff included.
     failure_clocks: HashMap<ItemId, (std::time::SystemTime, std::time::Duration)>,
     /// For a permanently failed item whose worker said so: where its last attempt failed.
-    failure_phases: HashMap<ItemId, crate::dispatch::ErrorPhase>,
+    failure_phases: HashMap<ItemId, barca_compile::dispatch::ErrorPhase>,
     /// Skipped items (upstream data dep failed).
     skipped: HashSet<ItemId>,
     /// Items parked for retry backoff — not ready until requeue() is called.
@@ -424,7 +424,10 @@ impl Coordinator {
     }
 
     /// The ready items in the order `next_ready` hands them out, left in the queue.
-    pub fn sensor_previous(&mut self, previous: &HashMap<String, crate::dispatch::OutputRef>) {
+    pub fn sensor_previous(
+        &mut self,
+        previous: &HashMap<String, barca_compile::dispatch::OutputRef>,
+    ) {
         for item in self.items.values_mut() {
             if item.spec.kind == "sensor" {
                 item.spec.previous_sensor = previous.get(&item.step_id.display()).cloned();

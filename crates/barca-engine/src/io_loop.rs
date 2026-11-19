@@ -40,10 +40,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::coordinator::{Coordinator, FailureAction, GroupId, ItemId, ItemSpec};
 use crate::cost::CostModel;
-use crate::protocol::{
+use barca_model::events::RunEvent;
+use barca_proc::protocol::{
     CoordinatorMessage, FrameReader, ParallelResult, WorkerMessage, write_frame,
 };
-use barca_model::events::RunEvent;
 
 mod leases;
 mod lifecycle;
@@ -51,7 +51,7 @@ mod parallel;
 mod phase;
 mod shared;
 
-use crate::protocol::build_step_json;
+use crate::step_json::build_step_json;
 use lifecycle::*;
 use parallel::*;
 use shared::{Share, Steps, share_changed};
@@ -202,7 +202,7 @@ async fn accept_connections(listener: UnixListener, event_tx: mpsc::Sender<IoEve
                 .and_then(|p| u32::try_from(p).ok());
             let negotiated = tokio::time::timeout(
                 WORKER_CONNECT_LIMIT,
-                crate::protocol::accept_hello(&mut stream, "worker"),
+                barca_proc::protocol::accept_hello(&mut stream, "worker"),
             )
             .await;
             let (worker_id, stream) = match negotiated {

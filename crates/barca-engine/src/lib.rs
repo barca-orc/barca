@@ -14,19 +14,16 @@ pub mod coordinator;
 pub mod cost;
 #[doc(hidden)]
 pub mod dataset_sinks;
-pub mod dispatch;
-pub mod helper_proc;
 pub mod interrupt;
 #[doc(hidden)]
 pub mod io_loop;
 #[doc(hidden)]
 pub mod observation;
 #[doc(hidden)]
-pub mod protocol;
-#[doc(hidden)]
 pub mod result_journal;
 #[doc(hidden)]
 pub mod run_host;
+mod step_json;
 #[doc(hidden)]
 pub mod step_trace;
 #[doc(hidden)]

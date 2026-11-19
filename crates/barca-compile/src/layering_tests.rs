@@ -73,6 +73,7 @@ const LAYERS: &[(Layer, &[&str])] = &[
     (Layer::Planning, &["planner"]),
     (Layer::Planning, &["selection", "warnings"]),
     (Layer::Planning, &["targets"]),
+    (Layer::Planning, &["dispatch"]),
     (Layer::Load, &["discover", "load"]),
 ];
 

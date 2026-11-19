@@ -112,7 +112,7 @@ impl Coordinator {
     pub fn load_phase(
         &mut self,
         phase: &barca_compile::planner::Phase,
-        provided: &HashMap<String, crate::dispatch::ProvidedInput>,
+        provided: &HashMap<String, barca_compile::dispatch::ProvidedInput>,
     ) -> usize {
         enum Pending<'p> {
             Plain {
@@ -211,11 +211,11 @@ impl Coordinator {
                     for (param_name, upstream_id) in &step.inputs {
                         if let Some(pi) = provided.get(upstream_id) {
                             match pi {
-                                crate::dispatch::ProvidedInput::Single(oref) => {
+                                barca_compile::dispatch::ProvidedInput::Single(oref) => {
                                     spec.dag_inputs
                                         .insert(param_name.clone(), oref.path.clone());
                                 }
-                                crate::dispatch::ProvidedInput::Collected(orefs) => {
+                                barca_compile::dispatch::ProvidedInput::Collected(orefs) => {
                                     spec.collected_inputs
                                         .insert(param_name.clone(), orefs.clone());
                                 }
@@ -293,11 +293,11 @@ impl Coordinator {
                             }
                         }) {
                             match pi {
-                                crate::dispatch::ProvidedInput::Single(oref) => {
+                                barca_compile::dispatch::ProvidedInput::Single(oref) => {
                                     spec.dag_inputs
                                         .insert(param_name.clone(), oref.path.clone());
                                 }
-                                crate::dispatch::ProvidedInput::Collected(orefs) => {
+                                barca_compile::dispatch::ProvidedInput::Collected(orefs) => {
                                     spec.collected_inputs
                                         .insert(param_name.clone(), orefs.clone());
                                 }

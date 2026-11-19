@@ -32,7 +32,7 @@ fn every_helper_launch_forwards_resolved_storage_options() {
             count += 1;
             let before = &code[..offset];
             let call = before
-                .rsplit_once("crate::helper_proc::python_module")
+                .rsplit_once("helper_proc::python_module")
                 .unwrap_or_else(|| panic!("{module} bypasses shared helper configuration"));
             assert!(
                 !call.1.contains(';'),

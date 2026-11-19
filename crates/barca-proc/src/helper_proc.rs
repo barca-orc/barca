@@ -24,7 +24,7 @@ use tokio::process::{Child, Command};
 
 /// Build a Python module command with the storage options shared by workers and helpers.
 /// Process lifetime and stdio stay with the caller because helpers use different protocols.
-pub(crate) fn python_module_std(
+pub fn python_module_std(
     python: &std::path::Path,
     module: &str,
     storage_options: Option<&str>,
@@ -100,7 +100,7 @@ pub fn shield_from_ctrl_c(cmd: &mut Command) {
 /// `fork`, about 1 ms slower each, and it left the signal ignored in a way the worker could
 /// not tell from a barca that was itself started with SIGINT ignored.)
 #[cfg(unix)]
-pub(crate) fn start_outside_the_job(cmd: &mut std::process::Command) {
+pub fn start_outside_the_job(cmd: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
     // SAFETY: plain syscall.
@@ -544,7 +544,7 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            let this_module = path.ends_with("barca-engine/src/helper_proc.rs")
+            let this_module = path.ends_with("barca-proc/src/helper_proc.rs")
                 || path.ends_with("barca-model/src/spawn_lock.rs");
             // `process::Command` as well as `Command::new`: a file that imports the type under
             // another name, or is handed a `Command` built elsewhere, still names the type.

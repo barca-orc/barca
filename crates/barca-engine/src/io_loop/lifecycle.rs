@@ -7,7 +7,7 @@ impl WorkerPool {
     /// Bind the coordination socket. Workers spawn on demand during phases.
     /// Must be called from within a tokio runtime context.
     pub fn start(config: IoConfig) -> Result<Self, String> {
-        let socket_path = crate::protocol::socket_path(&config.run_id, "main")?;
+        let socket_path = barca_proc::protocol::socket_path(&config.run_id, "main")?;
         std::fs::remove_file(&socket_path).ok();
         let listener = UnixListener::bind(&socket_path).map_err(|e| format!("socket bind: {e}"))?;
         // Best effort: without the directory each worker prints a repeated warning once
@@ -271,7 +271,8 @@ impl WorkerPool {
     /// Start `cmd` as worker `worker_id`, without waiting for it to connect.
     pub(super) fn launch(&mut self, mut cmd: Command, worker_id: usize) -> Result<(), String> {
         let started = std::time::Instant::now();
-        let child = crate::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;
+        let child =
+            barca_proc::helper_proc::spawn_std(&mut cmd).map_err(|e| format!("spawn: {e}"))?;
         if self.trace_on {
             barca_model::errln!(
                 "[trace]  worker {worker_id} process spawned in {:.1}ms",
@@ -359,7 +360,7 @@ impl WorkerPool {
                     wid,
                     format!(
                         "timeout waiting for worker {wid} to connect and announce protocol v{}; reinstall barca in this Python environment",
-                        crate::protocol::PROTOCOL_VERSION
+                        barca_proc::protocol::PROTOCOL_VERSION
                     ),
                 )),
                 Ok(None) => {}
@@ -389,7 +390,7 @@ impl WorkerPool {
 
 /// The command that starts worker `worker_id` against the socket at `socket_path`.
 pub(super) fn worker_command(config: &IoConfig, socket_path: &Path, worker_id: usize) -> Command {
-    let mut cmd = crate::helper_proc::python_module_std(
+    let mut cmd = barca_proc::helper_proc::python_module_std(
         &config.python,
         "barca._worker",
         config.storage_options_json.as_deref(),
@@ -423,7 +424,7 @@ pub(super) fn worker_command(config: &IoConfig, socket_path: &Path, worker_id: u
     // terminal's job, so that one arriving while the interpreter starts is not a traceback,
     // and joins the job once it handles the signal itself.
     #[cfg(unix)]
-    crate::helper_proc::start_outside_the_job(&mut cmd);
+    barca_proc::helper_proc::start_outside_the_job(&mut cmd);
     cmd
 }
 

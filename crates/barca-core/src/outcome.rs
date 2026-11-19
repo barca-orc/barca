@@ -581,6 +581,27 @@ pub struct RunView {
     pub logs: Vec<crate::db::LogEntry>,
 }
 
+impl<'a> From<&'a RunView> for crate::run_explanation::RunFacts<'a> {
+    fn from(r: &'a RunView) -> Self {
+        crate::run_explanation::RunFacts {
+            status: &r.status,
+            target: r.target.as_deref(),
+            job: r.job.as_deref(),
+            triggered_by: r.triggered_by,
+            principal: r.principal.as_deref(),
+            attempts: r.attempts,
+            retries: r.retries,
+            steps_total: r.steps_total,
+            steps_executed: r.steps_executed,
+            steps_cached: r.steps_cached,
+            steps_failed: None,
+            started_at: &r.started_at,
+            plan_reasons: r.plan_reasons.as_ref(),
+            cancellation: r.cancellation.as_ref(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod metadata_envelope_tests;
 

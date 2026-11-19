@@ -174,7 +174,7 @@ pub(super) fn branch_result(
         };
     };
     ParallelResult::Ok {
-        artifact: crate::protocol::BranchArtifact {
+        artifact: barca_proc::protocol::BranchArtifact {
             path: path.to_string(),
             format: format.to_string(),
             frame_type: field("frame_type").map(str::to_string),

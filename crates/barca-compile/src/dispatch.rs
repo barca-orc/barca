@@ -2,7 +2,7 @@
 //!
 //! Execution (worker spawning, protocol parsing) lives in `io_loop`.
 
-use barca_compile::planner::{Phase, StreamStep, WorkerStream, expand_partition_combos};
+use crate::planner::{Phase, StreamStep, WorkerStream, expand_partition_combos};
 use std::collections::{HashMap, HashSet};
 
 pub use barca_model::step_result::{ErrorPhase, OutputRef, ProvidedInput};
@@ -49,10 +49,10 @@ pub struct Expansion {
 
 /// The node id of the `partitions_from` source `source_name` of `node` (a `PartitionSource`
 /// predecessor with that name), else the first recorded output named so.
-fn source_id_of(dag: &barca_compile::dag::Dag, node: &str, source_name: &str) -> Option<String> {
+fn source_id_of(dag: &crate::dag::Dag, node: &str, source_name: &str) -> Option<String> {
     dag.partition_sources(node)
         .into_iter()
-        .find(|id| barca_compile::targets::short_name(id) == source_name)
+        .find(|id| crate::targets::short_name(id) == source_name)
         .map(str::to_string)
 }
 
@@ -66,7 +66,7 @@ fn source_id_of(dag: &barca_compile::dag::Dag, node: &str, source_name: &str) ->
 /// Tests only (here and in `barca-core`), so compiled always.
 #[doc(hidden)]
 pub fn expand_pending_partitions(
-    dag: &barca_compile::dag::Dag,
+    dag: &crate::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
@@ -84,7 +84,7 @@ pub fn expand_pending_partitions(
 /// Explicit selection can project before allocating hashes for the entire source.
 pub fn selected_source(
     outputs: &HashMap<String, OutputRef>,
-    selection: Option<&barca_compile::selection::PartitionSelection>,
+    selection: Option<&crate::selection::PartitionSelection>,
     dim: &str,
     source: &str,
 ) -> Option<(usize, barca_model::keyed::SourceKeys)> {
@@ -94,7 +94,7 @@ pub fn selected_source(
 }
 
 pub fn expand_pending_partitions_filtered(
-    dag: &barca_compile::dag::Dag,
+    dag: &crate::dag::Dag,
     phase: &Phase,
     all_outputs: &HashMap<String, OutputRef>,
     pool_size: usize,
@@ -488,14 +488,14 @@ pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_compile::planner::PhaseReason;
+    use crate::planner::PhaseReason;
     use barca_model::model::ValueType;
     use barca_model::{NodeKind, PartitionKey, StepId};
     use std::sync::Arc;
 
     /// A DAG without nodes: sources are found by name among the outputs.
-    fn no_dag() -> barca_compile::dag::Dag {
-        barca_compile::dag::Dag::build(&[]).unwrap()
+    fn no_dag() -> crate::dag::Dag {
+        crate::dag::Dag::build(&[]).unwrap()
     }
 
     fn test_output_ref(path: &str, format: &str) -> OutputRef {

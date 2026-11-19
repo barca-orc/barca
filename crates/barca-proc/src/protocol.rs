@@ -11,7 +11,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
-#[cfg(test)]
 use std::io::{Read, Write};
 
 /// Negotiated worker/transfer wire version, independent of package and DB versions.
@@ -57,7 +56,7 @@ where
 /// Messages sent from a Python worker to the Rust coordinator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum WorkerMessage {
+pub enum WorkerMessage {
     /// A step completed successfully with an artifact.
     StepCompleted {
         node_id: String,
@@ -116,7 +115,7 @@ pub(crate) enum WorkerMessage {
 
 /// A work item submitted via parallel().
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SubmitItem {
+pub struct SubmitItem {
     /// Function reference: "module.py:function_name"
     pub fn_ref: String,
     /// Positional arguments (JSON values).
@@ -127,7 +126,7 @@ pub(crate) struct SubmitItem {
 
 /// Reference to a materialized artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ArtifactRef {
+pub struct ArtifactRef {
     /// Run-owned bytes pinned before the reusable artifact path is published.
     /// Internal transfer source; never an artifact identity or persisted path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,7 +204,7 @@ pub struct BatchPhases {
 /// Outcome of a single `@sink` write. A sink that fails fails its step (0.30.0), so a
 /// current worker reports only successes; "error" is what workers before 0.30.0 sent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SinkOutcome {
+pub struct SinkOutcome {
     pub path: String,
     /// "ok" | "error"
     pub status: String,
@@ -229,7 +228,7 @@ pub(crate) struct SinkOutcome {
 /// Messages sent from the Rust coordinator to a Python worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum CoordinatorMessage {
+pub enum CoordinatorMessage {
     /// Response to a Submit request — results for all submitted items.
     ParallelResponse { results: Vec<ParallelResult> },
     /// Request the worker to shut down gracefully.
@@ -239,7 +238,7 @@ pub(crate) enum CoordinatorMessage {
 /// Result of a single parallel branch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum ParallelResult {
+pub enum ParallelResult {
     /// The branch returned an artifact file reference. Values never ride this response.
     Ok {
         artifact: BranchArtifact,
@@ -252,7 +251,7 @@ pub(crate) enum ParallelResult {
 /// Where a branch's return value is: the artifact its worker wrote, like any step's output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BranchArtifact {
+pub struct BranchArtifact {
     pub path: String,
     /// `json`, `pickle` or `parquet`.
     pub format: String,
@@ -353,18 +352,18 @@ pub fn encode_message<T: Serialize>(msg: &T) -> io::Result<Vec<u8>> {
     Ok(frame)
 }
 
-#[cfg(test)]
-/// Write a message to a stream (socket/pipe).
-pub(crate) fn write_message<W: Write, T: Serialize>(writer: &mut W, msg: &T) -> io::Result<()> {
+/// Write a message to a stream (socket/pipe). Used by tests, of this crate and of the engine.
+#[doc(hidden)]
+pub fn write_message<W: Write, T: Serialize>(writer: &mut W, msg: &T) -> io::Result<()> {
     let frame = encode_message(msg)?;
     writer.write_all(&frame)?;
     writer.flush()
 }
 
-#[cfg(test)]
 /// Read a message from a stream (socket/pipe). Blocks until complete.
-/// Returns None on EOF (clean disconnect).
-pub(crate) fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
+/// Returns None on EOF (clean disconnect). Used by tests.
+#[doc(hidden)]
+pub fn read_message<R: Read, T: for<'de> Deserialize<'de>>(
     reader: &mut R,
 ) -> io::Result<Option<T>> {
     let mut len_buf = [0u8; 4];
@@ -519,9 +518,9 @@ impl FrameReader {
 /// The longest Unix socket path `bind` accepts, in bytes: `sun_path` is 104 bytes on macOS
 /// and the BSDs and 108 on Linux, and holds the terminating NUL.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub(crate) const SOCKET_PATH_MAX: usize = 107;
+pub const SOCKET_PATH_MAX: usize = 107;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub(crate) const SOCKET_PATH_MAX: usize = 103;
+pub const SOCKET_PATH_MAX: usize = 103;
 
 /// A unique socket path for one coordination socket of this process:
 /// `<dir>/<pid>-<run_id>-<worker_id>.sock`, where `<dir>` is `barca-<uid>` (created 0700,
@@ -609,9 +608,6 @@ fn sweep_dead_sockets(dir: &std::path::Path) {
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
-
-mod step_json;
-pub(crate) use step_json::build_step_json;
 
 #[cfg(test)]
 mod tests;

@@ -22,10 +22,20 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("barca-model", &[]),
     ("barca-compile", &["barca-model"]),
     ("barca-db", &["barca-model"]),
-    ("barca-engine", &["barca-model", "barca-compile"]),
+    ("barca-proc", &["barca-model"]),
+    (
+        "barca-engine",
+        &["barca-model", "barca-compile", "barca-proc"],
+    ),
     (
         "barca-core",
-        &["barca-model", "barca-compile", "barca-db", "barca-engine"],
+        &[
+            "barca-model",
+            "barca-compile",
+            "barca-db",
+            "barca-proc",
+            "barca-engine",
+        ],
     ),
     ("barca-server", &["barca-core"]),
     ("barca-cli", &["barca-core", "barca-server"]),

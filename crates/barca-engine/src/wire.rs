@@ -163,7 +163,9 @@ pub(crate) fn encode_steps(steps: &[Value]) -> Value {
     frame
 }
 
-pub(crate) fn decode_results(frame: &Value) -> Result<Vec<crate::protocol::WorkerMessage>, String> {
+pub(crate) fn decode_results(
+    frame: &Value,
+) -> Result<Vec<barca_proc::protocol::WorkerMessage>, String> {
     let details = decode_table(frame.get("details").ok_or("results need details")?)?;
     let array = |name| {
         frame
@@ -319,7 +321,7 @@ json.dump({'steps':steps,'results':encoded}, sys.stdout)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = crate::helper_proc::spawn_std(&mut python_command).unwrap();
+        let mut child = barca_proc::helper_proc::spawn_std(&mut python_command).unwrap();
         child
             .stdin
             .take()
@@ -338,9 +340,10 @@ json.dump({'steps':steps,'results':encoded}, sys.stdout)
         let results = decode_results(&answer["results"]).unwrap();
         assert_eq!(results.len(), 10_000);
         assert!(
-            matches!(&results[0], crate::protocol::WorkerMessage::StepError { error_type, .. } if error_type=="ValueError")
+            matches!(&results[0], barca_proc::protocol::WorkerMessage::StepError { error_type, .. } if error_type=="ValueError")
         );
-        let crate::protocol::WorkerMessage::StepCompleted { artifact, .. } = &results[17] else {
+        let barca_proc::protocol::WorkerMessage::StepCompleted { artifact, .. } = &results[17]
+        else {
             panic!("completion")
         };
         assert_eq!(

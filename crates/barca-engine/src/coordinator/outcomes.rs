@@ -37,7 +37,7 @@ impl Coordinator {
         item_id: ItemId,
         error: String,
         elapsed: std::time::Duration,
-        phase: Option<crate::dispatch::ErrorPhase>,
+        phase: Option<barca_compile::dispatch::ErrorPhase>,
     ) -> FailureAction {
         self.executing.remove(&item_id);
 
@@ -115,7 +115,7 @@ impl Coordinator {
     }
 
     /// Where a permanently failed item failed, when its worker reported it.
-    pub fn failure_phase(&self, item_id: ItemId) -> Option<crate::dispatch::ErrorPhase> {
+    pub fn failure_phase(&self, item_id: ItemId) -> Option<barca_compile::dispatch::ErrorPhase> {
         self.failure_phases.get(&item_id).copied()
     }
 

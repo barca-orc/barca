@@ -9,7 +9,6 @@
 //! recorded, so the wording can change without a migration. Experimental.
 
 use crate::db::{RunNodeSummary, RunRecord, RunStep};
-use crate::outcome::RunView;
 use crate::run_explain::{Cancellation, CancelledBy, PlanReason, PlanReasons, ReasonCategory};
 use crate::step_status::StepStatus;
 use crate::targets::short_name;
@@ -248,7 +247,7 @@ pub struct SlowNode {
 }
 
 /// What [`explain`] reads of a run: the same fields of a recorded run ([`RunRecord`]) and of
-/// one `GET /runs/{run_id}` shows ([`RunView`]).
+/// one `GET /runs/{run_id}` shows (`RunView`, which converts into this where it is defined).
 #[derive(Clone, Copy, Debug)]
 pub struct RunFacts<'a> {
     pub status: &'a str,
@@ -283,27 +282,6 @@ impl<'a> From<&'a RunRecord> for RunFacts<'a> {
             steps_executed: r.steps_executed,
             steps_cached: r.steps_cached,
             steps_failed: r.steps_failed,
-            started_at: &r.started_at,
-            plan_reasons: r.plan_reasons.as_ref(),
-            cancellation: r.cancellation.as_ref(),
-        }
-    }
-}
-
-impl<'a> From<&'a RunView> for RunFacts<'a> {
-    fn from(r: &'a RunView) -> Self {
-        RunFacts {
-            status: &r.status,
-            target: r.target.as_deref(),
-            job: r.job.as_deref(),
-            triggered_by: r.triggered_by,
-            principal: r.principal.as_deref(),
-            attempts: r.attempts,
-            retries: r.retries,
-            steps_total: r.steps_total,
-            steps_executed: r.steps_executed,
-            steps_cached: r.steps_cached,
-            steps_failed: None,
             started_at: &r.started_at,
             plan_reasons: r.plan_reasons.as_ref(),
             cancellation: r.cancellation.as_ref(),

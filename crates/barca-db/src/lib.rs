@@ -10,6 +10,7 @@
 pub mod db;
 #[doc(hidden)]
 pub mod metadata_size;
+pub mod open;
 pub mod pending_uploads;
 #[doc(hidden)]
 pub mod recording;

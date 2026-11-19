@@ -6,12 +6,7 @@
 //! module instead: `pauses::{list, pause, resume}`, `serve::record_unstarted_run`. The one
 //! defined here is [`open_metadata`], which every such operation starts with.
 
-/// Make this environment's metadata DB usable for reads and writes: its directories exist and
-/// the database has barca's tables (a new project's first command creates it).
-pub async fn open_metadata(cfg: &crate::config::ResolvedConfig) -> Result<(), crate::BarcaError> {
-    crate::layout::ensure_env_dirs(&cfg.env)?;
-    init_db(&cfg.db_path).await
-}
+pub use barca_db::open::open_metadata;
 
 // Inside barca-core, `crate::db::<anything>` still names `barca_db::db`.
 pub(crate) use barca_db::db::*;

@@ -1,0 +1,19 @@
+[package]
+name = "barca-proc"
+version = "0.45.0"
+edition = "2024"
+description = "Process layer — starting and stopping barca's child processes, and the framed socket protocol they speak"
+
+# Only barca-model among barca crates: the engine (workers) and the storage layer (the transfer
+# and state helpers) both start processes and frame messages, and neither depends on the other
+# (#1056, C6). No libsql, no HTTP client.
+[dependencies]
+barca-model = { path = "../barca-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "process"] }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-util = { workspace = true }
