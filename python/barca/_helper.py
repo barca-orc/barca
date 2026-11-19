@@ -25,7 +25,7 @@ import contextlib
 import json
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from typing import IO, Any, NoReturn
 
 
@@ -41,7 +41,7 @@ def env_request(name: str) -> Any:
 
 
 @contextlib.contextmanager
-def answering() -> Iterator[IO[str]]:
+def answering() -> Generator[IO[str]]:
     """Keep stdout for the answer: inside, `sys.stdout` is stderr, and the stream yielded is
     the real stdout to write the answer to."""
     out = sys.stdout

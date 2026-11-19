@@ -55,13 +55,12 @@ def qualified(table: dict) -> str:
     return f"{quote(table['schema'])}.{quote(table['name'])}"
 
 
-def create(con: Any, table: dict, not_loaded: str) -> bool:
+def create(con: Any, table: dict, not_loaded: str) -> None:
     """Create one of barca's tables, empty, from the `{"schema", "name", "columns", "rows"}`
     Rust sends. Its schema must exist.
 
     A table sent without rows (`rows` null) becomes a placeholder: a view with the table's
-    columns that fails with `not_loaded` when read. Returns whether there is a table to fill
-    (False for a placeholder).
+    columns that fails with `not_loaded` when read. Filling a table is the caller's.
     """
     columns = table["columns"]
     if table.get("rows") is None:
@@ -70,11 +69,10 @@ def create(con: Any, table: dict, not_loaded: str) -> bool:
             f"CREATE VIEW {qualified(table)} AS SELECT {nulls} "
             f"WHERE error({quote_str(not_loaded)}) IS NULL"
         )
-        return False
+        return
     con.execute(
         f"CREATE TABLE {qualified(table)} ({', '.join(f'{quote(c)} {ty}' for c, ty in columns)})"
     )
-    return True
 
 
 def missing_table(duckdb: Any, error: Exception) -> str | None:

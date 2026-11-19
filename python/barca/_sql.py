@@ -97,7 +97,8 @@ def _table(con, table: dict) -> None:
         "name it in the query"
     )
     rows = table.get("rows")
-    if not _sql_tables.create(con, table, not_loaded) or not rows:
+    _sql_tables.create(con, table, not_loaded)
+    if not rows:
         return
     columns = table["columns"]
     spec = "{" + ", ".join(f"{_quote_str(c)}: {_quote_str(ty)}" for c, ty in columns) + "}"

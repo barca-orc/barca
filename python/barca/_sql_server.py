@@ -205,7 +205,8 @@ class Helper:
                 [table["schema"], table["name"]],
             ).fetchall()[0][0]
             con.execute(f"DROP {'VIEW' if is_view else 'TABLE'} IF EXISTS {qualified}")
-            if _sql_tables.create(con, table, not_loaded):
+            _sql_tables.create(con, table, not_loaded)
+            if rows is not None:
                 # The rows as one JSON parameter per batch: a file would need the file access
                 # this database does not have.
                 spec = json.dumps([{c: ty for c, ty in columns}])
