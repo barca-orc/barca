@@ -472,6 +472,11 @@ fn render_queue(view: &QueueView) -> String {
             (None, Some(at)) => format!("~{at}"),
             (None, None) => "-".to_string(),
         };
+        // A run asked to wait its turn behind scheduled work (`--queue last`) says so.
+        let start = match run.queue {
+            Some(barca_service::outcome::QueuePlace::Last) => format!("{start}  queued last"),
+            _ => start,
+        };
         out.push_str(&format!(
             "{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {:<25} {}\n",
             run.position.map_or("-".to_string(), |p| p.to_string()),

@@ -47,6 +47,9 @@ pub struct RunState {
     /// What started the run.
     #[serde(skip)]
     pub trigger: barca_service::outcome::Trigger,
+    /// Where the request asked to join the queue.
+    #[serde(skip)]
+    pub queue: barca_service::outcome::QueuePlace,
     /// The run was asked to compute again what is cached (`--refresh`, `--refresh-all`): a
     /// cached node of it is not one it will serve from cache.
     #[serde(skip)]
@@ -106,6 +109,8 @@ pub(crate) struct RunSpec {
     /// How many times a server killed during its drain left this run unfinished, and the next
     /// server put it back in the queue (`runs::resume_at_startup`).
     pub kill_requeues: u32,
+    /// `queue` of `POST /runs`: `last` orders the run with scheduled work.
+    pub queue: barca_service::outcome::QueuePlace,
 }
 
 impl RunSpec {
@@ -125,6 +130,7 @@ impl RunSpec {
             rules: barca_service::freshness::RunRules::default(),
             timeout: None,
             kill_requeues: 0,
+            queue: Default::default(),
         }
     }
 }

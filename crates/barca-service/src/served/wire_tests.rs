@@ -206,12 +206,14 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
         run_id: "run-1".into(),
         status: RunViewStatus::Pending,
         waiting_for: Some(crate::run_explain::WaitingFor::Restart),
+        queue: None,
     };
     let by_hand = json!({
         "run_id": "run-1",
         "status": LiveStatus::Pending.as_str(),
         "position": 2,
         "waiting_for": "restart",
+        "queue": null,
     });
     assert_eq!(bytes(&handle), by_hand.to_string());
     let started = RunHandle {
@@ -311,6 +313,7 @@ fn the_recorded_queue_orders_requested_runs_first_and_numbers_them() {
             scheduled_at: schedule.map(|_| "2026-11-19T10:00:00Z".to_string()),
             ..Default::default()
         },
+        queue: Default::default(),
     };
     let timing = crate::liveness::RecordedTiming {
         started: [("r1".to_string(), 130)].into(),

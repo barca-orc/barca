@@ -344,6 +344,9 @@ pub struct RecordedRun {
     /// The scheduled node whose tick started it; `None` for a run someone asked for.
     pub schedule: Option<String>,
     pub triggered_by: Option<barca_model::trigger::TriggeredBy>,
+    /// The request asked to queue last (`queue` of the server's description): it starts with
+    /// the scheduled runs, in the order they were accepted, not ahead of them.
+    pub queue_last: bool,
     /// Its resolved target node ids; empty for a run of everything.
     pub targets: Vec<String>,
     /// It started executing (`run_queue` state `running` or `draining`).
@@ -386,6 +389,7 @@ pub async fn recorded_runs(db_path: &str) -> Result<Vec<RecordedRun>, BarcaError
             command: spec["command"].as_str().unwrap_or("get").to_string(),
             schedule: spec["trigger"]["schedule_id"].as_str().map(str::to_string),
             triggered_by: serde_json::from_value(spec["trigger"]["triggered_by"].clone()).ok(),
+            queue_last: spec["queue"].as_str() == Some("last"),
             targets: spec["nodes"]
                 .as_array()
                 .map(|nodes| {
@@ -532,11 +536,13 @@ pub fn recorded_timing(
     if gone {
         return out;
     }
-    // The order they start in: runs someone asked for first, then scheduled runs.
+    // The order they start in: runs someone asked for first, then scheduled runs and the
+    // runs asked to queue last.
+    let behind = |r: &&RecordedRun| r.schedule.is_some() || r.queue_last;
     let waiting = runs
         .iter()
-        .filter(|r| !r.started && r.schedule.is_none())
-        .chain(runs.iter().filter(|r| !r.started && r.schedule.is_some()));
+        .filter(|r| !r.started && !behind(r))
+        .chain(runs.iter().filter(|r| !r.started && behind(r)));
     let queue: Vec<QueueRun> = runs
         .iter()
         .filter(|r| r.started)

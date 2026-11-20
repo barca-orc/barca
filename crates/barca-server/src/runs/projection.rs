@@ -80,6 +80,7 @@ pub(crate) fn live_of(state: &AppState, run: &RunState) -> LiveRun {
         error: run.error.clone(),
         cancellation: run.cancellation.clone(),
         waiting_for: state.lifecycle.waiting_for(run.status),
+        queue: run.queue,
         steps: run.result.as_ref().map(|r| LiveSteps {
             total: r.steps.len() as i64,
             executed: r.steps_executed as i64,

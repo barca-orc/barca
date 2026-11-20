@@ -29,6 +29,40 @@ fn yes() -> bool {
     true
 }
 
+/// Where a requested run joins a server's run queue (`queue` of `POST /runs`, `--queue`).
+/// Experimental.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum QueuePlace {
+    /// The default: ahead of the scheduled runs that wait, behind the requests accepted
+    /// before it.
+    #[default]
+    Next,
+    /// Behind every run that waits, scheduled ones included, and ordered with scheduled work
+    /// from then on: for a run slot, and for the shared capacity its steps wait for.
+    Last,
+}
+
+impl QueuePlace {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QueuePlace::Next => "next",
+            QueuePlace::Last => "last",
+        }
+    }
+
+    pub fn is_next(&self) -> bool {
+        *self == QueuePlace::Next
+    }
+
+    /// What a view shows of a run's place: `last` for a run asked to queue last, nothing for
+    /// every other run (the default order).
+    pub fn shown(self) -> Option<QueuePlace> {
+        (self == QueuePlace::Last).then_some(self)
+    }
+}
+
 /// The body of `POST /runs`: the CLI's flags for `barca get` / `barca run`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -85,6 +119,12 @@ pub struct RunRequest {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
     pub allow_paused: bool,
+    /// `--queue`: where the run joins the run queue. `next` (the default) is ahead of waiting
+    /// scheduled runs and behind earlier requests; `last` is behind every run that waits, and
+    /// the run is ordered with scheduled work from then on. Experimental.
+    #[serde(default, skip_serializing_if = "QueuePlace::is_next")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub queue: QueuePlace,
     /// Why the caller asks for the run, in free text (at most 500 characters, one line),
     /// recorded with it and shown as its `trigger_reason`. Experimental.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +155,7 @@ impl RunRequest {
             partition: None,
             batch: Vec::new(),
             allow_paused: false,
+            queue: QueuePlace::Next,
             reason: None,
         }
     }
@@ -560,6 +601,11 @@ pub struct RunView {
     /// For a run waiting in the queue: what else it waits for, `restart` while the server
     /// drains (it starts on the next server); `null` otherwise. Experimental.
     pub waiting_for: Option<crate::run_explain::WaitingFor>,
+    /// `last` while a run asked to queue last (`queue` of `POST /runs`, `--queue last`) waits
+    /// or executes on the answering server; `null` for every other run, and once the run has
+    /// finished (it is not recorded with the run). Experimental.
+    #[serde(default)]
+    pub queue: Option<QueuePlace>,
     /// The run in words (#956): its steps grouped by the reason they ran, its retries apart
     /// from its attempts, its targets as a list and what became of them, and how far a run in
     /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.

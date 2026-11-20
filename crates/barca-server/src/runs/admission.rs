@@ -4,13 +4,12 @@
 
 use super::RunSpec;
 use crate::error::ApiError;
-use crate::queue::{Waiting, is_scheduled, load, store};
+use crate::queue::{Waiting, goes_ahead, load, store, with_scheduled};
 use crate::replay::RunChannel;
 use crate::run_model::{RunState, RunStatus};
 use crate::state::AppState;
 use barca_service::cache::CachePolicy;
 use barca_service::db;
-use barca_service::outcome::TriggeredBy;
 use barca_service::serve::run_queue::{self, QueueState};
 use barca_service::time::{now_secs_f64 as now_ts, rfc3339_millis as timestamp};
 
@@ -94,13 +93,13 @@ pub async fn admit_as(
     })
 }
 
-/// Whether a scheduled run is executing now.
+/// Whether a scheduled run, or one asked to queue last, is executing now.
 fn scheduled_running(state: &AppState) -> bool {
     state
         .runs
         .registry
         .iter()
-        .any(|r| r.status == RunStatus::Running && r.trigger.triggered_by == TriggeredBy::Schedule)
+        .any(|r| r.status == RunStatus::Running && with_scheduled(&r.trigger, r.queue))
 }
 
 /// The live record and event channel of a run that joins the queue.
@@ -117,6 +116,7 @@ fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, chann
             target: (!spec.targets.is_empty()).then(|| spec.targets.join(",")),
             nodes: spec.nodes.clone(),
             trigger: spec.trigger.clone(),
+            queue: spec.queue,
             refreshes: !matches!(spec.policy, CachePolicy::CacheAware),
             files: spec.files.clone(),
             status: RunStatus::Pending,
@@ -142,15 +142,16 @@ pub fn dispatch(state: &AppState) {
             return;
         }
         let mut waiting = state.runs.queue.waiting.lock().unwrap();
-        // The first run someone asked for goes ahead of scheduled runs.
+        // The first run someone asked for goes ahead of scheduled runs and of the runs asked
+        // to queue last.
         let Some(at) = waiting
             .iter()
-            .position(|w| !is_scheduled(&w.spec))
+            .position(|w| goes_ahead(&w.spec))
             .or((!waiting.is_empty()).then_some(0))
         else {
             return;
         };
-        let interactive = !is_scheduled(&waiting[at].spec);
+        let interactive = goes_ahead(&waiting[at].spec);
         let permit = match state.runs.slots.clone().try_acquire_owned() {
             Ok(permit) => permit,
             // The extra slot is for running past scheduled work, not for running two

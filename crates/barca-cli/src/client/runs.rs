@@ -36,6 +36,8 @@ pub(crate) struct RunArgs {
     pub(crate) env: Option<String>,
     /// `--allow-paused`.
     pub(crate) allow_paused: bool,
+    /// `--queue`.
+    pub(crate) queue: barca_service::outcome::QueuePlace,
 }
 
 /// `barca get|run ... --server`: start the run on the server, print its lines as they come,
@@ -57,6 +59,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         partition: args.partition.clone(),
         batch: args.batch.clone(),
         allow_paused: args.allow_paused,
+        queue: args.queue,
         reason: None,
     };
     let body = serde_json::to_value(&request).expect("a run request is JSON");

@@ -75,6 +75,8 @@ pub(crate) struct RunSpec {
     pub(crate) fields: Option<Vec<String>>,
     pub(crate) env: Option<String>,
     pub(crate) allow_paused: bool,
+    /// `--queue`: where the run joins the server's run queue.
+    pub(crate) queue: barca_service::outcome::QueuePlace,
 }
 
 /// `barca status`.
@@ -307,9 +309,11 @@ impl Request {
                 fields,
                 env,
                 allow_paused,
+                queue,
                 ..
             } => {
                 check_order("get", &args)?;
+                let queue = queue_place("get", queue, side)?;
                 let mode = get_mode(output, expires.as_deref(), format, fields.as_deref())?;
                 // A served `get` returns the server's artifact pointers (its paths), or with
                 // `-o value` the values the server read. Signed links are not in the run
@@ -356,6 +360,7 @@ impl Request {
                         fields,
                         env,
                         allow_paused,
+                        queue,
                     },
                     mode,
                 }
@@ -374,9 +379,11 @@ impl Request {
                 fields,
                 env,
                 allow_paused,
+                queue,
                 ..
             } => {
                 check_order("run", &args)?;
+                let queue = queue_place("run", queue, side)?;
                 let mode = get_run_mode(output, format, fields.as_deref())?;
                 let selection = parse_partition(partition.as_deref())?;
                 let (target, files) = split_target_files(args);
@@ -412,6 +419,7 @@ impl Request {
                         fields,
                         env,
                         allow_paused,
+                        queue,
                     },
                     mode,
                 }
@@ -842,6 +850,30 @@ fn server_files(sub: &str, files: &[PathBuf], refresh: Option<&[String]>) -> Res
         .cloned()
         .collect();
     check_py_files(sub, &not_dirs, refresh)
+}
+
+/// `--queue`: a place in a server's run queue. On this machine a run starts at once and there
+/// is no queue to place it in, so the flag is a usage error there, whatever its value.
+fn queue_place(
+    sub: &str,
+    queue: Option<crate::args::QueueArg>,
+    side: Side,
+) -> Result<barca_service::outcome::QueuePlace, CliError> {
+    use barca_service::outcome::QueuePlace;
+    match (queue, side) {
+        (None, _) => Ok(QueuePlace::Next),
+        (Some(_), Side::Here) => Err(CliError::from_prose(
+            ErrorKind::Usage,
+            format!(
+                "error: --queue places a run in a barca server's run queue, and this `barca \
+                 {sub}` runs on this machine, where a run starts at once\nRun it on a server \
+                 (--server, or in the project a `barca serve` is running in, without --local), \
+                 or leave out --queue (barca docs scheduling)."
+            ),
+        )),
+        (Some(crate::args::QueueArg::Next), Side::Server) => Ok(QueuePlace::Next),
+        (Some(crate::args::QueueArg::Last), Side::Server) => Ok(QueuePlace::Last),
+    }
 }
 
 /// `--batch`, parsed (RFC-0013); a usage error naming the accepted forms when it does not parse.

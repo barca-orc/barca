@@ -4,7 +4,9 @@
 //! order they were accepted, at most `--max-runs` at once (`[server] max_runs`, default one per
 //! core), while the queue is neither paused nor draining. A run someone asked for (API, UI,
 //! CLI) starts ahead of waiting scheduled runs, and when every slot is taken it may use one
-//! extra slot of its own, so an interactive `get` never waits behind cron work.
+//! extra slot of its own, so an interactive `get` never waits behind cron work. A request
+//! that says `queue: "last"` gives that up: it waits its turn with the scheduled runs, in the
+//! order they were accepted, and takes no extra slot.
 //!
 //! A run leaves the queue when it has recorded how it ended. A server that starts resumes the runs
 //! it finds queued, in order (`runs::resume_at_startup`). A run the stopping server stopped at its
@@ -14,7 +16,7 @@
 
 use crate::run_model::RunSpec;
 use barca_service::cache::CachePolicy;
-use barca_service::outcome::{RunCommand, Trigger, TriggeredBy};
+use barca_service::outcome::{QueuePlace, RunCommand, Trigger, TriggeredBy};
 use barca_service::served::QueueView;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -99,11 +101,12 @@ impl Queue {
     }
 
     /// The ids of the runs waiting, in the order they will start: runs someone asked for
-    /// first, then scheduled runs, each in the order they were accepted.
+    /// first, then scheduled runs and the runs asked to queue last ([`goes_ahead`]), each in
+    /// the order they were accepted.
     pub fn waiting_ids(&self) -> Vec<String> {
         let waiting = self.waiting.lock().unwrap();
         let (asked, scheduled): (Vec<_>, Vec<_>) =
-            waiting.iter().partition(|w| !is_scheduled(&w.spec));
+            waiting.iter().partition(|w| goes_ahead(&w.spec));
         asked
             .into_iter()
             .chain(scheduled)
@@ -153,6 +156,9 @@ struct Stored {
     /// How many times it was put back after its server was killed during a drain.
     #[serde(default)]
     kill_requeues: u32,
+    /// `queue` of `POST /runs`, when it is not the default: `"last"`.
+    #[serde(default, skip_serializing_if = "QueuePlace::is_next")]
+    queue: QueuePlace,
     /// When the server accepted it (unix seconds).
     accepted_at: f64,
 }
@@ -187,6 +193,7 @@ pub(crate) fn store(spec: &RunSpec, accepted_at: f64) -> String {
         tick: spec.rules.tick.clone(),
         timeout: spec.timeout,
         kill_requeues: spec.kill_requeues,
+        queue: spec.queue,
         accepted_at,
     };
     serde_json::to_string(&stored).expect("a run spec is JSON")
@@ -220,6 +227,7 @@ pub(crate) fn load(text: &str) -> Result<(RunSpec, f64), String> {
         },
         timeout: stored.timeout,
         kill_requeues: stored.kill_requeues,
+        queue: stored.queue,
     };
     Ok((spec, stored.accepted_at))
 }
@@ -227,4 +235,69 @@ pub(crate) fn load(text: &str) -> Result<(RunSpec, f64), String> {
 /// A run a cron tick started, rather than a person or client.
 pub(crate) fn is_scheduled(spec: &RunSpec) -> bool {
     spec.trigger.triggered_by == TriggeredBy::Schedule
+}
+
+/// A run that starts ahead of waiting scheduled work: someone asked for it, and did not ask
+/// for it to queue last (`queue: "last"`). Every other run, a tick's or one queued last, starts
+/// in the order it was accepted, after the runs that go ahead.
+pub(crate) fn goes_ahead(spec: &RunSpec) -> bool {
+    !is_scheduled(spec) && spec.queue != QueuePlace::Last
+}
+
+/// Whether a run of this trigger and place is ordered with scheduled work: for the extra run
+/// slot, and for the shared capacity its steps wait for.
+pub(crate) fn with_scheduled(trigger: &Trigger, queue: QueuePlace) -> bool {
+    trigger.triggered_by == TriggeredBy::Schedule || queue == QueuePlace::Last
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(trigger: Trigger, queue: QueuePlace) -> RunSpec {
+        RunSpec {
+            trigger,
+            queue,
+            ..RunSpec::api(RunCommand::Get, vec!["a".into()], vec![])
+        }
+    }
+
+    /// The rule of `queue: "last"` for a run slot: requests that did not ask for it first, in
+    /// the order accepted; then the scheduled runs and the runs queued last, together, in the
+    /// order accepted. So a run queued last is behind the scheduled runs accepted before it
+    /// and ahead of the ones accepted after it.
+    #[test]
+    fn a_run_queued_last_waits_with_the_scheduled_runs_in_the_order_accepted() {
+        let queue = Queue::new(1);
+        let tick = |id: &str| Trigger::schedule(id, 0);
+        for (id, spec) in [
+            ("tick-a", spec(tick("p.py:a"), QueuePlace::Next)),
+            ("asked-1", spec(Trigger::api(), QueuePlace::Next)),
+            ("last-1", spec(Trigger::api(), QueuePlace::Last)),
+            ("asked-2", spec(Trigger::api(), QueuePlace::Next)),
+            ("tick-b", spec(tick("p.py:b"), QueuePlace::Next)),
+            ("last-2", spec(Trigger::api(), QueuePlace::Last)),
+        ] {
+            queue.waiting.lock().unwrap().push_back(Waiting {
+                run_id: id.into(),
+                spec,
+            });
+        }
+        assert_eq!(
+            queue.waiting_ids(),
+            ["asked-1", "asked-2", "tick-a", "last-1", "tick-b", "last-2"]
+        );
+    }
+
+    #[test]
+    fn the_place_is_kept_in_the_stored_description_and_absent_by_default() {
+        let last = store(&spec(Trigger::api(), QueuePlace::Last), 1.0);
+        assert!(last.contains(r#""queue":"last""#), "{last}");
+        assert_eq!(load(&last).unwrap().0.queue, QueuePlace::Last);
+        // The default writes no key, so a description is what earlier releases wrote, and
+        // one they wrote reads as the default.
+        let next = store(&spec(Trigger::api(), QueuePlace::Next), 1.0);
+        assert!(!next.contains(r#""queue":"#), "{next}");
+        assert_eq!(load(&next).unwrap().0.queue, QueuePlace::Next);
+    }
 }

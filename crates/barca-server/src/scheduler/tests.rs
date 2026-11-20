@@ -96,6 +96,7 @@ fn insert_run(
             target: target.map(str::to_string),
             nodes: node.map(str::to_string).into_iter().collect(),
             trigger: barca_service::outcome::Trigger::api(),
+            queue: Default::default(),
             refreshes: false,
             files: Vec::new(),
             status,
@@ -1653,6 +1654,7 @@ async fn a_run_nobody_scheduled_writes_no_tick() {
         rules: barca_service::freshness::RunRules::default(),
         timeout: None,
         kill_requeues: 0,
+        queue: Default::default(),
     };
     let handle = crate::runs::start_as(st.clone(), db::generate_run_id(), spec)
         .await

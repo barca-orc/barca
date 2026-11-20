@@ -79,6 +79,8 @@ pub struct LiveRun {
     pub cancellation: Option<Cancellation>,
     /// What else a waiting run waits for (a draining server).
     pub waiting_for: Option<WaitingFor>,
+    /// Where the request asked to join the queue.
+    pub queue: crate::outcome::QueuePlace,
     /// Its result's step counts, once it has one.
     pub steps: Option<LiveSteps>,
 }
@@ -178,6 +180,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
                 .clone()
                 .or_else(|| live.and_then(|r| r.cancellation.clone())),
             waiting_for: None,
+            queue: None,
             explanation: Default::default(),
             outcome: None,
             error: None,
@@ -214,6 +217,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
             plan_reasons: None,
             cancellation: run.cancellation.clone(),
             waiting_for: None,
+            queue: None,
             explanation: Default::default(),
             outcome: None,
             error: None,
@@ -231,6 +235,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     {
         view.status = run.status.as_str().into();
         view.waiting_for = run.waiting_for;
+        view.queue = run.queue.shown();
     }
     if let Some(outcome) = &outcome {
         view.status = outcome.status().as_str().into();
@@ -479,6 +484,9 @@ pub struct RunHandle {
     /// What else a waiting run waits for: `restart` while the server drains. Experimental.
     #[serde(default)]
     pub waiting_for: Option<WaitingFor>,
+    /// `last` when the request asked to queue last; `null` otherwise. Experimental.
+    #[serde(default)]
+    pub queue: Option<crate::outcome::QueuePlace>,
 }
 
 /// `DELETE /runs/{run_id}` of a run in progress: it was told to stop.

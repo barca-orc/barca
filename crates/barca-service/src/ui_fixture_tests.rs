@@ -1194,6 +1194,7 @@ impl Project {
             plan_reasons: record.plan_reasons.clone(),
             cancellation: record.cancellation.clone(),
             waiting_for: None,
+            queue: None,
             explanation: Default::default(),
             outcome: None,
             error: steps.iter().find_map(|step| step.error.clone()),

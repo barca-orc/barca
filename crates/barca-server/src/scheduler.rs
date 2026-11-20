@@ -150,6 +150,7 @@ async fn trigger(
             rules: barca_service::freshness::RunRules::tick(&job.id),
             timeout: job.timeout_seconds,
             kill_requeues: 0,
+            queue: Default::default(),
         },
     )
     .await

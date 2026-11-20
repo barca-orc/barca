@@ -37,6 +37,7 @@ pub(crate) async fn perform(
                 fields: run.fields,
                 env: run.env,
                 allow_paused: run.allow_paused,
+                queue: run.queue,
             };
             super::run(server, args, ctx).await
         }
@@ -57,6 +58,7 @@ pub(crate) async fn perform(
                 fields: run.fields,
                 env: run.env,
                 allow_paused: run.allow_paused,
+                queue: run.queue,
             };
             super::run(server, args, ctx).await
         }

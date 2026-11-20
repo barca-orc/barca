@@ -3,6 +3,7 @@
 //! nothing itself (`--read-only`) answers with.
 
 use crate::liveness::RecordedTiming;
+use crate::outcome::QueuePlace;
 use crate::run_explain::WaitingFor;
 use crate::run_queue::QueueState;
 use crate::serve::capacity::CapacitySnapshot;
@@ -69,6 +70,11 @@ pub struct QueueEntry {
     /// next server); `null` otherwise. Experimental.
     #[serde(default)]
     pub waiting_for: Option<WaitingFor>,
+    /// `last` for a run asked to queue last (`queue` of `POST /runs`, `--queue last`): it
+    /// waits behind the scheduled runs accepted before it and is ordered with scheduled work;
+    /// `null` for every other run. Experimental.
+    #[serde(default)]
+    pub queue: Option<QueuePlace>,
 }
 
 impl QueueEntry {
@@ -134,13 +140,15 @@ pub struct RecordedRun {
     /// The targets as given; empty for every asset.
     pub targets: Vec<String>,
     pub trigger: Trigger,
+    /// Where the request asked to join the queue.
+    pub queue: QueuePlace,
 }
 
 /// The queue a metadata database records, as of `now` (unix seconds): `rows` in the order the
 /// server accepted them, with the starts and estimates `timing` has
 /// ([`crate::liveness::recorded_timing`]). A run counts as running once `timing` knows when it
-/// started. The waiting runs someone asked for go ahead of the scheduled ones, as the server
-/// starts them. `draining` is the answering host's own: the records do not say whether the
+/// started. The waiting runs someone asked for go ahead of the scheduled ones and of the runs
+/// asked to queue last, as the server starts them. `draining` is the answering host's own: the records do not say whether the
 /// server that writes them drains.
 pub fn recorded(
     rows: Vec<RecordedRun>,
@@ -177,6 +185,7 @@ pub fn recorded(
             scheduled_at: row.trigger.scheduled_at,
             // The records do not say whether the server that writes them drains.
             waiting_for: None,
+            queue: row.queue.shown(),
         };
         if started {
             running.push(item);
@@ -184,7 +193,7 @@ pub fn recorded(
             queued.push(item);
         }
     }
-    queued.sort_by_key(|entry| entry.schedule_id.is_some());
+    queued.sort_by_key(|entry| entry.schedule_id.is_some() || entry.queue.is_some());
     for (i, entry) in queued.iter_mut().enumerate() {
         entry.position = Some(i + 1);
     }

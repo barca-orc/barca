@@ -212,7 +212,13 @@ async fn execute(
                     host: std::sync::Arc::new(barca_service::serve::ServeHost::new(
                         state.runs.capacity.clone(),
                         state.runs.shared_steps.clone(),
-                        barca_service::serve::capacity::Origin::of(spec.trigger.triggered_by),
+                        // A run asked to queue last waits for capacity as a scheduled
+                        // run does, aging rule included.
+                        if crate::queue::with_scheduled(&spec.trigger, spec.queue) {
+                            barca_service::serve::capacity::Origin::Scheduled
+                        } else {
+                            barca_service::serve::capacity::Origin::Requested
+                        },
                     )),
                     batch: barca_service::batch::BatchOverride::parse(&spec.batch)
                         .unwrap_or_default(),

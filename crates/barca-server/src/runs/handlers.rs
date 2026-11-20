@@ -135,6 +135,7 @@ async fn create_run(
             rules: barca_service::freshness::RunRules::request(),
             timeout: None,
             kill_requeues: 0,
+            queue: request.queue,
         },
     )
     .await?;
@@ -148,6 +149,7 @@ async fn create_run(
             },
             position: admitted.position,
             waiting_for: admitted.waiting_for,
+            queue: request.queue.shown(),
         }),
     )
         .into_response())

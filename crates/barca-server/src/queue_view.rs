@@ -37,6 +37,7 @@ fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bo
         }),
         scheduled_at: run.trigger.scheduled_at.clone(),
         waiting_for: state.lifecycle.waiting_for(run.status),
+        queue: run.queue.shown(),
     }
 }
 
@@ -209,6 +210,7 @@ pub(crate) async fn recorded_view(state: &AppState) -> Result<QueueView, ApiErro
                 command: spec.command.as_str().into(),
                 targets: spec.targets,
                 trigger: spec.trigger,
+                queue: spec.queue,
             })
         })
         .collect();

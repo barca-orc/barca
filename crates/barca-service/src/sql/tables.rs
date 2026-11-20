@@ -692,6 +692,7 @@ mod tests {
             schedule_id: Some("pipeline.py:inbox".into()),
             scheduled_at: Some("2026-11-17T15:00:00Z".into()),
             waiting_for: None,
+            queue: None,
         };
         let table = queue(Some(vec![row.table_row()]));
         let rows = table.rows.unwrap();

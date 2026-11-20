@@ -41,6 +41,15 @@ impl OutputMode {
 /// `-o` on get. `path` and `value` choose what is returned and print only that, unless
 /// `--json` (or `--pretty`) asks for the whole result; `json` and `pretty` are the older
 /// spellings of `--json` and `--pretty`.
+/// `--queue` of `get` and `run`: where the run joins a server's run queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum QueueArg {
+    /// Ahead of waiting scheduled runs, behind earlier requests (the default)
+    Next,
+    /// Behind every waiting run, scheduled ones included
+    Last,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum GetOutput {
     /// Artifact paths, one per line (one per selected partition key); the default
@@ -245,6 +254,7 @@ Examples:
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
   barca get total --local                  # run in this process: not on this project's barca serve, nothing sent to a configured server
   barca get total pipeline.py --allow-paused   # run it even though it is paused (barca docs incidents)
+  barca get sales --server --queue last --refresh-all   # a backfill that waits its turn behind the server's scheduled runs (barca docs scheduling)
   barca get --examples                     # the complete example collection; runs nothing
 
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents";
@@ -270,6 +280,7 @@ Examples:
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
   barca run deploy pipeline.py --local                 # run in this process: not on this project's barca serve, nothing posted to a configured server
   barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
+  barca run deploy --server --queue last               # behind the server's waiting runs, scheduled ones included (barca docs scheduling)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 More: barca docs tasks, barca docs cache, barca docs agents";
@@ -714,6 +725,12 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
         allow_paused: bool,
+        /// Where the run joins a server's run queue: `next` (the default) ahead of waiting
+        /// scheduled runs, `last` behind every waiting run and at scheduled priority. A usage
+        /// error when the command runs on this machine. Experimental
+        #[arg(long, value_enum, value_name = "PLACE")]
+        #[arg(help = "On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental)", long_help = None)]
+        queue: Option<QueueArg>,
         #[command(flatten)]
         server: ServerFlags,
     },
@@ -782,6 +799,12 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
         allow_paused: bool,
+        /// Where the run joins a server's run queue: `next` (the default) ahead of waiting
+        /// scheduled runs, `last` behind every waiting run and at scheduled priority. A usage
+        /// error when the command runs on this machine. Experimental
+        #[arg(long, value_enum, value_name = "PLACE")]
+        #[arg(help = "On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental)", long_help = None)]
+        queue: Option<QueueArg>,
         #[command(flatten)]
         server: ServerFlags,
     },

@@ -33,6 +33,7 @@ fn live(handle: &str) -> RunState {
         target: Some("first".into()),
         nodes: vec![],
         trigger: Trigger::api(),
+        queue: Default::default(),
         refreshes: false,
         files: vec![],
         status: RunStatus::Pending,
