@@ -1,6 +1,6 @@
 [package]
 name = "barca-analysis"
-version = "0.45.0"
+version = "0.46.0"
 edition = "2024"
 description = "Analysis layer — read models over what was recorded: status, health, causes, estimates, the rollup, run explanations"
 
