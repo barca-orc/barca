@@ -164,8 +164,13 @@ the server takes its own (RFC-0015).
 The cross-process lock on a metadata database is `<db>.lock`, held for each operation. A
 process that waits 60 seconds for it fails with an infrastructure error that names the process
 holding it at that moment (pid and command line, read from the kernel's lock table; Linux
-only, and "could not be named" elsewhere) and points at the server. Nothing is written to disk
-to make the holder known. `BARCA_TRACE_TIMING` prints, at the end of a run, how many of the
+only, and "could not be named" elsewhere) and points at the server. The table is read up to
+five times, because one read can skip a lock that is held while others come and go, and a
+process a matching line names is the holder only if it has the lock file open (the table
+identifies a file by inode, which another filesystem repeats). A lock found free during the
+look is taken, and the operation proceeds. A holder the table does not name (a process outside
+this container, or on another machine that shares the directory) is reported as that, not as
+"could not be named". Nothing is written to disk to make the holder known. `BARCA_TRACE_TIMING` prints, at the end of a run, how many of the
 process's lock acquisitions had to wait, their total wait and the longest.
 
 ### Process storage overrides

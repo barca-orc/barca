@@ -425,6 +425,20 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
 }
 
 async fn metadata(path: &str) -> Result<String, String> {
+    // In place when the database can be read so: no copy of it, and no lock that a run or a
+    // server would wait for while every page is checked.
+    if let Some(view) = crate::db::ReadView::open(path)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return match crate::state_validate::check_in_place(view.path())
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            Ok(()) => Ok("metadata snapshot integrity and format are valid".into()),
+            Err(error) => Err(error.why),
+        };
+    }
     let Some(snapshot) = crate::db::DbSnapshot::take(path)
         .await
         .map_err(|e| e.to_string())?

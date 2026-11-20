@@ -174,10 +174,17 @@ pub async fn sql(
     python: &std::path::Path,
     limit: Option<usize>,
 ) -> Result<SqlResult, BarcaError> {
-    let (st, membership, dag) =
-        crate::loaded::status_with_membership(cfg, &[], file_args, python, 0, false).await?;
-    let catalog = resolve(cfg, &st, &membership, |_| true).await?;
-    let tables = tables::local(cfg, query, &st.nodes, &dag).await?;
+    // What the query reads of the metadata DB is read in place, without its lock. Stamping
+    // the results it read (`run`, below) is the one write, on the database itself.
+    let (catalog, tables) = {
+        let read = crate::db::read_metadata(cfg, false).await?;
+        let cfg = read.cfg();
+        let (st, membership, dag) =
+            crate::loaded::status_with_membership(cfg, &[], file_args, python, 0, false).await?;
+        let catalog = resolve(cfg, &st, &membership, |_| true).await?;
+        let tables = tables::local(cfg, query, &st.nodes, &dag).await?;
+        (catalog, tables)
+    };
     run(
         cfg,
         query,

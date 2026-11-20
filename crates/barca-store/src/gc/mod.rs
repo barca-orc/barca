@@ -676,6 +676,10 @@ fn du(path: &Path) -> (u64, u64) {
 
 /// Walk `.barca/`; the artifact directories only when `artifacts` is set.
 fn walk(project: &Project, artifacts: bool) -> Walk {
+    // The log of a database this process has open is not disk use: it is folded into the main
+    // file, and gone, once the connection closes. Measured with it, the size moved by
+    // megabytes between a measurement and the eviction planned from it.
+    barca_db::db::close_connections();
     let trees: HashSet<PathBuf> = project.artifact_trees().into_iter().collect();
     let mut out = Walk::default();
     fn visit(
@@ -1467,11 +1471,19 @@ async fn delete(
     }
     for env in envs {
         if let Some(paths) = by_env.get(env.env.as_str()) {
-            mark_evicted(&env.db_path, paths).await;
+            // Each chunk under its own hold of the lock: an eviction of 100k files marked them
+            // all in one, and a run waited for it. The files are gone already, so marks cut
+            // short by a crash are what a crash before the first one left.
+            for chunk in paths.chunks(EVICTION_MARKS) {
+                mark_evicted(&env.db_path, chunk).await;
+            }
         }
     }
     done
 }
+
+/// Evictions recorded under one hold of the lock ([`mark_evicted`]).
+const EVICTION_MARKS: usize = 1000;
 
 async fn mark_evicted(db_path: &str, paths: &[&str]) {
     let _g = barca_db::db::db_guard().await;

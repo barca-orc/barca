@@ -177,7 +177,8 @@ graph (an edit to the parser rebuilds them), though neither names it.
 
 ## Measured
 
-Before is `integrate/modularity` at 78faf8fc, after is this branch's head, on one machine (32
+Before is `integrate/modularity` at 78faf8fc, after is this branch on top of it (f2c6197e, before
+the later commits of `integrate/modularity` were merged in), on one machine (32
 cores, Linux) on 2026-11-19 while other builds ran on it (load 4 to 15), so times are
 indicative and sizes and counts are exact.
 

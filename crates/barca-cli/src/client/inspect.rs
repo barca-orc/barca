@@ -321,12 +321,27 @@ pub(super) async fn local_run(
     run_id: Option<&str>,
 ) -> Option<barca_service::db::RunRecord> {
     let cfg = barca_service::config::resolve(env).ok()?;
-    let snapshot = barca_service::db::DbSnapshot::take(&cfg.db_path)
+    // In place when the database can be read so, else from a copy: never created or migrated.
+    let view = barca_service::db::ReadView::open(&cfg.db_path)
         .await
-        .ok()??;
+        .ok()
+        .flatten();
+    let snapshot = match view {
+        Some(_) => None,
+        None => Some(
+            barca_service::db::DbSnapshot::take(&cfg.db_path)
+                .await
+                .ok()??,
+        ),
+    };
+    let path = match (&view, &snapshot) {
+        (Some(view), _) => view.path(),
+        (None, Some(snapshot)) => snapshot.path(),
+        (None, None) => return None,
+    };
     match run_id {
-        Some(id) => barca_service::db::get_run(snapshot.path(), id).await.ok()?,
-        None => barca_service::db::get_recent_runs(snapshot.path(), 1)
+        Some(id) => barca_service::db::get_run(path, id).await.ok()?,
+        None => barca_service::db::get_recent_runs(path, 1)
             .await
             .ok()?
             .into_iter()

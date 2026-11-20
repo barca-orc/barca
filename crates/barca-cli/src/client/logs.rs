@@ -77,7 +77,7 @@ pub(crate) async fn logs(
         if live {
             let status = follow_events(&mut follow, args).await?;
             follow_ended(&run_id, &status);
-            barca_service::term::exit(follow_exit_code(&status));
+            crate::exit(follow_exit_code(&status));
         }
     }
     let (status, lines) = match recorded_logs(server, &run_id, args).await {
@@ -90,7 +90,7 @@ pub(crate) async fn logs(
     args.print_all(&lines).map_err(engine)?;
     if args.follow {
         follow_ended(&run_id, &status);
-        barca_service::term::exit(follow_exit_code(&status));
+        crate::exit(follow_exit_code(&status));
     }
     Ok(())
 }

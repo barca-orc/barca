@@ -102,8 +102,8 @@ pub async fn history(
     limit: Option<usize>,
     filter: &crate::history_filter::HistoryFilter,
 ) -> Result<(Vec<db::RunRecord>, usize), BarcaError> {
-    open_metadata(cfg).await?;
-    history_at(&cfg.db_path, limit, filter).await
+    let read = crate::db::read_metadata(cfg, true).await?;
+    history_at(read.path(), limit, filter).await
 }
 
 /// The newest `limit` runs of the database at `db_path` that `filter` keeps (every one when
@@ -135,8 +135,8 @@ pub async fn activity(
     cfg: &crate::config::ResolvedConfig,
     filter: &crate::history_filter::HistoryFilter,
 ) -> Result<crate::run_list::RunActivity, BarcaError> {
-    open_metadata(cfg).await?;
-    activity_at(&cfg.db_path, filter, chrono::Utc::now()).await
+    let read = crate::db::read_metadata(cfg, true).await?;
+    activity_at(read.path(), filter, chrono::Utc::now()).await
 }
 
 /// [`activity`] of the database at `db_path`, at `now`: the runs of the window, read once
@@ -172,6 +172,10 @@ pub async fn history_now(
     python: &std::path::Path,
 ) -> std::collections::HashMap<String, crate::run_list::RunNow> {
     let mut out = std::collections::HashMap::new();
+    let Ok(read) = crate::db::read_metadata(cfg, false).await else {
+        return out;
+    };
+    let cfg = read.cfg();
     for alive in db::alive_running_runs(&cfg.db_path).await {
         let Some(run) = runs.iter().find(|r| r.run_id == alive.run_id) else {
             continue;
@@ -231,8 +235,8 @@ pub async fn reconcile_run(
 pub(crate) async fn latest_run(
     cfg: &crate::config::ResolvedConfig,
 ) -> Result<db::RunRecord, BarcaError> {
-    open_metadata(cfg).await?;
-    db::get_recent_runs(&cfg.db_path, 1)
+    let read = crate::db::read_metadata(cfg, true).await?;
+    db::get_recent_runs(read.path(), 1)
         .await?
         .into_iter()
         .next()
@@ -327,8 +331,8 @@ pub async fn logs(
     step: Option<&str>,
     stream: Option<crate::LogStream>,
 ) -> Result<Vec<db::LogEntry>, BarcaError> {
-    open_metadata(cfg).await?;
-    logs_at(&cfg.db_path, &cfg.db_path, run_id, step, stream).await
+    let read = crate::db::read_metadata(cfg, true).await?;
+    logs_at(&cfg.db_path, read.path(), run_id, step, stream).await
 }
 
 /// [`logs`] of the metadata DB at `db_path`, read from `read_path` (it or a snapshot of it).
@@ -385,8 +389,8 @@ pub async fn run_to_read(
     if !running {
         return latest_run(cfg).await;
     }
-    open_metadata(cfg).await?;
-    let recent = db::get_recent_runs(&cfg.db_path, RUNNING_LOOKBACK).await?;
+    let read = crate::db::read_metadata(cfg, true).await?;
+    let recent = db::get_recent_runs(read.path(), RUNNING_LOOKBACK).await?;
     match pick_run(recent, true) {
         Some(run) => Ok(run),
         None => latest_run(cfg).await,
@@ -398,8 +402,8 @@ pub async fn run_record(
     cfg: &crate::config::ResolvedConfig,
     run_id: &str,
 ) -> Result<Option<db::RunRecord>, BarcaError> {
-    open_metadata(cfg).await?;
-    db::get_run(&cfg.db_path, run_id).await
+    let read = crate::db::read_metadata(cfg, true).await?;
+    db::get_run(read.path(), run_id).await
 }
 
 /// How many recent runs `barca logs -f` looks through for one in progress.
@@ -417,8 +421,8 @@ pub async fn stats(
 
     let target_id = find_target_id(&dag, target_name)?;
 
-    open_metadata(cfg).await?;
-    db::get_asset_stats(&cfg.db_path, &target_id).await
+    let read = crate::db::read_metadata(cfg, true).await?;
+    db::get_asset_stats(read.path(), &target_id).await
 }
 
 // ─── list_assets ──────────────────────────────────────────────────────────────

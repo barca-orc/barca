@@ -24,6 +24,9 @@ pub async fn status(
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
+    // In place: `barca status` neither waits for a run's writes nor makes one wait.
+    let read = crate::db::read_metadata(cfg, false).await?;
+    let cfg = read.cfg();
     let mut result =
         status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape)
             .await?
@@ -41,7 +44,7 @@ pub async fn status(
 }
 
 /// SQL reuses this prediction instead of loading the DAG or interpreting keys again.
-pub async fn status_with_membership(
+pub(crate) async fn status_with_membership(
     cfg: &crate::config::ResolvedConfig,
     target_names: &[String],
     file_args: &[String],
@@ -82,6 +85,8 @@ pub async fn rollup(
     python: &std::path::Path,
 ) -> Result<crate::rollup::Rollup, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
+    let read = crate::db::read_metadata(cfg, false).await?;
+    let cfg = read.cfg();
     let mut result =
         crate::status::status_from_dag(cfg, target_names, &dag, python, 0, false).await?;
     crate::health::rollup_from_db(
@@ -104,7 +109,8 @@ pub async fn grid_for_target(
 ) -> Result<PartitionGrid, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
     let id = partitioned_target(&dag, name)?;
-    partition_grid(cfg, &dag, &id).await
+    let read = crate::db::read_metadata(cfg, false).await?;
+    partition_grid(read.cfg(), &dag, &id).await
 }
 
 /// `barca status NODE --key KEY` on this machine; `None` when the node has no such key.
@@ -118,7 +124,8 @@ pub async fn key_for_target(
 ) -> Result<Option<PartitionKeyDetail>, BarcaError> {
     let dag = crate::load::build_dag(file_args, python).await?;
     let id = partitioned_target(&dag, name)?;
-    partition_key_detail(cfg, &dag, python, &id, key, sample).await
+    let read = crate::db::read_metadata(cfg, false).await?;
+    partition_key_detail(read.cfg(), &dag, python, &id, key, sample).await
 }
 
 /// Enumerate scheduled jobs from source and compute each one's next fire time.

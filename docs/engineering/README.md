@@ -13,6 +13,7 @@ change those contracts.
 - [The intermediate representation](ir.md): what the graph barca plans is made of, which fields are declaration, fingerprint, invocation and Python by-product, and what a second frontend would supply (#1056, D2 and D3). No external format exists.
 - [The CLI's layers](cli-layering.md): one request and one dispatch, the table of where each command can run, the module rows the layering test enforces (#1056, track E) and what is left.
 - [Layers inside barca-core](layering.md): the layer of every module of what was `barca-core`, the rule and the cuts that made each layer a crate (#1056 track C). The layers are crates now: [part two](crate-split-2.md).
+- [One owner of the metadata connection per process](metadata-owner.md): reads without the lock, turns at the lock and the kept connection (#1056, A7 and A8), the safety properties with their tests, measurements and what is not done.
 - [Requirements discussion handoff](requirements-handoff.md): unanswered proposals and remaining decisions.
 - [User API rationale](user-api-decisions.md): reasons behind declaration choices.
 - [DuckDB lifetime investigation](history/duckdb-step-isolation.md): retained empirical evidence and rejected isolation alternatives.

@@ -278,6 +278,36 @@ fn integrity_problems(rows: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Rule 2 on a database read in place: the problems `PRAGMA integrity_check` finds through a
+/// [`crate::db::ReadView`] at `view_path`, without copying the database or taking its lock.
+/// Rules 1, 3 and 4 hold of any database a view opens (`ReadView::open` answers `None` for
+/// anything but a whole database of this release's format with nothing to add).
+pub async fn check_in_place(view_path: &str) -> Result<Result<(), Invalid>, BarcaError> {
+    let failed = |e| BarcaError::Db(format!("failed to check the metadata DB: {e}"));
+    let (_handle, conn) = crate::db::open_conn(view_path).await?;
+    let mut checked = Vec::new();
+    let mut rows = conn
+        .query("PRAGMA integrity_check", ())
+        .await
+        .map_err(failed)?;
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        checked.push(row.get::<String>(0).map_err(failed)?);
+    }
+    let problems = integrity_problems(&checked);
+    if problems.is_empty() {
+        return Ok(Ok(()));
+    }
+    let count = match problems.len() {
+        1 => "1 problem".to_string(),
+        n => format!("{n} problems, the first"),
+    };
+    Ok(Err(Invalid {
+        kind: InvalidKind::Damage,
+        why: format!("its integrity check found {count}: {}", problems[0]),
+        details: problems,
+    }))
+}
+
 /// Rules 1 to 4 on the file at `path`. The outer error is this machine failing to
 /// check; the inner `Err` says why the copy is not valid. Afterwards the file has barca's
 /// current schema (the migrations are applied to it between rules 3 and 4).

@@ -1851,6 +1851,9 @@ mod tests {
         barca_db::db::create_run(&cfg.db_path, &live, "get", "[]", None, Some(1))
             .await
             .unwrap();
+        // The log folded in first, as it is when a command ends: the main file is then the
+        // whole database, and a refused reset must leave its every byte.
+        barca_db::db::close_connections();
         let before = std::fs::read(&cfg.db_path).unwrap();
         let refused = reset(&cfg, |running| {
             assert_eq!(running, std::slice::from_ref(&live));

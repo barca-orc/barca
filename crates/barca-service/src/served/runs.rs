@@ -413,11 +413,12 @@ pub async fn run_detail(
     limit: Option<usize>,
     python: &std::path::Path,
 ) -> Result<crate::queries::RunDetail, BarcaError> {
-    crate::db::open_metadata(cfg).await?;
+    // In place: reading a run neither waits for another's writes nor makes one wait.
+    let read = crate::db::read_metadata(cfg, true).await?;
     // The one definition of a run's detail ([`run_view`]), with no server's
     // overlay: what `GET /runs/{run_id}` answers for a run only the database knows.
     let draft = run_view(RunViewRequest {
-        read_path: &cfg.db_path,
+        read_path: read.path(),
         db_path: &cfg.db_path,
         run_id,
         limit,
