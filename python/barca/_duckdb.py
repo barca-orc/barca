@@ -59,6 +59,48 @@ def finish_open_result() -> None:
         print(f"[barca] duckdb: could not discard an open result: {exc}", file=sys.stderr)
 
 
+def invalidated(exc: BaseException) -> bool:
+    """Whether this process's duckdb database is unusable after a step failed with `exc`.
+
+    duckdb invalidates a database after a fatal or internal error: every later statement on
+    it, on any connection, fails with ``FatalException: database has been invalidated``. A
+    worker holding one must stop, or each step it is given next fails the same way (#1083).
+
+    True when `exc`, or an exception it was raised from or while handling, is duckdb's
+    ``FatalException``; or when it is another duckdb error and a ``SELECT 1`` on a cursor of
+    the shared connection now raises one (an internal error is reported under its own class
+    and invalidates the database all the same). A cursor, so a result the step left open on
+    the connection itself is not disturbed. False when duckdb was never imported. Never raises.
+    """
+    if "duckdb" not in sys.modules:
+        return False
+    import duckdb
+
+    fatal = getattr(duckdb, "FatalException", None)
+    if fatal is None:
+        return False
+    from_duckdb = False
+    seen: set[int] = set()
+    at: BaseException | None = exc
+    while at is not None and id(at) not in seen:
+        seen.add(id(at))
+        if isinstance(at, fatal):
+            return True
+        from_duckdb = from_duckdb or isinstance(at, duckdb.Error)
+        at = at.__cause__ or at.__context__
+    if not from_duckdb:
+        return False
+    try:
+        connection().cursor().execute("SELECT 1").fetchone()
+    except fatal:
+        return True
+    except Exception:  # noqa: BLE001
+        # Deliberate: anything else (a closed connection, one busy in another thread) is not
+        # an invalidated database, and the step's own error is what gets reported.
+        return False
+    return False
+
+
 def arrow_reader(relation: Any) -> Any:
     """Stream a relation as a ``pyarrow.RecordBatchReader`` on duckdb 1.4 to 2.x.
 

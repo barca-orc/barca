@@ -1286,3 +1286,23 @@ fn every_partition_key_takes_its_nodes_weight() {
     let mut running = 0;
     assert_eq!(admit(&mut c, &mut running, 4).len(), 2);
 }
+
+#[test]
+fn a_fresh_retry_is_one_attempt_beyond_retries_once() {
+    let mut c = Coordinator::new();
+    let a = c.add_item(dummy_step_id("a"), spec("a"), vec![]); // retries=1 → no retry
+    c.next_ready();
+    assert!(c.grant_fresh_retry(a));
+    assert_eq!(
+        c.on_item_failed(a, "invalidated".into(), std::time::Duration::ZERO),
+        FailureAction::RetryNow
+    );
+    assert_eq!(c.next_ready(), Some(a));
+    // The second attempt's worker says the same: nothing more is granted, and it fails.
+    assert!(!c.grant_fresh_retry(a));
+    assert_eq!(
+        c.on_item_failed(a, "invalidated".into(), std::time::Duration::ZERO),
+        FailureAction::Failed
+    );
+    assert!(c.is_finished());
+}

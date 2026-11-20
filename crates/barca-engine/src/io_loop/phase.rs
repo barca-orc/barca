@@ -239,6 +239,7 @@ impl WorkerPool {
                         elapsed,
                         import_seconds,
                         worker_continues,
+                        retry_fresh,
                         phase,
                     } => {
                         let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
@@ -276,6 +277,13 @@ impl WorkerPool {
                                 import_seconds,
                             });
                         }
+                        if retry_fresh && coord.grant_fresh_retry(item_id) {
+                            barca_model::errln!(
+                                "[barca] {node_id}: duckdb invalidated its worker's database \
+                                 ({error_type}); the worker is replaced and the step tried once \
+                                 more in a fresh one"
+                            );
+                        }
                         if let FailureAction::RetryAfter(delay) = coord.on_item_failed_in(
                             item_id,
                             error,
@@ -290,11 +298,12 @@ impl WorkerPool {
 
                         // A step that raised leaves its worker sound, and the worker goes on
                         // with its batch (#523). One that may not be sound (a failed import,
-                        // `sys.exit()`, still running past its timeout) is stopped so retries
+                        // `sys.exit()`, still running past its timeout, an invalidated duckdb
+                        // database) is stopped so retries
                         // and remaining work get a fresh interpreter: unstarted leases go back
                         // to the queue front, and the 200ms SIGTERM grace runs off the event
                         // loop.
-                        if worker_continues {
+                        if worker_continues && !retry_fresh {
                             self.failures_survived += 1;
                         } else if let Some(mut handle) = self.workers.remove(&worker_id) {
                             Self::return_leases(&mut handle, coord);

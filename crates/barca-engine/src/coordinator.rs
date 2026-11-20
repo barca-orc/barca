@@ -143,6 +143,9 @@ pub struct Item {
     pub step_id: barca_model::StepId,
     pub spec: ItemSpec,
     pub attempts: u32,
+    /// Attempts allowed beyond `spec.retries`: one, once, for an attempt that failed because
+    /// its worker's process was unusable ([`Coordinator::grant_fresh_retry`]).
+    pub fresh_retries: u32,
     pub group: Option<GroupId>,
     pub deps: Vec<Dep>,
 }

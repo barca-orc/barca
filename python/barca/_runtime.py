@@ -255,12 +255,15 @@ def emit_step_error(
     import_seconds: float | None = None,
     worker_continues: bool = False,
     phase: str = "user_code",
+    retry_fresh: bool = False,
 ) -> None:
     """Report a step failed.
 
     `worker_continues` tells the coordinator this worker is still sound and goes on with its
     batch; without it the coordinator stops the worker and starts a fresh one (#523). `phase`
-    is where the failure happened (`_failure.PHASES`).
+    is where the failure happened (`_failure.PHASES`). `retry_fresh` says the failure was this
+    process's (its duckdb database is invalidated), not the step's: the coordinator tries the
+    step once more in a fresh worker, outside its `retries` (#1083).
     """
     _report_repeated_warnings()
     _emit_result(
@@ -274,6 +277,7 @@ def emit_step_error(
             "phase": phase,
             **({"import_seconds": import_seconds} if import_seconds is not None else {}),
             **({"worker_continues": True} if worker_continues else {}),
+            **({"retry_fresh": True} if retry_fresh else {}),
         }
     )
 

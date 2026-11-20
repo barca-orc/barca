@@ -31,6 +31,20 @@ impl Coordinator {
         self.on_item_failed_in(item_id, error, elapsed, None)
     }
 
+    /// Allow `item_id` one attempt beyond its `retries`, for an attempt that failed because its
+    /// worker's process was unusable (an invalidated duckdb database, #1083) and not because
+    /// of the step. Once per item: a step that makes every fresh worker unusable fails for
+    /// good on its second such attempt. True when this call granted it.
+    pub(crate) fn grant_fresh_retry(&mut self, item_id: ItemId) -> bool {
+        match self.items.get_mut(&item_id) {
+            Some(item) if item.fresh_retries == 0 => {
+                item.fresh_retries = 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// [`Coordinator::on_item_failed`] for an attempt whose worker said where it failed.
     pub(crate) fn on_item_failed_in(
         &mut self,
@@ -54,7 +68,7 @@ impl Coordinator {
             .is_some_and(|&c| self.calls[c].members.iter().flatten().count() > 1);
         let item = self.items.get_mut(&item_id).unwrap();
 
-        if can_split || item.attempts < item.spec.retries {
+        if can_split || item.attempts < item.spec.retries + item.fresh_retries {
             let backoff = item.spec.retry_backoff_seconds * item.attempts as f64;
             if let Some(&c) = self.call_of.get(&item_id) {
                 // A key of a call: tried again with the call's other failed keys, once every
