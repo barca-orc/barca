@@ -478,15 +478,15 @@ pub struct RunHandle {
     /// Its place in the queue, 1 = next; `null` when it started.
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub position: Option<usize>,
+    /// `last` when the request asked to queue last; `null` otherwise. Experimental.
+    #[serde(default)]
+    pub queue: Option<crate::outcome::QueuePlace>,
     pub run_id: String,
     /// `running` when it started at once, `pending` while it waits in the queue.
     pub status: RunViewStatus,
     /// What else a waiting run waits for: `restart` while the server drains. Experimental.
     #[serde(default)]
     pub waiting_for: Option<WaitingFor>,
-    /// `last` when the request asked to queue last; `null` otherwise. Experimental.
-    #[serde(default)]
-    pub queue: Option<crate::outcome::QueuePlace>,
 }
 
 /// `DELETE /runs/{run_id}` of a run in progress: it was told to stop.

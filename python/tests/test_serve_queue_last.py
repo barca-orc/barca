@@ -366,7 +366,9 @@ def q3(q2: int) -> int:
 
 
 def waiting_steps(server: Serve) -> list[tuple[str, str]]:
-    return [(w["node"].rsplit(":", 1)[1], w["origin"]) for w in queue(server)["capacity"]["waiting"]]
+    return [
+        (w["node"].rsplit(":", 1)[1], w["origin"]) for w in queue(server)["capacity"]["waiting"]
+    ]
 
 
 def test_the_steps_of_a_run_queued_last_wait_for_capacity_as_scheduled_steps_do(project, serve):
@@ -496,9 +498,7 @@ def usage(done: subprocess.CompletedProcess) -> dict:
     return envelope
 
 
-def test_the_flag_is_a_usage_error_where_the_command_runs_on_this_machine(
-    project, serve, tmp_path
-):
+def test_the_flag_is_a_usage_error_where_the_command_runs_on_this_machine(project, serve, tmp_path):
     wanted = "--queue places a run in a barca server's run queue"
     # No server at all.
     for command in (("get", "one", "pipeline.py"), ("run", "one", "pipeline.py")):

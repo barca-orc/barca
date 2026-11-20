@@ -63,8 +63,7 @@ curl -X POST http://127.0.0.1:8274/runs -d '{"command": "run", "targets": ["back
 - **For the shared capacity** (`--capacity`, below): its steps wait in line as a scheduled
   run's do, behind requested steps and, among scheduled runs, in the order the runs first
   asked. A step that has waited `scheduled_max_wait_seconds` goes ahead of requested ones, as a
-  scheduled step does. `capacity.waiting[].origin` reads `scheduled` for it. Under
-  `admission = "first_come"` the option changes nothing there.
+  scheduled step does. `capacity.waiting[].origin` reads `scheduled` for it.
 - **Where it shows**: `queue` is `"last"` in the answer of `POST /runs`, on the run's entry in
   `GET /queue` (`barca queue --json`; the table ends its row with `queued last`) and in
   `GET /runs/{run_id}` while the run waits or executes. It is `null` for every other run, and
@@ -72,8 +71,7 @@ curl -X POST http://127.0.0.1:8274/runs -d '{"command": "run", "targets": ["back
   (it survives a restart while the run waits), not with the finished run.
 - `--queue next` is the default, spelled out. `--queue` is a usage error (exit 2) when the
   command runs on this machine (no server, `--local`, or a configured server used only as the
-  ledger): a run there starts at once and has no queue. A server older than this option
-  refuses the request (`400`, unknown field `queue`).
+  ledger): a run there starts at once and has no queue.
 - Nothing running is stopped, and the order among scheduled runs is unchanged. The web UI has
   no control for it yet.
 
