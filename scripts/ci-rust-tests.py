@@ -77,31 +77,42 @@ WORKSPACE = [
 # include_str!/include_bytes! that leaves its crate; test-ci-rust-tests.py fails when a test
 # source does either and is neither here nor in WORKSPACE_READERS.
 READERS = [
-    # barca-core: guards that scan every crate.
+    # barca-service: guards that scan every crate.
     {
-        "source": "crates/barca-core/src/layering_tests.rs",
+        "source": "crates/barca-service/src/layering_tests.rs",
         "tests": ["crates_depend_only_on_crates_below_them"],
         "paths": ["crates/*/Cargo.toml"],
     },
     {
-        "source": "crates/barca-core/src/write_boundary_tests.rs",
+        "source": "crates/barca-service/src/write_boundary_tests.rs",
         "tests": ["metadata_writes_go_through_an_owner"],
         "paths": ["crates/*/src/*"],
     },
     {
-        "source": "crates/barca-core/src/step_status_literals_tests.rs",
+        "source": "crates/barca-service/src/step_status_literals_tests.rs",
         "tests": ["no_bare_step_status_literal_outside_the_vocabulary"],
         "paths": ["crates/*/src/*"],
     },
     {
-        "source": "crates/barca-core/src/helper_launch_tests.rs",
+        "source": "crates/barca-service/src/helper_launch_tests.rs",
         "tests": ["every_helper_launch_forwards_resolved_storage_options"],
-        "paths": ["crates/barca-engine/src/io_loop/lifecycle.rs"],
+        "paths": [
+            "crates/barca-engine/src/io_loop/lifecycle.rs",
+            "crates/barca-store/src/backup.rs",
+            "crates/barca-store/src/store_inspect.rs",
+            "crates/barca-store/src/transfer.rs",
+        ],
     },
-    # barca-core: the UI's fixtures, a specification table, and every pipeline in the
+    # barca-service: a read model's record, printed by the renderer above it.
+    {
+        "source": "crates/barca-service/src/report/audit_rollup_tests.rs",
+        "tests": ["the_audit_shape_prints_its_to_do_list"],
+        "paths": ["crates/barca-analysis/testdata/*"],
+    },
+    # barca-service: the UI's fixtures, a specification table, and every pipeline in the
     # repository (Python files, fenced blocks in the documentation, heredocs in shell tests).
     {
-        "source": "crates/barca-core/src/ui_fixture_tests.rs",
+        "source": "crates/barca-service/src/ui_fixture_tests.rs",
         "tests": [
             "the_ui_fixture_health_table_is_what_classify_says",
             "the_ui_fixture_weights_are_the_rollups",
@@ -109,12 +120,12 @@ READERS = [
         "paths": ["ui/src/lib/testdata/*"],
     },
     {
-        "source": "crates/barca-core/src/sql.rs",
+        "source": "crates/barca-service/src/sql.rs",
         "tests": ["format_of_agrees_with_the_spec_table"],
         "paths": ["specs/interfaces/artifact-formats.md"],
     },
     {
-        "source": "crates/barca-core/tests/unused_input_repo_sweep.rs",
+        "source": "crates/barca-service/tests/unused_input_repo_sweep.rs",
         "binary": "unused_input_repo_sweep",
         "paths": [
             "examples/*.py",
@@ -129,25 +140,25 @@ READERS = [
             "site/src/content/*.mdx",
         ],
     },
-    # barca-engine: every child process in every crate goes through helper_proc.
+    # barca-proc: every child process in every crate goes through helper_proc.
     {
-        "source": "crates/barca-engine/src/helper_proc.rs",
+        "source": "crates/barca-proc/src/helper_proc.rs",
         "tests": ["every_child_process_is_started_through_this_module"],
         "paths": ["crates/*/src/*", "crates/*/tests/*"],
     },
     # barca-compile: a UI demo pipeline, and tables in the manual and on the site.
     {
-        "source": "crates/barca-compile/src/groups.rs",
+        "source": "crates/barca-python/src/groups.rs",
         "tests": ["group_names_matching_local_variables_do_not_change_hashes"],
         "paths": ["ui/demo/modeling.py"],
     },
     {
-        "source": "crates/barca-compile/src/definition.rs",
+        "source": "crates/barca-python/src/definition.rs",
         "tests": ["the_manual_lists_exactly_these_rules"],
         "paths": ["crates/barca-cli/docs/hashing.md"],
     },
     {
-        "source": "crates/barca-compile/src/decorator_args.rs",
+        "source": "crates/barca-python/src/decorator_args.rs",
         "tests": ["the_manual_and_the_site_list_exactly_these_arguments"],
         "paths": [
             "crates/barca-cli/docs/assets.md",
@@ -193,11 +204,11 @@ READERS = [
 # that is never in a diff. Listed so the audit in test-ci-rust-tests.py is complete.
 WORKSPACE_READERS = {
     "crates/barca-model/src/artifact_format.rs": "python/barca/_artifacts.py",
-    "crates/barca-compile/src/load.rs": "python/ on PYTHONPATH",
-    "crates/barca-core/src/backup.rs": "python/ on PYTHONPATH",
-    "crates/barca-core/src/ir_roundtrip_tests.rs": "python/ on PYTHONPATH",
-    "crates/barca-core/src/persist.rs": "python/ on PYTHONPATH",
-    "crates/barca-core/src/transfer/tests.rs": ".venv/bin/python (untracked)",
+    "crates/barca-python/src/load.rs": "python/ on PYTHONPATH",
+    "crates/barca-store/src/backup.rs": "python/ on PYTHONPATH",
+    "crates/barca-service/src/ir_roundtrip_tests.rs": "python/ on PYTHONPATH",
+    "crates/barca-run/src/persist.rs": "python/ on PYTHONPATH",
+    "crates/barca-store/src/transfer/tests.rs": ".venv/bin/python (untracked)",
     "crates/barca-engine/src/wire.rs": "python/barca/_wire.py",
     "crates/barca-server/src/sql_query.rs": "python/ and .venv/bin/python",
     "crates/barca-server/src/ui.rs": "ui/dist (untracked build output, absent in rust-tests)",

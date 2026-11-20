@@ -609,7 +609,7 @@ pub async fn latest_ticks(db_path: &str) -> Result<LatestTicks, BarcaError> {
 
 /// The newest slot recorded for each schedule, whatever the scheduler decided for it (fired,
 /// paused, skipped, failing), unix seconds: the last time a scheduler is known to have served
-/// the schedule (`barca_core::liveness`). One grouped read of the primary key; a database
+/// the schedule (`barca_service::liveness`). One grouped read of the primary key; a database
 /// without the table has none.
 pub async fn newest_decided(db_path: &str) -> Result<HashMap<String, i64>, BarcaError> {
     let mut out = HashMap::new();

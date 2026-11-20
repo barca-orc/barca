@@ -142,6 +142,14 @@ pub const EXPERIMENTAL: &[(&str, &str)] = &[
         "new in 0.41: runs a paused target by hand; which requests need it may change after field use",
     ),
     (
+        "get --queue",
+        "new in 0.46.0: a place in a server's run queue; the values, what `last` is ordered with and where it shows may change after field use",
+    ),
+    (
+        "run --queue",
+        "new in 0.46.0: a place in a server's run queue; the values, what `last` is ordered with and where it shows may change after field use",
+    ),
+    (
         "serve",
         "the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open",
     ),

@@ -1,7 +1,7 @@
 //! What a run's events say about its steps so far: kept per run beside its event channel
 //! ([`crate::replay`]) and read by the `running` views ([`crate::running`]).
 
-use barca_core::{RunEvent, StepId};
+use barca_service::{RunEvent, StepId};
 use std::collections::{HashMap, HashSet};
 
 /// What one run's events say about its steps.
@@ -32,7 +32,7 @@ impl Progress {
     pub(crate) fn observe(&mut self, event: &RunEvent) {
         match event {
             RunEvent::RunStarted { .. } => {
-                self.started = Some(barca_core::time::now_secs_f64());
+                self.started = Some(barca_service::time::now_secs_f64());
             }
             RunEvent::Log { node_id, .. } => {
                 self.touched
@@ -45,7 +45,7 @@ impl Progress {
                     return;
                 }
                 let base = id.base_id().to_string();
-                self.last_step = Some(barca_core::time::now_secs_f64());
+                self.last_step = Some(barca_service::time::now_secs_f64());
                 self.touched.insert(base.clone());
                 if id.partition.0.is_empty() {
                     self.finished.insert(base);

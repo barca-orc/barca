@@ -32,6 +32,8 @@ Options:
           Use a separate cache and history for this environment
       --allow-paused
           Run a target even though it is paused (experimental)
+      --queue <PLACE>
+          On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental) [possible values: next, last]
       --server [<URL>]
           Use a server (URL or configured); get/run execute its deployed code
       --local

@@ -18,7 +18,7 @@ pub(crate) async fn gc(
 ) -> Result<(), CliError> {
     // Checked here as locally; the server parses it again.
     if let Some(raw) = max_size {
-        barca_core::gc::size::parse(raw).map_err(|e| {
+        barca_service::gc::size::parse(raw).map_err(|e| {
             CliError::from_prose(ErrorKind::Usage, format!("error: --max-size: {e}"))
         })?;
     }
@@ -31,7 +31,7 @@ pub(crate) async fn gc(
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(json!({"max_size": max_size, "dry_run": dry_run, "env": env}).to_string());
     let (_, body) = server.send(request, what).await?;
-    let result: barca_core::gc::GcResult = serde_json::from_slice(&body)
+    let result: barca_service::gc::GcResult = serde_json::from_slice(&body)
         .map_err(|e| server.unexpected(what, &format!("not a gc result: {e}")))?;
     crate::print::print_gc(&result, json);
     Ok(())

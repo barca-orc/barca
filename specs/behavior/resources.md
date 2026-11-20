@@ -96,6 +96,17 @@ requests a scheduled run advances one step per bound. The server's run queue alr
 requested runs ahead of waiting scheduled runs; the bound does not apply there. A run without
 a shared capacity is admitted against its own capacity only and has no line.
 
+A request may decline its priority (decided 2026-11-19; `queue: "last"` of `POST /runs`,
+`--queue last` of `barca get` and `barca run`, experimental). Such a run is ordered with
+scheduled work wherever requested and scheduled work are ranked: for a run slot it starts
+after the requests that did not decline, among the scheduled runs in the order the server
+accepted them, and it does not use the slot past `max_runs`; for the shared capacity its
+origin is scheduled, the bound included. The default is unchanged, as is the order among
+scheduled runs. The choice is part of the queue's durable description of the run, so it
+holds across a restart while the run waits; it is not recorded with the finished run. A
+command that runs on the caller's machine has no queue and refuses the option as a usage
+error. Conformance: `python/tests/test_serve_queue_last.py`.
+
 Hold back new work as a job-memory budget fills. If running jobs exceed a configured hard
 memory budget, report a resource-limit failure and preserve completed results. Resource
 exhaustion must not erase successful peers or masquerade as a cache hit. Identify the
@@ -121,7 +132,7 @@ enforced quota.
 ## Acceptance and evidence
 
 Requested runs first (#1003) is checked by the
-[shared capacity's unit tests and simulation](../../crates/barca-core/src/serve/capacity.rs)
+[shared capacity's unit tests and simulation](../../crates/barca-service/src/serve/capacity.rs)
 (order, aging bound, first-come opt-out, weights above 1, the handoff race), the
 [engine's handoff test](../../crates/barca-engine/src/io_loop/tests.rs)
 (`a_step_that_ends_gives_its_weight_back_with_the_next_ask`) and

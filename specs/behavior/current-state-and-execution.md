@@ -144,7 +144,7 @@ committed selection, evidence, progress and summaries.
 ## Acceptance and evidence
 
 Required implementation evidence. Only the sharing scenario passes today, for a server's
-in-flight asset steps (0.39.4, experimental, [claims.rs](../../crates/barca-core/src/serve/claims.rs),
+in-flight asset steps (0.39.4, experimental, [claims.rs](../../crates/barca-service/src/serve/claims.rs),
 [shared steps](../../python/tests/test_serve_shared_steps.py): two runs of one uncached asset
 compute it once, a task runs twice, overlapping partition domains share only the keys in common,
 a run waiting on a failed or cancelled owner executes the step itself, and the shared result is

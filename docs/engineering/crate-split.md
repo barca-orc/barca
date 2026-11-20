@@ -1,6 +1,7 @@
 # Crate split (#905)
 
-Status: done, 2026-11-13. Non-normative record of how `barca-core` (94k lines, about 70
+Status: done, 2026-11-13; `barca-core` itself was dissolved on 2026-11-19, in
+[crate-split-2.md](crate-split-2.md), which has the crates as they are now. Non-normative record of how `barca-core` (94k lines, about 70
 top-level modules) became five crates, with no change to commands, flags, JSON keys, routes,
 decorator arguments, output or UI. The plan is
 [#905](https://github.com/barca-orc/barca/issues/905); the crate map and dependency direction

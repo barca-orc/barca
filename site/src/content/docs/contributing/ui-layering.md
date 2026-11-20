@@ -6,7 +6,7 @@ description: The web UI only renders. What that means, the checks that hold it, 
 
 The web UI and the CLI render; they derive nothing. Every answer that takes two facts to
 produce a third (a node's health, what blocks it, a group's counts, a run's explanation, whether
-a schedule is late, a data signal) is computed once, in `barca-core`, and printed as is by
+a schedule is late, a data signal) is computed once, in `barca-service`, and printed as is by
 `barca status --json`, `barca history --json` and the server's routes. So the map, the bars
 and the CLI cannot disagree, and an agent on the CLI can get everything the UI shows. The rule
 is in `DIRECTION.md` ("The UI") and `specs/behavior/health.md` ("Four layers").
@@ -22,7 +22,7 @@ The table is `crates/barca-cli/ui-layering.json`. Two checks hold it:
 |---|---|---|
 | `scripts/check-ui-layering.py` | a prek hook (`prek.toml`): every pull request and merge group in every CI tier, UI-only diffs included, and `scripts/check-fast.sh` | the UI's sources (`ui/src`) to the table |
 | `cargo test -p barca ui_layering` | the Rust tests (the merge tier) | the table to the real CLI and the server's router |
-| `cargo test -p barca-core ui_fixture` | the Rust tests | the UI's fixtures (`ui/src/lib/testdata/served/*.json`, `health-alone.json`, `weights.json`) to what `barca-core` computes |
+| `cargo test -p barca-service ui_fixture` | the Rust tests | the UI's fixtures (`ui/src/lib/testdata/served/*.json`, `health-alone.json`, `weights.json`) to what `barca-service` computes |
 
 Together they fail when:
 
@@ -95,7 +95,7 @@ What they cannot check, and review still reads for:
 
 ## When a check fails
 
-Move the derivation to `barca-core` and serve the answer; that is the fix in nearly every case.
+Move the derivation to `barca-service` and serve the answer; that is the fix in nearly every case.
 A new field on a status row or a run is generated into `ui/src/lib/generated` and reaches the
 CLI's JSON in the same change (`CLAUDE.md`, "CLI and manual are part of every feature").
 
@@ -117,7 +117,7 @@ Extend the table only for what is true of the new code:
      file under the table's `derives`). `sees` lists the signals the entry accounts for; leave
      it out for something the check cannot see and a reviewer should know of.
   2. A served field already answers it: read the field and delete the code.
-  3. A real derivation with no served field: compute it in `barca-core`, serve it, delete the
+  3. A real derivation with no served field: compute it in `barca-service`, serve it, delete the
      TypeScript. If that is not this change, the entry names the `issue` that does it in place
      of `kept`.
 
@@ -125,12 +125,12 @@ Extend the table only for what is true of the new code:
 
 The UI's unit tests and its kit page need rows "as the server would serve them", and a value
 someone typed can drift from what the server computes. So the values come from Rust
-(`crates/barca-core/src/ui_fixture_tests.rs`), which fails when a checked-in file differs from
+(`crates/barca-service/src/ui_fixture_tests.rs`), which fails when a checked-in file differs from
 what the code produces:
 
 - **A project as served** (`ui/src/lib/testdata/served/`, read through
   `ui/src/lib/testdata/project.ts`). The test copies the fixture project
-  (`crates/barca-core/testdata/ui_fixture/`: a node that is fresh, stale, failing, blocked,
+  (`crates/barca-service/testdata/ui_fixture/`: a node that is fresh, stale, failing, blocked,
   never run, paused, pinned, partitioned with failed keys, on a late schedule, covered by a
   queued run), records a history for it with a fixed clock and writes the rows of `GET /state`,
   `GET /state/rollup`, the run list, four run details, the pauses, the pins and the
@@ -150,6 +150,6 @@ are repeated in the Rust test from the same reads, so a field added there is add
 by hand. After changing the health table, a wording, a weight or the fixture project:
 
 ```bash
-BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture
+BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture
 pnpm --dir ui test
 ```

@@ -1,7 +1,7 @@
 //! The one place that decides where a command runs, and runs it.
 //!
 //! A command is one [`Request`] and three places it can go: this process (`commands`, which
-//! calls `barca_core`), a server named by `--server`, `BARCA_SERVER` or `[server] url`, or the
+//! calls `barca_service`), a server named by `--server`, `BARCA_SERVER` or `[server] url`, or the
 //! `barca serve` running in this project, found by its socket (`client` for both). [`place`]
 //! resolves which, from the command's row in the table (`route`), in the order the places are
 //! looked for; [`run`] checks the command once for that place (`Request::of`) and hands it to
@@ -34,7 +34,7 @@ pub(crate) enum Target {
     /// In this process. `ledger` is the configured server a `get` or `run` reads and posts
     /// through.
     Here {
-        ledger: Option<barca_core::ledger::Ledger>,
+        ledger: Option<barca_service::ledger::Ledger>,
     },
     /// On a server: named, configured, or this project's own.
     Server(Box<Server>),
@@ -105,7 +105,7 @@ pub(crate) fn place(
                 });
             }
             // Something holds the socket and does not answer: as with no server at all.
-            Err(why) => barca_core::errln!(
+            Err(why) => barca_service::errln!(
                 "[barca] warning: this project's server did not answer on {} ({why}); running \
                  on this machine",
                 server.shown()

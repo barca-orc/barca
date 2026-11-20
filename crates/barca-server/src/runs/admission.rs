@@ -4,15 +4,14 @@
 
 use super::RunSpec;
 use crate::error::ApiError;
-use crate::queue::{Waiting, is_scheduled, load, store};
+use crate::queue::{Waiting, goes_ahead, load, store, with_scheduled};
 use crate::replay::RunChannel;
 use crate::run_model::{RunState, RunStatus};
 use crate::state::AppState;
-use barca_core::cache::CachePolicy;
-use barca_core::db;
-use barca_core::outcome::TriggeredBy;
-use barca_core::serve::run_queue::{self, QueueState};
-use barca_core::time::{now_secs_f64 as now_ts, rfc3339_millis as timestamp};
+use barca_service::cache::CachePolicy;
+use barca_service::db;
+use barca_service::serve::run_queue::{self, QueueState};
+use barca_service::time::{now_secs_f64 as now_ts, rfc3339_millis as timestamp};
 
 /// What [`admit`] answers: the run id, and whether the run started at once or waits (with its
 /// place, 1 = next).
@@ -20,11 +19,11 @@ pub struct Admitted {
     pub run_id: String,
     pub status: RunStatus,
     pub position: Option<usize>,
-    pub waiting_for: Option<barca_core::run_explain::WaitingFor>,
+    pub waiting_for: Option<barca_service::run_explain::WaitingFor>,
 }
 
 /// The metadata DB exists and has barca's tables: the first run of a new project creates it.
-pub(crate) async fn ensure_db(state: &AppState) -> Result<(), barca_core::BarcaError> {
+pub(crate) async fn ensure_db(state: &AppState) -> Result<(), barca_service::BarcaError> {
     let cfg = &state.config.resolved;
     let path = std::path::Path::new(&cfg.db_path);
     if !path.exists() {
@@ -63,7 +62,7 @@ pub async fn admit_as(
         )
         .await
         .map_err(|e| {
-            ApiError::Barca(barca_core::BarcaError::Db(format!(
+            ApiError::Barca(barca_service::BarcaError::Db(format!(
                 "could not record the run in the run queue: {e}"
             )))
         })?;
@@ -94,13 +93,13 @@ pub async fn admit_as(
     })
 }
 
-/// Whether a scheduled run is executing now.
+/// Whether a scheduled run, or one asked to queue last, is executing now.
 fn scheduled_running(state: &AppState) -> bool {
     state
         .runs
         .registry
         .iter()
-        .any(|r| r.status == RunStatus::Running && r.trigger.triggered_by == TriggeredBy::Schedule)
+        .any(|r| r.status == RunStatus::Running && with_scheduled(&r.trigger, r.queue))
 }
 
 /// The live record and event channel of a run that joins the queue.
@@ -117,6 +116,7 @@ fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, chann
             target: (!spec.targets.is_empty()).then(|| spec.targets.join(",")),
             nodes: spec.nodes.clone(),
             trigger: spec.trigger.clone(),
+            queue: spec.queue,
             refreshes: !matches!(spec.policy, CachePolicy::CacheAware),
             files: spec.files.clone(),
             status: RunStatus::Pending,
@@ -142,15 +142,16 @@ pub fn dispatch(state: &AppState) {
             return;
         }
         let mut waiting = state.runs.queue.waiting.lock().unwrap();
-        // The first run someone asked for goes ahead of scheduled runs.
+        // The first run someone asked for goes ahead of scheduled runs and of the runs asked
+        // to queue last.
         let Some(at) = waiting
             .iter()
-            .position(|w| !is_scheduled(&w.spec))
+            .position(|w| goes_ahead(&w.spec))
             .or((!waiting.is_empty()).then_some(0))
         else {
             return;
         };
-        let interactive = !is_scheduled(&waiting[at].spec);
+        let interactive = goes_ahead(&waiting[at].spec);
         let permit = match state.runs.slots.clone().try_acquire_owned() {
             Ok(permit) => permit,
             // The extra slot is for running past scheduled work, not for running two
@@ -176,7 +177,7 @@ pub fn dispatch(state: &AppState) {
 /// join the queue in their order, under their run ids; a run that was started and never
 /// recorded how it ended (the server was killed) is not started again: it is recorded as
 /// interrupted. Then read whether the queue is paused. Prints what it resumes.
-pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::BarcaError> {
+pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_service::BarcaError> {
     let path = state.config.resolved.db_path.clone();
     if !std::path::Path::new(&path).exists() {
         return Ok(());
@@ -211,7 +212,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
                 match run_queue::requeue(&path, &row.run_id, Some(&store(&spec, accepted_at))).await
                 {
                     Ok(()) => {
-                        barca_core::errln!(
+                        barca_service::errln!(
                             "[barca] run {} was in flight when the last server was killed during \
                              its drain (SIGKILL after SIGTERM: the stop grace period ran out); \
                              it is put back in the queue and starts again (steps that finished \
@@ -232,7 +233,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
                         resumed += 1;
                     }
                     Err(e) => {
-                        barca_core::errln!(
+                        barca_service::errln!(
                             "[barca] warning: could not put run {} back in the queue: {e}",
                             row.run_id
                         );
@@ -244,7 +245,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
                 interrupted(state, &row.run_id, loaded.ok().map(|(s, _)| s)).await;
             }
             (QueueState::Queued, Err(why)) => {
-                barca_core::errln!(
+                barca_service::errln!(
                     "[barca] warning: queued run {} cannot be read ({why}); it is not resumed",
                     row.run_id
                 );
@@ -253,16 +254,16 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
         }
     }
     if resumed > 0 {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] resuming {resumed} queued run{}",
             if resumed == 1 { "" } else { "s" }
         );
     }
     if let Some(at) = paused {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] the run queue is paused (since {}): queued runs wait for POST /queue/resume \
              (barca queue resume)",
-            barca_core::outcome::rfc3339(at)
+            barca_service::outcome::rfc3339(at)
         );
     }
     Ok(())
@@ -274,7 +275,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::Barca
 /// gets one with an `error` outcome, so its id is not lost.
 async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
     let cfg = &state.config.resolved;
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] warning: run {run_id} was interrupted when the server last stopped (it was \
          killed before it finished); it is not started again"
     );
@@ -286,10 +287,10 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         crate::runs::record_tick_finished(state, run_id, spec, status, None).await;
     }
     if unrecorded && let Some(spec) = spec {
-        let outcome = barca_core::outcome::Outcome::ended(
-            barca_core::outcome::OutcomeStatus::Error,
-            &barca_core::envelope::ErrorEnvelope::from_prose(
-                barca_core::envelope::ErrorKind::Infra,
+        let outcome = barca_service::outcome::Outcome::ended(
+            barca_service::outcome::OutcomeStatus::Error,
+            &barca_service::envelope::ErrorEnvelope::from_prose(
+                barca_service::envelope::ErrorKind::Infra,
                 "run interrupted: the server was killed before the run recorded itself\nRun it \
                  again; give the server a longer stop grace period than its drain timeout.",
             ),
@@ -300,9 +301,9 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         } else {
             &spec.files
         };
-        let _ = barca_core::serve::record_unstarted_run(
+        let _ = barca_service::serve::record_unstarted_run(
             &cfg.db_path,
-            barca_core::serve::UnstartedRun {
+            barca_service::serve::UnstartedRun {
                 run_id,
                 command: spec.command.as_str(),
                 files,
@@ -315,6 +316,6 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         .await;
     }
     if let Err(e) = run_queue::remove(&cfg.db_path, run_id).await {
-        barca_core::errln!("[barca] warning: {e}");
+        barca_service::errln!("[barca] warning: {e}");
     }
 }

@@ -94,6 +94,7 @@ Content-Type: application/json
   "partition": "region=emea",   // optional --partition, as the flag takes it (a JSON object or array for exact keys)
   "values": false,              // get -o value: final_output holds the values, not artifact pointers
   "allow_paused": false,        // --allow-paused: run a target that `barca pause` paused
+  "queue": "next",              // --queue: "last" joins the run queue behind every waiting run, scheduled ones included (experimental)
   "reason": "backfill after the fees fix", // optional: why, recorded with the run
   "agent": true                 // which stderr lines the client will print
 }

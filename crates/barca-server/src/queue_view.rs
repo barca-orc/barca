@@ -5,11 +5,11 @@
 use crate::error::ApiError;
 use crate::run_model::{RunState, RunStatus};
 use crate::state::AppState;
-use barca_core::serve::run_queue::{self, QueueState};
-use barca_core::time::rfc3339_millis as timestamp;
+use barca_service::serve::run_queue::{self, QueueState};
+use barca_service::time::rfc3339_millis as timestamp;
 use std::sync::atomic::Ordering;
 
-pub use barca_core::served::{QueueEntry, QueueView};
+pub use barca_service::served::{QueueEntry, QueueView};
 
 fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
     QueueEntry {
@@ -22,7 +22,7 @@ fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bo
         .into(),
         position,
         command: run.command.clone(),
-        target_line: barca_core::run_list::target_line(run.target.as_deref()),
+        target_line: barca_service::run_list::target_line(run.target.as_deref()),
         target: run.target.clone(),
         triggered_by: run.trigger.triggered_by,
         schedule_id: run.trigger.schedule_id.clone(),
@@ -37,6 +37,7 @@ fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bo
         }),
         scheduled_at: run.trigger.scheduled_at.clone(),
         waiting_for: state.lifecycle.waiting_for(run.status),
+        queue: run.queue.shown(),
     }
 }
 
@@ -55,13 +56,13 @@ pub(crate) struct QueueEstimate {
 }
 
 /// [`QueueEstimate`] over `ticks`, what is recorded of each schedule's ticks: a run's typical
-/// time is its schedule's ([`barca_core::estimates::typical_run_seconds`]).
+/// time is its schedule's ([`barca_service::estimates::typical_run_seconds`]).
 pub(crate) fn estimate(
     state: &AppState,
-    ticks: &std::collections::HashMap<String, barca_core::schedule_standing::Ticks>,
+    ticks: &std::collections::HashMap<String, barca_service::schedule_standing::Ticks>,
     now: i64,
 ) -> QueueEstimate {
-    use barca_core::estimates::{QueueRun, queue_starts, typical_run_seconds};
+    use barca_service::estimates::{QueueRun, queue_starts, typical_run_seconds};
     let open = !state.lifecycle.is_draining() && state.runs.queue.paused_at().is_none();
     let of = |run: &RunState, started_at: Option<i64>| QueueRun {
         run_id: run.handle.clone(),
@@ -122,18 +123,19 @@ pub(crate) async fn view_with_starts(state: &AppState) -> QueueView {
     let now = chrono::Utc::now().timestamp();
     let estimate = estimate(state, &facts.ticks, now);
     let waited = |entry: &QueueEntry, until: i64| {
-        barca_core::time::parse_rfc3339(&entry.queued_at).map(|from| (until - from).max(0) as u64)
+        barca_service::time::parse_rfc3339(&entry.queued_at)
+            .map(|from| (until - from).max(0) as u64)
     };
     for entry in &mut view.running {
         if let Some(&at) = estimate.started.get(&entry.run_id) {
-            entry.started_at = barca_core::time::rfc3339_secs(at);
+            entry.started_at = barca_service::time::rfc3339_secs(at);
             entry.wait_seconds = waited(entry, at);
         }
     }
     for entry in &mut view.queued {
         if let Some(&at) = estimate.starts.get(&entry.run_id) {
-            let at = barca_core::estimates::rounded(at, now);
-            entry.estimated_start_at = barca_core::time::rfc3339_secs(at);
+            let at = barca_service::estimates::rounded(at, now);
+            entry.estimated_start_at = barca_service::time::rfc3339_secs(at);
             entry.wait_seconds = waited(entry, at);
         }
     }
@@ -168,10 +170,10 @@ pub fn view(state: &AppState) -> QueueView {
     let paused_at = state.runs.queue.paused_at();
     QueueView {
         paused: paused_at.is_some(),
-        paused_at: paused_at.map(barca_core::outcome::rfc3339),
+        paused_at: paused_at.map(barca_service::outcome::rfc3339),
         draining: state.lifecycle.is_draining(),
         max_runs: Some(state.runs.queue.max_runs),
-        slots: barca_core::run_list::queue_slots_line(running.len(), state.runs.queue.max_runs),
+        slots: barca_service::run_list::queue_slots_line(running.len(), state.runs.queue.max_runs),
         running,
         queued,
         capacity: state.runs.capacity.as_ref().map(|c| c.snapshot()),
@@ -186,8 +188,8 @@ pub(crate) async fn recorded_view(state: &AppState) -> Result<QueueView, ApiErro
     let paused_at = run_queue::paused_at(&snapshot.path).await?;
     let now = chrono::Utc::now().timestamp();
     let timing = if rows.is_empty() {
-        barca_core::liveness::RecordedTiming {
-            max_runs: barca_core::liveness::serving(&snapshot.path)
+        barca_service::liveness::RecordedTiming {
+            max_runs: barca_service::liveness::serving(&snapshot.path)
                 .await?
                 .map(|s| s.max_runs),
             ..Default::default()
@@ -201,17 +203,18 @@ pub(crate) async fn recorded_view(state: &AppState) -> Result<QueueView, ApiErro
         .into_iter()
         .filter_map(|row| {
             let (spec, accepted_at) = crate::queue::load(&row.spec).ok()?;
-            Some(barca_core::served::RecordedRun {
+            Some(barca_service::served::RecordedRun {
                 run_id: row.run_id,
                 state: row.state,
                 accepted_at,
                 command: spec.command.as_str().into(),
                 targets: spec.targets,
                 trigger: spec.trigger,
+                queue: spec.queue,
             })
         })
         .collect();
-    let view = barca_core::served::recorded_queue(
+    let view = barca_service::served::recorded_queue(
         rows,
         paused_at,
         &timing,
@@ -238,7 +241,7 @@ pub(crate) async fn table_rows(state: &AppState) -> Result<Vec<QueueEntry>, ApiE
 /// (what `GET /queue` lists), not its own empty one. `/health` never waits on a read: it reports
 /// the last recorded counts (read by `GET /queue`, or in the background when they are older than
 /// a few seconds) and its own counts until there are any.
-pub fn health(state: &AppState) -> barca_core::served::HealthQueue {
+pub fn health(state: &AppState) -> barca_service::served::HealthQueue {
     let mut max_runs = Some(state.runs.queue.max_runs);
     let mut paused = state.runs.queue.paused_at().is_some();
     let mut queued = state.runs.queue.waiting_ids().len();
@@ -262,14 +265,14 @@ pub fn health(state: &AppState) -> barca_core::served::HealthQueue {
             });
         }
     }
-    barca_core::served::HealthQueue {
+    barca_service::served::HealthQueue {
         paused,
         queued,
         running,
         max_runs,
         capacity: state.runs.capacity.as_ref().map(|c| {
             let s = c.snapshot();
-            barca_core::served::HealthCapacity {
+            barca_service::served::HealthCapacity {
                 total: s.total,
                 in_use: s.in_use,
                 waiting: s.waiting.len(),

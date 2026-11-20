@@ -1,6 +1,6 @@
 //! Server-only credentials and request scope. General outgoing HTTP never receives them.
 use crate::error::{CliError, Context, ErrorKind};
-use barca_core::BarcaError;
+use barca_service::BarcaError;
 use reqwest::{
     Method, Url,
     header::{AUTHORIZATION, HeaderValue},
@@ -131,7 +131,7 @@ impl Http {
                 attempt.error("server redirect left the configured origin or proxy path")
             }
         });
-        let client = barca_core::http::client_with_redirects(timeout, redirects)
+        let client = barca_service::http::client_with_redirects(timeout, redirects)
             .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
         if let Some((user, password)) = basic {
             // Let reqwest own Basic encoding, then reuse its sensitive header on every
@@ -158,7 +158,7 @@ impl Http {
         Ok(Self {
             client,
             base,
-            shown: barca_core::http::diagnostic_url(raw),
+            shown: barca_service::http::diagnostic_url(raw),
             raw: raw.into(),
             authorization,
             secrets,
@@ -169,7 +169,7 @@ impl Http {
     /// credential is sent: the socket's file permission is the access rule.
     #[cfg(unix)]
     pub(super) fn over_socket(path: &std::path::Path, timeout: Duration) -> Result<Self, CliError> {
-        let client = barca_core::http::unix_socket_client(path, timeout)
+        let client = barca_service::http::unix_socket_client(path, timeout)
             .map_err(|e| CliError::from_prose(ErrorKind::Infra, e))?;
         // The host is never resolved: every connection is the socket.
         let raw = "http://localhost";
@@ -276,7 +276,7 @@ mod tests {
             assert!(request.url().path().starts_with("/proxy/"));
             assert!(!format!("{request:?}").contains("private-token-value"));
         }
-        let unrelated = barca_core::http::client(TIMEOUT)
+        let unrelated = barca_service::http::client(TIMEOUT)
             .unwrap()
             .get("http://host/other")
             .build()

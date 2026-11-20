@@ -15,7 +15,7 @@
 
 use barca_model::model::BatchSpec;
 
-pub(crate) use barca_compile::batch_spec as spec;
+pub(crate) use barca_python::batch_spec as spec;
 
 pub use spec::evaluate_labels;
 pub use spec::{BatchOverride, OverrideValue};
@@ -206,7 +206,7 @@ pub fn grouping_line(plan: &barca_model::reports::BatchPlan) -> String {
 /// Add the grouping of each batched node's keys that will run to its dry-run report: `batch`,
 /// and the line at the end of `detail`.
 pub fn annotate(
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     steps: &mut [barca_model::reports::StepReport],
     over: &BatchOverride,
     python: &std::path::Path,

@@ -1,7 +1,7 @@
 /**
  * Data signals (`signals` on every status row) and data coverage (`measured`) in words — pure.
  *
- * `barca-core` raises a signal only from facts it recorded (row counts its workers counted,
+ * `barca-service` raises a signal only from facts it recorded (row counts its workers counted,
  * when each result was written) and says whether an asset was measured at all; this module
  * says what each one means, one line each, so a list, a panel or a tooltip phrase it the same
  * way.

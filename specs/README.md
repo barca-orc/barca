@@ -59,13 +59,13 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 | Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
 | HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 27; the same routes on the project socket (`x-project-socket`) | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
-| Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-core/tests/grammar_spec.rs), [argument owner](../crates/barca-compile/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
+| Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-service/tests/grammar_spec.rs), [argument owner](../crates/barca-python/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
 | CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
-| Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-engine/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
+| Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-proc/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
 | Batched partitions | [Execution](behavior/execution.md), [RFC-0013](../site/src/content/docs/rfcs/0013-batched-partitions.md), existing wire owners | Implemented in 0.32.0; grouping/observability experimental | [Real worker/server](../python/tests/test_batched_partitions.py), [grouping](../crates/barca-engine/src/batch.rs) |
 | Materialization digests | [Digests](interfaces/materialization-digests.md) | Implemented producer, repair and ledger acceptance, specification 3 | [CLI](../python/tests/test_materialization_digests.py), [ledger](../python/tests/test_server_ledger.py) |
 | Artifact formats and dataset sinks | [Formats](interfaces/artifact-formats.md) | Implemented, specification 4 | [Extensions](../python/tests/test_artifact_extensions.py), [CSV](../python/tests/test_csv_outputs.py), [dataset sinks](../python/tests/test_dataset_sinks.py), [sink republish](../python/tests/test_sink_republish.py) |
-| `.barca/` paths and owners | [Layout](interfaces/dot-barca-layout.md) | Implemented, specification 2 | [Top-level entries](../python/tests/test_dot_barca_layout.py), [GC](../crates/barca-core/src/gc/tests.rs) |
+| `.barca/` paths and owners | [Layout](interfaces/dot-barca-layout.md) | Implemented, specification 2 | [Top-level entries](../python/tests/test_dot_barca_layout.py), [GC](../crates/barca-store/src/gc/tests.rs) |
 | Upload ownership/receipts | [Receipts](interfaces/artifact-upload-receipts.md) | Implemented, specification 3; concurrent input read isolation is explicitly not guaranteed | [Controlled overlaps](../python/tests/test_upload_snapshot_receipts.py), [cancellation](../python/tests/test_remote_cancel.py), [pending uploads](../python/tests/test_fail_soft_uploads.py), [drain/requeue](../python/tests/test_drain_keeps_computed_steps.py) |
 | Metadata compatibility | [Metadata](interfaces/metadata-schema.md) | Implemented policy specification 1; database format 1, legacy 0 | [Admission](../crates/barca-db/src/db/schema/ddl.rs), [validation](../crates/barca-db/src/state_validate.rs), [compatibility](../python/tests/test_metadata_compat.py) |
 | Task results and recorded output | [Task output](interfaces/task-output.md) | Implemented, specification 5 | [Task/stdout](../python/tests/test_task_logs.py), [live logs](../python/tests/test_live_logs.py) |
@@ -117,7 +117,7 @@ part. Implemented (experimental): the health words and their derivation (`health
 `health_reason`), `signals` and `measured` on every status node, and `data_coverage`, in
 `barca status --json`, `GET /nodes`, `GET /state` and `barca.nodes`, with their wire shapes in
 the OpenAPI and CLI contract owners and their rules checked in
-`crates/barca-core/src/health.rs`. Also
+`crates/barca-analysis/src/health.rs`. Also
 implemented: the server query route (#972: `POST /sql/query`, one `SELECT` over `barca.*`
 tables in a helper that can read no file, result or network resource, checked in
 `crates/barca-server/src/sql_query.rs` and `python/tests/test_sql_query_route.py`), the tick
@@ -126,22 +126,22 @@ record (#960: the `schedule_ticks` table and its reads), from it
 path cannot decide reads `ok` while the last tick's verdict stands), and the rollup (#955:
 `GET /state/rollup` and `barca status --rollup`, one tree whose every level is the sum of its
 children in nodes and in assets, with failure roots, checked in
-`crates/barca-core/src/rollup.rs`; the web UI renders it and no longer sums); and the refresh path
+`crates/barca-analysis/src/rollup.rs`; the web UI renders it and no longer sums); and the refresh path
 (#961: `refresh_path` on every status node and the `refresh_schedule`, `next_tick` and
-`missed_ticks` columns of `barca.nodes`, in `crates/barca-core/src/refresh_path.rs`); and the times
+`missed_ticks` columns of `barca.nodes`, in `crates/barca-analysis/src/refresh_path.rs`); and the times
 (#962: `stale_since`, `expected_fresh_at` versus `recheck_at` on every status node and in
 `barca.nodes`, `unbounded` and `fresh_by` of a rollup entry, a queued run's
 `estimated_start_at`, a schedule's typical queue wait and run time, in
-`crates/barca-core/src/estimates.rs`, with the estimate's error measured on a real server in
+`crates/barca-analysis/src/estimates.rs`, with the estimate's error measured on a real server in
 `python/tests/test_estimates.py`); and the cause, the root and the gap (#963, #973: `cause`,
 `root` of every kind and `gap_seconds` on every status node and in `barca.nodes`, the cause
 and gap sums of a rollup entry, the ranked root list with the action that clears each, `as_of`
 and `rollup` in `barca status --json`, and the run queue named as the cause where a
-schedule's ticks wait for a run slot, in `crates/barca-core/src/causes.rs` and
-`crates/barca-core/src/rollup.rs`, with the audit-shaped fixture and a real one-slot server
+schedule's ticks wait for a run slot, in `crates/barca-analysis/src/causes.rs` and
+`crates/barca-analysis/src/rollup.rs`, with the audit-shaped fixture and a real one-slot server
 in `python/tests/test_causes.py`); and the tables (#965: `barca.schedules`, `barca.ticks` and
 `barca.queue` in `barca sql` and the server's query route, their rows built in
-`crates/barca-core/src/sql/tables.rs` from the values the JSON surfaces print, with the
+`crates/barca-service/src/sql/tables.rs` from the values the JSON surfaces print, with the
 manual's health queries run by `python/tests/test_docs_examples.py`). No other field, route, flag or table it names exists on `main`. The 0.44.0 series (#974)
 implements it issue by issue, and each PR moves its wire shapes into the OpenAPI and CLI contract
 owners. Until then the current HTTP/CLI contracts and [inspection](behavior/inspection.md) are

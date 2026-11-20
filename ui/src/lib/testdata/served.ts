@@ -2,12 +2,12 @@
  * Fixture rows as the server would serve them. Test and kit data only: nothing the app ships
  * imports this (the layering guard, `crates/barca-cli/src/ui_layering_tests.rs`, checks it).
  *
- * Health is classified in `barca-core` (`crates/barca-core/src/health.rs`) and arrives on every
+ * Health is classified in `barca-service` (`crates/barca-analysis/src/health.rs`) and arrives on every
  * row. A fixture that spells a row by hand would have to repeat `health` beside the facts that
  * decide it; `served` fills it in. No health rule is written here: the word of a row with these
  * facts and no evidence around it (no graph, no signals, no schedule, no tick) is looked up in
  * `health-alone.json`, which a Rust test generates by running `health::classify` on each such
- * row (`crates/barca-core/src/ui_fixture_tests.rs`) and fails when the file is out of date. A
+ * row (`crates/barca-service/src/ui_fixture_tests.rs`) and fails when the file is out of date. A
  * fixture about a health no row has on its own (`blocked` by a node upstream, `suspect`, a late
  * schedule) states it with its reason and cause: `blockedBy(id)` and
  * `LATE_SCHEDULE` read them off rows of the generated project (`project.ts`), so what a blocked
@@ -34,7 +34,7 @@ function alone(row: Unserved): [Health, HealthReason, Cause | null, LastAttempt]
   const last = row.last_materialization === null ? 'none' : row.last_materialization.status
   const key = `${row.cache.state}|${last}|${(row.partitions?.failed ?? 0) > 0}`
   const found = ALONE[key]
-  if (!found) throw new Error(`no row ${key} in health-alone.json: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
+  if (!found) throw new Error(`no row ${key} in health-alone.json: regenerate it (crates/barca-service/src/ui_fixture_tests.rs)`)
   return [found.health, found.health_reason, found.cause, found.last_attempt]
 }
 

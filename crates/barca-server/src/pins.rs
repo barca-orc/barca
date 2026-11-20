@@ -8,14 +8,14 @@ use crate::error::ApiError;
 use crate::read_cache::Reads;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use barca_core::pins::{Choice, Pinned, Unpinned, Versions};
-use barca_core::served::Pins;
+use barca_service::pins::{Choice, Pinned, Unpinned, Versions};
+use barca_service::served::Pins;
 use serde::Deserialize;
 
 /// `GET /pins` — every pinned asset: `{pins: [...]}`.
 pub async fn list(State(reads): State<Reads>) -> Result<Json<Pins>, ApiError> {
     let snapshot = reads.snapshot_db().await?;
-    let pins = barca_core::pins::list(&snapshot.path).await?;
+    let pins = barca_service::pins::list(&snapshot.path).await?;
     Ok(Json(Pins { pins }))
 }
 
@@ -35,10 +35,10 @@ pub async fn versions(
     let snapshot = reads.snapshot_db().await?;
     let limit = query
         .limit
-        .unwrap_or(barca_core::pins::DEFAULT_VERSIONS)
+        .unwrap_or(barca_service::pins::DEFAULT_VERSIONS)
         .clamp(1, 500);
     Ok(Json(
-        barca_core::pins::versions(&snapshot.path, &dag, &name, limit).await?,
+        barca_service::pins::versions(&snapshot.path, &dag, &name, limit).await?,
     ))
 }
 
@@ -78,8 +78,8 @@ pub async fn pin(
     };
     let dag = reads.loaded_dag().await?;
     let cfg = &reads.config.resolved;
-    barca_core::queries::open_metadata(cfg).await?;
-    let pinned = barca_core::pins::pin(
+    barca_service::queries::open_metadata(cfg).await?;
+    let pinned = barca_service::pins::pin(
         &cfg.db_path,
         &dag,
         &name,
@@ -88,7 +88,7 @@ pub async fn pin(
         principal.map(|Extension(p)| p.0),
     )
     .await?;
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] pinned {} at {}",
         pinned.node_id,
         pinned.pin.run_hash
@@ -129,13 +129,13 @@ pub async fn upload(
     }
     let dag = reads.loaded_dag().await?;
     let cfg = &reads.config.resolved;
-    barca_core::queries::open_metadata(cfg).await?;
-    let supplied = barca_core::pins::Supplied {
+    barca_service::queries::open_metadata(cfg).await?;
+    let supplied = barca_service::pins::Supplied {
         bytes: body.to_vec(),
         file_name,
         format: query.format,
     };
-    let pinned = barca_core::pins::pin_upload(
+    let pinned = barca_service::pins::pin_upload(
         cfg,
         &reads.config.python,
         &dag,
@@ -145,7 +145,7 @@ pub async fn upload(
         principal.map(|Extension(p)| p.0),
     )
     .await?;
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] pinned {} at {} (uploaded)",
         pinned.node_id,
         pinned.pin.run_hash
@@ -161,9 +161,9 @@ pub async fn unpin(
     crate::guards::refuse_if_read_only(&reads.config)?;
     let dag = reads.loaded_dag().await?;
     let cfg = &reads.config.resolved;
-    let unpinned = barca_core::pins::unpin(&cfg.db_path, &dag, &name).await?;
+    let unpinned = barca_service::pins::unpin(&cfg.db_path, &dag, &name).await?;
     if unpinned.removed.is_some() {
-        barca_core::errln!("[barca] unpinned {}", unpinned.node_id);
+        barca_service::errln!("[barca] unpinned {}", unpinned.node_id);
     }
     Ok(Json(unpinned))
 }

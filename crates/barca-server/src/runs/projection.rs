@@ -1,17 +1,17 @@
 //! What the run routes answer with: one run in full ([`view_page`]) and the run list, both
-//! computed in `barca_core::served` from the durable record. This module fills what only the
+//! computed in `barca_service::served` from the durable record. This module fills what only the
 //! server holds: its runs in memory, as the overlay ([`live_of`]), and the events a run
 //! streamed.
 
 use crate::error::ApiError;
 use crate::run_model::{RunState, RunStatus};
 use crate::state::AppState;
-use barca_core::db;
-use barca_core::outcome::RunView;
-use barca_core::served::{LiveRun, LiveStatus, LiveSteps};
-use barca_core::step_status::StepStatus;
+use barca_service::db;
+use barca_service::outcome::RunView;
+use barca_service::served::{LiveRun, LiveStatus, LiveSteps};
+use barca_service::step_status::StepStatus;
 
-pub use barca_core::served::{RunList, RunsQuery};
+pub use barca_service::served::{RunList, RunsQuery};
 
 pub(crate) async fn view(state: &AppState, id: &str) -> Result<RunView, ApiError> {
     view_page(state, id, Some(db::RUN_STEPS_LIMIT), 0).await
@@ -30,7 +30,7 @@ pub(crate) async fn view_page(
         .as_ref()
         .and_then(|run| state.runs.events.get(&run.handle))
         .map(|channel| channel.snapshot());
-    let draft = barca_core::served::run_view(barca_core::served::RunViewRequest {
+    let draft = barca_service::served::run_view(barca_service::served::RunViewRequest {
         read_path: &snapshot.path,
         db_path: &state.config.resolved.db_path,
         run_id: id,
@@ -80,6 +80,7 @@ pub(crate) fn live_of(state: &AppState, run: &RunState) -> LiveRun {
         error: run.error.clone(),
         cancellation: run.cancellation.clone(),
         waiting_for: state.lifecycle.waiting_for(run.status),
+        queue: run.queue,
         steps: run.result.as_ref().map(|r| LiveSteps {
             total: r.steps.len() as i64,
             executed: r.steps_executed as i64,

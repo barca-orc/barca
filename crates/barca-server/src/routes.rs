@@ -85,7 +85,7 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/assets/{name}/pin/upload",
             post(pins::upload).layer(axum::extract::DefaultBodyLimit::max(
-                barca_core::pins::MAX_UPLOAD_BYTES,
+                barca_service::pins::MAX_UPLOAD_BYTES,
             )),
         )
         // Start the metadata database over (the old one is moved aside, never deleted).
@@ -143,7 +143,7 @@ async fn etag(request: axum::extract::Request, next: axum::middleware::Next) -> 
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     // The first 12 bytes of the body's digest, as hex.
-    let tag = format!("\"{}\"", &barca_core::hash::sha256_hex(&bytes)[..24]);
+    let tag = format!("\"{}\"", &barca_service::hash::sha256_hex(&bytes)[..24]);
     let value = HeaderValue::from_str(&tag).expect("hex is a valid header value");
     parts.headers.insert(header::ETAG, value.clone());
     parts

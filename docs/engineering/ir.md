@@ -1,6 +1,7 @@
 # The intermediate representation (#1056, D2 and D3)
 
-Status: built, 2026-11-19. Non-normative. **No external format exists.** Nothing reads or
+Status: built, 2026-11-19; since C6 the graph container is `barca_model::dag` and the frontend
+is the crate `barca-python` ([crate-split-2.md](crate-split-2.md)). Non-normative. **No external format exists.** Nothing reads or
 writes the IR as a file, no command takes one, and the JSON in the round-trip test is serde's
 derive of internal Rust types that change whenever the code does. This page says what the IR
 is, so that a format could one day be designed from it.
@@ -9,12 +10,12 @@ is, so that a format could one day be designed from it.
 
 The IR is the graph barca plans and runs: nodes, the edges between them, and the groups over
 them. A **frontend** reads a project in some language and produces it; the graph, the planner,
-the scheduler and everything in `barca-core` read the IR and never the frontend. There is one
+the scheduler and every crate above them read the IR and never the frontend. There is one
 frontend, for Python.
 
 ```text
 Python source ──parse, cone, definition──▶ ExtractedNode ──link──▶ Dag (IR) ──▶ plan, hashes, runs
-                 the Python frontend (barca-compile)                 barca_model::ir + barca_compile::dag
+                 the Python frontend (barca-python)                 barca_model::ir + barca_model::dag
 ```
 
 | Type | Where | Holds |
@@ -25,8 +26,8 @@ Python source ──parse, cone, definition──▶ ExtractedNode ──link─
 | `Invocation`, `PythonFunction` | `barca_model::ir` | how a worker runs the step; one variant, `Python` |
 | `NodeFindings` | `barca_model::ir` | what the frontend's analysis noticed |
 | `NodeGroup`, `EdgeKind` | `barca_model::ir` | groups; `direct`, `collect`, `partition_source` |
-| `Dag` | `barca_compile::dag` | the validated graph (petgraph) and its traversals |
-| `DagParts`, `Edge` | `barca_compile::dag` | the same graph as plain data: `nodes`, `edges`, `groups`, `cannot_run` |
+| `Dag` | `barca_model::dag` | the validated graph (petgraph) and its traversals |
+| `DagParts`, `Edge` | `barca_model::dag` | the same graph as plain data: `nodes`, `edges`, `groups`, `cannot_run` |
 
 `Dag::from_parts(DagParts)` is the one way a graph is made. It checks what holds in any
 language: ids are unique, an edge joins two of the nodes, a sensor has no inputs, a task feeds
@@ -41,12 +42,12 @@ re-exports the values a declaration is made of (`NodeKind`, `Freshness`, `Partit
 of `barca-compile`, because `barca-db`, `barca-engine` and `barca-model` itself (reports, the
 ledger's post) read nodes and do not depend on `barca-compile`.
 
-The graph container stays in `barca_compile::dag` for now: it needs petgraph, which
-`barca-model` does not link, and moving a module across crates is C6's. It uses
-`barca_model::ir` and `barca_compile::names` and nothing else, which
-`crates/barca-compile/src/layering_tests.rs` holds. A `barca-ir` crate is cut as
-`barca_model::ir`, the declaration values of `barca_model::model`, `barca_model::dag_error`,
-`barca_compile::names` and `barca_compile::dag`.
+The graph container is `barca_model::dag` too (since C6; it was `barca_compile::dag`), so
+`barca-model` links petgraph. It uses `barca_model::ir` and `barca_model::names` and nothing
+else. With it there, the frontend (`barca-python`) and planning (`barca-compile`) are side by
+side above `barca-model` and neither names the other. A `barca-ir` crate, if one is ever
+wanted, is cut as `barca_model::ir`, the declaration values of `barca_model::model`,
+`barca_model::dag_error`, `barca_model::names` and `barca_model::dag`.
 
 ## The four groups
 
@@ -93,11 +94,11 @@ line, param_types, return_type })`. The planner copies it into the steps a worke
 
 | Was | Now |
 |---|---|
-| `ExtractedNode.inputs` (references as written), `source_text`, `cone_hash`, `cone_parts`, `byte_offset`, `is_unsafe`, `parallel_calls` | stay on `barca_compile::extracted::ExtractedNode`, the parser's own type; nothing after `link` reads them |
+| `ExtractedNode.inputs` (references as written), `source_text`, `cone_hash`, `cone_parts`, `byte_offset`, `is_unsafe`, `parallel_calls` | stay on `barca_python::extracted::ExtractedNode`, the parser's own type; nothing after `link` reads them |
 | `Dag.broken_imports` (a file, a `SyntaxProblem`, who imports it) | the frontend turns it into `Dag.cannot_run`, a message per node; the graph holds no syntax problem |
 | `ExtractedNode.unused_inputs`, `env_reads` | `findings`: reported as plan warnings, in no hash; a frontend without such analysis leaves them empty |
 | `Dag.files_read` | still a field of `Dag`, marked as not the graph's and not in `DagParts`: see "What is left" |
-| which definitions to leave out when some are broken (`isolate`), `partitions_from` of a partitioned asset, reference resolution | `barca_compile::link` |
+| which definitions to leave out when some are broken (`isolate`), `partitions_from` of a partitioned asset, reference resolution | `barca_python::link` |
 
 ## What a second frontend would supply
 
@@ -105,7 +106,7 @@ A `DagParts`: for each node an id, a `NodeDecl`, its inputs as node ids, a `Fing
 computes however its language allows (the only requirement is that the hash changes when the
 step's result could), an `Invocation`, and the edges. `Dag::from_parts` validates it; planning,
 hashing, the dry run and status then work unchanged, which is what
-`crates/barca-core/src/ir_roundtrip_tests.rs` shows for a graph that went through JSON.
+`crates/barca-service/src/ir_roundtrip_tests.rs` shows for a graph that went through JSON.
 
 What it could not supply today, because the field's meaning is Python:
 
@@ -146,10 +147,10 @@ The IR is the smaller half. A step in another language also needs:
 ## What is left
 
 - `Dag.files_read` belongs in what `load` returns, beside the graph. `load::build_dag` returns a
-  `Dag` to about thirty holders in `barca-core`, `barca-cli` and `barca-server` (the server keeps
+  `Dag` to about thirty holders in `barca-service`, `barca-run`, `barca-cli` and `barca-server` (the server keeps
   an `Arc<Dag>` and reads `files_read` from it in one place, `read_cache::source_paths`);
   changing that return type was out of scope while those files were being restructured.
-- `Dag::build`, `Dag::isolate` and `Dag::isolate_with` take the Python frontend's nodes and are
-  defined in `barca_compile::link` as inherent methods of `Dag`, to keep their many callers
-  (mostly tests) as they were. When the frontend is its own crate they become its functions.
+- Done in C6: what were `Dag::build`, `Dag::isolate` and `Dag::isolate_with` (inherent methods
+  defined in the frontend) are the functions `build`, `isolate` and `isolate_with` of
+  `barca_python::link`; a graph is made from Python source by `barca_python::link::build(&nodes)`.
 - `DagError` words some rules in Python's terms (`partitions_from(...)`, `collect(...)`).

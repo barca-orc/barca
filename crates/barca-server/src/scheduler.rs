@@ -9,7 +9,7 @@
 //! A scheduled task reuses cached upstream assets; `POST /run/{task}` does not.
 //!
 //! A tick is one run (RFC-0008): the scheduled node and every `Always` node below it or below
-//! an unscheduled sensor the run polls ([`barca_core::freshness::tick_targets`]), a `Manual`
+//! an unscheduled sensor the run polls ([`barca_service::freshness::tick_targets`]), a `Manual`
 //! node read as it is. A job whose ticks failed `max_failures` times in a row is skipped and
 //! reported `failing` until a node it failed on (or an input of one, or the scheduled node)
 //! succeeds in another run.
@@ -26,9 +26,9 @@
 use crate::runs;
 use crate::state::AppState;
 use crate::views::JobStatus;
-use barca_core::schedule::ScheduledJob;
-pub(crate) use barca_core::schedule::Zone;
-use barca_core::{NodeKind, db};
+use barca_service::schedule::ScheduledJob;
+pub(crate) use barca_service::schedule::Zone;
+use barca_service::{NodeKind, db};
 use chrono::{DateTime, FixedOffset};
 use std::sync::atomic::Ordering;
 
@@ -63,16 +63,16 @@ fn record_skip(
             format!("[barca] {what} {} skipped — the schedule is paused", job.id),
         ),
     };
-    barca_core::jsonlog::line(barca_core::jsonlog::Level::Warning, Some(&job.id), &line);
+    barca_service::jsonlog::line(barca_service::jsonlog::Level::Warning, Some(&job.id), &line);
     book.last_skip
         .insert(job.id.clone(), (epoch, reason, handle.map(str::to_string)));
     let report = skip_report(job, reason, handle, epoch);
     tokio::spawn(async move {
-        let integrations = barca_core::telemetry::configured();
+        let integrations = barca_service::telemetry::configured();
         if !integrations.is_empty() {
             // A skipped tick is not an outcome of the job: no history to read.
-            let history = barca_core::telemetry::JobHistory::none();
-            barca_core::telemetry::export(&integrations, &report, &history).await;
+            let history = barca_service::telemetry::JobHistory::none();
+            barca_service::telemetry::export(&integrations, &report, &history).await;
         }
     });
 }
@@ -85,8 +85,8 @@ fn skip_report(
     reason: &str,
     handle: Option<&str>,
     epoch: i64,
-) -> barca_core::telemetry::RunReport {
-    barca_core::telemetry::RunReport {
+) -> barca_service::telemetry::RunReport {
+    barca_service::telemetry::RunReport {
         run_id: db::generate_run_id(),
         command: match job.kind {
             NodeKind::Task => "run",
@@ -96,7 +96,7 @@ fn skip_report(
         target: Some(job.id.clone()),
         job: job.id.clone(),
         env: None,
-        targets: vec![barca_core::telemetry::short_name(&job.id).to_string()],
+        targets: vec![barca_service::telemetry::short_name(&job.id).to_string()],
         files: Vec::new(),
         status: "skipped".to_string(),
         reason: Some(reason.to_string()),
@@ -109,7 +109,7 @@ fn skip_report(
         steps_executed: 0,
         steps_cached: 0,
         steps: Vec::new(),
-        trigger: barca_core::outcome::Trigger::schedule(&job.id, epoch),
+        trigger: barca_service::outcome::Trigger::schedule(&job.id, epoch),
     }
 }
 
@@ -130,8 +130,8 @@ async fn trigger(
     run_id: String,
 ) -> Option<String> {
     let command = match job.kind {
-        NodeKind::Task => barca_core::outcome::RunCommand::Run,
-        NodeKind::Asset | NodeKind::Sensor => barca_core::outcome::RunCommand::Get,
+        NodeKind::Task => barca_service::outcome::RunCommand::Run,
+        NodeKind::Asset | NodeKind::Sensor => barca_service::outcome::RunCommand::Get,
     };
     let targets = job.targets();
     runs::start_as(
@@ -142,20 +142,21 @@ async fn trigger(
             targets: targets.clone(),
             nodes: targets,
             files: Vec::new(),
-            policy: barca_core::cache::CachePolicy::CacheAware,
-            trigger: barca_core::outcome::Trigger::schedule(&job.id, epoch),
+            policy: barca_service::cache::CachePolicy::CacheAware,
+            trigger: barca_service::outcome::Trigger::schedule(&job.id, epoch),
             values: false,
             partition: None,
             batch: job.batch.iter().cloned().collect(),
-            rules: barca_core::freshness::RunRules::tick(&job.id),
+            rules: barca_service::freshness::RunRules::tick(&job.id),
             timeout: job.timeout_seconds,
             kill_requeues: 0,
+            queue: Default::default(),
         },
     )
     .await
     .map_err(|e| {
         let (_, envelope) = e.parts();
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] scheduled run {} not started: {}",
             job.id,
             envelope.error
@@ -201,7 +202,7 @@ async fn catch_up(
     zone: &Zone,
     now: &DateTime<FixedOffset>,
     db_path: &str,
-) -> Result<Bookkeeping, barca_core::BarcaError> {
+) -> Result<Bookkeeping, barca_service::BarcaError> {
     let saved = db::get_schedule_state(db_path).await?;
     let pauses = db::get_schedule_pauses(db_path).await?;
     let mut book = Bookkeeping {
@@ -221,7 +222,7 @@ async fn catch_up(
                     _ => last_epoch,
                 };
                 let last = zone.timestamp(since);
-                if barca_core::schedule::next_fire(
+                if barca_service::schedule::next_fire(
                     &job.cron,
                     zone,
                     last.with_timezone(&chrono::Utc),
@@ -254,8 +255,8 @@ async fn catch_up(
                             None,
                         )
                         .await;
-                        barca_core::jsonlog::line(
-                            barca_core::jsonlog::Level::Warning,
+                        barca_service::jsonlog::line(
+                            barca_service::jsonlog::Level::Warning,
                             Some(&job.id),
                             &format!(
                                 "[barca] catch-up run {} skipped — failing ({} consecutive failed ticks)",
@@ -282,8 +283,8 @@ async fn catch_up(
                     } else if let Some(handle) =
                         fire(state, job, now.timestamp(), Some(db_path)).await
                     {
-                        barca_core::jsonlog::line(
-                            barca_core::jsonlog::Level::Info,
+                        barca_service::jsonlog::line(
+                            barca_service::jsonlog::Level::Info,
                             Some(&job.id),
                             &format!("[barca] catch-up run {} → {handle}", job.id),
                         );
@@ -328,7 +329,7 @@ async fn record_tick(
         run_id,
     };
     if let Err(e) = db::record_tick(db_path, tick).await {
-        barca_core::errln!("[barca] tick record write failed for {}: {e}", job.id);
+        barca_service::errln!("[barca] tick record write failed for {}: {e}", job.id);
     }
 }
 
@@ -339,14 +340,14 @@ async fn trim_ticks(db_path: &str, book: &mut Bookkeeping, epoch: i64) {
     }
     book.ticks_trimmed_at = epoch;
     if let Err(e) = db::trim_ticks(db_path, epoch).await {
-        barca_core::errln!("[barca] tick record trim failed: {e}");
+        barca_service::errln!("[barca] tick record trim failed: {e}");
     }
 }
 
 /// Record that `node_id` fired at `epoch` seconds. Best-effort durability.
 async fn persist_fired(db_path: &str, node_id: &str, epoch: i64) {
     if let Err(e) = db::upsert_schedule_state(db_path, node_id, epoch).await {
-        barca_core::errln!("[barca] schedule_state write failed for {node_id}: {e}");
+        barca_service::errln!("[barca] schedule_state write failed for {node_id}: {e}");
     }
 }
 
@@ -375,12 +376,12 @@ fn publish_registry(state: &AppState, jobs: &[ScheduledJob], book: &Bookkeeping)
 }
 
 /// Re-run static analysis to enumerate scheduled jobs. The parse itself runs
-/// on the blocking pool inside `barca_core::queries::list_assets`.
+/// on the blocking pool inside `barca_service::queries::list_assets`.
 async fn reload_jobs(state: &AppState) -> Vec<ScheduledJob> {
     match state.reads.loaded_dag().await {
-        Ok(dag) => barca_core::schedule::jobs_from_dag(&dag),
+        Ok(dag) => barca_service::schedule::jobs_from_dag(&dag),
         Err(error) => {
-            barca_core::errln!("[barca] scheduler load failed: {error}");
+            barca_service::errln!("[barca] scheduler load failed: {error}");
             Vec::new()
         }
     }
@@ -410,16 +411,16 @@ fn count_by_kind(jobs: &[ScheduledJob]) -> String {
 /// Log the current schedule and each job's next fire time.
 fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
     if jobs.is_empty() {
-        barca_core::errln!("[barca] no scheduled nodes yet (watching for changes)");
+        barca_service::errln!("[barca] no scheduled nodes yet (watching for changes)");
         return;
     }
-    barca_core::errln!("[barca] scheduling {}:", count_by_kind(jobs));
+    barca_service::errln!("[barca] scheduling {}:", count_by_kind(jobs));
     let now = chrono::Utc::now();
     for job in jobs {
-        let next = barca_core::schedule::next_fire(&job.cron, zone, now)
+        let next = barca_service::schedule::next_fire(&job.cron, zone, now)
             .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| "?".to_string());
-        barca_core::errln!("  {} — {} (next {})", job.id, job.cron_str, next);
+        barca_service::errln!("  {} — {} (next {})", job.id, job.cron_str, next);
     }
 }
 
@@ -431,7 +432,7 @@ pub async fn run_scheduler(state: AppState) {
     let zone = match Zone::parse(&state.config.timezone) {
         Ok(zone) => zone,
         Err(e) => {
-            barca_core::errln!("[barca] scheduler disabled: {e}");
+            barca_service::errln!("[barca] scheduler disabled: {e}");
             return;
         }
     };
@@ -442,7 +443,7 @@ pub async fn run_scheduler(state: AppState) {
     let mut jobs = reload_jobs(&state).await;
 
     if jobs.is_empty() && !state.config.watch {
-        barca_core::errln!("[barca] no scheduled nodes — scheduler idle");
+        barca_service::errln!("[barca] no scheduled nodes — scheduler idle");
         return;
     }
     log_schedule(&jobs, &zone);
@@ -455,7 +456,7 @@ pub async fn run_scheduler(state: AppState) {
             // `serve` initialized it before binding and exits 3 when it cannot; this is for a
             // caller that spawned the scheduler on its own, or a database broken since.
             if let Err(error) = db::init_db(&path).await {
-                barca_core::errln!(
+                barca_service::errln!(
                     "[barca] scheduler disabled: metadata initialization failed: {error}"
                 );
                 state.scheduler_failed(error.to_string());
@@ -468,7 +469,7 @@ pub async fn run_scheduler(state: AppState) {
             Some(path)
         }
         Err(_) => {
-            barca_core::errln!("[barca] scheduler: durability disabled (no metadata db)");
+            barca_service::errln!("[barca] scheduler: durability disabled (no metadata db)");
             None
         }
     };
@@ -476,7 +477,7 @@ pub async fn run_scheduler(state: AppState) {
     // Paused schedules, for the tick to skip. They are kept in step by the pause routes.
     if let Err(e) = crate::schedule_view::pauses(&state).await {
         let (_, envelope) = e.parts();
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] scheduler: cannot read paused schedules: {}",
             envelope.error
         );
@@ -499,7 +500,7 @@ pub async fn run_scheduler(state: AppState) {
         {
             Ok(caught_up) => caught_up,
             Err(error) => {
-                barca_core::errln!(
+                barca_service::errln!(
                     "[barca] scheduler disabled: cannot read schedule history: {error}"
                 );
                 state.scheduler_failed(format!("cannot read schedule history: {error}"));
@@ -512,7 +513,7 @@ pub async fn run_scheduler(state: AppState) {
         trim_ticks(dbp, &mut book, zone.now().timestamp()).await;
     }
     if let Some(path) = &db_path
-        && let Err(e) = barca_core::liveness::record_scheduler(
+        && let Err(e) = barca_service::liveness::record_scheduler(
             path,
             zone.now().timestamp(),
             jobs.iter().map(|j| j.id.clone()).collect(),
@@ -520,7 +521,7 @@ pub async fn run_scheduler(state: AppState) {
         )
         .await
     {
-        barca_core::errln!("[barca] could not record scheduler: {e}");
+        barca_service::errln!("[barca] could not record scheduler: {e}");
     }
     publish_registry(&state, &jobs, &book);
 
@@ -533,7 +534,7 @@ pub async fn run_scheduler(state: AppState) {
             _ = state.lifecycle.draining.cancelled() => {}
         }
         if state.lifecycle.is_draining() {
-            barca_core::errln!("[barca] scheduler stopped: the server is draining");
+            barca_service::errln!("[barca] scheduler stopped: the server is draining");
             return;
         }
 
@@ -542,10 +543,10 @@ pub async fn run_scheduler(state: AppState) {
         if current_gen != seen_gen {
             seen_gen = current_gen;
             let fresh = reload_jobs(&state).await;
-            barca_core::errln!("[barca] schedule reloaded: {} job(s)", fresh.len());
+            barca_service::errln!("[barca] schedule reloaded: {} job(s)", fresh.len());
             jobs = fresh;
             if let Some(path) = &db_path
-                && let Err(e) = barca_core::liveness::record_scheduler(
+                && let Err(e) = barca_service::liveness::record_scheduler(
                     path,
                     zone.now().timestamp(),
                     jobs.iter().map(|j| j.id.clone()).collect(),
@@ -553,7 +554,7 @@ pub async fn run_scheduler(state: AppState) {
                 )
                 .await
             {
-                barca_core::errln!("[barca] could not record scheduler: {e}");
+                barca_service::errln!("[barca] could not record scheduler: {e}");
             }
             log_schedule(&jobs, &zone);
             publish_registry(&state, &jobs, &book);
@@ -561,10 +562,10 @@ pub async fn run_scheduler(state: AppState) {
 
         let now = zone.now();
         if let Some(path) = &db_path
-            && now.timestamp() - last_heartbeat >= barca_core::liveness::HEARTBEAT_SECONDS
+            && now.timestamp() - last_heartbeat >= barca_service::liveness::HEARTBEAT_SECONDS
         {
-            if let Err(e) = barca_core::liveness::heartbeat(path, now.timestamp()).await {
-                barca_core::errln!("[barca] could not record scheduler heartbeat: {e}");
+            if let Err(e) = barca_service::liveness::heartbeat(path, now.timestamp()).await {
+                barca_service::errln!("[barca] could not record scheduler heartbeat: {e}");
             }
             last_heartbeat = now.timestamp();
         }
@@ -605,8 +606,8 @@ pub async fn run_scheduler(state: AppState) {
                     }
                 }
                 TickAction::Failing { job, failures } => {
-                    barca_core::jsonlog::line(
-                        barca_core::jsonlog::Level::Warning,
+                    barca_service::jsonlog::line(
+                        barca_service::jsonlog::Level::Warning,
                         Some(&job.id),
                         &format!(
                             "[barca] scheduled run {} skipped — failing ({failures} consecutive \
@@ -622,8 +623,8 @@ pub async fn run_scheduler(state: AppState) {
                     let Some(handle) = fire(&state, job, epoch, db_path.as_deref()).await else {
                         continue;
                     };
-                    barca_core::jsonlog::line(
-                        barca_core::jsonlog::Level::Info,
+                    barca_service::jsonlog::line(
+                        barca_service::jsonlog::Level::Info,
                         Some(&job.id),
                         &format!("[barca] scheduled run {} → {handle}", job.id),
                     );

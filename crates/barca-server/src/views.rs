@@ -1,7 +1,7 @@
 //! Bodies the server answers with that are assembled from several of its parts: a row of
 //! `GET /state`, the `running` entry of a node, and the scheduler's published job.
 
-use barca_core::outcome::TriggeredBy;
+use barca_service::outcome::TriggeredBy;
 use serde::Serialize;
 
 /// One row of `GET /state`: the node's `barca status` entry plus what the
@@ -11,7 +11,7 @@ use serde::Serialize;
 pub struct NodeState {
     #[serde(flatten)]
     #[cfg_attr(feature = "ts", ts(flatten))]
-    pub status: barca_core::status::NodeStatus,
+    pub status: barca_service::status::NodeStatus,
     /// Typical wall time over the most recent successful materializations.
     pub durations: Option<Durations>,
     /// Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
@@ -42,15 +42,15 @@ pub struct NodeState {
     /// recorded a row for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
-    pub last_run: Option<barca_core::db::RunTotals>,
+    pub last_run: Option<barca_service::db::RunTotals>,
 }
 
-pub use barca_core::health::Durations;
+pub use barca_service::health::Durations;
 
 /// Durable, mutable view of one scheduled job, published by the scheduler and
 /// read by `GET /schedule`. Where the schedule stands (its last tick and run, its next slot,
 /// whether it is late) is not here: it is computed at request time from the recorded ticks
-/// (`barca_core::schedule_standing::standing`), as every other surface computes it.
+/// (`barca_service::schedule_standing::standing`), as every other surface computes it.
 #[derive(Clone, Debug, Serialize)]
 pub struct JobStatus {
     /// Full node id (the run target).
@@ -58,7 +58,7 @@ pub struct JobStatus {
     /// The node's cron expression.
     pub cron: String,
     /// Node kind (asset / sensor / task).
-    pub kind: barca_core::NodeKind,
+    pub kind: barca_service::NodeKind,
     /// Last time a due tick of this job was skipped (unix epoch seconds) because a run of
     /// its node was already in flight. Kept in memory only; a restart clears it.
     pub last_skipped: Option<i64>,
@@ -93,6 +93,6 @@ pub struct NodeRunning {
     pub partitions: Option<PartitionProgress>,
 }
 
-pub use barca_core::run_list::RunningStep;
+pub use barca_service::run_list::RunningStep;
 
-pub use barca_core::served::PartitionProgress;
+pub use barca_service::served::PartitionProgress;

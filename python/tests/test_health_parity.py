@@ -1,7 +1,7 @@
 """One definition of health: `barca status` and a server answer from the same computation.
 
 `barca status --json` reads the metadata database; `GET /state` reads a server's read cache,
-its scheduler and its run queue. Both fill one inputs type in barca-core
+its scheduler and its run queue. Both fill one inputs type in barca-service
 (`health::Inputs`), so on one database every node's health, cause, reason and estimate are
 the same on both, whichever host answers (#1056).
 
@@ -46,7 +46,7 @@ def loose() -> dict:
 """
 
 # What a node says of its health and when it will be fresh: every field classification and
-# the estimates fill (`barca_core::health::classify`).
+# the estimates fill (`barca_service::health::classify`).
 FIELDS = (
     "health",
     "reason",

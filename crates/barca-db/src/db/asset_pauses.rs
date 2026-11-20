@@ -1,6 +1,6 @@
 //! Reads and writes of `asset_pauses`: the assets, sensors and tasks an operator held back
 //! (`barca pause`, `POST /pauses`). A paused node is not computed by a scheduled tick until
-//! it is resumed (`barca_core::pauses`).
+//! it is resumed (`barca_service::pauses`).
 
 use super::*;
 
@@ -109,7 +109,7 @@ pub async fn resume_assets(db_path: &str, ids: Option<&[String]>) -> Result<(), 
         return Ok(());
     }
     // Ticks read a paused node as it is, whatever changed above it. No run records a proof
-    // of a node it held (`barca_core::incremental`), but a proof written by an earlier
+    // of a node it held (`barca_service::incremental`), but a proof written by an earlier
     // version, or by a run that started before the pause, may say it is fresh: forget them
     // before the pause is lifted, so a crash in between leaves a pause without proofs and
     // never a resumed node with a stale one (#988).

@@ -4,7 +4,7 @@ use super::{Server, encode};
 use crate::error::CliError;
 use crate::print::{print_pinned, print_pins, print_unpinned, print_versions};
 use crate::request::{PinAction, read_supplied};
-use barca_core::pins::Choice;
+use barca_service::pins::Choice;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -28,7 +28,7 @@ pub(crate) async fn pin(
     match action {
         PinAction::List => {
             let body = server.get_json("/pins").await?;
-            let pins: Vec<barca_core::db::AssetPin> =
+            let pins: Vec<barca_service::db::AssetPin> =
                 parse(server, "GET /pins", body["pins"].clone())?;
             print_pins(&pins, json);
         }

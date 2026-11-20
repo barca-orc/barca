@@ -1,6 +1,6 @@
 use super::*;
-use crate::extracted::{DeclaredInput, ExtractedNode};
 use barca_model::model::*;
+use barca_python::extracted::{DeclaredInput, ExtractedNode};
 use smallvec::SmallVec;
 
 fn build_test_dag(specs: &[(&str, &[&str])]) -> Dag {
@@ -73,7 +73,7 @@ fn build_dag_with(specs: &[(&str, &[&str])], sensors: &[&str], manual: &[&str]) 
             }
         })
         .collect();
-    Dag::build(&extracted).unwrap()
+    barca_python::link::build(&extracted).unwrap()
 }
 
 fn cfg(pool_size: usize) -> ResourceConfig {
@@ -148,7 +148,7 @@ fn chain_to_steps_carries_sinks() {
         serializer: None,
         ..Default::default()
     });
-    let dag = Dag::build(std::slice::from_ref(&extracted)).unwrap();
+    let dag = barca_python::link::build(std::slice::from_ref(&extracted)).unwrap();
     let chain = Chain {
         nodes: vec!["test.py:a".to_string()],
     };
@@ -578,7 +578,7 @@ fn plan_500_independent_across_16_workers() {
             schedule_batch: None,
         })
         .collect();
-    let dag = Dag::build(&extracted).unwrap();
+    let dag = barca_python::link::build(&extracted).unwrap();
     let p = plan_from_dag(&dag, &cfg(16));
 
     assert_eq!(p.phases.len(), 1);
@@ -733,7 +733,7 @@ fn build_partitioned_dag(specs: &[(&str, &[&str], &[(&str, &[&str])])]) -> Dag {
             }
         })
         .collect();
-    Dag::build(&extracted).unwrap()
+    barca_python::link::build(&extracted).unwrap()
 }
 
 #[test]
@@ -1059,7 +1059,7 @@ fn build_collect_dag(producer_partitions: &[&str]) -> Dag {
         batch: None,
         schedule_batch: None,
     };
-    Dag::build(&[producer, collector]).unwrap()
+    barca_python::link::build(&[producer, collector]).unwrap()
 }
 
 #[test]
@@ -1231,7 +1231,7 @@ fn plan_dynamic_partition_collect_not_merged_into_pending_phase() {
         batch: None,
         schedule_batch: None,
     };
-    let dag = Dag::build(&[tickers, fetch_prices, aggregate]).unwrap();
+    let dag = barca_python::link::build(&[tickers, fetch_prices, aggregate]).unwrap();
     let p = plan_from_dag(&dag, &cfg(10));
 
     // tickers, fetch_prices (pending), and aggregate must land in three
@@ -1277,8 +1277,8 @@ fn a_fan_in_is_never_fused_into_the_phase_it_collects_from() {
                  def report(s: int, rows: list) -> int:\n    return s\n",
             listed.join(", ")
         );
-        let nodes = crate::parse::extract_nodes(&source, "t.py").unwrap();
-        let dag = Dag::build(&nodes).unwrap();
+        let nodes = barca_python::parse::extract_nodes(&source, "t.py").unwrap();
+        let dag = barca_python::link::build(&nodes).unwrap();
         for pool_size in 1..=8usize {
             let config = ResourceConfig {
                 pool_size,

@@ -26,7 +26,7 @@ pub struct ServeConfig {
     /// Python interpreter used for execution (and dynamic-partition resolution).
     pub python: PathBuf,
     /// Resolved barca configuration (environment, DB path, artifact root, state).
-    pub resolved: barca_core::config::ResolvedConfig,
+    pub resolved: barca_service::config::ResolvedConfig,
     /// Inspect-only mode (`--read-only`): endpoints that run or cancel work
     /// return 403, the scheduler never starts, and every DB read goes through a
     /// private snapshot — the metadata DB is never opened, locked, created, or
@@ -36,6 +36,7 @@ pub struct ServeConfig {
 
 /// The zone cron expressions are evaluated in (`--timezone`); local time when the value does
 /// not parse, which [`crate::check_timezone`] refuses before a server starts.
-pub(crate) fn zone_of(config: &ServeConfig) -> barca_core::schedule::Zone {
-    barca_core::schedule::Zone::parse(&config.timezone).unwrap_or(barca_core::schedule::Zone::Local)
+pub(crate) fn zone_of(config: &ServeConfig) -> barca_service::schedule::Zone {
+    barca_service::schedule::Zone::parse(&config.timezone)
+        .unwrap_or(barca_service::schedule::Zone::Local)
 }

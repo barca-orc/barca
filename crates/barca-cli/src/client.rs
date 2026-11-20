@@ -3,11 +3,11 @@
 //! `--server [<URL>]` runs `get`, `run`, `status`, `list`, `history` or `stats` on a
 //! `barca serve` and prints its answer here exactly as the command would print it locally: the
 //! same stdout, the same stderr lines and the same exit code, rendered by the same
-//! `barca_core::report` functions. `--local` ignores a configured server.
+//! `barca_service::report` functions. `--local` ignores a configured server.
 //!
 //! Without `--server`, a configured server (`BARCA_SERVER`, else `[server] url`) is still the
 //! ledger: `get` and `run` run here and read and post through it ([`Server`] implements
-//! `barca_core::ledger::LedgerTransport`), and `status`, `history` and `stats` answer from it.
+//! `barca_service::ledger::LedgerTransport`), and `status`, `history` and `stats` answer from it.
 //! `--local` leaves the configured server untouched.
 //!
 //! This is the remote backend: [`perform`] takes a checked request (`crate::request`) and sends
@@ -34,10 +34,10 @@
 
 use crate::args::ServerFlags;
 use crate::error::{CliError, Context, ErrorKind};
-use barca_core::BarcaError;
-use barca_core::config::{ServerSource, check_server_url, configured_server};
-use barca_core::envelope::ErrorEnvelope;
-use barca_core::outcome::API_VERSION;
+use barca_service::BarcaError;
+use barca_service::config::{ServerSource, check_server_url, configured_server};
+use barca_service::envelope::ErrorEnvelope;
+use barca_service::outcome::API_VERSION;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -186,7 +186,7 @@ pub(crate) fn project_server(flags: &ServerFlags, env: Option<&str>) -> Option<S
     if std::env::var_os("BARCA_WORKER").is_some() {
         return None;
     }
-    let path = barca_core::config::project_server_socket(env)?;
+    let path = barca_service::config::project_server_socket(env)?;
     #[cfg(unix)]
     {
         // A socket nobody listens on refuses the connection at once.
@@ -316,20 +316,20 @@ impl Server {
     /// not name.
     pub(crate) fn announce(&self) {
         if self.project {
-            barca_core::errln!(
+            barca_service::errln!(
                 "[barca] server {} (this project's barca serve; --local runs on this machine)",
                 self.shown_url
             );
         }
         if let Some(source) = self.source {
-            barca_core::errln!("[barca] server {} ({})", self.shown_url, source.describe());
+            barca_service::errln!("[barca] server {} ({})", self.shown_url, source.describe());
         }
     }
 
     /// This server as the ledger of a local `get` / `run`.
-    pub(crate) fn into_ledger(self) -> barca_core::ledger::Ledger {
+    pub(crate) fn into_ledger(self) -> barca_service::ledger::Ledger {
         let source = self.source.map(ServerSource::describe);
-        barca_core::ledger::Ledger::with_source(self, source)
+        barca_service::ledger::Ledger::with_source(self, source)
     }
 
     /// The remediation of an error that leaves the server unused.
@@ -577,7 +577,7 @@ impl Server {
                 if let Some(local) = local_sha256(path, root.as_deref())
                     && &local != sha
                 {
-                    barca_core::errln!(
+                    barca_service::errln!(
                         "[barca] note: {path} differs from the deployment; the server runs the deployed version"
                     );
                 }
@@ -593,13 +593,13 @@ impl Server {
 /// This machine's project root: the nearest barca.toml at or above the cwd, else the cwd.
 fn project_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
-    Some(barca_core::config::find_root(&cwd).unwrap_or(cwd))
+    Some(barca_service::config::find_root(&cwd).unwrap_or(cwd))
 }
 
 /// A path typed in the cwd, relative to the project root (as the deployment's paths are).
 fn relative_to_root(path: &Path, root: Option<&Path>) -> PathBuf {
     match (std::env::current_dir().ok(), root) {
-        (Some(cwd), Some(root)) => barca_core::config::rebase_onto_root(path, &cwd, root),
+        (Some(cwd), Some(root)) => barca_service::config::rebase_onto_root(path, &cwd, root),
         _ => path.to_path_buf(),
     }
 }
@@ -607,7 +607,7 @@ fn relative_to_root(path: &Path, root: Option<&Path>) -> PathBuf {
 /// The sha256 of a root-relative file on this machine; `None` when it is not here.
 fn local_sha256(path: &str, root: Option<&Path>) -> Option<String> {
     let bytes = std::fs::read(root?.join(path)).ok()?;
-    Some(barca_core::hash::sha256_hex(&bytes))
+    Some(barca_service::hash::sha256_hex(&bytes))
 }
 
 // ─── 5. inspection ──────────────────────────────────────────────────────────

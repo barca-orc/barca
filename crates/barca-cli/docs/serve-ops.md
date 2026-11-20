@@ -36,6 +36,40 @@ start in the order they were accepted, at most `--max-runs` at once (`[server] m
 draining (below) and `null` otherwise. A run someone asked for (API, UI, CLI) starts ahead of waiting scheduled runs, and while a
 scheduled run holds a slot and every slot is taken, it may use one extra slot of its own.
 
+### Queue a run last: `--queue last`
+
+A requested run can give that place up (experimental). `barca get` / `barca run` with `--queue
+last`, or `"queue": "last"` in the body of `POST /runs`, joins the queue behind every run that
+waits, the scheduled ones included, and is ordered with scheduled work from then on. Use it to
+start a large backfill by hand without delaying the schedules.
+
+```bash
+barca get sales --server --queue last --refresh-all   # behind the server's waiting runs
+barca run backfill --queue last                       # in the project a `barca serve` runs in
+curl -X POST http://127.0.0.1:8274/runs -d '{"command": "run", "targets": ["backfill"], "queue": "last"}'
+```
+
+- **For a run slot**: the requests that did not ask for it start first, in the order accepted;
+  then the scheduled runs and the runs queued last, together, in the order accepted. A run
+  queued last is behind the scheduled runs accepted before it and ahead of the ones accepted
+  after it, so a steady stream of ticks does not starve it. It takes no slot past `max_runs`,
+  and a default request made while it holds a slot may use the extra slot, as beside a
+  scheduled run. With a free slot it starts at once: there is nothing to wait behind.
+- **For the shared capacity** (`--capacity`, below): its steps wait in line as a scheduled
+  run's do, behind requested steps and, among scheduled runs, in the order the runs first
+  asked. A step that has waited `scheduled_max_wait_seconds` goes ahead of requested ones, as a
+  scheduled step does. `capacity.waiting[].origin` reads `scheduled` for it.
+- **Where it shows**: `queue` is `"last"` in the answer of `POST /runs`, on the run's entry in
+  `GET /queue` (`barca queue --json`; the table ends its row with `queued last`) and in
+  `GET /runs/{run_id}` while the run waits or executes. It is `null` for every other run, and
+  in `GET /runs/{run_id}` once the run has finished: the place is kept in the queue's record
+  (it survives a restart while the run waits), not with the finished run.
+- `--queue next` is the default, spelled out. `--queue` is a usage error (exit 2) when the
+  command runs on this machine (no server, `--local`, or a configured server used only as the
+  ledger): a run there starts at once and has no queue.
+- Nothing running is stopped, and the order among scheduled runs is unchanged. The web UI has
+  no control for it yet.
+
 ```bash
 barca serve pipeline.py --max-runs 2           # two runs at a time; the rest wait, in order
 barca queue --server                           # the configured server's queue: running and queued runs
@@ -333,6 +367,9 @@ a second weight-3 step waits. How a step is admitted:
   `scheduled_max_wait_seconds` (default 120) goes ahead of the requested ones, so a stream of
   requests cannot starve a schedule. The bound is per step: under requests that never stop, a
   scheduled run advances about one step per bound.
+- **A request queued last counts as scheduled.** A run started with `--queue last`
+  (`"queue": "last"`) waits in this line as a scheduled run does, bound included ("Queue a run
+  last", above).
 - **First come, first served on request.** `admission = "first_come"` puts the oldest waiting
   step at the front whatever started its run, the order before 0.45.0 (a requested run that
   overlaps a scheduled run then takes turns with it step by step).
@@ -362,7 +399,7 @@ scheduled_max_wait_seconds = 120  # the default; at least 1, only with requested
 `GET /queue` (and `barca queue --server --json`) has `capacity: {total, source, admission,
 scheduled_max_wait_seconds, in_use, runs, waiting}`: the order in effect, the weight in use,
 the weight each run holds, and the steps waiting in admission order with their run, weight,
-`waiting_seconds` and `origin` (`requested` or `scheduled`); `null` without a server capacity. `GET
+`waiting_seconds` and `origin` (`requested`, or `scheduled` for a tick's run and for a run queued last); `null` without a server capacity. `GET
 /health` has `queue.capacity: {total, in_use, waiting}`. The web UI's Runs page shows `weight 3
 of 4 in use · 1 step waiting` and the waiting steps.
 

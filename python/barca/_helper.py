@@ -1,7 +1,7 @@
 """The envelope of the helpers Rust runs as `python -m barca._x`.
 
 A helper is a short process that takes one request and answers with one JSON document on
-stdout (`crates/barca-engine/src/helper_proc.rs`: `run_json`, `run_to_output`). What each one
+stdout (`crates/barca-proc/src/helper_proc.rs`: `run_json`, `run_to_output`). What each one
 is sent and what it answers is its own, and stays in its module; what they share is here:
 
 - the request: one JSON document on stdin (`stdin_request`), or in an environment variable

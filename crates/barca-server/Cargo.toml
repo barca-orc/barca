@@ -4,7 +4,7 @@ version = "0.45.0"
 edition = "2024"
 
 [dependencies]
-barca-core = { path = "../barca-core" }
+barca-service = { path = "../barca-service" }
 axum = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util", "time", "sync"] }
 dashmap = { workspace = true }
@@ -27,8 +27,8 @@ rust-embed = "8"
 ts-rs = { workspace = true, optional = true }
 
 [features]
-# Generate TS type bindings for the frontend (also enables barca-core's).
-ts = ["dep:ts-rs", "barca-core/ts"]
+# Generate TS type bindings for the frontend (also enables barca-service's).
+ts = ["dep:ts-rs", "barca-service/ts"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

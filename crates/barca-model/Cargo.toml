@@ -10,6 +10,7 @@ description = "Model layer — the values, ids, hashes, terminal output and conf
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+petgraph = { workspace = true }
 sha2 = { workspace = true }
 croner = { workspace = true }
 chrono = { workspace = true }

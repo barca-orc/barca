@@ -29,24 +29,48 @@ def package(name, deps=(), dev=(), lib=True, ts=False, dir=None):
     }
 
 
-# The crate graph of v0.45.0, written by hand so the rules are tested without cargo: the
-# selection itself always reads the real one from `cargo metadata`.
+# The crate graph after barca-core was dissolved (#1056, C6), written by hand so the rules are
+# tested without cargo: the selection itself always reads the real one from `cargo metadata`.
+LOWER = ["barca-model", "barca-compile", "barca-db", "barca-store"]
 CRATES = mod["parse_metadata"](
     {
         "workspace_root": "/w",
         "packages": [
             package("barca-model", ts=True),
-            package("barca-compile", ["barca-model"], ts=True),
+            package("barca-python", ["barca-model"], ts=True),
+            # The frontend in tests only: they write a graph as Python source.
+            package("barca-compile", ["barca-model"], dev=["barca-python"]),
             package("barca-db", ["barca-model"], ts=True),
-            package("barca-engine", ["barca-model", "barca-compile"]),
+            package("barca-proc", ["barca-model"]),
+            package("barca-engine", ["barca-model", "barca-python", "barca-compile", "barca-proc"]),
             package(
-                "barca-core",
-                ["barca-model", "barca-compile", "barca-db", "barca-engine"],
+                "barca-store",
+                ["barca-model", "barca-python", "barca-compile", "barca-db", "barca-proc"],
                 ts=True,
             ),
-            package("barca-server", ["barca-core"], ts=True),
+            package("barca-decide", LOWER, dev=["barca-python"]),
+            package("barca-analysis", [*LOWER, "barca-decide"], dev=["barca-python"], ts=True),
+            package(
+                "barca-run",
+                [*LOWER, "barca-python", "barca-proc", "barca-engine", "barca-decide"],
+                ts=True,
+            ),
+            package(
+                "barca-service",
+                [
+                    *LOWER,
+                    "barca-python",
+                    "barca-proc",
+                    "barca-engine",
+                    "barca-decide",
+                    "barca-analysis",
+                    "barca-run",
+                ],
+                ts=True,
+            ),
+            package("barca-server", ["barca-service"], ts=True),
             # The package is `barca`; its directory is crates/barca-cli.
-            package("barca", ["barca-core", "barca-server"], lib=False, dir="barca-cli"),
+            package("barca", ["barca-service", "barca-server"], lib=False, dir="barca-cli"),
         ],
     }
 )
@@ -67,7 +91,19 @@ class Rules(unittest.TestCase):
         self.assertEqual(out["rust_packages"], " ".join(f"-p {c}" for c in ALL))
 
         sel, _ = run("crates/barca-db/src/db/runs.rs")
-        self.assertEqual(sorted(sel["whole"]), ["barca", "barca-core", "barca-db", "barca-server"])
+        self.assertEqual(
+            sorted(sel["whole"]),
+            [
+                "barca",
+                "barca-analysis",
+                "barca-db",
+                "barca-decide",
+                "barca-run",
+                "barca-server",
+                "barca-service",
+                "barca-store",
+            ],
+        )
         self.assertEqual(sel["whole"]["barca-db"], ["owns crates/barca-db/src/db/runs.rs"])
         self.assertEqual(
             sel["whole"]["barca"], ["depends on barca-db (crates/barca-db/src/db/runs.rs)"]
@@ -75,33 +111,45 @@ class Rules(unittest.TestCase):
 
         sel, _ = run("crates/barca-engine/src/wire.rs")
         self.assertEqual(
-            sorted(sel["whole"]), ["barca", "barca-core", "barca-engine", "barca-server"]
+            sorted(sel["whole"]),
+            ["barca", "barca-engine", "barca-run", "barca-server", "barca-service"],
+        )
+        # A read model: the service layer and the hosts, never the engine or the run
+        # orchestrator beside it.
+        sel, _ = run("crates/barca-analysis/src/health.rs")
+        self.assertEqual(
+            sorted(sel["whole"]), ["barca", "barca-analysis", "barca-server", "barca-service"]
+        )
+        # The frontend: planning's tests use it (a dev-dependency), so they run too.
+        sel, _ = run("crates/barca-python/src/parse.rs")
+        self.assertEqual(
+            sorted(sel["whole"]), sorted(set(ALL) - {"barca-model", "barca-db", "barca-proc"})
         )
 
     def test_a_leaf_crate_runs_the_guards_that_scan_it_and_nothing_else_below(self):
         sel, out = run("crates/barca-server/src/routes.rs")
         self.assertEqual(sorted(sel["whole"]), ["barca", "barca-server"])
         self.assertEqual(
-            sorted(sel["readers"]["barca-core"]),
+            sorted(sel["readers"]["barca-service"]),
             [
                 ("test", "metadata_writes_go_through_an_owner"),
                 ("test", "no_bare_step_status_literal_outside_the_vocabulary"),
             ],
         )
         self.assertEqual(
-            sorted(sel["readers"]["barca-engine"]),
+            sorted(sel["readers"]["barca-proc"]),
             [("test", "every_child_process_is_started_through_this_module")],
         )
         self.assertEqual(
-            out["rust_packages"], "-p barca -p barca-core -p barca-engine -p barca-server"
+            out["rust_packages"], "-p barca -p barca-proc -p barca-server -p barca-service"
         )
         self.assertEqual(
             out["rust_filter"],
             "package(=barca) | package(=barca-server)"
-            " | (package(=barca-core) & (test(~metadata_writes_go_through_an_owner)"
-            " | test(~no_bare_step_status_literal_outside_the_vocabulary)))"
-            " | (package(=barca-engine)"
-            " & (test(~every_child_process_is_started_through_this_module)))",
+            " | (package(=barca-proc)"
+            " & (test(~every_child_process_is_started_through_this_module)))"
+            " | (package(=barca-service) & (test(~metadata_writes_go_through_an_owner)"
+            " | test(~no_bare_step_status_literal_outside_the_vocabulary)))",
         )
         # Doc tests: library crates selected whole. `barca` has no library.
         self.assertEqual(out["rust_doc"], "-p barca-server")
@@ -119,18 +167,18 @@ class Rules(unittest.TestCase):
         self.assertEqual(sorted(sel["whole"]), ["high", "low"])
 
     def test_a_new_crate_is_selected_from_the_manifests(self):
-        # barca-analysis split out of barca-core (#1056 C6): nothing in the script names it.
+        # A crate nothing in the script names is selected from the manifests alone.
         packages = [
             package("barca-model"),
             package("barca-analysis", ["barca-model"]),
-            package("barca-core", ["barca-model", "barca-analysis"]),
-            package("barca-engine", ["barca-model"]),
+            package("barca-service", ["barca-model", "barca-analysis"]),
+            package("barca-proc", ["barca-model"]),
         ]
         crates = mod["parse_metadata"]({"workspace_root": "/w", "packages": packages})
         sel, _ = run("crates/barca-analysis/src/health.rs", crates=crates)
-        self.assertEqual(sorted(sel["whole"]), ["barca-analysis", "barca-core"])
-        # barca-engine: only its guard that scans every crate's sources.
-        self.assertEqual(list(sel["readers"]), ["barca-engine"])
+        self.assertEqual(sorted(sel["whole"]), ["barca-analysis", "barca-service"])
+        # barca-proc: only its guard that scans every crate's sources.
+        self.assertEqual(list(sel["readers"]), ["barca-proc"])
 
     def test_workspace_wide_files(self):
         for path in (
@@ -206,7 +254,7 @@ class Rules(unittest.TestCase):
 
         sweep = ("binary", "unused_input_repo_sweep")
         self.assertEqual(
-            chosen("site/src/content/docs/guide.md"), (["barca"], {"barca-core": [sweep]})
+            chosen("site/src/content/docs/guide.md"), (["barca"], {"barca-service": [sweep]})
         )
         # Outside src/content the site is read by the contract tests only (the sidebar).
         self.assertEqual(chosen("site/astro.config.mjs"), (["barca"], {}))
@@ -215,10 +263,10 @@ class Rules(unittest.TestCase):
             (
                 ["barca"],
                 {
-                    "barca-compile": [
+                    "barca-python": [
                         ("test", "the_manual_and_the_site_list_exactly_these_arguments")
                     ],
-                    "barca-core": [sweep],
+                    "barca-service": [sweep],
                 },
             ),
         )
@@ -228,14 +276,14 @@ class Rules(unittest.TestCase):
         )
         self.assertEqual(
             chosen("specs/interfaces/artifact-formats.md"),
-            ([], {"barca-core": [("test", "format_of_agrees_with_the_spec_table")]}),
+            ([], {"barca-service": [("test", "format_of_agrees_with_the_spec_table")]}),
         )
         self.assertEqual(
             chosen("ui/src/lib/testdata/weights.json"),
             (
                 [],
                 {
-                    "barca-core": [
+                    "barca-service": [
                         ("test", "the_ui_fixture_health_table_is_what_classify_says"),
                         ("test", "the_ui_fixture_weights_are_the_rollups"),
                     ]
@@ -247,7 +295,7 @@ class Rules(unittest.TestCase):
             (
                 [],
                 {
-                    "barca-compile": [
+                    "barca-python": [
                         ("test", "group_names_matching_local_variables_do_not_change_hashes")
                     ]
                 },
@@ -259,15 +307,15 @@ class Rules(unittest.TestCase):
             "python/tests/test_storage.py",
             "tests/integration/test_cli.sh",
         ):
-            self.assertEqual(chosen(path), ([], {"barca-core": [sweep]}), path)
-        self.assertEqual(chosen("README.md"), (["barca"], {"barca-core": [sweep]}))
-        self.assertEqual(chosen("SKILL.md"), (["barca"], {"barca-core": [sweep]}))
+            self.assertEqual(chosen(path), ([], {"barca-service": [sweep]}), path)
+        self.assertEqual(chosen("README.md"), (["barca"], {"barca-service": [sweep]}))
+        self.assertEqual(chosen("SKILL.md"), (["barca"], {"barca-service": [sweep]}))
 
     def test_a_crate_manifest_runs_the_layering_test(self):
         sel, _ = run("crates/barca-server/Cargo.toml")
         self.assertEqual(sorted(sel["whole"]), ["barca", "barca-server"])
         self.assertEqual(
-            sorted(sel["readers"]["barca-core"]),
+            sorted(sel["readers"]["barca-service"]),
             [("test", "crates_depend_only_on_crates_below_them")],
         )
 
@@ -277,16 +325,16 @@ class Rules(unittest.TestCase):
         self.assertEqual(
             {c: sorted(r) for c, r in sel["readers"].items()},
             {
-                "barca-compile": [("test", "the_manual_lists_exactly_these_rules")],
-                "barca-core": [("binary", "unused_input_repo_sweep")],
+                "barca-python": [("test", "the_manual_lists_exactly_these_rules")],
+                "barca-service": [("binary", "unused_input_repo_sweep")],
             },
         )
         self.assertEqual(out["rust_doc"], "")
 
     def test_a_whole_crate_drops_its_readers(self):
-        sel, out = run("site/src/content/docs/guide.md", "crates/barca-core/src/health.rs")
-        self.assertNotIn("barca-core", sel["readers"])
-        self.assertIn("package(=barca-core)", out["rust_filter"])
+        sel, out = run("site/src/content/docs/guide.md", "crates/barca-analysis/src/health.rs")
+        self.assertNotIn("barca-service", sel["readers"])
+        self.assertIn("package(=barca-service)", out["rust_filter"])
         self.assertNotIn("unused_input_repo_sweep", out["rust_filter"])
 
     def test_generated_types(self):
@@ -303,7 +351,7 @@ class Rules(unittest.TestCase):
         text = "\n".join(explain(sel, CRATES, 1))
         self.assertIn("barca-server: every test: owns crates/barca-server/src/routes.rs", text)
         self.assertIn("barca: every test: depends on barca-server", text)
-        self.assertIn("barca-engine: only test every_child_process_is_started_through", text)
+        self.assertIn("barca-proc: only test every_child_process_is_started_through", text)
         self.assertIn("barca-model: not run: no changed file can affect its tests", text)
         sel, _ = run("Cargo.lock")
         self.assertIn("the whole workspace: Cargo.lock", "\n".join(explain(sel, CRATES, 1)))

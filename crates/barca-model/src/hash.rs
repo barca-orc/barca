@@ -14,7 +14,7 @@ pub(crate) const PROTOCOL_VERSION: &str = "1.0.0";
 /// Compute the definition hash for a node.
 ///
 /// Inputs:
-/// - the node's definition text (`barca_core::definition::node_definition`): the decorator parts
+/// - the node's definition text (`barca_service::definition::node_definition`): the decorator parts
 ///   that count, in canonical form, then the function from `def` on
 /// - the dependency cone hash (helpers, constants)
 /// - the node kind, as JSON

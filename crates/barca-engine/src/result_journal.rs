@@ -1,6 +1,6 @@
 //! Coordinator-owned transient metadata receipts for compact result batches.
 //! A worker crash preserves completed leases without sending one result frame per item.
-use crate::protocol::WorkerMessage;
+use barca_proc::protocol::WorkerMessage;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::Read;

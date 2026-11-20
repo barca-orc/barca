@@ -4,8 +4,8 @@
 //! A `barca get` or `barca run` on its own is hosted by [`LocalHost`], which shares nothing:
 //! it has no shared capacity, so the worker pool never asks for one, and it shares no steps,
 //! so every step is the run's own. Under `barca serve` every run is hosted by
-//! `barca_core::serve::ServeHost`, which wraps the server's `barca_core::serve::capacity` (#628) and
-//! `barca_core::serve::claims` (#654). The pool asks [`RunHost::shared_capacity`] and
+//! `barca_service::serve::ServeHost`, which wraps the server's `barca_service::serve::capacity` (#628) and
+//! `barca_service::serve::claims` (#654). The pool asks [`RunHost::shared_capacity`] and
 //! [`RunHost::shares_steps`] once, when it starts, and keeps no per-run state for what the
 //! host does not share, so a local run pays nothing for either.
 
@@ -36,8 +36,8 @@ pub struct SharedBudget {
 
 /// What the local loop calls on the host of a run. The capacity operations are only called
 /// when [`Self::shared_capacity`] is `Some`, the step operations only when
-/// [`Self::shares_steps`]; their arguments are as `barca_core::serve::capacity::SharedCapacity`
-/// and `barca_core::serve::claims::SharedSteps` take them.
+/// [`Self::shares_steps`]; their arguments are as `barca_service::serve::capacity::SharedCapacity`
+/// and `barca_service::serve::claims::SharedSteps` take them.
 pub trait RunHost: Send + Sync + std::fmt::Debug {
     /// Replace this run's snapshot of active worker steps, grouped by base node.
     fn set_executing(&self, _run_id: &str, _nodes: std::collections::HashMap<String, usize>) {}

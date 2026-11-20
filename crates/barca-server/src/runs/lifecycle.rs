@@ -7,11 +7,11 @@ use crate::error::ApiError;
 use crate::replay::RunChannel;
 use crate::run_model::{RunState, RunStatus};
 use crate::state::AppState;
-use barca_core::commands::{RunResult, ServedRun, serve_run};
-use barca_core::envelope::{Context, ErrorEnvelope, ErrorKind};
-use barca_core::outcome::{Outcome, OutcomeStatus, RunCommand, RunOptions};
-use barca_core::time::now_secs_f64 as now_ts;
-use barca_core::{BarcaError, RunEvent, db, results::GetResult};
+use barca_service::commands::{RunResult, ServedRun, serve_run};
+use barca_service::envelope::{Context, ErrorEnvelope, ErrorKind};
+use barca_service::outcome::{Outcome, OutcomeStatus, RunCommand, RunOptions};
+use barca_service::time::now_secs_f64 as now_ts;
+use barca_service::{BarcaError, RunEvent, db, results::GetResult};
 use std::time::Duration;
 
 /// Accept a run ([`crate::runs::admit`]): it is recorded in the run queue and starts when the
@@ -34,11 +34,11 @@ pub(crate) async fn start_as(
 /// The tick a scheduled run was started for: its schedule and slot (unix seconds). `None` for
 /// every other run, which the tick record does not concern.
 fn tick_of(spec: &RunSpec) -> Option<(&str, i64)> {
-    if spec.trigger.triggered_by != barca_core::outcome::TriggeredBy::Schedule {
+    if spec.trigger.triggered_by != barca_service::outcome::TriggeredBy::Schedule {
         return None;
     }
     let schedule = spec.trigger.schedule_id.as_deref()?;
-    let slot = barca_core::time::parse_rfc3339(spec.trigger.scheduled_at.as_deref()?)?;
+    let slot = barca_service::time::parse_rfc3339(spec.trigger.scheduled_at.as_deref()?)?;
     Some((schedule, slot))
 }
 
@@ -62,7 +62,7 @@ async fn record_tick_started(state: &AppState, run_id: &str, spec: &RunSpec) {
     )
     .await
     {
-        barca_core::errln!("[barca] tick record write failed for run {run_id}: {e}");
+        barca_service::errln!("[barca] tick record write failed for run {run_id}: {e}");
     }
 }
 
@@ -80,7 +80,7 @@ pub(crate) async fn record_tick_finished(
         return;
     };
     let targets =
-        barca_core::serve::ticks::target_outcomes(&spec.nodes, outcome.map_or("", |o| o.text()));
+        barca_service::serve::ticks::target_outcomes(&spec.nodes, outcome.map_or("", |o| o.text()));
     if let Err(e) = db::record_tick_finished(
         &state.config.resolved.db_path,
         schedule,
@@ -92,7 +92,7 @@ pub(crate) async fn record_tick_finished(
     )
     .await
     {
-        barca_core::errln!("[barca] tick record write failed for run {run_id}: {e}");
+        barca_service::errln!("[barca] tick record write failed for run {run_id}: {e}");
     }
 }
 
@@ -128,12 +128,12 @@ async fn execute(
     state: AppState,
     run_id: String,
     spec: RunSpec,
-    cancel: barca_core::CancellationToken,
+    cancel: barca_service::CancellationToken,
     channel: RunChannel,
     permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     // The run holds one run slot (`--max-runs`) until it ends. Runs execute in parallel; the
-    // shared metadata.db is kept safe by barca-core's process-wide DB lock.
+    // shared metadata.db is kept safe by barca-service's process-wide DB lock.
     let ctx = context(spec.command, &spec.files);
 
     if cancel.is_cancelled() {
@@ -148,9 +148,9 @@ async fn execute(
         return;
     }
     if let Err(e) =
-        barca_core::serve::run_queue::mark_running(&state.config.resolved.db_path, &run_id).await
+        barca_service::serve::run_queue::mark_running(&state.config.resolved.db_path, &run_id).await
     {
-        barca_core::errln!("[barca] warning: run {run_id}: {e}");
+        barca_service::errln!("[barca] warning: run {run_id}: {e}");
     }
     record_tick_started(&state, &run_id, &spec).await;
     channel.emit(RunEvent::RunStarted {
@@ -184,7 +184,7 @@ async fn execute(
     let timeout = run_timeout(&state, &spec);
     // The run's own cancel reason, so a timeout names itself in the run's logs
     // (`[barca] run cancelled: run timed out after ...`); a server that stops copies its own in.
-    let run_reason = barca_core::interrupt::CancelReason::new();
+    let run_reason = barca_service::interrupt::CancelReason::new();
     let result: Result<RunResult, BarcaError> = {
         let fut = run_reason.clone().scope(async {
             // A request that names files reads only those, as `barca get x a.py` does.
@@ -192,7 +192,9 @@ async fn execute(
             let dag = if spec.files.is_empty() {
                 state.reads.sources.current_dag().await?
             } else {
-                std::sync::Arc::new(barca_core::load::build_dag(files, &state.config.python).await?)
+                std::sync::Arc::new(
+                    barca_service::load::build_dag(files, &state.config.python).await?,
+                )
             };
             serve_run(ServedRun {
                 dag,
@@ -207,12 +209,19 @@ async fn execute(
                 options: RunOptions {
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
-                    host: std::sync::Arc::new(barca_core::serve::ServeHost::new(
+                    host: std::sync::Arc::new(barca_service::serve::ServeHost::new(
                         state.runs.capacity.clone(),
                         state.runs.shared_steps.clone(),
-                        barca_core::serve::capacity::Origin::of(spec.trigger.triggered_by),
+                        // A run asked to queue last waits for capacity as a scheduled
+                        // run does, aging rule included.
+                        if crate::queue::with_scheduled(&spec.trigger, spec.queue) {
+                            barca_service::serve::capacity::Origin::Scheduled
+                        } else {
+                            barca_service::serve::capacity::Origin::Requested
+                        },
                     )),
-                    batch: barca_core::batch::BatchOverride::parse(&spec.batch).unwrap_or_default(),
+                    batch: barca_service::batch::BatchOverride::parse(&spec.batch)
+                        .unwrap_or_default(),
                 },
                 partition: spec.partition.clone(),
                 rules: spec.rules.clone(),
@@ -283,7 +292,7 @@ async fn execute(
     };
     let values = spec.values && spec.command == RunCommand::Get;
     let returned_values = |single, keys, summary| {
-        barca_core::values::returned_values(
+        barca_service::values::returned_values(
             &state.config.python,
             &state.config.resolved,
             single,
@@ -294,7 +303,7 @@ async fn execute(
     let outcome = match result {
         Ok(RunResult::Single(r)) if values || spec.command == RunCommand::Run => {
             let output = if spec.command == RunCommand::Run {
-                barca_core::values::task_output(
+                barca_service::values::task_output(
                     &state.config.python,
                     &state.config.resolved,
                     r.final_output.as_ref(),
@@ -317,7 +326,7 @@ async fn execute(
             let mut outputs = Vec::with_capacity(m.targets.len());
             for (_, t) in &m.targets {
                 let output = if spec.command == RunCommand::Run {
-                    barca_core::values::task_output(
+                    barca_service::values::task_output(
                         &state.config.python,
                         &state.config.resolved,
                         t.final_output.as_ref(),
@@ -363,7 +372,7 @@ async fn execute(
             let output = if values {
                 returned_values(None, keys.as_deref(), summary.as_ref()).await
             } else {
-                barca_core::report::pointer_output(None, keys.as_deref(), summary.as_ref())
+                barca_service::report::pointer_output(None, keys.as_deref(), summary.as_ref())
             };
             Outcome::of_failed(BarcaError::WorkerFailed(f), &ctx, output)
         }
@@ -378,14 +387,15 @@ async fn execute(
     crate::runs::dispatch(&state);
 }
 
-/// Put a run the stopping server stopped back in the queue ([`barca_core::serve::run_queue::requeue`]):
+/// Put a run the stopping server stopped back in the queue ([`barca_service::serve::run_queue::requeue`]):
 /// the next server starts it again, under the same id. Its event stream ends without
 /// `run_finished` when the server stops; a client following it reconnects to the next one.
 async fn requeue(state: &AppState, run_id: &str) {
-    match barca_core::serve::run_queue::requeue(&state.config.resolved.db_path, run_id, None).await
+    match barca_service::serve::run_queue::requeue(&state.config.resolved.db_path, run_id, None)
+        .await
     {
         Ok(()) => {
-            barca_core::errln!(
+            barca_service::errln!(
                 "[barca] run {run_id} stopped and put back in the queue: it starts again when \
                  the server restarts"
             );
@@ -394,7 +404,7 @@ async fn requeue(state: &AppState, run_id: &str) {
             }
         }
         Err(e) => {
-            barca_core::errln!("[barca] could not put run {run_id} back in the queue: {e}");
+            barca_service::errln!("[barca] could not put run {run_id} back in the queue: {e}");
         }
     }
 }
@@ -402,7 +412,7 @@ async fn requeue(state: &AppState, run_id: &str) {
 /// The outcome of a cancelled run. When the server cancelled it (a forced stop), its message
 /// names why: `run cancelled: server shutdown`.
 pub(super) fn cancelled(state: &AppState, ctx: &Context) -> Outcome {
-    let mut envelope = barca_core::outcome::envelope_of(BarcaError::Cancelled, ctx);
+    let mut envelope = barca_service::outcome::envelope_of(BarcaError::Cancelled, ctx);
     if state.lifecycle.cancel_reason.get().is_some() {
         envelope.error = state.lifecycle.cancelled_message();
     }
@@ -424,22 +434,22 @@ pub(super) async fn finish(
 ) {
     let status = outcome.status();
     if let Err(e) = persist_outcome(state, run_id, spec, &outcome, recorded, timed_out).await {
-        barca_core::errln!("[barca] could not record the outcome of run {run_id}: {e}");
+        barca_service::errln!("[barca] could not record the outcome of run {run_id}: {e}");
     }
     if status == OutcomeStatus::Cancelled
         && let Some(cancellation) = cancellation_of(state, run_id)
         && let Err(e) =
             db::set_cancellation(&state.config.resolved.db_path, run_id, &cancellation).await
     {
-        barca_core::errln!("[barca] could not record why run {run_id} was cancelled: {e}");
+        barca_service::errln!("[barca] could not record why run {run_id} was cancelled: {e}");
     }
     // A run stopped at its timeout is an `error`, as its row says.
     record_tick_finished(state, run_id, spec, status.as_str(), Some(&outcome)).await;
     // Recorded: it leaves the queue.
     if let Err(e) =
-        barca_core::serve::run_queue::remove(&state.config.resolved.db_path, run_id).await
+        barca_service::serve::run_queue::remove(&state.config.resolved.db_path, run_id).await
     {
-        barca_core::errln!("[barca] warning: run {run_id}: {e}");
+        barca_service::errln!("[barca] warning: run {run_id}: {e}");
     }
     let error = outcome.envelope().map(|e| e.error);
     if let Some(mut r) = state.runs.registry.get_mut(run_id) {
@@ -467,7 +477,7 @@ pub(super) async fn finish(
     evict_over_budget(state, FINISHED_RUNS_BUDGET);
     // What the run freed (at 200k keys, about a gigabyte) goes back to the system, so the
     // server's resident memory does not stay at the largest run each thread has served.
-    tokio::task::spawn_blocking(barca_core::release_free_memory);
+    tokio::task::spawn_blocking(barca_service::release_free_memory);
 }
 
 /// Why `run_id` was cancelled (#925): what `DELETE /runs/{run_id}` recorded, else the server
@@ -475,14 +485,14 @@ pub(super) async fn finish(
 fn cancellation_of(
     state: &AppState,
     run_id: &str,
-) -> Option<barca_core::run_explain::Cancellation> {
+) -> Option<barca_service::run_explain::Cancellation> {
     let run = state.runs.registry.get(run_id)?;
     if let Some(cancellation) = &run.cancellation {
         return Some(cancellation.clone());
     }
     state.lifecycle.cancel_reason.get()?;
-    Some(barca_core::run_explain::Cancellation {
-        by: barca_core::run_explain::CancelledBy::Shutdown,
+    Some(barca_service::run_explain::Cancellation {
+        by: barca_service::run_explain::CancelledBy::Shutdown,
         principal: None,
         started: run.status != RunStatus::Pending,
         waiting_behind: Vec::new(),
@@ -556,11 +566,11 @@ async fn persist_outcome(
     } else if recorded && db::set_run_outcome(&cfg.db_path, run_id, status, outcome.text()).await? {
         return Ok(());
     }
-    barca_core::queries::open_metadata(cfg).await?;
+    barca_service::queries::open_metadata(cfg).await?;
     let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
-    barca_core::serve::record_unstarted_run(
+    barca_service::serve::record_unstarted_run(
         &cfg.db_path,
-        barca_core::serve::UnstartedRun {
+        barca_service::serve::UnstartedRun {
             run_id,
             command: spec.command.as_str(),
             files: run_files(state, &spec.files),

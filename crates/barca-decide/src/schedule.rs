@@ -1,0 +1,249 @@
+//! Static schedule analysis shared by the CLI and server.
+
+use barca_model::CronExpr;
+use barca_model::Freshness;
+use barca_model::NodeKind;
+use barca_store::results::AssetSummary;
+use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
+use croner::Cron;
+use serde::Serialize;
+
+/// Static description of one scheduled job, for `barca list` (no server).
+#[derive(Debug, Clone, Serialize)]
+pub struct ScheduleInfo {
+    pub id: String,
+    pub cron: String,
+    pub kind: NodeKind,
+    /// Next fire time as unix epoch seconds (for programmatic use).
+    pub next_fire: Option<i64>,
+    /// Next fire time formatted in local time (for display).
+    pub next_fire_local: Option<String>,
+}
+
+/// Describe schedules in an already validated graph.
+pub fn describe_schedule_from_dag(
+    dag: Option<&barca_model::dag::Dag>,
+    zone: &Zone,
+) -> Vec<ScheduleInfo> {
+    let now = Utc::now();
+    let jobs = dag
+        .map(|dag| jobs_from_summaries(barca_store::results::list_assets_from_dag(dag)))
+        .unwrap_or_default();
+    jobs.iter()
+        .map(|j| {
+            let next = next_fire(&j.cron, zone, now);
+            ScheduleInfo {
+                id: j.id.clone(),
+                cron: j.cron_str.clone(),
+                kind: j.kind,
+                next_fire: next.map(|t| t.timestamp()),
+                next_fire_local: next.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()),
+            }
+        })
+        .collect()
+}
+
+/// A parsed cron job discovered from the DAG at startup.
+pub struct ScheduledJob {
+    /// Full node id (e.g. `pipeline.py:daily_report`), used verbatim as the run target.
+    pub id: String,
+    /// Node kind decides the trigger path: asset/sensor → `get`, task → `run`.
+    pub kind: NodeKind,
+    /// The original cron string, kept for logging.
+    pub cron_str: String,
+    /// Parsed cron (5-field minute-granular, or 6-field seconds-granular),
+    /// evaluated in the scheduler's configured timezone.
+    pub cron: Cron,
+    /// The `Always` nodes a tick of this job reconciles in the same run: those below the
+    /// scheduled node and below every sensor the run polls
+    /// ([`crate::freshness::tick_targets`], without the scheduled node). Empty for a job built
+    /// from summaries.
+    pub followers: Vec<String>,
+    /// `Schedule(..., max_failures=N)`: consecutive failed ticks before the job is skipped and
+    /// reported `failing`.
+    pub max_failures: u32,
+    /// `Schedule(..., timeout_seconds=N)`: how long one of its ticks' runs may take (0: no
+    /// limit). `None`: the server's run timeout applies.
+    pub timeout_seconds: Option<u64>,
+    /// `Schedule(..., batch=V)`: the `--batch` value its ticks run with (RFC-0013).
+    pub batch: Option<String>,
+}
+
+impl ScheduledJob {
+    /// The targets of one tick's run: the scheduled node, then its followers
+    /// ([`crate::freshness::tick_targets`]).
+    pub fn targets(&self) -> Vec<String> {
+        std::iter::once(self.id.clone())
+            .chain(self.followers.iter().cloned())
+            .collect()
+    }
+}
+
+/// Every node whose freshness is `Schedule(cron)`, with its cron parsed. An invalid or empty
+/// cron string is logged and skipped. Takes the summaries, so it needs no Python interpreter.
+pub fn jobs_from_summaries(summaries: Vec<AssetSummary>) -> Vec<ScheduledJob> {
+    let mut jobs = Vec::new();
+    for s in summaries {
+        let Freshness::Schedule(expr) = &s.freshness else {
+            continue;
+        };
+        match CronExpr::parse(&expr.0) {
+            Ok(cron) => jobs.push(ScheduledJob {
+                id: s.id,
+                kind: s.kind,
+                cron_str: expr.0.clone(),
+                cron,
+                followers: Vec::new(),
+                max_failures: crate::freshness::DEFAULT_MAX_FAILURES,
+                timeout_seconds: None,
+                batch: None,
+            }),
+            Err(e) => barca_model::errln!(
+                "[barca] skipping '{}': invalid cron {:?}: {e}",
+                s.id,
+                expr.0
+            ),
+        }
+    }
+    jobs
+}
+
+/// The scheduled jobs of a loaded DAG, each with the `Always` nodes its ticks reconcile and its
+/// `max_failures`. This is what `barca serve` schedules; it is computed when the DAG is loaded
+/// (and again on a `--watch` reload), not per tick.
+pub fn jobs_from_dag(dag: &barca_model::dag::Dag) -> Vec<ScheduledJob> {
+    let mut jobs = jobs_from_summaries(barca_store::results::list_assets_from_dag(dag));
+    for job in &mut jobs {
+        job.followers = crate::freshness::tick_targets(dag, &job.id)
+            .into_iter()
+            .skip(1)
+            .collect();
+        if let Some(n) = dag.get_node(&job.id).and_then(|n| n.decl.max_failures) {
+            job.max_failures = n;
+        }
+        job.timeout_seconds = dag.get_node(&job.id).and_then(|n| n.decl.schedule_timeout);
+        job.batch = dag
+            .get_node(&job.id)
+            .and_then(|n| n.decl.schedule_batch.clone());
+    }
+    jobs
+}
+
+/// Resolved timezone that cron expressions are evaluated in.
+#[derive(Debug)]
+pub enum Zone {
+    Local,
+    Utc,
+    Named(chrono_tz::Tz),
+}
+
+impl Zone {
+    /// Parse a `--timezone` value: `local` or `utc` (in any letter case), or an IANA name
+    /// spelled as in the tz database (`America/New_York`, `Etc/UTC`; case-sensitive).
+    /// Surrounding whitespace is ignored. Anything else is an error that names the value and
+    /// shows valid ones.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let name = s.trim();
+        match name.to_ascii_lowercase().as_str() {
+            "local" => Ok(Zone::Local),
+            "utc" => Ok(Zone::Utc),
+            _ => name.parse::<chrono_tz::Tz>().map(Zone::Named).map_err(|_| {
+                format!(
+                    "unknown timezone '{s}': use `local`, `utc`, or an IANA name such as \
+                     `America/New_York` (IANA names are case-sensitive)"
+                )
+            }),
+        }
+    }
+
+    /// The current instant in this zone as a fixed-offset datetime.
+    pub fn now(&self) -> DateTime<FixedOffset> {
+        self.at(Utc::now())
+    }
+
+    /// An instant as a fixed-offset datetime in this zone.
+    pub fn at(&self, instant: DateTime<Utc>) -> DateTime<FixedOffset> {
+        match self {
+            Zone::Local => instant.with_timezone(&Local).fixed_offset(),
+            Zone::Utc => instant.fixed_offset(),
+            Zone::Named(tz) => instant.with_timezone(tz).fixed_offset(),
+        }
+    }
+
+    /// An epoch-seconds timestamp interpreted in this zone.
+    pub fn timestamp(&self, secs: i64) -> DateTime<FixedOffset> {
+        let dt = match self {
+            Zone::Local => Local
+                .timestamp_opt(secs, 0)
+                .single()
+                .map(|t| t.fixed_offset()),
+            Zone::Utc => Utc
+                .timestamp_opt(secs, 0)
+                .single()
+                .map(|t| t.fixed_offset()),
+            Zone::Named(tz) => tz.timestamp_opt(secs, 0).single().map(|t| t.fixed_offset()),
+        };
+        dt.unwrap_or_else(|| self.now())
+    }
+}
+
+/// Find the next occurrence without freezing the timezone's daylight-saving offset.
+pub fn next_fire(cron: &Cron, zone: &Zone, now: DateTime<Utc>) -> Option<DateTime<FixedOffset>> {
+    match zone {
+        Zone::Local => cron
+            .find_next_occurrence(&now.with_timezone(&Local), false)
+            .ok()
+            .map(|t| t.fixed_offset()),
+        Zone::Utc => cron
+            .find_next_occurrence(&now, false)
+            .ok()
+            .map(|t| t.fixed_offset()),
+        Zone::Named(tz) => cron
+            .find_next_occurrence(&now.with_timezone(tz), false)
+            .ok()
+            .map(|t| t.fixed_offset()),
+    }
+}
+
+/// The most recent occurrence at or before `now`: the slot a schedule last had.
+pub fn prev_fire(cron: &Cron, zone: &Zone, now: DateTime<Utc>) -> Option<DateTime<FixedOffset>> {
+    match zone {
+        Zone::Local => cron
+            .find_previous_occurrence(&now.with_timezone(&Local), true)
+            .ok()
+            .map(|t| t.fixed_offset()),
+        Zone::Utc => cron
+            .find_previous_occurrence(&now, true)
+            .ok()
+            .map(|t| t.fixed_offset()),
+        Zone::Named(tz) => cron
+            .find_previous_occurrence(&now.with_timezone(tz), true)
+            .ok()
+            .map(|t| t.fixed_offset()),
+    }
+}
+
+#[cfg(test)]
+mod timezone_tests {
+    use super::*;
+
+    #[test]
+    fn next_fire_preserves_named_zone_across_daylight_saving_transitions() {
+        let zone = Zone::parse("America/New_York").unwrap();
+        let cron = CronExpr::parse("0 5 * * *").unwrap();
+        for (start, expected) in [
+            ((2026, 10, 31, 12), (2026, 11, 1, 10)),
+            ((2026, 3, 7, 12), (2026, 3, 8, 9)),
+        ] {
+            let now = Utc
+                .with_ymd_and_hms(start.0, start.1, start.2, start.3, 0, 0)
+                .unwrap();
+            let expected = Utc
+                .with_ymd_and_hms(expected.0, expected.1, expected.2, expected.3, 0, 0)
+                .unwrap();
+            let next = next_fire(&cron, &zone, now).unwrap();
+            assert_eq!(next.timestamp(), expected.timestamp());
+            assert_eq!(next.format("%H:%M").to_string(), "05:00");
+        }
+    }
+}

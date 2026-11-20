@@ -60,7 +60,7 @@ pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
     // replace files atomically, which directory-level watching catches reliably.
     let mut watched: Vec<std::path::PathBuf> = Vec::new();
     for f in &state.config.files {
-        let dir = barca_core::load::source_dir(Path::new(f));
+        let dir = barca_service::load::source_dir(Path::new(f));
         if watched.contains(&dir) {
             continue;
         }
@@ -72,7 +72,7 @@ pub fn spawn(state: AppState) -> notify::Result<SourceWatcher> {
         while changes.changed().await.is_ok() {
             tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_MS)).await;
             if let Err(error) = state.reads.loaded_dag().await {
-                barca_core::errln!("[barca] source reload failed: {error}");
+                barca_service::errln!("[barca] source reload failed: {error}");
             }
         }
     });

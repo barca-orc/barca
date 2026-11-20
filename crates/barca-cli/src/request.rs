@@ -21,10 +21,10 @@ use crate::input::{
     get_mode, get_run_mode, is_json, missing_target_error, split_target_files, targets_arg,
     usage_error,
 };
-use barca_core::LogStream;
-use barca_core::history_filter::HistoryFilter;
-use barca_core::pins::Choice;
-use barca_core::selection::PartitionSelection;
+use barca_service::LogStream;
+use barca_service::history_filter::HistoryFilter;
+use barca_service::pins::Choice;
+use barca_service::selection::PartitionSelection;
 use std::path::PathBuf;
 
 /// Where the request is going, for the one check that differs: the files it names.
@@ -69,12 +69,14 @@ pub(crate) struct RunSpec {
     /// `--partition`, as typed (a server parses it again) and parsed.
     pub(crate) partition: Option<String>,
     pub(crate) selection: Option<PartitionSelection>,
-    pub(crate) batch: barca_core::batch::BatchOverride,
+    pub(crate) batch: barca_service::batch::BatchOverride,
     pub(crate) dry_run: bool,
     pub(crate) agent: bool,
     pub(crate) fields: Option<Vec<String>>,
     pub(crate) env: Option<String>,
     pub(crate) allow_paused: bool,
+    /// `--queue`: where the run joins the server's run queue.
+    pub(crate) queue: barca_service::outcome::QueuePlace,
 }
 
 /// `barca status`.
@@ -101,7 +103,7 @@ pub(crate) enum StatusView {
         limit: Option<usize>,
         fields: Option<Vec<String>>,
         sample: usize,
-        filter: barca_core::status::StatusFilter,
+        filter: barca_service::status::StatusFilter,
     },
 }
 
@@ -273,7 +275,7 @@ pub(crate) enum StateAction {
 /// `barca serve`'s flags, as typed.
 pub(crate) struct ServeArgs {
     pub(crate) env: Option<String>,
-    pub(crate) auth: Option<barca_core::serve::AuthMode>,
+    pub(crate) auth: Option<barca_service::serve::AuthMode>,
     pub(crate) files: Vec<PathBuf>,
     pub(crate) host: std::net::IpAddr,
     pub(crate) port: u16,
@@ -307,9 +309,11 @@ impl Request {
                 fields,
                 env,
                 allow_paused,
+                queue,
                 ..
             } => {
                 check_order("get", &args)?;
+                let queue = queue_place("get", queue, side)?;
                 let mode = get_mode(output, expires.as_deref(), format, fields.as_deref())?;
                 // A served `get` returns the server's artifact pointers (its paths), or with
                 // `-o value` the values the server read. Signed links are not in the run
@@ -356,6 +360,7 @@ impl Request {
                         fields,
                         env,
                         allow_paused,
+                        queue,
                     },
                     mode,
                 }
@@ -374,9 +379,11 @@ impl Request {
                 fields,
                 env,
                 allow_paused,
+                queue,
                 ..
             } => {
                 check_order("run", &args)?;
+                let queue = queue_place("run", queue, side)?;
                 let mode = get_run_mode(output, format, fields.as_deref())?;
                 let selection = parse_partition(partition.as_deref())?;
                 let (target, files) = split_target_files(args);
@@ -412,6 +419,7 @@ impl Request {
                         fields,
                         env,
                         allow_paused,
+                        queue,
                     },
                     mode,
                 }
@@ -580,7 +588,7 @@ impl Request {
                         },
                     }));
                 }
-                let filter = history_filter(barca_core::history_filter::HistoryFlags {
+                let filter = history_filter(barca_service::history_filter::HistoryFlags {
                     status: status.as_deref(),
                     target: target.as_deref(),
                     triggered_by: triggered_by.as_deref(),
@@ -844,17 +852,41 @@ fn server_files(sub: &str, files: &[PathBuf], refresh: Option<&[String]>) -> Res
     check_py_files(sub, &not_dirs, refresh)
 }
 
+/// `--queue`: a place in a server's run queue. On this machine a run starts at once and there
+/// is no queue to place it in, so the flag is a usage error there, whatever its value.
+fn queue_place(
+    sub: &str,
+    queue: Option<crate::args::QueueArg>,
+    side: Side,
+) -> Result<barca_service::outcome::QueuePlace, CliError> {
+    use barca_service::outcome::QueuePlace;
+    match (queue, side) {
+        (None, _) => Ok(QueuePlace::Next),
+        (Some(_), Side::Here) => Err(CliError::from_prose(
+            ErrorKind::Usage,
+            format!(
+                "error: --queue places a run in a barca server's run queue, and this `barca \
+                 {sub}` runs on this machine, where a run starts at once\nRun it on a server \
+                 (--server, or in the project a `barca serve` is running in, without --local), \
+                 or leave out --queue (barca docs serve-ops)."
+            ),
+        )),
+        (Some(crate::args::QueueArg::Next), Side::Server) => Ok(QueuePlace::Next),
+        (Some(crate::args::QueueArg::Last), Side::Server) => Ok(QueuePlace::Last),
+    }
+}
+
 /// `--batch`, parsed (RFC-0013); a usage error naming the accepted forms when it does not parse.
-fn parse_batch(values: &[String]) -> Result<barca_core::batch::BatchOverride, CliError> {
-    barca_core::batch::BatchOverride::parse(values)
+fn parse_batch(values: &[String]) -> Result<barca_service::batch::BatchOverride, CliError> {
+    barca_service::batch::BatchOverride::parse(values)
         .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
 }
 
 /// `--partition`, parsed; a usage error naming the accepted forms when it does not parse.
 fn parse_partition(
     raw: Option<&str>,
-) -> Result<Option<barca_core::selection::PartitionSelection>, CliError> {
-    raw.map(barca_core::selection::PartitionSelection::parse)
+) -> Result<Option<barca_service::selection::PartitionSelection>, CliError> {
+    raw.map(barca_service::selection::PartitionSelection::parse)
         .transpose()
         .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
 }
@@ -867,7 +899,7 @@ pub(crate) struct StatusOpts<'a> {
     pub(crate) fields: Option<&'a [String]>,
     pub(crate) sample: usize,
     /// `--state` / `--problems`.
-    pub(crate) filter: barca_core::status::StatusFilter,
+    pub(crate) filter: barca_service::status::StatusFilter,
 }
 
 /// `barca status --state a,b --problems`: an unknown state is a usage error naming the valid
@@ -878,10 +910,10 @@ fn status_filter(
     cause: Option<String>,
     health: Option<String>,
     root: Option<String>,
-) -> Result<barca_core::status::StatusFilter, CliError> {
-    let states = barca_core::status::StatusFilter::parse_states(states)
+) -> Result<barca_service::status::StatusFilter, CliError> {
+    let states = barca_service::status::StatusFilter::parse_states(states)
         .map_err(|e| usage_error(&format!("error: --state: {e}")))?;
-    Ok(barca_core::status::StatusFilter {
+    Ok(barca_service::status::StatusFilter {
         states,
         cause,
         health,
@@ -896,7 +928,7 @@ fn status_filter(
 pub(crate) enum KeysView {
     /// `--keys [--state a,b] [--needs-run] [--value D=V] [--range D=A..B] [--error N]
     /// [--match TEXT] [--sort ORDER] [--offset N]`.
-    Keys(barca_core::key_query::KeyQuery),
+    Keys(barca_service::key_query::KeyQuery),
     /// `--overview`.
     Overview,
     /// `--grid`.
@@ -930,7 +962,7 @@ impl KeysView {
             let sample = flags
                 .sample
                 .unwrap_or(0)
-                .min(barca_core::partition_grid::KEY_SAMPLE_MAX);
+                .min(barca_service::partition_grid::KEY_SAMPLE_MAX);
             return Ok(Some(KeysView::Key { key, sample }));
         }
         if flags.grid {
@@ -940,7 +972,7 @@ impl KeysView {
             return Ok(Some(KeysView::Overview));
         }
         if flags.keys {
-            let args = barca_core::key_query::KeyQueryArgs {
+            let args = barca_service::key_query::KeyQueryArgs {
                 states: &flags.states,
                 needs_run: flags.needs_run,
                 values: &flags.values,
@@ -951,7 +983,7 @@ impl KeysView {
                 offset: flags.offset.unwrap_or(0),
                 limit: None,
             };
-            return barca_core::key_query::KeyQuery::parse(&args)
+            return barca_service::key_query::KeyQuery::parse(&args)
                 .map(|query| Some(KeysView::Keys(query)))
                 .map_err(|e| format!("error: --keys: {e}"));
         }
@@ -985,7 +1017,7 @@ impl KeysView {
 
 /// The filter flags of `barca history`, checked here (also before a server sees them).
 pub(crate) fn history_filter(
-    flags: barca_core::history_filter::HistoryFlags<'_>,
+    flags: barca_service::history_filter::HistoryFlags<'_>,
 ) -> Result<HistoryFilter, CliError> {
     HistoryFilter::parse(flags, chrono::Utc::now())
         .map_err(|msg| CliError::from_prose(ErrorKind::Usage, format!("error: {msg}")))
@@ -1054,7 +1086,7 @@ pub(crate) fn pin_action(
     if versions {
         return Ok(PinAction::Versions {
             target,
-            limit: limit.unwrap_or(barca_core::pins::DEFAULT_VERSIONS),
+            limit: limit.unwrap_or(barca_service::pins::DEFAULT_VERSIONS),
         });
     }
     if let Some(path) = from_file {
@@ -1085,7 +1117,7 @@ pub(crate) fn pin_action(
 /// The file `--from-file` names, read whole (refused over the upload limit before reading).
 pub(crate) fn read_supplied(
     path: &std::path::Path,
-) -> Result<barca_core::pins::Supplied, CliError> {
+) -> Result<barca_service::pins::Supplied, CliError> {
     let usage = |text: String| CliError::from_prose(ErrorKind::Usage, text);
     let meta = std::fs::metadata(path).map_err(|e| {
         usage(format!(
@@ -1099,12 +1131,12 @@ pub(crate) fn read_supplied(
             path.display()
         )));
     }
-    if meta.len() > barca_core::pins::MAX_UPLOAD_BYTES as u64 {
+    if meta.len() > barca_service::pins::MAX_UPLOAD_BYTES as u64 {
         return Err(usage(format!(
             "error: --from-file {} is {} bytes, more than the {} an upload may be",
             path.display(),
             meta.len(),
-            barca_core::gc::size::human(barca_core::pins::MAX_UPLOAD_BYTES as u64)
+            barca_service::gc::size::human(barca_service::pins::MAX_UPLOAD_BYTES as u64)
         )));
     }
     let bytes = std::fs::read(path).map_err(|e| {
@@ -1117,8 +1149,9 @@ pub(crate) fn read_supplied(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    barca_core::pins::upload_format(&file_name, None).map_err(|e| usage(format!("error: {e}")))?;
-    Ok(barca_core::pins::Supplied {
+    barca_service::pins::upload_format(&file_name, None)
+        .map_err(|e| usage(format!("error: {e}")))?;
+    Ok(barca_service::pins::Supplied {
         bytes,
         file_name,
         format: None,
@@ -1144,7 +1177,7 @@ impl LogsArgs<'_> {
         self.stream.is_none_or(|s| s == stream)
             && self
                 .step
-                .is_none_or(|step| barca_core::queries::step_matches(node_id, step))
+                .is_none_or(|step| barca_service::queries::step_matches(node_id, step))
     }
 }
 

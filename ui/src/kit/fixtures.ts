@@ -259,7 +259,7 @@ export const resetPhases = {
 
 /**
  * A run in the state of `name` (`run-explanations.json`): the facts the Rust test states for
- * it, the explanation `barca-core` gives for them, and the rest of a `RunView` (ids, steps,
+ * it, the explanation `barca-service` gives for them, and the rest of a `RunView` (ids, steps,
  * logs) spelled here. No count, line or reason of the explanation is written in this file.
  */
 function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunView {
@@ -282,6 +282,7 @@ function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunVi
     failure: first_failure ? { node: first_failure.node_id, error: first_failure.error } : null,
     trigger_reason: null,
     waiting_for: null,
+    queue: null,
     outcome: null,
     steps: listed,
     steps_page: { total: listed.length, truncated: false, ...(nodes.length > 0 ? { nodes } : {}) },
@@ -360,7 +361,7 @@ const runManyKeys: RunView = {
   })),
 }
 
-/** The list row of a scenario's run: its facts, and the `line` `barca-core` words them with. */
+/** The list row of a scenario's run: its facts, and the `line` `barca-service` words them with. */
 function summary(name: RunScenarioName, id: string, overrides: Partial<RunSummary> = {}): RunSummary {
   const view = runView(name)
   const { run, line } = scenario(name)
@@ -433,7 +434,7 @@ const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => (
   target_line: overrides.target ?? `web.py:sessions_${String(n).padStart(2, '0')}`,
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
   schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30),
-  started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null, ...overrides,
+  started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null, queue: null, ...overrides,
 })
 const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
 const deepQueue: QueueView = {
@@ -482,7 +483,7 @@ const rebuildNow: RunNow = {
 
 /**
  * The run overview (`RunOverviewView`) in each state it says something different in: each is a
- * scenario of `run-explanations.json`, its facts and its explanation from `barca-core`.
+ * scenario of `run-explanations.json`, its facts and its explanation from `barca-service`.
  */
 export const runOverviews: Record<string, { run: RunView; now: RunNow | null; nowMs: number }> = {
   'full rebuild in flight': {

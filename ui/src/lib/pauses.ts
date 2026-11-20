@@ -23,7 +23,7 @@ export interface AffectedSchedule {
 
 /**
  * The schedules a pause covers (`covers.schedules` of `GET /pauses?target=`, found by the
- * scheduler's own walk in barca-core) joined with their jobs (`GET /schedule`), soonest next
+ * scheduler's own walk in barca-service) joined with their jobs (`GET /schedule`), soonest next
  * tick first. Which schedules, and how each touches the node, is the server's; this only looks
  * each one up and orders the list. A schedule `GET /schedule` does not list yet is left out.
  */

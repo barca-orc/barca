@@ -6,12 +6,12 @@ use crate::replay::RunChannel;
 use crate::run_model::{RunState, RunStatus};
 use axum::Json;
 use axum::extract::{Query, State};
-use barca_core::outcome::Trigger;
-use barca_core::time::now_secs_f64 as now_ts;
-use barca_core::{RunEvent, db};
+use barca_service::outcome::Trigger;
+use barca_service::time::now_secs_f64 as now_ts;
+use barca_service::{RunEvent, db};
 use futures::StreamExt;
 fn state(dir: &std::path::Path) -> AppState {
-    let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
+    let mut resolved = barca_service::config::resolve_in(None, dir).unwrap();
     resolved.db_path = dir.join("metadata.db").display().to_string();
     AppState::new(ServeConfig {
         files: vec!["p.py".into()],
@@ -33,6 +33,7 @@ fn live(handle: &str) -> RunState {
         target: Some("first".into()),
         nodes: vec![],
         trigger: Trigger::api(),
+        queue: Default::default(),
         refreshes: false,
         files: vec![],
         status: RunStatus::Pending,
@@ -41,7 +42,7 @@ fn live(handle: &str) -> RunState {
         started_at: now_ts(),
         finished_at: None,
         outcome: None,
-        cancel: barca_core::CancellationToken::new(),
+        cancel: barca_service::CancellationToken::new(),
         cancel_requested: false,
         cancellation: None,
     }
@@ -154,7 +155,7 @@ async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
     // A run waiting in the queue has no row yet: the filters apply to it too.
     let mut queued = live("queued");
     queued.trigger = Trigger {
-        triggered_by: barca_core::outcome::TriggeredBy::Schedule,
+        triggered_by: barca_service::outcome::TriggeredBy::Schedule,
         ..Trigger::api()
     };
     state.runs.registry.insert(queued.handle.clone(), queued);
@@ -198,7 +199,7 @@ fn finished_runs_past_the_memory_budget_are_dropped_oldest_first() {
         let channel = RunChannel::new();
         channel.emit(RunEvent::Line {
             line: "x".repeat(10_000),
-            when: barca_core::lines::LineWhen::Always,
+            when: barca_service::lines::LineWhen::Always,
         });
         state.runs.events.insert(handle.to_string(), channel);
     }
@@ -241,7 +242,7 @@ async fn a_slow_subscriber_and_a_reconnect_receive_every_event_once() {
         channel.emit(RunEvent::log(
             "p.py:a".into(),
             i.to_string(),
-            barca_core::LogStream::Stdout,
+            barca_service::LogStream::Stdout,
         ));
     }
     // The first reader takes a few events and goes away, as a dropped connection does.
@@ -303,7 +304,7 @@ fn a_queued_run_revalidates_source_before_any_worker_starts() {
             "from barca import asset\n@asset()\ndef target(): return 1\n",
         )
         .unwrap();
-        let mut cfg = barca_core::config::resolve_in(None, dir.path()).unwrap();
+        let mut cfg = barca_service::config::resolve_in(None, dir.path()).unwrap();
         cfg.db_path = dir.path().join("metadata.db").display().to_string();
         let mut state = AppState::new(crate::ServeConfig {
             files: vec![file.clone()],
@@ -324,7 +325,7 @@ fn a_queued_run_revalidates_source_before_any_worker_starts() {
         let handle = start(
             state.clone(),
             RunSpec::api(
-                barca_core::outcome::RunCommand::Get,
+                barca_service::outcome::RunCommand::Get,
                 vec!["target".into()],
                 vec![],
             ),

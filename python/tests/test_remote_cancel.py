@@ -59,7 +59,7 @@ def slow(numbers: list) -> int:
     return len(numbers)
 """
 
-# `barca_core::interrupt::WRAP_UP_LIMIT`: how long a cancelled run may spend on its backup.
+# `barca_service::interrupt::WRAP_UP_LIMIT`: how long a cancelled run may spend on its backup.
 WRAP_UP_LIMIT = 10
 
 

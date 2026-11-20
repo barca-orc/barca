@@ -18,7 +18,7 @@ pub(crate) enum OutputMode {
     Pretty,
 }
 
-impl From<OutputMode> for barca_core::report::ResultFormat {
+impl From<OutputMode> for barca_service::report::ResultFormat {
     fn from(mode: OutputMode) -> Self {
         match mode {
             OutputMode::Json => Self::Json,
@@ -41,6 +41,15 @@ impl OutputMode {
 /// `-o` on get. `path` and `value` choose what is returned and print only that, unless
 /// `--json` (or `--pretty`) asks for the whole result; `json` and `pretty` are the older
 /// spellings of `--json` and `--pretty`.
+/// `--queue` of `get` and `run`: where the run joins a server's run queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum QueueArg {
+    /// Ahead of waiting scheduled runs, behind earlier requests (the default)
+    Next,
+    /// Behind every waiting run, scheduled ones included
+    Last,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum GetOutput {
     /// Artifact paths, one per line (one per selected partition key); the default
@@ -74,7 +83,7 @@ pub(crate) enum LogStreamArg {
     Stderr,
 }
 
-impl From<LogStreamArg> for barca_core::LogStream {
+impl From<LogStreamArg> for barca_service::LogStream {
     fn from(arg: LogStreamArg) -> Self {
         match arg {
             LogStreamArg::Stdout => Self::Stdout,
@@ -245,6 +254,7 @@ Examples:
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
   barca get total --local                  # run in this process: not on this project's barca serve, nothing sent to a configured server
   barca get total pipeline.py --allow-paused   # run it even though it is paused (barca docs incidents)
+  barca get sales --server --queue last --refresh-all   # a backfill that waits its turn behind the server's scheduled runs (barca docs serve-ops)
   barca get --examples                     # the complete example collection; runs nothing
 
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents";
@@ -270,6 +280,7 @@ Examples:
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
   barca run deploy pipeline.py --local                 # run in this process: not on this project's barca serve, nothing posted to a configured server
   barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
+  barca run deploy --server --queue last               # behind the server's waiting runs, scheduled ones included (barca docs serve-ops)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 More: barca docs tasks, barca docs cache, barca docs agents";
@@ -714,6 +725,12 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
         allow_paused: bool,
+        /// Where the run joins a server's run queue: `next` (the default) ahead of waiting
+        /// scheduled runs, `last` behind every waiting run and at scheduled priority. A usage
+        /// error when the command runs on this machine. Experimental
+        #[arg(long, value_enum, value_name = "PLACE")]
+        #[arg(help = "On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental)", long_help = None)]
+        queue: Option<QueueArg>,
         #[command(flatten)]
         server: ServerFlags,
     },
@@ -782,6 +799,12 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
         allow_paused: bool,
+        /// Where the run joins a server's run queue: `next` (the default) ahead of waiting
+        /// scheduled runs, `last` behind every waiting run and at scheduled priority. A usage
+        /// error when the command runs on this machine. Experimental
+        #[arg(long, value_enum, value_name = "PLACE")]
+        #[arg(help = "On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental)", long_help = None)]
+        queue: Option<QueueArg>,
         #[command(flatten)]
         server: ServerFlags,
     },
@@ -1040,7 +1063,7 @@ pub(crate) enum Cli {
         files: Vec<PathBuf>,
         /// Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth
         #[arg(long)]
-        auth: Option<barca_core::serve::AuthMode>,
+        auth: Option<barca_service::serve::AuthMode>,
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
         port: u16,
@@ -1259,10 +1282,10 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "STATE", value_delimiter = ',')]
         state: Vec<String>,
         /// Keep nodes with this cause
-        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Cause::ALL.map(|v| v.as_str())))]
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_service::health::Cause::ALL.map(|v| v.as_str())))]
         cause: Option<String>,
         /// Keep nodes with this health
-        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Health::ALL.map(|v| v.as_str())))]
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_service::health::Health::ALL.map(|v| v.as_str())))]
         health: Option<String>,
         /// Keep nodes with this root id
         #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"])]
@@ -1482,5 +1505,5 @@ fn parse_capacity(value: &str) -> Result<usize, String> {
 }
 
 fn parse_timezone(value: &str) -> Result<String, String> {
-    barca_core::schedule::Zone::parse(value).map(|_| value.to_string())
+    barca_service::schedule::Zone::parse(value).map(|_| value.to_string())
 }

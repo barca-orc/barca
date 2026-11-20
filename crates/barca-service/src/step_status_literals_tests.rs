@@ -1,0 +1,119 @@
+//! No bare step-status literal outside the vocabulary (`barca_model::step_status`): a source
+//! scan over every library crate below the hosts (`barca-model` up to `barca-service`), which
+//! lives here, above them all.
+
+use crate::source_scan;
+use std::path::Path;
+
+/// The words only a step status spells. `success` and `failed` are left out: run and
+/// materialization statuses spell theirs the same way.
+const WORDS: [&str; 5] = ["cached", "ran", "partial", "skipped", "blocked"];
+
+/// Files that may spell one of [`WORDS`] as a bare literal, each with why.
+const ALLOWED: &[(&str, &str, &str)] = &[
+    ("step_status.rs", "*", "the vocabulary"),
+    (
+        "cache_state.rs",
+        "*",
+        "the cache-state vocabulary shares three spellings",
+    ),
+    (
+        "health.rs",
+        "*",
+        "the health vocabulary shares three spellings (`blocked`, `partial`, `cached`)",
+    ),
+    (
+        "views/health.rs",
+        "*",
+        "the health vocabulary shares three spellings (`blocked`, `partial`, `cached`)",
+    ),
+    (
+        "partition_grid.rs",
+        "blocked",
+        "the key-state vocabulary shares one spelling",
+    ),
+    (
+        "key_query.rs",
+        "blocked",
+        "the key-state vocabulary shares one spelling",
+    ),
+    ("parse.rs", "partial", "Python's functools.partial"),
+    (
+        "io_loop.rs",
+        "blocked",
+        "the worker protocol's `blocked` frame type",
+    ),
+    (
+        "wire.rs",
+        "blocked",
+        "the worker protocol's `blocked` frame type",
+    ),
+    (
+        "jsonlog.rs",
+        "skipped",
+        "a word a log line's severity is read from",
+    ),
+    (
+        "results.rs",
+        "cached",
+        "also the `cached` count key of a partitioned target's summary",
+    ),
+    (
+        "outcome.rs",
+        "ran",
+        "the verb of the multi-target summary line",
+    ),
+    (
+        "run_explanation.rs",
+        "ran",
+        "the verb of a run's `why` headline",
+    ),
+    (
+        "telemetry/datadog.rs",
+        "skipped",
+        "a telemetry run status: a serve tick that started no run",
+    ),
+    (
+        "db/ticks.rs",
+        "skipped",
+        "a tick action: a due tick held back for a run in flight",
+    ),
+];
+
+#[test]
+fn no_bare_step_status_literal_outside_the_vocabulary() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut offenders = Vec::new();
+    let sources = [
+        "barca-model",
+        "barca-compile",
+        "barca-db",
+        "barca-proc",
+        "barca-engine",
+        "barca-store",
+        "barca-decide",
+        "barca-run",
+        "barca-analysis",
+        "barca-service",
+    ]
+    .iter()
+    .flat_map(|krate| source_scan::non_test_sources(&crates.join(krate).join("src")));
+    for (rel, src) in sources {
+        for (line, text) in source_scan::string_literals(&src) {
+            let Some(word) = WORDS.iter().find(|w| **w == text) else {
+                continue;
+            };
+            let allowed = ALLOWED
+                .iter()
+                .any(|(f, w, _)| *f == rel && (*w == "*" || w == word));
+            if !allowed {
+                offenders.push(format!("  {rel}:{line}: \"{word}\""));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "bare step-status literals (use StepStatus::<Variant>.as_str()):\n{}",
+        offenders.join("\n")
+    );
+}

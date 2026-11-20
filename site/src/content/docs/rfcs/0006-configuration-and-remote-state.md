@@ -333,7 +333,7 @@ With `state = "off"` nothing is pulled or pushed, and none of the above runs.
 ### 4.2 Implementation Details
 
 Resolution lives in `crates/barca-model/src/config.rs`; the shared-state pull/checkpoint/push
-sequence lives in `crates/barca-core/src/state_sync.rs` (Rust side; the swap of the local
+sequence lives in `crates/barca-service/src/state_sync.rs` (Rust side; the swap of the local
 database is `db::replace_db`, and what it carries over is `state_carry.rs`) and
 `python/barca/_state.py` (`python -m barca._state`, the Python-side counterpart for
 backends gcsfs can't express a generation precondition on — see
@@ -377,8 +377,8 @@ replays on top of it. Covered by the backend conformance suite (conditional crea
 cross-machine cache hit, concurrent-writer conflict → replay, a pull over unpushed
 local runs) run against MinIO / fake-gcs-server / Azurite on every PR, plus
 `crates/barca-model/src/config.rs` unit tests for precedence resolution. The pull rules of
-§4.1 are pinned by `crates/barca-core/src/state_carry.rs` (what is unpushed), the
-`replace_db` tests in `crates/barca-core/src/db.rs` (the sequence, a death at each point,
+§4.1 are pinned by `crates/barca-service/src/state_carry.rs` (what is unpushed), the
+`replace_db` tests in `crates/barca-service/src/db.rs` (the sequence, a death at each point,
 unreadable and older-schema databases) and `python/tests/test_state_pull.py` (killed
 runs, concurrent runs and read-only commands, across project directories sharing a state).
 

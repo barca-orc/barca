@@ -7,8 +7,8 @@ use super::{
     transport_reason,
 };
 use crate::error::{CliError, ErrorKind};
-use barca_core::RunEvent;
-use barca_core::outcome::Outcome;
+use barca_service::RunEvent;
+use barca_service::outcome::Outcome;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -243,7 +243,7 @@ impl<'a> Follow<'a> {
                 ),
             ));
         }
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] event replay is incomplete for run {}; following its outcome by polling; recorded logs remain available",
             self.run_id
         );
@@ -306,7 +306,7 @@ impl<'a> Follow<'a> {
             self.lost = Some((why, deadline));
             return Ok(());
         }
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] lost the event stream of run {} ({why}); waiting up to {}s for the server \
              to come back",
             self.run_id,
@@ -453,7 +453,7 @@ impl<'a> Follow<'a> {
                     self.instance = instance;
                     deadline = tokio::time::Instant::now() + self.window;
                     self.lost = Some((why.clone(), deadline));
-                    barca_core::errln!(
+                    barca_service::errln!(
                         "[barca] run {} has a new attempt; following its new stream without submitting another run",
                         self.run_id
                     );
@@ -473,7 +473,7 @@ impl<'a> Follow<'a> {
                     if !(instance.is_some() && instance == self.instance) {
                         self.restarts += 1;
                     }
-                    barca_core::errln!(
+                    barca_service::errln!(
                         "[barca] the server is back; run {} ended meanwhile ({})",
                         self.run_id,
                         body["status"].as_str().unwrap_or("unknown")
@@ -489,10 +489,10 @@ impl<'a> Follow<'a> {
                     self.lost = None;
                     self.unproven = Some((deadline, tokio::time::Instant::now()));
                     if same {
-                        barca_core::errln!("[barca] reconnected; following run {}", self.run_id);
+                        barca_service::errln!("[barca] reconnected; following run {}", self.run_id);
                     } else {
                         self.restarts += 1;
-                        barca_core::errln!(
+                        barca_service::errln!(
                             "[barca] the server restarted; following run {} there (a run \
                              that was stopped is shown again from its new start)",
                             self.run_id

@@ -33,7 +33,7 @@ argv ──clap──> Cli ──dispatch::place──> Target ──Request::of
   `status` need one; a server takes a directory or none (it has its deployed files). `get -o
   url` and `history --reconcile` are refused for a server. The checks run in a fixed order, so
   a command line with two mistakes reports the same one wherever it runs.
-- **The backends** each have one `perform(request, ...)`: `commands` calls `barca_core`,
+- **The backends** each have one `perform(request, ...)`: `commands` calls `barca_service`,
   `client` calls the server's routes. `doctor` is the one command both take part in (this
   machine's checks, then the server's), so `dispatch` composes it.
 
@@ -114,10 +114,10 @@ commands' printers and request types).
 
 ## Where the printers are
 
-`print` holds the printers the CLI keeps: `emit` (writes what `barca_core::report` rendered),
+`print` holds the printers the CLI keeps: `emit` (writes what `barca_service::report` rendered),
 `print_groups` (`list --groups`), `print_gc`, the four `pin` printers and the `logs` line
 printers with `-f`'s closing line and exit code. They stay in the CLI, not beside the
-renderers in `barca_core::report`, for three reasons. A server prints none of them: it answers
+renderers in `barca_service::report`, for three reasons. A server prints none of them: it answers
 with the typed value (`GcResult`, `Versions`, `Pinned`, the groups, the log entries) as JSON,
 and the `--json` half of each printer is one `serde_json` call on that value. They write
 straight to stdout and stderr, where `report`'s renderers return chunks, so moving them means
@@ -129,7 +129,7 @@ the plan (C5).
 - `client/inspect.rs` still adapts some answers to core shapes before rendering: `/list` nodes
   into `AssetSummary`, the run detail's steps and page, the files filter with the summary
   recomputed, the table of `sql`. Each wants a typed view the server and the CLI share
-  (`barca_core::served`), which is the views track's, not a move within this crate.
+  (`barca_service::served`), which is the views track's, not a move within this crate.
 - `SERVER_QUERY_ROWS` in `client/inspect.rs` repeats the server's row limit for
   `POST /sql/query`.
 - `-o url` signing (`commands/get.rs`) and the local `logs -f` tail loop (`commands/logs.rs`)

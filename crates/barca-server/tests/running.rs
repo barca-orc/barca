@@ -61,7 +61,7 @@ fn config(dir: &Path, schedule: bool) -> ServeConfig {
     )
     .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
+    let mut resolved = barca_service::config::resolve_in(None, dir).unwrap();
     resolved.db_path = dir.join("metadata.db").display().to_string();
     resolved.artifact_root = dir.join("artifacts").display().to_string();
     resolved.local_artifact_dir = resolved.artifact_root.clone();
@@ -404,7 +404,7 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
         .find(|r| is_ticking(&r["schedule_id"]))
         .cloned()
         .unwrap_or_else(|| panic!("no scheduled run listed: {runs}"));
-    let rfc = |secs: &Value| Value::from(barca_core::outcome::rfc3339(secs.as_i64().unwrap()));
+    let rfc = |secs: &Value| Value::from(barca_service::outcome::rfc3339(secs.as_i64().unwrap()));
 
     // The last tick and its run: the queued run, by the same id and status everywhere.
     assert_eq!(entry["last_run_id"], run["id"], "{entry} {run}");

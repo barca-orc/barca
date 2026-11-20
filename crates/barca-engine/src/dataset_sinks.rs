@@ -184,9 +184,9 @@ pub async fn prune(
     if request.is_empty() {
         return Vec::new();
     }
-    let mut cmd = crate::helper_proc::python_module(python, "barca._sinks", storage_options);
+    let mut cmd = barca_proc::helper_proc::python_module(python, "barca._sinks", storage_options);
     cmd.arg("prune").kill_on_drop(true);
-    let answer = crate::helper_proc::run_json::<PruneAnswer>(
+    let answer = barca_proc::helper_proc::run_json::<PruneAnswer>(
         cmd,
         &serde_json::json!({ "datasets": request }),
         None,
@@ -196,15 +196,15 @@ pub async fn prune(
         Ok(answer) => answer,
         Err(e) => {
             let why = match e {
-                crate::helper_proc::JsonFailed::Spawn(e)
-                | crate::helper_proc::JsonFailed::Io(e) => e.to_string(),
-                crate::helper_proc::JsonFailed::TimedOut(limit) => {
+                barca_proc::helper_proc::JsonFailed::Spawn(e)
+                | barca_proc::helper_proc::JsonFailed::Io(e) => e.to_string(),
+                barca_proc::helper_proc::JsonFailed::TimedOut(limit) => {
                     format!("it did not finish within {}s", limit.as_secs())
                 }
-                crate::helper_proc::JsonFailed::Exited(stderr) => {
-                    crate::helper_proc::last_line(&stderr)
+                barca_proc::helper_proc::JsonFailed::Exited(stderr) => {
+                    barca_proc::helper_proc::last_line(&stderr)
                 }
-                crate::helper_proc::JsonFailed::Invalid(e) => e.to_string(),
+                barca_proc::helper_proc::JsonFailed::Invalid(e) => e.to_string(),
             };
             return vec![format!(
                 "[barca] warning: dataset sinks: the keys the assets no longer have were not \

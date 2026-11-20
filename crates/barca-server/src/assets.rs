@@ -8,9 +8,9 @@ use crate::snapshot::SnapshotDb;
 use crate::state::{AppState, Runs};
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use barca_core::db;
-use barca_core::queries;
-use barca_core::results::PlanResult;
+use barca_service::db;
+use barca_service::queries;
+use barca_service::results::PlanResult;
 use serde_json::{Value, json};
 
 /// `GET /plan` — execution plan for the server's files (cache-aware).
@@ -20,7 +20,7 @@ pub async fn plan(
 ) -> Result<Json<PlanResult>, ApiError> {
     let dag = reads.loaded_dag().await?;
     let cfg = &reads.config.resolved;
-    let sizing = barca_core::sizing(cfg.capacity, cfg.pool_size, runs.server_capacity());
+    let sizing = barca_service::sizing(cfg.capacity, cfg.pool_size, runs.server_capacity());
     Ok(Json(queries::plan_from_dag(&dag, sizing)))
 }
 
@@ -33,7 +33,7 @@ pub async fn assets(State(reads): State<Reads>) -> Result<Json<Vec<Value>>, ApiE
     let next_fires = next_fires(&dag);
     let nodes = result
         .iter()
-        .map(|a| barca_core::report::list_node_json(a, next_fires.get(&a.id)))
+        .map(|a| barca_service::report::list_node_json(a, next_fires.get(&a.id)))
         .collect();
     Ok(Json(nodes))
 }
@@ -54,7 +54,7 @@ pub async fn asset_schema(
     State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<SchemaQuery>,
-) -> Result<Json<Vec<barca_core::status::NodeStatus>>, ApiError> {
+) -> Result<Json<Vec<barca_service::status::NodeStatus>>, ApiError> {
     let dag = reads.inspect_dag().await?;
     let summaries = queries::list_assets_from_dag(&dag);
     let matches = crate::resolve::matching(&summaries, |s| s.id.as_str(), &name);
@@ -75,7 +75,7 @@ pub async fn asset_schema(
         .nodes
         .clone();
     nodes.retain(|n| n.id == id || inputs.contains(&n.id));
-    barca_core::status::read_schemas(
+    barca_service::status::read_schemas(
         &reads.config.python,
         &cfg,
         &mut nodes,
@@ -118,8 +118,8 @@ pub async fn asset_detail(
     let next_fire = next_fires(&dag).remove(&summary.id);
     let running = running_node(&state, &db_state, &snap, &summary.id).await?;
     Ok(Json(json!({
-        "asset": barca_core::report::list_node_json(&summary, next_fire.as_ref()),
-        "stats": barca_core::report::stats_json(&stats),
+        "asset": barca_service::report::list_node_json(&summary, next_fire.as_ref()),
+        "stats": barca_service::report::stats_json(&stats),
         "running": running,
         "failure": failure,
     })))
@@ -145,7 +145,7 @@ async fn running_node(
 /// Organizational metadata; never part of the execution graph.
 pub async fn groups(
     State(reads): State<Reads>,
-) -> Result<Json<Vec<barca_core::groups::NodeGroup>>, ApiError> {
+) -> Result<Json<Vec<barca_service::groups::NodeGroup>>, ApiError> {
     let dag = reads.loaded_dag().await?;
     Ok(Json(dag.groups.clone()))
 }

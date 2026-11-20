@@ -10,7 +10,7 @@ petgraph = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
 # No "suggestions" feature: a mistyped flag or subcommand gets barca's own "Did you mean" (one
-# rule for every name, `barca_core::suggest`; see `barca docs agents`), not clap's tips.
+# rule for every name, `barca_service::suggest`; see `barca docs agents`), not clap's tips.
 clap = { version = "4", default-features = false, features = ["std", "color", "help", "usage", "error-context", "derive"] }
 thiserror = "2"
 axum = "0.8"
@@ -31,7 +31,7 @@ croner = "3.0.1"
 futures = "0.3"
 libc = "0.2"
 tokio-util = "0.7"
-# TypeScript binding generation (`ts` features of barca-core and barca-server), never in the
+# TypeScript binding generation (`ts` features of barca-service and barca-server), never in the
 # production binary; regenerates ui/src/lib/generated/.
 ts-rs = "12"
 

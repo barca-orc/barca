@@ -31,7 +31,7 @@ Three things went wrong with it:
 
 The CLI's read commands (`status` and its keys views, `history`, `stats`, `logs`, `sql`'s
 reads, `doctor`'s metadata check) read through a `ReadView`, as the server's routes do:
-`barca_core::db::read_metadata`. A database that has no view (missing, an empty file, written
+`barca_service::db::read_metadata`. A database that has no view (missing, an empty file, written
 by an earlier release and not yet completed, not in WAL mode) is treated as it was before
 there were views, command by command. `history`, `stats` and `logs` have always created or
 completed the database first (`open_metadata`); they still do, and then view it. `status`, its

@@ -102,6 +102,7 @@
       "steps": 1
     },
     "principal": null,
+    "queue": null,
     "retries": 0,
     "run_id": "5c4ed0001445",
     "schedule_id": "orders.py:orders_feed",
@@ -264,6 +265,7 @@
       "steps": 9
     },
     "principal": null,
+    "queue": null,
     "retries": 0,
     "run_id": "a1f0c0000001",
     "schedule_id": null,
@@ -653,6 +655,7 @@
       "steps": 1
     },
     "principal": "token:ci-bot",
+    "queue": null,
     "retries": 0,
     "run_id": "a1f0c0000005",
     "schedule_id": null,
@@ -812,6 +815,7 @@
       "steps": 1
     },
     "principal": null,
+    "queue": null,
     "retries": 0,
     "run_id": "a1f0c0000006",
     "schedule_id": null,

@@ -41,8 +41,8 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
-use barca_core::dag::Dag;
-use barca_core::sql::{SqlResult, tables};
+use barca_service::dag::Dag;
+use barca_service::sql::{SqlResult, tables};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -98,7 +98,7 @@ pub(crate) struct Source {
 }
 
 /// The tables of `POST /sql/query`. To serve another one, add its columns and row builder to
-/// `barca_core::sql::tables` (where `barca sql` on a machine reads them too) and an entry
+/// `barca_service::sql::tables` (where `barca sql` on a machine reads them too) and an entry
 /// here that reads its rows from [`Inputs`]; nothing else names the tables.
 pub(crate) const SOURCES: &[Source] = &[
     Source {
@@ -157,8 +157,8 @@ fn rows_of(table: tables::Table, total: usize) -> Rows {
 fn runs(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
     Box::pin(async move {
         let path = &inputs.snapshot.path;
-        let total = barca_core::db::count_runs(path).await?;
-        let rows = barca_core::db::get_recent_runs(path, TABLE_ROWS).await?;
+        let total = barca_service::db::count_runs(path).await?;
+        let rows = barca_service::db::get_recent_runs(path, TABLE_ROWS).await?;
         Ok(rows_of(tables::runs(Some(&rows)), total))
     })
 }
@@ -166,7 +166,7 @@ fn runs(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
 fn materializations(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
     Box::pin(async move {
         let (rows, total) =
-            barca_core::db::read_step_rows(&inputs.snapshot.path, TABLE_ROWS, 0).await?;
+            barca_service::db::read_step_rows(&inputs.snapshot.path, TABLE_ROWS, 0).await?;
         Ok(rows_of(tables::materializations(Some(&rows)), total))
     })
 }
@@ -227,7 +227,8 @@ fn schedules(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
 
 fn ticks(inputs: &Inputs) -> BoxFuture<'_, Result<Rows, ApiError>> {
     Box::pin(async move {
-        let (rows, total) = barca_core::db::recent_ticks(&inputs.snapshot.path, TABLE_ROWS).await?;
+        let (rows, total) =
+            barca_service::db::recent_ticks(&inputs.snapshot.path, TABLE_ROWS).await?;
         Ok(rows_of(tables::ticks(Some(&rows)), total))
     })
 }
@@ -313,7 +314,7 @@ impl QueryHelper {
         // the text does not show: a query that calls either gets every table.
         let indirect = ["query", "query_table"]
             .iter()
-            .any(|function| barca_core::sql::names(query, function));
+            .any(|function| barca_service::sql::names(query, function));
         let named: Vec<&Source> = SOURCES
             .iter()
             .filter(|s| indirect || tables::named(query, s.name))
@@ -514,7 +515,9 @@ pub async fn query(
     let (helper, server) = (state.sql.clone(), state.clone());
     let result = tokio::spawn(async move { helper.run(&server, &body.query, limit).await })
         .await
-        .map_err(|e| ApiError::Barca(barca_core::BarcaError::Other(format!("sql query: {e}"))))??;
+        .map_err(|e| {
+            ApiError::Barca(barca_service::BarcaError::Other(format!("sql query: {e}")))
+        })??;
     let truncated = (result.rows.len() as u64) < result.total;
     Ok(Json(SqlAnswer {
         hint: truncated.then(|| {
@@ -563,7 +566,7 @@ mod tests {
         let venv = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.venv/bin/python");
         let interpreter = match venv.exists() {
             true => venv,
-            false => barca_core::commands::find_python(),
+            false => barca_service::commands::find_python(),
         };
         let launcher = dir.join("query-python");
         std::fs::write(
@@ -581,10 +584,10 @@ mod tests {
     async fn server(dir: &Path, read_only: bool, without_duckdb: bool) -> AppState {
         let file = dir.join("pipeline.py");
         std::fs::write(&file, PIPELINE).unwrap();
-        let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
+        let mut resolved = barca_service::config::resolve_in(None, dir).unwrap();
         std::fs::create_dir_all(dir.join(".barca")).unwrap();
         resolved.db_path = dir.join(".barca/metadata.db").display().to_string();
-        barca_core::db::init_db(&resolved.db_path).await.unwrap();
+        barca_service::db::init_db(&resolved.db_path).await.unwrap();
         let state = AppState::new(crate::ServeConfig {
             files: vec![file.display().to_string()],
             host: "127.0.0.1".parse().unwrap(),
@@ -670,7 +673,7 @@ mod tests {
             let listed = ask(&state, "show tables").await.unwrap();
             assert_eq!(listed.total, SOURCES.len() as u64);
             // A database write is seen by the next query that names a table.
-            barca_core::db::create_run(
+            barca_service::db::create_run(
                 &state.config.resolved.db_path,
                 "run-1",
                 "get",
@@ -1203,7 +1206,7 @@ mod tests {
         .unwrap();
         assert_eq!(runs.rows, [json!({"n": 0})]);
         assert_eq!(state.sql.loads.load(Ordering::Relaxed), SOURCES.len());
-        barca_core::db::create_run(
+        barca_service::db::create_run(
             &state.config.resolved.db_path,
             "run-1",
             "get",

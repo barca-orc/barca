@@ -15,8 +15,8 @@ use crate::replay::{ReplayHub, RunChannel};
 use crate::run_model::{RunState, RunStatus};
 use crate::views::JobStatus;
 use axum::extract::FromRef;
-use barca_core::CancellationToken;
-use barca_core::db;
+use barca_service::CancellationToken;
+use barca_service::db;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,7 +40,7 @@ pub struct Runs {
     pub(crate) replay: ReplayHub,
     /// Bounds how many runs execute concurrently (`--max-runs`). Runs execute Python in
     /// parallel; the shared metadata.db is kept race-free by a process-wide DB
-    /// lock in `barca-core`, not by serializing whole runs.
+    /// lock in `barca-service`, not by serializing whole runs.
     pub slots: Arc<Semaphore>,
     /// One more slot that only a run someone asked for (not a cron tick) may take while a
     /// scheduled run holds one of `slots` and they are full: an API `get` never waits behind
@@ -48,10 +48,10 @@ pub struct Runs {
     pub interactive_slot: Arc<Semaphore>,
     /// The capacity every run shares (`--capacity`, `[server] capacity`, #628): a step of any
     /// run is admitted against it as well as against its run's own. `None`: not set.
-    pub capacity: Option<Arc<barca_core::serve::capacity::SharedCapacity>>,
+    pub capacity: Option<Arc<barca_service::serve::capacity::SharedCapacity>>,
     /// The asset steps the runs are executing (#654): a run waits for a step another run is
     /// computing instead of computing it again.
-    pub shared_steps: Arc<barca_core::serve::claims::SharedSteps>,
+    pub shared_steps: Arc<barca_service::serve::claims::SharedSteps>,
     /// The runs accepted and not started, in order, and whether the queue is paused.
     pub queue: Arc<crate::queue::Queue>,
     /// Every run task, so a drain can wait for them to end.
@@ -61,7 +61,7 @@ pub struct Runs {
 }
 
 impl Runs {
-    /// The shared capacity as `barca_core::sizing` takes it: its total and the setting that
+    /// The shared capacity as `barca_service::sizing` takes it: its total and the setting that
     /// gave it.
     pub(crate) fn server_capacity(&self) -> Option<(usize, &'static str)> {
         self.capacity
@@ -95,7 +95,7 @@ pub struct Lifecycle {
     pub draining: CancellationToken,
     /// Why the server cancelled its runs (`server shutdown`), set before [`Self::shutdown`]
     /// is cancelled. Every run executes inside its scope, so the run records the reason.
-    pub cancel_reason: barca_core::interrupt::CancelReason,
+    pub cancel_reason: barca_service::interrupt::CancelReason,
     /// When this server started (unix seconds), for `GET /project`'s `deployed_at`.
     pub started_at: i64,
     /// The same, RFC 3339 with milliseconds (`GET /health` `started_at`): a client that
@@ -111,9 +111,9 @@ impl Lifecycle {
 
     /// `waiting_for` of a run in `status`: `restart` for a queued run while the server drains
     /// (it starts on the next server, #1011); `None` otherwise.
-    pub fn waiting_for(&self, status: RunStatus) -> Option<barca_core::run_explain::WaitingFor> {
+    pub fn waiting_for(&self, status: RunStatus) -> Option<barca_service::run_explain::WaitingFor> {
         (status == RunStatus::Pending && self.is_draining())
-            .then_some(barca_core::run_explain::WaitingFor::Restart)
+            .then_some(barca_service::run_explain::WaitingFor::Restart)
     }
 
     /// The error a cancelled run reports: `run cancelled`, plus the reason when the server
@@ -180,11 +180,13 @@ impl AppState {
             .max(1);
         let now = chrono::Utc::now();
         let admission =
-            barca_core::serve::capacity::Admission::from(config.resolved.server_admission);
+            barca_service::serve::capacity::Admission::from(config.resolved.server_admission);
         let capacity = config.resolved.server_capacity.map(|(total, source)| {
-            Arc::new(barca_core::serve::capacity::SharedCapacity::with_admission(
-                total, source, admission,
-            ))
+            Arc::new(
+                barca_service::serve::capacity::SharedCapacity::with_admission(
+                    total, source, admission,
+                ),
+            )
         });
         let auth = Arc::new(crate::auth_http::Access::new(&config.resolved));
         let config = Arc::new(config);
@@ -199,7 +201,7 @@ impl AppState {
                 slots: Arc::new(Semaphore::new(run_slot_count)),
                 interactive_slot: Arc::new(Semaphore::new(1)),
                 capacity,
-                shared_steps: Arc::new(barca_core::serve::claims::SharedSteps::new()),
+                shared_steps: Arc::new(barca_service::serve::claims::SharedSteps::new()),
                 queue: Arc::new(crate::queue::Queue::new(run_slot_count)),
                 tasks: tokio_util::task::TaskTracker::new(),
                 writer_recorded: Default::default(),
@@ -212,7 +214,7 @@ impl AppState {
             lifecycle: Lifecycle {
                 shutdown: CancellationToken::new(),
                 draining: CancellationToken::new(),
-                cancel_reason: barca_core::interrupt::CancelReason::new(),
+                cancel_reason: barca_service::interrupt::CancelReason::new(),
                 started_at: now.timestamp(),
                 started: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             },
@@ -237,7 +239,7 @@ impl AppState {
 
     /// Publish the writer's settings on its first metadata write. An idle server can
     /// inspect a project with no database without creating one.
-    pub(crate) async fn record_writer(&self) -> Result<(), barca_core::BarcaError> {
+    pub(crate) async fn record_writer(&self) -> Result<(), barca_service::BarcaError> {
         self.runs
             .writer_recorded
             .get_or_try_init(|| self.publish_writer(vec![]))
@@ -248,14 +250,25 @@ impl AppState {
     pub(crate) async fn publish_writer(
         &self,
         schedules: Vec<String>,
-    ) -> Result<(), barca_core::BarcaError> {
+    ) -> Result<(), barca_service::BarcaError> {
         let cfg = &self.config.resolved;
         let workers =
-            barca_core::sizing(cfg.capacity, cfg.pool_size, self.runs.server_capacity()).pool_size;
+            barca_service::sizing(cfg.capacity, cfg.pool_size, self.runs.server_capacity())
+                .pool_size;
         let now = chrono::Utc::now().timestamp();
-        barca_core::liveness::record_serving(&cfg.db_path, now, self.runs.queue.max_runs, workers)
-            .await?;
-        barca_core::liveness::record_scheduler(&cfg.db_path, now, schedules, &self.config.timezone)
-            .await
+        barca_service::liveness::record_serving(
+            &cfg.db_path,
+            now,
+            self.runs.queue.max_runs,
+            workers,
+        )
+        .await?;
+        barca_service::liveness::record_scheduler(
+            &cfg.db_path,
+            now,
+            schedules,
+            &self.config.timezone,
+        )
+        .await
     }
 }

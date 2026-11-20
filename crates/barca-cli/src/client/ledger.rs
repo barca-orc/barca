@@ -1,18 +1,18 @@
-//! The ledger of a local `get` / `run` ([`barca_core::ledger::LedgerTransport`] for
+//! The ledger of a local `get` / `run` ([`barca_service::ledger::LedgerTransport`] for
 //! [`Server`]): `GET /health`, `POST /ledger/lookup`, `POST /ledger/runs`.
 
 use super::{LEDGER_TIMEOUT, Server, transport_reason};
-use barca_core::envelope::ErrorEnvelope;
+use barca_service::envelope::ErrorEnvelope;
 
 /// The ledger requests of a local `get` / `run`: the JSON body of a 2xx, or why there is none.
-/// What the answers mean is `barca_core::ledger`'s; this is only the transport.
+/// What the answers mean is `barca_service::ledger`'s; this is only the transport.
 impl Server {
     async fn ledger_call<T: serde::de::DeserializeOwned>(
         &self,
         request: reqwest::RequestBuilder,
         route: &str,
-    ) -> Result<T, barca_core::ledger::LedgerError> {
-        use barca_core::ledger::LedgerError;
+    ) -> Result<T, barca_service::ledger::LedgerError> {
+        use barca_service::ledger::LedgerError;
         let response = request
             .timeout(LEDGER_TIMEOUT)
             .header(reqwest::header::ACCEPT, "application/json")
@@ -60,14 +60,14 @@ impl Server {
         &'a self,
         path: &'static str,
         body: &'a B,
-    ) -> barca_core::ledger::BoxFuture<'a, Result<T, barca_core::ledger::LedgerError>> {
+    ) -> barca_service::ledger::BoxFuture<'a, Result<T, barca_service::ledger::LedgerError>> {
         Box::pin(async move {
             let body = serde_json::to_vec(body)
-                .map_err(|e| barca_core::ledger::LedgerError::Unreachable(e.to_string()))?;
+                .map_err(|e| barca_service::ledger::LedgerError::Unreachable(e.to_string()))?;
             let request = self
                 .http
                 .request(reqwest::Method::POST, path)
-                .map_err(|e| barca_core::ledger::LedgerError::Unreachable(e.error))?
+                .map_err(|e| barca_service::ledger::LedgerError::Unreachable(e.error))?
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body);
             self.ledger_call(request, &format!("POST {path}")).await
@@ -75,42 +75,42 @@ impl Server {
     }
 }
 
-impl barca_core::ledger::LedgerTransport for Server {
+impl barca_service::ledger::LedgerTransport for Server {
     fn url(&self) -> &str {
         &self.url
     }
 
     fn health(
         &self,
-    ) -> barca_core::ledger::BoxFuture<
+    ) -> barca_service::ledger::BoxFuture<
         '_,
-        Result<barca_core::ledger::ServerHealth, barca_core::ledger::LedgerError>,
+        Result<barca_service::ledger::ServerHealth, barca_service::ledger::LedgerError>,
     > {
         Box::pin(async move {
             let request = self
                 .http
                 .request(reqwest::Method::GET, "/health")
-                .map_err(|e| barca_core::ledger::LedgerError::Unreachable(e.error))?;
+                .map_err(|e| barca_service::ledger::LedgerError::Unreachable(e.error))?;
             self.ledger_call(request, "GET /health").await
         })
     }
 
     fn lookup<'a>(
         &'a self,
-        request: &'a barca_core::ledger::LookupRequest,
-    ) -> barca_core::ledger::BoxFuture<
+        request: &'a barca_service::ledger::LookupRequest,
+    ) -> barca_service::ledger::BoxFuture<
         'a,
-        Result<barca_core::ledger::LookupResponse, barca_core::ledger::LedgerError>,
+        Result<barca_service::ledger::LookupResponse, barca_service::ledger::LedgerError>,
     > {
         self.ledger_post("/ledger/lookup", request)
     }
 
     fn post_run<'a>(
         &'a self,
-        post: &'a barca_core::ledger::LedgerPost,
-    ) -> barca_core::ledger::BoxFuture<
+        post: &'a barca_service::ledger::LedgerPost,
+    ) -> barca_service::ledger::BoxFuture<
         'a,
-        Result<barca_core::ledger::PostAccepted, barca_core::ledger::LedgerError>,
+        Result<barca_service::ledger::PostAccepted, barca_service::ledger::LedgerError>,
     > {
         self.ledger_post("/ledger/runs", post)
     }

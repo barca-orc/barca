@@ -37,7 +37,7 @@ fn files_are_checked_for_the_side_they_go_to() {
     let none = usage("barca run deploy", Side::Here);
     assert!(none.contains("no .py files provided"), "{none}");
     assert!(request("barca run deploy", Side::Server).is_ok());
-    // The commands that leave their files to `barca_core` here still check them for a server.
+    // The commands that leave their files to `barca_service` here still check them for a server.
     for line in [
         "barca list notes.txt",
         "barca stats total notes.txt",

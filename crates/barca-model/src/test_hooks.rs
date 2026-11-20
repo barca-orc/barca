@@ -44,7 +44,7 @@ pub fn slack_remind_after() -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
-// The three items below serve only `barca-core`'s unit tests. A crate's `cfg(test)` does not
+// The three items below serve only `barca-service`'s unit tests. A crate's `cfg(test)` does not
 // reach its dependents' tests, so they are compiled always, and hidden.
 
 /// Set on the child process `helper_proc`'s storage-options test re-executes itself as.

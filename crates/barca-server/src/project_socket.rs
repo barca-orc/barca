@@ -40,7 +40,7 @@ impl ProjectSocket {
     #[cfg(unix)]
     pub(crate) fn open(db_path: &str) -> Result<Self, String> {
         use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-        let path = barca_core::db::serve_socket_path(db_path);
+        let path = barca_service::db::serve_socket_path(db_path);
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         let staging = dir.join(format!(".serve-{}", std::process::id()));
         let staged = staging.join("s");
@@ -127,7 +127,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join(".barca").join("metadata.db");
         let db = db.to_str().unwrap();
-        let path = barca_core::db::serve_socket_path(db);
+        let path = barca_service::db::serve_socket_path(db);
         // A dead server's socket: bound once, its listener gone.
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         drop(std::os::unix::net::UnixListener::bind(&path).unwrap());

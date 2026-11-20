@@ -9,7 +9,7 @@ name = "barca"
 path = "src/main.rs"
 
 [dependencies]
-barca-core = { path = "../barca-core" }
+barca-service = { path = "../barca-service" }
 barca-server = { path = "../barca-server" }
 chrono = "0.4.45"
 clap = { workspace = true }

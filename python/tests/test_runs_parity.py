@@ -2,7 +2,7 @@
 
 `barca history RUN_ID --json` reads the metadata database; `GET /runs/{run_id}` reads a
 server's snapshot of it and adds what only the server holds (its runs in memory, the events a
-run streamed). Both go through `barca_core::views::run_view`, and the run list through
+run streamed). Both go through `barca_service::views::run_view`, and the run list through
 `queries::history_at`, so on one database a recorded run is the same run whichever host
 answers (#1056).
 

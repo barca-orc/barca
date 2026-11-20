@@ -2,26 +2,26 @@
 //! machine, `client` against a server), so a command's stdout and stderr are the same bytes
 //! from either.
 //!
-//! Most results are rendered by `barca_core::report` into a `RenderedOutput`, which [`emit`]
+//! Most results are rendered by `barca_service::report` into a `RenderedOutput`, which [`emit`]
 //! writes. The printers below are the ones the CLI keeps: `pin`, `gc`, `list --groups` and
 //! `logs`. They write straight to stdout and stderr, and a server prints none of them (it
-//! answers with the typed value as JSON), so they stay here and not in `barca_core::report`
+//! answers with the typed value as JSON), so they stay here and not in `barca_service::report`
 //! (`docs/engineering/cli-layering.md`).
 
 use crate::request::LogsArgs;
-use barca_core::db::{AssetPin, LogEntry, Version};
-use barca_core::gc::{GcResult, size::human};
-use barca_core::pins::{Pinned, Unpinned, Versions};
-use barca_core::{BarcaError, LogStream};
+use barca_service::db::{AssetPin, LogEntry, Version};
+use barca_service::gc::{GcResult, size::human};
+use barca_service::pins::{Pinned, Unpinned, Versions};
+use barca_service::{BarcaError, LogStream};
 
 /// Emit ordered rendering writes directly, preserving result/error order.
-pub(crate) fn emit(rendered: barca_core::report::RenderedOutput) {
-    use barca_core::report::OutputChunk;
+pub(crate) fn emit(rendered: barca_service::report::RenderedOutput) {
+    use barca_service::report::OutputChunk;
     for chunk in rendered.chunks {
         match chunk {
-            OutputChunk::Stdout(text) => barca_core::term::stdout_str(&text),
+            OutputChunk::Stdout(text) => barca_service::term::stdout_str(&text),
             OutputChunk::Stderr(text) => {
-                barca_core::term::stderr_str(&text);
+                barca_service::term::stderr_str(&text);
             }
         }
     }
@@ -30,9 +30,9 @@ pub(crate) fn emit(rendered: barca_core::report::RenderedOutput) {
 // ─── list --groups ──────────────────────────────────────────────────────────
 
 /// `barca list --groups`: the group hierarchy, as JSON `{"groups": [...]}` or as a tree.
-pub(crate) fn print_groups(groups: &[barca_core::groups::NodeGroup], json: bool) {
+pub(crate) fn print_groups(groups: &[barca_service::groups::NodeGroup], json: bool) {
     if json {
-        barca_core::outln!(
+        barca_service::outln!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({"groups": groups})).unwrap()
         );
@@ -47,19 +47,19 @@ pub(crate) fn print_groups(groups: &[barca_core::groups::NodeGroup], json: bool)
     fn show(
         id: &str,
         depth: usize,
-        groups: &std::collections::HashMap<&str, &barca_core::groups::NodeGroup>,
+        groups: &std::collections::HashMap<&str, &barca_service::groups::NodeGroup>,
     ) {
         if let Some(g) = groups.get(id) {
-            barca_core::outln!("{}{} [{}] → {}", "  ".repeat(depth), g.name, g.id, g.output);
+            barca_service::outln!("{}{} [{}] → {}", "  ".repeat(depth), g.name, g.id, g.output);
             for m in &g.members {
                 show(m, depth + 1, groups);
             }
         } else {
-            barca_core::outln!("{}{}", "  ".repeat(depth), id);
+            barca_service::outln!("{}{}", "  ".repeat(depth), id);
         }
     }
     if groups.is_empty() {
-        barca_core::outln!("No groups declared.");
+        barca_service::outln!("No groups declared.");
     }
     for g in groups {
         if !nested.contains(g.id.as_str()) {
@@ -73,7 +73,7 @@ pub(crate) fn print_groups(groups: &[barca_core::groups::NodeGroup], json: bool)
 /// The result of an eviction, as `barca gc` prints it wherever it ran.
 pub(crate) fn print_gc(result: &GcResult, json: bool) {
     if json {
-        barca_core::outln!("{}", serde_json::to_string_pretty(result).unwrap());
+        barca_service::outln!("{}", serde_json::to_string_pretty(result).unwrap());
     } else {
         gc_text(result);
     }
@@ -85,12 +85,12 @@ fn gc_text(r: &GcResult) {
         None => " (no limit: leftovers and superseded results only)".to_string(),
     };
     if r.evicted.is_empty() {
-        barca_core::outln!(
+        barca_service::outln!(
             "nothing to evict: {} budgeted{limit}",
             human(r.budget_before_bytes)
         );
     } else {
-        barca_core::outln!(
+        barca_service::outln!(
             "{} {} file{} ({}), leaving {}{limit}:",
             if r.dry_run { "would evict" } else { "evicted" },
             r.evicted_files,
@@ -105,7 +105,7 @@ fn gc_text(r: &GcResult) {
                 "store_held" => "held by the store",
                 _ => "least recently read",
             };
-            barca_core::outln!(
+            barca_service::outln!(
                 "  {name:<20} {:>7} {:<5} {:>9}",
                 tier.files,
                 if tier.files == 1 { "file" } else { "files" },
@@ -114,7 +114,7 @@ fn gc_text(r: &GcResult) {
         }
     }
     // Over the target after evicting what could go: say what holds the rest.
-    barca_core::outln!(
+    barca_service::outln!(
         "{} metadata backups outside the budget; {} physical total",
         human(r.backup_bytes),
         human(r.after_bytes)
@@ -135,13 +135,15 @@ fn gc_text(r: &GcResult) {
                 format!("{} {words}", human(h.bytes))
             })
             .collect();
-        barca_core::outln!("held by: {}", parts.join(", "));
+        barca_service::outln!("held by: {}", parts.join(", "));
     }
     if let Some(why) = &r.restricted {
-        barca_core::errln!("[barca] {why}: only leftovers and superseded results were considered");
+        barca_service::errln!(
+            "[barca] {why}: only leftovers and superseded results were considered"
+        );
     }
     if let Some(f) = r.failed.first() {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] warning: could not evict {}: {} ({} skipped)",
             f.path,
             f.error,
@@ -161,7 +163,7 @@ fn hash(h: &str) -> &str {
 }
 
 fn json_line(value: &impl serde::Serialize) {
-    barca_core::outln!("{}", serde_json::to_string(value).unwrap_or_default());
+    barca_service::outln!("{}", serde_json::to_string(value).unwrap_or_default());
 }
 
 fn by(pin: &AssetPin) -> String {
@@ -181,11 +183,11 @@ pub(crate) fn print_pins(pins: &[AssetPin], json: bool) {
         return;
     }
     if pins.is_empty() {
-        barca_core::outln!("no pinned assets");
+        barca_service::outln!("no pinned assets");
         return;
     }
     for pin in pins {
-        barca_core::outln!(
+        barca_service::outln!(
             "{}  pinned at {}  {}",
             pin.node_id,
             hash(&pin.run_hash),
@@ -196,7 +198,7 @@ pub(crate) fn print_pins(pins: &[AssetPin], json: bool) {
 
 fn size(v: &Version) -> String {
     v.size_bytes
-        .map(|b| barca_core::gc::size::human(b.max(0) as u64))
+        .map(|b| barca_service::gc::size::human(b.max(0) as u64))
         .unwrap_or_else(|| "-".into())
 }
 
@@ -206,7 +208,7 @@ pub(crate) fn print_versions(v: &Versions, json: bool) {
         return;
     }
     if let Some(pin) = &v.pin {
-        barca_core::outln!(
+        barca_service::outln!(
             "{} is pinned at {} {}",
             short(&v.node_id),
             hash(&pin.run_hash),
@@ -214,16 +216,16 @@ pub(crate) fn print_versions(v: &Versions, json: bool) {
         );
     }
     if !v.pinnable {
-        barca_core::outln!(
+        barca_service::outln!(
             "{} cannot be pinned (only an asset without partitions can)",
             short(&v.node_id)
         );
     }
     if v.versions.is_empty() {
-        barca_core::outln!("no successful materializations of {}", short(&v.node_id));
+        barca_service::outln!("no successful materializations of {}", short(&v.node_id));
         return;
     }
-    barca_core::outln!(
+    barca_service::outln!(
         "{:<12}  {:<20}  {:>9}  {:>9}  {:<24}  note",
         "run hash",
         "materialized at",
@@ -245,7 +247,7 @@ pub(crate) fn print_versions(v: &Versions, json: bool) {
         if ver.upload.is_some() {
             note.push("uploaded");
         }
-        barca_core::outln!(
+        barca_service::outln!(
             "{:<12}  {:<20}  {:>9}  {:>9}  {:<24}  {}",
             hash(&ver.run_hash),
             ver.materialized_at,
@@ -265,7 +267,7 @@ pub(crate) fn print_pinned(p: &Pinned, json: bool) {
         return;
     }
     if let Some(up) = &p.version.upload {
-        barca_core::outln!(
+        barca_service::outln!(
             "pinned {} at {}, uploaded from {} ({}); runs read it and never recompute it until \
              `barca unpin {}`",
             short(&p.node_id),
@@ -275,11 +277,11 @@ pub(crate) fn print_pinned(p: &Pinned, json: bool) {
             short(&p.node_id)
         );
         if let Some(old) = &p.replaced {
-            barca_core::errln!("[barca] replaced its pin at {}", hash(&old.run_hash));
+            barca_service::errln!("[barca] replaced its pin at {}", hash(&old.run_hash));
         }
         return;
     }
-    barca_core::outln!(
+    barca_service::outln!(
         "pinned {} at {} (materialized {}, run {}); runs read it and never recompute it until \
          `barca unpin {}`",
         short(&p.node_id),
@@ -289,7 +291,7 @@ pub(crate) fn print_pinned(p: &Pinned, json: bool) {
         short(&p.node_id)
     );
     if let Some(old) = &p.replaced {
-        barca_core::errln!("[barca] replaced its pin at {}", hash(&old.run_hash));
+        barca_service::errln!("[barca] replaced its pin at {}", hash(&old.run_hash));
     }
 }
 
@@ -299,12 +301,12 @@ pub(crate) fn print_unpinned(u: &Unpinned, json: bool) {
         return;
     }
     match &u.removed {
-        Some(pin) => barca_core::outln!(
+        Some(pin) => barca_service::outln!(
             "unpinned {} (was pinned at {}); the next run decides it as before",
             short(&u.node_id),
             hash(&pin.run_hash)
         ),
-        None => barca_core::outln!("{} was not pinned", short(&u.node_id)),
+        None => barca_service::outln!("{} was not pinned", short(&u.node_id)),
     }
 }
 
@@ -315,7 +317,7 @@ impl LogsArgs<'_> {
     pub(crate) fn print_all(&self, lines: &[LogEntry]) -> Result<(), BarcaError> {
         if self.json && !self.follow {
             let entries: Vec<_> = lines.iter().map(entry_json).collect();
-            barca_core::outln!("[{}]", entries.join(","));
+            barca_service::outln!("[{}]", entries.join(","));
         } else {
             for line in lines {
                 self.print_one(line);
@@ -328,15 +330,15 @@ impl LogsArgs<'_> {
     /// --json one object on a line of its own.
     pub(crate) fn print_one(&self, entry: &LogEntry) {
         if self.json {
-            barca_core::outln!("{}", entry_json(entry));
+            barca_service::outln!("{}", entry_json(entry));
         } else if self.timestamps {
-            barca_core::outln!(
+            barca_service::outln!(
                 "{} {}",
                 entry.ts.as_deref().unwrap_or(UNKNOWN_TS),
                 entry.line
             );
         } else {
-            barca_core::outln!("{}", entry.line);
+            barca_service::outln!("{}", entry.line);
         }
     }
 }
@@ -374,22 +376,22 @@ pub(crate) fn follow_exit_code(status: &str) -> i32 {
 
 /// The stderr line that ends `-f`.
 pub(crate) fn follow_ended(run_id: &str, status: &str) {
-    barca_core::errln!("barca: run {run_id} ended: {status}");
+    barca_service::errln!("barca: run {run_id} ended: {status}");
 }
 
 /// The stderr line naming the run read without a run id.
-pub(crate) fn name_run(run: &barca_core::db::RunRecord, follow: bool) {
+pub(crate) fn name_run(run: &barca_service::db::RunRecord, follow: bool) {
     let what = if follow && run.status == "running" {
         "following the newest running run"
     } else {
         "logs of the most recent run"
     };
-    barca_core::errln!(
+    barca_service::errln!(
         "barca: {what}: {} ({} {}, {}, started {})",
         run.run_id,
         run.command,
-        barca_core::report::history_target(run),
+        barca_service::report::history_target(run),
         run.status,
-        barca_core::report::utc_cell(&run.started_at)
+        barca_service::report::utc_cell(&run.started_at)
     );
 }

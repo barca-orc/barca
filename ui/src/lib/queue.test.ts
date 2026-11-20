@@ -34,6 +34,7 @@ function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
     estimated_start_at: null,
     wait_seconds: null,
     waiting_for: null,
+    queue: null,
     ...over,
   }
 }

@@ -194,7 +194,7 @@ artifact file if another task consumes it).
   and unreturned assets at the end of a pipeline are not recomputed. `--dry-run` and
   `barca status` apply the same rule to what is on disk, including a store that is a
   directory; they do not contact a remote store. Implemented in
-  `crates/barca-core/src/recover.rs`.
+  `crates/barca-decide/src/recover.rs`.
 - A `@sink` failure (missing extra, bad credentials, unreachable endpoint) never fails
   the parent asset — logged as `[barca] SINK FAILED: ...` and recorded in run metadata.
 

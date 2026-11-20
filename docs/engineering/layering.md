@@ -1,6 +1,9 @@
 # Layers inside barca-core (#1056 track C)
 
-Status: guard in place and the cheap cuts made, 2026-11-19. Non-normative. The plan is
+Status: done, 2026-11-19: every layer below is a crate of its own, and `barca-core` is gone
+([crate-split-2.md](crate-split-2.md) has the crates, their graph and the tests that replaced
+the one described here). This page is the record of how the modules were layered first; where
+it says `barca-core`, read the crate that holds the module now. Non-normative. The plan is
 [#1056](https://github.com/barca-orc/barca/issues/1056); the crate graph above this is in
 [crate-split.md](crate-split.md).
 
@@ -68,7 +71,7 @@ storage modules of the rows above its own, so the layer has no cycle and no allo
 
 ## The test
 
-`crates/barca-core/src/module_layering_tests.rs`, run by `cargo test -p barca-core`:
+`crates/barca-service/src/module_layering_tests.rs`, run by `cargo test -p barca-core`:
 
 1. It lists the modules `lib.rs` declares outside `#[cfg(test)]`. One with no layer in
    `LAYERS` fails, and so does a `LAYERS` entry that `lib.rs` does not declare.
@@ -78,7 +81,7 @@ storage modules of the rows above its own, so the layer has no cycle and no allo
    name, its `m::item` paths. A file belongs to the module its path starts with. `super::`
    and `self::` paths stay inside one module and are not read.
 3. An edge the rule forbids must be a line of
-   `crates/barca-core/src/module_layering_allowlist.txt`, written
+   `crates/barca-service/src/module_layering_allowlist.txt`, written
    `from -> to: item, item`. A new edge fails; a new item on a listed edge fails; a line or an
    item the source no longer has fails until it is deleted; a line the layers allow fails. So
    the file is exact, and it only shrinks.
@@ -339,7 +342,7 @@ The module scan reads `crate::<module>` paths of this crate. `crate::dispatch`,
 `crate::helper_proc` and the other modules re-exported from `barca-engine` are below it for
 Cargo, but a crate made of the leaf, storage, decisions or analysis layer must not depend on
 the engine. `the_layers_below_the_engine_name_barca_engine_only_where_listed` reads those paths
-too, and `crates/barca-core/src/engine_uses_allowlist.txt` is what is left (it only shrinks).
+too, and `crates/barca-service/src/engine_uses_allowlist.txt` is what is left (it only shrinks).
 15 module pairs before, 7 now; the analysis layer names none.
 
 Cut, because the item was a value:

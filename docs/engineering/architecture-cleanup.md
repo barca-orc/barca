@@ -46,7 +46,7 @@ Names describe responsibilities, not mandated new crates, services, tables or pu
 ## Bookkeeping extraction
 
 The first implementation slice introduces
-[execution bookkeeping](../../crates/barca-core/src/execution/bookkeeping.rs): `RunResults`
+[execution bookkeeping](../../crates/barca-run/src/execution/bookkeeping.rs): `RunResults`
 owns collected outputs, failures, attempts, timings, observations, reports and batch identities.
 It decodes finished artifact evidence, merges only plan outputs, annotates report metrics and
 builds the borrowed terminal ledger projection. `RunEvidence` holds the existing component
@@ -61,10 +61,10 @@ not implement the remaining ownership, snapshot or bounded-work requirements bel
 
 ### Admission and run lifetime
 
-The CLI delegates execution through [core commands](../../crates/barca-core/src/commands.rs).
+The CLI delegates execution through [core commands](../../crates/barca-run/src/commands.rs).
 On the server, [runs](../../crates/barca-server/src/runs.rs) validates requests and drives
 execution; [queue](../../crates/barca-server/src/queue.rs) admits runs using run slots and
-[durable queue records](../../crates/barca-core/src/run_queue.rs). [Server state](../../crates/barca-server/src/state.rs)
+[durable queue records](../../crates/barca-store/src/run_queue.rs). [Server state](../../crates/barca-server/src/state.rs)
 holds live run state, events, slots and shared capacity. [Server lifecycle](../../crates/barca-server/src/lib.rs)
 owns startup and drain. Queue acceptance is durable before acknowledgement.
 
@@ -77,13 +77,13 @@ in structural refactors; change them explicitly to meet the approved operations 
 
 ### Preparation, decisions and execution
 
-[Loading](../../crates/barca-compile/src/load.rs), [project import analysis](../../crates/barca-compile/src/project_modules.rs),
+[Loading](../../crates/barca-python/src/load.rs), [project import analysis](../../crates/barca-python/src/project_modules.rs),
 [target resolution](../../crates/barca-compile/src/targets.rs) and [planning](../../crates/barca-compile/src/planner.rs)
-prepare a dependency cone. [Cache decisions](../../crates/barca-core/src/cache.rs) and
-[incremental proofs](../../crates/barca-core/src/incremental.rs) decide which work can be reused.
-[Dispatch](../../crates/barca-engine/src/dispatch.rs) expands partitions and builds provided inputs.
+prepare a dependency cone. [Cache decisions](../../crates/barca-decide/src/cache.rs) and
+[incremental proofs](../../crates/barca-run/src/incremental.rs) decide which work can be reused.
+[Dispatch](../../crates/barca-compile/src/dispatch.rs) expands partitions and builds provided inputs.
 
-[Execution](../../crates/barca-core/src/execution.rs) joins these pieces. Its `RunSession` owns
+[Execution](../../crates/barca-run/src/execution.rs) joins these pieces. Its `RunSession` owns
 a recorder, worker pool and store synchronization; `RunState` retains decision state, outputs,
 reports, failures, observations, pins and accounting. It handles phase progression, transfer
 recovery and finalization. This is the main concentration of responsibilities to untangle.
@@ -92,20 +92,20 @@ of ordered current-result publication.
 
 [Coordinator](../../crates/barca-engine/src/coordinator.rs) already separates scheduling state
 from [worker I/O](../../crates/barca-engine/src/io_loop.rs). Keep that separation. The worker pool
-is reused across phases of one run, while [capacity](../../crates/barca-core/src/serve/capacity.rs)
+is reused across phases of one run, while [capacity](../../crates/barca-service/src/serve/capacity.rs)
 can be shared across server runs. Sharing capacity does not deduplicate matching work.
 The coordinator's per-item retries are also distinct from a new user-requested invocation attempt.
 
 ### Results, publication and bytes
 
-[Persistence](../../crates/barca-core/src/persist.rs) records successful steps through
+[Persistence](../../crates/barca-run/src/persist.rs) records successful steps through
 `StepRecorder`, then fills gaps and records terminal state through `persist_run`. Its
 `StepRow` already gives both paths a common representation. The terminal ledger is
 transactional; that alone does not establish ordered observation publication. The recorder
 uses an unbounded channel and run state retains per-key maps: current warm incremental
 optimizations are not a bound on cold/full-domain execution.
 
-[Freshness state](../../crates/barca-core/src/freshness.rs), incremental proof saving and
+[Freshness state](../../crates/barca-decide/src/freshness.rs), incremental proof saving and
 [database operations](../../crates/barca-db/src/db/mod.rs) participate in current-state decisions.
 [Observation](../../crates/barca-engine/src/observation.rs) and
 [source observations](../../crates/barca-model/src/source_observation.rs) provide evidence;
@@ -113,18 +113,18 @@ their hashes do not supply a monotonic reconciliation order. Result history, cur
 membership/selection and freshness evidence need explicit responsibilities before multiple
 versions can publish concurrently.
 
-[Store synchronization](../../crates/barca-core/src/store_sync.rs),
-[transfer](../../crates/barca-core/src/transfer.rs), [pending uploads](../../crates/barca-db/src/pending_uploads.rs)
-and the [server ledger](../../crates/barca-core/src/ledger.rs) handle availability and sharing
+[Store synchronization](../../crates/barca-store/src/store_sync.rs),
+[transfer](../../crates/barca-store/src/transfer.rs), [pending uploads](../../crates/barca-db/src/pending_uploads.rs)
+and the [server ledger](../../crates/barca-store/src/ledger.rs) handle availability and sharing
 of completed artifacts. [Upload receipts](../../specs/interfaces/artifact-upload-receipts.md) protect producer
-upload evidence, not every downstream reader's input lifetime. [GC](../../crates/barca-core/src/gc/mod.rs)
+upload evidence, not every downstream reader's input lifetime. [GC](../../crates/barca-store/src/gc/mod.rs)
 already has planning and pin protection, but implements size-based eviction, not the approved
 three-version retention policy. Preserve these distinctions rather than treating a history
 row or upload receipt as proof that bytes are available and isolated.
 
 ### Inspection and recovery
 
-[Core status](../../crates/barca-core/src/status.rs) and [queries](../../crates/barca-core/src/queries.rs)
+[Core status](../../crates/barca-analysis/src/status.rs) and [queries](../../crates/barca-service/src/queries.rs)
 derive inspection results. [Server inspection](../../crates/barca-server/src/inspect.rs) reads
 metadata snapshots; [running projections](../../crates/barca-server/src/running.rs) combine live
 events with cache state. A metadata read snapshot is not an execution input snapshot.
@@ -133,9 +133,9 @@ acceptance obligations in [inspection](../../specs/behavior/inspection.md).
 
 [Run owner diagnosis](../../crates/barca-db/src/run_owner.rs) distinguishes proven alive,
 proven gone and unknown owners. This protects against treating an unreachable owner as dead;
-retain that distinction. [Recover](../../crates/barca-core/src/recover.rs) primarily recovers
+retain that distinction. [Recover](../../crates/barca-decide/src/recover.rs) primarily recovers
 missing cached artifacts; it is not the proposed shared-computation ownership manager.
-[History reconciliation](../../crates/barca-core/src/queries.rs) and server queue replay have
+[History reconciliation](../../crates/barca-service/src/queries.rs) and server queue replay have
 different scopes and must not be collapsed into one unconditional retry path.
 
 The [Python source loader](../../python/barca/_source_import.py) reads source from disk with
@@ -240,7 +240,7 @@ single-owner execution. Track this work with issue #654.
 
 Note, 2026-11-04: [#796](https://github.com/barca-orc/barca/pull/796) (0.39.4) shipped the
 incremental part of this step ahead of steps 2b and 3: a server-wide claim per asset step
-([`claims.rs`](../../crates/barca-core/src/serve/claims.rs)) lets a run wait on another run's in-flight
+([`claims.rs`](../../crates/barca-service/src/serve/claims.rs)) lets a run wait on another run's in-flight
 step and take its artifact as a cache hit. Execution lifetime still belongs to the originating
 run's pool. It is kept on under `serve` as experimental (#800, item 8). What remains of this
 step, in #654: shared work surviving the cancellation of the run that started it

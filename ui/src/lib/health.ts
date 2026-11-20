@@ -1,6 +1,6 @@
 /**
  * What is broken and how much it holds, in the words a page shows: the rollup's entries and
- * roots (`GET /state/rollup`, classified and summed in `barca-core`) joined with the rows of
+ * roots (`GET /state/rollup`, classified and summed in `barca-service`) joined with the rows of
  * `GET /state`. Nothing here classifies, counts or attributes; it words and joins.
  */
 

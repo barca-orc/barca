@@ -22,7 +22,7 @@ export type Placement = ReadonlyMap<string, Pick<RollupEntry, 'parent'>>
 
 /**
  * The organizational tree of the groups the parser found (`GET /groups`). A node or group
- * declared in several groups is counted by the rollup under one of them (`barca-core`'s
+ * declared in several groups is counted by the rollup under one of them (`barca-service`'s
  * `rollup`, the entry's `parent`); with `placed` (the rollup's entries) each group lists the
  * members the rollup counts under it, so a list and its count are the same nodes. The other
  * groups that declare a member are its entry's `also_in`. Nothing is decided here: without

@@ -1,4 +1,4 @@
-//! Reads and writes of `cost_estimates`, the measured-cost EWMA per node (`barca_core::persist`
+//! Reads and writes of `cost_estimates`, the measured-cost EWMA per node (`barca_service::persist`
 //! writes it inside the terminal ledger's transaction; a run reads it as it starts).
 
 use super::*;

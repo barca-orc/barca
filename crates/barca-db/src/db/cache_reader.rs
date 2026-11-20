@@ -17,13 +17,13 @@ pub const READ_STAMP_REFRESH: &str = "-1 hour";
 /// then the in-process guard.)
 pub struct CacheReader {
     /// The statement of a one-key cache lookup, compiled on first use and kept for the
-    /// reader's life (`barca_core::cache::lookup_cached`): compiling it cost more than the lookup.
+    /// reader's life (`barca_service::cache::lookup_cached`): compiling it cost more than the lookup.
     lookup: tokio::sync::Mutex<Option<libsql::Statement>>,
     /// The statement of [`CacheReader::lookup_many`], kept the same way.
     lookup_many: tokio::sync::Mutex<Option<libsql::Statement>>,
     local_artifact_dir: Option<String>,
     /// A server's ledger answers cache lookups in place of this database
-    /// (`barca_core::cache::CacheReader` holds it).
+    /// (`barca_service::cache::CacheReader` holds it).
     ledger_answers: bool,
     /// The successful rows of a partitioned node's keys, read in one pass the first time a
     /// node with many keys is looked up ([`CacheReader::key_rows`]); `None` for a node whose
@@ -102,7 +102,7 @@ impl CacheReader {
         Some(statement)
     }
 
-    /// `barca_core::cache::lookup_cached` of each `(node id, run hash)`, in order, a few thousand
+    /// `barca_service::cache::lookup_cached` of each `(node id, run hash)`, in order, a few thousand
     /// at a time: one query (compiled once, the keys passed as one JSON array) instead of one
     /// query and one transaction per key. `None` when this database cannot answer them so (a
     /// server's ledger answers lookups, or the table predates output hashes); the caller then
@@ -393,7 +393,7 @@ const PREVIOUS_OBSERVATION: &str = "SELECT COALESCE(observation_hash, output_has
 
 impl CacheReader {
     /// A sensor's latest observation: its freshness revision and the output it last reported
-    /// (`barca_core::observation` decides the next revision from it).
+    /// (`barca_service::observation` decides the next revision from it).
     pub async fn previous_observation(
         &self,
         node_id: &str,

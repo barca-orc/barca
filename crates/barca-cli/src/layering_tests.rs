@@ -544,7 +544,7 @@ fn a_wrong_way_edge_is_named() {
 }
 
 /// A command that kept a connection to a metadata DB closes it as it ends, which folds the
-/// log into the main file (`barca_core::db::end_of_command`). `crate::exit` does that, so it
+/// log into the main file (`barca_service::db::end_of_command`). `crate::exit` does that, so it
 /// is the one place that ends the process: the `logs -f` paths once called `term::exit`
 /// themselves and left the log unfolded.
 #[test]

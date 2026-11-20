@@ -3,7 +3,7 @@
 //! These types are the values a declaration is made of (kinds, freshness, partitions, sinks,
 //! batches) and the identities of steps. The node that holds them is [`crate::ir::DagNode`];
 //! what the Python parser produces for a decorated function is
-//! `barca_compile::extracted::ExtractedNode`.
+//! `barca_python::extracted::ExtractedNode`.
 //!
 //! Allocation strategy:
 //! - `SmallVec<[T; N]>` for small collections (inputs, sinks — usually ≤4 items, stays on stack)

@@ -12,9 +12,12 @@ export TS_RS_EXPORT_DIR="$OUT"
 
 # ts-rs emits one export test per annotated type, gated behind the `ts` feature.
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-model --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-compile --features ts export_bindings
+cargo test --manifest-path "$REPO/Cargo.toml" -p barca-python --features ts export_bindings
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-db --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-core --features ts export_bindings
+cargo test --manifest-path "$REPO/Cargo.toml" -p barca-store --features ts export_bindings
+cargo test --manifest-path "$REPO/Cargo.toml" -p barca-analysis --features ts export_bindings
+cargo test --manifest-path "$REPO/Cargo.toml" -p barca-run --features ts export_bindings
+cargo test --manifest-path "$REPO/Cargo.toml" -p barca-service --features ts export_bindings
 cargo test --manifest-path "$REPO/Cargo.toml" -p barca-server --features ts export_bindings
 
 # ts-rs leaves trailing whitespace, which the repo's trailing-whitespace hook strips

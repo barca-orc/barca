@@ -30,9 +30,9 @@ use clap::{CommandFactory, Parser};
 
 /// Finish a successful command, reporting non-pipe stdout write failures as infrastructure errors.
 fn finish(json: bool) -> ! {
-    if barca_core::term::stdout_write_failed() {
+    if barca_service::term::stdout_write_failed() {
         CliError::from_barca(
-            barca_core::BarcaError::Other(
+            barca_service::BarcaError::Other(
                 "could not write the result to stdout\nCheck the file or device stdout is redirected to (a full disk, a revoked terminal), then run the command again.".to_string(),
             ),
             &Context::default(),
@@ -45,8 +45,8 @@ fn finish(json: bool) -> ! {
 /// another): the connections this process kept to a metadata DB are closed first, which
 /// folds its log into the main file, then `term::exit` copies out what child processes wrote.
 pub(crate) fn exit(code: i32) -> ! {
-    barca_core::db::end_of_command();
-    barca_core::term::exit(code)
+    barca_service::db::end_of_command();
+    barca_service::term::exit(code)
 }
 
 fn main() {
@@ -78,7 +78,7 @@ fn main() {
 
     // Version needs no runtime — answer before paying for thread spawns.
     if let Cli::Version = cli {
-        barca_core::outln!("barca {}", env!("CARGO_PKG_VERSION"));
+        barca_service::outln!("barca {}", env!("CARGO_PKG_VERSION"));
         finish(json);
     }
 
@@ -94,27 +94,29 @@ fn main() {
         match docs::run(topic.as_deref(), *all, *json || fields.is_some())
             .map(|out| input::project_docs_json(out, fields.as_deref()))
         {
-            Ok(out) => barca_core::term::stdout_str(&out),
+            Ok(out) => barca_service::term::stdout_str(&out),
             Err(msg) => CliError::from_prose(ErrorKind::Usage, msg).emit(*json || fields.is_some()),
         }
         finish(*json || fields.is_some());
     }
 
     // `BARCA_LOG=json`: structured lines on stdout, for `barca serve` only (#434).
-    let barca_log = std::env::var(barca_core::jsonlog::ENV_VAR).ok();
+    let barca_log = std::env::var(barca_service::jsonlog::ENV_VAR).ok();
     match (
-        barca_core::jsonlog::requested(barca_log.as_deref()),
+        barca_service::jsonlog::requested(barca_log.as_deref()),
         matches!(cli, Cli::Serve { .. }),
     ) {
         (Ok(false), _) => {}
-        (Ok(true), true) => barca_core::jsonlog::enable(barca_core::telemetry::is_on("datadog")),
+        (Ok(true), true) => {
+            barca_service::jsonlog::enable(barca_service::telemetry::is_on("datadog"))
+        }
         (Err(value), true) => CliError::from_prose(
             ErrorKind::Usage,
             format!("BARCA_LOG={value} is not a log format: use json, or text (the default)"),
         )
         .emit(json),
         (_, false) => {
-            barca_core::warnings::warn_once(
+            barca_service::warnings::warn_once(
                 "BARCA_LOG applies to barca serve only; this command writes its usual lines",
             );
         }
@@ -136,7 +138,7 @@ fn main() {
                 CliError::from_prose(ErrorKind::Infra, e.to_string()).emit(false)
             });
             match barca_server::auth::Store::open(&root).and_then(|store| store.bootstrap()) {
-                Ok(code) => barca_core::outln!("{code}"),
+                Ok(code) => barca_service::outln!("{code}"),
                 Err(error) => CliError::from_prose(ErrorKind::Infra, error.to_string()).emit(false),
             }
             finish(false);

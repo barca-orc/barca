@@ -33,7 +33,7 @@ runs hung.
 **v0.2.0, final: one task per connection, one channel.** Each connection gets a tokio task
 that forwards its messages to a single mpsc channel. The coordinator reads from that channel,
 so the cost of receiving a message does not depend on the number of workers. This is the
-current design. `crates/barca-core/tests/socket_stress.rs` exercises many workers connecting
+current design. `crates/barca-service/tests/socket_stress.rs` exercises many workers connecting
 to one listener at once.
 
 ### Why a Unix socket

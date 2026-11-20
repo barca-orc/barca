@@ -11,7 +11,7 @@ import WEIGHTS from './weights.json'
 
 /**
  * The weights an entry of `nodes` nodes with `causes` not fresh is served with ("Distance from
- * fresh"): the table is `barca-core`'s, written out by a Rust test (`weights.json`), so a
+ * fresh"): the table is `barca-service`'s, written out by a Rust test (`weights.json`), so a
  * fixture states what the server would and the app holds no weight of its own.
  */
 export function weightsOf(nodes: number, causes: CauseCounts): Weights {

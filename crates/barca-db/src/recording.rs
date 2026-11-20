@@ -42,7 +42,7 @@ pub struct RunLedger<'a> {
     pub all_sink_seconds: &'a HashMap<String, f64>,
     pub cached_node_ids: &'a std::collections::HashSet<String>,
     pub run_hashes: &'a HashMap<String, String>,
-    /// Executed step -> its run hash's components as JSON (`barca_core::changes`).
+    /// Executed step -> its run hash's components as JSON (`barca_service::changes`).
     pub components: &'a HashMap<String, String>,
     /// Sensor step -> content hash of the output it returned in this run. Other steps
     /// record the hash on their `OutputRef`, when the artifact went through a store.

@@ -16,9 +16,9 @@ use crate::progress::ProgressSnapshot;
 use crate::run_model::RunStatus;
 use crate::state::AppState;
 use crate::views::{NodeRunning, PartitionProgress, RunningStep};
-use barca_core::db;
-use barca_core::outcome::TriggeredBy;
-use barca_core::status::NodeStatus;
+use barca_service::db;
+use barca_service::outcome::TriggeredBy;
+use barca_service::status::NodeStatus;
 use std::collections::{HashMap, HashSet};
 
 /// One run in flight.
@@ -55,11 +55,11 @@ impl InFlight {
             .as_ref()
             .and_then(|p| p.started)
             .map(|at| at as i64)
-            .or_else(|| barca_core::time::parse_rfc3339(&self.started_at))
+            .or_else(|| barca_service::time::parse_rfc3339(&self.started_at))
     }
 
     /// Its latest progress, unix seconds: when it started executing, or the last step it
-    /// finished. What it has left is counted from here ([`barca_core::estimates`]).
+    /// finished. What it has left is counted from here ([`barca_service::estimates`]).
     pub(crate) fn anchor(&self) -> Option<i64> {
         let last = self
             .progress
@@ -82,7 +82,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         .map(|r| InFlight {
             run_id: r.handle.clone(),
             triggered_by: Some(r.trigger.triggered_by),
-            started_at: barca_core::time::rfc3339_millis(r.started_at),
+            started_at: barca_service::time::rfc3339_millis(r.started_at),
             started_sql: chrono::DateTime::from_timestamp(r.started_at as i64, 0)
                 .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default(),
@@ -110,10 +110,10 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         .map(|r| r.handle.clone())
         .collect();
     if state.config.read_only
-        && let Ok(recorded) = barca_core::liveness::recorded_runs(read_path).await
+        && let Ok(recorded) = barca_service::liveness::recorded_runs(read_path).await
     {
         let stopped = !recorded.is_empty()
-            && barca_core::liveness::recorded(read_path)
+            && barca_service::liveness::recorded(read_path)
                 .await
                 .is_ok_and(|rec| rec.writer_stopped(chrono::Utc::now().timestamp()));
         for r in recorded {
@@ -132,7 +132,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
                 progress: None,
                 schedule_id: r.schedule,
                 refreshes: r.refreshes,
-                started_at: barca_core::time::rfc3339_secs(at).unwrap_or_default(),
+                started_at: barca_service::time::rfc3339_secs(at).unwrap_or_default(),
                 started_sql: chrono::DateTime::from_timestamp(at, 0)
                     .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
                     .unwrap_or_default(),
@@ -157,7 +157,7 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
         runs.push(InFlight {
             run_id: alive.run_id,
             triggered_by: record.as_ref().and_then(|r| r.triggered_by),
-            started_at: barca_core::time::sql_datetime_rfc3339(&started_sql),
+            started_at: barca_service::time::sql_datetime_rfc3339(&started_sql),
             started_sql,
             command: alive.command,
             from_queue: false,
@@ -177,13 +177,13 @@ pub(crate) async fn in_flight(state: &AppState, read_path: Option<&str>) -> Vec<
 fn covered<'a>(
     run: &InFlight,
     nodes: &'a [NodeStatus],
-    dag: &barca_core::dag::Dag,
+    dag: &barca_service::dag::Dag,
 ) -> Vec<&'a str> {
     // A CLI run: the rule `barca history --status running` applies on its own machine.
     if !run.from_queue {
         return nodes
             .iter()
-            .filter(|n| barca_core::run_list::unfollowed_run_covers(&run.command, &run.nodes, n))
+            .filter(|n| barca_service::run_list::unfollowed_run_covers(&run.command, &run.nodes, n))
             .map(|n| n.id.as_str())
             .collect();
     }
@@ -227,7 +227,7 @@ fn rank(step: RunningStep) -> u8 {
 pub(crate) fn by_node(
     runs: &[InFlight],
     nodes: &[NodeStatus],
-    dag: &barca_core::dag::Dag,
+    dag: &barca_service::dag::Dag,
 ) -> HashMap<String, NodeRunning> {
     let by_id: HashMap<&str, &NodeStatus> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut out: HashMap<String, NodeRunning> = HashMap::new();
@@ -255,7 +255,7 @@ pub(crate) fn by_node(
             if run.from_queue
                 && !run.refreshes
                 && !run.pending
-                && n.cache.state == barca_core::cache_state::CacheState::Cached
+                && n.cache.state == barca_service::cache_state::CacheState::Cached
                 && progress.is_none_or(|p| !p.touched.contains(id))
             {
                 return true;
@@ -277,7 +277,7 @@ pub(crate) fn by_node(
                 }
                 Some(p) => p.finished.contains(id),
                 // A CLI run: finished once it recorded a materialization of the node.
-                None => barca_core::run_list::unfollowed_run_finished(&run.started_sql, n),
+                None => barca_service::run_list::unfollowed_run_finished(&run.started_sql, n),
             }
         };
         for id in covered {

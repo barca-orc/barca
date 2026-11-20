@@ -2,12 +2,12 @@
  * One project as a server answers about it: test and kit data only (the layering guard keeps
  * the app from importing it).
  *
- * Nobody typed these values. `crates/barca-core/src/ui_fixture_tests.rs` copies the fixture
- * project (`crates/barca-core/testdata/ui_fixture/`: `orders.py`, `billing.py`), records a
- * history for it, and writes what `barca-core` says of it at `NOW` to `served/*.json`; the test
+ * Nobody typed these values. `crates/barca-service/src/ui_fixture_tests.rs` copies the fixture
+ * project (`crates/barca-service/testdata/ui_fixture/`: `orders.py`, `billing.py`), records a
+ * history for it, and writes what `barca-service` says of it at `NOW` to `served/*.json`; the test
  * fails when a file here differs from what the code produces. Regenerate them with
  *
- *     BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-core ui_fixture
+ *     BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca-service ui_fixture
  *
  * and review the diff: it is what the UI will be told. A test that asserts on a value the
  * server computes (health, reason, cause, root, an estimate, a weight, a count, a headline, a
@@ -86,14 +86,14 @@ export const STATE_PINNED = statePinned as unknown as NodeState[]
 export const PINS = pins as unknown as { pins: AssetPin[] }
 
 function found<T>(value: T | undefined, what: string): T {
-  if (value === undefined) throw new Error(`${what} is not in the generated fixture: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
+  if (value === undefined) throw new Error(`${what} is not in the generated fixture: regenerate it (crates/barca-service/src/ui_fixture_tests.rs)`)
   return value
 }
 
 /**
  * A run no recorded history holds (queued, in flight, cancelled, of 23,278 steps): the facts a
  * server would have of it (`run`, `nodes`), stated in the Rust test, with the explanation and
- * the list-row words `barca-core` gives for exactly those facts.
+ * the list-row words `barca-service` gives for exactly those facts.
  */
 export interface RunScenario {
   run: Pick<RunView, 'status' | 'target' | 'job' | 'triggered_by' | 'principal' | 'attempts' | 'retries' | 'steps_total' | 'steps_executed' | 'steps_cached' | 'started_at' | 'plan_reasons' | 'cancellation' | 'error'> & Pick<RunSummary, 'first_failure'>

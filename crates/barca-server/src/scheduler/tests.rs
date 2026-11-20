@@ -1,9 +1,10 @@
 use super::*;
 use crate::ServeConfig;
 use crate::run_model::{RunState, RunStatus};
-use barca_core::results::AssetSummary;
-use barca_core::schedule::{describe_schedule, jobs_from_summaries, next_fire};
-use barca_core::{CronExpr, Freshness, NodeKind, db};
+use barca_service::loaded::describe_schedule;
+use barca_service::results::AssetSummary;
+use barca_service::schedule::{jobs_from_summaries, next_fire};
+use barca_service::{CronExpr, Freshness, NodeKind, db};
 use chrono::{DateTime, Local, TimeZone, Timelike, Utc};
 use croner::Cron;
 use std::collections::HashMap;
@@ -57,7 +58,7 @@ fn at_s(hour: u32, minute: u32, sec: u32) -> DateTime<Local> {
 /// triggers fails fast in the background (DAG read error) with no side effects.
 fn app_state() -> AppState {
     let mut resolved =
-        barca_core::config::resolve_in(None, std::path::Path::new("/nonexistent")).unwrap();
+        barca_service::config::resolve_in(None, std::path::Path::new("/nonexistent")).unwrap();
     // The run queue records each run it accepts: in a directory of its own.
     let dir = tempfile::tempdir().unwrap();
     resolved.db_path = dir.path().join("metadata.db").display().to_string();
@@ -94,7 +95,8 @@ fn insert_run(
             command: command.into(),
             target: target.map(str::to_string),
             nodes: node.map(str::to_string).into_iter().collect(),
-            trigger: barca_core::outcome::Trigger::api(),
+            trigger: barca_service::outcome::Trigger::api(),
+            queue: Default::default(),
             refreshes: false,
             files: Vec::new(),
             status,
@@ -103,7 +105,7 @@ fn insert_run(
             started_at,
             finished_at: None,
             outcome: None,
-            cancel: barca_core::CancellationToken::new(),
+            cancel: barca_service::CancellationToken::new(),
             cancel_requested: false,
             cancellation: None,
         },
@@ -143,7 +145,8 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
         .generation
         .fetch_add(1, Ordering::Relaxed);
     assert_eq!(
-        barca_core::queries::list_assets_from_dag(&state.reads.loaded_dag().await.unwrap()).len(),
+        barca_service::queries::list_assets_from_dag(&state.reads.loaded_dag().await.unwrap())
+            .len(),
         2
     );
     drop(held);
@@ -569,7 +572,7 @@ fn a_skipped_tick_is_reported_with_status_skipped_and_the_run_in_flight() {
     assert_ne!(report.run_id, "h1", "a skip is its own trace");
     assert_eq!(
         report.trigger.triggered_by,
-        barca_core::outcome::TriggeredBy::Schedule
+        barca_service::outcome::TriggeredBy::Schedule
     );
     assert_eq!(report.trigger.schedule_id.as_deref(), Some("f.py:weekly"));
     let paused = skip_report(&task, "paused", None, 1_000);
@@ -644,13 +647,13 @@ fn finished(state: &AppState, handle: &str, status: RunStatus, failed: &[&str]) 
     insert_run(state, handle, status, "get", None, Some("f.py:s"), 1.0);
     let steps = failed
         .iter()
-        .map(|id| barca_core::results::StepReport {
+        .map(|id| barca_service::results::StepReport {
             id: id.to_string(),
             status: Some("failed".into()),
             ..Default::default()
         })
         .collect();
-    state.runs.registry.get_mut(handle).unwrap().result = Some(barca_core::results::GetResult {
+    state.runs.registry.get_mut(handle).unwrap().result = Some(barca_service::results::GetResult {
         run_id: "r".into(),
         elapsed_seconds: 0.0,
         steps_executed: 0,
@@ -704,7 +707,7 @@ fn a_tick_run_counts_once_it_finished_and_not_when_cancelled() {
         1.0,
     );
     st.runs.registry.get_mut("m").unwrap().outcome = Some(
-        barca_core::outcome::Outcome::from_text(
+        barca_service::outcome::Outcome::from_text(
             r#"{"status":"failed","steps":[{"id":"f.py:s","status":"success"},{"id":"f.py:publish","status":"failed"}],"targets":{"f.py:s":{"status":"success"},"f.py:publish":{"status":"failed","failed_node":"f.py:publish"},"f.py:late":{"status":"blocked","failed_node":"f.py:baseline"}}}"#,
         )
         .unwrap(),
@@ -1019,7 +1022,7 @@ async fn a_missed_tick_is_skipped_at_startup_while_a_cli_run_of_its_node_is_goin
 async fn schedule_db() -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("metadata.db").display().to_string();
-    barca_core::db::init_db(&path).await.unwrap();
+    barca_service::db::init_db(&path).await.unwrap();
     (dir, path)
 }
 
@@ -1148,7 +1151,7 @@ async fn unreadable_schedule_history_never_becomes_an_empty_first_start() {
     .await
     .unwrap_err();
     assert!(
-        matches!(error, barca_core::BarcaError::MetadataUnusable { path, .. }
+        matches!(error, barca_service::BarcaError::MetadataUnusable { path, .. }
         if path == dir.path().to_string_lossy())
     );
     assert!(st.runs.registry.is_empty());
@@ -1350,9 +1353,9 @@ async fn collect_jobs_discovers_scheduled_nodes_from_source() {
     )
     .unwrap();
 
-    let summaries = barca_core::queries::list_assets(
+    let summaries = barca_service::queries::list_assets(
         &[path.display().to_string()],
-        &barca_core::commands::find_python(),
+        &barca_service::commands::find_python(),
     )
     .await
     .unwrap();
@@ -1393,7 +1396,7 @@ async fn describe_schedule_reports_next_fire() {
 
     let infos = describe_schedule(
         &[path.display().to_string()],
-        &barca_core::commands::find_python(),
+        &barca_service::commands::find_python(),
     )
     .await;
     assert_eq!(infos.len(), 1);
@@ -1592,7 +1595,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     db::record_tick_started(&path, &killed.id, 240, &k, 241.0, 1.0)
         .await
         .unwrap();
-    barca_core::serve::run_queue::mark_running(&path, &k)
+    barca_service::serve::run_queue::mark_running(&path, &k)
         .await
         .unwrap();
     drop(st);
@@ -1639,18 +1642,19 @@ async fn a_run_nobody_scheduled_writes_no_tick() {
     let (_dir, st, path) = recording_state().await;
     let j = job("f.py:daily", NodeKind::Asset, "0 6 * * *");
     let spec = crate::runs::RunSpec {
-        command: barca_core::outcome::RunCommand::Get,
+        command: barca_service::outcome::RunCommand::Get,
         targets: vec![j.id.clone()],
         nodes: vec![j.id.clone()],
         files: Vec::new(),
-        policy: barca_core::cache::CachePolicy::CacheAware,
-        trigger: barca_core::outcome::Trigger::api(),
+        policy: barca_service::cache::CachePolicy::CacheAware,
+        trigger: barca_service::outcome::Trigger::api(),
         values: false,
         partition: None,
         batch: Vec::new(),
-        rules: barca_core::freshness::RunRules::default(),
+        rules: barca_service::freshness::RunRules::default(),
         timeout: None,
         kill_requeues: 0,
+        queue: Default::default(),
     };
     let handle = crate::runs::start_as(st.clone(), db::generate_run_id(), spec)
         .await
