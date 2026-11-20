@@ -151,7 +151,9 @@ authoritative for the rest.
 from both implemented contracts and accepted design.
 [Computed and published](proposals/computed-and-published.md) is an unapproved draft that
 separates a step being computed from its output being published (store upload, sinks), with
-publication outside step capacity (#951). [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
+publication outside step capacity (#951).
+[A cache-only get](proposals/cached-only-get.md) is a draft for returning an asset's last result
+without running anything: disk, then the store, then a typed miss (#1085). [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
 investigation; completed implementation plans were deleted and remain in linked PR history.
 They are not current contract owners.
 
