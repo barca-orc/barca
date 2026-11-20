@@ -1023,6 +1023,7 @@ mod run_list_tests {
             error: None,
             cancellation: None,
             waiting_for: None,
+            queue: Default::default(),
             steps: None,
         }
     }
