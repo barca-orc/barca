@@ -483,12 +483,14 @@ def write_keys(
     `write(step, value, prewritten)` writes one key's artifact and reports it (the worker's
     `_materialize`). A key the call returned `barca.Failed` or nothing for, or whose write
     fails, is reported as that key's error, and the keys after it are still written: the
-    worker goes on. `elapsed` is each key's share of the call's time. Every key dealt with
+    worker goes on. A failure that leaves duckdb's database invalidated is raised on instead:
+    it is the worker's, and the keys left would all fail on it. `elapsed` is each key's share
+    of the call's time. Every key dealt with
     is added to `reported`, and `at.phase` is kept at where the key in hand is, so that
     whoever catches what this lets through (an interrupt, a socket that is gone) knows which
     keys are left and where the call was.
     """
-    from barca import _failure, _runtime
+    from barca import _duckdb, _failure, _runtime
 
     for k, text, st in zip(batch.keys, batch.texts, steps, strict=True):
         node_id = st["node_id"]
@@ -509,6 +511,11 @@ def write_keys(
         except (BrokenPipeError, ConnectionResetError):
             raise
         except Exception as exc:
+            if _duckdb.invalidated(exc):
+                # Not this key's failure: no later key can be written on this database
+                # either. Raised on, so the runner reports this key and the ones left and
+                # the worker stops (#1083).
+                raise
             reported.add(node_id)
             if at.phase == _failure.WRITE_OUTPUT:
                 at.phase = _failure.output_phase(exc)

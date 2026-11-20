@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- A worker whose DuckDB database is invalidated (after a DuckDB fatal or internal error, every later statement in the process fails with `FatalException: database has been invalidated`) is replaced, and the step that hit it is tried once more in a fresh worker, whatever its `retries`. The worker used to stay in the pool and every DuckDB step it was given next failed the same way: one fault became 1,462 failed steps in one run (#1083).
+
 ## 0.46.0 (2026-11-20)
 
 - Internal: `barca-core` is dissolved into crates that match its layers (`barca-store`, `barca-decide`, `barca-run`, `barca-analysis` and `barca-service`, the one crate the CLI and the server import), with child processes and the socket protocol in `barca-proc`, the Python frontend in `barca-python` and the graph in `barca-model`; `barca-decide`, `barca-analysis` and planning (`barca-compile`) take a graph and do not depend on the frontend (`docs/engineering/crate-split-2.md`, #1056); no behavior change.

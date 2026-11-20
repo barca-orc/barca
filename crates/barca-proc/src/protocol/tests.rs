@@ -295,6 +295,7 @@ fn test_read_write_stream() {
         elapsed: 1.5,
         import_seconds: Some(1.1),
         worker_continues: true,
+        retry_fresh: false,
         phase: Some("load_inputs".to_string()),
     };
 
@@ -314,8 +315,10 @@ fn test_read_write_stream() {
             elapsed,
             import_seconds,
             worker_continues,
+            retry_fresh,
             phase,
         } => {
+            assert!(!retry_fresh);
             assert!(worker_continues);
             assert_eq!(phase.as_deref(), Some("load_inputs"));
             assert_eq!(node_id, "transform");

@@ -199,6 +199,18 @@ additive optional metadata introduced within version 3 and retained in version 4
 [Conformance](../../python/tests/test_worker_survives_exceptions.py) counts worker starts and
 dispatched steps from the coordinator's `BARCA_TRACE_TIMING` summary.
 
+Error details optionally include `retry_fresh: true`: the failure was the worker's, not the
+step's (#1083). A worker sends it, without `worker_continues`, when its process's duckdb
+database is invalidated: the exception, or one it was raised from or while handling, is
+duckdb's `FatalException`, or it is another duckdb error and `SELECT 1` on a cursor of the
+shared connection then raises one. The coordinator stops the worker as above and allows the
+step one attempt beyond its `retries`, once for the step: the second attempt runs in a fresh
+worker, and a second `retry_fresh` for the same step grants nothing. The keys of a batched
+call that were not yet reported are each reported with it. The field is additive optional
+metadata introduced within version 5.
+[Conformance](../../python/tests/test_duckdb_invalidated.py) raises `FatalException` from a
+step; it does not invalidate a real database.
+
 ## Other messages and artifact data
 
 Coordinator → worker: `execute`, `execute_batch`, `parallel_response`, `cancel`, `done`.

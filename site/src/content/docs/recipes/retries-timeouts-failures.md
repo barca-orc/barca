@@ -149,3 +149,11 @@ Step 'pipeline.py:slow' failed: TimeoutError: Step 'pipeline.py:slow' exceeded t
   exception the worker goes on to its next step. It is replaced by a fresh one when the step
   called `sys.exit()`, ran out of memory (`MemoryError`), was still running at its
   `timeout_seconds`, failed while its module was imported, or crashed the interpreter.
+- **A step that fails because DuckDB invalidated its worker's database is tried once more.**
+  After a fatal or internal error DuckDB refuses every later statement in that process
+  (`FatalException: database has been invalidated`). Barca replaces the worker and runs the
+  step again in a fresh one, whatever its `retries`, once per step in a run; stderr says so.
+  If the second attempt fails the same way, the step fails with DuckDB's error. Steps that had
+  not started go to other workers. This covers DuckDB's default connection, the one barca
+  shares with `duckdb.sql(...)`; a connection you opened with `duckdb.connect()` is detected
+  only when the exception that reaches barca is a `FatalException`.

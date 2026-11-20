@@ -36,6 +36,7 @@ impl Coordinator {
                 step_id,
                 spec,
                 attempts: 0,
+                fresh_retries: 0,
                 group: Some(group_id),
                 deps: Vec::new(),
             };

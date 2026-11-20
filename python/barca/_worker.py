@@ -581,7 +581,8 @@ def _worker_survives(exc: BaseException, imported: bool) -> bool:
     and the coordinator starts a fresh worker, when this interpreter may not be sound: the
     module failed to import (a half-run module body), the step called sys.exit() or was
     interrupted, it ran out of memory, it is still running past its timeout, or a parallel()
-    exchange with the coordinator was left unfinished.
+    exchange with the coordinator was left unfinished. A worker whose duckdb database is
+    invalidated stops too (`_Run.retry_fresh`).
     """
     return (
         imported
@@ -683,6 +684,7 @@ class _Run:
         "phase",
         "propagates",
         "report",
+        "retry_fresh",
         "rss_window",
         "survives",
         "t0",
@@ -714,6 +716,9 @@ class _Run:
         self.phase = USER_CODE
         self.propagates: tuple[type[BaseException], ...] = ()
         self.survives = True
+        # The failure was this process's, not the step's (`_duckdb.invalidated`): the worker
+        # stops and the coordinator tries the step once more in a fresh one.
+        self.retry_fresh = False
 
     def begin(self, step: Step, modules: Modules, log_id: str) -> _Begun:
         """Import the step's module and find its function (`_begin`). From here until the
@@ -738,6 +743,7 @@ class _Run:
             "traceback": traceback_for(exc, self.phase),
             "import_seconds": _slow_import(self.import_seconds),
             "phase": self.phase,
+            "retry_fresh": self.retry_fresh,
         }
 
     def __enter__(self) -> _Run:
@@ -754,7 +760,8 @@ class _Run:
                 return False
             wall = self.wall()
             self.tracing.finish(exc)
-            self.survives = _worker_survives(exc, self.imported)
+            self.retry_fresh = _duckdb.invalidated(exc)
+            self.survives = _worker_survives(exc, self.imported) and not self.retry_fresh
             self.report(exc, wall)
             return True
         finally:

@@ -123,6 +123,11 @@ barca.duckdb_connection().execute("SET threads = 4")   # runs once per worker pr
   named after input parameters: an existing table is skipped during binding, while an
   existing view may be replaced and then dropped. There is no per-step namespace isolation.
 
+- **An invalidated database.** After a fatal or internal error DuckDB refuses every later
+  statement in the process (`FatalException: database has been invalidated`). Barca replaces
+  that worker and runs the step once more in a fresh one, whatever its `retries`, once per
+  step in a run, and says so on stderr. A second failure of the same kind fails the step.
+
 - Stay on that connection. If a step opens its own `duckdb.connect()`, its relations cannot be
   combined with inputs (`Cannot combine LEFT and RIGHT relations of different connections!`),
   and `con.register("x", input)` fails the same way. Barca recognizes these DuckDB errors

@@ -47,6 +47,7 @@ impl Coordinator {
             step_id,
             spec,
             attempts: 0,
+            fresh_retries: 0,
             group: None,
             deps: deps.clone(),
         };

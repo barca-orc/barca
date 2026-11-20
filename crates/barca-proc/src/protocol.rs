@@ -77,6 +77,11 @@ pub enum WorkerMessage {
         /// coordinator stops the worker and starts a fresh one (#523).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         worker_continues: bool,
+        /// The failure was the worker's, not the step's: its duckdb database is invalidated
+        /// and every step it ran next would fail on it. The coordinator stops the worker and
+        /// tries the step once more in a fresh one, outside the step's `retries` (#1083).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        retry_fresh: bool,
         /// Where the step failed (`dispatch::ErrorPhase`, by name). Absent from an older
         /// worker; a name this barca does not know is read as unknown.
         #[serde(default, skip_serializing_if = "Option::is_none")]
