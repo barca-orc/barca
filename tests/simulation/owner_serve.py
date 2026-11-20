@@ -76,6 +76,8 @@ KEPT_RUNS = 1000
 TICKS_PER_SCHEDULE = 1000
 # Read routes answer within this while runs write (#921).
 READ_BAR_MS = 500
+# A command or request this slow is listed in the report with when it ended.
+SLOW_MS = 2000
 KEYS = 12
 # Steps of `get pipeline.py --refresh-all` (base, total, last and the keys) and of
 # `get last --refresh-all`.
@@ -201,6 +203,8 @@ class Harness:
             "BARCA_BACKUP_INTERVAL": f"{args.backup_secs}s",
             "BARCA_TEST_CACHE_CHECKPOINT_SECS": "2",
         }
+        if args.trace:
+            self.env["BARCA_TRACE_TIMING"] = "1"
         self.port = free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         self.log_path = root / "serve.log"
@@ -221,6 +225,10 @@ class Harness:
         self.local_runs: dict[str, dict] = {}
         self.samples: list[tuple[float, int, int, int]] = []
         self.backups: dict[str, Path] = {}
+        self.slow: list[dict] = []
+        self.in_flight: dict[object, tuple[str, float]] = {}
+        self.stacks = 0
+        self.last_stack = 0.0
         self.detail_404_ms: list[float] = []
         self.detail_404_of: Counter[str] = Counter()
         self.stops: list[dict] = []
@@ -285,6 +293,16 @@ class Harness:
             self.phases.append((began, self.now() + grace, self.phase))
             self.phase = ""
 
+    def took(self, kind: str, ms: float) -> None:
+        with self.lock:
+            self.commands[kind] += 1
+            self.latency[kind].append(ms)
+            if ms >= SLOW_MS and not kind.endswith(("get", "logs -f")):
+                self.slow.append({"at": self.now(), "kind": kind, "ms": round(ms)})
+                # Beside what the server was saying then.
+                with self.log_path.open("a") as log:
+                    log.write(f"### owner_serve {self.now()}s: {kind} took {ms:.0f} ms\n")
+
     # ─── the processes ────────────────────────────────────────────────────────
 
     def cli(self, kind: str, *argv: str, timeout: float = 120, ok=(0,), env: dict | None = None):
@@ -305,9 +323,7 @@ class Harness:
             self.problem(kind, f"no answer in {timeout}s", str(e.stderr)[-1500:], began)
             return None
         ms = (time.monotonic() - start) * 1000
-        with self.lock:
-            self.commands[kind] += 1
-            self.latency[kind].append(ms)
+        self.took(kind, ms)
         said = [word for word in NEVER if word in out.stderr or word in out.stdout]
         if out.returncode not in ok or said:
             self.problem(
@@ -330,6 +346,8 @@ class Harness:
             method=method,
             headers={"Content-Type": "application/json"} if data else {},
         )
+        token = object()
+        self.in_flight[token] = (kind, start)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as r:
                 status, raw = r.status, r.read()
@@ -338,10 +356,10 @@ class Harness:
         except (OSError, ValueError) as e:
             self.problem(kind, "no answer", repr(e), began)
             return 0, None
+        finally:
+            del self.in_flight[token]
         ms = (time.monotonic() - start) * 1000
-        with self.lock:
-            self.commands[kind] += 1
-            self.latency[kind].append(ms)
+        self.took(kind, ms)
         text = raw.decode(errors="replace")
         said = [word for word in NEVER if word in text]
         if status >= 500 or said:
@@ -700,6 +718,29 @@ class Harness:
         with self.lock:
             self.samples.append((self.now(), size(f"{self.db}-wal"), size(str(self.db)), rss))
 
+    def watch_stalls(self, _rng: random.Random) -> None:
+        """`--stacks`: the server's thread stacks while a request has waited 1.5 s (a binary
+        with symbols says where)."""
+        now = time.monotonic()
+        waiting = [(kind, now - start) for kind, start in list(self.in_flight.values())]
+        stuck = [(kind, round(secs, 2)) for kind, secs in waiting if secs > 1.5]
+        if not stuck or now - self.last_stack < 4 or self.stacks >= 12 or self.phase:
+            return
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        self.last_stack = now
+        self.stacks += 1
+        out = subprocess.run(
+            ["eu-stack", "-p", str(self.proc.pid)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        (self.root / f"stacks-{self.now():.1f}.txt").write_text(
+            f"waiting: {stuck}\n{out.stdout}\n{out.stderr}"
+        )
+
     def collect_backups(self, _rng: random.Random | None = None) -> None:
         """Copy each backup out of the store as it appears: the store keeps the newest five."""
         for sidecar in sorted((self.store / "default/state/backups").glob("*.json")):
@@ -734,6 +775,8 @@ class Harness:
         self.loop("maintenance", self.maintenance, 8, (0.5, 2.0))
         self.loop("samples", self.sample, 9, (0.2, 0.2))
         self.loop("backups", self.collect_backups, 10, (0.5, 0.5))
+        if self.args.stacks:
+            self.loop("stalls", self.watch_stalls, 11, (0.25, 0.25))
 
     def stop_loops(self) -> None:
         self.stop.set()
@@ -877,7 +920,13 @@ class Harness:
         self.proc.wait()
         self.reap_group()
         (self.dir / "hold.secs").write_text("0")
-        record = {"what": "SIGKILL", "exit": -9, "run": run_id, "in flight": len(live)}
+        record = {
+            "what": "SIGKILL",
+            "exit": -9,
+            "run": run_id,
+            "in flight": len(live),
+            "at the kill": self.sidecars(),
+        }
         # CLI processes are still at work on the database the killed server left.
         time.sleep(rng.uniform(0.2, 1.0))
         marker = len(self.log_text())
@@ -1307,6 +1356,7 @@ class Harness:
                 for kind, v in sorted(self.latency.items())
                 if kind.startswith("http GET") and any(ms > READ_BAR_MS for ms in v)
             },
+            "slow": self.slow,
             "listed runs whose detail was 404 at first": sum(1 for ms in self.detail_404_ms if ms),
             "longest such 404 ms": round(max(self.detail_404_ms, default=0.0), 1),
             "such runs, as listed": dict(self.detail_404_of),
@@ -1335,6 +1385,10 @@ def main() -> int:
     p.add_argument(
         "--no-latency-bar", action="store_true", help="report slow read routes, do not fail on them"
     )
+    p.add_argument(
+        "--stacks", action="store_true", help="eu-stack the server while a request waits 1.5 s"
+    )
+    p.add_argument("--trace", action="store_true", help="BARCA_TRACE_TIMING in every process")
     p.add_argument("--report", type=Path, help="write the report here as JSON")
     p.add_argument("--quiet", action="store_true", help="no progress on stderr")
     p.add_argument("--barca", default=str(REPO / ".venv/bin/barca"))

@@ -159,6 +159,30 @@ SQLite locks on it; `looking_at_the_database_file_keeps_this_process_s_locks` in
 one-minute size check for it; long waits (`STUCK_FOR`, `SURVEY_EVERY`) are skipped by rewriting
 `gc-state.json`.
 
+`tests/simulation/owner_serve.py` beside it measures instead of searching: it holds one real
+`barca serve` up as the long-lived holder of its metadata connection (#1056), with two schedules
+firing every second, a store in a local directory backed up to every 2 s, a small `[cache]
+max_size` checked every 2 s, its read routes polled, and CLI processes looping beside it
+(`get --local`, the read commands, `logs -f`, `gc --local`, `state backups`, `doctor`, and
+commands sent over `.barca/serve.sock`). Then it stops the server during a run, a second time
+during the drain, kills it three times with the CLI loops still going, stops it with nothing
+else running, and restores backups while CLI processes work.
+
+```bash
+tests/simulation/owner_serve.py --seconds 600 --keep /var/tmp/owner --report report.json
+```
+
+It fails (exit 1) on any database error in a command, a response or the server's log
+(`database is locked`, `malformed`, a lock timeout, a failed checkpoint or backup), on an
+unexplained non-zero exit or 5xx, on a backup that fails `integrity_check` or, restored with
+`barca state restore`, reads as a history the final one does not continue, on an accepted run,
+an exit-0 `--local` run or a fired tick missing from the final history (the trim's deletions
+past the newest 1,000 runs aside), on a torn read it can detect, and on a read route whose 95th
+percentile is over 500 ms. The report has the counts, each command's and route's latency, the
+`-wal` size and the server's memory through the run. Give `--keep` a short path on a disk (the
+project socket's path must fit a Unix socket address). `python/tests/test_owner_serve.py` runs
+20 seconds of it with one kill in CI's full tier.
+
 ## Web UI
 
 ```bash
