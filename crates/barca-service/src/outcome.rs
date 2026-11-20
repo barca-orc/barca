@@ -123,7 +123,7 @@ pub struct RunRequest {
     /// scheduled runs and behind earlier requests; `last` is behind every run that waits, and
     /// the run is ordered with scheduled work from then on. Experimental.
     #[serde(default, skip_serializing_if = "QueuePlace::is_next")]
-    #[cfg_attr(feature = "ts", ts(optional))]
+    #[cfg_attr(feature = "ts", ts(optional, as = "Option<QueuePlace>"))]
     pub queue: QueuePlace,
     /// Why the caller asks for the run, in free text (at most 500 characters, one line),
     /// recorded with it and shown as its `trigger_reason`. Experimental.

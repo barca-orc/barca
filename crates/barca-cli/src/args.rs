@@ -254,7 +254,7 @@ Examples:
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
   barca get total --local                  # run in this process: not on this project's barca serve, nothing sent to a configured server
   barca get total pipeline.py --allow-paused   # run it even though it is paused (barca docs incidents)
-  barca get sales --server --queue last --refresh-all   # a backfill that waits its turn behind the server's scheduled runs (barca docs scheduling)
+  barca get sales --server --queue last --refresh-all   # a backfill that waits its turn behind the server's scheduled runs (barca docs serve-ops)
   barca get --examples                     # the complete example collection; runs nothing
 
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents";
@@ -280,7 +280,7 @@ Examples:
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
   barca run deploy pipeline.py --local                 # run in this process: not on this project's barca serve, nothing posted to a configured server
   barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
-  barca run deploy --server --queue last               # behind the server's waiting runs, scheduled ones included (barca docs scheduling)
+  barca run deploy --server --queue last               # behind the server's waiting runs, scheduled ones included (barca docs serve-ops)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 More: barca docs tasks, barca docs cache, barca docs agents";

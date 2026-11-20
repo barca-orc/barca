@@ -6,6 +6,10 @@ released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their not
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 
+### Features
+
+- A requested run can queue last (experimental): `barca get` / `barca run` with `--queue last` on a server (`--server`, or in the project a `barca serve` is running in), or `"queue": "last"` in the body of `POST /runs`, joins the run queue behind every waiting run, the scheduled ones included, and is ordered with scheduled work from then on: for a run slot (the scheduled runs and the runs queued last start in the order accepted; no slot past `max_runs`) and for the shared capacity (its steps wait as a scheduled run's do, `scheduled_max_wait_seconds` included). For starting a large backfill by hand without delaying the schedules. The default is unchanged: a requested run still starts ahead of waiting scheduled runs. `queue` is `"last"` in the answer of `POST /runs`, on the run's entry in `GET /queue` and `barca queue --json` (the table says `queued last`) and in `GET /runs/{run_id}` while the run waits or executes; the place survives a restart while the run waits. `--queue` is a usage error (exit 2) on a command that runs on this machine. See `barca docs serve-ops`, "Queue a run last" (#1056).
+
 ## Pending
 
 - Internal: `barca-core` is dissolved into crates that match its layers (`barca-store`, `barca-decide`, `barca-run`, `barca-analysis` and `barca-service`, the one crate the CLI and the server import), with child processes and the socket protocol in `barca-proc`, the Python frontend in `barca-python` and the graph in `barca-model`; `barca-decide`, `barca-analysis` and planning (`barca-compile`) take a graph and do not depend on the frontend (`docs/engineering/crate-split-2.md`, #1056); no behavior change.

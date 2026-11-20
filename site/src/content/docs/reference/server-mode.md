@@ -72,7 +72,8 @@ What that means for `get` and `run`:
   file the server did not deploy is a usage error listing the deployed files. To run an edit
   the server has not loaded, pass `--local`.
 - The run waits for a run slot like any other (`barca queue`), and Ctrl-C cancels it on the
-  server.
+  server. Like every requested run it starts ahead of the scheduled runs that wait; `--queue
+  last` puts it behind them instead ([Operating barca serve: Queue a run last](/reference/serve-ops/#queue-a-run-last---queue-last)).
 - `-o url` is not available on a server yet; pass `--local` for it.
 - A command a step starts (`barca.get(...)` inside a task) does not go to the server: it runs
   in the step's own process, as it did before the socket, so it never waits for a run slot its
@@ -360,6 +361,11 @@ prints one note and continues:
 Your edits run only on this machine (leave out `--server`), or after you deploy them.
 
 `--env` must name the server's environment; another is a usage error naming the server's.
+
+`--queue last` (experimental) joins the server's run queue behind every waiting run, scheduled
+ones included, instead of ahead of the scheduled ones: `barca get sales --server --queue last`
+([Operating barca serve: Queue a run last](/reference/serve-ops/#queue-a-run-last---queue-last)). It is a usage error on a command that runs on
+this machine.
 
 ### What prints
 

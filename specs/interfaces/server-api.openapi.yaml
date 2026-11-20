@@ -3505,7 +3505,8 @@ paths:
       description: 'The command runs here with the deployed code, as barca get / barca run would. Targets
         are checked first: no run starts for a request the CLI would refuse. A failed step is not an HTTP
         error: it is a run whose outcome is failed. The run joins the run queue (GET /queue), recorded in
-        the metadata DB before the answer: it starts in order when fewer than max_runs run, the queue
+        the metadata DB before the answer: it starts in order (a requested run ahead of waiting scheduled runs, unless it says queue
+        last) when fewer than max_runs run, the queue
         is not paused and the server is not draining. A draining server accepts it too (status pending,
         waiting_for restart): the next server resumes it under the same run id, after the drain, which
         lasts until the runs in flight finish or [server] drain_timeout passes. With no next server
@@ -4758,6 +4759,13 @@ components:
       - position
       - waiting_for
       properties:
+        queue: &id_queue_place
+          anyOf:
+          - $ref: '#/components/schemas/QueuePlace'
+          - type: 'null'
+          description: last for a run asked to queue last (queue of POST /runs), while it waits or
+            executes; null for every other run, and in GET /runs/{run_id} once the run has finished
+            (it is not recorded with the run). Experimental.
         run_id:
           type: string
           description: The database run id, the one barca history shows.
@@ -4778,6 +4786,17 @@ components:
           - type: 'null'
           description: What else a queued run waits for, beyond the runs ahead of it; null when nothing
             does. Experimental.
+    QueuePlace:
+      type: string
+      enum:
+      - next
+      - last
+      description: 'Where a requested run joins the run queue. next (the default): ahead of the
+        scheduled runs that wait, behind the requests accepted before it. last: behind every run
+        that waits, scheduled ones included; from then on the run is ordered with scheduled work,
+        in the order accepted for a run slot (it takes no slot past max_runs), and as a scheduled
+        run for the shared capacity its steps wait for (origin scheduled, the bound of
+        scheduled_max_wait_seconds included). Experimental.'
     WaitingFor:
       type: string
       enum:
@@ -4804,6 +4823,7 @@ components:
       - waiting_for
       - target_line
       properties:
+        queue: *id_queue_place
         target_line: {type: string}
         run_id:
           type: string
@@ -5080,7 +5100,8 @@ components:
                 enum:
                 - requested
                 - scheduled
-                description: scheduled for a run a schedule's tick started, requested for any other.
+                description: scheduled for a run a schedule's tick started and for a run asked to
+                  queue last (queue of POST /runs), requested for any other.
     RunHandle:
       type: object
       additionalProperties: false
@@ -8353,6 +8374,11 @@ components:
           type: boolean
           description: --allow-paused. Run a target that is paused (POST /pauses); without it a request
             naming a paused node is 400. Experimental.
+        queue:
+          $ref: '#/components/schemas/QueuePlace'
+          description: --queue. Where the run joins the run queue; next when absent. last puts it
+            behind every waiting run, scheduled ones included, and orders it with scheduled work.
+            Any other value is 400. Experimental.
         reason:
           type: string
           maxLength: 500
@@ -8845,6 +8871,7 @@ components:
           description: Why the run executed what it did; null before it decided to execute anything.
         cancellation: *id_cancellation
         waiting_for: *id_waiting_for
+        queue: *id_queue_place
         explanation:
           $ref: '#/components/schemas/RunExplanation'
         outcome:

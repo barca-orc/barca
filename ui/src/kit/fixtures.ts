@@ -282,6 +282,7 @@ function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunVi
     failure: first_failure ? { node: first_failure.node_id, error: first_failure.error } : null,
     trigger_reason: null,
     waiting_for: null,
+    queue: null,
     outcome: null,
     steps: listed,
     steps_page: { total: listed.length, truncated: false, ...(nodes.length > 0 ? { nodes } : {}) },
@@ -433,7 +434,7 @@ const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => (
   target_line: overrides.target ?? `web.py:sessions_${String(n).padStart(2, '0')}`,
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
   schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30),
-  started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null, ...overrides,
+  started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null, queue: null, ...overrides,
 })
 const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
 const deepQueue: QueueView = {

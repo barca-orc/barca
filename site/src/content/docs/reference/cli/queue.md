@@ -19,6 +19,9 @@ barca queue pause --server           # queued runs wait; runs in flight go on; k
 barca queue resume --server          # queued runs start again, in order
 ```
 
+A run started with `--queue last` (`barca get`, `barca run`) has `"queue": "last"` in `--json`
+and `queued last` at the end of its row; every other run has `"queue": null`.
+
 `pause` and `resume` answer with the queue after the change, and exit 2 on a `--read-only`
 server. See [Operating barca serve: The run queue](/reference/serve-ops/#the-run-queue).
 

@@ -1616,6 +1616,95 @@ async fn queue_pause_and_resume_match_contract() {
     assert_eq!(view["queued"], json!([]));
 }
 
+/// `queue: "last"` of `POST /runs` (experimental): the answer, `GET /queue` and
+/// `GET /runs/{run_id}` say so, and the run waits behind a request accepted after it.
+#[tokio::test]
+async fn a_run_queued_last_matches_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    checked(&router, "POST", "/queue/pause", "/queue/pause", 200).await;
+    let accepted = &contract()["components"]["schemas"]["RunAccepted"];
+    let (status, last) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["first"], "queue": "last"}),
+    )
+    .await;
+    assert_eq!(status, 202, "{last}");
+    validate(accepted, &last);
+    assert_eq!(
+        (&last["queue"], &last["position"]),
+        (&json!("last"), &json!(1))
+    );
+    let (status, next) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["second"], "queue": "next"}),
+    )
+    .await;
+    assert_eq!(status, 202, "{next}");
+    validate(accepted, &next);
+    assert_eq!(
+        (&next["queue"], &next["position"]),
+        (&Value::Null, &json!(1))
+    );
+    let queue = checked(&router, "GET", "/queue", "/queue", 200).await;
+    let ids: Vec<&Value> = queue["queued"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| &e["run_id"])
+        .collect();
+    assert_eq!(ids, [&next["run_id"], &last["run_id"]]);
+    assert_eq!(queue["queued"][0]["queue"], Value::Null);
+    assert_eq!(queue["queued"][1]["queue"], "last");
+    let id = last["run_id"].as_str().unwrap();
+    let run = checked(
+        &router,
+        "GET",
+        &format!("/runs/{id}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(run["queue"], "last");
+    // The description the metadata DB keeps says so, and nothing for the default.
+    let db = dir.path().join("metadata.db").display().to_string();
+    let rows = barca_service::serve::run_queue::list(&db).await.unwrap();
+    let specs: Vec<Value> = rows
+        .iter()
+        .map(|r| serde_json::from_str(&r.spec).unwrap())
+        .collect();
+    assert_eq!(specs[0]["queue"], "last");
+    assert_eq!(specs[1].get("queue"), None);
+    let (status, refused) = request_json(
+        &router,
+        "POST",
+        "/runs",
+        json!({"command": "get", "targets": ["first"], "queue": "first"}),
+    )
+    .await;
+    assert_eq!(status, 400, "{refused}");
+    validate(&contract()["components"]["schemas"]["Error"], &refused);
+    checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;
+    for run in [&next, &last] {
+        let done = wait(&router, run["run_id"].as_str().unwrap()).await;
+        assert_eq!(done["status"], "complete", "{done}");
+    }
+    // Not recorded with the finished run.
+    let run = checked(
+        &router,
+        "GET",
+        &format!("/runs/{id}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert_eq!(run["queue"], Value::Null);
+}
+
 #[tokio::test]
 async fn schedule_pause_and_resume_match_contract() {
     let dir = tempfile::tempdir().unwrap();

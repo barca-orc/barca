@@ -868,7 +868,7 @@ fn queue_place(
                 "error: --queue places a run in a barca server's run queue, and this `barca \
                  {sub}` runs on this machine, where a run starts at once\nRun it on a server \
                  (--server, or in the project a `barca serve` is running in, without --local), \
-                 or leave out --queue (barca docs scheduling)."
+                 or leave out --queue (barca docs serve-ops)."
             ),
         )),
         (Some(crate::args::QueueArg::Next), Side::Server) => Ok(QueuePlace::Next),
