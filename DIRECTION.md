@@ -1,7 +1,6 @@
 # Direction
 
-Last updated: 2026-11-04, after v0.39.5 (the 0.39 cleanup, #800) shipped the same day; preparing
-v0.39.6, a second cleanup pass. The pinned
+Last updated: 2026-11-20, after v0.46.0 (the modularity series, #1056). The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -24,55 +23,23 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 ## Now, in order
 
-An issue's milestone is the release it ships in; the items below are the order.
+An issue's milestone is the release it ships in; the milestones below are the order.
 
-**Crate split ([#905](https://github.com/barca-orc/barca/issues/905)):** `barca-core` split into
-`barca-model`, `barca-compile`, `barca-db` and `barca-engine`, with `barca-cli` and
-`barca-server` reaching only `barca-core`. Internal only, no new surface; it lands on `main` as
-one change from the `integrate/modularize` branch. Record:
-[crate-split.md](docs/engineering/crate-split.md).
+**0.46.1, small fixes.** The Host header check for a loopback-bound server (#998), the
+partitioned-node status fault once an asset is pinned (#1069), and the production feedback left
+unscheduled since October (#668, #671, #672, #673, #811, #814).
 
-0.39.5 (2026-11-04) was the 0.39 cleanup ([#800](https://github.com/barca-orc/barca/issues/800)):
-no new surface, every item of its list landed (the row below). A repo-wide audit on the day it
-shipped found a second layer of the same kind of debt, so **0.39.6 is a second cleanup pass**,
-again with no commands, flags, keys, routes, decorator arguments or UI features. In order:
+**0.47.0, the run lifecycle on a server ([#944](https://github.com/barca-orc/barca/issues/944)).**
+Stop and drain, restart and requeue, cancel, rerun scope and live progress (#926 to #942), with
+the breaking changes decided for it: one set of run status words (#943: `failed`, `pending`),
+the run and schedule shapes that still differ between routes and commands made one, and the
+web UI's Run doing what a plain run does (#937).
 
-1. **CI:** a lint gate that fails the merge tier on every linter the hooks run (not only the
-   formatters), and a Dependabot configuration that covers every ecosystem in the repository
-   (Cargo, uv, npm for `ui/` and `site/`, GitHub Actions) at zero critical and high.
-2. **Rust hot-path shape:** `execution.rs` split along its phases; a `StepStatus` enum in place
-   of the step-status string literals (`ran`, `cached`, `skipped`, `failed`, ...), as #802 did for
-   cache states; one artifact format map (extension, reader, writer) instead of the copies in
-   core, status and the Python bridge; `barca-server`'s `runs.rs` and the CLI's `client.rs` split
-   by route family; store inspection out of `status.rs` into its own module; the `barca-core`
-   `pub` surface narrowed to what `barca-cli` and `barca-server` call (done by #905 step 5).
-3. **Python:** `_worker.py` split (daemon loop, step execution, result writing), the import
-   cycles between `_runtime`, `_artifacts` and `_batch` removed, one shared `serve` test fixture
-   in place of the per-file copies, and typed public decorators (`@asset`, `@task`, `@sensor`,
-   `@sink` keep their signatures under `ty`).
-4. **UI, vocabulary-faithful:** one `CacheState` to display map generated from the enum
-   (`ts-rs`), the client-side mutes, the demo preview and the mock placeholder removed,
-   `GroupedPipelinePage` split, the Playwright e2e specs re-based on a real fixture served by
-   `barca serve` ([#807](https://github.com/barca-orc/barca/issues/807)).
-5. **Documents made true:** this file and the release table, the drain exit codes, the `.barca/`
-   and cache-state tables with one owner each, the experimental table and the README's command
-   table generated from `contract.rs`, the engineering plans closed out or deleted, the manual
-   topics mirrored on the site from one source (`SITE_PAGES`), the long topics split.
+**0.48.0, resource bounds.** The cache size limit while runs are always active (#1054), gc on a
+large catalog (#750, #754), coordinator and inspection memory at partition scale (#655, #656).
 
-0.39.6 ships when those land. Then the UI redesign (Decided, November 2026): its prototype is
-[PR #818](https://github.com/barca-orc/barca/pull/818), branch `feat/ui-chains`, display-only
-"chains" (named, possibly overlapping sets of nodes viewed together); before it merges, `chain()`
-is parsed from Python and served by `GET /chains`, which brings the parser, CLI contract and
-manual changes with it. Nothing else new lands before 0.39.6 is done.
-
-**0.44.0, the freshness gap ([#974](https://github.com/barca-orc/barca/issues/974)):** the UI
-and the CLI both answer "how far is this project from a fresh DAG, why, and what closes the
-distance", from one implementation in Rust. The specification is
-[health.md](specs/behavior/health.md) (#953, approved intent); "The UI" under Decided is amended
-for it. In order: confirm whether `Always` assets below a polled sensor stay stale through
-ticks (#952); move the UI's derivations into `barca-core` with no new behaviour (#954 to #959);
-record what each tick decided and classify refresh path, estimates, cause and root (#960 to
-#965, #972, #973); then the UI, rendering only (#966 to #971).
+**0.49.0, time outside the steps on a server.** Computed and published (#1006), the measurements
+of #951, shared in-flight steps (#654).
 
 RFC-0014 pipeline fuzzing is deferred, with no action on its working branch. It has no
 scheduled release. DuckDB 1.x and 2.x remain supported (`duckdb>=1.4,<3`), with CI on both.
@@ -120,8 +87,12 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.39.3 | 2026-11-02 | Failed partition batches split into smaller calls, down to single partitions | [#787](https://github.com/barca-orc/barca/pull/787) |
 | 0.39.4 | 2026-11-03 | A server's runs share identical in-flight asset steps (experimental); a requeued run's re-executed steps are recorded under their new run hashes | #654 (part, [#796](https://github.com/barca-orc/barca/pull/796)), #794 |
 | 0.39.5 (the 0.39 cleanup) | 2026-11-04 | No features: #799 documented (a refresh recomputes only its target's cone); 0.39.4 measured (31.7 ms trivial run) with a performance gate in the merge tier; the documents made true; one `CacheState` enum, one metadata write boundary, serve out of the embedded hot loop, the `.barca/` layout spec; per-test timeouts, Playwright and type drift in CI, isolated backup tests, Dependabot at zero critical and high | #800: #804 (#799), #810, #803, #802, #819, #817, #805, #806, #809, #808 |
-| 0.39.6 (second cleanup) | planned | No features: `db.rs` split by table family and metadata backups that do not hold the DB lock (landed), then the five items under "Now, in order" | #821, #801, #807 and the issues filed from the 2026-11-04 audit |
-| 0.44.0 | planned | The freshness gap: health, causes and estimates defined once in Rust, for the CLI and the UI | #974: #952 to #973 |
+| 0.39.6 to 0.45.0 | 2026-11-05 to 2026-11-19 | The second cleanup, pins, pauses, the health map and the freshness gap, server query route, run counts and queue state; see each version's notes | [CHANGELOG.md](CHANGELOG.md) |
+| 0.46.0 | 2026-11-20 | Breaking: a command beside a running `barca serve` goes to it (`--local` runs here). The modularity series: `barca-core` dissolved into layer crates, one definition per view for the CLI and the server, the metadata lock (lock-free reads, turns, one kept connection), an IR that is not the parser's | #1056 ([#1062](https://github.com/barca-orc/barca/pull/1062)), #945, part of #1054 |
+| 0.46.1 | planned | Small fixes | #998, #1069, #668, #671 to #673, #811, #814 |
+| 0.47.0 | planned | The run lifecycle on a server; one set of status words and run shapes | #944: #926 to #943 |
+| 0.48.0 | planned | Resource bounds | #1054, #750, #754, #655, #656 |
+| 0.49.0 | planned | Time outside the steps on a server | #1006, #951, #654 |
 
 An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
 
@@ -141,11 +112,52 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-None at 0.39.6.
+- Whether `GET /schedule` and the `schedule` block of `GET /state` settle on RFC 3339 times, and
+  whether a run in a list takes `barca history`'s key names (`run_id`, `failure`). Proposed with
+  #943; blocks 0.47.0.
+- `[cache] max_size`: a hard cap or a target, and whether a run is refused or delayed when gc
+  cannot make room (#1054). Blocks 0.48.0.
+- What a run with an owed sink reports, and when a server's ledger tells other machines of a
+  computed result (#1006). Blocks 0.49.0.
+- Whether a "check" is a kind the server knows (the web UI infers it from a `check__` name).
+  No release yet.
 
 Settled by what shipped, and documented in the manual: drain defaults (#190: `--drain-timeout` and `[server] drain_timeout`, 30 s; the server exits 0 when the runs in flight finish and when the timeout requeues them, and 1 only when a second SIGTERM or SIGINT cancels them, `barca docs scheduling`, "Stopping the server"; 0.27.0), pause persistence (#435: a pause survives a restart; 0.27.0) and the fixture home (#250: `benchmarks/planning_pipeline/`; 0.29.0).
 
 ## Decided, November 2026
+
+**Structure (2026-11-19, #1056).** The crates are the layers: `barca-model` (shared vocabulary,
+the IR and the graph), `barca-python` (the Python frontend), `barca-compile` (planning),
+`barca-db`, `barca-proc`, `barca-engine` (the worker loop, no database), `barca-store`,
+`barca-decide`, `barca-analysis`, `barca-run` and `barca-service`, the one crate the CLI and
+the server import. The scheduling engine is separate from the decision layer. The CLI and the
+web UI have one seam, the typed views; text and pixels are two renderings of them. The CLI is
+one host of the service and the server another: a command is checked once and one place decides
+where it runs. Record: [crate-split-2.md](docs/engineering/crate-split-2.md).
+
+**A graph from another language (2026-11-19).** Wanted eventually, not now. The IR is an
+internal Rust type that a second frontend could produce and that serializes
+([ir.md](docs/engineering/ir.md) lists what a second frontend could not supply today); there is
+no external format, and executing a plan built elsewhere stays undecided.
+
+**A command beside a server (2026-11-19, 0.46.0).** In a project a `barca serve` is running in,
+commands go to that server over `.barca/serve.sock`: reads are answered by it, `get` and `run`
+join its queue ahead of scheduled work, in the order asked (`--queue last` waits behind
+scheduled work too), and `--local` runs in the command's own process. The project's own server
+wins over a configured remote one. The socket needs no token: it is owner-only, and whoever can
+open it can write the database.
+
+**The metadata lock (2026-11-19, 0.46.0).** The contention was barca's own lock, not SQLite's,
+so MVCC was never the remedy. Reads do not take the lock, a waiter gets a turn, and a process
+keeps one write connection; the cross-process lock is still taken per operation. DuckDB stays
+the query surface (`barca sql`, `POST /sql/query`) and is not used for analysis.
+
+**Refresh (2026-11-19, #937).** A plain run brings the asset DAG up to date: fresh by default.
+`refresh all` is the hard refresh: it discards the cache and re-runs everything, and keeps that
+name and meaning in the CLI and the API. The web UI's Run does the default, offers the hard
+refresh as its own action, and has "Including Manual", off by default.
+
+**Run status words (2026-11-19, #943).** `failed`, not `error`; `pending`, not `queued`.
 
 **The 0.39 cleanup (2026-11-04, #800).** The cleanup weeks after 0.36, 0.37, 0.38 and 0.39 were
 skipped: four minors and six patches shipped in five days with no checklist pass. 0.39.5 is the
