@@ -31,7 +31,7 @@ pub const BY_NODE_RUN: &str = by_node_run!();
 
 // The metadata write boundary: every INSERT, UPDATE, DELETE or REPLACE of the database is in
 // this directory (one file per table family); `recording.rs` drives the recording ones. The
-// boundary test is barca-core's `write_boundary_tests.rs` (it scans every crate).
+// boundary test is barca-service's `write_boundary_tests.rs` (it scans every crate).
 mod asset_pauses;
 mod cache_reader;
 pub mod cost_estimates;
@@ -220,7 +220,7 @@ thread_local! {
 
 /// How many statements [`prepare`] has prepared on this thread. Tests run on a current-thread
 /// runtime, so this counts only their own writes. Always compiled (one thread-local add per
-/// prepared statement): barca-core's tests count too, and a dependency's `cfg(test)` does not
+/// prepared statement): barca-service's tests count too, and a dependency's `cfg(test)` does not
 /// reach them.
 #[doc(hidden)]
 pub fn prepares() -> u64 {
@@ -242,13 +242,23 @@ pub async fn db_guard_for(db_path: &str) -> Option<MutexGuard<'static, ()>> {
     Some(DB_LOCK.lock().await)
 }
 
-/// The paths of the [`ReadView`]s open in this process.
-static READ_VIEWS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+/// The [`ReadView`]s open in this process: each one's path, and the database it reads.
+static READ_VIEWS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
 /// True when `db_path` names a [`ReadView`].
 pub fn is_read_view(db_path: &str) -> bool {
-    READ_VIEWS.lock().unwrap().contains(db_path)
+    READ_VIEWS.lock().unwrap().contains_key(db_path)
+}
+
+/// The database `db_path` is: itself, or for a [`ReadView`] the database the view reads. What
+/// lives beside a database (`live-logs/`, `run-owners/`) is beside this path, not beside a
+/// view's link in a temp dir.
+pub fn database_of(db_path: &str) -> std::borrow::Cow<'_, str> {
+    match READ_VIEWS.lock().unwrap().get(db_path) {
+        Some(database) => std::borrow::Cow::Owned(database.clone()),
+        None => std::borrow::Cow::Borrowed(db_path),
+    }
 }
 
 /// How long a connection waits on SQLite's own locks before `database is locked`
@@ -257,8 +267,9 @@ pub fn is_read_view(db_path: &str) -> bool {
 const BUSY_WAIT: Duration = Duration::from_secs(5);
 
 /// How long [`fold_log`] tries again a checkpoint that a [`ReadView`]'s query kept from
-/// finishing: one query of a read route lasts milliseconds.
-const CHECKPOINT_BUSY_WAIT: Duration = Duration::from_secs(2);
+/// finishing: one query of a read route lasts milliseconds. As long as a connection waits on
+/// SQLite's own locks ([`BUSY_WAIT`]), which is how long one try used to block.
+const CHECKPOINT_BUSY_WAIT: Duration = BUSY_WAIT;
 
 /// A read-only connection to a [`ReadView`]'s database.
 async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
@@ -280,24 +291,390 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
 }
 
 // barca-server names these as `db::` paths; the `.barca/` layout is `barca_model::layout`'s.
-pub use barca_model::layout::{ensure_env_dirs, env_local_paths};
+pub use barca_model::layout::{ensure_env_dirs, env_local_paths, serve_socket_path};
 
 /// How long one barca process waits for another's DB operation before giving up.
 /// Operations are brief (a few queries), so hitting this means a stuck process.
 const DB_FILE_LOCK_WAIT: Duration = Duration::from_secs(60);
 
-/// An open database plus the cross-process lock that makes it safe to open. Field
-/// order matters: the database is closed before the lock is released.
+/// A database open for one operation, plus the cross-process lock that makes it safe to use.
+/// Field order matters: a database opened for this operation alone is closed before the lock
+/// is released.
 pub struct DbHandle {
-    _db: libsql::Database,
+    /// The owner's connection this operation was handed ([`OWNED`]): looked at once more when
+    /// the handle is dropped, with the lock still held.
+    owned: Option<OwnedUse>,
+    /// The database of a connection opened for this operation alone: a [`ReadView`]'s, or one
+    /// of a file the owner does not keep a connection to ([`owns`]).
+    _db: Option<libsql::Database>,
     /// None for a [`ReadView`], which reads without the lock.
-    _lock: Option<fs::File>,
+    _lock: Option<FileLock>,
+}
+
+impl DbHandle {
+    /// The handle of a connection opened for one operation.
+    fn of_one_operation(db: libsql::Database, lock: Option<FileLock>) -> Self {
+        Self {
+            owned: None,
+            _db: Some(db),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for DbHandle {
+    fn drop(&mut self) {
+        // Before the fields drop, so before the lock is released.
+        if let Some(used) = self.owned.take() {
+            release_owned(used);
+        }
+    }
+}
+
+// ─── The owner: one write connection per metadata database, per process ──────────────────────
+
+/// The write connections this process keeps open, by database path: one per metadata
+/// database, handed to each operation in turn by [`open_conn`] in place of a connection opened
+/// and closed for it (#1056, A8; `docs/engineering/metadata-owner.md`).
+///
+/// Opening a connection for every operation cost two opens (a read-only format check, then the
+/// writer) and, in a process with no other connection, a checkpoint and the deletion of the
+/// log at every close, with the log and its index created again by the next operation.
+///
+/// Nothing about the locks changes: an operation still takes the cross-process lock for itself
+/// and holds it until its [`DbHandle`] is dropped, so two operations never use the connection
+/// at once (the lock is a `flock` on a descriptor of each operation's own, which excludes a
+/// second holder in this process as it does one in another), other processes get their turns
+/// between operations, and a backup, a restore or a trim that holds the lock keeps every
+/// writer out.
+///
+/// What a kept connection adds is the question whether it is still a connection to the
+/// database at that path. Every handout answers it under the lock ([`reusable`]): the file at
+/// the path and its `-wal` must be the files the connection has open (device and inode), and
+/// no transaction may be open on it. A database a restore or a reset replaced, or one whose
+/// log was deleted under this process, gets a new connection, opened as every connection used
+/// to be.
+static OWNED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Owned>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// One kept connection. Field order: the connection closes before its database.
+struct Owned {
+    conn: libsql::Connection,
+    _db: libsql::Database,
+    /// The database file the connection was opened on.
+    main: FileId,
+    /// Its `-wal` when the connection was last released (or opened): the log the connection
+    /// has open. `None` while the database has none.
+    wal: Option<FileId>,
+    /// Which connection this is, of all this process kept: tests tell a kept one from a new.
+    #[cfg(test)]
+    serial: u64,
+}
+
+/// The serial of the connection kept for the database at `path`.
+#[cfg(test)]
+pub(crate) fn kept_serial(path: &str) -> Option<u64> {
+    OWNED.lock().unwrap().get(path).map(|entry| entry.serial)
+}
+
+#[cfg(test)]
+static KEPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The owner's connection in the hands of one operation.
+struct OwnedUse {
+    path: String,
+    conn: libsql::Connection,
+}
+
+/// The copies [`DbSnapshot`]s made that still exist, by path: files named `metadata.db` in a
+/// temp dir, which the owner must not keep open past their snapshot.
+static SNAPSHOT_COPIES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Whether the owner keeps a connection to the file at `path`: an environment's metadata
+/// database (`metadata.db`, `specs/interfaces/dot-barca-layout.md`). A backup copy, a staged
+/// restore and a snapshot's copy are temporary files read once: a kept connection would hold
+/// their disk space after they are deleted.
+fn owns(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .is_some_and(|name| name == "metadata.db")
+        && !SNAPSHOT_COPIES.lock().unwrap().contains(path)
+}
+
+/// The device and inode of the file at `path`, if there is one.
+fn file_id(path: &str) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+fn wal_id(path: &str) -> Option<FileId> {
+    file_id(&format!("{path}-wal"))
+}
+
+/// The owner's connection to the database at `path`, if it has one that is still a connection
+/// to the files at that path with no transaction open. The caller holds the database's lock,
+/// so the files cannot be replaced by a barca process until it lets go. A connection that
+/// fails the check is dropped here: it closes, and SQLite neither checkpoints nor deletes the
+/// log of a database that is no longer at the path it was opened on.
+fn reusable(path: &str) -> Option<libsql::Connection> {
+    let mut stale = None;
+    let conn = {
+        let mut owned = OWNED.lock().unwrap();
+        let entry = owned.get(path)?;
+        if Some(entry.main) == file_id(path)
+            && entry.wal == wal_id(path)
+            && entry.conn.is_autocommit()
+        {
+            Some(entry.conn.clone())
+        } else {
+            stale = owned.remove(path);
+            None
+        }
+    };
+    // Closed outside the table's lock.
+    drop(stale);
+    conn
+}
+
+/// Keep `conn`, just opened on the database at `path` under its lock, for the operations to
+/// come. Connections to databases that are no longer at their paths (a test's temp dir, a
+/// database moved aside) are dropped first.
+fn keep(path: &str, main: FileId, db: libsql::Database, conn: libsql::Connection) -> OwnedUse {
+    let entry = Owned {
+        conn: conn.clone(),
+        _db: db,
+        main,
+        wal: wal_id(path),
+        #[cfg(test)]
+        serial: KEPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    };
+    let stale: Vec<Owned> = {
+        let mut owned = OWNED.lock().unwrap();
+        let gone: Vec<String> = owned
+            .iter()
+            .filter(|(at, entry)| file_id(at) != Some(entry.main))
+            .map(|(at, _)| at.clone())
+            .collect();
+        let mut stale: Vec<Owned> = gone.iter().filter_map(|at| owned.remove(at)).collect();
+        stale.extend(owned.insert(path.to_string(), entry));
+        stale
+    };
+    drop(stale);
+    OwnedUse {
+        path: path.to_string(),
+        conn,
+    }
+}
+
+/// The handle of an operation on a connection just opened on the database at `path` under
+/// `lock`: kept by the owner for the operations to come when the file is one it keeps a
+/// connection to ([`owns`]), else the operation's own.
+fn handle_of_new(
+    path: &str,
+    db: libsql::Database,
+    conn: &libsql::Connection,
+    lock: FileLock,
+) -> DbHandle {
+    match file_id(path).filter(|_| owns(path)) {
+        Some(main) => DbHandle {
+            owned: Some(keep(path, main, db, conn.clone())),
+            _db: None,
+            _lock: Some(lock),
+        },
+        None => DbHandle::of_one_operation(db, Some(lock)),
+    }
+}
+
+/// An operation is done with the owner's connection; its lock is still held. A connection left
+/// in a transaction (the operation's future was dropped between `BEGIN` and `COMMIT`) is not
+/// kept: it closes when the operation's own clone drops, and SQLite rolls the transaction
+/// back, as it did when every operation had a connection of its own.
+fn release_owned(used: OwnedUse) {
+    let mut dropped = None;
+    {
+        let mut owned = OWNED.lock().unwrap();
+        if !used.conn.is_autocommit() {
+            dropped = owned.remove(&used.path);
+        } else if let Some(entry) = owned.get_mut(&used.path) {
+            // The log the connection has open now: created by its first write in WAL mode,
+            // and never replaced while this process holds the lock.
+            entry.wal = wal_id(&used.path);
+        }
+    }
+    drop(dropped);
+    drop(used);
+}
+
+/// The connection for one operation on the database at `path`, whose lock the caller holds
+/// (`lock`): the owner's, kept or opened now, or for a file the owner does not keep one to
+/// ([`owns`]) a connection of the operation's own.
+async fn connection_for(
+    path: &str,
+    lock: FileLock,
+) -> Result<(DbHandle, libsql::Connection), BarcaError> {
+    if !owns(path) {
+        let (db, conn) = connect(path).await?;
+        return Ok((DbHandle::of_one_operation(db, Some(lock)), conn));
+    }
+    // As every open checked: a file that is not a database is not handed to SQLite.
+    if let Some(why) = unusable_file(path) {
+        return Err(unusable_at(unusable(why), path));
+    }
+    if let Some(conn) = reusable(path) {
+        // The pages the last operation read are let go, as they were when its connection
+        // closed: a process's memory is what its largest operation needs, not their sum.
+        let _ = conn.execute("PRAGMA shrink_memory", ()).await;
+        // What every open read: a database a newer barca rewrote meanwhile is refused now.
+        if let Err(e) = crate::db::schema::ddl::check(&conn).await {
+            let dropped = OWNED.lock().unwrap().remove(path);
+            drop(dropped);
+            return Err(unusable_at(e, path));
+        }
+        return Ok((handle_of_kept(path, &conn, lock), conn));
+    }
+    let (db, conn) = connect(path).await?;
+    Ok((handle_of_new(path, db, &conn, lock), conn))
+}
+
+/// The handle of an operation on the owner's connection `conn` to the database at `path`.
+fn handle_of_kept(path: &str, conn: &libsql::Connection, lock: FileLock) -> DbHandle {
+    DbHandle {
+        owned: Some(OwnedUse {
+            path: path.to_string(),
+            conn: conn.clone(),
+        }),
+        _db: None,
+        _lock: Some(lock),
+    }
+}
+
+/// Close the connections this process keeps ([`OWNED`]), each under its database's lock when
+/// that is free right now: the last connection to close folds the log into the main file and
+/// deletes it, which is what every operation's close did. The CLI calls this as a command
+/// ends, and `gc` before it measures `.barca/` (a log that comes and goes is not disk use to
+/// evict for). A connection whose lock is held (an operation of this process is using it, or
+/// another process is at work on the database) stays as it is: at exit that leaves the log
+/// to the next process to open the database, as after a crash.
+pub fn close_connections() {
+    close_kept(|_| true);
+}
+
+/// [`close_connections`] for the databases `which` picks.
+fn close_kept(which: impl Fn(&str) -> bool) {
+    let paths: Vec<String> = {
+        let owned = OWNED.lock().unwrap();
+        owned.keys().filter(|path| which(path)).cloned().collect()
+    };
+    for path in paths {
+        // The lock first: while it is held no operation has the connection, and none can
+        // open another before this one has closed.
+        let Some(_lock) = fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{path}.lock"))
+            .ok()
+            .filter(|file| file.try_lock().is_ok())
+        else {
+            continue;
+        };
+        let entry = OWNED.lock().unwrap().remove(&path);
+        drop(entry);
+    }
+}
+
+/// The cross-process lock of one database, held: released when dropped (or when the process
+/// exits or crashes). How long it was held is counted ([`lock_holds`]).
+#[derive(Debug)]
+pub(crate) struct FileLock {
+    _file: fs::File,
+    lock_path: String,
+    /// The lock file's stamp when this hold began ([`Turn`]).
+    stamp: Option<SystemTime>,
+    since: Instant,
+}
+
+impl FileLock {
+    fn held(file: fs::File, lock_path: String) -> Self {
+        Self {
+            stamp: stamp_of(&file),
+            _file: file,
+            lock_path,
+            since: Instant::now(),
+        }
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        note_lock_hold(self.since.elapsed());
+        let mut turns = TURNS.lock().unwrap();
+        // One entry per database this process used; a test process uses thousands.
+        if turns.len() >= 64 {
+            turns.retain(|_, turn| turn.released.elapsed() < TURN_RECENT);
+        }
+        turns.insert(
+            std::mem::take(&mut self.lock_path),
+            Turn {
+                released: Instant::now(),
+                stamp: self.stamp,
+            },
+        );
+    }
+}
+
+/// Taking turns. The lock is a `flock` that waiters poll, so a process that takes it again
+/// right after releasing it (a run recording step after step, a trim working through its
+/// batches) leaves a gap of microseconds that a waiter almost never finds: a `barca gc` beside
+/// a server's two recording runs timed out after 60 s without one turn (#1054), though no
+/// single hold was long.
+///
+/// So a waiter says it is waiting, in the one place every process already looks: it sets the
+/// lock file's modification time each time it finds the lock held ([`stamp`]). A process
+/// about to take the lock again within [`TURN_RECENT`] of releasing it compares the file's
+/// time with the one it saw when its last hold began; a different one means somebody waited
+/// during that hold or since, and it leaves the lock free for [`TURN`] first, which is longer
+/// than a waiter's longest pause between tries ([`WAIT_POLL_MAX`]). The file stays empty and
+/// nothing else is written. A process of an earlier release neither stamps nor gives way: it
+/// gets and gives the turns it always did.
+#[derive(Clone, Copy)]
+struct Turn {
+    released: Instant,
+    stamp: Option<SystemTime>,
+}
+
+/// This process's last hold of each lock file, by path.
+static TURNS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Turn>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// How long a process that sees a waiter leaves the lock free before taking it again.
+const TURN: Duration = Duration::from_millis(8);
+/// A release longer ago than this already left the lock free for any waiter.
+const TURN_RECENT: Duration = Duration::from_millis(100);
+/// The longest pause of a waiter between two tries: shorter than [`TURN`].
+const WAIT_POLL_MAX: Duration = Duration::from_millis(5);
+
+fn stamp_of(file: &fs::File) -> Option<SystemTime> {
+    file.metadata().and_then(|m| m.modified()).ok()
+}
+
+/// Say that this process is waiting for the lock `file` is ([`Turn`]). Best effort.
+fn stamp(file: &fs::File) {
+    let _ = file.set_modified(SystemTime::now());
+}
+
+/// Whether another process waited for `lock_path` during this process's last hold of it or
+/// since, when that hold ended a moment ago.
+fn waiter_seen(lock_path: &str, file: &fs::File) -> bool {
+    let Some(last) = TURNS.lock().unwrap().get(lock_path).copied() else {
+        return false;
+    };
+    last.released.elapsed() < TURN_RECENT && stamp_of(file) != last.stamp
 }
 
 /// Take the cross-process lock for `db_path` (a `<db>.lock` file next to it), waiting
 /// up to `wait` for another barca process to finish its operation. The lock is
 /// released when the returned file is dropped (or the process exits or crashes).
-async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, BarcaError> {
+async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<FileLock, BarcaError> {
     let lock_path = format!("{db_path}.lock");
     let file = fs::OpenOptions::new()
         .create(true)
@@ -305,35 +682,316 @@ async fn acquire_file_lock(db_path: &str, wait: Duration) -> Result<fs::File, Ba
         .write(true)
         .open(&lock_path)
         .map_err(|e| BarcaError::Db(format!("failed to open lock file {lock_path}: {e}")))?;
-    let deadline = Instant::now() + wait;
-    let mut delay = Duration::from_millis(2);
+    // Somebody waited while this process had the lock: their turn first.
+    if waiter_seen(&lock_path, &file) {
+        note_turn_given();
+        tokio::time::sleep(TURN).await;
+    }
+    // Uncontended (every operation of a one-shot command): one `flock`, no clock read.
+    match file.try_lock() {
+        Ok(()) => return Ok(FileLock::held(file, lock_path)),
+        Err(fs::TryLockError::WouldBlock) => {}
+        Err(fs::TryLockError::Error(e)) => {
+            return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
+        }
+    }
+    let started = Instant::now();
+    let deadline = started + wait;
+    let mut delay = Duration::from_millis(1);
     loop {
+        if Instant::now() >= deadline {
+            let holder = match lock_holder(&file).await {
+                // Released while its holder was looked up: this is the turn waited for.
+                Holder::Gone => {
+                    note_lock_wait(started.elapsed());
+                    return Ok(FileLock::held(file, lock_path));
+                }
+                Holder::Named(holder) => format!("held now by {holder}"),
+                Holder::NotListed => "the kernel's lock table does not name its holder: a \
+                                      process outside this container, or on another machine \
+                                      that shares the directory"
+                    .to_string(),
+                Holder::NoTable => "its holder could not be named on this system".to_string(),
+            };
+            return Err(BarcaError::Db(format!(
+                "timed out after {:.1}s waiting for {lock_path}: another barca process is \
+                 holding the metadata DB ({holder}): a very long operation, a stuck process, or \
+                 many short operations of a busy `barca serve` in this project\n\
+                 With a server running here, leave out --local so the command goes to it \
+                 (barca docs server-mode); otherwise wait for that process or stop it, then run \
+                 the command again.",
+                wait.as_secs_f32()
+            )));
+        }
+        // Tell the holder somebody is waiting, then back off with a little jitter so waiters
+        // don't wake in lockstep.
+        stamp(&file);
+        let jitter =
+            Duration::from_micros((barca_model::time::unix_nanos(SystemTime::now()) % 1000) as u64);
+        tokio::time::sleep(delay + jitter).await;
+        delay = (delay * 2).min(WAIT_POLL_MAX - Duration::from_millis(1));
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => {
+                note_lock_wait(started.elapsed());
+                return Ok(FileLock::held(file, lock_path));
+            }
             Err(fs::TryLockError::WouldBlock) => {}
             Err(fs::TryLockError::Error(e)) => {
                 return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
             }
         }
-        if Instant::now() >= deadline {
-            return Err(BarcaError::Db(format!(
-                "timed out after {:.1}s waiting for {lock_path}: another barca process is \
-                 holding the metadata DB (a very long operation, or a stuck process)",
-                wait.as_secs_f32()
-            )));
+    }
+}
+
+/// Times this process left the lock free for a waiter ([`Turn`]).
+static TURNS_GIVEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn note_turn_given() {
+    TURNS_GIVEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How often this process gave way to a waiter before taking the lock again.
+pub fn turns_given() -> u64 {
+    TURNS_GIVEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Contended acquisitions of the cross-process lock in this process: how many, their total
+/// wait and the longest, in microseconds. An uncontended acquisition is not counted.
+static LOCK_WAITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_WAIT_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_WAIT_LONGEST_MICROS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn note_lock_wait(waited: Duration) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let micros = u64::try_from(waited.as_micros()).unwrap_or(u64::MAX);
+    LOCK_WAITS.fetch_add(1, Relaxed);
+    LOCK_WAIT_MICROS.fetch_add(micros, Relaxed);
+    LOCK_WAIT_LONGEST_MICROS.fetch_max(micros, Relaxed);
+}
+
+/// Holds of the cross-process lock by this process: how many, their total and the longest, in
+/// microseconds. The longest is how long another barca process can have waited for this one.
+static LOCK_HOLDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_HOLD_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOCK_HOLD_LONGEST_MICROS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn note_lock_hold(held: Duration) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let micros = u64::try_from(held.as_micros()).unwrap_or(u64::MAX);
+    LOCK_HOLDS.fetch_add(1, Relaxed);
+    LOCK_HOLD_MICROS.fetch_add(micros, Relaxed);
+    LOCK_HOLD_LONGEST_MICROS.fetch_max(micros, Relaxed);
+}
+
+/// How long this process held a metadata database's lock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LockHolds {
+    /// Times the lock was taken.
+    pub holds: u64,
+    /// Their total.
+    pub total: Duration,
+    /// The longest one.
+    pub longest: Duration,
+}
+
+/// [`LockHolds`] so far (`BARCA_TRACE_TIMING` prints it at the end of a command).
+pub fn lock_holds() -> LockHolds {
+    use std::sync::atomic::Ordering::Relaxed;
+    LockHolds {
+        holds: LOCK_HOLDS.load(Relaxed),
+        total: Duration::from_micros(LOCK_HOLD_MICROS.load(Relaxed)),
+        longest: Duration::from_micros(LOCK_HOLD_LONGEST_MICROS.load(Relaxed)),
+    }
+}
+
+/// What this process waited for another process's hold on a metadata database's lock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LockWaits {
+    /// Acquisitions that found the lock held and waited.
+    pub waits: u64,
+    /// Their total wait.
+    pub total: Duration,
+    /// The longest one.
+    pub longest: Duration,
+}
+
+/// [`LockWaits`] so far (`BARCA_TRACE_TIMING` prints it at the end of a run).
+pub fn lock_waits() -> LockWaits {
+    use std::sync::atomic::Ordering::Relaxed;
+    LockWaits {
+        waits: LOCK_WAITS.load(Relaxed),
+        total: Duration::from_micros(LOCK_WAIT_MICROS.load(Relaxed)),
+        longest: Duration::from_micros(LOCK_WAIT_LONGEST_MICROS.load(Relaxed)),
+    }
+}
+
+/// What a look for the holder of a lock found ([`lock_holder`]).
+enum Holder {
+    /// `pid N (command line)`.
+    Named(String),
+    /// Nobody holds it any more: the lock was free, and the caller now has it.
+    Gone,
+    /// The kernel's table was read and names no holder that has the file open.
+    NotListed,
+    /// There is no table to read (not Linux, or no `/proc`).
+    NoTable,
+}
+
+/// How often the lock table is read before its silence is believed ([`lock_holder`]).
+const HOLDER_LOOKS: usize = 5;
+
+/// The process holding the lock on `file` right now, read from the kernel's lock table
+/// (`/proc/locks`, Linux only). Nothing is written to disk to make this possible: the holder
+/// is looked up only when a wait has timed out.
+///
+/// One read of the table is not an answer. The kernel hands it out a page at a time and finds
+/// its place again by counting entries, so a lock taken or released elsewhere on the machine
+/// between two pages makes it skip a line: with other processes locking and unlocking, about
+/// one read in a hundred did not list a lock held throughout. And the holder may simply have
+/// let go. So the table is read up to [`HOLDER_LOOKS`] times, and after each read that does
+/// not name a holder the lock is tried: free means the caller holds it now ([`Holder::Gone`]).
+async fn lock_holder(file: &fs::File) -> Holder {
+    let Some(id) = file_id_of(file) else {
+        return Holder::NoTable;
+    };
+    for look in 0..HOLDER_LOOKS {
+        let Some(table) = lock_table() else {
+            return Holder::NoTable;
+        };
+        if let Some(pid) = holder_pid(&table, id.1, std::process::id(), |pid| has_open(pid, id)) {
+            return Holder::Named(described(pid));
         }
-        // Back off with a little jitter so waiters don't wake in lockstep.
-        let jitter =
-            Duration::from_micros((barca_model::time::unix_nanos(SystemTime::now()) % 2000) as u64);
-        tokio::time::sleep(delay + jitter).await;
-        delay = (delay * 2).min(Duration::from_millis(40));
+        if file.try_lock().is_ok() {
+            return Holder::Gone;
+        }
+        if look + 1 < HOLDER_LOOKS {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+    Holder::NotListed
+}
+
+/// The device and inode of an open file, as `stat` reports them.
+fn file_id_of(file: &fs::File) -> Option<FileId> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        file.metadata().ok().map(|m| (m.dev(), m.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        None
+    }
+}
+
+/// The kernel's lock table, read with a buffer larger than the table usually is: every extra
+/// `read` is one more place where the kernel can lose its position ([`lock_holder`]).
+fn lock_table() -> Option<String> {
+    use std::io::Read;
+    let mut file = fs::File::open("/proc/locks").ok()?;
+    let mut table = Vec::new();
+    let mut chunk = vec![0u8; 1 << 16];
+    loop {
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => table.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(String::from_utf8_lossy(&table).into_owned())
+}
+
+/// Whether process `pid` has the file `id` open, from `/proc/<pid>/fd`: `None` when that
+/// cannot be read (another user's process, or one that has exited).
+fn has_open(pid: u32, id: FileId) -> Option<bool> {
+    let fds = fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+    Some(
+        fds.filter_map(|fd| fd.ok())
+            .any(|fd| file_id(&fd.path().to_string_lossy()) == Some(id)),
+    )
+}
+
+/// `pid N (command line)`, or `pid N` for a process whose command line cannot be read.
+fn described(pid: u32) -> String {
+    let command = fs::read(format!("/proc/{pid}/cmdline"))
+        .ok()
+        .map(|raw| {
+            raw.split(|b| *b == 0)
+                .filter(|part| !part.is_empty())
+                .map(|part| String::from_utf8_lossy(part).into_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|command| !command.is_empty());
+    match command {
+        Some(command) => {
+            let short: String = command.chars().take(200).collect();
+            format!("pid {pid} ({short})")
+        }
+        None => format!("pid {pid}"),
+    }
+}
+
+/// The pid holding a `flock` on the file with `inode` in a `/proc/locks` table: a line reads
+/// `<n>: FLOCK ADVISORY WRITE <pid> <major>:<minor>:<inode> <start> <end>` (a waiter's has
+/// `->` after the ordinal; a holder in a pid namespace this process cannot see has pid 0).
+///
+/// The inode alone does not say which file: every filesystem numbers its own, and a busy
+/// machine holds locks on the same number elsewhere. The table's device cannot settle it
+/// either, because it is the filesystem's own number while `stat` gives a btrfs subvolume's.
+/// So `has_open` is asked of each process a matching line names: one that has the file open
+/// is the holder, one that does not is holding another filesystem's file, and one that cannot
+/// be asked (`None`) is named only if no other line is in doubt. Another process is preferred
+/// to this one (`me`), which may hold the same lock on another descriptor.
+fn holder_pid(
+    table: &str,
+    inode: u64,
+    me: u32,
+    has_open: impl Fn(u32) -> Option<bool>,
+) -> Option<u32> {
+    let mut pids: Vec<u32> = Vec::new();
+    for line in table.lines() {
+        let mut fields = line.split_whitespace().skip(1);
+        if fields.next() != Some("FLOCK") {
+            continue;
+        }
+        let (Some(_), Some(_), Some(pid), Some(file)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if file.rsplit(':').next().and_then(|i| i.parse::<u64>().ok()) != Some(inode) {
+            continue;
+        }
+        match pid.parse::<u32>() {
+            Ok(pid) if pid != 0 && !pids.contains(&pid) => pids.push(pid),
+            _ => {}
+        }
+    }
+    // Another process first.
+    pids.sort_by_key(|pid| *pid == me);
+    let mut unasked = Vec::new();
+    for pid in pids {
+        match has_open(pid) {
+            Some(true) => return Some(pid),
+            Some(false) => {}
+            None => unasked.push(pid),
+        }
+    }
+    match unasked[..] {
+        [only] => Some(only),
+        _ => None,
     }
 }
 
 /// The in-process guard and the cross-process lock of the database at `db_path`, for an
 /// operation that must see no other barca process touch the file. Held until dropped.
 pub struct DbLock {
-    _lock: fs::File,
+    _lock: FileLock,
     _guard: MutexGuard<'static, ()>,
 }
 
@@ -409,7 +1067,12 @@ pub async fn fold_log(db_path: &str) -> Result<(), BarcaError> {
         let (_db, conn) = connect(db_path).await?;
         // The lock keeps every writer out, not a [`ReadView`]: a reader in the middle of a
         // query holds the log until the query ends, so a busy checkpoint (and only that) is
-        // tried again for a moment.
+        // tried again for a moment. Each try answers at once: SQLite's own wait sleeps on
+        // this thread, and a reader on the same thread (a current-thread runtime) could then
+        // never finish. The log is rarely empty now that a process keeps its connection
+        // ([`OWNED`]), so a checkpoint really does wait for the readers of what is in it.
+        conn.busy_timeout(Duration::ZERO)
+            .map_err(|e| BarcaError::Db(format!("failed to set busy timeout: {e}")))?;
         let deadline = Instant::now() + CHECKPOINT_BUSY_WAIT;
         while checkpoint_once(&conn).await? {
             if Instant::now() >= deadline {
@@ -628,9 +1291,11 @@ pub fn empty_file(path: &str) -> bool {
     fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) && wal_is_clean(path)
 }
 
-/// Open the database at `db_path` and connect. Callers must hold [`db_guard`]
-/// for the duration of their work on the returned connection; the returned
-/// handle holds the cross-process lock until it is dropped.
+/// The connection for one operation on the database at `db_path`. Callers must hold
+/// [`db_guard`] for the duration of their work on the returned connection; the returned
+/// handle holds the cross-process lock until it is dropped. For a metadata database the
+/// connection is the one this process keeps ([`OWNED`]), not one opened for the operation:
+/// use it only while the handle lives.
 pub async fn open_conn(db_path: &str) -> Result<(DbHandle, libsql::Connection), BarcaError> {
     open_conn_with_until(db_path, barca_model::process::Until::done()).await
 }
@@ -642,26 +1307,13 @@ pub async fn open_conn_with_until(
     if is_read_view(db_path) {
         until.check()?;
         let (db, conn) = connect_view(db_path).await?;
-        return Ok((
-            DbHandle {
-                _db: db,
-                _lock: None,
-            },
-            conn,
-        ));
+        return Ok((DbHandle::of_one_operation(db, None), conn));
     }
     let lock = until
         .admit(acquire_file_lock(db_path, DB_FILE_LOCK_WAIT))
         .await??;
     until.check()?;
-    let (db, conn) = connect(db_path).await?;
-    Ok((
-        DbHandle {
-            _db: db,
-            _lock: Some(lock),
-        },
-        conn,
-    ))
+    connection_for(db_path, lock).await
 }
 
 /// Fold the write-ahead log into the main database file (`PRAGMA wal_checkpoint(TRUNCATE)`).
@@ -824,11 +1476,253 @@ mod tests {
             .to_string();
         assert!(err.contains("metadata.db.lock"), "{err}");
         assert!(err.contains("another barca process"), "{err}");
+        // The kernel's lock table names the holder (this process, on another descriptor).
+        if cfg!(target_os = "linux") && std::path::Path::new("/proc/locks").exists() {
+            assert!(
+                err.contains(&format!("held now by pid {}", std::process::id())),
+                "{err}"
+            );
+        }
+        assert!(err.contains("barca docs server-mode"), "{err}");
 
         drop(first);
         acquire_file_lock(&db_path, std::time::Duration::from_secs(1))
             .await
             .expect("lock is free again once the holder drops it");
+    }
+
+    #[test]
+    fn the_lock_table_names_another_holder_before_this_process() {
+        let table = "1: POSIX  ADVISORY  WRITE 900 00:2a:77 0 EOF\n\
+                     2: FLOCK  ADVISORY  WRITE 41 00:2a:77 0 EOF\n\
+                     3: -> FLOCK  ADVISORY  WRITE 43 00:2a:77 0 EOF\n\
+                     4: FLOCK  ADVISORY  WRITE 42 00:2a:77 0 EOF\n\
+                     5: FLOCK  ADVISORY  WRITE 50 00:2a:78 0 EOF\n";
+        let open = |_| Some(true);
+        assert_eq!(holder_pid(table, 77, 41, open), Some(42));
+        assert_eq!(holder_pid(table, 77, 7, open), Some(41));
+        assert_eq!(holder_pid(table, 78, 50, open), Some(50));
+        assert_eq!(holder_pid(table, 79, 7, open), None);
+    }
+
+    #[test]
+    fn a_lock_on_the_same_inode_of_another_filesystem_is_not_the_holder() {
+        // 41 holds inode 77 of another filesystem; 42 holds this file.
+        let table = "1: FLOCK  ADVISORY  WRITE 41 00:19:77 0 EOF\n\
+                     2: FLOCK  ADVISORY  WRITE 42 00:23:77 0 EOF\n";
+        assert_eq!(holder_pid(table, 77, 7, |pid| Some(pid == 42)), Some(42));
+        assert_eq!(holder_pid(table, 77, 7, |pid| Some(pid == 41)), Some(41));
+        // Only the other filesystem's is listed (this read skipped the holder's line).
+        assert_eq!(holder_pid(table, 77, 7, |_| Some(false)), None);
+        // A process that cannot be asked is named when it is the only one in doubt,
+        assert_eq!(
+            holder_pid(table, 77, 7, |pid| (pid == 41).then_some(false)),
+            Some(42)
+        );
+        // and not when two are: either could be the other filesystem's.
+        assert_eq!(holder_pid(table, 77, 7, |_| None), None);
+        // A holder in a pid namespace this process cannot see is listed as pid 0.
+        let hidden = "1: FLOCK  ADVISORY  WRITE 0 00:23:77 0 EOF\n";
+        assert_eq!(holder_pid(hidden, 77, 7, |_| Some(true)), None);
+    }
+
+    #[test]
+    fn a_process_is_asked_whether_it_has_a_file_open() {
+        if !std::path::Path::new("/proc/self/fd").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let open = fs::File::create(dir.path().join("open")).unwrap();
+        fs::write(dir.path().join("closed"), b"").unwrap();
+        let closed = file_id(&dir.path().join("closed").to_string_lossy()).unwrap();
+        let me = std::process::id();
+        assert_eq!(has_open(me, file_id_of(&open).unwrap()), Some(true));
+        assert_eq!(has_open(me, closed), Some(false));
+        assert_eq!(has_open(u32::MAX, closed), None, "no such process");
+    }
+
+    /// One read of `/proc/locks` can skip a lock that is held throughout, when other locks
+    /// are taken and released between the pages the kernel hands out (about 1 read in 100
+    /// here, which failed `file_lock_excludes_a_second_holder_until_released` on a busy
+    /// machine, and fails this test with `HOLDER_LOOKS` at 1). The holder is named every time
+    /// all the same.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_holder_is_named_while_other_locks_come_and_go() {
+        if !std::path::Path::new("/proc/locks").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let _held = acquire_file_lock(&db_path, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let waiter = fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{db_path}.lock"))
+            .unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let churn: Vec<_> = (0..4)
+            .map(|i| {
+                let stop = stop.clone();
+                let files: Vec<fs::File> = (0..40)
+                    .map(|j| fs::File::create(dir.path().join(format!("churn-{i}-{j}"))).unwrap())
+                    .collect();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        for file in &files {
+                            file.lock().unwrap();
+                        }
+                        for file in &files {
+                            file.unlock().unwrap();
+                        }
+                    }
+                })
+            })
+            .collect();
+        let me = format!("pid {}", std::process::id());
+        let mut unnamed = 0;
+        for _ in 0..1000 {
+            match lock_holder(&waiter).await {
+                Holder::Named(holder) if holder.starts_with(&me) => {}
+                _ => unnamed += 1,
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for thread in churn {
+            thread.join().unwrap();
+        }
+        assert_eq!(unnamed, 0, "of 1000 looks");
+    }
+
+    #[tokio::test]
+    async fn a_lock_released_while_its_holder_is_looked_up_is_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        drop(
+            acquire_file_lock(&db_path, Duration::from_secs(1))
+                .await
+                .unwrap(),
+        );
+        let waiter = fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{db_path}.lock"))
+            .unwrap();
+        if std::path::Path::new("/proc/locks").exists() {
+            assert!(matches!(lock_holder(&waiter).await, Holder::Gone));
+            assert!(matches!(
+                fs::File::open(format!("{db_path}.lock"))
+                    .unwrap()
+                    .try_lock(),
+                Err(fs::TryLockError::WouldBlock)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_contended_acquisition_is_counted_with_its_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let before = lock_waits();
+        let held = acquire_file_lock(&db_path, std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
+        // Uncontended: not counted (other tests of this process may add their own waits).
+        let waiter_path = db_path.clone();
+        let waiter = tokio::spawn(async move {
+            acquire_file_lock(&waiter_path, std::time::Duration::from_secs(5)).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        drop(held);
+        waiter.await.unwrap().unwrap();
+        let after = lock_waits();
+        assert!(after.waits > before.waits, "{before:?} {after:?}");
+        assert!(
+            after.total >= before.total + std::time::Duration::from_millis(50),
+            "{before:?} {after:?}"
+        );
+        assert!(after.longest >= std::time::Duration::from_millis(50));
+    }
+
+    /// A holder that takes the lock again the moment it releases it (a trim's batches, a run
+    /// recording step after step) left a waiter gaps of microseconds between holds of
+    /// milliseconds, and the waiter's tries almost never landed in one: `barca gc` beside a
+    /// busy server timed out after 60 s (#1054). The waiter now stamps the lock file and the
+    /// holder, seeing the stamp, leaves the lock free for a moment before its next hold.
+    #[tokio::test]
+    async fn a_holder_that_takes_the_lock_again_at_once_gives_a_waiter_its_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Stops the holder however this test ends.
+        struct Stop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _stop = Stop(stop.clone());
+        // On a thread and a runtime of its own, as another process is.
+        let holder = std::thread::spawn({
+            let (db_path, stop) = (db_path.clone(), stop.clone());
+            move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let mut holds = 0u32;
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let held = acquire_file_lock(&db_path, Duration::from_secs(5))
+                            .await
+                            .unwrap();
+                        // The work of one batch: no pause the waiter could use.
+                        std::thread::sleep(Duration::from_millis(20));
+                        drop(held);
+                        holds += 1;
+                    }
+                    holds
+                })
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let given = turns_given();
+        let mut waits = Vec::new();
+        for _ in 0..5 {
+            let started = Instant::now();
+            let lock = acquire_file_lock(&db_path, Duration::from_secs(10))
+                .await
+                .expect("the waiter gets a turn");
+            waits.push(started.elapsed());
+            drop(lock);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let holds = holder.join().unwrap();
+        // One hold of the holder, the turn it then leaves, and the scheduler's slack: far from
+        // the seconds a waiter spent finding a gap by chance.
+        let longest = waits.iter().max().unwrap();
+        assert!(*longest < Duration::from_millis(1500), "{waits:?}");
+        assert!(turns_given() > given, "the holder gave way");
+        assert!(holds >= 5, "the holder went on between the turns: {holds}");
+    }
+
+    /// Nobody waiting: taking the lock again costs no pause.
+    #[tokio::test]
+    async fn a_holder_alone_never_pauses_between_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("metadata.db").to_string_lossy().to_string();
+        let started = Instant::now();
+        for _ in 0..200 {
+            let held = acquire_file_lock(&db_path, Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert!(!waiter_seen(&held.lock_path, &held._file));
+            drop(held);
+        }
+        // 200 turns given would be 1.6 s.
+        assert!(started.elapsed() < Duration::from_millis(800));
+        let lock_path = format!("{db_path}.lock");
+        assert_eq!(std::fs::metadata(&lock_path).unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -871,6 +1765,9 @@ mod tests {
         assert!(!other.contains("outside barca"), "{other}");
     }
 }
+
+#[cfg(test)]
+mod owner_tests;
 
 #[cfg(test)]
 mod fold_log_tests {

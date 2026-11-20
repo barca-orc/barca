@@ -38,9 +38,10 @@ measuring performance or reproducing a wheel.
 `cargo build --release` builds only the binary, at `target-local/release/barca` in a worktree.
 
 `scripts/check-fast.sh` runs what CI's always-on gates run (changelog, specs, the prek hooks
-including the pinned ruff and ty, clippy with `-D warnings`, the Rust tests, a rebuild of the
-venv's barca when Rust changed, and the Python tests picked from the diff) and prints a pass/fail
-summary; `--python-all` runs the whole Python suite.
+including the pinned ruff and ty, clippy with `-D warnings`, the Rust tests the diff can
+affect, a rebuild of the venv's barca when Rust changed, and the Python tests picked from the
+diff) and prints a pass/fail summary; `--python-all` runs the whole Python suite and
+`--rust-all` every Rust test ([which Rust tests run](/contributing/testing/#which-rust-tests-run)).
 
 ## Run an example
 
@@ -60,11 +61,17 @@ cd examples/basic_app
 barca/
 ├── Cargo.toml                # Rust workspace root
 ├── crates/
-│   ├── barca-model/          # shared values, hashes, terminal output, barca.toml config
-│   ├── barca-compile/        # parser, DAG, planning
+│   ├── barca-model/          # shared values, the graph, hashes, terminal output, barca.toml config
+│   ├── barca-python/         # the Python frontend: parser, fingerprints, linker, loader
+│   ├── barca-compile/        # planning: targets, selection, the planner
 │   ├── barca-db/             # the metadata database
-│   ├── barca-engine/         # coordinator, worker pool and wire protocol
-│   ├── barca-core/           # run orchestration, cache, stores, commands; wires the others
+│   ├── barca-proc/           # child processes and the socket protocol
+│   ├── barca-engine/         # coordinator, worker pool and wire tables
+│   ├── barca-store/          # transfer, gc, backups, the ledger, pins, pauses
+│   ├── barca-decide/         # cache and freshness decisions, the dry run, schedules
+│   ├── barca-run/            # the run orchestrator: executes a plan and records it
+│   ├── barca-analysis/       # read models: status, health, estimates, the rollup
+│   ├── barca-service/        # one operation per command; what the CLI and the server import
 │   ├── barca-cli/            # the `barca` command
 │   │   ├── docs/             # the manual (`barca docs`), compiled into the binary
 │   │   └── snapshots/help/   # `--help` snapshots checked by the contract test
@@ -112,7 +119,7 @@ scripts/update-cli-snapshots.sh
 It regenerates `crates/barca-cli/snapshots/help/` and `snapshots/examples/`, the tables in
 `crates/barca-cli/docs/contract.md` and the README's command table,
 `python/tests/snapshots/cli_contract/` and the site pages generated from manual topics
-(`SITE_PAGES` in `crates/barca-cli/src/contract.rs`). Review the diff: it is the contract change.
+(`SITE_PAGES` in `crates/barca-cli/src/site_pages_tests.rs`). Review the diff: it is the contract change.
 See [Testing](/contributing/testing/) for the tests that enforce this.
 
 ## The documentation site
@@ -128,10 +135,10 @@ The reference pages that are manual topics (`reference/cli-contract.md`, `agents
 `assets.md`, `cache.md`, `discovery.md`, `doctor.md`, `duckdb.md`, `groups.md`, `logs.md`,
 `partitions.md`, `remote-storage.md`, `server-mode.md`, `sinks.md`, `sql.md`, `status.md`,
 `tasks.md`, `telemetry.md`, `types.md`; the list is `SITE_PAGES` in
-`crates/barca-cli/src/contract.rs`) are generated from `crates/barca-cli/docs/`, each with an
+`crates/barca-cli/src/site_pages_tests.rs`) are generated from `crates/barca-cli/docs/`, each with an
 edit link back to its topic.
 Edit the manual topic, then regenerate them with
-`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract::` (`scripts/update-cli-snapshots.sh`
+`BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests::` (`scripts/update-cli-snapshots.sh`
 does it too). Every other page is written by hand.
 
 ## Git workflow

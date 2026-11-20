@@ -1,7 +1,7 @@
 //! What a step's trace says about it: where its node sits in the pipeline ([`NodeContext`])
 //! and the trace context a worker's `barca.execute` span joins ([`StepTrace::context`]). The
 //! worker loop attaches it to each step it sends; the Datadog exporter
-//! (`barca_core::telemetry::datadog`) sends the traces themselves.
+//! (`barca_service::telemetry::datadog`) sends the traces themselves.
 
 use barca_model::trace_ids::{step_span_id, step_trace_id, step_trace_id_high};
 use serde_json::{Map, Value, json};
@@ -58,7 +58,7 @@ pub fn short_name(base_id: &str) -> &str {
 
 /// The [`NodeContext`] of every node of `dag`, by base id.
 pub fn node_contexts(
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
 ) -> std::collections::HashMap<String, NodeContext> {
     use barca_model::model::{Freshness, NodeKind};
     use std::collections::HashMap;
@@ -68,7 +68,7 @@ pub fn node_contexts(
         *name_count.entry(short_name(id)).or_default() += 1;
     }
     // Groups name their members by node id or group id; a member has at most one parent.
-    let mut parent: HashMap<&str, &barca_compile::groups::NodeGroup> = HashMap::new();
+    let mut parent: HashMap<&str, &barca_model::ir::NodeGroup> = HashMap::new();
     for group in &dag.groups {
         for member in &group.members {
             parent.insert(member.as_str(), group);
@@ -94,7 +94,7 @@ pub fn node_contexts(
             continue;
         };
         let short = short_name(id);
-        let (freshness, schedule) = match &node.extracted.freshness {
+        let (freshness, schedule) = match &node.decl.freshness {
             Freshness::Always => ("always", None),
             Freshness::Manual => ("manual", None),
             Freshness::Schedule(cron) => ("schedule", Some(cron.0.clone())),
@@ -151,7 +151,7 @@ pub struct StepTrace {
 
 impl StepTrace {
     pub fn new(
-        dag: &barca_compile::dag::Dag,
+        dag: &barca_model::dag::Dag,
         job: &str,
         run_id: &str,
         service: String,

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { ROOT, arcPath, freshWithin, healthSummary, heldIds, indexRollup, leafIds, nearestInTree, noEstimate, ringRadii, rootsWithin, sunburst, treePath, worstOf } from './rollupView'
-import { causeCounts, counts, failureRoot, heldBy, nodeEntry, rollup, scopeEntry } from './testdata/rollup'
+import { ROOT, arcPath, freshWithin, heldIds, indexRollup, leafIds, nearestInTree, noEstimate, ringRadii, rootsWithin, sunburst, treePath } from './rollupView'
+import { ROLLUP, STATE, entry } from './testdata/project'
+import { causeCounts, failureRoot, heldBy, nodeEntry, rollup, scopeEntry } from './testdata/rollup'
 
+// The rollup of the generated project (`testdata/project.ts`): what a server sums, not typed here.
+const project = indexRollup(ROLLUP)
+
+// A tree spelled by hand, for layout alone: how given counts and weights are drawn.
 // a.py: raw (failing, 100 of 120 keys failed) → clean, report (blocked by it)
 // b.py: src (ok) → mart (never run, no refresh path); c.py: x (behind, catching up), waits (undecided)
 const byFile = indexRollup(rollup([
@@ -27,13 +32,13 @@ const parts = (a: { start: number; end: number; bands: { part: string; start: nu
 
 describe('the rollup, indexed', () => {
   it('reads every count off the entry: nodes and assets are both there', () => {
-    const root = byFile.entries.get(ROOT)!
-    expect([root.nodes, root.assets, root.not_fresh]).toEqual([7, 7, 6])
-    expect(worstOf(root.health)).toBe('failing')
-    expect(worstOf(counts())).toBe('ok')
-    expect(healthSummary(root.health)).toBe('1 failing · 2 blocked · 1 behind')
-    expect(healthSummary(root.health, 2)).toBe('1 failing · 2 blocked')
-    expect(healthSummary(counts({ ok: 3 }))).toBe('')
+    // 15 nodes, 11 of them assets (three tasks and a sensor are not), 10 not fresh.
+    const root = project.entries.get(ROOT)!
+    expect([root.nodes, root.assets, root.not_fresh]).toEqual([15, 11, 10])
+    expect([root.nodes, root.assets, root.not_fresh]).toEqual([STATE.length, STATE.filter((n) => n.kind === 'asset').length, STATE.filter((n) => n.cause !== null).length])
+    // A file's entry leaves out the nodes of a group declared in it: they are the group's.
+    expect(['file:orders.py', 'file:billing.py', 'group:orders.py:reporting'].map((id) => entry(id).nodes)).toEqual([9, 4, 2])
+    expect(ROLLUP.files.map((f) => [f.file, f.nodes])).toEqual([['billing.py', 4], ['orders.py', 11]])
   })
 
   it('finds the path to an entry, its leaves and the roots about them', () => {
@@ -47,11 +52,28 @@ describe('the rollup, indexed', () => {
     expect(rootsWithin(byFile, ROOT).map((r) => r.node)).toEqual(['a.py:raw'])
     expect(rootsWithin(byFile, 'file:a.py').map((r) => r.node)).toEqual(['a.py:raw'])
     expect(rootsWithin(byFile, 'file:b.py')).toEqual([])
+    // In the served rollup: the roots in the order served, kept to those a scope's entry lists.
+    expect(rootsWithin(project, ROOT).map((r) => r.id)).toEqual(ROLLUP.roots.map((r) => r.id))
+    expect(rootsWithin(project, 'file:billing.py').map((r) => r.id)).toEqual(['failure:billing.py:invoices', 'failure:billing.py:check__invoices'])
+    // About the nodes underneath, not what holds them: the group's `revenue_hourly` is held by a
+    // root about `orders_enriched`, outside it, and `scheduler_off` is about no one node.
+    expect(rootsWithin(project, 'group:orders.py:reporting')).toEqual([])
+    expect(entry('group:orders.py:reporting').held_by.map((h) => h.root)).toEqual(['input:orders.py:orders_enriched'])
+    expect(rootsWithin(project, 'file:orders.py').map((r) => r.id)).toEqual(['failure:orders.py:sales_by_day', 'no_schedule:orders.py:forecast', 'input:orders.py:orders_enriched'])
+    expect(rootsWithin(project, 'orders.py:orders')).toEqual([])
   })
 
   it('says when a scope is expected fresh and how many nodes have no estimate, as served', () => {
+    // The project's root: `orders_enriched` is expected fresh 10s after `as_of`, and nine nodes
+    // (failing, held by a failure, late with no scheduler, with no refresh path) have no estimate.
+    const served = project.entries.get(ROOT)!
+    expect([served.fresh_by, served.unbounded, project.asOf]).toEqual(['2026-11-17T14:57:10Z', 9, '2026-11-17T14:57:00Z'])
+    expect(freshWithin(served, project.asOf)).toBe('fresh within about 10s')
+    expect(noEstimate(served)).toBe('9 with no estimate')
+    expect(freshWithin(entry('file:billing.py'), project.asOf)).toBeNull()
+    expect(noEstimate(entry('orders.py:orders'))).toBeNull()
+    // The words for given times. 4m10s from `as_of` (14:57:00): rounded up to the unit shown, never sooner.
     const root = byFile.entries.get(ROOT)!
-    // 4m10s from `as_of` (14:57:00): rounded up to the unit shown, never sooner.
     expect(freshWithin(root, byFile.asOf)).toBe('fresh within about 5m')
     expect(freshWithin({ fresh_by: '2026-11-17T14:57:20Z' }, byFile.asOf)).toBe('fresh within about 20s')
     expect(freshWithin({ fresh_by: '2026-11-18T06:00:00Z' }, byFile.asOf)).toBe('fresh within about 16h')
@@ -70,16 +92,27 @@ describe('the rollup, indexed', () => {
     ]
     expect([...heldIds(byFile, rows, 'failure:a.py:raw')].sort()).toEqual(['a.py:clean', 'a.py:raw', 'file:a.py', 'root'])
     expect([...heldIds(byFile, rows, 'nothing:here')]).toEqual([])
+    // As served: the failing `invoices` holds itself and the two nodes below it, in its file.
+    expect([...heldIds(project, STATE, 'failure:billing.py:invoices')].sort()).toEqual(['billing.py:invoice_totals', 'billing.py:invoices', 'billing.py:ledger', 'file:billing.py', 'root'])
+    expect([...heldIds(project, STATE, 'input:orders.py:orders_enriched')].sort()).toEqual(['file:orders.py', 'group:orders.py:reporting', 'orders.py:orders_enriched', 'orders.py:revenue_hourly', 'root'])
   })
 })
 
 describe('the health map', () => {
   it('lays an entry out by its served weight, and holds no weight of its own', () => {
-    // The fixture states what the server would ("Distance from fresh": 1 a fresh node, 2 one
-    // that will be fresh without anyone acting or is undecided, 6 one that needs someone).
-    const entry = (id: string) => byFile.entries.get(id)!
-    expect([entry('b.py:src').weight, entry('c.py:x').weight, entry('c.py:waits').weight, entry('b.py:mart').weight, entry('a.py:raw').weight]).toEqual([1, 2, 2, 6, 6])
-    expect([entry('file:a.py').weight, entry('file:c.py').weight, entry('file:b.py').weight, entry(ROOT).weight]).toEqual([18, 4, 7, 29])
+    // As served ("Distance from fresh"): 1 a fresh node, 2 one a queued run will refresh, 6 one
+    // that is failing, held by a failure, or has nothing to refresh it.
+    expect(['orders.py:orders', 'orders.py:orders_enriched', 'orders.py:forecast', 'orders.py:nightly_export', 'billing.py:invoices', 'billing.py:ledger'].map((id) => entry(id).weight)).toEqual([1, 2, 6, 6, 6, 6])
+    expect(['file:orders.py', 'file:billing.py', 'group:orders.py:reporting', ROOT].map((id) => entry(id).weight)).toEqual([30, 24, 3, 57])
+    // The map is those weights: each scope its share of the turn, in the order served.
+    const ring = sunburst(project, ROOT, 1)
+    expect(ring.map((a) => a.id)).toEqual(['file:orders.py', 'file:billing.py', 'group:orders.py:reporting'])
+    expect(ring.map((a) => a.end - a.start)).toEqual([30 / 57, 24 / 57, 3 / 57].map((share) => expect.closeTo(share, 10)))
+    expect(ring.map((a) => a.bands.map((b) => b.part))).toEqual([['failing', 'no_refresh_path', 'queued', 'fresh'], ['failing'], ['queued', 'fresh']])
+    // A partitioned node's keys, as its entry counts them: the key never computed takes the
+    // colour of the cause the server gives the keys not up to date.
+    expect(entry('orders.py:sales_by_day').keys).toEqual({ failed: 1, behind: 1, ok: 3, cause: 'failing' })
+    expect(sunburst(project, 'orders.py:sales_by_day').map((a) => [a.label, a.bands[0]!.part])).toEqual([['1 key failed', 'failing'], ['1 key not up to date', 'failing'], ['3 keys ok', 'fresh']])
     // A served weight the fixture's table would not give is drawn as served: half the turn.
     const served = indexRollup(rollup([
       scopeEntry(ROOT, 'root', null, ['file:a.py', 'file:b.py'], { ok: 2 }, { weight: 10 }),

@@ -76,6 +76,11 @@ pub enum DagError {
         problem: String,
         fix: String,
     },
+
+    /// A graph given as plain data (`barca_model::dag::DagParts`) that is not one. The
+    /// Python frontend never produces it.
+    #[error("malformed graph: {0}")]
+    Malformed(String),
 }
 
 impl DagError {

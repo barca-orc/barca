@@ -282,7 +282,7 @@ impl WorkerPool {
                             Duration::from_secs_f64(elapsed.max(0.0)),
                             phase
                                 .as_deref()
-                                .and_then(crate::dispatch::ErrorPhase::parse),
+                                .and_then(barca_compile::dispatch::ErrorPhase::parse),
                         ) {
                             schedule_retry(&self.event_tx, item_id, delay);
                         }

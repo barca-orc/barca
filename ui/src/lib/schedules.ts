@@ -4,14 +4,15 @@
  * A scheduled node is one whose freshness is `schedule` (from `GET /assets`,
  * cron in `schedule`). Where its schedule stands (its last tick and that tick's run, whether
  * it is late and since when) is decided by the server, once, and read from the `schedule`
- * block of `GET /state`; this module words it and orders the rows. Whether the scheduler has
- * it paused is read from `GET /schedule`, which the pause control updates.
+ * block of `GET /state`, the one source of a row; this module words it and orders the rows.
+ * Whether the scheduler has it paused is in that block too (`paused`, `paused_until`): the
+ * pause control refetches `GET /state` when it has answered.
  */
 
-import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 import { sourceFile } from './pipeline'
 import { formatAbout, parseTime } from './time'
-import type { ListNode, NodeState, ScheduleJob } from './types'
+import type { ListNode, NodeState } from './types'
 
 export interface ScheduleRow {
   id: string
@@ -31,7 +32,7 @@ export interface ScheduleRow {
   /** Its newest tick (`schedule.last_fired`, as the server writes it; `Age` draws it), and the
    * run that tick started: its status (`pending` while it waits in the run queue) and id. */
   last: { status: string | null; at: string; runId: string | null } | null
-  /** `cache.state`, in the CLI's word (`shownCacheState`); null until `/state` has the node. */
+  /** `cache.state`, in the CLI's word; null until `/state` has the node. */
   state: CacheState | null
   /** Its last attempt failed: a fact beside the state. */
   lastFailed: boolean
@@ -85,10 +86,6 @@ export function humanizeCron(cron: string): string | null {
   return null
 }
 
-/** The status of a tick's run in the page's words: a run that waits for a run slot is `queued`. */
-export function lastStatusLabel(status: string): string {
-  return status === 'pending' ? 'queued' : status
-}
 
 /** "late by 12m": how long ago the first missed slot was. */
 export function formatLate(sinceMs: number, nowMs: number): string {
@@ -109,28 +106,22 @@ export function formatLate(sinceMs: number, nowMs: number): string {
 export function scheduleRows(
   assets: ListNode[],
   states: NodeState[],
-  jobs: ScheduleJob[] = [],
   nowMs: number = Date.now(),
 ): ScheduleRow[] {
   const byId = new Map(states.map((s) => [s.id, s]))
-  const jobById = new Map(jobs.map((j) => [j.id, j]))
   return assets
     .flatMap((a): ScheduleRow[] => {
       if (a.freshness !== 'schedule' || a.schedule === undefined) return []
       const cron = a.schedule
       const st = byId.get(a.id)
-      const job = jobById.get(a.id)
       // Where the schedule stands is the server's answer (`schedule` of `GET /state`, the
-      // same values as `GET /schedule` and `barca status`): nothing here compares times.
+      // same values as `barca status`): nothing here compares times.
       const stands = st?.schedule
-      const standing = stands?.state ?? job?.state
-      const nextRunSecs = st?.next_run ?? job?.next_fire ?? null
+      const standing = stands?.state
+      const nextRunSecs = st?.next_run ?? null
       const nextRunMs = nextRunSecs !== null ? nextRunSecs * 1000 : null
       const lateSinceMs = stands?.late && stands.late_since ? parseTime(stands.late_since) : null
-      const paused = job?.paused ?? stands?.paused ?? false
-      const pausedUntilMs = job
-        ? job.paused_until !== null ? job.paused_until * 1000 : null
-        : stands?.paused_until ? parseTime(stands.paused_until) : null
+      const pausedUntilMs = stands?.paused_until ? parseTime(stands.paused_until) : null
       return [
         {
           id: a.id,
@@ -140,15 +131,15 @@ export function scheduleRows(
           cron,
           human: humanizeCron(cron),
           standing,
-          detail: stands?.state_detail ?? job?.state_detail ?? null,
+          detail: stands?.state_detail ?? null,
           nextRunMs: standing === "held" ? null : nextRunMs,
           late: lateSinceMs !== null ? { sinceMs: lateSinceMs, by: formatLate(lateSinceMs, nowMs) } : null,
           last: stands?.last_fired
             ? { status: stands.last_status, at: stands.last_fired, runId: stands.last_run_id }
             : null,
-          state: st ? shownCacheState(st) : null,
+          state: st ? st.cache.state : null,
           lastFailed: st ? lastAttemptFailed(st) : false,
-          paused: paused ? { until: pausedUntilMs } : null,
+          paused: stands?.paused ? { until: pausedUntilMs } : null,
           queueWait: stands && stands.typical_queue_wait_seconds > 0 ? formatAbout(stands.typical_queue_wait_seconds) : null,
           typicalRun: stands && stands.typical_run_seconds !== null ? formatAbout(stands.typical_run_seconds) : null,
           queueBound: stands?.queue_bound ?? false,

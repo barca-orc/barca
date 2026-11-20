@@ -1,5 +1,5 @@
 //! The report values below the command layer: what a step, a target, a dry run and a run's
-//! uploads and partition selection report. Data only, like the rest of `barca_core::results`,
+//! uploads and partition selection report. Data only, like the rest of `barca_service::results`,
 //! which re-exports them; they live here so the planner, the engine and the metadata DB can
 //! return them.
 
@@ -194,11 +194,11 @@ pub struct TargetOutcome {
     /// envelope (`phase`), not into the run JSON.
     #[serde(skip)]
     pub failed_phase: Option<ErrorPhase>,
-    /// A partitioned target's returned keys and their artifacts (see `barca_core::results::GetResult::partitions`);
+    /// A partitioned target's returned keys and their artifacts (see `barca_service::results::GetResult::partitions`);
     /// on a failed target, the keys that succeeded.
     #[serde(skip)]
     pub partitions: Option<Vec<(String, OutputRef)>>,
-    /// See `barca_core::results::GetResult::key_summary`.
+    /// See `barca_service::results::GetResult::key_summary`.
     #[serde(skip)]
     pub key_summary: Option<KeySummary>,
 }
@@ -366,7 +366,7 @@ pub struct ExplainResult {
     pub uploads: Option<UploadsReport>,
     /// The most the `weight=` of the steps running at once may add up to (#436).
     pub capacity: usize,
-    /// See `barca_core::results::GetResult::partition_selection`.
+    /// See `barca_service::results::GetResult::partition_selection`.
     pub partition_selection: Option<PartitionSelectionReport>,
 }
 

@@ -23,6 +23,11 @@ pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
 /// [`BarcaError::MetadataUnusable`]: a file that is not SQLite, a newer format, or a malformed
 /// schema. A lock or I/O failure is [`BarcaError::Db`].
 pub async fn init_db_as(path: &str, shown: &str) -> Result<i64, BarcaError> {
+    // A read view is of a database this release reads as it is ([`ReadView::open`]), and is
+    // never written: nothing to initialize, and no write connection to open beside the lock.
+    if is_read_view(path) {
+        return Ok(crate::db::schema::ddl::VERSION);
+    }
     let _g = db_guard().await;
     initialized(path, shown)
         .await
@@ -59,26 +64,31 @@ pub(super) async fn initialized(
     } else if let Some(why) = unusable_file(path) {
         return Err(unusable(why));
     }
-    if Path::new(path).exists() {
-        // A read-write SQLite connection may checkpoint on close, even after a failed
-        // schema check. Judge compatibility read-only before opening the writer.
-        let (_db, read) = connect_read_only(path).await?;
-        let version = crate::db::schema::ddl::check(&read).await?;
-        if version == crate::db::schema::ddl::VERSION {
-            crate::state_validate::Schema::read(&read)
-                .await?
-                .columns_fit(true)
-                .map_err(unusable)?;
-        } else {
-            crate::state_validate::legacy_schema(&read)
-                .await?
-                .map_err(unusable)?;
+    // The connection this process keeps to the database, when it has one ([`OWNED`]): no
+    // writer is opened, so there is nothing for a read-only look to protect.
+    let kept = if owns(path) { reusable(path) } else { None };
+    let (handle, conn) = match kept {
+        Some(conn) => (handle_of_kept(path, &conn, lock), conn),
+        None => {
+            if Path::new(path).exists() {
+                // A read-write SQLite connection may checkpoint on close, even after a failed
+                // schema check. Judge compatibility read-only before opening the writer.
+                let (_db, read) = connect_read_only(path).await?;
+                let version = crate::db::schema::ddl::check(&read).await?;
+                if version == crate::db::schema::ddl::VERSION {
+                    crate::state_validate::Schema::read(&read)
+                        .await?
+                        .columns_fit(true)
+                        .map_err(unusable)?;
+                } else {
+                    crate::state_validate::legacy_schema(&read)
+                        .await?
+                        .map_err(unusable)?;
+                }
+            }
+            let (db, conn) = connect_write(path).await?;
+            (handle_of_new(path, db, &conn, lock), conn)
         }
-    }
-    let (db, conn) = connect_write(path).await?;
-    let handle = DbHandle {
-        _db: db,
-        _lock: Some(lock),
     };
     let version = match init_schema(&conn).await {
         Ok(()) => crate::db::schema::ddl::read_version(&conn).await,

@@ -1,0 +1,2470 @@
+//! Pure command rendering. Output chunks preserve stdout/stderr ordering.
+use super::*;
+
+/// Result representation requested by the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultFormat {
+    Json,
+    Value,
+    Pretty,
+}
+
+/// One output write, in the order it should be emitted.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OutputChunk {
+    Stdout(String),
+    Stderr(String),
+}
+
+/// Complete command presentation, without writing to process streams.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RenderedOutput {
+    pub chunks: Vec<OutputChunk>,
+}
+impl RenderedOutput {
+    fn stdout(&mut self, text: String) {
+        self.chunks.push(OutputChunk::Stdout(text));
+    }
+    fn stdout_line(&mut self, mut text: String) {
+        text.push('\n');
+        self.stdout(text);
+    }
+    fn stderr_line(&mut self, mut text: String) {
+        text.push('\n');
+        self.chunks.push(OutputChunk::Stderr(text));
+    }
+}
+macro_rules! line { ($out:expr, $($args:tt)*) => { $out.stdout_line(format!($($args)*)) }; }
+macro_rules! text { ($out:expr, $($args:tt)*) => { $out.stdout(format!($($args)*)) }; }
+macro_rules! note { ($out:expr, $($args:tt)*) => { $out.stderr_line(format!($($args)*)) }; }
+fn root_field(out: &mut Value, root: Option<&str>) {
+    if let (Value::Object(obj), Some(root)) = (out, root) {
+        obj.insert("root".into(), root.into());
+    }
+}
+/// `uploads` on a run's JSON, when something is left unpublished (#390).
+fn uploads_field(out: &mut Value, uploads: Option<&crate::results::UploadsReport>) {
+    if let (Value::Object(obj), Some(uploads)) = (out, uploads) {
+        obj.insert(
+            "uploads".into(),
+            serde_json::to_value(uploads).unwrap_or(Value::Null),
+        );
+    }
+}
+/// `metadata_seconds` on a run's JSON, when the run made a batched call.
+fn metadata_field(out: &mut Value, seconds: Option<f64>) {
+    if let (Value::Object(obj), Some(seconds)) = (out, seconds) {
+        obj.insert("metadata_seconds".into(), seconds.into());
+    }
+}
+/// The stdout JSON body of a successful single-target `barca get --json` / `barca run --json`,
+/// before `--fields`. A served run's `outcome` is this body.
+pub(crate) fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
+    let mut out = serde_json::json!({
+        "status": "success",
+        "run_id": result.run_id,
+        "elapsed_seconds": result.elapsed_seconds,
+        "steps_executed": result.steps_executed,
+        "phases": result.phases,
+        "final_output": final_output,
+        "steps": &result.steps,
+        "warnings": &result.warnings,
+    });
+    if let (Value::Object(obj), Some(cache)) = (&mut out, &result.cache) {
+        obj.insert("cache".into(), serde_json::json!(cache));
+    }
+    uploads_field(&mut out, result.uploads.as_ref());
+    metadata_field(&mut out, result.metadata_seconds);
+    selection_field(&mut out, result.partition_selection.as_ref());
+    out
+}
+
+/// The human lines for `partition_selection`: the selection, each narrowed node's share of
+/// its keys, and the nodes it skips.
+pub(crate) fn selection_lines(selection: &crate::results::PartitionSelectionReport) -> String {
+    let named: Vec<String> = selection
+        .selection
+        .iter()
+        .map(|(d, vs)| format!("{d}={}", vs.join(",")))
+        .collect();
+    let nodes: Vec<String> = selection
+        .nodes
+        .iter()
+        .map(|n| {
+            let name = crate::targets::short_name(&n.id);
+            match (n.selected, n.skipped) {
+                (Some(s), Some(k)) => format!("{name} {s} of {} keys", s + k),
+                _ => format!("{name} (keys known once its source runs)"),
+            }
+        })
+        .collect();
+    let scope = match &selection.exact_keys {
+        Some(keys) => format!("{} exact key combinations", keys.len()),
+        None => named.join(" "),
+    };
+    let mut out = format!("--partition {scope}: {}\n", nodes.join(", "));
+    if !selection.skipped_nodes.is_empty() {
+        let skipped: Vec<&str> = selection
+            .skipped_nodes
+            .iter()
+            .map(|id| crate::targets::short_name(id))
+            .collect();
+        out.push_str(&format!(
+            "Skipped (run without --partition to update): {}\n",
+            skipped.join(", ")
+        ));
+    }
+    out
+}
+
+/// `partition_selection` on a run's JSON body, when it ran under `--partition`.
+fn selection_field(out: &mut Value, selection: Option<&crate::results::PartitionSelectionReport>) {
+    if let (Value::Object(obj), Some(selection)) = (out, selection) {
+        obj.insert("partition_selection".into(), serde_json::json!(selection));
+    }
+}
+
+/// What the human summary of a single-target run says it did: `got 'x'`, `all assets` or
+/// `ran 'x'`.
+pub(crate) fn run_label(command: &str, target: Option<&str>) -> String {
+    match (command, target) {
+        ("run", Some(t)) => format!("ran '{t}'"),
+        ("run", None) => "ran ''".to_string(),
+        (_, Some(t)) => format!("got '{t}'"),
+        (_, None) => "all assets".to_string(),
+    }
+}
+
+/// Render a successful single-target run from its JSON body ([`run_body`]). The one renderer
+/// for a local run and for a served run's `outcome`. `final_output` is the value to show, or
+/// `None` when the run has none (a `get` of every asset); the body says `null` for both that
+/// and a target whose value is `None`.
+pub(crate) fn render_run_body(
+    body: &Value,
+    label: &str,
+    final_output: Option<&Value>,
+    mode: ResultFormat,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    match mode {
+        ResultFormat::Json => {
+            let mut out = body.clone();
+            project_key(&mut out, "steps", fields);
+            line!(rendered, "{out}");
+        }
+        ResultFormat::Value => {
+            if let Some(val) = final_output {
+                line!(rendered, "{}", serde_json::to_string_pretty(val).unwrap());
+            }
+        }
+        ResultFormat::Pretty => {
+            let count = |key: &str| body[key].as_u64().unwrap_or(0);
+            let (steps, phases) = (count("steps_executed"), count("phases"));
+            line!(
+                rendered,
+                "Run {} | {} in {:.3}s ({} step{}, {} phase{})",
+                body["run_id"].as_str().unwrap_or_default(),
+                label,
+                body["elapsed_seconds"].as_f64().unwrap_or(0.0),
+                steps,
+                if steps == 1 { "" } else { "s" },
+                phases,
+                if phases == 1 { "" } else { "s" }
+            );
+            if let Some(val) = final_output {
+                line!(
+                    rendered,
+                    "\nValue:\n{}",
+                    serde_json::to_string_pretty(val).unwrap()
+                );
+            }
+        }
+    }
+    rendered
+}
+
+/// How `barca get` prints its result on stdout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GetShape {
+    /// One JSON line: the run, with `final_output` (or `targets`).
+    Json,
+    /// For people: a summary line, then the returned paths (or the value).
+    Pretty,
+    /// Only what was returned: one path per line (`-o path`) or the value (`-o value`).
+    Bare,
+}
+
+/// One returned artifact, ready to print.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    /// The partition key (`dim=value,...`) when the returned node is partitioned.
+    pub key: Option<String>,
+    pub path: String,
+    /// A small json value shown under its path in a terminal.
+    pub preview: Option<String>,
+}
+
+/// What one target returned, prepared by the caller in the form it asked for.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Returned {
+    /// `final_output`: the artifact pointer or the value, or for a partitioned target a mapping
+    /// of key to either. `None` when nothing was returned.
+    pub final_output: Option<Value>,
+    /// Whether `final_output` holds values (`-o value`) rather than pointers.
+    pub values: bool,
+    /// The returned artifacts, one per key.
+    pub shown: Vec<Shown>,
+    /// A partitioned target with more keys than are listed: the counts (#623); `shown` then
+    /// holds only the keys the run computed.
+    pub key_summary: Option<crate::results::KeySummary>,
+}
+
+fn shown_lines(rendered: &mut RenderedOutput, returned: &Returned, shape: GetShape) {
+    for s in &returned.shown {
+        match (shape, &s.key) {
+            (GetShape::Pretty, Some(key)) => line!(rendered, "{key}: {}", s.path),
+            _ => line!(rendered, "{}", s.path),
+        }
+        if shape == GetShape::Pretty
+            && let Some(preview) = &s.preview
+        {
+            for l in preview.lines() {
+                line!(rendered, "  {l}");
+            }
+        }
+    }
+    if let Some(summary) = &returned.key_summary {
+        note!(
+            rendered,
+            "[barca] {}",
+            crate::report::key_summary_note(summary)
+        );
+    }
+}
+
+/// `barca get` with one target (or none): paths by default, values under `-o value`.
+pub fn render_get(
+    result: &GetResult,
+    target: Option<&str>,
+    returned: &Returned,
+    shape: GetShape,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let body = run_body(result, returned.final_output.clone());
+    render_get_body(&body, target, returned, shape, fields)
+}
+
+/// Render a successful single-target `get` from its JSON body ([`run_body`]): the one renderer
+/// for a local run and for a served run's `outcome`.
+pub(crate) fn render_get_body(
+    body: &Value,
+    target: Option<&str>,
+    returned: &Returned,
+    shape: GetShape,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    match shape {
+        GetShape::Json => {
+            let mut out = body.clone();
+            project_key(&mut out, "steps", fields);
+            line!(rendered, "{out}");
+        }
+        GetShape::Bare if returned.values => {
+            if let Some(val) = &returned.final_output {
+                line!(rendered, "{}", serde_json::to_string_pretty(val).unwrap());
+            }
+        }
+        GetShape::Bare => shown_lines(&mut rendered, returned, shape),
+        GetShape::Pretty => {
+            let count = |key: &str| body[key].as_u64().unwrap_or(0);
+            let (steps, phases) = (count("steps_executed"), count("phases"));
+            line!(
+                rendered,
+                "Run {} | {} in {:.3}s ({} step{}, {} phase{})",
+                body["run_id"].as_str().unwrap_or_default(),
+                run_label("get", target),
+                body["elapsed_seconds"].as_f64().unwrap_or(0.0),
+                steps,
+                if steps == 1 { "" } else { "s" },
+                phases,
+                if phases == 1 { "" } else { "s" }
+            );
+            if returned.values {
+                if let Some(val) = &returned.final_output {
+                    line!(
+                        rendered,
+                        "\nValue:\n{}",
+                        serde_json::to_string_pretty(val).unwrap()
+                    );
+                }
+            } else if !returned.shown.is_empty() {
+                line!(rendered, "");
+                shown_lines(&mut rendered, returned, shape);
+            }
+        }
+    }
+    rendered
+}
+
+/// What a `get` returned, read back from the pointers in its JSON `final_output` (an artifact
+/// pointer, or an object of them keyed by partition key): the paths to print.
+pub(crate) fn returned_from_pointers(final_output: Option<&Value>) -> Returned {
+    let path = |v: &Value| v["_barca_artifact"]["path"].as_str().map(str::to_string);
+    let key_summary = final_output.and_then(crate::report::parse_key_summary);
+    let listed = match (&key_summary, final_output) {
+        (Some(_), Some(v)) => v[crate::report::KEY_SUMMARY]
+            .get("outputs")
+            .or(Some(&Value::Null)),
+        _ => final_output,
+    };
+    let shown = match listed {
+        Some(Value::Object(map)) if !map.contains_key("_barca_artifact") => map
+            .iter()
+            .filter_map(|(key, v)| {
+                path(v).map(|path| Shown {
+                    key: Some(key.clone()),
+                    path,
+                    preview: None,
+                })
+            })
+            .collect(),
+        Some(v) => path(v)
+            .map(|path| Shown {
+                key: None,
+                path,
+                preview: None,
+            })
+            .into_iter()
+            .collect(),
+        None => Vec::new(),
+    };
+    Returned {
+        final_output: final_output.filter(|v| !v.is_null()).cloned(),
+        values: false,
+        shown,
+        key_summary,
+    }
+}
+
+/// `barca get a,b`: [`render_get`] per target. JSON carries `targets`, keyed by target in the
+/// order given: `{status: success, final_output}` or `{status: failed, failed_node, error}`,
+/// where a failed partitioned target also has `final_output` with the keys that succeeded.
+pub fn render_get_multi(
+    result: &MultiResult,
+    returned: &[Returned],
+    shape: GetShape,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let empty = Returned::default();
+    let returned: Vec<&Returned> = (0..result.targets.len())
+        .map(|i| returned.get(i).unwrap_or(&empty))
+        .collect();
+    let finals: Vec<Option<Value>> = returned.iter().map(|r| r.final_output.clone()).collect();
+    let (run, per_target) = multi_parts(result, &finals);
+    render_get_multi_parts(&run, &per_target, &returned, shape, fields)
+}
+
+/// Render a multi-target `get` from its two JSON parts ([`multi_parts`]) and what each target
+/// returned, in the same order: the one renderer for a local run and a served run's `outcome`.
+pub(crate) fn render_get_multi_parts(
+    run: &Value,
+    per_target: &[(String, Value)],
+    returned: &[&Returned],
+    shape: GetShape,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    let empty = Returned::default();
+    let each = |i: usize| returned.get(i).copied().unwrap_or(&empty);
+    let status = |t: &Value| t["status"].as_str().unwrap_or("?").to_string();
+    match shape {
+        GetShape::Json => {
+            let mut run = run.clone();
+            project_key(&mut run, "steps", fields);
+            line!(rendered, "{}", multi_json(&run, per_target));
+        }
+        GetShape::Bare if returned.iter().any(|r| r.values) => {
+            // Each target's value (null when it failed), keyed by target name.
+            let values: serde_json::Map<String, Value> = per_target
+                .iter()
+                .enumerate()
+                .map(|(i, (name, _))| {
+                    (
+                        name.clone(),
+                        each(i).final_output.clone().unwrap_or_default(),
+                    )
+                })
+                .collect();
+            line!(
+                rendered,
+                "{}",
+                serde_json::to_string_pretty(&values).unwrap()
+            );
+        }
+        GetShape::Bare => {
+            for i in 0..per_target.len() {
+                shown_lines(&mut rendered, each(i), shape);
+            }
+        }
+        GetShape::Pretty => {
+            let failed = per_target
+                .iter()
+                .filter(|(_, t)| t["status"].as_str() != Some("success"));
+            let count = |key: &str| run[key].as_u64().unwrap_or(0);
+            let (steps, phases) = (count("steps_executed"), count("phases"));
+            line!(
+                rendered,
+                "Run {} | got {} targets in {:.3}s ({} step{}, {} phase{}, {} failed)",
+                run["run_id"].as_str().unwrap_or_default(),
+                per_target.len(),
+                run["elapsed_seconds"].as_f64().unwrap_or(0.0),
+                steps,
+                if steps == 1 { "" } else { "s" },
+                phases,
+                if phases == 1 { "" } else { "s" },
+                failed.count(),
+            );
+            for (i, (name, t)) in per_target.iter().enumerate() {
+                let r = each(i);
+                let status = status(t);
+                if status != "success" && r.shown.is_empty() {
+                    continue;
+                }
+                line!(rendered, "\n{name}: {status}");
+                if r.values {
+                    if let Some(v) = &r.final_output {
+                        line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
+                    }
+                } else {
+                    shown_lines(&mut rendered, r, shape);
+                }
+            }
+        }
+    }
+    rendered
+}
+
+/// A single-target `barca get` whose step failed: the JSON result line (as
+/// [`render_failed_run`]), with `final_output` holding a partitioned target's keys that
+/// succeeded; outside JSON, those keys' paths (or values).
+pub fn render_failed_get(
+    err: &crate::BarcaError,
+    returned: Option<&Returned>,
+    shape: GetShape,
+) -> RenderedOutput {
+    let crate::BarcaError::WorkerFailed(f) = err else {
+        return RenderedOutput::default();
+    };
+    let Some(run) = &f.run else {
+        return RenderedOutput::default();
+    };
+    let mut rendered = RenderedOutput::default();
+    match shape {
+        GetShape::Json => {
+            let mut out = serde_json::json!({
+                "status": "failed",
+                "run_id": run.run_id,
+                "elapsed_seconds": run.elapsed_seconds,
+                "steps_executed": run.steps_executed,
+                "phases": run.phases,
+                "failed_node": f.node,
+                "error": f.summary(),
+                "steps": &run.steps,
+                "warnings": &run.warnings,
+            });
+            if let (Some(obj), Some(final_output)) = (
+                out.as_object_mut(),
+                returned.and_then(|r| r.final_output.clone()),
+            ) {
+                obj.insert("final_output".into(), final_output);
+            }
+            line!(rendered, "{out}");
+        }
+        _ => {
+            if let Some(r) = returned {
+                rendered = render_failed_get_returned(r, shape);
+            }
+        }
+    }
+    rendered
+}
+
+/// What a failed `get` prints outside JSON: the paths (or values) of the keys that succeeded.
+pub(crate) fn render_failed_get_returned(r: &Returned, shape: GetShape) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    if r.values {
+        if let Some(v) = &r.final_output {
+            line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
+        }
+    } else {
+        shown_lines(&mut rendered, r, shape);
+    }
+    rendered
+}
+
+pub fn render_run(
+    result: &GetResult,
+    target: &str,
+    final_output: Option<Value>,
+    mode: ResultFormat,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let body = run_body(result, final_output.clone());
+    render_run_body(
+        &body,
+        &run_label("run", Some(target)),
+        final_output.as_ref(),
+        mode,
+        fields,
+    )
+}
+
+/// How many reasons of one category `barca history RUN_ID` prints; `--json` has them all.
+const REASON_LINES: usize = 8;
+
+/// Width of the `barca history` TARGET column; longer targets end in `…`.
+const TARGET_WIDTH: usize = 24;
+
+/// A run's TARGET cell, a few words whatever the run named: its one target's function name
+/// (`kpis`), `all` for a run without targets, and for several the first as given (a tick's
+/// scheduled node) and how many more (`country_report +1 more`). `--json` has the full list
+/// (`target`, `job`). Runs recorded before the job was stored show the target as typed. Cut to
+/// [`TARGET_WIDTH`] characters with a trailing `…`.
+pub fn history_target(run: &crate::db::RunRecord) -> String {
+    let given = crate::run_list::target_ids(run.target.as_deref());
+    let job = crate::run_list::target_ids(run.job.as_deref());
+    // One node: the job's id names it in full. Several: the order they were given in.
+    let ids = if job.len() == 1 || given.is_empty() {
+        job
+    } else {
+        given
+    };
+    let names = match ids.as_slice() {
+        [] => "all".to_string(),
+        [one] => crate::telemetry::short_name(one).to_string(),
+        [first, rest @ ..] => format!(
+            "{} +{} more",
+            crate::telemetry::short_name(first),
+            crate::run_explanation::count(rest.len() as u64)
+        ),
+    };
+    if names.chars().count() > TARGET_WIDTH {
+        let cut: String = names.chars().take(TARGET_WIDTH - 1).collect();
+        format!("{cut}…")
+    } else {
+        names
+    }
+}
+
+/// How many of a run's outputs `barca history RUN_ID` lists; `--json` has every one.
+const OUTPUT_LINES: usize = 10;
+
+/// One run of `barca history --json`: the record, plus `failure`'s node and error as the flat
+/// `failed_node` and `error` (#627), so `--fields run_id,failed_node,error` needs no nesting,
+/// and `line`, the run in the words of a list row ([`crate::run_list::RunLine`], #959).
+pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
+    let mut out = serde_json::to_value(run).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = out.as_object_mut() {
+        let failure = run.failure.as_ref();
+        obj.insert("failed_node".into(), failure.map(|f| f.node.clone()).into());
+        obj.insert("error".into(), failure.map(|f| f.error.clone()).into());
+        obj.insert(
+            "line".into(),
+            serde_json::to_value(crate::run_list::run_line(run.into()))
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    out
+}
+
+/// [`history_json`] serialized straight from the record, keys in the same (sorted) order: a
+/// `serde_json::Value` per run allocates every file name again, which made `GET /history` of
+/// 17k runs spend most of its 330 ms in the allocator.
+#[derive(serde::Serialize)]
+struct HistoryItem<'a> {
+    attempts: &'a Option<i64>,
+    cancellation: &'a Option<crate::run_explain::Cancellation>,
+    client_run_id: &'a Option<String>,
+    command: &'a str,
+    elapsed_seconds: &'a Option<f64>,
+    error: Option<&'a str>,
+    failed_node: Option<&'a str>,
+    failure: Option<HistoryFailure<'a>>,
+    files: &'a [String],
+    finished_at: &'a Option<String>,
+    job: &'a Option<String>,
+    line: crate::run_list::RunLine,
+    /// With `--status running`: what a run in progress is working on now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    now: Option<&'a crate::run_list::RunNow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_reasons: &'a Option<crate::run_explain::PlanReasons>,
+    principal: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retries: &'a Option<i64>,
+    run_id: &'a str,
+    schedule_id: &'a Option<String>,
+    scheduled_at: &'a Option<String>,
+    started_at: &'a str,
+    status: &'a str,
+    steps_cached: i64,
+    steps_executed: i64,
+    steps_total: &'a Option<i64>,
+    target: &'a Option<String>,
+    trigger_reason: &'a Option<String>,
+    triggered_by: &'a Option<crate::trigger::TriggeredBy>,
+}
+
+#[derive(serde::Serialize)]
+struct HistoryFailure<'a> {
+    error: &'a str,
+    node: &'a str,
+}
+
+impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
+    fn from(run: &'a crate::db::RunRecord) -> Self {
+        let crate::db::RunRecord {
+            run_id,
+            command,
+            files,
+            target,
+            job,
+            status,
+            steps_total,
+            steps_executed,
+            steps_cached,
+            steps_failed: _,
+            attempts,
+            started_at,
+            finished_at,
+            elapsed_seconds,
+            triggered_by,
+            scheduled_at,
+            schedule_id,
+            client_run_id,
+            failure,
+            principal,
+            trigger_reason,
+            cancellation,
+            retries,
+            plan_reasons,
+        } = run;
+        let failure = failure.as_ref().map(|f| HistoryFailure {
+            error: &f.error,
+            node: &f.node,
+        });
+        HistoryItem {
+            attempts,
+            cancellation,
+            client_run_id,
+            command,
+            elapsed_seconds,
+            error: failure.as_ref().map(|f| f.error),
+            failed_node: failure.as_ref().map(|f| f.node),
+            failure,
+            files,
+            finished_at,
+            job,
+            line: crate::run_list::run_line(run.into()),
+            now: None,
+            plan_reasons,
+            principal,
+            retries,
+            run_id,
+            schedule_id,
+            scheduled_at,
+            started_at,
+            status,
+            steps_cached: *steps_cached,
+            steps_executed: *steps_executed,
+            steps_total,
+            target,
+            trigger_reason,
+            triggered_by,
+        }
+    }
+}
+
+/// [`Page::envelope`] of [`HistoryItem`]s.
+#[derive(serde::Serialize)]
+struct HistoryPage<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+    runs: Vec<HistoryItem<'a>>,
+    total: usize,
+    truncated: bool,
+}
+
+/// What each run in progress is working on now, by run id: `now` of `barca history --status
+/// running` ([`crate::queries::history_now`], or a server's `GET /history?status=running`).
+pub type HistoryNow = std::collections::HashMap<String, crate::run_list::RunNow>;
+
+/// What [`render_history`] prints beside the records, by run id.
+#[derive(Default)]
+pub struct HistoryExtras {
+    /// What a run in progress is working on now; a run without an entry prints none.
+    pub now: HistoryNow,
+    /// A run's `line` as a server computed it: printed as it is, since a record read from a
+    /// server's JSON lacks what the line counts (its failed steps). A run without an entry
+    /// gets the line of its own record.
+    pub line: std::collections::HashMap<String, crate::run_list::RunLine>,
+}
+
+impl HistoryExtras {
+    pub fn now(now: HistoryNow) -> Self {
+        Self {
+            now,
+            line: Default::default(),
+        }
+    }
+
+    /// The extras of `runs` as a server's `GET /history` lists them (`now`, `line`).
+    pub fn of_server_runs(runs: &serde_json::Value) -> Self {
+        let mut extras = Self::default();
+        for run in runs.as_array().into_iter().flatten() {
+            let Some(id) = run["run_id"].as_str() else {
+                continue;
+            };
+            if let Some(now) = run
+                .get("now")
+                .and_then(|now| serde_json::from_value(now.clone()).ok())
+            {
+                extras.now.insert(id.to_string(), now);
+            }
+            if let Some(line) = run
+                .get("line")
+                .and_then(|line| serde_json::from_value(line.clone()).ok())
+            {
+                extras.line.insert(id.to_string(), line);
+            }
+        }
+        extras
+    }
+}
+
+/// `barca history --activity`: the runs of the last 24 hours, hour by hour. JSON is
+/// `{"activity": {...}}`, the `activity` of `GET /runs`; the table lists the hours that had
+/// runs, in UTC.
+pub fn render_activity(activity: &crate::run_list::RunActivity, json: bool) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    if json {
+        let out = serde_json::json!({ "activity": activity });
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    line!(rendered, "{}", activity.summary);
+    let busy: Vec<_> = activity.hours.iter().filter(|h| h.runs > 0).collect();
+    if busy.is_empty() {
+        return rendered;
+    }
+    if let Some(hidden) = activity.excluded.as_ref().filter(|h| h.runs > 0) {
+        let names: Vec<&str> = activity
+            .not_triggered_by
+            .iter()
+            .map(|t| t.as_str())
+            .collect();
+        line!(
+            rendered,
+            "left out: {} {} {}{}",
+            crate::run_explanation::count(hidden.runs as u64),
+            names.join(", "),
+            if hidden.runs == 1 { "run" } else { "runs" },
+            if hidden.not_successful > 0 {
+                format!(
+                    ", {} not successful",
+                    crate::run_explanation::count(hidden.not_successful as u64)
+                )
+            } else {
+                String::new()
+            }
+        );
+    }
+    line!(
+        rendered,
+        "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6} {:>7}  FAILURE",
+        "HOUR",
+        "RUNS",
+        "NOT OK",
+        "RUNNING",
+        "SCHEDULE",
+        "API",
+        "MANUAL",
+        "CLIENT",
+        "MEDIAN"
+    );
+    line!(rendered, "{}", "-".repeat(89));
+    for hour in busy {
+        let failure = hour.failure.as_ref().map(|f| {
+            if f.runs == hour.not_successful {
+                f.text.clone()
+            } else {
+                format!("{} ({} of {})", f.text, f.runs, hour.not_successful)
+            }
+        });
+        line!(
+            rendered,
+            "{:<20} {:>6} {:>6} {:>7} {:>8} {:>6} {:>6} {:>6} {:>7}  {}",
+            crate::report::utc_cell(hour.at.trim_end_matches(":00Z")),
+            hour.runs,
+            hour.not_successful,
+            hour.in_progress,
+            hour.by_trigger.schedule,
+            hour.by_trigger.api,
+            hour.by_trigger.manual,
+            hour.by_trigger.client,
+            hour.median_seconds
+                .map_or("-".to_string(), crate::run_list::seconds_text),
+            failure.as_deref().unwrap_or("")
+        );
+    }
+    rendered
+}
+
+pub fn render_history(
+    runs: &[crate::db::RunRecord],
+    total: usize,
+    json: bool,
+    fields: Option<&[String]>,
+    extras: &HistoryExtras,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    let page = Page::new(runs.len(), total);
+    if json && fields.is_none() {
+        let out = HistoryPage {
+            hint: page.truncated.then(|| page.hint("runs")),
+            runs: runs
+                .iter()
+                .map(|run| {
+                    let mut item = HistoryItem::from(run);
+                    item.now = extras.now.get(&run.run_id);
+                    if let Some(line) = extras.line.get(&run.run_id) {
+                        item.line = line.clone();
+                    }
+                    item
+                })
+                .collect(),
+            total: page.total,
+            truncated: page.truncated,
+        };
+        rendered.stdout_line(serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    if json || fields.is_some() {
+        let mut items: Vec<serde_json::Value> = runs
+            .iter()
+            .map(|run| {
+                let mut item = history_json(run);
+                if let Some(obj) = item.as_object_mut() {
+                    if let Some(now) = extras.now.get(&run.run_id) {
+                        obj.insert("now".into(), serde_json::to_value(now).unwrap_or_default());
+                    }
+                    if let Some(line) = extras.line.get(&run.run_id) {
+                        obj.insert(
+                            "line".into(),
+                            serde_json::to_value(line).unwrap_or_default(),
+                        );
+                    }
+                }
+                item
+            })
+            .collect();
+        if let Some(f) = fields {
+            project(&mut items, f);
+        }
+        let out = page.envelope("runs", items, "runs");
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    if runs.is_empty() {
+        match page.note(0, "runs") {
+            Some(note) => note!(rendered, "{note}"),
+            None => line!(rendered, "No run history found."),
+        }
+        return rendered;
+    }
+    // Table header.
+    line!(
+        rendered,
+        "{:<14} {:<7} {:<TARGET_WIDTH$} {:<11} {:>5} {:>6} {:>6} {:<20}",
+        "RUN_ID",
+        "CMD",
+        "TARGET",
+        "STATUS",
+        "STEPS",
+        "CACHED",
+        "TIME",
+        "STARTED"
+    );
+    line!(rendered, "{}", "-".repeat(78 + TARGET_WIDTH));
+    for r in runs {
+        let elapsed_str = r
+            .elapsed_seconds
+            .map(|e| format!("{:.1}s", e))
+            .unwrap_or_else(|| "-".to_string());
+        let row = format!(
+            "{:<14} {:<7} {:<TARGET_WIDTH$} {:<11} {:>5} {:>6} {:>6} {:<20}",
+            r.run_id,
+            r.command,
+            history_target(r),
+            r.status,
+            r.steps_executed,
+            r.steps_cached,
+            elapsed_str,
+            crate::report::utc_cell(&r.started_at),
+        );
+        match &r.failure {
+            Some(failure) => line!(rendered, "{row}  {}", failure_cell(failure)),
+            None => line!(rendered, "{row}"),
+        }
+        if let Some(now) = extras.now.get(&r.run_id) {
+            line!(rendered, "  now: {}", now.line);
+        }
+    }
+    if let Some(note) = page.note(runs.len(), "runs") {
+        note!(rendered, "{note}");
+    }
+    rendered
+}
+
+/// The longest failure text after a history row.
+const FAILURE_WIDTH: usize = 72;
+
+/// `clean: ZeroDivisionError: division by zero`, cut to [`FAILURE_WIDTH`].
+fn failure_cell(failure: &crate::db::RunFailure) -> String {
+    let text = format!("{}: {}", step_label(&failure.node), failure.error);
+    if text.chars().count() > FAILURE_WIDTH {
+        let cut: String = text.chars().take(FAILURE_WIDTH - 1).collect();
+        format!("{cut}…")
+    } else {
+        text
+    }
+}
+
+/// A step as a table names it: its function name, with its partition key when it has one.
+fn step_label(node_id: &str) -> String {
+    let id = crate::StepId::parse(node_id);
+    let name = crate::telemetry::short_name(id.base_id());
+    let key = id.partition.suffix();
+    if key.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}[{key}]")
+    }
+}
+
+/// What `--step` should say to select `failed` among `steps`: its function name when no other
+/// definition shares it, otherwise its node id; quoted when a shell would read it otherwise.
+fn step_arg(failed: &crate::db::RunStep, steps: &[crate::db::RunStep]) -> String {
+    let base = crate::StepId::parse(&failed.node_id).base_id().to_string();
+    let name = crate::telemetry::short_name(&base);
+    let shared = steps.iter().any(|s| {
+        let other = crate::StepId::parse(&s.node_id).base_id().to_string();
+        other != base && crate::telemetry::short_name(&other) == name
+    });
+    let arg = if shared { base.as_str() } else { name };
+    if arg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_.:/-".contains(c))
+    {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', r"'\''"))
+    }
+}
+
+/// The command that prints a failed run's stderr: `barca logs RUN --step STEP --stream stderr`,
+/// then `select` (the `--server URL`, `--local` or `--env NAME` the caller was given, so the
+/// command reads the same history). `None` when no step failed.
+pub(crate) fn run_detail_hint(detail: &crate::queries::RunDetail, select: &str) -> Option<String> {
+    let failed = detail.steps.iter().find(|s| s.status == "failed")?;
+    Some(format!(
+        "barca logs {} --step {} --stream stderr{select}",
+        detail.run.run_id,
+        step_arg(failed, &detail.steps)
+    ))
+}
+
+/// `barca history RUN_ID`: the run's own fields, a row per recorded step, and for each failed
+/// step its error, traceback and how its worker ended. JSON: `{run, steps, hint?}`.
+/// How many keys of one batched call `barca history RUN_ID` lists under the call's row; the
+/// JSON lists every recorded key.
+pub(crate) const CALL_KEYS_SHOWN: usize = 10;
+
+/// The rows of `barca history RUN_ID`: one per step, except that the keys of a batched call
+/// (RFC-0013) are listed under one row for the call, `node[N keys]`, with its total time and
+/// its peak memory (the call's, shared by its keys).
+fn history_rows(
+    steps: &[crate::db::RunStep],
+    step_row: impl Fn(&crate::db::RunStep) -> [String; 7],
+    secs: impl Fn(Option<f64>) -> String,
+) -> Vec<[String; 7]> {
+    let mut members: std::collections::HashMap<&str, Vec<&crate::db::RunStep>> =
+        std::collections::HashMap::new();
+    for s in steps {
+        if let Some(b) = &s.batch {
+            members.entry(b.as_str()).or_default().push(s);
+        }
+    }
+    for keys in members.values_mut() {
+        keys.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    }
+    let mut rows = Vec::new();
+    let mut shown = std::collections::HashSet::new();
+    for s in steps {
+        let Some(b) = s.batch.as_deref() else {
+            rows.push(step_row(s));
+            continue;
+        };
+        if !shown.insert(b) {
+            continue;
+        }
+        let keys = &members[b];
+        let failed = keys.iter().filter(|k| k.status == "failed").count();
+        let status = match failed {
+            0 => "success".to_string(),
+            n if n == keys.len() => "failed".to_string(),
+            n => format!("partial ({n} failed)"),
+        };
+        let total: f64 = keys.iter().filter_map(|k| k.elapsed_seconds).sum();
+        let peak = keys.iter().filter_map(|k| k.max_rss_bytes).max();
+        let attempts = keys.iter().filter_map(|k| k.attempts).max();
+        let base = crate::StepId::parse(&s.node_id).base_id().to_string();
+        rows.push([
+            format!(
+                "{base}[{} key{}]",
+                keys.len(),
+                if keys.len() == 1 { "" } else { "s" }
+            ),
+            status,
+            attempts.map_or_else(|| "-".to_string(), |n| n.to_string()),
+            secs(Some(total)),
+            peak.map_or_else(|| "-".to_string(), |b| crate::text::human(b.max(0) as u64)),
+            "-".to_string(),
+            format!("batch {b}"),
+        ]);
+        for k in keys.iter().take(CALL_KEYS_SHOWN) {
+            let mut row = step_row(k);
+            row[0] = format!("  {}", row[0]);
+            row[4] = "-".to_string();
+            rows.push(row);
+        }
+        if keys.len() > CALL_KEYS_SHOWN {
+            rows.push([
+                format!(
+                    "  ... {} more keys (--json lists them)",
+                    keys.len() - CALL_KEYS_SHOWN
+                ),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]);
+        }
+    }
+    rows
+}
+
+pub fn render_run_detail(
+    detail: &crate::queries::RunDetail,
+    json: bool,
+    select: &str,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    let hint = run_detail_hint(detail, select);
+    let mut explanation = crate::run_explanation::explain(
+        (&detail.run).into(),
+        &detail.steps_page.nodes,
+        &detail.steps,
+        crate::time::now_secs_f64(),
+    );
+    explanation.outputs = detail.outputs.clone();
+    if json {
+        let mut out = serde_json::json!({
+            "run": detail.run,
+            "steps": detail.steps,
+            "steps_page": detail.steps_page,
+            "explanation": explanation,
+        });
+        if let Some(hint) = &hint {
+            out["hint"] = hint.clone().into();
+        }
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    let r = &detail.run;
+    let secs = |s: Option<f64>| s.map_or_else(|| "-".to_string(), |e| format!("{e:.1}s"));
+    let target = r.target.as_deref().unwrap_or("all");
+    // The targets in a few words: a tick's run names dozens (`--json` lists them).
+    let named = match crate::run_list::target_ids(r.target.as_deref()).len() {
+        0 => "all".to_string(),
+        _ => explanation.target_line.clone(),
+    };
+    let mut head = format!(
+        "run {}  {} {}  {}  {}",
+        r.run_id,
+        r.command,
+        named,
+        r.status,
+        secs(r.elapsed_seconds)
+    );
+    if let Some(attempts) = &explanation.attempts {
+        head.push_str(&format!("  {attempts}"));
+    }
+    line!(rendered, "{head}");
+    let mut when = format!("started {}", crate::report::utc_cell(&r.started_at));
+    if let Some(finished) = &r.finished_at {
+        when.push_str(&format!("  finished {}", crate::report::utc_cell(finished)));
+    }
+    line!(rendered, "{when}");
+    if let Some(trigger) = r.triggered_by {
+        let mut by = format!("triggered by {}", trigger.as_str());
+        if let Some(tick) = &r.scheduled_at {
+            by.push_str(&format!("  tick {}", crate::report::utc_cell(tick)));
+        }
+        if let Some(schedule) = &r.schedule_id {
+            by.push_str(&format!("  schedule {schedule}"));
+        }
+        if let Some(client) = &r.client_run_id {
+            by.push_str(&format!("  client run {client}"));
+        }
+        if let Some(principal) = &r.principal {
+            by.push_str(&format!("  as {principal}"));
+        }
+        line!(rendered, "{by}");
+    }
+    if let Some(reason) = &r.trigger_reason {
+        line!(rendered, "reason: {reason}");
+    }
+    if let Some(c) = &explanation.cancellation {
+        let detail = c.detail.as_deref().map(|d| format!(" {d}"));
+        line!(
+            rendered,
+            "cancelled: {}{}",
+            c.headline,
+            detail.unwrap_or_default()
+        );
+    }
+    if let Some(job) = &r.job
+        && job != target
+        && history_target(r) != target
+    {
+        line!(
+            rendered,
+            "job {}",
+            crate::run_list::target_line(Some(job.as_str()))
+        );
+    }
+    if !r.files.is_empty() {
+        line!(rendered, "files {}", r.files.join(" "));
+    }
+    // The run's numbers as its panel says them (`explanation.counts`): they add up.
+    let counts = &explanation.counts;
+    let mut steps_line = format!("steps: {} ({})", counts.outcome, counts.planned);
+    if r.steps_cached > 0 {
+        steps_line.push_str("; cached steps are not listed");
+    }
+    line!(rendered, "{steps_line}");
+    if let Some(not_reached) = &counts.not_reached_line {
+        line!(rendered, "not reached: {not_reached}");
+    }
+    for outcome in &explanation.target_outcomes {
+        line!(rendered, "target: {outcome}");
+    }
+    for output in explanation.outputs.iter().take(OUTPUT_LINES) {
+        line!(rendered, "output: {}", output.line);
+    }
+    if explanation.outputs.len() > OUTPUT_LINES {
+        line!(
+            rendered,
+            "output: and {} more (--json lists them)",
+            explanation.outputs.len() - OUTPUT_LINES
+        );
+    }
+    // A run cancelled in the queue decided nothing: its `cancelled:` line says so.
+    if r.cancellation.as_ref().is_none_or(|c| c.started) {
+        for line in crate::run_explanation::why_lines(&explanation.why, REASON_LINES) {
+            line!(rendered, "{line}");
+        }
+    }
+    if !detail.steps.is_empty() {
+        let step_row = |s: &crate::db::RunStep| {
+            let artifact = match (&s.artifact_path, &s.artifact_format) {
+                (Some(path), format) => {
+                    let mut about: Vec<String> = format.iter().cloned().collect();
+                    if let Some(size) = s.artifact_size_bytes {
+                        about.push(crate::text::human(size.max(0) as u64));
+                    }
+                    if about.is_empty() {
+                        path.clone()
+                    } else {
+                        format!("{path} ({})", about.join(", "))
+                    }
+                }
+                (None, _) => "-".to_string(),
+            };
+            [
+                s.node_id.clone(),
+                s.status.clone(),
+                s.attempts
+                    .map_or_else(|| "-".to_string(), |n| n.to_string()),
+                secs(s.elapsed_seconds),
+                s.max_rss_bytes
+                    .map_or_else(|| "-".to_string(), |b| crate::text::human(b.max(0) as u64)),
+                s.run_hash
+                    .as_deref()
+                    .map_or_else(|| "-".to_string(), |h| h.chars().take(12).collect()),
+                artifact,
+            ]
+        };
+        let rows = history_rows(&detail.steps, step_row, secs);
+        let header = [
+            "STEP", "STATUS", "ATTEMPTS", "TIME", "PEAK_RSS", "RUN_HASH", "ARTIFACT",
+        ];
+        let mut widths = header.map(str::len);
+        for row in &rows {
+            for (w, cell) in widths.iter_mut().zip(row) {
+                *w = (*w).max(cell.chars().count());
+            }
+        }
+        let fmt_row = |cells: [&str; 7]| {
+            let mut out = String::new();
+            for (i, cell) in cells.iter().enumerate() {
+                if i == cells.len() - 1 {
+                    out.push_str(cell);
+                } else {
+                    out.push_str(&format!("{cell:<w$}  ", w = widths[i]));
+                }
+            }
+            out.trim_end().to_string()
+        };
+        line!(rendered, "");
+        line!(rendered, "{}", fmt_row(header));
+        for row in &rows {
+            line!(rendered, "{}", fmt_row(row.each_ref().map(String::as_str)));
+        }
+    }
+    if detail.steps_page.truncated {
+        let page = crate::report::Page::new(detail.steps.len(), detail.steps_page.total);
+        if let Some(note) = page.note(detail.steps.len(), "steps") {
+            note!(rendered, "{note}; failed steps are always listed");
+        }
+    }
+    for step in detail.steps.iter().filter(|s| s.status == "failed") {
+        line!(rendered, "");
+        let attempts = match step.attempts {
+            Some(n) if n > 1 => format!(" after {n} attempts"),
+            _ => String::new(),
+        };
+        let message = step
+            .error_message
+            .as_deref()
+            .or(step.error.as_deref())
+            .unwrap_or_default();
+        let failure = crate::db::RunFailure::new(
+            step.node_id.clone(),
+            step.error_type.as_deref().unwrap_or_default(),
+            message,
+        );
+        // A failure in barca's own code around the step says so (#664).
+        let in_barca = step
+            .error_phase
+            .as_deref()
+            .and_then(crate::dispatch::ErrorPhase::parse)
+            .filter(|p| p.in_barca())
+            .map(|p| format!(" in barca while {} (phase {})", p.doing(), p.as_str()))
+            .unwrap_or_default();
+        line!(
+            rendered,
+            "{} failed{attempts}{in_barca}: {}",
+            step.node_id,
+            failure.error
+        );
+        if let Some(traceback) = step
+            .error_traceback
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+        {
+            line!(rendered, "  Traceback (most recent call last):");
+            for frame in traceback.lines() {
+                line!(rendered, "  {frame}");
+            }
+            let error_type = step.error_type.as_deref().unwrap_or_default();
+            let mut last = message.lines();
+            match last.next() {
+                Some(first) if !error_type.is_empty() => {
+                    line!(rendered, "  {error_type}: {first}")
+                }
+                Some(first) => line!(rendered, "  {first}"),
+                None => line!(rendered, "  {error_type}"),
+            }
+            for more in last {
+                line!(rendered, "  {more}");
+            }
+        } else {
+            for more in message.lines().skip(1) {
+                line!(rendered, "  {more}");
+            }
+        }
+        if let Some(exit) = &step.worker_exit {
+            line!(rendered, "  worker exit: {exit}");
+        }
+        if let Some(tail) = step.output_tail.as_deref().filter(|t| !t.is_empty()) {
+            let n = tail.len();
+            line!(
+                rendered,
+                "  last {n} line{} of its output:",
+                if n == 1 { "" } else { "s" }
+            );
+            for out in tail {
+                line!(rendered, "  | {out}");
+            }
+        }
+    }
+    if let Some(hint) = hint {
+        note!(rendered, "hint: {hint}");
+    }
+    rendered
+}
+
+pub fn render_stats(
+    stats: &crate::db::AssetStats,
+    json: bool,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    if json || fields.is_some() {
+        let mut out = stats_json(stats);
+        project_key(&mut out, "recent_runs", fields);
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    let fmt = |v: Option<f64>| v.map(|e| format!("{:.3}s", e)).unwrap_or("-".to_string());
+    line!(rendered, "Asset: {}", stats.node_id);
+    line!(rendered, "Total materializations: {}", stats.total_runs);
+    line!(
+        rendered,
+        "Timing:  avg {}  median {}  p95 {}  max {}",
+        fmt(stats.avg_elapsed_seconds),
+        fmt(stats.median_elapsed_seconds),
+        fmt(stats.p95_elapsed_seconds),
+        fmt(stats.max_elapsed_seconds),
+    );
+    // Not a cache hit rate: hits execute nothing and are not recorded per asset (#496).
+    line!(
+        rendered,
+        "Re-executed with unchanged inputs: {:.1}%",
+        stats.cache_hit_rate * 100.0
+    );
+    let mem =
+        |v: Option<i64>| v.map_or_else(|| "-".to_string(), |b| crate::text::human(b.max(0) as u64));
+    if stats.max_rss_bytes.is_some() {
+        line!(
+            rendered,
+            "Peak memory (RSS):  median {}  max {}",
+            mem(stats.median_max_rss_bytes),
+            mem(stats.max_rss_bytes),
+        );
+    }
+    if !stats.recent_runs.is_empty() {
+        line!(rendered, "\nRecent runs:");
+        line!(
+            rendered,
+            "  {:<10} {:<9} {:<8} {:<10} {:<12} {}",
+            "ELAPSED",
+            "STATUS",
+            "ATTEMPTS",
+            "PEAK_RSS",
+            "RUN",
+            "CREATED"
+        );
+        for entry in &stats.recent_runs {
+            let elapsed_str = entry
+                .elapsed_seconds
+                .map(|e| format!("{:.3}s", e))
+                .unwrap_or_else(|| "-".to_string());
+            let created = crate::report::utc_cell(&entry.created_at);
+            let row = format!(
+                "  {:<10} {:<9} {:<8} {:<10} {:<12} {}",
+                elapsed_str,
+                entry.status,
+                entry.attempts,
+                mem(entry.max_rss_bytes),
+                entry.run_id.as_deref().unwrap_or("-"),
+                created,
+            );
+            line!(rendered, "{}", row.trim_end());
+            if entry.status == "failed"
+                && let Some(msg) = &entry.error_message
+                && !msg.is_empty()
+            {
+                line!(rendered, "      └─ {msg}");
+            }
+        }
+    }
+    rendered
+}
+
+pub fn render_sql(result: crate::results::SqlResult, json: bool) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    for note in &result.notes {
+        note!(rendered, "barca: {note}");
+    }
+    let page = Page::new(result.rows.len(), result.total as usize);
+    if json {
+        let mut out = page.envelope("rows", result.rows, "rows");
+        if let serde_json::Value::Object(obj) = &mut out {
+            obj.insert(
+                "columns".into(),
+                serde_json::Value::Array(
+                    result
+                        .columns
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    let cell = |v: &serde_json::Value| match v {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let grid: Vec<Vec<String>> = result
+        .rows
+        .iter()
+        .map(|r| result.columns.iter().map(|c| cell(&r[c])).collect())
+        .collect();
+    let widths: Vec<usize> = result
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            grid.iter()
+                .map(|r| r[i].chars().count())
+                .chain([c.chars().count()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let line = |cells: &[String]| {
+        cells
+            .iter()
+            .zip(&widths)
+            .map(|(c, w)| format!("{c:<w$}"))
+            .collect::<Vec<_>>()
+            .join("  ")
+            .trim_end()
+            .to_string()
+    };
+    if !result.columns.is_empty() {
+        line!(rendered, "{}", line(&result.columns));
+    }
+    for row in &grid {
+        line!(rendered, "{}", line(row));
+    }
+    if let Some(note) = page.note(grid.len(), "rows") {
+        note!(rendered, "{note}");
+    }
+    rendered
+}
+
+pub fn render_status(
+    mut result: crate::status::StatusResult,
+    json: bool,
+    limit: Option<usize>,
+    fields: Option<&[String]>,
+    root: Option<&str>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    // Bounded like `list`: the summary still counts every node; `nodes` is cut to the limit.
+    let total = result.nodes.len();
+    if let Some(limit) = limit {
+        result.nodes.truncate(limit);
+    }
+    let page = Page::new(result.nodes.len(), total);
+    if json {
+        let mut out = serde_json::to_value(&result).unwrap();
+        project_key(&mut out, "nodes", fields);
+        if let serde_json::Value::Object(obj) = &mut out
+            && let serde_json::Value::Object(env) = page.envelope("nodes", vec![], "nodes")
+        {
+            // Add `total`, `truncated` and (when truncated) `hint` beside `nodes`.
+            for (k, v) in env {
+                if k != "nodes" {
+                    obj.insert(k, v);
+                }
+            }
+        }
+        root_field(&mut out, root);
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    text!(rendered, "{}", render_status_table(&result));
+    if let Some(note) = page.note(result.nodes.len(), "nodes") {
+        note!(rendered, "{note}");
+    }
+    rendered
+}
+
+/// `barca status --rollup`: the document as JSON, or the tree down to groups and files (a
+/// node's own row is `barca status`), worst first, then what holds the nodes that are not
+/// fresh and how much of the data was measured. Every count names its unit.
+pub fn render_rollup(rollup: &crate::rollup::Rollup, json: bool) -> RenderedOutput {
+    use crate::rollup::{EntryKind, RollupEntry};
+    let mut rendered = RenderedOutput::default();
+    if json {
+        line!(
+            rendered,
+            "{}",
+            serde_json::to_string_pretty(rollup).unwrap()
+        );
+        return rendered;
+    }
+    let by_id: HashMap<&str, &RollupEntry> =
+        rollup.entries.iter().map(|e| (e.id.as_str(), e)).collect();
+    let depth = |entry: &RollupEntry| {
+        let mut depth = 0;
+        let mut at = entry.parent.as_deref();
+        while let Some(id) = at {
+            depth += 1;
+            at = by_id.get(id).and_then(|e| e.parent.as_deref());
+        }
+        depth
+    };
+    let mut rows = vec![[
+        "SCOPE".to_string(),
+        "NODES".to_string(),
+        "ASSETS".to_string(),
+        "CAUSE (nodes)".to_string(),
+    ]];
+    for entry in rollup.entries.iter().filter(|e| e.kind != EntryKind::Node) {
+        let mut causes = match entry.causes.line() {
+            line if line.is_empty() && entry.nodes > 0 => format!("all {} fresh", entry.nodes),
+            line if line.is_empty() => "-".to_owned(),
+            line => line,
+        };
+        if entry.running > 0 {
+            causes.push_str(&format!(" · {} running", entry.running));
+        }
+        // When what has an estimate is expected fresh, and how many have none (#962).
+        let now = chrono::Utc::now().timestamp();
+        if let Some(by) = entry
+            .fresh_by
+            .as_deref()
+            .and_then(|at| crate::estimates::clock(at, now, true))
+        {
+            causes.push_str(&format!(" · fresh by ~{by}"));
+        }
+        if entry.unbounded > 0 {
+            causes.push_str(&format!(" · {} with no estimate", entry.unbounded));
+        }
+        rows.push([
+            format!("{}{}", "  ".repeat(depth(entry)), entry.label),
+            entry.nodes.to_string(),
+            entry.assets.to_string(),
+            causes,
+        ]);
+    }
+    let width = |i: usize| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
+    let (scope, nodes, assets) = (width(0), width(1), width(2));
+    for row in &rows {
+        line!(
+            rendered,
+            "{:<scope$}  {:>nodes$}  {:>assets$}  {}",
+            row[0],
+            row[1],
+            row[2],
+            row[3]
+        );
+    }
+    // "Within" is from the instant the rows were classified, not from when this prints.
+    let as_of =
+        crate::time::parse_rfc3339(&rollup.as_of).unwrap_or_else(|| chrono::Utc::now().timestamp());
+    line!(rendered, "");
+    line!(rendered, "Gap: {}", rollup.root().gap_line(as_of));
+    // One number for how far the scope is from fresh, and what a fully fresh scope reads.
+    line!(
+        rendered,
+        "Distance from fresh: {} (weighted nodes); {} when every node is fresh",
+        rollup.root().weight,
+        rollup.root().nodes * crate::rollup::FRESH_WEIGHT
+    );
+    if !rollup.roots.is_empty() {
+        // The to-do list: what holds the nodes that are not fresh, and what clears each.
+        let held = rollup.root().causes.total();
+        line!(rendered, "");
+        line!(
+            rendered,
+            "What holds the {} that {} not fresh, and what clears it:",
+            plural(held as u64, "node"),
+            if held == 1 { "is" } else { "are" }
+        );
+        line!(rendered, "{}", rollup.root().split.line());
+        // How much the head of the list explains, when there is more than a head.
+        if let Some(third) = rollup
+            .root()
+            .held_by
+            .get(2)
+            .filter(|_| rollup.roots.len() > 3)
+        {
+            line!(
+                rendered,
+                "The first 3 hold {} of them.",
+                third.cumulative_nodes
+            );
+        }
+        let rank = rollup.roots.len().to_string().len();
+        for (at, root) in rollup.roots.iter().enumerate() {
+            let pad = " ".repeat(rank + 4);
+            let title = if root.node.is_empty() {
+                root.kind.word().to_string()
+            } else {
+                format!(
+                    "{}: {}",
+                    root.kind.word(),
+                    crate::targets::short_name(&root.node)
+                )
+            };
+            line!(rendered, "{:>rank$}. {title}", at + 1);
+            let mut holds = format!(
+                "holds {} ({}): {}",
+                plural(root.nodes as u64, "node"),
+                plural(root.assets as u64, "asset"),
+                root.causes.line()
+            );
+            if root.gap_seconds > 0 {
+                holds.push_str(&format!(
+                    "; {} of gap across nodes (node-time)",
+                    crate::text::span(root.gap_seconds)
+                ));
+            }
+            if root.unbounded > 0 {
+                holds.push_str(&format!("; {} with no estimate", root.unbounded));
+            }
+            holds.push_str(&format!("; weight {}", root.weight));
+            line!(rendered, "{pad}{holds}");
+            line!(rendered, "{pad}why:  {}", root.detail);
+            let cost = root
+                .action
+                .estimated_seconds
+                .map(|s| format!(" (about {} of compute)", crate::text::span(s.max(1) as i64)));
+            line!(
+                rendered,
+                "{pad}do:   {}{}{}",
+                root.action.kind.word(),
+                match (&root.action.command, root.action.kind.hint()) {
+                    (Some(command), _) => format!(": {command}"),
+                    (None, Some(hint)) => format!(": {hint}"),
+                    (None, None) => String::new(),
+                },
+                cost.unwrap_or_default()
+            );
+            if let Some(command) = &root.action.run_once {
+                line!(rendered, "{pad}run once: {command}");
+            }
+        }
+    }
+    line!(rendered, "");
+    line!(rendered, "Data: {}", rollup.data_coverage.line());
+    line!(rendered, "As of {}", rollup.as_of);
+    rendered
+}
+
+pub fn render_list(
+    assets: &[AssetSummary],
+    total: usize,
+    next_fires: &HashMap<String, String>,
+    json: bool,
+    fields: Option<&[String]>,
+    root: Option<&str>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    let page = Page::new(assets.len(), total);
+    if json || fields.is_some() {
+        let mut nodes: Vec<serde_json::Value> = assets
+            .iter()
+            .map(|a| list_node_json(a, next_fires.get(&a.id)))
+            .collect();
+        if let Some(f) = fields {
+            project(&mut nodes, f);
+        }
+        let mut out = page.envelope("nodes", nodes, "nodes");
+        root_field(&mut out, root);
+        line!(rendered, "{}", serde_json::to_string_pretty(&out).unwrap());
+        return rendered;
+    }
+    if assets.is_empty() {
+        match page.note(0, "nodes") {
+            Some(note) => note!(rendered, "{note}"),
+            None => line!(rendered, "No definitions found."),
+        }
+        return rendered;
+    }
+    let has_schedule = !next_fires.is_empty();
+    // Like NEXT FIRE, the ENV column only appears when some node declares env.
+    let has_env = assets.iter().any(|a| !a.env.is_empty());
+
+    // Render each row's cells up front so column widths fit the actual content.
+    let mut header = vec!["NAME", "KIND", "FRESHNESS"];
+    if has_schedule {
+        header.push("NEXT FIRE (LOCAL TIME)");
+    }
+    header.push("DEPS");
+    if has_env {
+        header.push("ENV");
+    }
+    let list_or_dash = |v: &[String]| {
+        if v.is_empty() {
+            "-".to_string()
+        } else {
+            v.join(", ")
+        }
+    };
+    let rows: Vec<Vec<String>> = assets
+        .iter()
+        .map(|a| {
+            let kind = serde_json::to_value(a.kind)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| format!("{:?}", a.kind).to_lowercase());
+            let freshness = match &a.freshness {
+                crate::Freshness::Schedule(cron) => format!("cron: {}", cron.0),
+                f => freshness_str(f).to_string(),
+            };
+            let mut row = vec![a.id.clone(), kind, freshness];
+            if has_schedule {
+                row.push(next_fires.get(&a.id).cloned().unwrap_or_else(|| "-".into()));
+            }
+            row.push(list_or_dash(&a.inputs));
+            if has_env {
+                row.push(list_or_dash(&a.env));
+            }
+            row
+        })
+        .collect();
+
+    let widths: Vec<usize> = (0..header.len())
+        .map(|i| {
+            rows.iter()
+                .map(|r| r[i].len())
+                .chain(std::iter::once(header[i].len()))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    // Every column but the last is padded; the last runs to the end of the line.
+    let last = header.len() - 1;
+    let render = |cells: &[&str]| {
+        cells
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                if i == last {
+                    c.to_string()
+                } else {
+                    format!("{c:<w$}", w = widths[i])
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    line!(rendered, "{}", render(&header));
+    line!(
+        rendered,
+        "{}",
+        "-".repeat(widths[..last].iter().sum::<usize>() + 2 * last + 4)
+    );
+    for row in &rows {
+        let cells: Vec<&str> = row.iter().map(String::as_str).collect();
+        line!(rendered, "{}", render(&cells));
+    }
+    if let Some(note) = page.note(rows.len(), "nodes") {
+        note!(rendered, "{note}");
+    }
+    rendered
+}
+
+pub fn render_explain(
+    result: &ExplainResult,
+    label: &str,
+    mode: ResultFormat,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    match mode {
+        ResultFormat::Json => {
+            let mut out = serde_json::to_value(result).unwrap();
+            project_key(&mut out, "steps", fields);
+            // `targets` (several targets) is keyed in the order given, like a real run; the
+            // other keys sort before it.
+            match out.as_object_mut().and_then(|o| o.remove("targets")) {
+                Some(_) => {
+                    let per_target: Vec<(String, serde_json::Value)> = result
+                        .targets
+                        .iter()
+                        .map(|(n, p)| (n.clone(), serde_json::to_value(p).unwrap()))
+                        .collect();
+                    let rest = out.to_string();
+                    line!(
+                        rendered,
+                        "{},\"targets\":{}}}",
+                        &rest[..rest.len() - 1],
+                        ordered_object(&per_target)
+                    );
+                }
+                None => line!(rendered, "{out}"),
+            }
+        }
+        ResultFormat::Value => line!(
+            rendered,
+            "{}",
+            serde_json::to_string_pretty(&result.steps).unwrap()
+        ),
+        ResultFormat::Pretty => {
+            line!(
+                rendered,
+                "Dry run: barca {label}{} (nothing executed, nothing written)\n",
+                if result.targets.len() > 1 {
+                    format!(" {}", result.target_names().join(","))
+                } else {
+                    result
+                        .target
+                        .as_deref()
+                        .map(|t| format!(" {t}"))
+                        .unwrap_or_default()
+                }
+            );
+            text!(rendered, "{}", render_step_table(&result.steps, true));
+            line!(
+                rendered,
+                "\n{} will run, {} cached, {} unknown",
+                result.summary.will_run,
+                result.summary.cached,
+                result.summary.unknown
+            );
+            if let Some(selection) = &result.partition_selection {
+                text!(rendered, "{}", selection_lines(selection));
+            }
+            let heavy: Vec<String> = result
+                .steps
+                .iter()
+                .filter_map(|s| s.weight.map(|w| format!("{} (weight {w})", s.id)))
+                .collect();
+            if !heavy.is_empty() {
+                line!(
+                    rendered,
+                    "Steps running at once total at most weight {}: {}",
+                    result.capacity,
+                    heavy.join(", ")
+                );
+            }
+            if let Some(uploads) = &result.uploads {
+                line!(
+                    rendered,
+                    "{} pending upload{} from an earlier run, uploaded first: {}{}",
+                    uploads.pending,
+                    if uploads.pending == 1 { "" } else { "s" },
+                    uploads.nodes.join(", "),
+                    uploads
+                        .error
+                        .as_deref()
+                        .map(|e| format!(" (last error: {e})"))
+                        .unwrap_or_default()
+                );
+            }
+        }
+    }
+    rendered
+}
+
+/// The run's own keys of a multi-target run's JSON (everything but `targets`).
+fn multi_run(result: &MultiResult) -> Value {
+    let mut run = serde_json::json!({
+        "status": if result.any_failed() { "failed" } else { "success" },
+        "run_id": result.run_id,
+        "elapsed_seconds": result.elapsed_seconds,
+        "steps_executed": result.steps_executed,
+        "phases": result.phases,
+        "steps": &result.steps,
+        "warnings": &result.warnings,
+    });
+    if let (Value::Object(obj), Some(cache)) = (&mut run, &result.cache) {
+        obj.insert("cache".into(), serde_json::json!(cache));
+    }
+    uploads_field(&mut run, result.uploads.as_ref());
+    metadata_field(&mut run, result.metadata_seconds);
+    selection_field(&mut run, result.partition_selection.as_ref());
+    run
+}
+
+/// The JSON of a multi-target run, in two parts: the run's own keys (sorted, without
+/// `targets`) and each target's object in the order given. Printed, they are
+/// `{...run keys...,"targets":{...}}`.
+pub(crate) fn multi_parts(
+    result: &MultiResult,
+    final_outputs: &[Option<Value>],
+) -> (Value, Vec<(String, Value)>) {
+    let per_target: Vec<(String, serde_json::Value)> = result
+        .targets
+        .iter()
+        .enumerate()
+        .map(|(index, (name, t))| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("status".into(), t.status.clone().into());
+            let value = final_outputs.get(index).cloned().flatten();
+            if t.status == "success" {
+                obj.insert("final_output".into(), value.unwrap_or(Value::Null));
+            } else if t.partitions.is_some()
+                && let Some(value) = value
+            {
+                // A failed partitioned target returns the keys that succeeded.
+                obj.insert("final_output".into(), value);
+            }
+            if let Some(step) = &t.failed_node {
+                obj.insert("failed_node".into(), step.clone().into());
+            }
+            if let Some(err) = &t.error {
+                obj.insert("error".into(), err.clone().into());
+            }
+            (name.clone(), serde_json::Value::Object(obj))
+        })
+        .collect();
+    (multi_run(result), per_target)
+}
+
+/// `{...run keys...,"targets":{...}}` with the targets in the order given.
+pub(crate) fn multi_json(run: &Value, per_target: &[(String, Value)]) -> String {
+    let run = run.to_string();
+    format!(
+        "{},\"targets\":{}}}",
+        &run[..run.len() - 1],
+        ordered_object(per_target)
+    )
+}
+
+/// Render values supplied in the same order as `result.targets`; absent values are null.
+pub fn render_multi(
+    result: &MultiResult,
+    final_outputs: &[Option<Value>],
+    mode: ResultFormat,
+    verb: &str,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let (run, per_target) = multi_parts(result, final_outputs);
+    render_multi_parts(&run, &per_target, mode, verb, fields)
+}
+
+/// Render a multi-target run from its two JSON parts ([`multi_parts`]). The one renderer for a
+/// local run and for a served run's `outcome`.
+pub(crate) fn render_multi_parts(
+    run: &Value,
+    per_target: &[(String, Value)],
+    mode: ResultFormat,
+    verb: &str,
+    fields: Option<&[String]>,
+) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    match mode {
+        ResultFormat::Json => {
+            // Keys of the run object sort before `targets`, which keeps the given order.
+            let mut run = run.clone();
+            project_key(&mut run, "steps", fields);
+            line!(rendered, "{}", multi_json(&run, per_target));
+        }
+        ResultFormat::Value => {
+            // Each target's value (null when it failed), keyed by target name.
+            let values: serde_json::Map<String, serde_json::Value> = per_target
+                .iter()
+                .map(|(name, t)| {
+                    let v = t.get("final_output").cloned().unwrap_or_default();
+                    (name.clone(), v)
+                })
+                .collect();
+            line!(
+                rendered,
+                "{}",
+                serde_json::to_string_pretty(&values).unwrap()
+            );
+        }
+        ResultFormat::Pretty => {
+            let failed = per_target
+                .iter()
+                .filter(|(_, t)| t["status"].as_str() != Some("success"));
+            let count = |key: &str| run[key].as_u64().unwrap_or(0);
+            let (steps, phases) = (count("steps_executed"), count("phases"));
+            line!(
+                rendered,
+                "Run {} | {verb} {} targets in {:.3}s ({} step{}, {} phase{}, {} failed)",
+                run["run_id"].as_str().unwrap_or_default(),
+                per_target.len(),
+                run["elapsed_seconds"].as_f64().unwrap_or(0.0),
+                steps,
+                if steps == 1 { "" } else { "s" },
+                phases,
+                if phases == 1 { "" } else { "s" },
+                failed.count(),
+            );
+            for (name, t) in per_target {
+                let status = t["status"].as_str().unwrap_or("?");
+                if status != "success" {
+                    continue;
+                }
+                line!(rendered, "\n{name}: {status}");
+                if let Some(v) = t.get("final_output") {
+                    line!(rendered, "{}", serde_json::to_string_pretty(v).unwrap());
+                }
+            }
+        }
+    }
+
+    rendered
+}
+
+/// The stdout JSON body of a failed single-target run: what ran before the failing step,
+/// the step and its error. `None` for any other error.
+pub(crate) fn failed_run_body(err: &crate::BarcaError) -> Option<Value> {
+    let crate::BarcaError::WorkerFailed(f) = err else {
+        return None;
+    };
+    let run = f.run.as_ref()?;
+    Some(serde_json::json!({
+        "status": "failed",
+        "run_id": run.run_id,
+        "elapsed_seconds": run.elapsed_seconds,
+        "steps_executed": run.steps_executed,
+        "phases": run.phases,
+        "failed_node": f.node,
+        "error": f.summary(),
+        "steps": &run.steps,
+        "warnings": &run.warnings,
+    }))
+}
+
+pub fn render_failed_run(err: &crate::BarcaError, mode: ResultFormat) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    if mode == ResultFormat::Json
+        && let Some(body) = failed_run_body(err)
+    {
+        line!(rendered, "{body}");
+    }
+    rendered
+}
+
+pub fn render_plan(result: &PlanResult) -> RenderedOutput {
+    let mut rendered = RenderedOutput::default();
+    line!(
+        rendered,
+        "{}",
+        serde_json::to_string_pretty(result).unwrap()
+    );
+    rendered
+}
+
+#[cfg(test)]
+mod history_target_tests {
+    use super::history_target;
+
+    fn run(target: Option<&str>, job: Option<&str>) -> crate::db::RunRecord {
+        crate::db::RunRecord {
+            run_id: "r".into(),
+            command: "get".into(),
+            files: vec![],
+            target: target.map(str::to_string),
+            job: job.map(str::to_string),
+            status: "success".into(),
+            steps_total: None,
+            steps_executed: 0,
+            steps_cached: 0,
+            steps_failed: None,
+            attempts: None,
+            started_at: String::new(),
+            finished_at: None,
+            elapsed_seconds: None,
+            triggered_by: None,
+            scheduled_at: None,
+            schedule_id: None,
+            client_run_id: None,
+            failure: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_job_by_function_name_else_the_typed_target_else_all() {
+        assert_eq!(history_target(&run(None, Some("all"))), "all");
+        assert_eq!(
+            history_target(&run(Some("kpis"), Some("p/r.py:kpis"))),
+            "kpis"
+        );
+        assert_eq!(
+            history_target(&run(Some("b,a"), Some("p.py:a,p.py:b"))),
+            "b +1 more"
+        );
+        // Rows recorded before the job was stored.
+        assert_eq!(history_target(&run(Some("p.py:kpis"), None)), "kpis");
+        assert_eq!(history_target(&run(None, None)), "all");
+        let long = history_target(&run(None, Some("p.py:country_report,p.py:weekly_summary")));
+        assert_eq!(long, "country_report +1 more");
+    }
+}
+
+#[cfg(test)]
+mod run_detail_tests {
+    use super::*;
+    use crate::db::{RunFailure, RunStep};
+
+    fn failed(node: &str) -> RunStep {
+        RunStep {
+            node_id: node.into(),
+            status: "failed".into(),
+            attempts: Some(3),
+            error_type: Some("ZeroDivisionError".into()),
+            error_message: Some("division by zero".into()),
+            error_traceback: Some("  File \"p.py\", line 3, in clean\n    1 / 0".into()),
+            ..Default::default()
+        }
+    }
+
+    fn detail(steps: Vec<RunStep>) -> crate::queries::RunDetail {
+        let mut run = super::history_target_tests_run();
+        run.status = "failed".into();
+        run.failure = Some(RunFailure::new(
+            "p.py:clean".into(),
+            "WorkerError",
+            "ZeroDivisionError: division by zero\n  File \"p.py\", line 3, in clean",
+        ));
+        crate::queries::RunDetail {
+            run,
+            steps,
+            steps_page: Default::default(),
+            outputs: Vec::new(),
+        }
+    }
+
+    fn text(out: &RenderedOutput) -> (String, String) {
+        let (mut stdout, mut stderr) = (String::new(), String::new());
+        for chunk in &out.chunks {
+            match chunk {
+                OutputChunk::Stdout(s) => stdout.push_str(s),
+                OutputChunk::Stderr(s) => stderr.push_str(s),
+            }
+        }
+        (stdout, stderr)
+    }
+
+    #[test]
+    fn a_failure_is_its_type_and_the_first_line_of_its_message() {
+        let d = detail(vec![]);
+        assert_eq!(
+            d.run.failure.as_ref().unwrap().error,
+            "ZeroDivisionError: division by zero"
+        );
+        let long = RunFailure::new("p.py:clean".into(), "ValueError", &"x".repeat(200));
+        assert_eq!(failure_cell(&long).chars().count(), FAILURE_WIDTH);
+        assert!(failure_cell(&long).starts_with("clean: ValueError: xxx"));
+        let keyed = RunFailure::new("p.py:weekly[week=w1]".into(), "KeyError", "'w1'");
+        assert_eq!(failure_cell(&keyed), "weekly[week=w1]: KeyError: 'w1'");
+    }
+
+    #[test]
+    fn the_hint_names_the_failed_step_and_the_same_history() {
+        let d = detail(vec![failed("p.py:clean")]);
+        assert_eq!(
+            run_detail_hint(&d, " --server http://h:1").as_deref(),
+            Some("barca logs r --step clean --stream stderr --server http://h:1")
+        );
+        // Two definitions share the name: the node id. A partition key needs no quoting, the
+        // base name selects every key.
+        let d = detail(vec![
+            failed("a.py:clean[k=1]"),
+            RunStep {
+                node_id: "b.py:clean".into(),
+                status: "success".into(),
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            run_detail_hint(&d, "").as_deref(),
+            Some("barca logs r --step a.py:clean --stream stderr")
+        );
+        let ok = detail(vec![RunStep {
+            node_id: "p.py:load".into(),
+            status: "success".into(),
+            ..Default::default()
+        }]);
+        assert_eq!(run_detail_hint(&ok, ""), None);
+    }
+
+    #[test]
+    fn the_human_form_shows_the_traceback_and_how_the_worker_ended() {
+        let mut killed = failed("p.py:big");
+        killed.error_type = Some("WorkerError".into());
+        killed.error_message =
+            Some("worker for p.py:big exited with SIGKILL (possibly the OOM killer)".into());
+        killed.error_traceback = None;
+        killed.worker_exit = Some("SIGKILL (possibly the OOM killer)".into());
+        let d = detail(vec![failed("p.py:clean"), killed]);
+        let (stdout, stderr) = text(&render_run_detail(&d, false, ""));
+        assert!(
+            stdout.starts_with("run r  get all  failed  -\n"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains("p.py:clean failed after 3 attempts: ZeroDivisionError: division by zero\n  Traceback (most recent call last):\n    File \"p.py\", line 3, in clean\n      1 / 0\n  ZeroDivisionError: division by zero\n"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains("  worker exit: SIGKILL (possibly the OOM killer)\n"),
+            "{stdout}"
+        );
+        assert_eq!(stderr, "hint: barca logs r --step clean --stream stderr\n");
+        let (json, _) = text(&render_run_detail(&d, true, ""));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["hint"], "barca logs r --step clean --stream stderr");
+        assert_eq!(
+            v["steps"][1]["worker_exit"],
+            "SIGKILL (possibly the OOM killer)"
+        );
+        assert_eq!(v["run"]["failure"]["node"], "p.py:clean");
+    }
+
+    /// #956: the human form and `--json` carry the same explanation.
+    #[test]
+    fn the_run_explains_itself_in_both_forms() {
+        use crate::run_explain::{PlanReason, PlanReasons, ReasonCategory};
+        let mut d = detail(vec![]);
+        d.run.status = "success".into();
+        d.run.failure = None;
+        d.run.target = Some("daily_report,orders".into());
+        d.run.job = Some("p.py:daily_report,p.py:orders".into());
+        d.run.attempts = Some(29);
+        d.run.retries = Some(0);
+        d.run.steps_executed = 29;
+        d.run.plan_reasons = Some(PlanReasons {
+            nodes: 29,
+            steps: 29,
+            omitted: 0,
+            reasons: vec![
+                PlanReason {
+                    category: ReasonCategory::Sensor,
+                    subject: None,
+                    nodes: 27,
+                    steps: 27,
+                    example: "p.py:poll_inbox".into(),
+                },
+                PlanReason {
+                    category: ReasonCategory::NeverRun,
+                    subject: None,
+                    nodes: 2,
+                    steps: 2,
+                    example: "p.py:orders".into(),
+                },
+            ],
+        });
+        let (stdout, _) = text(&render_run_detail(&d, false, ""));
+        assert!(
+            stdout
+                .starts_with("run r  get daily_report +1 more  success  -  29 attempts: one per step, none retried\n"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains(
+                "why: 29 steps ran: 27 sensors (always run), 2 never run\n  sensors (always run)\n    27 nodes, e.g. poll_inbox\n  never run\n    2 nodes, e.g. orders\n"
+            ),
+            "{stdout}"
+        );
+        let (json, _) = text(&render_run_detail(&d, true, ""));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let e = &v["explanation"];
+        assert_eq!(e["attempts"], "29 attempts: one per step, none retried");
+        assert_eq!(
+            e["targets"],
+            serde_json::json!(["p.py:daily_report", "p.py:orders"])
+        );
+        assert_eq!(
+            e["why"]["headline"],
+            "29 steps ran: 27 sensors (always run), 2 never run"
+        );
+        assert_eq!(e["why"]["groups"][0]["rows"][0]["counts"], "27 nodes");
+        assert_eq!(e["progress"], serde_json::Value::Null);
+        // The recorded facts stay beside it.
+        assert_eq!(v["run"]["attempts"], 29);
+        assert_eq!(v["run"]["target"], "daily_report,orders");
+    }
+
+    #[test]
+    fn a_failure_in_barca_says_where() {
+        let mut step = failed("p.py:clean");
+        step.error_phase = Some("write_output".into());
+        let (stdout, _) = text(&render_run_detail(&detail(vec![step]), false, ""));
+        assert!(
+            stdout.contains("p.py:clean failed after 3 attempts in barca while writing its result (phase write_output): ZeroDivisionError"),
+            "{stdout}"
+        );
+        let mut step = failed("p.py:clean");
+        step.error_phase = Some("user_code".into());
+        let (stdout, _) = text(&render_run_detail(&detail(vec![step]), true, ""));
+        let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(v["steps"][0]["error_phase"], "user_code");
+    }
+
+    #[test]
+    fn a_dead_worker_is_read_from_its_recorded_error() {
+        use crate::db::worker_exit;
+        let w = Some("WorkerError");
+        assert_eq!(
+            worker_exit(
+                w,
+                Some("worker for p.py:a exited with SIGKILL (possibly the OOM killer)")
+            ),
+            Some("SIGKILL (possibly the OOM killer)".into())
+        );
+        assert_eq!(
+            worker_exit(
+                w,
+                Some(
+                    "worker for p.py:a exited with SIGSEGV while it waited for its parallel() branches"
+                )
+            ),
+            Some("SIGSEGV".into())
+        );
+        assert_eq!(
+            worker_exit(w, Some("worker disconnected")),
+            Some("disconnected".into())
+        );
+        assert_eq!(worker_exit(w, Some("ValueError: boom")), None);
+        assert_eq!(worker_exit(Some("ValueError"), Some("exited with x")), None);
+    }
+}
+
+#[cfg(test)]
+fn history_target_tests_run() -> crate::db::RunRecord {
+    crate::db::RunRecord {
+        run_id: "r".into(),
+        command: "get".into(),
+        files: vec![],
+        target: None,
+        job: Some("all".into()),
+        status: "success".into(),
+        steps_total: None,
+        steps_executed: 0,
+        steps_cached: 0,
+        steps_failed: None,
+        attempts: None,
+        started_at: String::new(),
+        finished_at: None,
+        elapsed_seconds: None,
+        triggered_by: None,
+        scheduled_at: None,
+        schedule_id: None,
+        client_run_id: None,
+        failure: None,
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod history_json_tests {
+    use super::*;
+    use crate::db::{RunFailure, RunRecord};
+
+    /// What `render_history` printed before it serialized records directly.
+    fn through_values(runs: &[RunRecord], total: usize) -> String {
+        let page = Page::new(runs.len(), total);
+        let items = runs.iter().map(history_json).collect();
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&page.envelope("runs", items, "runs")).unwrap()
+        )
+    }
+
+    fn stdout(rendered: RenderedOutput) -> String {
+        rendered
+            .chunks
+            .into_iter()
+            .map(|c| match c {
+                OutputChunk::Stdout(s) => s,
+                OutputChunk::Stderr(s) => panic!("stderr: {s}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn history_json_is_the_same_bytes_as_the_record_through_values() {
+        let full = RunRecord {
+            run_id: "run-1".into(),
+            command: "run".into(),
+            files: vec!["a.py".into(), "dir/b \"q\".py".into()],
+            target: Some("kpis".into()),
+            job: Some("a.py:kpis".into()),
+            status: "failed".into(),
+            steps_total: Some(7),
+            steps_executed: 3,
+            steps_cached: 2,
+            steps_failed: Some(1),
+            attempts: Some(4),
+            started_at: "2026-11-13T10:00:00Z".into(),
+            finished_at: Some("2026-11-13T10:01:00Z".into()),
+            elapsed_seconds: Some(60.25),
+            triggered_by: Some(crate::trigger::TriggeredBy::Schedule),
+            scheduled_at: Some("2026-11-13T10:00:00Z".into()),
+            schedule_id: Some("a.py:kpis".into()),
+            client_run_id: Some("laptop-run".into()),
+            failure: Some(RunFailure {
+                node: "a.py:kpis[2026-01]".into(),
+                error: "ValueError: bad\tvalue é".into(),
+            }),
+            principal: Some("token:ci".into()),
+            trigger_reason: Some("backfill after the \"fees\" fix".into()),
+            cancellation: None,
+            retries: None,
+            plan_reasons: None,
+        };
+        let bare = RunRecord {
+            run_id: "run-0".into(),
+            command: "get".into(),
+            files: vec![],
+            target: None,
+            job: None,
+            status: "running".into(),
+            steps_total: None,
+            steps_executed: 0,
+            steps_cached: 0,
+            steps_failed: None,
+            attempts: None,
+            started_at: String::new(),
+            finished_at: None,
+            elapsed_seconds: Some(f64::NAN),
+            triggered_by: None,
+            scheduled_at: None,
+            schedule_id: None,
+            client_run_id: None,
+            failure: None,
+            ..Default::default()
+        };
+        for (runs, total) in [
+            (vec![], 0),
+            (vec![full.clone()], 1),
+            (vec![full.clone(), bare.clone()], 2),
+            (vec![bare, full], 9),
+        ] {
+            assert_eq!(
+                stdout(render_history(
+                    &runs,
+                    total,
+                    true,
+                    None,
+                    &Default::default()
+                )),
+                through_values(&runs, total)
+            );
+        }
+    }
+}

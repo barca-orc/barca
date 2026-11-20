@@ -115,8 +115,8 @@ set closed under both steps. Nothing else is touched.
   never shared between runs, so two ticks that fire in the same second both fire a task they
   have in common. Current limitation.
 
-`barca_core::freshness::tick_targets` is the scheduler's target list and
-`barca_core::freshness::tick_reach` the one statement of which schedules reach a node and how
+`barca_service::freshness::tick_targets` is the scheduler's target list and
+`barca_service::freshness::tick_reach` the one statement of which schedules reach a node and how
 (`Target` or `Input`); a node with no `Target` entry is brought up to date by no tick.
 A changed `collect()` consumer needs all applicable inputs. Explicit partition selection does
 not promise a partial collect over selected keys.
@@ -184,7 +184,7 @@ Conformance: [partition cache](../../python/tests/test_partition_cache.py)
 existing unpartitioned return-to-an-earlier-value coverage alone does not
 prove the partitioned invariant.
 
-Conformance: [freshness rules](../../crates/barca-core/src/freshness.rs)
+Conformance: [freshness rules](../../crates/barca-decide/src/freshness.rs)
 (`always_nodes_below_a_sensor_a_tick_polls_are_its_targets`,
 `a_sensor_polled_for_a_target_below_another_sensor_is_followed_too`,
 `a_node_below_a_sensor_with_a_slower_schedule_follows_the_sensors_own_ticks`),

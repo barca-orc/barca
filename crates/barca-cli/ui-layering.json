@@ -235,7 +235,7 @@
     },
     "cacheStateDisplay": {
       "kind": "display",
-      "does": "a cache state's word, tone, glyph and rank"
+      "does": "a cache state's word, tone, glyph and rank; a node that always runs drawn by its served `last_attempt`"
     },
     "healthDisplay": {
       "kind": "display",
@@ -259,7 +259,14 @@
     },
     "status": {
       "kind": "display",
-      "does": "the run lifecycle's word, tone and glyph; kind and freshness labels"
+      "does": "the run lifecycle's word, tone and glyph; kind and freshness labels",
+      "derives": [
+        {
+          "what": "`isCheck`: a task named `check__…` or `validate__…` is labelled and counted as a check",
+          "reason": "`check` is a kind only the UI knows, read off a naming convention. Whether it becomes a kind the server knows or goes is an open product decision (#1056, \"Open decisions\"), so no server-side kind is invented here",
+          "kept": true
+        }
+      ]
     },
     "tone": {
       "kind": "display",
@@ -267,7 +274,17 @@
     },
     "runs": {
       "kind": "display",
-      "does": "a run's status, trigger and outcome, and a run's step and node, as word, tone and glyph"
+      "does": "a run's status, trigger and outcome, a run's step and node, and whether one recorded execution succeeded or failed, as word, tone and glyph",
+      "derives": [
+        {
+          "what": "`parseRunStatus`: a run's wire `status` (a string) narrowed to the generated `RunViewStatus`; `complete` and `ran`, older spellings, read as `success`",
+          "reason": "display: compatibility with rows an older server recorded; the status is the served one and none is decided from other facts",
+          "sees": [
+            "word"
+          ],
+          "kept": true
+        }
+      ]
     },
     "graphState": {
       "kind": "display",
@@ -287,7 +304,33 @@
     },
     "nodeDetail": {
       "kind": "format",
-      "does": "the node panel's lines from the node's served row"
+      "does": "the node panel's lines from the node's served row",
+      "derives": [
+        {
+          "what": "`downstreamOf` by name, `barSegments`' widest part, `changedSummary`'s tally of the served `changed` entries by their first word, `collapseRuns`: a stretch of identical failed runs of the History as one line `×12`",
+          "reason": "presentation: the order of a list of names, the widths of a bar, and the folding of rows on screen that say the same thing; each row is shown as served and nothing about the node is concluded from them",
+          "sees": [
+            "count",
+            "order"
+          ],
+          "kept": true
+        },
+        {
+          "what": "`whatChanged`, `failuresOnlyNote`, `dataKeyNote`: sentences for the served `change_causes`, `total_runs`, `consecutive_failures` and the key of `last_materialization`",
+          "reason": "presentation: wording of served values; `barca status --json` and `barca stats --json` print the values the sentences are made of",
+          "kept": true
+        },
+        {
+          "what": "`dataKey`: which output the Data tab opens for a partitioned node: the key of its served `last_materialization`",
+          "reason": "page: a choice of what to show first, not a statement about the node; the key explorer lists every key as served",
+          "kept": true
+        },
+        {
+          "what": "`sinceLastSuccess`: which of five sentences says what differs between a failed attempt and the last success, decided by comparing three served run hashes (`failure.run_hash`, `failure.last_success.run_hash`, `cache.run_hash`)",
+          "reason": "a real derivation with no served field: two facts make a third. Owed to barca-service as a word on the failure facts (#1056, F3 \"what changed\"); left out of this change to keep its new fields few",
+          "issue": 1056
+        }
+      ]
     },
     "pins": {
       "kind": "format",
@@ -295,7 +338,17 @@
     },
     "pipeline": {
       "kind": "format",
-      "does": "file names from node ids; a file's line from its sums in the rollup, in the health map's words"
+      "does": "file names from node ids; a file's line from its sums in the rollup, in the health map's words",
+      "derives": [
+        {
+          "what": "`pipelineSummaries`: the project's files by name, each with how many of its nodes are of the page's kind",
+          "reason": "layout: a count of the listed graph (`GET /assets`) by declared kind, shown before any state has loaded. The rollup serves the same numbers (`kinds`, `files` of `GET /state/rollup`) but arrives later, and three e2e specs hold the sidebar's counts visible before it does; the graph is the only response the sidebar has at that moment",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "plural": {
       "kind": "format",
@@ -303,7 +356,22 @@
     },
     "queue": {
       "kind": "format",
-      "does": "`GET /queue` as the queue strip's rows and labels"
+      "does": "`GET /queue` as the queue strip's rows and labels",
+      "derives": [
+        {
+          "what": "the queue list's order: the running runs by `queued_at`, the waiting ones by their served `position`",
+          "reason": "presentation: an order of served rows by served fields; the place of a waiting run is the server's",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        },
+        {
+          "what": "`queueStatus`: how long the run waiting longest has waited",
+          "reason": "format: a duration since a served time (`queued_at`), re-counted between polls against the browser's clock like every `ago`; which runs wait is the server's list",
+          "kept": true
+        }
+      ]
     },
     "running": {
       "kind": "format",
@@ -311,7 +379,17 @@
     },
     "schedules": {
       "kind": "format",
-      "does": "scheduled nodes as rows: next slot, last tick, the server's `late` and `queue_bound`, its typical queue wait and run time in words"
+      "does": "scheduled nodes as rows: next slot, last tick, the server's `late` and `queue_bound`, its typical queue wait and run time in words",
+      "derives": [
+        {
+          "what": "the Schedules page's order: late first (by the served `late_since`), then queue-bound, then the next slot, then the name",
+          "reason": "presentation: an order of rows by fields each was served with; whether a schedule is late or queue-bound is the server's",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "time": {
       "kind": "format",
@@ -323,7 +401,7 @@
     },
     "health": {
       "kind": "format",
-      "does": "a scope's rollup entry and its roots as the words of a bar, a label and a failures list",
+      "does": "the rollup's failure roots joined with their rows as the failures list; an error's one line and its traceback's paths",
       "derives": [
         {
           "what": "`consumersOf`, `downstreamIds`: the node panel's downstream count and what a pause with `--downstream` would cover",
@@ -334,7 +412,17 @@
     },
     "assetTable": {
       "kind": "layout",
-      "does": "the flat assets table: rows from served rows, the served order of the causes, sort, file headers"
+      "does": "the flat assets table: rows from served rows (the served `typical_run_seconds` and `last_attempt` among them), the served order of the causes, sort, file headers",
+      "derives": [
+        {
+          "what": "the table's order: the served order of the causes by default, then the column a header click picks",
+          "reason": "layout: an order of the rows on screen by served fields (`cause`, `typical_run_seconds`, the times); which cause a row has, and its typical run time, are the server's",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "graph": {
       "kind": "layout",
@@ -342,7 +430,18 @@
     },
     "graphLayout": {
       "kind": "layout",
-      "does": "dagre layout per connected part and edge routes"
+      "does": "dagre layout per connected part and edge routes",
+      "derives": [
+        {
+          "what": "the packing of the graph's connected parts: their order by size and the area they take",
+          "reason": "layout: geometry of boxes on a canvas; reads no state",
+          "sees": [
+            "count",
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "graphLayout.worker": {
       "kind": "layout",
@@ -350,11 +449,31 @@
     },
     "graphView": {
       "kind": "layout",
-      "does": "viewport fits, keyboard neighbours"
+      "does": "viewport fits, keyboard neighbours",
+      "derives": [
+        {
+          "what": "nodes by their position on the canvas, for the first fit and the keyboard's neighbours",
+          "reason": "layout: an order of drawn boxes by x and y",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "groups": {
       "kind": "layout",
-      "does": "the tree of groups, each listing the members the rollup counts under it; a group's box from its entry's served `causes`, in the health map's words"
+      "does": "the tree of groups, each listing the members the rollup counts under it; a group's box from its entry's served `causes`, in the health map's words",
+      "derives": [
+        {
+          "what": "`contentsSummary`: what a group holds by kind, `3 assets · 1 check`",
+          "reason": "layout: counts of the listed graph by declared kind (`check` is the name convention of lib/status, see there); reads no state",
+          "sees": [
+            "count"
+          ],
+          "kept": true
+        }
+      ]
     },
     "lineage": {
       "kind": "layout",
@@ -373,11 +492,36 @@
     },
     "rollupView": {
       "kind": "layout",
-      "does": "the rollup indexed by id and the geometry of the health map over it: a segment's angle from its entry's served `weight`, its colours from the served `weights`"
+      "does": "the rollup indexed by id and the geometry of the health map over it: a segment's angle from its entry's served `weight`, its colours from the served `weights`",
+      "derives": [
+        {
+          "what": "the health map's geometry: a segment's angle from the served `weight`s, with thin segments folded into one",
+          "reason": "layout: sums of served weights turned into angles; no weight is made here (`weights` and `weight` are served)",
+          "sees": [
+            "count"
+          ],
+          "kept": true
+        },
+        {
+          "what": "`rootsWithin`: the served roots whose own node is underneath a scope, for the scope's failures list",
+          "reason": "layout: which served roots are about a node listed in the scope (a membership test of `root.node`). The roots that hold a scope from outside it are the to-do list's, read from the scope's served `held_by` (lib/causesView); the failures list is of the nodes on screen",
+          "kept": true
+        }
+      ]
     },
     "assetFilters": {
       "kind": "page",
-      "does": "the assets table's filters in the URL; a row falls under its served cause, an unfiltered chip's count is the rollup's (`kinds`), a filtered one counts the rows listed"
+      "does": "the assets table's filters in the URL; a row falls under its served cause, an unfiltered chip's count is the rollup's (`kinds`), a filtered one counts the rows listed",
+      "derives": [
+        {
+          "what": "`facetCounts`: a filter chip's count under a search or another filter",
+          "reason": "presentation: a count of the rows listed, by a field each row was served with (`cause`, `kind`, `pinned`); with no other filter the state chips show the rollup's own counts (`kinds` of `GET /state/rollup`)",
+          "sees": [
+            "count"
+          ],
+          "kept": true
+        }
+      ]
     },
     "connection": {
       "kind": "page",
@@ -389,7 +533,18 @@
     },
     "groupedPage": {
       "kind": "page",
-      "does": "the grouped page: URL, scope, entries, search hits, order"
+      "does": "the grouped page: URL, scope, entries, search hits, order",
+      "derives": [
+        {
+          "what": "`scopeCountsLabel`: the nodes in scope by declared kind; the grouped table's order (the column picked, search hits by how well they match, the order held while the pointer is over the table)",
+          "reason": "layout: counts of the listed graph (`GET /assets`, which `barca list --json` prints) by `kind`, and the order of rows on screen; no state is read and no node's standing decided",
+          "sees": [
+            "count",
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "keysPage": {
       "kind": "page",
@@ -401,11 +556,31 @@
     },
     "palette": {
       "kind": "page",
-      "does": "the command palette's index, search and program"
+      "does": "the command palette's index, search and program",
+      "derives": [
+        {
+          "what": "the palette's lists: files by name, keys and runs by the urgency of their shown state, search hits by how well they match",
+          "reason": "presentation: the order of a list on screen; each item's state is the one its row was served with",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "pauses": {
       "kind": "page",
-      "does": "what is paused, and the request a pause control sends"
+      "does": "what is paused, the request a pause control sends, and what a pause would cover as the server says it (`covers` of `GET /pauses?target=`) joined with each schedule's job",
+      "derives": [
+        {
+          "what": "`affectedSchedules`: the served schedules of a pause's cover, soonest next tick first",
+          "reason": "presentation: an order of a served list by a served time (`next_fire` of `GET /schedule`); which schedules a pause covers, and how each touches the node, is computed in barca-service (`refresh_path::pause_cover`, the scheduler's own walk)",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "program": {
       "kind": "page",
@@ -417,11 +592,31 @@
     },
     "runFeedback": {
       "kind": "page",
-      "does": "a node's run status as the feedback a panel shows"
+      "does": "a node's run status as the feedback a panel shows",
+      "derives": [
+        {
+          "what": "`runOutcomeSummary`: `7 keys failed`, the sum of a finished run's per-node `failed` counts (or its failed key steps)",
+          "reason": "a sum over served rows that no field serves as one number (`steps_failed` counts steps that are not keys too). Owed to barca-service as a field of the run view",
+          "sees": [
+            "count"
+          ],
+          "issue": 1056
+        }
+      ]
     },
     "runRecovery": {
       "kind": "page",
-      "does": "what a page does when its run stream gaps or the server restarts"
+      "does": "what a page does when its run stream gaps or the server restarts",
+      "derives": [
+        {
+          "what": "a key's `name=value` pairs folded into a line of text",
+          "reason": "format: `reduce` builds a string here, not a count",
+          "sees": [
+            "count"
+          ],
+          "kept": true
+        }
+      ]
     },
     "runStream": {
       "kind": "page",
@@ -429,11 +624,31 @@
     },
     "runTarget": {
       "kind": "page",
-      "does": "what a toolbar's Run button acts on"
+      "does": "what a toolbar's Run button acts on",
+      "derives": [
+        {
+          "what": "how many assets and sensors a toolbar's Run would act on",
+          "reason": "page: a count of the listed graph in the open scope by declared kind, for the button's label; reads no state",
+          "sees": [
+            "count"
+          ],
+          "kept": true
+        }
+      ]
     },
     "runsPage": {
       "kind": "page",
-      "does": "the Runs page's program, the query its filters are on the server, and the rows of a run's Steps"
+      "does": "the Runs page's program, the query its filters are on the server, and the rows of a run's Steps",
+      "derives": [
+        {
+          "what": "a node's steps in a run's panel: the failed ones first",
+          "reason": "presentation: an order of served rows by their served status",
+          "sees": [
+            "order"
+          ],
+          "kept": true
+        }
+      ]
     },
     "sidebar": {
       "kind": "page",
@@ -448,6 +663,78 @@
       "does": "whether write controls are drawn: read-only, or not known yet"
     }
   },
+  "derives": {
+    "components/HealthMap.tsx": [
+      {
+        "what": "the deepest ring among the map's arcs",
+        "reason": "layout: geometry of the drawn arcs",
+        "sees": [
+          "count"
+        ],
+        "kept": true
+      }
+    ],
+    "components/partitions/KeyHeatmap.tsx": [
+      {
+        "what": "a heatmap column's key total: the sum of its bin's per-state counts",
+        "reason": "layout: decides whether a column is drawn solid or as a mark; the per-state counts are the served rows' own",
+        "sees": [
+          "count"
+        ],
+        "kept": true
+      }
+    ],
+    "layouts/Sidebar.tsx": [
+      {
+        "what": "the sidebar's counts: the listed nodes of each kind and with a schedule, in the open pipeline",
+        "reason": "layout: counts of the listed graph (`GET /assets`, which `barca list --json` prints) by declared kind, shown before any state has loaded. `kinds` of `GET /state/rollup` serves the same numbers but arrives later, and three e2e specs hold these counts visible before it does; an earlier switch to the rollup was reverted for that. Kept until the loading state has an answer",
+        "sees": [
+          "count"
+        ],
+        "kept": true
+      }
+    ],
+    "pages/GroupedView.tsx": [
+      {
+        "what": "a group's panel and row: how many nested groups, assets and checks it holds",
+        "reason": "layout: counts of the listed graph by declared kind and of the group tree; reads no state (`check`: see lib/status)",
+        "sees": [
+          "count"
+        ],
+        "kept": true
+      }
+    ],
+    "pages/KeysPage.tsx": [
+      {
+        "what": "the key explorer's key total: the sum of the served per-state counts of one answer",
+        "reason": "presentation: the counts partition the node's keys, so their sum is how many there are; each count is the server's",
+        "sees": [
+          "count"
+        ],
+        "kept": true
+      }
+    ],
+    "pages/RunsView.tsx": [
+      {
+        "what": "`and N more`: the steps a run's summary does not list",
+        "reason": "presentation: how many rows of a served list are folded away on screen",
+        "sees": [
+          "count"
+        ],
+        "kept": true
+      }
+    ],
+    "pages/SchedulesView.tsx": [
+      {
+        "what": "the Schedules header: how many of the listed schedules are late or queue-bound",
+        "reason": "presentation: a count of the page's rows by a flag each was served with (`late`, `queue_bound`)",
+        "sees": [
+          "count"
+        ],
+        "kept": true
+      }
+    ]
+  },
   "vocabulary": {
     "types": [
       "Health",
@@ -456,6 +743,13 @@
       "Cause",
       "RootKind",
       "ActionKind"
+    ],
+    "status_types": [
+      "RunViewStatus",
+      "StepStatus",
+      "MaterializationStatus",
+      "QueueEntryStatus",
+      "LastAttempt"
     ],
     "ambiguous": [
       "ok",
@@ -477,10 +771,9 @@
       {
         "file": "lib/health.ts",
         "words": [
-          "failing",
           "failure"
         ],
-        "reason": "`failing`: the order of a health bar's segments: failures, then run work, then the rest in the served order; nothing is decided about a node. `failure`: picks the failure roots the server lists for the failures list, which shows each failure's error"
+        "reason": "picks the failure roots the server lists for the failures list, which shows each failure's error"
       },
       {
         "file": "pages/GroupedPipelinePage.tsx",
@@ -490,18 +783,30 @@
         "reason": "the tag of the failures table's own row union (a failure row or a heading), not a root kind"
       },
       {
-        "file": "lib/runFeedback.ts",
+        "file": "hooks/polling.ts",
         "words": [
-          "queued"
+          "error"
         ],
-        "reason": "a run step's status in the event stream, not a cause"
+        "reason": "the status of a react-query query, not a run's"
       },
       {
-        "file": "lib/schedules.ts",
+        "file": "lib/runsPage.ts",
         "words": [
-          "queued"
+          "failed"
         ],
-        "reason": "the page's word for a tick's run that waits (`pending`), a run status, not a cause"
+        "reason": "the Runs page's own filter value (`?status=failed`), which asks the server for `not_successful`; not a run's status"
+      },
+      {
+        "file": "lib/runFeedback.ts",
+        "words": [
+          "queued",
+          "running",
+          "success",
+          "cancelled",
+          "interrupted",
+          "pending"
+        ],
+        "reason": "page: folds the served status of the run a page started, and a run step's status in the event stream (`queued`, not the cause), into the notice and the feedback a panel shows (queued, running, finished); the status shown is the served one"
       }
     ]
   }

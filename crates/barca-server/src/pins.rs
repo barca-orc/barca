@@ -5,19 +5,18 @@
 
 use crate::auth_http::Principal;
 use crate::error::ApiError;
-use crate::handlers::snapshot_db;
-use crate::state::AppState;
+use crate::read_cache::Reads;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use barca_core::pins::{Choice, Pinned, Unpinned, Versions};
+use barca_service::pins::{Choice, Pinned, Unpinned, Versions};
+use barca_service::served::Pins;
 use serde::Deserialize;
-use serde_json::{Value, json};
 
 /// `GET /pins` — every pinned asset: `{pins: [...]}`.
-pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let snapshot = snapshot_db(&state).await?;
-    let pins = barca_core::pins::list(&snapshot.path).await?;
-    Ok(Json(json!({ "pins": pins })))
+pub async fn list(State(reads): State<Reads>) -> Result<Json<Pins>, ApiError> {
+    let snapshot = reads.snapshot_db().await?;
+    let pins = barca_service::pins::list(&snapshot.path).await?;
+    Ok(Json(Pins { pins }))
 }
 
 #[derive(Default, Deserialize)]
@@ -28,18 +27,18 @@ pub struct VersionsQuery {
 /// `GET /assets/{name}/versions?limit=N` — the asset's recent successful materializations (one
 /// per run hash, newest first) and its pin, as `barca pin <name> --versions --json`.
 pub async fn versions(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<VersionsQuery>,
 ) -> Result<Json<Versions>, ApiError> {
-    let dag = state.loaded_dag().await?;
-    let snapshot = snapshot_db(&state).await?;
+    let dag = reads.loaded_dag().await?;
+    let snapshot = reads.snapshot_db().await?;
     let limit = query
         .limit
-        .unwrap_or(barca_core::pins::DEFAULT_VERSIONS)
+        .unwrap_or(barca_service::pins::DEFAULT_VERSIONS)
         .clamp(1, 500);
     Ok(Json(
-        barca_core::pins::versions(&snapshot.path, &dag, &name, limit).await?,
+        barca_service::pins::versions(&snapshot.path, &dag, &name, limit).await?,
     ))
 }
 
@@ -57,12 +56,12 @@ pub struct PinBody {
 /// `POST /assets/{name}/pin` — pin the asset to `run_hash` or the `previous` version, as
 /// `barca pin`. `pinned_by` is the request's project token (`token:<name>`), if any.
 pub async fn pin(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     principal: Option<Extension<Principal>>,
     Json(body): Json<PinBody>,
 ) -> Result<Json<Pinned>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
+    crate::guards::refuse_if_read_only(&reads.config)?;
     let choice = match (body.run_hash, body.previous) {
         (Some(_), true) => {
             return Err(ApiError::BadRequest(
@@ -77,10 +76,10 @@ pub async fn pin(
             )));
         }
     };
-    let dag = state.loaded_dag().await?;
-    let cfg = &state.config.resolved;
-    barca_core::queries::open_metadata(cfg).await?;
-    let pinned = barca_core::pins::pin(
+    let dag = reads.loaded_dag().await?;
+    let cfg = &reads.config.resolved;
+    barca_service::queries::open_metadata(cfg).await?;
+    let pinned = barca_service::pins::pin(
         &cfg.db_path,
         &dag,
         &name,
@@ -89,7 +88,7 @@ pub async fn pin(
         principal.map(|Extension(p)| p.0),
     )
     .await?;
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] pinned {} at {}",
         pinned.node_id,
         pinned.pin.run_hash
@@ -111,13 +110,13 @@ pub struct UploadQuery {
 /// (any content type): checked by loading it, written as a new artifact of the asset, recorded as
 /// an uploaded materialization and pinned, as `barca pin --from-file`.
 pub async fn upload(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
     Query(query): Query<UploadQuery>,
     principal: Option<Extension<Principal>>,
     body: axum::body::Bytes,
 ) -> Result<Json<Pinned>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
+    crate::guards::refuse_if_read_only(&reads.config)?;
     let file_name = query
         .file_name
         .as_deref()
@@ -128,17 +127,17 @@ pub async fn upload(
             "say what the body is: ?format=json|parquet|csv|pickle or ?file_name=<name.ext>".into(),
         ));
     }
-    let dag = state.loaded_dag().await?;
-    let cfg = &state.config.resolved;
-    barca_core::queries::open_metadata(cfg).await?;
-    let supplied = barca_core::pins::Supplied {
+    let dag = reads.loaded_dag().await?;
+    let cfg = &reads.config.resolved;
+    barca_service::queries::open_metadata(cfg).await?;
+    let supplied = barca_service::pins::Supplied {
         bytes: body.to_vec(),
         file_name,
         format: query.format,
     };
-    let pinned = barca_core::pins::pin_upload(
+    let pinned = barca_service::pins::pin_upload(
         cfg,
-        &state.config.python,
+        &reads.config.python,
         &dag,
         &name,
         supplied,
@@ -146,7 +145,7 @@ pub async fn upload(
         principal.map(|Extension(p)| p.0),
     )
     .await?;
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] pinned {} at {} (uploaded)",
         pinned.node_id,
         pinned.pin.run_hash
@@ -156,15 +155,15 @@ pub async fn upload(
 
 /// `DELETE /assets/{name}/pin` — remove the asset's pin, as `barca unpin`.
 pub async fn unpin(
-    State(state): State<AppState>,
+    State(reads): State<Reads>,
     Path(name): Path<String>,
 ) -> Result<Json<Unpinned>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
-    let dag = state.loaded_dag().await?;
-    let cfg = &state.config.resolved;
-    let unpinned = barca_core::pins::unpin(&cfg.db_path, &dag, &name).await?;
+    crate::guards::refuse_if_read_only(&reads.config)?;
+    let dag = reads.loaded_dag().await?;
+    let cfg = &reads.config.resolved;
+    let unpinned = barca_service::pins::unpin(&cfg.db_path, &dag, &name).await?;
     if unpinned.removed.is_some() {
-        barca_core::errln!("[barca] unpinned {}", unpinned.node_id);
+        barca_service::errln!("[barca] unpinned {}", unpinned.node_id);
     }
     Ok(Json(unpinned))
 }

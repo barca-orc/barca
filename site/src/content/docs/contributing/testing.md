@@ -8,7 +8,7 @@ description: The test suites in the barca repository, how to run each, and what 
 
 | Suite | Where | Run with |
 |---|---|---|
-| Rust tests | inline `#[test]` modules in `crates/*/src/`, plus `crates/barca-core/tests/` and `crates/barca-server/tests/` | `cargo test` |
+| Rust tests | inline `#[test]` modules in `crates/*/src/`, plus `crates/barca-service/tests/` and `crates/barca-server/tests/` | `cargo test` |
 | Python tests | `python/tests/` | `pytest python/tests -q` |
 | Storage backend tests | part of `python/tests/`, against local emulators | `pytest python/tests -q` with the emulators running |
 | Shell integration tests | `tests/integration/*.sh` | `bash tests/integration/<script>.sh` |
@@ -30,9 +30,9 @@ coordinator, scheduler, config). The separate test files are:
 
 | File | What it covers |
 |---|---|
-| `crates/barca-core/tests/grammar_spec.rs` | Parsing of decorator syntax |
-| `crates/barca-core/tests/socket_stress.rs` | The worker socket protocol under load |
-| `crates/barca-core/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs, and that none of them passes a decorator an argument barca does not define |
+| `crates/barca-service/tests/grammar_spec.rs` | Parsing of decorator syntax |
+| `crates/barca-service/tests/socket_stress.rs` | The worker socket protocol under load |
+| `crates/barca-service/tests/unused_input_repo_sweep.rs` | The unused-input warning against the repository's own examples and docs, and that none of them passes a decorator an argument barca does not define |
 | `crates/barca-server/tests/api.rs` | The HTTP endpoints of `barca serve` |
 
 ## Python
@@ -48,12 +48,12 @@ real `barca` binary on it, and check the output, exit code and files.
 Each test has a timeout (pytest-timeout, from the `test` extra): 120 s by default (`timeout` in
 `[tool.pytest.ini_options]` in `pyproject.toml`), 300 s in the files whose tests are known to
 take longer (`test_minute_checkpoints.py`, `test_remote_faults.py`, `test_simulation.py`, with a
-module-level `pytest.mark.timeout(300)`). A test past its timeout fails with the stacks of its
+module-level `pytest.mark.timeout(300)`; `test_owner_serve.py` marks its one long test). A test past its timeout fails with the stacks of its
 threads, so a hang costs minutes instead of the CI job's own limit. A test that needs optional packages (pandas, pyarrow, duckdb,
 jsonschema) skips without them through `pytest.importorskip`, so the suite collects without
 the `test` extra.
 
-barca prints through `barca_core::outln!` and `errln!`, which do not panic when the reader of
+barca prints through `barca_service::outln!` and `errln!`, which do not panic when the reader of
 stdout or stderr has gone; clippy denies `println!` and `eprintln!` in the three crates.
 Workers do not hold barca's stderr when it is a pipe: they write to a pipe barca reads and
 forwards (`crates/barca-model/src/term.rs`), so a step's child processes cannot meet a closed
@@ -159,6 +159,30 @@ SQLite locks on it; `looking_at_the_database_file_keeps_this_process_s_locks` in
 one-minute size check for it; long waits (`STUCK_FOR`, `SURVEY_EVERY`) are skipped by rewriting
 `gc-state.json`.
 
+`tests/simulation/owner_serve.py` beside it measures instead of searching: it holds one real
+`barca serve` up as the long-lived holder of its metadata connection (#1056), with two schedules
+firing every second, a store in a local directory backed up to every 2 s, a small `[cache]
+max_size` checked every 2 s, its read routes polled, and CLI processes looping beside it
+(`get --local`, the read commands, `logs -f`, `gc --local`, `state backups`, `doctor`, and
+commands sent over `.barca/serve.sock`). Then it stops the server during a run, a second time
+during the drain, kills it three times with the CLI loops still going, stops it with nothing
+else running, and restores backups while CLI processes work.
+
+```bash
+tests/simulation/owner_serve.py --seconds 600 --keep /var/tmp/owner --report report.json
+```
+
+It fails (exit 1) on any database error in a command, a response or the server's log
+(`database is locked`, `malformed`, a lock timeout, a failed checkpoint or backup), on an
+unexplained non-zero exit or 5xx, on a backup that fails `integrity_check` or, restored with
+`barca state restore`, reads as a history the final one does not continue, on an accepted run,
+an exit-0 `--local` run or a fired tick missing from the final history (the trim's deletions
+past the newest 1,000 runs aside), on a torn read it can detect, and on a read route whose 95th
+percentile is over 500 ms. The report has the counts, each command's and route's latency, the
+`-wal` size and the server's memory through the run. Give `--keep` a short path on a disk (the
+project socket's path must fit a Unix socket address). `python/tests/test_owner_serve.py` runs
+20 seconds of it with one kill in CI's full tier.
+
 ## Web UI
 
 ```bash
@@ -189,16 +213,17 @@ These keep the documentation and the command line in agreement.
   manual topics against the real argument parser, and requires help text on every flag and
   examples on every documented command.
 - `cargo test -p barca contract::` compares each command's `--help` with
-  `crates/barca-cli/snapshots/help/`, checks the generated tables in
-  `crates/barca-cli/docs/contract.md`, and checks that each site reference page generated from a
-  manual topic (`SITE_PAGES` in `crates/barca-cli/src/contract.rs`: `reference/cli-contract`,
-  `sql`, `remote-storage`, ...) is what its topic produces and is in the sidebar.
+  `crates/barca-cli/snapshots/help/` and checks the generated tables in
+  `crates/barca-cli/docs/contract.md`; `cargo test -p barca site_pages_tests::` checks that each
+  site reference page generated from a manual topic (`SITE_PAGES` in
+  `crates/barca-cli/src/site_pages_tests.rs`: `reference/cli-contract`, `sql`,
+  `remote-storage`, ...) is what its topic produces and is in the sidebar.
 - `python/tests/test_cli_contract.py` compares the JSON output schemas and the error envelope
   with `python/tests/snapshots/cli_contract/`.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
   what the text says about them.
-- `cargo test -p barca-compile decorator_args` compares the arguments each decorator and helper
-  accepts (`SIGNATURES` in `crates/barca-compile/src/decorator_args.rs`) with the signatures in
+- `cargo test -p barca-python decorator_args` compares the arguments each decorator and helper
+  accepts (`SIGNATURES` in `crates/barca-python/src/decorator_args.rs`) with the signatures in
   `python/barca/__init__.py` and with the "Accepted arguments" tables in `barca docs assets`
   and on the decorators page. Adding an argument means changing all four.
 
@@ -209,14 +234,14 @@ The other site pages are written by hand, and no test compares them with the man
 
 ## What CI runs
 
-`.depot/examples/ci.yml` runs on every pull request into `main` and on every merge group in
+`.depot/workflows/ci.yml` runs on every pull request into `main` and on every merge group in
 the merge queue. It does not run on push to `main`: `main` only moves to a merge group's
 commit, which the queue has just tested. The required checks are `CI / test` and
 `CI / backends`. Each is a job that passes when the jobs it needs succeeded.
 
-UI-only diffs (`ui/**`, plus optional `CHANGELOG.md`) run the UI tier on both pull requests and merge groups: repository checks, one wheel build for the real-server browser tests, and UI typecheck, lint, unit and Playwright tests. Clippy, Rust tests, Python suites, proxy tests and performance tests are skipped. Mixed changes retain the tiers below. Releases and `ci-full` override UI scoping; missing diff history retains the broader gates.
+UI-only diffs (`ui/**`, plus optional `CHANGELOG.md`) run the UI tier on both pull requests and merge groups: repository checks, one wheel build for the real-server browser tests, and UI typecheck, lint, unit and Playwright tests. Clippy, Python suites, proxy tests and performance tests are skipped. So are the Rust tests, except in a merge group whose diff a Rust test reads (a fixture in `ui/src/lib/testdata/`, `ui/demo/modeling.py`, the generated types): that merge group runs those tests ([which Rust tests run](#which-rust-tests-run)). Mixed changes retain the tiers below. Releases and `ci-full` override UI scoping; missing diff history retains the broader gates.
 
-Site-only diffs (`site/**`, plus optional `CHANGELOG.md` and `.github/workflows/site.yml`) build no wheel and run no clippy, Python suites or performance tests. On a pull request (the `site` tier) they run the repository checks, which include building the site; in a merge group (`site-merge`) they also run the Rust tests, which read site pages (the sidebar, the pages generated from manual topics, the decorator-argument table and the repository-wide unused-input sweep). A diff that touches `site/src/content/docs/recipes/ordering-only-deps.md`, which a Python test executes, runs the normal tiers. Releases and `ci-full` override site scoping too.
+Site-only diffs (`site/**`, plus optional `CHANGELOG.md` and `.github/workflows/site.yml`) build no wheel and run no clippy, Python suites or performance tests. On a pull request (the `site` tier) they run the repository checks, which include building the site; in a merge group (`site-merge`) they also run the Rust tests that read site pages (the CLI crate's tests for the sidebar and the pages generated from manual topics, the decorator-argument table and the repository-wide unused-input sweep; [which Rust tests run](#which-rust-tests-run)). A diff that touches `site/src/content/docs/recipes/ordering-only-deps.md`, which a Python test executes, runs the normal tiers. Releases and `ci-full` override site scoping too.
 
 Other changes run in three tiers. A pull request runs the fast tier, so it can enter the queue about a
 minute after a push. A merge group runs the merge tier, which gates the merge, in about two
@@ -229,8 +254,8 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **checks**: the CHANGELOG check, the specification checks, the prek hooks of `prek.toml` (`uvx prek run --all-files`: ruff and ruff format, ty on `python/barca/`, `cargo fmt --check`, the version sync, `uv lock --check`, whitespace and YAML/TOML checks) and the TLA+ models (the jar is cached, its SHA-256 checked each run) | test | yes | yes | yes |
 | **clippy**: `cargo clippy --workspace --all-targets -- -D warnings` | test | yes | yes | yes |
 | **changes**: the tier and its optional parts; every test file is in exactly one shard (`scripts/ci-shards.py --check`) and every file in `scripts/fast-tests.txt` exists | backends | yes | yes | yes |
-| **rust-tests**: `cargo nextest run --workspace`, each test in its own process | test | | yes | yes |
-| **rust-tests**, generated types: `ui/scripts/regen-types.sh` (what `pnpm gen:types` runs), then `git diff --exit-code` on `ui/src/lib/generated`, so the UI's wire types cannot drift from Rust | test | | yes | yes |
+| **rust-tests**: `cargo nextest run --workspace`, each test in its own process. The merge tier runs only the tests the diff can affect, and skips the job when there are none (see below) | test | | affected | yes |
+| **rust-tests**, generated types: `ui/scripts/regen-types.sh` (what `pnpm gen:types` runs), then `git diff --exit-code` on `ui/src/lib/generated`, so the UI's wire types cannot drift from Rust. In the merge tier, when a crate with a `ts` feature, the generated files or the script changed | test | | affected | yes |
 | **build**: the wheel, once, with the `fast` Cargo profile (no whole-program LTO, incremental); `ui/dist` is restored from a cache keyed on `ui/`, or built | both | | yes | yes |
 | **python (fast)**: the quick subset in `scripts/fast-tests.txt`, about 20 s of tests | backends | | yes | |
 | **perf**: the performance budgets, `scripts/perf-gate.py` against that wheel (see below) | test | | yes | yes |
@@ -240,12 +265,51 @@ A pull request labelled `ci-full` runs the full tier too, on its next push.
 | **python (1/3 .. 3/3, duckdb 1.x)**: the whole Python suite in shards, with the emulators, the duckdb 1.x rerun and the minute checkpoint test | backends | | | yes |
 | **durations**: merges the shards' JUnit reports into `scripts/ci-test-durations.json` and uploads it as the `ci-test-durations` artifact (not gating; see below) | | | | yes |
 
-The trade: a merge to `main` is checked by the Rust tests and the quick Python subset only, so
-a failure the full tier finds on a release pull request is in one of the pull requests merged
-since the previous release. Fix it there (or revert) and push to the release branch. Release
+The trade: a merge to `main` is checked by the Rust tests its diff can affect and the quick
+Python subset only, so a failure the full tier finds on a release pull request is in one of
+the pull requests merged since the previous release. Fix it there (or revert) and push to the release branch. Release
 wheels are built by the release workflow with `--release`, not by CI.
 
 No crate has a runnable doctest, so `cargo test --doc` does not run.
+
+### Which Rust tests run
+
+The full tier runs every Rust test. The merge tier and `scripts/check-fast.sh` run the tests
+the diff can affect, chosen by `scripts/ci-rust-tests.py`. Each changed file selects one of:
+
+| The file | Selects |
+| --- | --- |
+| Is inside a crate (`crates/<dir>/`) | Every test of that crate and of every crate that depends on it, directly or not. The crates and their dependencies (normal, dev and build) are read from `cargo metadata`, so a new crate needs no entry anywhere |
+| Is read by a test in another crate | That test alone, in its own crate. The script's `READERS` table lists them: the guards in `barca-service` and `barca-proc` that scan every crate's sources and manifests, the CLI crate's tests of the site, `README.md` and `SKILL.md`, the tests of `specs/interfaces/artifact-formats.md` and `specs/interfaces/server-api.openapi.yaml`, the UI fixtures in `ui/src/lib/testdata/`, and the unused-input sweep over every pipeline in `examples/`, `benchmarks/`, `python/`, the manual and the site |
+| Is the root `Cargo.toml`, `Cargo.lock`, a toolchain file, `.cargo/`, anything under `.depot/` (the CI workflow and its actions), the selection or tier scripts and their tests, `python/barca/` or `pyproject.toml` | The whole workspace |
+| Is known to affect no Rust test (the rest of `site/`, `ui/`, `specs/`, `docs/`, `scripts/`, `python/tests/`, the root documents) | Nothing |
+| Is anything else: a new top-level directory, a file under `crates/` that no crate owns, a workflow the script does not list | The whole workspace |
+
+So the merge tier no longer runs, for example, the `barca-model`, `barca-compile` and
+`barca-db` tests for a change inside `barca-server`, any Rust test for a change only under
+`docs/engineering/` or `python/tests/snapshots/`, or more than the two server test binaries that validate
+responses against the OpenAPI document for a change to that document. A test broken by a change
+the selection considers unrelated to it is found by the next release's full tier, not at the
+merge. At v0.45.0 the workspace has 1,578 tests; a change inside `barca-server` runs 300 of
+them and a site page 95.
+
+The build is still `cargo nextest run --workspace` with a filter (`-E`): cargo does not
+rebuild a crate nothing changed under, and `-p` would resolve features for the named packages
+alone and rebuild their dependencies. Without cargo-nextest, `check-fast.sh` runs
+`cargo test -p <crate> ...`, which has no filter and so runs every test of a crate with one
+selected test.
+
+The `changes` job prints the selection to its log and its summary, and `check-fast.sh` prints
+it before the tests: one line per crate, with the files that selected it or `not run: no
+changed file can affect its tests`. `scripts/check-fast.sh --rust-all` runs every Rust test.
+When the selection cannot be computed (`cargo metadata` or the diff fails), the whole
+workspace runs.
+
+A Rust test that starts reading a file outside its crate must be added to `READERS` with the
+paths it reads, or a change to those paths will not run it. `scripts/test-ci-rust-tests.py`,
+which the `changes` job runs on every pull request, fails when a source under `crates/` uses
+`CARGO_MANIFEST_DIR` with a parent path, or includes a file from outside its crate, and is not
+listed; it also fails when a listed test or path no longer exists.
 
 **perf** runs `scripts/perf-gate.py` on a 4-CPU sandbox against the wheel. It checks the
 budgets in `specs/behavior/performance.md` ("Gates"): the one-asset pipeline of
@@ -277,7 +341,7 @@ script's `--base` mode, which picks parts from the changed paths, is kept for lo
   on the real one-minute metadata backup timer. Outside the full tier the shards set
   `BARCA_TEST_MINUTE_CHECKPOINT=0` and it skips. Locally, with the variable unset, it runs. The
   checkpoint's logic is also covered in seconds by a Rust unit test in
-  `crates/barca-core/src/persist.rs` on a short interval.
+  `crates/barca-run/src/persist.rs` on a short interval.
 
 `scripts/ci-test-durations.json` holds each test file's duration, with and without the
 emulators, and the shard split balances on the map that matches the run (counting the minute

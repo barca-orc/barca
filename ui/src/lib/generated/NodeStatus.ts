@@ -5,6 +5,7 @@ import type { Cause } from "./Cause";
 import type { DataSignal } from "./DataSignal";
 import type { Health } from "./Health";
 import type { HealthReason } from "./HealthReason";
+import type { LastAttempt } from "./LastAttempt";
 import type { LastCheck } from "./LastCheck";
 import type { LastMaterialization } from "./LastMaterialization";
 import type { NoEstimate } from "./NoEstimate";
@@ -109,6 +110,23 @@ recheck_at: string | null,
  * for a fresh node and one that has an estimate.
  */
 no_estimate: NoEstimate | null,
+/**
+ * How its newest attempt went, in one word (`barca docs status-fields`, "Last attempt"):
+ * `failed` when its last materialization failed or any of its keys last failed
+ * (`partitions.failed`), `never_run` when no execution is recorded, else `success`. A
+ * fact beside `cache.state` and `health`: a blocked or stale node whose last run went
+ * well reads `success`, and a cache hit is not an attempt.
+ */
+last_attempt: LastAttempt,
+/**
+ * How long one run of the node typically takes, seconds (`barca docs status-fields`,
+ * "Typical run time"): the median of its recent successful executions, times its number
+ * of keys for a partitioned node (durations are recorded per key, and a run of the node
+ * computes each key). An estimate of a run over every key, not of the next run, which
+ * computes only the keys that need it. Rounded to a millisecond. `null` when it has no
+ * successful execution on record.
+ */
+typical_run_seconds: number | null,
 /**
  * Per-key cache state of a partitioned node.
  */

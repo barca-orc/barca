@@ -2,10 +2,11 @@
 //! rule (RFC-0008 rule 9): consecutive failed ticks are counted, a job at its `max_failures`
 //! is skipped until something it failed on succeeds again.
 
-use crate::state::{AppState, RunStatus};
-use barca_core::db;
-use barca_core::schedule::ScheduledJob;
-use barca_core::step_status::StepStatus;
+use crate::run_model::RunStatus;
+use crate::state::AppState;
+use barca_service::db;
+use barca_service::schedule::ScheduledJob;
+use barca_service::step_status::StepStatus;
 use chrono::{DateTime, TimeZone};
 use std::collections::{HashMap, HashSet};
 
@@ -39,7 +40,7 @@ impl Bookkeeping {
 /// cancelled (which is not a failure of the job); otherwise the nodes that failed, empty on
 /// success. A failed run with no failed step (it could not start) failed on the scheduled node.
 pub(super) fn tick_outcome(
-    run: &crate::state::RunState,
+    run: &crate::run_model::RunState,
     job: &ScheduledJob,
 ) -> Option<Vec<String>> {
     match run.status {
@@ -58,7 +59,7 @@ pub(super) fn tick_outcome(
 
 /// The ids of the steps that failed in a finished run: from its outcome (`steps`, and each
 /// failed target's `failed_node` of a multi-target run), or from its single-target result.
-pub(super) fn failed_steps(run: &crate::state::RunState) -> Vec<String> {
+pub(super) fn failed_steps(run: &crate::run_model::RunState) -> Vec<String> {
     let mut nodes: Vec<String> = Vec::new();
     let outcome: Option<serde_json::Value> = run
         .outcome
@@ -113,7 +114,12 @@ pub(super) async fn count_outcomes(
         if book.counted.contains(&handle) {
             continue;
         }
-        let Some(failed) = state.runs.get(&handle).and_then(|r| tick_outcome(&r, job)) else {
+        let Some(failed) = state
+            .runs
+            .registry
+            .get(&handle)
+            .and_then(|r| tick_outcome(&r, job))
+        else {
             continue;
         };
         book.counted.insert(handle);
@@ -135,8 +141,8 @@ pub(super) async fn count_outcomes(
             continue;
         }
         if next.failures >= job.max_failures && before < job.max_failures {
-            barca_core::jsonlog::line(
-                barca_core::jsonlog::Level::Error,
+            barca_service::jsonlog::line(
+                barca_service::jsonlog::Level::Error,
                 Some(&job.id),
                 &format!(
                     "[barca] {} failing: {} consecutive failed ticks (max_failures={}); skipped \
@@ -165,7 +171,7 @@ pub(super) async fn failing_reset(
 ) -> bool {
     let mut watch: Vec<String> = vec![job.id.clone()];
     watch.extend(failures.failed_nodes.iter().cloned());
-    if let Ok(dag) = state.loaded_dag().await {
+    if let Ok(dag) = state.reads.loaded_dag().await {
         for node in &failures.failed_nodes {
             watch.extend(dag.upstream(node).into_iter().map(str::to_string));
         }
@@ -192,8 +198,8 @@ pub(super) async fn reset_failing<Tz: TimeZone>(
         {
             continue;
         }
-        barca_core::jsonlog::line(
-            barca_core::jsonlog::Level::Info,
+        barca_service::jsonlog::line(
+            barca_service::jsonlog::Level::Info,
             Some(&job.id),
             &format!(
                 "[barca] {} no longer failing: something it failed on succeeded since",
@@ -212,6 +218,6 @@ pub(super) async fn persist_failures(
     failures: &db::ScheduleFailures,
 ) {
     if let Err(e) = db::set_schedule_failures(db_path, &job.id, failures).await {
-        barca_core::errln!("[barca] schedule_failures write failed for {}: {e}", job.id);
+        barca_service::errln!("[barca] schedule_failures write failed for {}: {e}", job.id);
     }
 }

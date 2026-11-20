@@ -2,6 +2,9 @@
 import type { RunActivity } from "./RunActivity";
 import type { RunSummary } from "./RunSummary";
 
+/**
+ * `GET /runs`.
+ */
 export type RunList = { runs: Array<RunSummary>,
 /**
  * How many runs there are in all; with a filter (`status`, `triggered_by`,

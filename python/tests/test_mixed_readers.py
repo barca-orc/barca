@@ -139,7 +139,7 @@ def test_an_eager_fan_in_in_a_later_phase_downloads_what_the_lazy_step_read_in_p
 
 def test_a_lazy_fan_in_is_handed_local_copies(machine):
     # Known limit: only single inputs are read in place; a collect() of lazy frames is
-    # downloaded like an eager one (crates/barca-core/src/commands.rs `read_in_place`).
+    # downloaded like an eager one (crates/barca-run/src/commands.rs `read_in_place`).
     store, make = machine
     root = make("fan-in")
     proc = cli(root, store, "get", "lazy_all", "-o", "value", "--json")

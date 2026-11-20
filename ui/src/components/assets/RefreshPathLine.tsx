@@ -12,7 +12,7 @@ export interface RefreshPathLineProps {
  * What will bring the node up to date: the schedule whose tick targets it, when that next
  * fires, and what the server says of it (`paused`, not `live`, ticks that missed the node).
  * Each part is one field of the server's answer, shown as it is; which schedule reaches the
- * node and what counts as a missed tick are decided in `barca-core`, never here.
+ * node and what counts as a missed tick are decided in `barca-service`, never here.
  */
 export function RefreshPathLine({ path, nowMs }: RefreshPathLineProps) {
   if (!path) {

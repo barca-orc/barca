@@ -46,7 +46,10 @@ impl ReadView {
         if !usable {
             return Ok(None);
         }
-        READ_VIEWS.lock().unwrap().insert(path.clone());
+        READ_VIEWS
+            .lock()
+            .unwrap()
+            .insert(path.clone(), target.display().to_string());
         Ok(Some(Self { path, _dir: dir }))
     }
 
@@ -295,10 +298,11 @@ impl DbSnapshot {
                 fs::copy(&wal, dir.path().join("metadata.db-wal"))
                     .map_err(|e| BarcaError::Db(format!("failed to snapshot DB WAL: {e}")))?;
             }
-            Ok(Some(Self {
-                path: copy.display().to_string(),
-                _dir: dir,
-            }))
+            let path = copy.display().to_string();
+            // A file named as a metadata database, but gone with this snapshot: the owner
+            // opens it per operation and keeps no connection to it ([`owns`]).
+            SNAPSHOT_COPIES.lock().unwrap().insert(path.clone());
+            Ok(Some(Self { path, _dir: dir }))
         })
         .await
         .map_err(|e| BarcaError::Db(format!("snapshot task failed: {e}")))?
@@ -306,6 +310,12 @@ impl DbSnapshot {
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+}
+
+impl Drop for DbSnapshot {
+    fn drop(&mut self) {
+        SNAPSHOT_COPIES.lock().unwrap().remove(&self.path);
     }
 }
 

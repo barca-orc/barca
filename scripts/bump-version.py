@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Apply a release's version bump to the working tree (scripts/release.sh runs this).
 
-Edits exactly what a release commit changes: `version` in crates/*/Cargo.toml, the barca,
-barca-core, barca-model, barca-compile, barca-db, barca-engine and barca-server entries in
-Cargo.lock, `version` in pyproject.toml, the barca entry in uv.lock, `__version__` in
+Edits exactly what a release commit changes: `version` in crates/*/Cargo.toml, the workspace
+crates' entries in Cargo.lock (`LOCKED`), `version` in pyproject.toml, the barca entry in uv.lock, `__version__` in
 python/barca/__init__.py, and CHANGELOG.md, where the `## Pending` notes become `## X.Y.Z (YYYY-MM-DD)` under a new empty
 `## Pending`.
 
@@ -24,23 +23,35 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]  # --root overrides
 CRATES = [
+    "barca-analysis",
     "barca-cli",
     "barca-compile",
-    "barca-core",
     "barca-db",
+    "barca-decide",
     "barca-engine",
     "barca-model",
+    "barca-proc",
+    "barca-python",
+    "barca-run",
     "barca-server",
+    "barca-service",
+    "barca-store",
 ]
 # Cargo.lock package names
 LOCKED = {
     "barca",
+    "barca-analysis",
     "barca-compile",
-    "barca-core",
     "barca-db",
+    "barca-decide",
     "barca-engine",
     "barca-model",
+    "barca-proc",
+    "barca-python",
+    "barca-run",
     "barca-server",
+    "barca-service",
+    "barca-store",
 }
 HEADINGS = {"Breaking", "Features", "Bug Fixes", "Performance", "Removed", "Documentation"}
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")

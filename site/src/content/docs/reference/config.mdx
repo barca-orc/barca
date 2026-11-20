@@ -315,6 +315,12 @@ barca get total --server                                       # the configured 
 barca get total --local                                        # this machine only
 ```
 
+One server needs no configuration: a `barca serve` running in this project. A command typed in
+its directory finds it by its socket (`.barca/serve.sock`) and goes to it, as with `--server`:
+`get` and `run` join its queue, the inspection commands are answered by it, and `gc` runs in
+it. It takes precedence over a configured server, and `--local` runs the command in its own
+process instead ([Server Mode](/reference/server-mode/), "In the server's own project").
+
 A bare `--server` with no server configured is a usage error (exit 2). When the URL came from
 `BARCA_SERVER` or `barca.toml`, barca prints `[barca] server <url> (<source>)` once on stderr.
 `--local` is a usage error with `--server`. A local `get`/`run` against the ledger needs

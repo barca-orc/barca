@@ -57,7 +57,7 @@ recreate under `.worktrees/<slug>` before editing.
    export CARGO_TARGET_DIR="$PWD/target-local"   # gitignored
    ```
    Do not share the trunk `target/` between trees. Two trees building at once overwrite the
-   same `target/release/barca`, and cargo can count one tree's `barca-core` as already built
+   same `target/release/barca`, and cargo can count one tree's `barca-service` as already built
    for another, so `maturin develop` installs a binary without your change (seen with several
    parallel agents on 2026-10-20). Before trusting a Python test run, confirm the installed
    binary contains your change, e.g. a string only your branch has. Delete `target-local/`

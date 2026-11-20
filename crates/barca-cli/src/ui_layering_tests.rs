@@ -1,11 +1,13 @@
 //! The web UI only renders (#959; DIRECTION.md "The UI", `specs/behavior/health.md`): every
-//! derived answer is computed in `barca-core`, and an agent on the CLI can get everything the
+//! derived answer is computed in `barca-service`, and an agent on the CLI can get everything the
 //! UI shows. The table of that rule is `crates/barca-cli/ui-layering.json`, held from two sides:
 //!
 //! - `scripts/check-ui-layering.py` (a prek hook: every pull request, every merge group,
 //!   `scripts/check-fast.sh`) reads `ui/src`: every route the UI calls is in the table, every
-//!   module of `ui/src/lib` has a kind, and no word of barca's vocabulary is decided on
-//!   outside a display module.
+//!   module of `ui/src/lib` has a kind and does only what its kind may, no word of barca's
+//!   vocabulary (a health, a cause, a cache state, a run's or a step's status) is decided on
+//!   outside a display module, and every count, order or produced word it can see is
+//!   registered under `derives` with why it stays or the issue that moves it here.
 //! - this test (`cargo test -p barca ui_layering`, the merge tier's Rust tests) reads the
 //!   table against the CLI and the server: each route's `cli` is a command line the real CLI
 //!   parses, each route is one the server serves with that method, and each exemption says
@@ -13,7 +15,7 @@
 //!
 //! Neither can check that a command prints the same JSON as its route: the table is a claim a
 //! reviewer reads. Adding a CLI command for an exempted route, or moving a derivation into
-//! `barca-core`, is the fix for a failure here; widening the table is not. How to extend it:
+//! `barca-service`, is the fix for a failure here; widening the table is not. How to extend it:
 //! `site/src/content/docs/contributing/ui-layering.md`.
 
 use super::*;

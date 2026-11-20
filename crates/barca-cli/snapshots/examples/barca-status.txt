@@ -22,7 +22,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, cause, root, gap_seconds, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, no_estimate, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
+          [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, cause, root, gap_seconds, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, no_estimate, last_attempt, typical_run_seconds, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
 
       --sample <N>
           Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
@@ -94,7 +94,7 @@ Options:
           Use a server (URL or configured); get/run execute its deployed code
 
       --local
-          Use independent local state; ignore the configured server
+          Run on this machine; ignore a configured server and this project's barca serve
 
   -h, --help
           Show concise command help

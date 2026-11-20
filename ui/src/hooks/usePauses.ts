@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { pausedIds, type PauseRequest } from '@/lib/pauses'
+import { pausedIds } from '@/lib/pauses'
+import type { PauseRequest } from '@/lib/types'
 import { recovering } from './polling'
 
 /** The paused assets (`GET /pauses`). */
@@ -10,6 +11,22 @@ export function usePauses() {
     queryKey: ['pauses'],
     queryFn: api.pauses,
     refetchInterval: recovering(10_000),
+    retry: false,
+  })
+}
+
+/**
+ * What a pause of `id` and everything below it would cover (`GET /pauses?target=`, `barca pause
+ * NODE --downstream --dry-run`): the nodes below it and the schedules whose ticks reach them, by
+ * the scheduler's own walk. It depends on the graph alone, so it is kept until the page reloads
+ * the graph.
+ */
+export function usePauseCover(id: string) {
+  return useQuery({
+    queryKey: ['pauses', 'cover', id],
+    queryFn: () => api.pauseCover(id),
+    select: (pauses) => pauses.covers,
+    staleTime: 60_000,
     retry: false,
   })
 }

@@ -1,6 +1,6 @@
 /**
  * Mocked rows of `GET /state` as the server would serve them. Health is classified in
- * `barca-core` and arrives on every row (`health`, `health_reason`, `cause`, `signals`, `measured`,
+ * `barca-service` and arrives on every row (`health`, `health_reason`, `cause`, `signals`, `measured`,
  * `root`, `last_check`); the UI derives none of it, so a mock that leaves it out is not a row the server
  * sends. `served` fills in what the server says of a row with these facts and nothing around
  * it (a lookup in `src/lib/testdata/health-alone.json`, which a Rust test generates); a mock about a node a failure blocks states that itself (`blockedBy`).
@@ -19,7 +19,7 @@ interface Row {
 }
 
 // What `health::classify` says of a row alone, for every combination of these facts: written
-// by a Rust test (`crates/barca-core/src/ui_fixture_tests.rs`), so no health rule is spelled here.
+// by a Rust test (`crates/barca-service/src/ui_fixture_tests.rs`), so no health rule is spelled here.
 const ALONE = JSON.parse(
   readFileSync(fileURLToPath(new URL('../../src/lib/testdata/health-alone.json', import.meta.url)), 'utf8'),
 ) as Record<string, { health: string; health_reason: string; cause: string | null }>
@@ -27,7 +27,7 @@ const ALONE = JSON.parse(
 function alone(row: Row): [string, string, string | null] {
   const key = `${row.cache.state}|${row.last_materialization?.status ?? 'none'}|${(row.partitions?.failed ?? 0) > 0}`
   const found = ALONE[key]
-  if (!found) throw new Error(`no row ${key} in health-alone.json: regenerate it (crates/barca-core/src/ui_fixture_tests.rs)`)
+  if (!found) throw new Error(`no row ${key} in health-alone.json: regenerate it (crates/barca-service/src/ui_fixture_tests.rs)`)
   return [found.health, found.health_reason, found.cause]
 }
 

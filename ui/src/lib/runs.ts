@@ -1,8 +1,7 @@
 import { match } from 'ts-pattern'
-import { statusGlyph, statusTone } from './status'
+import { statusGlyph } from './status'
 import type { Glyph } from './glyph'
 import { formatAbsolute, type TimeZone } from './time'
-import type { Tone } from './tone'
 import { shortName } from './graph'
 import type { ErrorEnvelope, RunNodeSummary, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
@@ -37,9 +36,32 @@ export function runStatus(status: string): StatusKind {
     .exhaustive()
 }
 
-/** The colour of a run's status. */
-export function runTone(status: string): Tone {
-  return statusTone(runStatus(status))
+/**
+ * Whether one recorded execution (a materialization, a run's step, a key's attempt: the
+ * generated `MaterializationStatus` and `StepStatus`) succeeded. The one place the word is read.
+ */
+export function isSuccess(status: string): boolean {
+  return status === 'success'
+}
+
+/** Whether one recorded execution failed. A status that is neither is not counted as either. */
+export function isFailure(status: string): boolean {
+  return status === 'failed'
+}
+
+/** A run that was accepted and has not started: it can still be taken out of the queue. */
+export function runIsWaiting(status: string): boolean {
+  return parseRunStatus(status) !== 'running'
+}
+
+/** The status of a tick's run in the page's words: a run that waits for a run slot is `queued`. */
+export function lastStatusLabel(status: string): string {
+  return status === 'pending' ? 'queued' : status
+}
+
+/** The error envelope of an outcome that is not a success; null for a success or no outcome. */
+export function outcomeEnvelope(outcome: RunOutcome | null): ErrorEnvelope | null {
+  return outcome && outcome.status !== 'success' ? outcome.envelope : null
 }
 
 /** The glyph of a run's status. */

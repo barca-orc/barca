@@ -1,3 +1,4 @@
+import { restingStatus } from '@/lib/status'
 import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
@@ -133,7 +134,7 @@ export function GraphPage() {
           <NodeInspector
             asset={selectedAsset}
             state={selectedState}
-            feedbackStatus={statuses[selectedAsset.id] ?? (isFailed(selectedState) ? 'failed' : 'skipped')}
+            feedbackStatus={statuses[selectedAsset.id] ?? restingStatus(isFailed(selectedState))}
             logs={stream.logs}
             running={stream.running}
             error={selectedError}

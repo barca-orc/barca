@@ -1,0 +1,40 @@
+[package]
+name = "barca-service"
+version = "0.45.0"
+edition = "2024"
+description = "Service layer — one operation per command, its typed result and its text; the one crate barca-cli and barca-server import"
+
+# The top of the library crates (#1056, C6): it uses every one of them and re-exports what the
+# hosts name. What was barca-core is this crate and the layers below it (barca-store,
+# barca-decide, barca-run, barca-analysis).
+[dependencies]
+barca-model = { path = "../barca-model" }
+barca-compile = { path = "../barca-compile" }
+barca-python = { path = "../barca-python" }
+barca-db = { path = "../barca-db" }
+barca-proc = { path = "../barca-proc" }
+barca-engine = { path = "../barca-engine" }
+barca-store = { path = "../barca-store" }
+barca-decide = { path = "../barca-decide" }
+barca-analysis = { path = "../barca-analysis" }
+barca-run = { path = "../barca-run" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "process"] }
+# Optional: TypeScript binding generation (enable with --features ts). Kept out
+# of the production binary; used only to regenerate ui/src/lib/generated/.
+ts-rs = { workspace = true, optional = true }
+
+# libsql only in tests (fixtures that write rows no owner writes); the manifest check and the
+# repository sweep read manifests and Python sources.
+[dev-dependencies]
+libsql = { version = "=0.10.0", default-features = false, features = ["core"] }
+toml = { workspace = true }
+ruff_python_parser = { workspace = true }
+ruff_python_ast = { workspace = true }
+
+[features]
+# Generate TS type bindings for the frontend. Off by default.
+ts = ["dep:ts-rs", "barca-model/ts", "barca-python/ts", "barca-db/ts", "barca-store/ts", "barca-analysis/ts", "barca-run/ts"]

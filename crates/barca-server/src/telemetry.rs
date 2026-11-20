@@ -1,7 +1,7 @@
 //! Owned, best-effort lifecycle telemetry. No inspection or run-history writes.
 use crate::state::AppState;
 
-use barca_core::{
+use barca_service::{
     CancellationToken,
     telemetry::{self, Integration, ServerPhase, ServerReport},
 };
@@ -42,15 +42,16 @@ impl Drop for ServerTelemetry {
 
 fn report(state: &AppState, phase: ServerPhase) -> ServerReport {
     // Never wait for an inspection lock, parse files, or resolve dynamic partitions.
-    let nodes = state.loaded_node_count();
+    let nodes = state.reads.sources.loaded_node_count();
     let schedules = state
-        .schedule
+        .scheduling
+        .jobs
         .try_read()
         .map(|jobs| jobs.len())
         .unwrap_or(0);
     ServerReport {
         phase,
-        start_unix_ns: barca_core::time::now_nanos_u64(),
+        start_unix_ns: barca_service::time::now_nanos_u64(),
         files: state.config.files.len(),
         nodes,
         schedules,
@@ -87,7 +88,7 @@ async fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use barca_core::telemetry::RunReport;
+    use barca_service::telemetry::RunReport;
     use std::sync::atomic::Ordering;
     use std::{future::Future, pin::Pin, sync::Arc};
     struct Recorder {
@@ -98,7 +99,7 @@ mod tests {
         fn export<'a>(
             &'a self,
             _: &'a RunReport,
-            _: &'a barca_core::telemetry::JobHistory,
+            _: &'a barca_service::telemetry::JobHistory,
         ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
             Box::pin(async { panic!("lifecycle must not export a run") })
         }
@@ -124,7 +125,7 @@ mod tests {
             schedule: false,
             timezone: "utc".into(),
             python: "missing-python".into(),
-            resolved: barca_core::config::resolve_in(None, dir).unwrap(),
+            resolved: barca_service::config::resolve_in(None, dir).unwrap(),
             read_only: true,
         })
     }
@@ -138,18 +139,18 @@ mod tests {
             "from barca import asset\n@asset\ndef first(): return 1\n@asset(inputs={\"first\": first})\ndef second(first): return first + 1\n",
         )
         .unwrap();
-        state.loaded_dag().await.unwrap();
-        assert_eq!(state.reads.dag_loads.load(Ordering::Relaxed), 0);
+        state.reads.loaded_dag().await.unwrap();
+        assert_eq!(state.reads.cache.dag_loads.load(Ordering::Relaxed), 0);
         assert_eq!(report(&state, ServerPhase::Start).nodes, Some(2));
 
         // A heartbeat must neither inspect changed sources nor wait for a loader.
         std::fs::write(file, "this is not valid Python !!!").unwrap();
         assert_eq!(report(&state, ServerPhase::Heartbeat).nodes, Some(2));
-        let held = state.loaded.lock().await;
+        let held = state.reads.sources.loaded.lock().await;
         assert_eq!(report(&state, ServerPhase::Heartbeat).nodes, None);
         drop(held);
         assert_eq!(report(&state, ServerPhase::Stop).nodes, Some(2));
-        assert!(state.runs.is_empty());
+        assert!(state.runs.registry.is_empty());
         assert!(!dir.path().join(".barca").exists());
     }
 
@@ -198,8 +199,8 @@ mod tests {
                 ServerPhase::Stop
             ]
         );
-        assert!(state.runs.is_empty());
-        assert_eq!(state.reads.dag_loads.load(Ordering::Relaxed), 0);
+        assert!(state.runs.registry.is_empty());
+        assert_eq!(state.reads.cache.dag_loads.load(Ordering::Relaxed), 0);
         assert!(!dir.path().join(".barca").exists());
     }
     #[tokio::test(start_paused = true)]

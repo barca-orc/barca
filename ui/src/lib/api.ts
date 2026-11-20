@@ -9,8 +9,6 @@ import type { Rollup } from './generated/Rollup'
 import type { SqlAnswer } from './generated/SqlAnswer'
 import type { SqlQuery } from './generated/SqlQuery'
 import { connectionToken, redactCredential, serverFetch } from './credentials'
-import type { Pins } from './pins'
-import type { PauseRequest, Pauses } from './pauses'
 
 import type {
   NodeGroup,
@@ -24,17 +22,25 @@ import type {
   NodeStatus,
   RunHandle,
   RunRequest,
-  Health,
+  ServerHealth,
   RunList,
   RunView,
   ScheduleJob,
   ResetResult,
   QueueView,
-  TokenMetadata,
   IssuedToken,
   AssetVersions,
   PinResult,
   UnpinResult,
+  Pins,
+  PauseRequest,
+  Pauses,
+  RunsQuery,
+  AuthStatus,
+  Project,
+  RunCancelling,
+  SchedulePauseAnswer,
+  TokenList,
 } from './types'
 
 
@@ -101,26 +107,14 @@ export type StateScope = { group: string } | { file: string }
 /** First rows asked for with an output's schema (the panel's Preview). */
 const PREVIEW_ROWS = 5
 
-/** The query of `GET /runs`: the flags of `barca history`, by name; `null` leaves one out. */
-export interface RunsQuery {
-  limit: number
-  /** `not_successful`, or `running` (the runs in flight). */
-  status: 'not_successful' | 'running' | null
-  /** `schedule`: without the schedule's runs; a run that recorded no trigger stays. */
-  not_triggered_by: 'schedule' | null
-  since: string | null
-  until: string | null
-  search: string | null
-}
-
 export const api = {
-  authStatus: (signal?: AbortSignal) => request<{ mode: 'off' | 'token' }>('/auth/status', { signal }, { token: null }),
+  authStatus: (signal?: AbortSignal) => request<AuthStatus>('/auth/status', { signal }, { token: null }),
   bootstrap: (code: string) => request<IssuedToken>('/auth/bootstrap', { method: 'POST', body: JSON.stringify({ code }) }, { token: null, secret: code }),
-  checkToken: (token: string) => request<Health>('/health', undefined, { token }),
-  tokens: () => request<{ tokens: TokenMetadata[] }>('/auth/tokens'),
+  checkToken: (token: string) => request<ServerHealth>('/health', undefined, { token }),
+  tokens: () => request<TokenList>('/auth/tokens'),
   createToken: (name: string, expires_at: string | null) => request<IssuedToken>('/auth/tokens', { method: 'POST', body: JSON.stringify({ name, expires_at }) }),
   revokeToken: (id: string) => request<void>(`/auth/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  health: () => request<Health>('/health'),
+  health: () => request<ServerHealth>('/health'),
   groups: () => request<NodeGroup[]>('/groups'),
   assets: () => request<ListNode[]>('/assets'),
   asset: (name: string) => request<AssetDetail>(`/assets/${encodeURIComponent(name)}`),
@@ -143,7 +137,7 @@ export const api = {
   partitionKey: (name: string, key: string) =>
     request<PartitionKeyDetail>(`/assets/${encodeURIComponent(name)}/partitions/key?${new URLSearchParams({ key, sample: String(PREVIEW_ROWS) })}`),
   assetSchema: (name: string) => request<NodeStatus[]>(`/assets/${encodeURIComponent(name)}/schema?sample=${PREVIEW_ROWS}`),
-  project: () => request<{ root: string | null; telemetry?: { datadog_url: string | null } }>('/project'),
+  project: () => request<Project>('/project'),
   /** `GET /state` of a group, a source file, or (`null`) every node. */
   state: (scope: StateScope | null, signal?: AbortSignal) =>
     request<NodeState[]>(
@@ -193,18 +187,20 @@ export const api = {
   runTarget: (target: string, allowPaused = false) =>
     startRun({ command: 'run', targets: [target], refresh_all: true, ...(allowPaused ? { allow_paused: true } : {}) }),
   cancelRun: (runId: string) =>
-    request<{ run_id: string; status: 'cancelling' }>(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
+    request<RunCancelling>(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
   schedule: () => request<ScheduleJob[]>('/schedule'),
   /** Pause a schedule; `until` (RFC 3339) ends the pause, otherwise it lasts until resumed. */
   pauseSchedule: (id: string, until?: string) =>
-    request<unknown>(
+    request<SchedulePauseAnswer>(
       `/schedule/${encodeURIComponent(id)}/pause${until ? `?until=${encodeURIComponent(until)}` : ''}`,
       { method: 'POST' },
     ),
   resumeSchedule: (id: string) =>
-    request<unknown>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+    request<SchedulePauseAnswer>(`/schedule/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   /** The paused assets (`barca pause`): scheduled runs skip them until resumed. */
   pauses: () => request<Pauses>('/pauses'),
+  /** `barca pause TARGET --downstream --dry-run --json`: the pauses, with `covers`, what a pause of `target` and everything below it would cover. Nothing is paused. */
+  pauseCover: (target: string) => request<Pauses>(`/pauses?target=${encodeURIComponent(target)}&downstream=true`),
   /** Every pinned asset (`barca pin`). */
   pins: () => request<Pins>('/pins'),
   /** Pause a node (with `downstream`, everything below it) or a file. 403 on a read-only server. */

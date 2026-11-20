@@ -186,10 +186,10 @@ pub(crate) const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_mat_node_rest ON materializations(node_id, id) WHERE status != 'success' OR artifact_path IS NULL",
 ];
 
-/// Derived per-node freshness witnesses (`barca_core::incremental`); never a second ledger.
+/// Derived per-node freshness witnesses (`barca_service::incremental`); never a second ledger.
 pub(crate) const FRESHNESS_PROOFS: &str = "CREATE TABLE IF NOT EXISTS freshness_proofs (id TEXT PRIMARY KEY, generation INTEGER NOT NULL, snapshot TEXT NOT NULL)";
 
-/// The run queue of `barca serve` (`barca_core::serve::run_queue`).
+/// The run queue of `barca serve` (`barca_service::run_queue`).
 pub const RUN_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
     run_id TEXT PRIMARY KEY,
     seq INTEGER NOT NULL,
@@ -198,7 +198,7 @@ pub const RUN_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
     queued_at TEXT NOT NULL
 )";
 
-/// Settings `barca serve` keeps across restarts (`barca_core::serve::run_queue`).
+/// Settings `barca serve` keeps across restarts (`barca_service::run_queue`).
 pub const SERVER_STATE: &str = "CREATE TABLE IF NOT EXISTS server_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -255,7 +255,7 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     // What each due tick of a schedule decided and how its run ended (#960); bounded by its
     // writers, written only by the scheduler of `barca serve`.
     ("schedule_ticks", crate::db::CREATE_SCHEDULE_TICKS),
-    // The component digests of a definition, once: the rows of its keys name it (`barca_core::changes`).
+    // The component digests of a definition, once: the rows of its keys name it (`barca_service::changes`).
     (
         "definition_components",
         "CREATE TABLE IF NOT EXISTS definition_components (

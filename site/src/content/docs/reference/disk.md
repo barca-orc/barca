@@ -4,7 +4,7 @@ description: "The size limit for .barca/, what barca gc evicts and in which orde
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/disk.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/disk.md (barca docs disk). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/disk.md (barca docs disk). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `.barca/` has a size limit, and barca deletes old artifacts to stay under it. Below: what the
 limit counts, what is evicted first and what never is, and how the metadata database keeps to
@@ -166,6 +166,16 @@ leftover and superseded result, which never costs a recompute of anything curren
 evicts only that environment's results (leftovers are shared; every environment's rows decide
 which files are named). A file that cannot be deleted is skipped with one warning; `barca gc`
 exits 3 only when a metadata DB cannot be read.
+
+In a project where `barca serve` is running, `barca gc` is run by the server (`POST /gc`): the
+command sends its flags over the project's socket and prints the server's result. The eviction
+then takes its turn with the server's own writes instead of waiting on the database lock from
+outside, where behind a server that was recording runs it could wait 60 seconds and fail
+([Server Mode: a Shared Ledger and --server: In the server's own project](/reference/server-mode/#in-the-servers-own-project-the-project-socket)). The server knows what its own runs
+in flight hold, so it protects those results one by one, where a second process beside a run
+considers only leftovers and superseded results (`restricted` in the JSON). `barca gc --local`
+evicts in the command's own process as before; `barca gc --server URL` asks another server to
+evict its own cache. A `--read-only` server refuses (exit 2).
 
 When `barca gc` cannot get down to its target, a `held by:` line says what holds the rest, and
 `held` in the JSON lists it, largest first, as `{what, bytes, evictable}`: `results` (files a

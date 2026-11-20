@@ -1,3 +1,4 @@
+import { isSuccess } from '@/lib/runs'
 import { Link } from 'react-router'
 import { AssetVersions } from '@/components/assets/AssetVersions'
 import { useHealth } from '@/hooks/useHealth'
@@ -8,12 +9,12 @@ import { StatusGlyph } from '@/components/StatusGlyph'
 import { ErrorLine } from '@/components/ErrorLine'
 import { Age } from '@/components/Age'
 import { artifactSchema } from '@/lib/artifactSchema'
-import { formatSeconds } from '@/lib/assetTable'
 import { shortName } from '@/lib/graph'
 import { formatBytes, previewRows, truncateCell } from '@/lib/nodeDetail'
 import { plural } from '@/lib/plural'
 import { keyStateDisplay, keyStateOfCode } from '@/lib/keyStateDisplay'
 import type { KeyArtifact, PartitionKeyDetail } from '@/lib/types'
+import { formatSeconds } from '@/lib/time'
 
 /** A key's result or input: its type and columns, and its first rows. */
 function Shape({ artifact, label }: { artifact: KeyArtifact; label: string }) {
@@ -151,7 +152,7 @@ export function KeyDetail({ node, keyName, detail, loading, error, hrefFor, onRu
               <ul className="barca-keyattempts">
                 {detail.attempts.map((a, i) => (
                   <li key={i}>
-                    <StatusGlyph glyph={a.status === 'success' ? 'fresh' : 'failed'} size={12} />
+                    <StatusGlyph glyph={isSuccess(a.status) ? 'fresh' : 'failed'} size={12} />
                     <Age at={a.created_at} />
                     {a.elapsed_seconds !== null && <span className="barca-cell-sub">{formatSeconds(a.elapsed_seconds)}</span>}
                     {a.run_id && <Link className="barca-cell-sub" to={`/runs?run=${encodeURIComponent(a.run_id)}`}>run</Link>}

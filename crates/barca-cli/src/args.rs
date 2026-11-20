@@ -18,7 +18,7 @@ pub(crate) enum OutputMode {
     Pretty,
 }
 
-impl From<OutputMode> for barca_core::report::ResultFormat {
+impl From<OutputMode> for barca_service::report::ResultFormat {
     fn from(mode: OutputMode) -> Self {
         match mode {
             OutputMode::Json => Self::Json,
@@ -41,6 +41,15 @@ impl OutputMode {
 /// `-o` on get. `path` and `value` choose what is returned and print only that, unless
 /// `--json` (or `--pretty`) asks for the whole result; `json` and `pretty` are the older
 /// spellings of `--json` and `--pretty`.
+/// `--queue` of `get` and `run`: where the run joins a server's run queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum QueueArg {
+    /// Ahead of waiting scheduled runs, behind earlier requests (the default)
+    Next,
+    /// Behind every waiting run, scheduled ones included
+    Last,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum GetOutput {
     /// Artifact paths, one per line (one per selected partition key); the default
@@ -74,7 +83,7 @@ pub(crate) enum LogStreamArg {
     Stderr,
 }
 
-impl From<LogStreamArg> for barca_core::LogStream {
+impl From<LogStreamArg> for barca_service::LogStream {
     fn from(arg: LogStreamArg) -> Self {
         match arg {
             LogStreamArg::Stdout => Self::Stdout,
@@ -83,16 +92,18 @@ impl From<LogStreamArg> for barca_core::LogStream {
     }
 }
 
-/// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1). On `get`, `run`,
-/// `status`, `list`, `history`, `stats`, `logs` and `sql` only; the other commands always run
-/// here.
+/// `--server [<URL>]` and `--local`: where a command runs (RFC-0007 §3.1; the project socket,
+/// #1056). On the commands whose row in `route::ROUTES` takes them (`doctor` declares its own
+/// pair, with its own help); the other commands always run here. A test in `route` holds the
+/// table and these flags to each other.
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct ServerFlags {
     /// Run this command on a barca server (`barca serve`) and print its result here: the URL
     /// given, or with no URL the configured one (BARCA_SERVER, else [server] url in
-    /// barca.toml). Without it, get and run run on this machine (against a configured server's
-    /// ledger), status, history, stats and logs are answered by a configured server, and sql
-    /// resolves its views from it (the query always runs here)
+    /// barca.toml). Without it, a `barca serve` running in this project is used the same way
+    /// (found by its socket under .barca/); with none, get and run run on this machine (against
+    /// a configured server's ledger), status, history, stats and logs are answered by a
+    /// configured server, and sql resolves its views from it (the query always runs here)
     #[arg(
         long,
         value_name = "URL",
@@ -102,10 +113,11 @@ pub(crate) struct ServerFlags {
     )]
     #[arg(help = "Use a server (URL or configured); get/run execute its deployed code", long_help = None)]
     pub(crate) server: Option<String>,
-    /// Ignore any configured server for this command: run against this machine's own ledger and
-    /// records; nothing is read from or sent to the server
+    /// Ignore any server for this command, a configured one and a `barca serve` running in
+    /// this project: run on this machine against its own ledger and records; nothing is read
+    /// from or sent to a server
     #[arg(long)]
-    #[arg(help = "Use independent local state; ignore the configured server", long_help = None)]
+    #[arg(help = "Run on this machine; ignore a configured server and this project's barca serve", long_help = None)]
     pub(crate) local: bool,
 }
 
@@ -240,8 +252,9 @@ Examples:
   barca get total pipeline.py --fields id,status   # JSON with each entry of `steps` trimmed to these keys
   barca get total --server                 # run it on the configured barca server; prints here as a local run
   barca get total --server https://barca.example.com --json   # on that server (barca docs server-mode)
-  barca get total --local                  # this machine's ledger only; nothing is sent to a configured server
+  barca get total --local                  # run in this process: not on this project's barca serve, nothing sent to a configured server
   barca get total pipeline.py --allow-paused   # run it even though it is paused (barca docs incidents)
+  barca get sales --server --queue last --refresh-all   # a backfill that waits its turn behind the server's scheduled runs (barca docs serve-ops)
   barca get --examples                     # the complete example collection; runs nothing
 
 More: barca docs cache, barca docs partitions, barca docs types, barca docs sinks, barca docs agents";
@@ -265,8 +278,9 @@ Examples:
   barca run check_a,check_b pipeline.py                # several tasks in one run; shared upstream runs once
   barca run check_a,check_b pipeline.py --dry-run      # preview the union of both cones
   barca run deploy --server --agent                    # run it on the configured barca server (barca docs server-mode)
-  barca run deploy pipeline.py --local                 # run here and post nothing to a configured server
+  barca run deploy pipeline.py --local                 # run in this process: not on this project's barca serve, nothing posted to a configured server
   barca run deploy pipeline.py --allow-paused          # run it even though it is paused (barca docs incidents)
+  barca run deploy --server --queue last               # behind the server's waiting runs, scheduled ones included (barca docs serve-ops)
   barca list pipeline.py                               # not sure of the name? list assets and tasks first
 
 More: barca docs tasks, barca docs cache, barca docs agents";
@@ -354,6 +368,8 @@ Examples:
   barca gc --max-size off         # only leftovers and superseded results, all of them
   barca gc --json                 # {size_bytes, limit_bytes, after_bytes, tiers, evicted, ...}
   barca gc --env dev              # only the dev environment's results (leftovers are shared)
+  barca gc --local                # evict in this process, not in a barca serve running in this project
+  barca gc --server http://barca.internal:8274   # a server evicts its own cache (POST /gc)
 
 More: barca docs cache (\"Disk use\")";
 
@@ -436,6 +452,7 @@ Examples:
   barca pause clean --server               # scheduled runs skip clean until it is resumed
   barca pause clean --downstream --server  # clean and everything below it
   barca pause pipeline.py --server         # every node of the file
+  barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
   barca pause --server --json              # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
   barca pause --schedule nightly --server  # the schedule of `nightly` does not fire until resumed
   barca pause --schedule nightly --until 2h --server   # resumes by itself in two hours
@@ -708,6 +725,12 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
         allow_paused: bool,
+        /// Where the run joins a server's run queue: `next` (the default) ahead of waiting
+        /// scheduled runs, `last` behind every waiting run and at scheduled priority. A usage
+        /// error when the command runs on this machine. Experimental
+        #[arg(long, value_enum, value_name = "PLACE")]
+        #[arg(help = "On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental)", long_help = None)]
+        queue: Option<QueueArg>,
         #[command(flatten)]
         server: ServerFlags,
     },
@@ -776,6 +799,12 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Run a target even though it is paused (experimental)", long_help = None)]
         allow_paused: bool,
+        /// Where the run joins a server's run queue: `next` (the default) ahead of waiting
+        /// scheduled runs, `last` behind every waiting run and at scheduled priority. A usage
+        /// error when the command runs on this machine. Experimental
+        #[arg(long, value_enum, value_name = "PLACE")]
+        #[arg(help = "On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental)", long_help = None)]
+        queue: Option<QueueArg>,
         #[command(flatten)]
         server: ServerFlags,
     },
@@ -939,6 +968,8 @@ pub(crate) enum Cli {
         #[arg(long)]
         #[arg(help = "Use a separate cache and history for this environment", long_help = None)]
         env: Option<String>,
+        #[command(flatten)]
+        server: ServerFlags,
     },
     /// Show execution statistics for an asset
     #[command(after_help = quick_help("stats", STATS_HELP), after_long_help = STATS_HELP, long_about = None)]
@@ -1032,7 +1063,7 @@ pub(crate) enum Cli {
         files: Vec<PathBuf>,
         /// Require project bearer tokens; overrides BARCA_SERVER_AUTH and [server] auth
         #[arg(long)]
-        auth: Option<barca_core::serve::AuthMode>,
+        auth: Option<barca_service::serve::AuthMode>,
         /// Port to bind on
         #[arg(short, long, default_value = "8274")]
         port: u16,
@@ -1133,9 +1164,14 @@ pub(crate) enum Cli {
         #[arg(long, requires = "target")]
         #[arg(help = "Also pause every node downstream of the target", long_help = None)]
         downstream: bool,
+        /// Pause nothing: print what the pause would cover (`covers`: the nodes TARGET names,
+        /// what --downstream adds, and the schedules whose ticks reach them)
+        #[arg(long, requires = "target")]
+        #[arg(help = "Pause nothing; print what the pause would cover", long_help = None)]
+        dry_run: bool,
         /// Pause one schedule instead: the scheduled NODE's ticks do not fire until it is
         /// resumed (or --until passes). The ticks it skips are not caught up
-        #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream"])]
+        #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream", "dry_run"])]
         #[arg(help = "Pause the schedule of this scheduled node instead of nodes", long_help = None)]
         schedule: Option<String>,
         /// With --schedule: resume by itself at this time: a duration from now (30m, 2h, 7d)
@@ -1246,10 +1282,10 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "STATE", value_delimiter = ',')]
         state: Vec<String>,
         /// Keep nodes with this cause
-        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Cause::ALL.map(|v| v.as_str())))]
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_service::health::Cause::ALL.map(|v| v.as_str())))]
         cause: Option<String>,
         /// Keep nodes with this health
-        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_core::health::Health::ALL.map(|v| v.as_str())))]
+        #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"], value_parser = PossibleValuesParser::new(barca_service::health::Health::ALL.map(|v| v.as_str())))]
         health: Option<String>,
         /// Keep nodes with this root id
         #[arg(long, conflicts_with_all = ["rollup", "keys", "overview", "grid", "key"])]
@@ -1469,5 +1505,5 @@ fn parse_capacity(value: &str) -> Result<usize, String> {
 }
 
 fn parse_timezone(value: &str) -> Result<String, String> {
-    barca_core::schedule::Zone::parse(value).map(|_| value.to_string())
+    barca_service::schedule::Zone::parse(value).map(|_| value.to_string())
 }

@@ -28,6 +28,7 @@ nodes[].id : string
 nodes[].inputs : array
 nodes[].inputs[] : string
 nodes[].kind : string
+nodes[].last_attempt : string
 nodes[].last_check : null
 nodes[].last_materialization : null|object
 nodes[].last_materialization.artifact : null
@@ -59,6 +60,7 @@ nodes[].root.node : string
 nodes[].shape : null
 nodes[].signals : array
 nodes[].stale_since : string
+nodes[].typical_run_seconds : null
 rollup : object
 rollup.also_in : array
 rollup.asset_causes : object

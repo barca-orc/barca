@@ -1,8 +1,9 @@
 //! The engine layer of barca (#905): plan in, results out. The coordinator's ready queue, the
-//! worker pool and its I/O loop, the Unix-socket protocol and its wire tables, batched calls,
-//! measured cost, dataset sinks and the trace context each step carries. It depends on
-//! `barca-model` and `barca-compile` only (no metadata database); `barca-core` re-exports each
-//! module, so its items keep their `barca_core::` paths.
+//! worker pool and its I/O loop, the wire tables, batched calls, measured cost, dataset sinks
+//! and the trace context each step carries. It depends on `barca-model`, `barca-compile` (the
+//! plan), `barca-proc` (processes and the socket protocol) and, for `batch` alone,
+//! `barca-python` (a batched step's labels are evaluated by the frontend); never on the
+//! metadata database. `barca-run` drives it.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
@@ -14,19 +15,16 @@ pub mod coordinator;
 pub mod cost;
 #[doc(hidden)]
 pub mod dataset_sinks;
-pub mod dispatch;
-pub mod helper_proc;
 pub mod interrupt;
 #[doc(hidden)]
 pub mod io_loop;
 #[doc(hidden)]
 pub mod observation;
 #[doc(hidden)]
-pub mod protocol;
-#[doc(hidden)]
 pub mod result_journal;
 #[doc(hidden)]
 pub mod run_host;
+mod step_json;
 #[doc(hidden)]
 pub mod step_trace;
 #[doc(hidden)]

@@ -33,9 +33,6 @@ export interface DagNodeProps {
   onClick?: () => void
 }
 
-export const DAG_NODE_WIDTH = 208
-export const DAG_NODE_HEIGHT = 40
-
 /** The glyph a node shows: pinned, then its state's own. */
 function nodeGlyph({ glyph, tone, pinned }: Pick<DagNodeProps, 'glyph' | 'tone' | 'pinned'>): Glyph {
   if (pinned !== undefined) return 'pinned'

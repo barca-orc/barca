@@ -23,7 +23,7 @@ export interface EstimateLineProps {
  * second it does not know); where the server gives only `recheck_at`, a tick will look at the
  * node again and the word is "rechecked", at the slot's exact time. A node with no estimate
  * says why (`no_estimate`), never a blank. Which of these a node gets, and every time and
- * reason, is decided in `barca-core`, never here.
+ * reason, is decided in `barca-service`, never here.
  */
 export function EstimateLine({ staleSince, expectedFreshAt, recheckAt, noEstimate = null, nowMs }: EstimateLineProps) {
   const { zone } = useTimeZone()

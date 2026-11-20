@@ -8,12 +8,11 @@
  */
 
 import { match } from 'ts-pattern'
-import { formatSeconds } from './assetTable'
 import { shortName } from './graph'
-import type { RunsQuery } from './api'
+import type { RunsQuery } from './types'
 import { only, type Next } from './program'
-import { parseRunStatus, runNodeIdle } from './runs'
-import { formatHour, hourOf, parseTime, zoneName, type TimeZone } from './time'
+import { isFailure, parseRunStatus, runNodeIdle } from './runs'
+import { formatHour, hourOf, parseTime, zoneName, type TimeZone, formatSeconds } from './time'
 import type { ActivityHour, RunNodeSummary, RunStep } from './types'
 
 const RUNS_PAGE_SIZE = 100
@@ -84,7 +83,7 @@ export const INITIAL_RUNS: RunsModel = { limit: RUNS_PAGE_SIZE, filter: 'all', q
 
 /** The newest `limit` runs, unfiltered: what `GET /runs` answers without a filter. */
 export function everyRun(limit: number): RunsQuery {
-  return { limit, status: null, not_triggered_by: null, since: null, until: null, search: null }
+  return { limit, status: null, triggered_by: null, not_triggered_by: null, since: null, until: null, search: null }
 }
 
 /** What the page asks the server for: the model's filters as `GET /runs` names them. */
@@ -96,6 +95,7 @@ export function runsQuery(model: RunsModel): RunsQuery {
       .with('live', () => 'running' as const)
       .with('all', () => null)
       .exhaustive(),
+    triggered_by: null,
     not_triggered_by: model.hideSchedule ? 'schedule' : null,
     since: model.window?.since ?? null,
     until: model.window?.until ?? null,
@@ -215,7 +215,7 @@ export function groupRunSteps(steps: readonly RunStep[], nodes: readonly RunNode
   }
   return nodes.map((summary) => ({
     summary,
-    steps: (byNode.get(summary.node_id) ?? []).slice().sort((a, b) => Number(b.status === 'failed') - Number(a.status === 'failed')),
+    steps: (byNode.get(summary.node_id) ?? []).slice().sort((a, b) => Number(isFailure(b.status)) - Number(isFailure(a.status))),
   }))
 }
 
@@ -237,7 +237,7 @@ export function runNodeTime(n: RunNodeSummary, format: (seconds: number) => stri
 
 /** A run's listed steps by outcome: the failed ones (first), then the rest. */
 export function splitRunSteps(steps: readonly RunStep[]): { failed: RunStep[]; ok: RunStep[] } {
-  return { failed: steps.filter((s) => s.status === 'failed'), ok: steps.filter((s) => s.status !== 'failed') }
+  return { failed: steps.filter((s) => isFailure(s.status)), ok: steps.filter((s) => !isFailure(s.status)) }
 }
 
 /**

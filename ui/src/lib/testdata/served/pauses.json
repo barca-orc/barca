@@ -1,0 +1,11 @@
+{
+  "paused": [
+    {
+      "id": "orders.py:customers",
+      "paused_at": 1794906000,
+      "via": "customers"
+    }
+  ],
+  "schedules": [],
+  "total": 1
+}

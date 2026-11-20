@@ -1,11 +1,12 @@
 //! The inspection commands against a server (`barca list|status|history|stats|queue|sql
 //! --server`): the CLI's `--json` bodies, rendered here with this command's own `--limit`,
-//! `--fields` and output mode by the same `barca_core::report` functions a local command uses.
+//! `--fields` and output mode by the same `barca_service::report` functions a local command uses.
 
 use super::{Server, encode, in_files};
 use crate::error::{CliError, Context, ErrorKind};
-use barca_core::BarcaError;
-use barca_core::cache_state::CacheState;
+use barca_service::BarcaError;
+use barca_service::cache_state::CacheState;
+use barca_service::served::{Pauses, QueueView, SchedulePauseAnswer};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -23,22 +24,22 @@ pub(crate) async fn list(
     let files = server.deployed_files(files).await?;
     if groups {
         let body = server.get_json("/groups").await?;
-        let groups: Vec<barca_core::groups::NodeGroup> = serde_json::from_value(body)
+        let groups: Vec<barca_service::groups::NodeGroup> = serde_json::from_value(body)
             .map_err(|e| server.unexpected("GET /groups", &e.to_string()))?;
-        crate::commands::print_groups(&groups, json);
+        crate::print::print_groups(&groups, json);
         return Ok(());
     }
     let body = server.get_json("/list").await?;
     let bad = |e: String| server.unexpected("GET /list", &e);
-    let nodes: Vec<barca_core::report::ListNode> =
+    let nodes: Vec<barca_service::report::ListNode> =
         serde_json::from_value(body["nodes"].clone()).map_err(|e| bad(e.to_string()))?;
     let mut assets = Vec::new();
     let mut next_fires = std::collections::HashMap::new();
     for node in nodes.into_iter().filter(|n| in_files(&n.id, &files)) {
-        let freshness: barca_core::Freshness = match &node.schedule {
+        let freshness: barca_service::Freshness = match &node.schedule {
             Some(cron) => serde_json::from_value(json!({"type": "Schedule", "value": cron})),
             None => serde_json::from_value(json!({"type": match node.freshness {
-                barca_core::report::ListFreshness::Manual => "Manual",
+                barca_service::report::ListFreshness::Manual => "Manual",
                 _ => "Always",
             }})),
         }
@@ -46,7 +47,7 @@ pub(crate) async fn list(
         if let Some(next) = node.next_fire {
             next_fires.insert(node.id.clone(), next);
         }
-        assets.push(barca_core::results::AssetSummary {
+        assets.push(barca_service::results::AssetSummary {
             id: node.id,
             kind: node.kind,
             freshness,
@@ -58,7 +59,7 @@ pub(crate) async fn list(
     }
     let total = assets.len();
     assets.truncate(limit.unwrap_or(total));
-    crate::commands::emit(barca_core::report::render_list(
+    crate::print::emit(barca_service::report::render_list(
         &assets,
         total,
         &next_fires,
@@ -98,9 +99,9 @@ pub(crate) async fn rollup(
         false => format!("/state/rollup?{}", query.join("&")),
     };
     let body = server.get_json(&path).await?;
-    let rollup: barca_core::rollup::Rollup = serde_json::from_value(body)
+    let rollup: barca_service::rollup::Rollup = serde_json::from_value(body)
         .map_err(|e| server.unexpected("GET /state/rollup", &e.to_string()))?;
-    crate::commands::emit(barca_core::report::render_rollup(&rollup, json));
+    crate::print::emit(barca_service::report::render_rollup(&rollup, json));
     Ok(())
 }
 
@@ -109,7 +110,7 @@ pub(crate) async fn status(
     server: &Server,
     targets: &[String],
     files: &[PathBuf],
-    opts: crate::commands::StatusOpts<'_>,
+    opts: crate::request::StatusOpts<'_>,
     env: Option<&str>,
 ) -> Result<(), CliError> {
     server.health(env).await?;
@@ -122,11 +123,11 @@ pub(crate) async fn status(
         path.push_str(&format!("&files={}", encode(&files.join(","))));
     }
     let body = server.get_json(&path).await?;
-    let mut result: barca_core::status::StatusResult = serde_json::from_value(body.clone())
+    let mut result: barca_service::status::StatusResult = serde_json::from_value(body.clone())
         .map_err(|e| server.unexpected("GET /nodes", &e.to_string()))?;
     if !files.is_empty() {
         result.nodes.retain(|n| in_files(&n.id, &files));
-        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
+        result.summary = barca_service::status::StatusSummary::of(&result.nodes);
     }
     if server.implicit {
         server.annotate_here(&mut result, env).await?;
@@ -134,7 +135,7 @@ pub(crate) async fn status(
     // Filtered here, after this machine's own states are known (`not_in_ledger`); the summary
     // keeps counting every node.
     opts.filter.apply(&mut result);
-    crate::commands::emit(barca_core::report::render_status(
+    crate::print::emit(barca_service::report::render_status(
         result,
         opts.json,
         opts.limit,
@@ -150,12 +151,12 @@ impl Server {
     /// `unsynced` (`not_in_ledger`).
     async fn annotate_here(
         &self,
-        result: &mut barca_core::status::StatusResult,
+        result: &mut barca_service::status::StatusResult,
         env: Option<&str>,
     ) -> Result<(), CliError> {
         let here = |e: BarcaError| CliError::from_barca(e, &Context::default());
-        let cfg = barca_core::config::resolve(env).map_err(here)?;
-        let layout = barca_core::transfer::ArtifactLayout::new(
+        let cfg = barca_service::config::resolve(env).map_err(here)?;
+        let layout = barca_service::transfer::ArtifactLayout::new(
             cfg.local_artifact_dir.clone(),
             &cfg.artifact_root,
         );
@@ -171,9 +172,9 @@ impl Server {
                     "a successful materialization matches this code and these inputs".to_string();
             }
             node.local = Some(has_copy(&layout, node.cache.artifact.as_deref()));
-            barca_core::status::not_in_ledger(node, &pending);
+            barca_service::status::not_in_ledger(node, &pending);
         }
-        result.summary = barca_core::status::StatusSummary::of(&result.nodes);
+        result.summary = barca_service::status::StatusSummary::of(&result.nodes);
         Ok(())
     }
 }
@@ -181,7 +182,7 @@ impl Server {
 /// Whether this machine holds the artifact the server recorded at `artifact`: its mirror of
 /// that store path exists under this machine's artifact directory. A path outside this
 /// project's store (a server without one) is never here.
-fn has_copy(layout: &barca_core::transfer::ArtifactLayout, artifact: Option<&str>) -> bool {
+fn has_copy(layout: &barca_service::transfer::ArtifactLayout, artifact: Option<&str>) -> bool {
     artifact
         .and_then(|a| layout.local_for(a))
         .is_some_and(|p| p.is_file())
@@ -191,7 +192,7 @@ fn has_copy(layout: &barca_core::transfer::ArtifactLayout, artifact: Option<&str
 pub(crate) async fn history(
     server: &Server,
     limit: Option<usize>,
-    filter: &barca_core::history_filter::HistoryFilter,
+    filter: &barca_service::history_filter::HistoryFilter,
     json: bool,
     fields: Option<&[String]>,
     env: Option<&str>,
@@ -207,13 +208,13 @@ pub(crate) async fn history(
     let path = format!("/history?{}", query.join("&"));
     let body = server.get_json(&path).await?;
     let bad = |e: serde_json::Error| server.unexpected("GET /history", &e.to_string());
-    let runs: Vec<barca_core::db::RunRecord> =
+    let runs: Vec<barca_service::db::RunRecord> =
         serde_json::from_value(body["runs"].clone()).map_err(bad)?;
     let total = body["total"].as_u64().map_or(runs.len(), |t| t as usize);
     // The server's own words for each run: its `line`, and with `--status running` what a
     // run in progress is working on (`now`).
-    let extras = barca_core::report::HistoryExtras::of_server_runs(&body["runs"]);
-    crate::commands::emit(barca_core::report::render_history(
+    let extras = barca_service::report::HistoryExtras::of_server_runs(&body["runs"]);
+    crate::print::emit(barca_service::report::render_history(
         &runs, total, json, fields, &extras,
     ));
     Ok(())
@@ -223,7 +224,7 @@ pub(crate) async fn history(
 /// the runs of the last 24 hours that the filters keep.
 pub(crate) async fn activity(
     server: &Server,
-    filter: &barca_core::history_filter::HistoryFilter,
+    filter: &barca_service::history_filter::HistoryFilter,
     json: bool,
     env: Option<&str>,
 ) -> Result<(), CliError> {
@@ -239,9 +240,10 @@ pub(crate) async fn activity(
             "the server sent no `activity`: it runs a barca older than 0.44",
         ));
     };
-    let activity: barca_core::run_list::RunActivity = serde_json::from_value(activity.clone())
-        .map_err(|e| server.unexpected("GET /runs", &e.to_string()))?;
-    crate::commands::emit(barca_core::report::render_activity(&activity, json));
+    let activity: barca_service::run_list::RunActivity =
+        serde_json::from_value(activity.clone())
+            .map_err(|e| server.unexpected("GET /runs", &e.to_string()))?;
+    crate::print::emit(barca_service::report::render_activity(&activity, json));
     Ok(())
 }
 
@@ -270,27 +272,27 @@ pub(crate) async fn run_detail(
         }
     };
     let bad = |e: serde_json::Error| server.unexpected(&format!("GET {path}"), &e.to_string());
-    let run: barca_core::db::RunRecord = serde_json::from_value(body.clone()).map_err(bad)?;
-    let mut steps: Vec<barca_core::db::RunStep> =
+    let run: barca_service::db::RunRecord = serde_json::from_value(body.clone()).map_err(bad)?;
+    let mut steps: Vec<barca_service::db::RunStep> =
         serde_json::from_value(body["steps"].clone()).map_err(bad)?;
     // The steps the run recorded, as on this machine: a finished run the server started also
     // lists the cached steps it streamed, until the server restarts.
     let listed = steps.len();
     if !matches!(run.status.as_str(), "pending" | "running") {
         steps.retain(|step| {
-            !barca_core::step_status::StepStatus::Cached.is(Some(step.status.as_str()))
+            !barca_service::step_status::StepStatus::Cached.is(Some(step.status.as_str()))
         });
     }
     // A server older than 0.30.2 lists every step and sends no page. The cached steps left
     // out above are not counted either.
     let steps_page = match body.get("steps_page") {
         Some(page) => {
-            let mut page: barca_core::db::StepsPage =
+            let mut page: barca_service::db::StepsPage =
                 serde_json::from_value(page.clone()).map_err(bad)?;
             page.total -= listed - steps.len();
             page
         }
-        None => barca_core::db::StepsPage {
+        None => barca_service::db::StepsPage {
             total: steps.len(),
             truncated: false,
             nodes: Vec::new(),
@@ -300,13 +302,15 @@ pub(crate) async fn run_detail(
     // The server's own rows of what the targets returned (it has the run's outcome).
     let outputs =
         serde_json::from_value(body["explanation"]["outputs"].clone()).unwrap_or_default();
-    let detail = barca_core::queries::RunDetail {
+    let detail = barca_service::queries::RunDetail {
         run,
         steps,
         steps_page,
         outputs,
     };
-    crate::commands::emit(barca_core::report::render_run_detail(&detail, json, select));
+    crate::print::emit(barca_service::report::render_run_detail(
+        &detail, json, select,
+    ));
     Ok(())
 }
 
@@ -315,14 +319,29 @@ pub(crate) async fn run_detail(
 pub(super) async fn local_run(
     env: Option<&str>,
     run_id: Option<&str>,
-) -> Option<barca_core::db::RunRecord> {
-    let cfg = barca_core::config::resolve(env).ok()?;
-    let snapshot = barca_core::db::DbSnapshot::take(&cfg.db_path)
+) -> Option<barca_service::db::RunRecord> {
+    let cfg = barca_service::config::resolve(env).ok()?;
+    // In place when the database can be read so, else from a copy: never created or migrated.
+    let view = barca_service::db::ReadView::open(&cfg.db_path)
         .await
-        .ok()??;
+        .ok()
+        .flatten();
+    let snapshot = match view {
+        Some(_) => None,
+        None => Some(
+            barca_service::db::DbSnapshot::take(&cfg.db_path)
+                .await
+                .ok()??,
+        ),
+    };
+    let path = match (&view, &snapshot) {
+        (Some(view), _) => view.path(),
+        (None, Some(snapshot)) => snapshot.path(),
+        (None, None) => return None,
+    };
     match run_id {
-        Some(id) => barca_core::db::get_run(snapshot.path(), id).await.ok()?,
-        None => barca_core::db::get_recent_runs(snapshot.path(), 1)
+        Some(id) => barca_service::db::get_run(path, id).await.ok()?,
+        None => barca_service::db::get_recent_runs(path, 1)
             .await
             .ok()?
             .into_iter()
@@ -380,38 +399,40 @@ pub(crate) async fn queue(
     let body: Value = serde_json::from_str(&text)
         .map_err(|e| server.unexpected(&format!("GET {path}"), &format!("not JSON: {e}")))?;
     match action {
-        Some(QueueAction::Pause) => barca_core::errln!(
+        Some(QueueAction::Pause) => barca_service::errln!(
             "[barca] run queue paused on {}: queued runs wait until `barca queue resume`",
             server.shown_url
         ),
         Some(QueueAction::Resume) => {
-            barca_core::errln!("[barca] run queue resumed on {}", server.shown_url)
+            barca_service::errln!("[barca] run queue resumed on {}", server.shown_url)
         }
         None => {}
     }
     if json {
-        barca_core::outln!(
+        // The server's answer as it sent it: a key a newer server adds is printed too.
+        barca_service::outln!(
             "{}",
             serde_json::to_string_pretty(&body).expect("a JSON value prints")
         );
     } else {
-        barca_core::term::stdout_str(&render_queue(&body));
+        let view: QueueView = serde_json::from_value(body)
+            .map_err(|e| server.unexpected(&format!("GET {path}"), &e.to_string()))?;
+        barca_service::term::stdout_str(&render_queue(&view));
     }
     Ok(())
 }
 
 /// The queue as a table: a summary line, then the running and the queued runs.
-fn render_queue(body: &Value) -> String {
-    let list = |key: &str| body[key].as_array().cloned().unwrap_or_default();
-    let (running, queued) = (list("running"), list("queued"));
+fn render_queue(view: &QueueView) -> String {
+    let (running, queued) = (&view.running, &view.queued);
     let mut state = Vec::new();
-    if body["draining"].as_bool() == Some(true) {
+    if view.draining {
         state.push("draining (the server is stopping; the queue resumes at its next start)".into());
     }
-    if body["paused"].as_bool() == Some(true) {
+    if view.paused {
         state.push(format!(
             "paused since {}",
-            body["paused_at"].as_str().unwrap_or("?")
+            view.paused_at.as_deref().unwrap_or("?")
         ));
     }
     if state.is_empty() {
@@ -419,12 +440,12 @@ fn render_queue(body: &Value) -> String {
     }
     // The slots in the server's words (`slots`): it says when a requested run is in the
     // extra slot. Older servers omit this field.
-    let slots = match body["slots"].as_str() {
-        Some(slots) => slots.to_string(),
-        None => body["max_runs"].as_u64().map_or_else(
+    let slots = match view.slots.as_str() {
+        "" => view.max_runs.map_or_else(
             || format!("{} running · run slots unknown", running.len()),
-            |max| barca_core::run_list::queue_slots_line(running.len(), max as usize),
+            |max| barca_service::run_list::queue_slots_line(running.len(), max),
         ),
+        slots => slots.to_string(),
     };
     let mut out = format!(
         "queue: {} · {slots} · {} queued\n",
@@ -439,31 +460,32 @@ fn render_queue(body: &Value) -> String {
         "POS", "RUN_ID", "STATUS", "COMMAND", "TARGET", "TRIGGER", "QUEUED_AT", "START"
     ));
     for run in running.iter().chain(queued.iter()) {
-        // The targets in a few words (`target_line`); `--json` has the full list.
-        let target = match run["target_line"].as_str() {
-            Some(line) => line.to_string(),
-            None => barca_core::run_list::target_line(run["target"].as_str()),
+        // The targets in a few words (`target_line`); `--json` has the full list. Older
+        // servers omit it.
+        let target = match run.target_line.as_str() {
+            "" => barca_service::run_list::target_line(run.target.as_deref()),
+            line => line.to_string(),
         };
         // When it started, or (`~`) when the server estimates it will.
-        let start = match (
-            run["started_at"].as_str(),
-            run["estimated_start_at"].as_str(),
-        ) {
+        let start = match (&run.started_at, &run.estimated_start_at) {
             (Some(at), _) => at.to_string(),
             (None, Some(at)) => format!("~{at}"),
             (None, None) => "-".to_string(),
         };
+        // A run asked to wait its turn behind scheduled work (`--queue last`) says so.
+        let start = match run.queue {
+            Some(barca_service::outcome::QueuePlace::Last) => format!("{start}  queued last"),
+            _ => start,
+        };
         out.push_str(&format!(
             "{:<4} {:<14} {:<8} {:<7} {:<28} {:<9} {:<25} {}\n",
-            run["position"]
-                .as_u64()
-                .map_or("-".to_string(), |p| p.to_string()),
-            run["run_id"].as_str().unwrap_or(""),
-            run["status"].as_str().unwrap_or(""),
-            run["command"].as_str().unwrap_or(""),
+            run.position.map_or("-".to_string(), |p| p.to_string()),
+            run.run_id,
+            run.status,
+            run.command,
             target,
-            run["triggered_by"].as_str().unwrap_or(""),
-            run["queued_at"].as_str().unwrap_or(""),
+            run.triggered_by.as_str(),
+            run.queued_at,
             start,
         ));
     }
@@ -490,9 +512,9 @@ pub(crate) async fn stats(
     {
         obj.insert("node_id".into(), id);
     }
-    let stats: barca_core::db::AssetStats = serde_json::from_value(body)
+    let stats: barca_service::db::AssetStats = serde_json::from_value(body)
         .map_err(|e| server.unexpected("GET /stats", &e.to_string()))?;
-    crate::commands::emit(barca_core::report::render_stats(&stats, json, fields));
+    crate::print::emit(barca_service::report::render_stats(&stats, json, fields));
     Ok(())
 }
 
@@ -507,11 +529,11 @@ const SERVER_QUERY_ROWS: usize = 10_000;
 fn server_runs(
     server: &Server,
     query: &str,
-    catalog: &barca_core::sql::Catalog,
+    catalog: &barca_service::sql::Catalog,
     files: &[String],
     limit: Option<usize>,
 ) -> bool {
-    use barca_core::sql::{names, tables};
+    use barca_service::sql::{names, tables};
     // Node ids in SQL string literals are values, including in a tick-outcomes predicate.
     // Doubled single quotes escape a quote within a literal.
     let identifiers = query.split('\'').step_by(2).collect::<Vec<_>>().join(" ");
@@ -546,31 +568,31 @@ pub(crate) async fn sql(
     json: bool,
     env: Option<&str>,
 ) -> Result<(), CliError> {
-    use barca_core::sql::tables;
+    use barca_service::sql::tables;
     let here = |e: BarcaError| CliError::from_barca(e, &Context::default());
     let health = server.health(env).await?;
-    let cfg = barca_core::config::resolve(env).map_err(here)?;
+    let cfg = barca_service::config::resolve(env).map_err(here)?;
     let files = server.deployed_files(files).await?;
     let mut path = "/sql/views".to_string();
     if !files.is_empty() {
         path.push_str(&format!("?files={}", encode(&files.join(","))));
     }
     let body = server.get_json(&path).await?;
-    let catalog: barca_core::sql::Catalog = serde_json::from_value(body)
+    let catalog: barca_service::sql::Catalog = serde_json::from_value(body)
         .map_err(|e| server.unexpected("GET /sql/views", &e.to_string()))?;
 
     if server_runs(server, query, &catalog, &files, limit)
         && let Some(answer) = server.sql_query(query, limit.unwrap_or_default()).await?
     {
         let bad = |e: serde_json::Error| server.unexpected("POST /sql/query", &e.to_string());
-        let result = barca_core::sql::SqlResult {
+        let result = barca_service::sql::SqlResult {
             columns: serde_json::from_value(answer["columns"].clone()).map_err(bad)?,
             rows: serde_json::from_value(answer["rows"].clone()).map_err(bad)?,
             total: serde_json::from_value(answer["total"].clone()).map_err(bad)?,
             truncated: answer["truncated"].as_bool().unwrap_or_default(),
             notes: serde_json::from_value(answer["notes"].clone()).unwrap_or_default(),
         };
-        crate::commands::emit(barca_core::report::render_sql(result, json));
+        crate::print::emit(barca_service::report::render_sql(result, json));
         return Ok(());
     }
 
@@ -579,13 +601,17 @@ pub(crate) async fn sql(
     } else {
         "leave out --server to query this machine's own results"
     };
-    barca_core::ledger::same_store(
-        &cfg,
-        &server.shown_url,
-        health["store_uri"].as_str(),
-        instead,
-    )
-    .map_err(here)?;
+    // This project's own server keeps its artifacts where this command reads them: there is
+    // no second machine whose store must match.
+    if !server.project {
+        barca_service::ledger::same_store(
+            &cfg,
+            &server.shown_url,
+            health["store_uri"].as_str(),
+            instead,
+        )
+        .map_err(here)?;
+    }
 
     let pending = if server.implicit {
         pending_posts(&cfg, &server.url).await.map_err(here)?
@@ -597,7 +623,7 @@ pub(crate) async fn sql(
     if tables::named(query, tables::RUNS) {
         let route = format!("/history?limit={cap}");
         let body = server.get_json(&route).await?;
-        let rows: Vec<barca_core::db::RunRecord> = serde_json::from_value(body["runs"].clone())
+        let rows: Vec<barca_service::db::RunRecord> = serde_json::from_value(body["runs"].clone())
             .map_err(|e| server.unexpected("GET /history", &e.to_string()))?;
         let total = body["total"].as_u64().map_or(rows.len(), |t| t as usize);
         runs = tables::runs(Some(&rows));
@@ -607,7 +633,7 @@ pub(crate) async fn sql(
     if tables::named(query, tables::MATERIALIZATIONS) {
         let route = format!("/materializations?limit={cap}");
         let body = server.get_json(&route).await?;
-        let rows: Vec<barca_core::db::StepRow> =
+        let rows: Vec<barca_service::db::StepRow> =
             serde_json::from_value(body["materializations"].clone())
                 .map_err(|e| server.unexpected("GET /materializations", &e.to_string()))?;
         let total = body["total"].as_u64().map_or(rows.len(), |t| t as usize);
@@ -622,7 +648,7 @@ pub(crate) async fn sql(
     let mut nodes = tables::nodes(None);
     if tables::named(query, tables::NODES) {
         let body = server.get_json("/nodes?sample=0").await?;
-        let mut result: barca_core::status::StatusResult = serde_json::from_value(body)
+        let mut result: barca_service::status::StatusResult = serde_json::from_value(body)
             .map_err(|e| server.unexpected("GET /nodes", &e.to_string()))?;
         if !files.is_empty() {
             result.nodes.retain(|n| in_files(&n.id, &files));
@@ -668,12 +694,12 @@ pub(crate) async fn sql(
         more.push(table);
     }
 
-    let python = barca_core::commands::find_python();
-    let origin = barca_core::sql::Origin::Server {
+    let python = barca_service::commands::find_python();
+    let origin = barca_service::sql::Origin::Server {
         url: server.shown_url.clone(),
         pending,
     };
-    let result = barca_core::sql::run(
+    let result = barca_service::sql::run(
         &cfg,
         query,
         limit,
@@ -685,23 +711,23 @@ pub(crate) async fn sql(
     )
     .await
     .map_err(here)?;
-    crate::commands::emit(barca_core::report::render_sql(result, json));
+    crate::print::emit(barca_service::report::render_sql(result, json));
     Ok(())
 }
 
 /// This machine's results whose post to the server at `url` is pending (`unsynced`).
 async fn pending_posts(
-    cfg: &barca_core::config::ResolvedConfig,
+    cfg: &barca_service::config::ResolvedConfig,
     url: &str,
-) -> Result<Vec<barca_core::status::PendingPost>, BarcaError> {
+) -> Result<Vec<barca_service::status::PendingPost>, BarcaError> {
     if !Path::new(&cfg.db_path).exists() {
         return Ok(Vec::new());
     }
-    Ok(barca_core::ledger::posts::unsynced(&cfg.db_path, url)
+    Ok(barca_service::ledger::posts::unsynced(&cfg.db_path, url)
         .await?
         .into_iter()
         .flat_map(|post| post.steps)
-        .map(|step| barca_core::status::PendingPost {
+        .map(|step| barca_service::status::PendingPost {
             node_id: step.node_id,
             run_hash: step.run_hash,
             error: None,
@@ -709,18 +735,29 @@ async fn pending_posts(
         .collect())
 }
 
-/// `barca pause [TARGET] [--downstream]`: `POST /pauses`, or without a target `GET /pauses`,
-/// and the paused nodes as JSON or a table.
+/// `barca pause [TARGET] [--downstream] [--dry-run]`: `POST /pauses`, or without a target
+/// `GET /pauses`, and the paused nodes as JSON or a table. With `--dry-run`, `GET
+/// /pauses?target=`: nothing is paused, and the answer says what the pause would cover.
 pub(crate) async fn pause(
     server: &Server,
     target: Option<&str>,
     downstream: bool,
+    dry_run: bool,
     json: bool,
     env: Option<&str>,
 ) -> Result<(), CliError> {
     server.health(env).await?;
     let (path, text) = match target {
         None => ("GET /pauses", server.get_text("/pauses").await?),
+        Some(target) if dry_run => (
+            "GET /pauses",
+            server
+                .get_text(&format!(
+                    "/pauses?target={}&downstream={downstream}",
+                    super::encode(target)
+                ))
+                .await?,
+        ),
         Some(target) => (
             "POST /pauses",
             server
@@ -731,18 +768,31 @@ pub(crate) async fn pause(
                 .await?,
         ),
     };
-    let body: Value = serde_json::from_str(&text)
-        .map_err(|e| server.unexpected(path, &format!("not JSON: {e}")))?;
+    let (body, pauses) = pauses_of(server, path, &text)?;
+    if dry_run {
+        print_cover(&body, &pauses, json);
+        return Ok(());
+    }
     if let Some(target) = target {
-        let n = body["added"].as_array().map_or(0, Vec::len);
-        barca_core::errln!(
+        let n = pauses.added.as_ref().map_or(0, Vec::len);
+        barca_service::errln!(
             "[barca] paused {n} node(s) on {} via {target}: scheduled runs skip them until `barca resume {target}{}`",
             server.shown_url,
             if downstream { " --downstream" } else { "" }
         );
     }
-    print_pauses(&body, json);
+    print_pauses(&body, &pauses, json);
     Ok(())
+}
+
+/// The answer of a pauses route: as the server sent it (what `--json` prints) and as
+/// [`Pauses`] (what the table and the count read).
+fn pauses_of(server: &Server, path: &str, text: &str) -> Result<(Value, Pauses), CliError> {
+    let body: Value = serde_json::from_str(text)
+        .map_err(|e| server.unexpected(path, &format!("not JSON: {e}")))?;
+    let pauses = serde_json::from_value(body.clone())
+        .map_err(|e| server.unexpected(path, &e.to_string()))?;
+    Ok((body, pauses))
 }
 
 /// `barca pause --schedule NODE [--until WHEN]` (`pause`: `Some(until)`) or `barca resume
@@ -768,64 +818,71 @@ pub(crate) async fn pause_schedule(
     let text = server.post_json(&path, &json!({})).await?;
     let body: Value = serde_json::from_str(&text)
         .map_err(|e| server.unexpected(&format!("POST {path}"), &format!("not JSON: {e}")))?;
-    let id = body["id"].as_str().unwrap_or(schedule);
+    let answer: SchedulePauseAnswer = serde_json::from_value(body.clone())
+        .map_err(|e| server.unexpected(&format!("POST {path}"), &e.to_string()))?;
+    let (id, paused, paused_until, cron, next_fire) = match &answer {
+        SchedulePauseAnswer::Job(job) => (
+            job.id.as_str(),
+            job.paused,
+            job.paused_until,
+            Some(job.cron.as_str()),
+            job.next_fire,
+        ),
+        SchedulePauseAnswer::Pause {
+            id,
+            paused,
+            paused_until,
+        } => (id.as_str(), *paused, *paused_until, None, None),
+    };
     match pause {
-        Some(_) => barca_core::errln!(
+        Some(_) => barca_service::errln!(
             "[barca] schedule {id} paused on {}: its ticks do not fire until {}",
             server.shown_url,
-            match body["paused_until"].as_i64() {
+            match paused_until {
                 Some(until) => format!(
                     "{} (or `barca resume --schedule {schedule}`)",
-                    barca_core::outcome::rfc3339(until)
+                    barca_service::outcome::rfc3339(until)
                 ),
                 None => format!("`barca resume --schedule {schedule}`"),
             }
         ),
-        None => barca_core::errln!(
+        None => barca_service::errln!(
             "[barca] schedule {id} resumed on {}: it fires again from its next tick",
             server.shown_url
         ),
     }
     if json {
-        barca_core::outln!(
+        barca_service::outln!(
             "{}",
             serde_json::to_string_pretty(&body).expect("a JSON value prints")
         );
     } else {
-        barca_core::term::stdout_str(&schedule_line(&body));
+        barca_service::term::stdout_str(&schedule_line(id, paused, paused_until, cron, next_fire));
     }
     Ok(())
 }
 
 /// One schedule's entry in a line: `p.py:nightly: paused until resumed · cron 0 2 * * * · next
-/// fire 2026-10-21T02:00:00Z`.
-fn schedule_line(job: &Value) -> String {
-    let mut parts = vec![
-        match (job["paused"].as_bool(), job["paused_until"].as_i64()) {
-            (Some(true), Some(until)) => {
-                format!("paused until {}", barca_core::outcome::rfc3339(until))
-            }
-            (Some(true), None) => "paused until resumed".to_string(),
-            _ => "not paused".to_string(),
-        },
-    ];
-    if let Some(cron) = job["cron"].as_str() {
+/// fire 2026-10-21T02:00:00Z`. Times are unix seconds, as `GET /schedule` gives them.
+fn schedule_line(
+    id: &str,
+    paused: bool,
+    paused_until: Option<i64>,
+    cron: Option<&str>,
+    next_fire: Option<i64>,
+) -> String {
+    let mut parts = vec![match (paused, paused_until) {
+        (true, Some(until)) => format!("paused until {}", barca_service::outcome::rfc3339(until)),
+        (true, None) => "paused until resumed".to_string(),
+        _ => "not paused".to_string(),
+    }];
+    if let Some(cron) = cron {
         parts.push(format!("cron {cron}"));
     }
-    match &job["next_fire"] {
-        Value::Number(at) => {
-            if let Some(at) = at.as_i64() {
-                parts.push(format!("next fire {}", barca_core::outcome::rfc3339(at)));
-            }
-        }
-        Value::String(at) => parts.push(format!("next fire {at}")),
-        _ => {}
+    if let Some(at) = next_fire {
+        parts.push(format!("next fire {}", barca_service::outcome::rfc3339(at)));
     }
-    format!(
-        "{}: {}\n",
-        job["id"].as_str().unwrap_or("?"),
-        parts.join(" · ")
-    )
+    format!("{id}: {}\n", parts.join(" · "))
 }
 
 /// The most keys asked of a server at once: `--all`, or a longer `--limit`, reads page after
@@ -835,12 +892,12 @@ const KEYS_PER_REQUEST: usize = 1000;
 /// `GET /assets/{name}/partitions/keys` for `query`, `limit` keys from `offset`.
 fn keys_path(
     target: &str,
-    query: &barca_core::key_query::KeyQuery,
+    query: &barca_service::key_query::KeyQuery,
     offset: usize,
     limit: usize,
 ) -> String {
-    use barca_core::key_query::KeySort;
-    use barca_core::partition_grid::state;
+    use barca_service::key_query::KeySort;
+    use barca_service::partition_grid::state;
     let mut path = format!(
         "/assets/{}/partitions/keys?limit={limit}&offset={offset}",
         encode(target)
@@ -890,12 +947,12 @@ pub(crate) async fn partition_keys(
     server: &Server,
     target: &str,
     files: &[PathBuf],
-    view: crate::commands::KeysView,
+    view: crate::request::KeysView,
     json: bool,
     limit: Option<usize>,
     env: Option<&str>,
 ) -> Result<(), CliError> {
-    use crate::commands::KeysView;
+    use crate::request::KeysView;
     server.health(env).await?;
     server.deployed_files(files).await?;
     let rendered = match view {
@@ -905,21 +962,21 @@ pub(crate) async fn partition_keys(
                 encode(target),
                 encode(&key)
             );
-            let detail: barca_core::partition_grid::PartitionKeyDetail =
+            let detail: barca_service::partition_grid::PartitionKeyDetail =
                 serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
                     server.unexpected("GET /assets/{name}/partitions/key", &e.to_string())
                 })?;
-            barca_core::report::render_partition_key(&detail, json)
+            barca_service::report::render_partition_key(&detail, json)
         }
         KeysView::Keys(query) => {
             // The server lists a bounded page: every key, or more than a page of them, is
             // read a page at a time and printed as one.
-            let mut page: Option<barca_core::key_query::KeysPage> = None;
+            let mut page: Option<barca_service::key_query::KeysPage> = None;
             loop {
                 let have = page.as_ref().map_or(0, |p| p.keys.len());
                 let want = limit.map_or(KEYS_PER_REQUEST, |l| (l - have).min(KEYS_PER_REQUEST));
                 let path = keys_path(target, &query, query.offset + have, want);
-                let next: barca_core::key_query::KeysPage =
+                let next: barca_service::key_query::KeysPage =
                     serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
                         server.unexpected("GET /assets/{name}/partitions/keys", &e.to_string())
                     })?;
@@ -934,29 +991,29 @@ pub(crate) async fn partition_keys(
                 }
             }
             let page = page.expect("the loop reads at least one page");
-            barca_core::report::render_partition_keys(&page, query.filters(), json)
+            barca_service::report::render_partition_keys(&page, query.filters(), json)
         }
         KeysView::Overview => {
             let mut path = format!("/assets/{}/partitions/overview", encode(target));
             if let Some(limit) = limit {
                 path.push_str(&format!("?limit={limit}"));
             }
-            let overview: barca_core::key_query::KeysOverview =
+            let overview: barca_service::key_query::KeysOverview =
                 serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
                     server.unexpected("GET /assets/{name}/partitions/overview", &e.to_string())
                 })?;
-            barca_core::report::render_partition_overview(&overview, json)
+            barca_service::report::render_partition_overview(&overview, json)
         }
         KeysView::Grid => {
             let path = format!("/assets/{}/partitions/grid", encode(target));
-            let grid: barca_core::partition_grid::PartitionGrid =
+            let grid: barca_service::partition_grid::PartitionGrid =
                 serde_json::from_value(server.get_json(&path).await?).map_err(|e| {
                     server.unexpected("GET /assets/{name}/partitions/grid", &e.to_string())
                 })?;
-            barca_core::report::render_partition_grid(&grid, limit, json)
+            barca_service::report::render_partition_grid(&grid, limit, json)
         }
     };
-    crate::commands::emit(rendered);
+    crate::print::emit(rendered);
     Ok(())
 }
 
@@ -976,42 +1033,79 @@ pub(crate) async fn resume(
             &json!({"target": target, "downstream": downstream, "all": all}),
         )
         .await?;
-    let body: Value = serde_json::from_str(&text)
-        .map_err(|e| server.unexpected("POST /pauses/resume", &format!("not JSON: {e}")))?;
-    barca_core::errln!(
+    let (body, pauses) = pauses_of(server, "POST /pauses/resume", &text)?;
+    barca_service::errln!(
         "[barca] resumed {} node(s) on {}",
-        body["removed"].as_array().map_or(0, Vec::len),
+        pauses.removed.as_ref().map_or(0, Vec::len),
         server.shown_url
     );
-    print_pauses(&body, json);
+    print_pauses(&body, &pauses, json);
     Ok(())
 }
 
-fn print_pauses(body: &Value, json: bool) {
+/// `barca pause TARGET --dry-run`: `body` as the server sent it with `--json`; else what the
+/// pause would cover (`covers`), in lines.
+fn print_cover(body: &Value, pauses: &Pauses, json: bool) {
     if json {
-        barca_core::outln!(
+        barca_service::outln!(
             "{}",
             serde_json::to_string_pretty(body).expect("a JSON value prints")
         );
         return;
     }
-    let paused = body["paused"].as_array().cloned().unwrap_or_default();
+    let cover = pauses.covers.clone().unwrap_or_default();
+    let mut out = format!(
+        "would pause {} node(s); nothing was paused\n",
+        cover.targets.len() + cover.downstream.len()
+    );
+    for id in &cover.targets {
+        out.push_str(&format!("  {id}\n"));
+    }
+    for id in &cover.downstream {
+        out.push_str(&format!("  {id} (downstream)\n"));
+    }
+    if !cover.schedules.is_empty() {
+        out.push_str(&format!(
+            "\n{} schedule(s) reach them\n\n{:<40} {}\n",
+            cover.schedules.len(),
+            "SCHEDULE",
+            "RELATION"
+        ));
+        for schedule in &cover.schedules {
+            let relation = serde_json::to_value(schedule.relation)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            out.push_str(&format!("{:<40} {relation}\n", schedule.id));
+        }
+    }
+    barca_service::term::stdout_str(&out);
+}
+
+/// `body`: the server's answer as it sent it, printed with `--json`; `pauses`: the same,
+/// read, for the table.
+fn print_pauses(body: &Value, pauses: &Pauses, json: bool) {
+    if json {
+        barca_service::outln!(
+            "{}",
+            serde_json::to_string_pretty(body).expect("a JSON value prints")
+        );
+        return;
+    }
+    let paused = &pauses.paused;
     let mut out = format!("{} node(s) paused\n", paused.len());
     if !paused.is_empty() {
         out.push_str(&format!("\n{:<40} {:<22} {}\n", "NODE", "PAUSED_AT", "VIA"));
-        for p in &paused {
+        for p in paused {
             out.push_str(&format!(
                 "{:<40} {:<22} {}\n",
-                p["id"].as_str().unwrap_or("?"),
-                p["paused_at"]
-                    .as_i64()
-                    .map(barca_core::outcome::rfc3339)
-                    .unwrap_or_default(),
-                p["via"].as_str().unwrap_or("")
+                p.id,
+                barca_service::outcome::rfc3339(p.paused_at),
+                p.via
             ));
         }
     }
-    let schedules = body["schedules"].as_array().cloned().unwrap_or_default();
+    let schedules = &pauses.schedules;
     if !schedules.is_empty() {
         out.push_str(&format!(
             "\n{} schedule(s) paused\n\n{:<40} {:<22} {}\n",
@@ -1020,19 +1114,15 @@ fn print_pauses(body: &Value, json: bool) {
             "PAUSED_AT",
             "UNTIL"
         ));
-        for s in &schedules {
+        for s in schedules {
             out.push_str(&format!(
                 "{:<40} {:<22} {}\n",
-                s["id"].as_str().unwrap_or("?"),
-                s["paused_at"]
-                    .as_i64()
-                    .map(barca_core::outcome::rfc3339)
-                    .unwrap_or_default(),
-                s["until"]
-                    .as_i64()
-                    .map_or("resumed".to_string(), barca_core::outcome::rfc3339)
+                s.id,
+                barca_service::outcome::rfc3339(s.paused_at),
+                s.until
+                    .map_or("resumed".to_string(), barca_service::outcome::rfc3339)
             ));
         }
     }
-    barca_core::term::stdout_str(&out);
+    barca_service::term::stdout_str(&out);
 }

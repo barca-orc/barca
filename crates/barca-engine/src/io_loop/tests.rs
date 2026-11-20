@@ -1,6 +1,6 @@
 use super::*;
 use crate::coordinator::ItemSpec;
-use crate::protocol::read_frame;
+use barca_proc::protocol::read_frame;
 use std::collections::HashMap;
 
 #[test]
@@ -48,7 +48,7 @@ fn a_dead_workers_exit_status_names_the_signal_or_code() {
 
 #[tokio::test]
 async fn a_live_process_is_not_reaped_and_a_dead_one_is() {
-    let mut sleeper = crate::helper_proc::spawn_std(Command::new("sleep").arg("5")).unwrap();
+    let mut sleeper = barca_proc::helper_proc::spawn_std(Command::new("sleep").arg("5")).unwrap();
     assert!(reap_briefly(&mut sleeper).await.is_none());
     sleeper.kill().unwrap();
     let status = reap_briefly(&mut sleeper)
@@ -78,7 +78,7 @@ async fn completed_receipts_do_not_overtake_their_stdout_frames() {
     let b = serde_json::json!({"path":"/b.json","format":"json","size_bytes":1});
     // Queue a valid producer sequence before this single-threaded runtime polls
     // the receiver. The journal is ahead of socket consumption, not socket writes.
-    crate::protocol::write_message(
+    barca_proc::protocol::write_message(
         &mut peer,
         &serde_json::json!({"type":"log","node_id":"a","line":"a output"}),
     )
@@ -88,12 +88,12 @@ async fn completed_receipts_do_not_overtake_their_stdout_frames() {
         format!("{}\n", serde_json::json!(["a", "step_completed", 0.1, a])),
     )
     .unwrap();
-    crate::protocol::write_message(
+    barca_proc::protocol::write_message(
         &mut peer,
         &serde_json::json!({"type":"result_checkpoint","completed":1}),
     )
     .unwrap();
-    crate::protocol::write_message(
+    barca_proc::protocol::write_message(
         &mut peer,
         &serde_json::json!({"type":"log","node_id":"b","line":"b output"}),
     )
@@ -111,7 +111,7 @@ async fn completed_receipts_do_not_overtake_their_stdout_frames() {
         )
         .unwrap();
     }
-    crate::protocol::write_message(&mut peer, &serde_json::json!({"type":"results","node_ids":["a","b"],"statuses":["step_completed","step_completed"],"elapsed_seconds":[0.1,0.2],"details":crate::wire::encode_table(&[a,b],true)})).unwrap();
+    barca_proc::protocol::write_message(&mut peer, &serde_json::json!({"type":"results","node_ids":["a","b"],"statuses":["step_completed","step_completed"],"elapsed_seconds":[0.1,0.2],"details":crate::wire::encode_table(&[a,b],true)})).unwrap();
     let mut seen = Vec::new();
     for _ in 0..5 {
         let event = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
@@ -295,14 +295,14 @@ fn build_step_json_sends_collected_param_as_artifact_list() {
     spec.collected_inputs.insert(
         "data".to_string(),
         vec![
-            crate::dispatch::OutputRef {
+            barca_compile::dispatch::OutputRef {
                 path: "f--source_key_a.json".to_string(),
                 format: "json".to_string(),
                 size_bytes: 10,
                 elapsed_seconds: None,
                 content_hash: None,
             },
-            crate::dispatch::OutputRef {
+            barca_compile::dispatch::OutputRef {
                 path: "f--source_key_b.json".to_string(),
                 format: "json".to_string(),
                 size_bytes: 12,
@@ -359,7 +359,7 @@ fn a_finished_branch_is_answered_with_where_its_artifact_is() {
         };
         assert_eq!(
             artifact,
-            crate::protocol::BranchArtifact {
+            barca_proc::protocol::BranchArtifact {
                 path: "/nowhere/branch.out".to_string(),
                 format: format.to_string(),
                 frame_type: frame_type.map(str::to_string),
@@ -513,7 +513,7 @@ fn a_runs_branch_results_are_under_its_own_id_and_pid() {
 #[test]
 fn the_sweep_removes_the_branch_results_of_dead_runs_only() {
     // A pid that existed and is certainly gone: a child that has been reaped.
-    let mut child = crate::helper_proc::spawn_std(&mut Command::new("true")).unwrap();
+    let mut child = barca_proc::helper_proc::spawn_std(&mut Command::new("true")).unwrap();
     let dead = child.id();
     child.wait().unwrap();
 
@@ -649,7 +649,7 @@ async fn connect_as(path: &Path, worker_id: Option<usize>) -> UnixStream {
     let mut stream = UnixStream::connect(path).await.unwrap();
     let mut hello = serde_json::json!({
         "type": "hello", "role": "worker",
-        "protocol_version": crate::protocol::PROTOCOL_VERSION,
+        "protocol_version": barca_proc::protocol::PROTOCOL_VERSION,
     });
     if let Some(id) = worker_id {
         hello["worker_id"] = id.into();
@@ -751,7 +751,7 @@ async fn the_workers_a_wave_needs_start_together_and_no_more() {
 #[tokio::test]
 async fn shutdown_waits_for_workers_already_removed_from_the_pool() {
     let mut pool = WorkerPool::start(test_config("reaping-at-shutdown", 1)).unwrap();
-    let mut child = crate::helper_proc::spawn_std(&mut sh("exec sleep 60")).unwrap();
+    let mut child = barca_proc::helper_proc::spawn_std(&mut sh("exec sleep 60")).unwrap();
     let pid = child.id();
     let (release, wait) = std::sync::mpsc::channel();
     let (started, ready) = tokio::sync::oneshot::channel();
@@ -822,7 +822,7 @@ fn shutdown_terminates_all_workers_in_one_shared_grace_window() {
             ])
             .arg(&ready);
             readiness.push(ready);
-            let child = crate::helper_proc::spawn_std(&mut cmd).unwrap();
+            let child = barca_proc::helper_proc::spawn_std(&mut cmd).unwrap();
             pids.push(child.id());
             let (cmd_tx, _cmd_rx) = mpsc::channel(1);
             workers.insert(

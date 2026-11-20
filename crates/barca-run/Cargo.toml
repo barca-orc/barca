@@ -1,0 +1,35 @@
+[package]
+name = "barca-run"
+version = "0.45.0"
+edition = "2024"
+description = "Run orchestrator — executes a plan and records what happened: the one crate that drives barca-engine and writes a run to the metadata database"
+
+# Above barca-decide and barca-engine, beside the read models (#1056, C6). Never
+# barca-analysis: a run records, a read model reads.
+[dependencies]
+barca-model = { path = "../barca-model" }
+barca-compile = { path = "../barca-compile" }
+barca-python = { path = "../barca-python" }
+barca-db = { path = "../barca-db" }
+barca-proc = { path = "../barca-proc" }
+barca-engine = { path = "../barca-engine" }
+barca-store = { path = "../barca-store" }
+barca-decide = { path = "../barca-decide" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }
+libsql = { version = "=0.10.0", default-features = false, features = ["core"] }
+tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "process"] }
+tokio-util = { workspace = true }
+indicatif = "0.18.4"
+libc = { workspace = true }
+reqwest = { workspace = true }
+# Optional: TypeScript binding generation (enable with --features ts). Kept out
+# of the production binary; used only to regenerate ui/src/lib/generated/.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Generate TS type bindings for the frontend. Off by default.
+ts = ["dep:ts-rs", "barca-model/ts", "barca-db/ts", "barca-store/ts"]

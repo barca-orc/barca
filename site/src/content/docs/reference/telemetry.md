@@ -4,7 +4,7 @@ description: "Report every step and every run to Datadog as a trace of its own, 
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/telemetry.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/telemetry.md (barca docs telemetry). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/telemetry.md (barca docs telemetry). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 barca can report every step and every run to a telemetry backend, and post to Slack when a job
 starts failing or recovers ([Slack Alerts](/reference/slack/); it has its own switch). Each backend is off

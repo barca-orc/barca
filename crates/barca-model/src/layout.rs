@@ -29,6 +29,17 @@ pub fn env_local_paths(env: &str) -> LocalPaths {
     }
 }
 
+/// The file name of the Unix socket `barca serve` listens on, beside its environment's metadata
+/// database (`specs/interfaces/dot-barca-layout.md`).
+pub const SERVE_SOCKET: &str = "serve.sock";
+
+/// Where the server that owns the database at `db_path` listens: `serve.sock` beside it.
+pub fn serve_socket_path(db_path: &str) -> PathBuf {
+    Path::new(db_path)
+        .parent()
+        .map_or_else(|| PathBuf::from(SERVE_SOCKET), |d| d.join(SERVE_SOCKET))
+}
+
 /// Create the `.barca` tree for an environment and return its paths.
 pub fn ensure_env_dirs(env: &str) -> Result<LocalPaths, BarcaError> {
     let paths = env_local_paths(env);
@@ -45,4 +56,17 @@ pub fn ensure_env_dirs(env: &str) -> Result<LocalPaths, BarcaError> {
         let _ = fs::write(&gitignore, "*\n");
     }
     Ok(paths)
+}
+
+/// The file under `.barca/` in which the cache size limit keeps its last full walk of the
+/// directory (`gc`). It is named here, below both of its users: `gc` reads and writes it, and
+/// whatever replaces the metadata database (`barca state reset`, `barca state restore`)
+/// removes it with [`forget_gc_survey`].
+pub const GC_STATE_FILE: &str = "gc-state.json";
+
+/// Forget the last full walk of `barca_dir` (a project's `.barca/`), so the next check walks
+/// it again: the recorded sizes the fast estimate adds up no longer describe the files on
+/// disk. A missing file is already forgotten.
+pub fn forget_gc_survey(barca_dir: &Path) {
+    let _ = fs::remove_file(barca_dir.join(GC_STATE_FILE));
 }

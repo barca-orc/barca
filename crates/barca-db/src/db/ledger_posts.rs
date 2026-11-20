@@ -1,5 +1,5 @@
 //! Writes of `ledger_posts`, this machine's record of run posts to a server
-//! (`barca_core::ledger::posts` owns when each happens).
+//! (`barca_service::ledger::posts` owns when each happens).
 
 use libsql::Connection;
 

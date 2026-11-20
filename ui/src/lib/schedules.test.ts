@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { ListNode, NodeState, ScheduleJob } from './types'
+import type { ListNode, NodeState } from './types'
 import type { ScheduleStatus } from './generated/ScheduleStatus'
-import { formatLate, humanizeCron, lastStatusLabel, scheduleRows } from './schedules'
+import { formatLate, humanizeCron, scheduleRows } from './schedules'
+import { lastStatusLabel } from './runs'
 import { formatCountdown } from './time'
 import { served } from './testdata/served'
 
@@ -41,31 +42,6 @@ function asset(id: string, cron: string | null, kind: ListNode['kind'] = 'task')
     ...(cron ? { freshness: 'schedule' as const, schedule: cron } : { freshness: 'always' as const }),
     inputs: [],
     env: [], file: 'p.py', line: 1,
-  }
-}
-
-function job(id: string, over: Partial<ScheduleJob> = {}): ScheduleJob {
-  return {
-    id,
-  state: 'on_time', state_detail: null,
-    cron: '*/10 * * * *',
-    kind: 'task',
-    next_fire: null,
-    last_fired: null,
-    last_run_id: null,
-    last_run: null,
-    last_status: null,
-    late: false,
-    late_since: null,
-    last_skipped: null,
-    skipped_for: null,
-    skip_reason: null,
-    paused: false,
-    paused_until: null,
-    failures: 0,
-    max_failures: 5,
-    failing: false,
-    ...over,
   }
 }
 
@@ -141,27 +117,6 @@ describe('scheduleRows', () => {
     expect(rows[0]).toMatchObject({ name: 'new', nextRunMs: null, last: null })
   })
 
-  it('is not paused without a scheduler entry or when the job runs', () => {
-    expect(scheduleRows(assets, states).every((r) => r.paused === null)).toBe(true)
-    const rows = scheduleRows(assets, states, [job('job.py:refresh')])
-    expect(rows.find((r) => r.name === 'refresh')?.paused).toBeNull()
-  })
-
-  it('shows a paused job, with when a timed pause ends', () => {
-    const rows = scheduleRows(assets, states, [
-      job('job.py:refresh', { paused: true, paused_until: now / 1000 + 3600, skip_reason: 'paused' }),
-      job('job.py:heartbeat', { paused: true }),
-    ])
-    expect(rows.find((r) => r.name === 'refresh')?.paused).toEqual({ until: now + 3_600_000 })
-    expect(rows.find((r) => r.name === 'heartbeat')?.paused).toEqual({ until: null })
-  })
-
-  it("falls back to the scheduler's next fire when /state has none", () => {
-    const rows = scheduleRows([asset('job.py:new', '0 6 * * *')], [], [
-      job('job.py:new', { next_fire: now / 1000 + 60 }),
-    ])
-    expect(rows[0]).toMatchObject({ nextRunMs: now + 60_000 })
-  })
 })
 
 describe('lateness', () => {
@@ -205,7 +160,6 @@ describe('lateness', () => {
           schedule: stands({ late: true, late_since: '2026-11-16T12:09:00Z', last_fired: '2026-11-16T12:08:00Z', last_status: 'success', last_run_id: 'r3' }),
         }),
       ],
-      [],
       now,
     )
     // Late first, then soonest next run.
@@ -230,7 +184,6 @@ describe('lateness', () => {
         state('job.py:pulse', { next_run: s('2026-11-16T12:25:00Z'), schedule: stands({ queue_bound: true, typical_queue_wait_seconds: 12, typical_run_seconds: 1 }) }),
         state('job.py:minutely', { next_run: s('2026-11-16T12:30:00Z'), schedule: stands({ late: true, late_since: '2026-11-16T12:09:00Z' }) }),
       ],
-      [],
       now,
     )
     expect(rows.map((r) => [r.name, r.late !== null, r.queueBound, r.queueWait, r.typicalRun])).toEqual([
@@ -242,13 +195,18 @@ describe('lateness', () => {
     expect(scheduleRows([asset('job.py:new', '0 6 * * *')], [])[0]).toMatchObject({ queueBound: false, queueWait: null, typicalRun: null })
   })
 
-  it('reads a pause from the schedule block when the scheduler published no entry', () => {
+  it('reads a pause from the schedule block, with when a timed pause ends', () => {
     const rows = scheduleRows(
-      [asset('job.py:held', '* * * * *')],
-      [state('job.py:held', { schedule: stands({ paused: true, paused_until: '2026-11-16T13:00:00Z' }) })],
-      [],
+      [asset('job.py:held', '* * * * *'), asset('job.py:open', '* * * * *'), asset('job.py:runs', '* * * * *'), asset('job.py:new', '* * * * *')],
+      [
+        state('job.py:held', { schedule: stands({ paused: true, paused_until: '2026-11-16T13:00:00Z' }) }),
+        state('job.py:open', { schedule: stands({ paused: true }) }),
+        state('job.py:runs', { schedule: stands() }),
+      ],
       now,
     )
-    expect(rows[0]?.paused).toEqual({ until: Date.parse('2026-11-16T13:00:00Z') })
+    const paused = Object.fromEntries(rows.map((r) => [r.name, r.paused]))
+    // A node `GET /state` has no row for yet is not shown as paused.
+    expect(paused).toEqual({ held: { until: Date.parse('2026-11-16T13:00:00Z') }, open: { until: null }, runs: null, new: null })
   })
 })

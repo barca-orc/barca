@@ -1,7 +1,7 @@
 /**
  * How a node's health is shown: the word, tone and glyph of each value. Display only.
  *
- * Health itself is classified in `barca-core` (`specs/behavior/health.md`) and arrives on every
+ * Health itself is classified in `barca-service` (`specs/behavior/health.md`) and arrives on every
  * row as `health`, with the rule that decided it in `health_reason`: the same word `barca
  * status --json` and `barca.nodes` carry. Nothing here reads two fields to produce a third. The
  * words, most severe first:
@@ -25,9 +25,6 @@ export type { Health }
 
 /** Most severe first: what sorts first, what a scope's colour is. */
 export const HEALTH_ORDER: readonly Health[] = ['failing', 'blocked', 'suspect', 'behind', 'undecided', 'never_run', 'ok']
-
-/** Health that is a problem: what a health map sizes by and a causes list explains. */
-export const UNHEALTHY: readonly Health[] = ['failing', 'blocked', 'suspect', 'behind']
 
 interface HealthDisplay {
   label: string
@@ -68,14 +65,10 @@ export function healthRank(health: Health): number {
   return HEALTH_ORDER.indexOf(health)
 }
 
-export function isUnhealthy(health: Health): boolean {
-  return UNHEALTHY.includes(health)
-}
-
 /**
  * The failing node that keeps `node` from being brought up to date, as the server names it: the
  * `root` of a `blocked` row. Null when it is not blocked by a failing node (a failing node's
- * root is itself). `barca-core` walks the graph (`health::blocked_by`); nothing here does.
+ * root is itself). `barca-service` walks the graph (`health::blocked_by`); nothing here does.
  */
 export function blockerOf(node: Pick<NodeState, 'health' | 'root'>): string | null {
   return node.health === 'blocked' && node.root ? node.root.node : null

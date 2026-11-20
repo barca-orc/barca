@@ -3,7 +3,11 @@
 /**
  * One materialization entry for asset stats.
  */
-export type AssetRunEntry = { elapsed_seconds: number | null, status: string, created_at: string,
+export type AssetRunEntry = { elapsed_seconds: number | null,
+/**
+ * `success` or `failed`, as the row recorded it.
+ */
+status: string, created_at: string,
 /**
  * Error message for `status='failed'` rows (None for successes).
  */

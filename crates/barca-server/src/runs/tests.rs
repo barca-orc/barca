@@ -2,15 +2,16 @@ use super::lifecycle::evict_over_budget;
 use super::projection::{RunList, RunsQuery, view};
 use super::*;
 use crate::ServeConfig;
-use crate::state::{RunChannel, RunState, RunStatus};
+use crate::replay::RunChannel;
+use crate::run_model::{RunState, RunStatus};
 use axum::Json;
 use axum::extract::{Query, State};
-use barca_core::outcome::Trigger;
-use barca_core::time::now_secs_f64 as now_ts;
-use barca_core::{RunEvent, db};
+use barca_service::outcome::Trigger;
+use barca_service::time::now_secs_f64 as now_ts;
+use barca_service::{RunEvent, db};
 use futures::StreamExt;
 fn state(dir: &std::path::Path) -> AppState {
-    let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
+    let mut resolved = barca_service::config::resolve_in(None, dir).unwrap();
     resolved.db_path = dir.join("metadata.db").display().to_string();
     AppState::new(ServeConfig {
         files: vec!["p.py".into()],
@@ -32,6 +33,7 @@ fn live(handle: &str) -> RunState {
         target: Some("first".into()),
         nodes: vec![],
         trigger: Trigger::api(),
+        queue: Default::default(),
         refreshes: false,
         files: vec![],
         status: RunStatus::Pending,
@@ -40,7 +42,7 @@ fn live(handle: &str) -> RunState {
         started_at: now_ts(),
         finished_at: None,
         outcome: None,
-        cancel: barca_core::CancellationToken::new(),
+        cancel: barca_service::CancellationToken::new(),
         cancel_requested: false,
         cancellation: None,
     }
@@ -50,7 +52,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let state = state(dir.path());
     let mut run = live("durable");
-    state.runs.insert(run.handle.clone(), run.clone());
+    state.runs.registry.insert(run.handle.clone(), run.clone());
     let Json(queued) = list(State(state.clone()), Query(RunsQuery::default()))
         .await
         .unwrap();
@@ -67,7 +69,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
         .unwrap();
     run.db_run_id = Some("durable".into());
     run.status = RunStatus::Running;
-    state.runs.insert(run.handle.clone(), run.clone());
+    state.runs.registry.insert(run.handle.clone(), run.clone());
     let wrapping_up = view(&state, "durable").await.unwrap();
     assert_eq!(
         wrapping_up.status, "running",
@@ -75,7 +77,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     );
     run.status = RunStatus::Failed;
     run.error = Some("boom".into());
-    state.runs.insert(run.handle.clone(), run);
+    state.runs.registry.insert(run.handle.clone(), run);
     let Json(history) = list(State(state.clone()), Query(RunsQuery::default()))
         .await
         .unwrap();
@@ -110,7 +112,7 @@ async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
     run.db_run_id = Some("long".into());
     run.target = Some("backfill".into());
     run.status = RunStatus::Running;
-    state.runs.insert(run.handle.clone(), run);
+    state.runs.registry.insert(run.handle.clone(), run);
     let query = |limit, search: Option<&str>, status: Option<&str>| RunsQuery {
         limit: Some(limit),
         search: search.map(str::to_string),
@@ -153,10 +155,10 @@ async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
     // A run waiting in the queue has no row yet: the filters apply to it too.
     let mut queued = live("queued");
     queued.trigger = Trigger {
-        triggered_by: barca_core::outcome::TriggeredBy::Schedule,
+        triggered_by: barca_service::outcome::TriggeredBy::Schedule,
         ..Trigger::api()
     };
-    state.runs.insert(queued.handle.clone(), queued);
+    state.runs.registry.insert(queued.handle.clone(), queued);
     let hidden = RunsQuery {
         not_triggered_by: Some("schedule".into()),
         ..query(10, None, None)
@@ -193,29 +195,39 @@ fn finished_runs_past_the_memory_budget_are_dropped_oldest_first() {
         let mut run = live(handle);
         run.status = RunStatus::Complete;
         run.finished_at = Some(1000.0 + i as f64);
-        state.runs.insert(handle.to_string(), run);
+        state.runs.registry.insert(handle.to_string(), run);
         let channel = RunChannel::new();
         channel.emit(RunEvent::Line {
             line: "x".repeat(10_000),
-            when: barca_core::lines::LineWhen::Always,
+            when: barca_service::lines::LineWhen::Always,
         });
-        state.events.insert(handle.to_string(), channel);
+        state.runs.events.insert(handle.to_string(), channel);
     }
     let mut running = live("running");
     running.status = RunStatus::Running;
-    state.runs.insert("running".into(), running);
+    state.runs.registry.insert("running".into(), running);
     // Under the budget: nothing is dropped.
     evict_over_budget(&state, 1 << 20);
-    assert_eq!(state.runs.len(), 6);
+    assert_eq!(state.runs.registry.len(), 6);
     // About two runs' worth: the oldest go, the newest and the running run stay.
     evict_over_budget(&state, 25_000);
-    let mut kept: Vec<String> = state.runs.iter().map(|r| r.key().clone()).collect();
+    let mut kept: Vec<String> = state
+        .runs
+        .registry
+        .iter()
+        .map(|r| r.key().clone())
+        .collect();
     kept.sort();
     assert_eq!(kept, ["r4", "r5", "running"]);
-    assert!(!state.events.contains_key("r1") && state.events.contains_key("r4"));
+    assert!(!state.runs.events.contains_key("r1") && state.runs.events.contains_key("r4"));
     // Even a budget of nothing keeps the run that finished last.
     evict_over_budget(&state, 0);
-    let mut kept: Vec<String> = state.runs.iter().map(|r| r.key().clone()).collect();
+    let mut kept: Vec<String> = state
+        .runs
+        .registry
+        .iter()
+        .map(|r| r.key().clone())
+        .collect();
     kept.sort();
     assert_eq!(kept, ["r5", "running"]);
 }
@@ -230,7 +242,7 @@ async fn a_slow_subscriber_and_a_reconnect_receive_every_event_once() {
         channel.emit(RunEvent::log(
             "p.py:a".into(),
             i.to_string(),
-            barca_core::LogStream::Stdout,
+            barca_service::LogStream::Stdout,
         ));
     }
     // The first reader takes a few events and goes away, as a dropped connection does.
@@ -272,12 +284,81 @@ fn a_queued_cancellation_names_the_same_work_already_running() {
     other.status = RunStatus::Running;
     other.target = Some("second".into());
     other.started_at = 0.5;
-    state.runs.insert("same".into(), same);
-    state.runs.insert("other".into(), other);
-    state.runs.insert("queued".into(), live("queued"));
+    state.runs.registry.insert("same".into(), same);
+    state.runs.registry.insert("other".into(), other);
+    state.runs.registry.insert("queued".into(), live("queued"));
     let c = super::handlers::queued_cancellation(&state, "queued", Some("token:a".into()));
     assert!(!c.started);
     assert_eq!(c.waiting_behind, ["other", "same"]);
     assert_eq!(c.same_as.as_deref(), Some("same"));
     assert_eq!(c.principal.as_deref(), Some("token:a"));
+}
+
+#[test]
+fn a_queued_run_revalidates_source_before_any_worker_starts() {
+    crate::test_support::bounded(|| async {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("p.py").display().to_string();
+        std::fs::write(
+            &file,
+            "from barca import asset\n@asset()\ndef target(): return 1\n",
+        )
+        .unwrap();
+        let mut cfg = barca_service::config::resolve_in(None, dir.path()).unwrap();
+        cfg.db_path = dir.path().join("metadata.db").display().to_string();
+        let mut state = AppState::new(crate::ServeConfig {
+            files: vec![file.clone()],
+            host: "127.0.0.1".parse().unwrap(),
+            port: 0,
+            watch: false,
+            schedule: false,
+            timezone: "utc".into(),
+            // A stale graph would try spawning this nonexistent interpreter.
+            python: "/nonexistent-barca-python".into(),
+            resolved: cfg,
+            read_only: false,
+        });
+        state.runs.slots = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        assert!(check_target(&state, "target", "get").await.is_ok());
+        // Every slot taken: the run waits in the queue.
+        let held = state.runs.slots.clone().try_acquire_owned().unwrap();
+        let handle = start(
+            state.clone(),
+            RunSpec::api(
+                barca_service::outcome::RunCommand::Get,
+                vec!["target".into()],
+                vec![],
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.runs.registry.get(&handle).unwrap().status,
+            RunStatus::Pending
+        );
+        std::fs::write(&file, "from barca import asset\ndef broken(: pass\n").unwrap();
+        drop(held);
+        dispatch(&state);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if state.runs.registry.get(&handle).unwrap().status == RunStatus::Failed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let run = state.runs.registry.get(&handle).unwrap();
+        assert!(
+            run.error.as_ref().unwrap().contains("not found"),
+            "{:?}",
+            run.error
+        );
+        assert!(
+            state.reads.sources.load_errors.read().unwrap()[0]
+                .error
+                .contains("syntax error")
+        );
+    });
 }

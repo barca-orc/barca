@@ -1,7 +1,7 @@
 //! `asset_pins`: assets held at a chosen earlier materialization (`barca pin`, `POST
 //! /assets/{name}/pin`), and the reads a pin is chosen from (a node's versions: its successful
 //! materializations with an artifact, one per run hash). While a node has a row, every run reads
-//! it as that materialization and never computes it (`barca_core::freshness::load_pins`).
+//! it as that materialization and never computes it (`barca_service::freshness::load_pins`).
 
 use super::*;
 use barca_model::step_result::OutputRef;
@@ -174,7 +174,7 @@ async fn run_id_of(
 }
 
 /// A pin changes what runs read without a new materialization, so the freshness proofs
-/// (`barca_core::incremental`, valid for one materialization generation) no longer hold.
+/// (`barca_service::incremental`, valid for one materialization generation) no longer hold.
 /// The same when a paused node is resumed (`asset_pauses::resume_assets`).
 pub(super) async fn forget_proofs(conn: &libsql::Connection) -> Result<(), BarcaError> {
     if has_column(conn, "freshness_proofs", "id").await? {

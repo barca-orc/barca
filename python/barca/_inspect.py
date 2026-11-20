@@ -24,12 +24,11 @@ import io
 import json
 import os
 import pickletools
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import IO, Any
 
-from barca import _storage
-from barca._sql import _jsonable
+from barca import _helper, _storage
+from barca._sql_tables import jsonable as _jsonable
 
 MAX_KEYS = 100
 # A remote json or pickle artifact larger than this is not downloaded to describe it.
@@ -455,22 +454,25 @@ def shapes(artifacts: list[dict], sample: int = 0, fields: bool = False, cache=N
     return [s if s is not None else {"note": "shape was not read"} for s in out]
 
 
-def main() -> None:
-    req = json.load(sys.stdin)
+def answer(req: dict) -> list[dict]:
+    """The answer to one request: a shape per artifact, in order."""
     sample = int(req.get("sample") or 0)
     fields = bool(req.get("fields", False))
-    if "inspection_cache" in req:
-        from barca._inspection_cache import Cache
+    if "inspection_cache" not in req:
+        return shapes(req.get("artifacts", []), sample, fields)
+    from barca._inspection_cache import Cache
 
-        cache = Cache(req["inspection_cache"])
-        try:
-            result = shapes(req.get("artifacts", []), sample, fields, cache)
-        finally:
-            cache.flush()
-    else:
-        result = shapes(req.get("artifacts", []), sample, fields)
-    sys.stdout.write(json.dumps(result, default=str))
+    cache = Cache(req["inspection_cache"])
+    try:
+        return shapes(req.get("artifacts", []), sample, fields, cache)
+    finally:
+        cache.flush()
+
+
+def main() -> None:
+    req = _helper.stdin_request()
+    _helper.answer(lambda: answer(req), default=str)
 
 
 if __name__ == "__main__":
-    main()
+    _helper.run(main)

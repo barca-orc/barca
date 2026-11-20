@@ -1,12 +1,15 @@
 import { Position, type Node, type Edge } from '@xyflow/react'
 import { match } from 'ts-pattern'
-import { DAG_NODE_WIDTH, DAG_NODE_HEIGHT } from '@/components'
 import { edgeId, layout, type Layout, type LayoutDir, type LayoutInput, type Point } from './graphLayout'
 import type { Tone } from './tone'
 import type { Glyph } from './glyph'
 import type { NodeKind } from './types'
 
 export type { LayoutDir }
+
+/** The size of a node's box on the graph, in px: what the layout places and `DagNode` draws. */
+export const DAG_NODE_WIDTH = 208
+export const DAG_NODE_HEIGHT = 40
 
 /** Data carried on each React Flow node (consumed by the custom AssetNode). */
 interface GraphNodeData {

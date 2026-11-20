@@ -1,0 +1,309 @@
+//! Collected result evidence and its persistence/report projections.
+//!
+//! Execution owns decisions and resource lifetimes. This module records facts from finished
+//! work and builds borrowed views of them; it does not dispatch, publish or write to storage.
+
+use crate::persist::RunLedger;
+use barca_compile::dispatch::{OutputRef, StepFailure};
+use barca_decide::cache::DecideState;
+use barca_model::dag::Dag;
+use barca_store::results::{BatchExecution, StepReport};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+#[derive(Default)]
+pub(super) struct RunResults {
+    pub(super) outputs: HashMap<String, OutputRef>,
+    pub(super) reports: Vec<StepReport>,
+    pub(super) sinks: HashMap<String, String>,
+    /// What each step's sinks hold after this run (`barca_db::sink_publications`).
+    pub(super) publications: Vec<barca_db::sink_publications::Publication>,
+    pub(super) timings: HashMap<String, (Option<f64>, Option<u64>)>,
+    /// Rows each executed step's tabular result holds, when its worker counted them.
+    pub(super) rows: HashMap<String, u64>,
+    /// Seconds each executed step spent writing its sinks, outside its own duration (#1004).
+    pub(super) sink_seconds: HashMap<String, f64>,
+    pub(super) observations: HashMap<String, serde_json::Value>,
+    pub(super) clocks: HashMap<String, (f64, f64)>,
+    pub(super) failures: Vec<StepFailure>,
+    /// Attempts belong to the exact step identity, including its partition key.
+    pub(super) attempts: HashMap<String, u32>,
+    /// Worker-reported active duration and slow import duration, including failed attempts.
+    pub(super) durations: HashMap<String, (f64, f64)>,
+    /// Each executed key's run-local batched call identity (RFC-0013).
+    pub(super) batches: HashMap<String, String>,
+    /// Each batched node's calls in this run, by base id, sorted for the end-of-run lines.
+    pub(super) batch_execution: BTreeMap<String, BatchExecution>,
+}
+
+/// The terminal projection's owned scratch data. Constructed after recorder shutdown, so it
+/// sees the same final results and measured costs as the terminal write.
+pub(super) struct RunEvidence {
+    components: HashMap<String, String>,
+    cost_snapshot: Vec<(String, barca_engine::cost::NodeEstimate)>,
+}
+
+impl RunEvidence {
+    pub(super) fn new(
+        results: &RunResults,
+        dag: &Dag,
+        decisions: &DecideState,
+        cached: &HashSet<String>,
+        costs: &barca_engine::cost::CostModel,
+    ) -> Self {
+        let cost_snapshot = costs
+            .persistence_snapshot()
+            .map(|(node_id, estimate)| (node_id.clone(), *estimate))
+            .collect();
+        let components = results
+            .outputs
+            .keys()
+            .filter(|id| !cached.contains(*id))
+            .filter_map(|id| {
+                barca_decide::changes::step_components_json(dag, decisions, id)
+                    .map(|components| (id.clone(), components))
+            })
+            .collect();
+        Self {
+            components,
+            cost_snapshot,
+        }
+    }
+}
+
+/// Run identity and execution decisions supplied by the driver at the terminal boundary.
+/// No result map is duplicated here: those belong to `RunResults`.
+pub(super) struct LedgerContext<'a> {
+    pub(super) run_id: &'a str,
+    pub(super) status: &'a str,
+    pub(super) command: &'a str,
+    pub(super) files: &'a [String],
+    pub(super) target: Option<&'a str>,
+    pub(super) job: &'a str,
+    pub(super) steps_total: usize,
+    pub(super) steps_executed: usize,
+    pub(super) steps_cached: usize,
+    pub(super) elapsed: f64,
+    pub(super) cached_node_ids: &'a HashSet<String>,
+    pub(super) decisions: &'a DecideState,
+    pub(super) store_paths: &'a HashMap<String, String>,
+    pub(super) touched: &'a [String],
+}
+
+impl RunResults {
+    pub(super) fn record_output(
+        &mut self,
+        node_id: &str,
+        artifact_val: &serde_json::Value,
+        attempts: u32,
+    ) -> OutputRef {
+        // Attempts belong to this exact lease, including its partition key.
+        self.attempts.insert(node_id.to_string(), attempts);
+        self.record_batch_call(node_id, artifact_val);
+        if let Some(observation) = artifact_val.get("source_observation") {
+            self.observations
+                .insert(node_id.to_string(), observation.clone());
+        }
+        let oref = OutputRef {
+            path: artifact_val
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            format: artifact_val
+                .get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("json")
+                .to_string(),
+            size_bytes: artifact_val
+                .get("size_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            elapsed_seconds: artifact_val.get("elapsed_seconds").and_then(|v| v.as_f64()),
+            content_hash: artifact_val
+                .get("content_hash")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        };
+        if let Some(sinks) = artifact_val.get("sinks").and_then(|v| v.as_array())
+            && !sinks.is_empty()
+        {
+            self.sinks.insert(
+                node_id.to_string(),
+                serde_json::Value::from(sinks.clone()).to_string(),
+            );
+        }
+        let cpu = artifact_val.get("cpu_seconds").and_then(|v| v.as_f64());
+        let rss = artifact_val.get("max_rss_bytes").and_then(|v| v.as_u64());
+        if cpu.is_some() || rss.is_some() {
+            self.timings.insert(node_id.to_string(), (cpu, rss));
+        }
+        if let Some(rows) = artifact_val.get("rows").and_then(|v| v.as_u64()) {
+            self.rows.insert(node_id.to_string(), rows);
+        }
+        if let Some(seconds) = artifact_val.get("sink_seconds").and_then(|v| v.as_f64()) {
+            self.sink_seconds.insert(node_id.to_string(), seconds);
+        }
+        if let (Some(finished), Some(wall)) = (
+            artifact_val.get("finished_at").and_then(|v| v.as_f64()),
+            artifact_val.get("wall_seconds").and_then(|v| v.as_f64()),
+        ) {
+            self.clocks.insert(node_id.to_string(), (finished, wall));
+        }
+        oref
+    }
+
+    /// Add a written key of a batched call to its node's totals. The call's own phases come
+    /// once, on the first key it wrote, so that key also counts the call.
+    fn record_batch_call(&mut self, node_id: &str, artifact_val: &serde_json::Value) {
+        if artifact_val.get("batch").is_none() {
+            return;
+        }
+        let base = barca_model::StepId::parse(node_id).base_id().to_string();
+        let total = self.batch_execution.entry(base).or_default();
+        total.keys += 1;
+        total.write_seconds += artifact_val
+            .get("write_seconds")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let Some(phases) = artifact_val.get("batch_phases").and_then(|v| {
+            serde_json::from_value::<barca_proc::protocol::BatchPhases>(v.clone()).ok()
+        }) else {
+            return;
+        };
+        total.calls += 1;
+        total.import_seconds += phases.import_seconds;
+        total.load_seconds += phases.load_seconds;
+        total.compute_seconds += phases.compute_seconds;
+        total.split_seconds += phases.split_seconds;
+    }
+
+    /// What the steps that ran and wrote their sinks published: each declared sink of the
+    /// node holds the step's run hash.
+    pub(super) fn note_written_sinks(&mut self, dag: &Dag, run_hashes: &HashMap<String, String>) {
+        let mut ids: Vec<&String> = self.sinks.keys().collect();
+        ids.sort();
+        for id in ids {
+            let Some(run_hash) = run_hashes.get(id) else {
+                continue;
+            };
+            let Some(node) = dag.get_node(barca_model::StepId::parse(id).base_id()) else {
+                continue;
+            };
+            for sink in &node.decl.sinks {
+                self.publications
+                    .push(barca_db::sink_publications::Publication {
+                        node_id: id.clone(),
+                        sink: sink.path.clone(),
+                        run_hash: run_hash.clone(),
+                    });
+            }
+        }
+    }
+
+    pub(super) fn record_failure(
+        &mut self,
+        node_id: String,
+        error_type: &str,
+        message: String,
+        attempts: u32,
+        clock: Option<(std::time::SystemTime, std::time::Duration)>,
+        phase: Option<barca_compile::dispatch::ErrorPhase>,
+    ) -> &StepFailure {
+        self.failures.push(StepFailure {
+            node_id,
+            error: barca_compile::dispatch::StepError {
+                error_type: error_type.to_string(),
+                message,
+                traceback: String::new(),
+                phase,
+                attempts,
+                started_unix_ns: clock
+                    .map(|(started, _)| barca_model::time::unix_nanos(started) as u64),
+                elapsed_seconds: clock.map(|(_, wall)| wall.as_secs_f64()),
+            },
+        });
+        self.failures.last().expect("just pushed")
+    }
+
+    /// Run hashes identify plan steps. Other coordinator outputs are parallel children,
+    /// whose facts may be observed but whose artifacts are never terminal materializations.
+    pub(super) fn merge_plan_outputs(
+        &mut self,
+        phase_outputs: &HashMap<String, OutputRef>,
+        run_hashes: &HashMap<String, String>,
+    ) {
+        for (node_id, output) in phase_outputs {
+            if run_hashes.contains_key(node_id) {
+                self.outputs.insert(node_id.clone(), output.clone());
+            }
+        }
+    }
+
+    /// Apply physical attempt and worker timing evidence to the final logical reports.
+    pub(super) fn annotate_reports(&self, step_reports: &mut [StepReport]) {
+        let mut attempts_by_base: HashMap<String, u32> = HashMap::new();
+        for (node, attempts) in &self.attempts {
+            let id = barca_model::StepId::parse(node);
+            if id.partition.0.contains_key("_branch") {
+                continue;
+            }
+            let base = id.base_id().to_string();
+            let count = attempts_by_base.entry(base).or_default();
+            *count = (*count).max(*attempts);
+        }
+        let mut sinks_by_base: HashMap<String, f64> = HashMap::new();
+        for (node, seconds) in &self.sink_seconds {
+            let id = barca_model::StepId::parse(node);
+            if !id.partition.0.contains_key("_branch") {
+                *sinks_by_base.entry(id.base_id().to_string()).or_default() += seconds;
+            }
+        }
+        for report in step_reports {
+            report.sink_seconds = sinks_by_base.get(&report.id).copied();
+            if let Some(attempts) = attempts_by_base.get(&report.id) {
+                report.attempts = Some(*attempts);
+            }
+            if let Some((elapsed, imports)) = self.durations.get(&report.id) {
+                report.elapsed_seconds = Some(*elapsed);
+                report.import_seconds = (*imports > 1.0).then_some(*imports);
+            }
+            report.batch_execution = self.batch_execution.get(&report.id).cloned();
+        }
+    }
+
+    pub(super) fn ledger<'a>(
+        &'a self,
+        run: LedgerContext<'a>,
+        evidence: &'a RunEvidence,
+    ) -> RunLedger<'a> {
+        RunLedger {
+            run_id: run.run_id,
+            status: run.status,
+            command: run.command,
+            files: barca_db::db::encode_files(run.files),
+            target: run.target,
+            job: run.job,
+            steps_total: run.steps_total,
+            steps_executed: run.steps_executed,
+            steps_cached: run.steps_cached,
+            elapsed: run.elapsed,
+            all_outputs: &self.outputs,
+            all_failures: &self.failures,
+            all_sinks: &self.sinks,
+            sink_publications: &self.publications,
+            all_attempts: &self.attempts,
+            all_timings: &self.timings,
+            all_rows: &self.rows,
+            all_sink_seconds: &self.sink_seconds,
+            batches: &self.batches,
+            cached_node_ids: run.cached_node_ids,
+            run_hashes: run.decisions.run_hashes(),
+            components: &evidence.components,
+            output_hashes: &run.decisions.sensor_outputs,
+            store_paths: run.store_paths,
+            cost_snapshot: &evidence.cost_snapshot,
+            touched: run.touched,
+            plan_reasons: run.decisions.plan_tally.json(),
+        }
+    }
+}

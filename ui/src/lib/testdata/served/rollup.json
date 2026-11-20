@@ -1,0 +1,2093 @@
+{
+  "as_of": "2026-11-17T14:57:00Z",
+  "data_coverage": {
+    "assets": 11,
+    "measured": 0,
+    "suspect": 0
+  },
+  "entries": [
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 5,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 2,
+        "blocked": 3,
+        "failing": 2,
+        "never_run": 1,
+        "ok": 3,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 11,
+      "causes": {
+        "catching_up": 0,
+        "failing": 6,
+        "no_refresh_path": 2,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      },
+      "children": [
+        "file:orders.py",
+        "file:billing.py",
+        "group:orders.py:reporting"
+      ],
+      "data_coverage": {
+        "assets": 11,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": "2026-11-17T14:57:10Z",
+      "gap_seconds": 390364,
+      "health": {
+        "behind": 3,
+        "blocked": 3,
+        "failing": 3,
+        "never_run": 1,
+        "ok": 5,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [
+        {
+          "action_kind": "start_server",
+          "assets": 0,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 1,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 1,
+          "fresh_by": null,
+          "gap_seconds": 32220,
+          "nodes": 1,
+          "root": "scheduler_off",
+          "stale_since": "2026-11-17T06:00:00Z",
+          "unbounded": 1,
+          "weight": 6
+        },
+        {
+          "action_kind": "fix_failure",
+          "assets": 3,
+          "causes": {
+            "catching_up": 0,
+            "failing": 3,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 4,
+          "fresh_by": null,
+          "gap_seconds": 154257,
+          "nodes": 3,
+          "root": "failure:billing.py:invoices",
+          "stale_since": "2026-11-17T00:40:01Z",
+          "unbounded": 3,
+          "weight": 18
+        },
+        {
+          "action_kind": "fix_failure",
+          "assets": 2,
+          "causes": {
+            "catching_up": 0,
+            "failing": 2,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 6,
+          "fresh_by": null,
+          "gap_seconds": 93238,
+          "nodes": 2,
+          "root": "failure:orders.py:sales_by_day",
+          "stale_since": "2026-11-17T02:00:01Z",
+          "unbounded": 2,
+          "weight": 12
+        },
+        {
+          "action_kind": "fix_failure",
+          "assets": 0,
+          "causes": {
+            "catching_up": 0,
+            "failing": 1,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 7,
+          "fresh_by": null,
+          "gap_seconds": 104219,
+          "nodes": 1,
+          "root": "failure:billing.py:check__invoices",
+          "stale_since": "2026-11-16T10:00:01Z",
+          "unbounded": 1,
+          "weight": 6
+        },
+        {
+          "action_kind": "add_schedule",
+          "assets": 1,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 1,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 8,
+          "fresh_by": null,
+          "gap_seconds": 6420,
+          "nodes": 1,
+          "root": "no_schedule:orders.py:forecast",
+          "stale_since": "2026-11-17T13:10:00Z",
+          "unbounded": 1,
+          "weight": 6
+        },
+        {
+          "action_kind": "wait",
+          "assets": 2,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 2,
+            "undecided": 0
+          },
+          "cumulative_nodes": 10,
+          "fresh_by": "2026-11-17T14:57:10Z",
+          "gap_seconds": 10,
+          "nodes": 2,
+          "root": "input:orders.py:orders_enriched",
+          "stale_since": null,
+          "unbounded": 1,
+          "weight": 4
+        }
+      ],
+      "id": "root",
+      "kind": "root",
+      "label": "all",
+      "nodes": 15,
+      "not_fresh": 10,
+      "parent": null,
+      "running": 0,
+      "split": {
+        "catching_up": 1,
+        "in_hand_nodes": 2,
+        "in_hand_weight": 4,
+        "need_someone": 5,
+        "need_someone_nodes": 8,
+        "need_someone_weight": 48,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-16T10:00:01Z",
+      "unbounded": 9,
+      "weight": 57,
+      "weights": {
+        "catching_up": 0,
+        "failing": 36,
+        "fresh": 5,
+        "no_refresh_path": 12,
+        "overdue": 0,
+        "queued": 4,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 2,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 1,
+        "blocked": 1,
+        "failing": 1,
+        "never_run": 1,
+        "ok": 3,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 7,
+      "causes": {
+        "catching_up": 0,
+        "failing": 2,
+        "no_refresh_path": 2,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "children": [
+        "orders.py:sales_by_day",
+        "orders.py:sales_report",
+        "orders.py:orders_enriched",
+        "orders.py:nightly_export",
+        "orders.py:forecast",
+        "orders.py:customers",
+        "orders.py:fx_rates",
+        "orders.py:orders",
+        "orders.py:orders_feed"
+      ],
+      "data_coverage": {
+        "assets": 7,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": "2026-11-17T14:57:10Z",
+      "gap_seconds": 131888,
+      "health": {
+        "behind": 2,
+        "blocked": 1,
+        "failing": 1,
+        "never_run": 1,
+        "ok": 4,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [
+        {
+          "action_kind": "start_server",
+          "assets": 0,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 1,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 1,
+          "fresh_by": null,
+          "gap_seconds": 32220,
+          "nodes": 1,
+          "root": "scheduler_off",
+          "stale_since": "2026-11-17T06:00:00Z",
+          "unbounded": 1,
+          "weight": 6
+        },
+        {
+          "action_kind": "fix_failure",
+          "assets": 2,
+          "causes": {
+            "catching_up": 0,
+            "failing": 2,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 3,
+          "fresh_by": null,
+          "gap_seconds": 93238,
+          "nodes": 2,
+          "root": "failure:orders.py:sales_by_day",
+          "stale_since": "2026-11-17T02:00:01Z",
+          "unbounded": 2,
+          "weight": 12
+        },
+        {
+          "action_kind": "add_schedule",
+          "assets": 1,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 1,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 4,
+          "fresh_by": null,
+          "gap_seconds": 6420,
+          "nodes": 1,
+          "root": "no_schedule:orders.py:forecast",
+          "stale_since": "2026-11-17T13:10:00Z",
+          "unbounded": 1,
+          "weight": 6
+        },
+        {
+          "action_kind": "wait",
+          "assets": 1,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 1,
+            "undecided": 0
+          },
+          "cumulative_nodes": 5,
+          "fresh_by": "2026-11-17T14:57:10Z",
+          "gap_seconds": 10,
+          "nodes": 1,
+          "root": "input:orders.py:orders_enriched",
+          "stale_since": null,
+          "unbounded": 0,
+          "weight": 2
+        }
+      ],
+      "id": "file:orders.py",
+      "kind": "file",
+      "label": "orders.py",
+      "nodes": 9,
+      "not_fresh": 5,
+      "parent": "root",
+      "running": 0,
+      "split": {
+        "catching_up": 1,
+        "in_hand_nodes": 1,
+        "in_hand_weight": 2,
+        "need_someone": 3,
+        "need_someone_nodes": 4,
+        "need_someone_weight": 24,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T02:00:01Z",
+      "unbounded": 4,
+      "weight": 30,
+      "weights": {
+        "catching_up": 0,
+        "failing": 12,
+        "fresh": 4,
+        "no_refresh_path": 12,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 46619,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:sales_by_day",
+      "keys": {
+        "behind": 1,
+        "cause": "failing",
+        "failed": 1,
+        "ok": 3
+      },
+      "kind": "node",
+      "label": "sales_by_day",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T02:00:01Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 6,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 46619,
+      "health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:sales_report",
+      "keys": {
+        "behind": 5,
+        "cause": "failing",
+        "failed": 0,
+        "ok": 0
+      },
+      "kind": "node",
+      "label": "sales_report",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T02:00:01Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 6,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": "2026-11-17T14:57:10Z",
+      "gap_seconds": 10,
+      "health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:orders_enriched",
+      "kind": "node",
+      "label": "orders_enriched",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 1,
+        "in_hand_nodes": 1,
+        "in_hand_weight": 2,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 0,
+      "weight": 2,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 0,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 0,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 32220,
+      "health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:nightly_export",
+      "kind": "node",
+      "label": "nightly_export",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T06:00:00Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 0,
+        "no_refresh_path": 6,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 1,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 6420,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 1,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:forecast",
+      "kind": "node",
+      "label": "forecast",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T13:10:00Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 0,
+        "no_refresh_path": 6,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 0,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:customers",
+      "kind": "node",
+      "label": "customers",
+      "nodes": 1,
+      "not_fresh": 0,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 0,
+      "weight": 1,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 0,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:fx_rates",
+      "kind": "node",
+      "label": "fx_rates",
+      "nodes": 1,
+      "not_fresh": 0,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 0,
+      "weight": 1,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 0,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:orders",
+      "kind": "node",
+      "label": "orders",
+      "nodes": 1,
+      "not_fresh": 0,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 0,
+      "weight": 1,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 0,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 0,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 0,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:orders_feed",
+      "kind": "node",
+      "label": "orders_feed",
+      "nodes": 1,
+      "not_fresh": 0,
+      "parent": "file:orders.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 0,
+      "weight": 1,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 3,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 2,
+        "failing": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 3,
+      "causes": {
+        "catching_up": 0,
+        "failing": 4,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [
+        "billing.py:invoices",
+        "billing.py:check__invoices",
+        "billing.py:invoice_totals",
+        "billing.py:ledger"
+      ],
+      "data_coverage": {
+        "assets": 3,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 258476,
+      "health": {
+        "behind": 0,
+        "blocked": 2,
+        "failing": 2,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [
+        {
+          "action_kind": "fix_failure",
+          "assets": 3,
+          "causes": {
+            "catching_up": 0,
+            "failing": 3,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 3,
+          "fresh_by": null,
+          "gap_seconds": 154257,
+          "nodes": 3,
+          "root": "failure:billing.py:invoices",
+          "stale_since": "2026-11-17T00:40:01Z",
+          "unbounded": 3,
+          "weight": 18
+        },
+        {
+          "action_kind": "fix_failure",
+          "assets": 0,
+          "causes": {
+            "catching_up": 0,
+            "failing": 1,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "cumulative_nodes": 4,
+          "fresh_by": null,
+          "gap_seconds": 104219,
+          "nodes": 1,
+          "root": "failure:billing.py:check__invoices",
+          "stale_since": "2026-11-16T10:00:01Z",
+          "unbounded": 1,
+          "weight": 6
+        }
+      ],
+      "id": "file:billing.py",
+      "kind": "file",
+      "label": "billing.py",
+      "nodes": 4,
+      "not_fresh": 4,
+      "parent": "root",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 2,
+        "need_someone_nodes": 4,
+        "need_someone_weight": 24,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-16T10:00:01Z",
+      "unbounded": 4,
+      "weight": 24,
+      "weights": {
+        "catching_up": 0,
+        "failing": 24,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 51419,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "billing.py:invoices",
+      "kind": "node",
+      "label": "invoices",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:billing.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T00:40:01Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 6,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 0,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 0,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 104219,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "billing.py:check__invoices",
+      "kind": "node",
+      "label": "check__invoices",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:billing.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-16T10:00:01Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 6,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 51419,
+      "health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "billing.py:invoice_totals",
+      "kind": "node",
+      "label": "invoice_totals",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:billing.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T00:40:01Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 6,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 51419,
+      "health": {
+        "behind": 0,
+        "blocked": 1,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "billing.py:ledger",
+      "kind": "node",
+      "label": "ledger",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "file:billing.py",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 1,
+        "need_someone_nodes": 1,
+        "need_someone_weight": 6,
+        "run_by_hand": 0
+      },
+      "stale_since": "2026-11-17T00:40:01Z",
+      "unbounded": 1,
+      "weight": 6,
+      "weights": {
+        "catching_up": 0,
+        "failing": 6,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "children": [
+        "orders.py:revenue_hourly",
+        "orders.py:publish_dashboard"
+      ],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 0,
+      "health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [
+        {
+          "action_kind": "wait",
+          "assets": 1,
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 1,
+            "undecided": 0
+          },
+          "cumulative_nodes": 1,
+          "fresh_by": null,
+          "gap_seconds": 0,
+          "nodes": 1,
+          "root": "input:orders.py:orders_enriched",
+          "stale_since": null,
+          "unbounded": 1,
+          "weight": 2
+        }
+      ],
+      "id": "group:orders.py:reporting",
+      "kind": "group",
+      "label": "Reporting",
+      "nodes": 2,
+      "not_fresh": 1,
+      "parent": "root",
+      "running": 0,
+      "split": {
+        "catching_up": 1,
+        "in_hand_nodes": 1,
+        "in_hand_weight": 2,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 1,
+      "weight": 3,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 1,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 1,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 0,
+      "health": {
+        "behind": 1,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:revenue_hourly",
+      "kind": "node",
+      "label": "revenue_hourly",
+      "nodes": 1,
+      "not_fresh": 1,
+      "parent": "group:orders.py:reporting",
+      "running": 0,
+      "split": {
+        "catching_up": 1,
+        "in_hand_nodes": 1,
+        "in_hand_weight": 2,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 1,
+      "weight": 2,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      }
+    },
+    {
+      "also_in": [],
+      "asset_causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "asset_health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 0,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "children": [],
+      "data_coverage": {
+        "assets": 0,
+        "measured": 0,
+        "suspect": 0
+      },
+      "fresh_by": null,
+      "gap_seconds": 0,
+      "health": {
+        "behind": 0,
+        "blocked": 0,
+        "failing": 0,
+        "never_run": 0,
+        "ok": 1,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "held_by": [],
+      "id": "orders.py:publish_dashboard",
+      "kind": "node",
+      "label": "publish_dashboard",
+      "nodes": 1,
+      "not_fresh": 0,
+      "parent": "group:orders.py:reporting",
+      "running": 0,
+      "split": {
+        "catching_up": 0,
+        "in_hand_nodes": 0,
+        "in_hand_weight": 0,
+        "need_someone": 0,
+        "need_someone_nodes": 0,
+        "need_someone_weight": 0,
+        "run_by_hand": 0
+      },
+      "stale_since": null,
+      "unbounded": 0,
+      "weight": 1,
+      "weights": {
+        "catching_up": 0,
+        "failing": 0,
+        "fresh": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      }
+    }
+  ],
+  "files": [
+    {
+      "asset_health": {
+        "behind": 0,
+        "blocked": 2,
+        "failing": 1,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 3,
+      "causes": {
+        "catching_up": 0,
+        "failing": 4,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "file": "billing.py",
+      "fresh": 0,
+      "health": {
+        "behind": 0,
+        "blocked": 2,
+        "failing": 2,
+        "never_run": 0,
+        "ok": 0,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "kinds": {
+        "asset": {
+          "causes": {
+            "catching_up": 0,
+            "failing": 3,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "fresh": 0,
+          "nodes": 3
+        },
+        "sensor": {
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "fresh": 0,
+          "nodes": 0
+        },
+        "task": {
+          "causes": {
+            "catching_up": 0,
+            "failing": 1,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "fresh": 0,
+          "nodes": 1
+        }
+      },
+      "nodes": 4,
+      "running": 0,
+      "worst": "failing"
+    },
+    {
+      "asset_health": {
+        "behind": 2,
+        "blocked": 1,
+        "failing": 1,
+        "never_run": 1,
+        "ok": 3,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "assets": 8,
+      "causes": {
+        "catching_up": 0,
+        "failing": 2,
+        "no_refresh_path": 2,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      },
+      "file": "orders.py",
+      "fresh": 5,
+      "health": {
+        "behind": 3,
+        "blocked": 1,
+        "failing": 1,
+        "never_run": 1,
+        "ok": 5,
+        "suspect": 0,
+        "undecided": 0
+      },
+      "kinds": {
+        "asset": {
+          "causes": {
+            "catching_up": 0,
+            "failing": 2,
+            "no_refresh_path": 1,
+            "overdue": 0,
+            "queued": 2,
+            "undecided": 0
+          },
+          "fresh": 3,
+          "nodes": 8
+        },
+        "sensor": {
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 0,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "fresh": 1,
+          "nodes": 1
+        },
+        "task": {
+          "causes": {
+            "catching_up": 0,
+            "failing": 0,
+            "no_refresh_path": 1,
+            "overdue": 0,
+            "queued": 0,
+            "undecided": 0
+          },
+          "fresh": 1,
+          "nodes": 2
+        }
+      },
+      "nodes": 11,
+      "running": 0,
+      "worst": "failing"
+    }
+  ],
+  "kinds": {
+    "asset": {
+      "causes": {
+        "catching_up": 0,
+        "failing": 5,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      },
+      "fresh": 3,
+      "nodes": 11
+    },
+    "sensor": {
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "fresh": 1,
+      "nodes": 1
+    },
+    "task": {
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "fresh": 1,
+      "nodes": 3
+    }
+  },
+  "roots": [
+    {
+      "action": {
+        "command": "barca serve",
+        "estimated_seconds": 3,
+        "kind": "start_server",
+        "run_once": null
+      },
+      "assets": 0,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "detail": "the running scheduler does not fire nightly_export: 1 schedule missed a slot",
+      "error_group": null,
+      "fresh_by": null,
+      "gap_seconds": 32220,
+      "id": "scheduler_off",
+      "kind": "scheduler_off",
+      "needs_someone": true,
+      "node": "",
+      "nodes": 1,
+      "stale_since": "2026-11-17T06:00:00Z",
+      "unbounded": 1,
+      "weight": 6
+    },
+    {
+      "action": {
+        "command": "barca get invoices --server",
+        "estimated_seconds": 8,
+        "kind": "fix_failure",
+        "run_once": null
+      },
+      "assets": 3,
+      "causes": {
+        "catching_up": 0,
+        "failing": 3,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "detail": "ValueError: 3 rows with a negative total",
+      "error_group": "ValueError: # rows with a negative total",
+      "fresh_by": null,
+      "gap_seconds": 154257,
+      "id": "failure:billing.py:invoices",
+      "kind": "failure",
+      "needs_someone": true,
+      "node": "billing.py:invoices",
+      "nodes": 3,
+      "stale_since": "2026-11-17T00:40:01Z",
+      "unbounded": 3,
+      "weight": 18
+    },
+    {
+      "action": {
+        "command": "barca get sales_by_day --server",
+        "estimated_seconds": 18,
+        "kind": "fix_failure",
+        "run_once": null
+      },
+      "assets": 2,
+      "causes": {
+        "catching_up": 0,
+        "failing": 2,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "detail": "KeyError: 'units'",
+      "error_group": "KeyError: 'units'",
+      "fresh_by": null,
+      "gap_seconds": 93238,
+      "id": "failure:orders.py:sales_by_day",
+      "kind": "failure",
+      "needs_someone": true,
+      "node": "orders.py:sales_by_day",
+      "nodes": 2,
+      "stale_since": "2026-11-17T02:00:01Z",
+      "unbounded": 2,
+      "weight": 12
+    },
+    {
+      "action": {
+        "command": "barca run check__invoices --server",
+        "estimated_seconds": null,
+        "kind": "fix_failure",
+        "run_once": null
+      },
+      "assets": 0,
+      "causes": {
+        "catching_up": 0,
+        "failing": 1,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "detail": "AssertionError: 3 rows with a negative total",
+      "error_group": "AssertionError: # rows with a negative total",
+      "fresh_by": null,
+      "gap_seconds": 104219,
+      "id": "failure:billing.py:check__invoices",
+      "kind": "failure",
+      "needs_someone": true,
+      "node": "billing.py:check__invoices",
+      "nodes": 1,
+      "stale_since": "2026-11-16T10:00:01Z",
+      "unbounded": 1,
+      "weight": 6
+    },
+    {
+      "action": {
+        "command": null,
+        "estimated_seconds": null,
+        "kind": "add_schedule",
+        "run_once": "barca get forecast --server"
+      },
+      "assets": 1,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 1,
+        "overdue": 0,
+        "queued": 0,
+        "undecided": 0
+      },
+      "detail": "no tick reaches forecast",
+      "error_group": null,
+      "fresh_by": null,
+      "gap_seconds": 6420,
+      "id": "no_schedule:orders.py:forecast",
+      "kind": "no_schedule",
+      "needs_someone": true,
+      "node": "orders.py:forecast",
+      "nodes": 1,
+      "stale_since": "2026-11-17T13:10:00Z",
+      "unbounded": 1,
+      "weight": 6
+    },
+    {
+      "action": {
+        "command": null,
+        "estimated_seconds": 14,
+        "kind": "wait",
+        "run_once": null
+      },
+      "assets": 2,
+      "causes": {
+        "catching_up": 0,
+        "failing": 0,
+        "no_refresh_path": 0,
+        "overdue": 0,
+        "queued": 2,
+        "undecided": 0
+      },
+      "detail": "orders_enriched is out of date against what it reads",
+      "error_group": null,
+      "fresh_by": "2026-11-17T14:57:10Z",
+      "gap_seconds": 10,
+      "id": "input:orders.py:orders_enriched",
+      "kind": "input",
+      "needs_someone": false,
+      "node": "orders.py:orders_enriched",
+      "nodes": 2,
+      "stale_since": null,
+      "unbounded": 1,
+      "weight": 4
+    }
+  ]
+}

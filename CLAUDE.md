@@ -14,11 +14,17 @@ stubs for decorators.
 ```
 Cargo.toml              ← Rust workspace root
 crates/
-  barca-model/          ← Shared vocabulary: ids, values, hashes, time, `term` (outln!/errln!), barca.toml config
-  barca-compile/        ← Source in, `Dag` and `ExecutionPlan` out: parser, decorator args, DAG, planner
+  barca-model/          ← Shared vocabulary: ids, values, the graph (`ir` node types, the `dag` container), hashes, time, `term` (outln!/errln!), barca.toml config
+  barca-python/         ← The Python frontend: project files in, a `Dag` out: parser, decorator args, fingerprints, link, load
+  barca-compile/        ← Planning: a `Dag` in, an `ExecutionPlan` out: targets, selection, planner, partition expansion (`dispatch`)
   barca-db/             ← The metadata database (`.barca/metadata.db`, libSQL): schema, owners of every write
-  barca-engine/         ← The per-step scheduler and worker loop: coordinator, dispatch, wire protocol
-  barca-core/           ← Wires them: run orchestration (`execution`: cache, freshness, publication), stores, commands
+  barca-proc/           ← Child processes (`helper_proc`) and the framed socket protocol they speak (`protocol`)
+  barca-engine/         ← The per-step scheduler and worker loop: coordinator, I/O loop, wire tables. No database
+  barca-store/          ← Storage: transfer, gc, backup, ledger, pins, pauses, the run queue's rows; the leaf types (`results`, `envelope`, `text`, `http`)
+  barca-decide/         ← Decisions: cache and freshness verdicts, plan reasons, the dry-run prediction, sizing, schedules
+  barca-run/            ← The run orchestrator (`execution`, `persist`, `commands`, `telemetry`): the one crate that drives barca-engine and records a run
+  barca-analysis/       ← Read models over what was recorded: status, health, causes, estimates, rollup, run explanations
+  barca-service/        ← One operation per command (`queries`, `loaded`, `served`, `report`, `outcome`, `sql`); the one crate the hosts import
   barca-cli/            ← CLI binary (the `barca` command)
     docs/               ← The manual: markdown topics embedded in the binary (`barca docs`)
   barca-server/         ← `barca serve`: axum HTTP API, cron scheduler, file watcher, embedded UI
@@ -34,11 +40,12 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
   _worker.py            ← Daemon worker (invoked by Rust as `python -m barca._worker --daemon`): runs steps
   _capture.py           ← A step's stdout/stderr capture, line by line, for the coordinator
   _rss.py               ← Peak memory (RSS) of a step, Linux only
-  _lru.py               ← The in-process artifact LRU a worker reads inputs from
+  _lru.py               ← The in-process artifact LRU a worker reads inputs through
   _signals.py           ← Signal policy in a worker: what Ctrl-C and SIGTERM interrupt
+  _failure.py           ← How a failed step is reported: its phase, traceback and message
   _runtime.py           ← Socket communication with the coordinator; `PROTOCOL_VERSION` lives here
   _wire.py              ← Compact wire tables: only metadata and artifact references cross the socket
-  _batch.py             ← Batched partitions (RFC-0013): one call computes several keys
+  _batch.py             ← Batched partitions (RFC-0013): one call computes several keys, each written and reported on its own
   _branches.py          ← How a `parallel()` branch's return value gets back to its caller
   _artifacts.py         ← Serialization: json, pickle, parquet, CSV format detection + I/O, staging
   _storage.py           ← Storage backends: local filesystem and fsspec object stores
@@ -50,6 +57,7 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
   _duckdb.py            ← DuckDB connections for steps that take or return relations
   _sql.py               ← `barca sql`: invoked by Rust as `python -m barca._sql`
   _sql_server.py        ← `POST /sql/query`: the server's one DuckDB helper, `barca.*` tables only, no file access
+  _sql_tables.py        ← barca's own tables in DuckDB, shared by `_sql` and `_sql_server` (reads no file)
   _value.py             ← `barca get -o value`: invoked by Rust as `python -m barca._value`
   _inspect.py           ← Artifact shape for `barca status`: `python -m barca._inspect`
   _inspection_cache.py  ← Disposable, bounded inspection evidence (never used by execution)
@@ -60,15 +68,34 @@ python/barca/           ← `ls python/barca` is the truth; one line each:
   _dedupe.py            ← Collapse repeated library warnings in a worker
   _telemetry.py         ← Python spans for a step inside the step's own Datadog trace
   _lifeline.py          ← A helper process must not outlive the coordinator that started it
+  _helper.py            ← The envelope of the `python -m barca._x` helpers: request, stdout guard, lifeline, exit
   py.typed              ← PEP 561 marker
 pyproject.toml          ← Maturin build config (binary + Python stubs in one wheel)
 ```
 
-Crate dependencies point one way (`crates/barca-core/src/layering_tests.rs` checks the
-manifests): barca-compile and barca-db use barca-model and not each other; barca-engine uses
-barca-model and barca-compile, never barca-db; barca-core uses all four; barca-cli and
-barca-server use only barca-core, which re-exports the lower crates' modules under their old
-paths (`barca_core::config`). Only barca-db and barca-core link libsql.
+Crate dependencies point one way (`crates/barca-service/src/layering_tests.rs` checks the
+manifests; `docs/engineering/crate-split-2.md` has the graph): barca-python, barca-compile,
+barca-db and barca-proc use barca-model and not each other; barca-engine uses barca-compile and
+barca-proc, never barca-db; barca-store is above barca-db and never uses barca-engine;
+barca-decide is above barca-store; barca-run (drives the engine, records the run) and
+barca-analysis (reads) are above barca-decide and never use each other; barca-service uses all
+of them; barca-cli and barca-server use only barca-service, which re-exports what they name
+under its own paths (`barca_service::config`). The lower crates do not re-export each other: a
+module of barca-run names `barca_decide::cache`. barca-db, barca-store and barca-run link
+libsql; barca-decide and barca-service only in tests. barca-decide, barca-analysis and
+barca-compile take a `Dag` and use the Python frontend in tests only; a command that starts from
+files loads it in barca-service (`loaded`).
+
+Cargo checks nothing between the modules of one crate, so each crate with an order keeps it in
+a test built on `barca_model::source_scan::module_graph`: rows in barca-store, barca-analysis,
+barca-compile and barca-python (`src/layering_tests.rs`: a module names only the rows before
+its own; a new module gets a row), and the size of the largest module cycle, which may only
+shrink, in barca-decide, barca-run and barca-service.
+
+Inside barca-server the modules are in rows too (leaf, the stateful parts, `state`, views,
+`runs`, `scheduler`, route families, `routes`: `docs/engineering/server-layering.md`);
+`crates/barca-server/src/layering_tests.rs` checks them, and its `ALLOWED` list is empty. A new
+module gets a row there; a handler takes the sub-state it uses (`State<Reads>`), not `AppState`.
 
 ### How it works
 
@@ -121,9 +148,11 @@ maturin develop --uv --release --extras test       # release profile (fat LTO), 
 cargo test
 
 # Before pushing: CI's always-on gates locally (changelog, specs, prek hooks incl. pinned ruff
-# and ty, clippy -D warnings, cargo test or nextest, rebuild the venv's barca if Rust changed,
-# Python tests picked from the diff), with a pass/fail summary. Exit 1 if any step failed.
-scripts/check-fast.sh                # --python-all for the whole Python suite, --no-python
+# and ty, clippy -D warnings, the Rust tests the diff can affect, rebuild the venv's barca if
+# Rust changed, Python tests picked from the diff), with a pass/fail summary. Exit 1 if any
+# step failed.
+scripts/check-fast.sh                # --python-all for the whole Python suite, --no-python,
+                                     # --rust-all for every Rust test
 BARCA_POOL_SIZE=2 scripts/check-fast.sh   # reproduce CI-only worker-pool failures
 
 # Benchmarks
@@ -190,7 +219,7 @@ computing it over some keys) rather than describing intended behavior.
 
 ## Output and decorator arguments
 
-`crates/barca-compile/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
+`crates/barca-python/src/decorator_args.rs` is the shared list of accepted decorator/helper arguments.
 Its tests keep Python stubs and documentation tables in sync. Use `outln!` / `errln!` for
 lines, or `term::stdout_str` / `stderr_str` for rendered chunks; direct print macros are denied
 by Clippy. Use `term::child_output()` for uncaptured child streams and `term::exit` to drain
@@ -221,19 +250,29 @@ changes `site/` or `CHANGELOG.md` redeploys barca.sh.
   specification checks and the prek hooks of `prek.toml`, so ruff, ruff format, ty, cargo fmt,
   the version sync and `uv lock --check` gate every PR; `clippy`; `changes`) so it enters the
   queue within about a minute. A merge group runs the merge tier, which gates the merge: the
-  fast set plus the Rust tests (and the UI's generated types against Rust), the wheel, the
-  quick Python subset in `scripts/fast-tests.txt` and `perf` (the performance budgets,
-  `scripts/perf-gate.py`), about two minutes. `scripts/check-fast.sh` runs the same gates
-  locally except `perf` and the generated types, and fails with one line when the tree has no
-  `.venv` to run the Python tests against. A release runs the full tier: everything,
-  including integration, the UI checks, the proxy tests, the Python shards, the object-store
+  fast set plus the Rust tests the diff can affect (and the UI's generated types against Rust
+  when a crate that exports them changed), the wheel, the quick Python subset in
+  `scripts/fast-tests.txt` and `perf` (the performance budgets, `scripts/perf-gate.py`),
+  about two minutes. The merge tier does not run the whole Rust workspace:
+  `scripts/ci-rust-tests.py` selects the crates that own a changed file, the crates that
+  depend on them (from `cargo metadata`) and the tests that read a changed file from outside
+  their crate (its `READERS` table: site pages, specifications, UI fixtures, the guards that
+  scan every crate), runs no Rust test for a diff that can affect none, runs everything for
+  the root manifest, `Cargo.lock`, `.depot/`, `python/barca/` or a path it does not know, and
+  prints the reason for each crate in the `changes` job. A Rust test that reads a file outside
+  its crate must be listed in `READERS` (`scripts/test-ci-rust-tests.py` fails otherwise).
+  `scripts/check-fast.sh` runs the same gates locally, with the same Rust selection
+  (`--rust-all` for the whole workspace), except `perf` and the generated types, and fails
+  with one line when the tree has no `.venv` to run the Python tests against. A release runs
+  the full tier: everything, the whole Rust workspace included, with integration, the UI
+  checks, the proxy tests, the Python shards, the object-store
   emulator tests, the duckdb 1.x rerun and the real minute checkpoint test
   (`test_minute_checkpoints.py`, about 2 min), as the `release/v*` PR's own run and again in
   its merge group (head commit `chore(release): ...`); its `durations` job uploads the suite's
   per-file durations, which `scripts/release.sh` merges into `scripts/ci-test-durations.json`.
   A PR labelled `ci-full` runs the full tier too. A site-only diff (`site/**`, optionally
   `CHANGELOG.md`) skips clippy, the wheel, Python and perf: its PR runs `checks` (which builds
-  the site) and its merge group adds the Rust tests, which read site pages
+  the site) and its merge group adds the Rust tests that read site pages
   (`scripts/ci-tier.py`). Nothing runs on push to main: main only
   moves to a merge group's commit, which the queue has tested. The one exception is the
   site: `.github/workflows/site.yml` deploys barca.sh when a commit on main changes `site/`

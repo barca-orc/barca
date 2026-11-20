@@ -1,3 +1,4 @@
+import { isSuccess } from '@/lib/runs'
 import { useState } from 'react'
 import { Age } from '@/components/Age'
 import { artifactSchema } from '@/lib/artifactSchema'
@@ -23,7 +24,7 @@ export function ArtifactSchema({ node }: { node: NodeStatus }) {
   const last = node.last_materialization
   const preview = previewRows((node.shape as { sample?: unknown } | null)?.sample)
   if (!last) return <p className="barca-schema-empty">Not materialized yet. Run this asset to inspect its output.</p>
-  if (last.status !== 'success') return <p className="barca-schema-empty">The latest attempt failed. No schema is available for that attempt.</p>
+  if (!isSuccess(last.status)) return <p className="barca-schema-empty">The latest attempt failed. No schema is available for that attempt.</p>
   if (!last.artifact) return <p className="barca-schema-empty">No output artifact was recorded.</p>
   return <>
     <div className="barca-schema-meta">

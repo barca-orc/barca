@@ -9,14 +9,14 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use barca_core::BarcaError;
-use barca_core::envelope::{Context, ErrorEnvelope, ErrorKind};
+use barca_service::BarcaError;
+use barca_service::envelope::{Context, ErrorEnvelope, ErrorKind};
 
 /// Error type returned by route handlers. Implements `IntoResponse` so handlers
 /// can use `?` directly.
 #[derive(Debug)]
 pub enum ApiError {
-    EventCursor(crate::replay::CursorError),
+    EventCursor(CursorError),
     /// A core engine error (parse/dag/db/worker).
     Barca(BarcaError),
     /// A core engine error of a command run with this context (its remediation names it).
@@ -67,18 +67,16 @@ impl ApiError {
         match self {
             ApiError::EventCursor(error) => {
                 let status = match error {
-                    crate::replay::CursorError::Invalid => StatusCode::BAD_REQUEST,
-                    crate::replay::CursorError::Mismatch => StatusCode::CONFLICT,
-                    crate::replay::CursorError::Expired => StatusCode::GONE,
+                    CursorError::Invalid => StatusCode::BAD_REQUEST,
+                    CursorError::Mismatch => StatusCode::CONFLICT,
+                    CursorError::Expired => StatusCode::GONE,
                 };
                 let mut envelope = ErrorEnvelope::from_prose(
                     ErrorKind::Infra,
                     match error {
-                        crate::replay::CursorError::Invalid => "invalid event cursor",
-                        crate::replay::CursorError::Mismatch => {
-                            "event cursor belongs to another run attempt"
-                        }
-                        crate::replay::CursorError::Expired => {
+                        CursorError::Invalid => "invalid event cursor",
+                        CursorError::Mismatch => "event cursor belongs to another run attempt",
+                        CursorError::Expired => {
                             "event replay is incomplete; read the existing run outcome and recorded logs"
                         }
                     },
@@ -122,7 +120,7 @@ fn engine(err: BarcaError, ctx: &Context) -> (StatusCode, ErrorEnvelope) {
             ErrorKind::StepFailed | ErrorKind::Infra => StatusCode::INTERNAL_SERVER_ERROR,
         },
     };
-    (status, barca_core::outcome::envelope_of(err, ctx))
+    (status, barca_service::outcome::envelope_of(err, ctx))
 }
 
 impl IntoResponse for ApiError {
@@ -211,5 +209,22 @@ mod tests {
             envelope.remediation.as_deref(),
             Some("GET /runs lists them.")
         );
+    }
+}
+
+/// Why an event cursor (`Last-Event-ID`, `?after=`) cannot be resumed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CursorError {
+    Invalid,
+    Mismatch,
+    Expired,
+}
+impl CursorError {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Invalid => "invalid_event_cursor",
+            Self::Mismatch => "event_cursor_mismatch",
+            Self::Expired => "event_cursor_expired",
+        }
     }
 }

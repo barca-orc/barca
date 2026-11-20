@@ -11,7 +11,12 @@ from collections import OrderedDict
 from typing import Any, Literal
 
 from barca import _storage
-from barca._artifacts import LAZY_FRAME_TYPES, dataframe_library
+from barca._artifacts import (
+    FORMAT_OF_EXTENSION,
+    LAZY_FRAME_TYPES,
+    dataframe_library,
+    deserialize,
+)
 
 # Tier-1 cache limits. Sizes are bytes of the serialized artifact: known without touching the
 # value, and the same unit for every type and for local and remote artifacts.
@@ -233,3 +238,23 @@ class _ArtifactLRU:
             self._drop(self._key(path, frame_type))
             return False
         return self.put(path, value, frame_type, size_bytes=size_bytes)
+
+    def read(self, path: str, fmt: str | None = None, *, frame_type: str | None = None) -> Any:
+        """The value of the artifact at `path`, read through the cache: the cached copy when
+        there is one, else the artifact from the store (tier 2), which is then cached for the
+        next reader if it may be. `fmt` defaults to what the path's extension says.
+
+        Raises FileNotFoundError when the artifact is not in the store.
+        """
+        cacheable = is_cacheable_frame_type(frame_type)
+        hot = self.get(path, frame_type) if cacheable else None
+        if hot is not None:
+            return hot
+        if not _storage.exists(path):
+            raise FileNotFoundError(f"Input artifact not found: {path}")
+        if fmt is None:
+            fmt = FORMAT_OF_EXTENSION.get(_storage.suffix(path), "json")
+        value = deserialize(path, fmt, frame_type=frame_type)
+        if cacheable:
+            self.admit(path, value, frame_type)
+        return value

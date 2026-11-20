@@ -55,7 +55,7 @@ pub(crate) fn cap_marker() -> String {
 
 /// Where a run's lines are spooled while it runs, beside the metadata DB at `db_path`.
 pub fn spool_path(db_path: &str, run_id: &str) -> PathBuf {
-    Path::new(db_path)
+    Path::new(crate::db::database_of(db_path).as_ref())
         .parent()
         .unwrap_or(Path::new("."))
         .join("live-logs")

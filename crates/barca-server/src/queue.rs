@@ -4,41 +4,33 @@
 //! order they were accepted, at most `--max-runs` at once (`[server] max_runs`, default one per
 //! core), while the queue is neither paused nor draining. A run someone asked for (API, UI,
 //! CLI) starts ahead of waiting scheduled runs, and when every slot is taken it may use one
-//! extra slot of its own, so an interactive `get` never waits behind cron work.
+//! extra slot of its own, so an interactive `get` never waits behind cron work. A request
+//! that says `queue: "last"` gives that up: it waits its turn with the scheduled runs, in the
+//! order they were accepted, and takes no extra slot.
 //!
 //! A run leaves the queue when it has recorded how it ended. A server that starts resumes the runs
-//! it finds queued, in order ([`resume_at_startup`]). A run the stopping server stopped at its
+//! it finds queued, in order (`runs::resume_at_startup`). A run the stopping server stopped at its
 //! drain deadline goes back to its place ([`crate::runs`], `requeue`) and starts again from the
 //! beginning after the restart: steps that finished are cache hits then, so a run is executed
 //! at least once, and a step that was interrupted runs again.
-//!
-//! `POST /queue/pause` holds every queued run back (runs in flight go on) until
-//! `POST /queue/resume`; the pause is kept in `server_state`, so a restart keeps it.
 
-use crate::error::ApiError;
-use crate::handlers::snapshot_db;
-use crate::runs::RunSpec;
-use crate::state::{AppState, RunChannel, RunState, RunStatus};
-use axum::Json;
-use axum::extract::State;
-use barca_core::cache::CachePolicy;
-use barca_core::db;
-use barca_core::outcome::{RunCommand, Trigger, TriggeredBy};
-use barca_core::serve::run_queue::{self, QueueState};
-use barca_core::time::{now_secs_f64 as now_ts, rfc3339_millis as timestamp};
+use crate::run_model::RunSpec;
+use barca_service::cache::CachePolicy;
+use barca_service::outcome::{QueuePlace, RunCommand, Trigger, TriggeredBy};
+use barca_service::served::QueueView;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 /// The queue of one server.
 pub struct Queue {
     /// The runs waiting to start, in order.
-    waiting: Mutex<VecDeque<Waiting>>,
+    pub(crate) waiting: Mutex<VecDeque<Waiting>>,
     /// When an operator paused the queue (unix seconds), while it is paused.
     paused_at: Mutex<Option<i64>>,
     /// Held while a run is recorded and joins `waiting`, so both orders agree.
-    admit: tokio::sync::Mutex<()>,
+    pub(crate) admit: tokio::sync::Mutex<()>,
     /// How many runs execute at once.
     pub max_runs: usize,
     /// Set when the drain deadline passed: the runs it stops go back to the queue instead of
@@ -48,7 +40,7 @@ pub struct Queue {
     /// reports it without waiting on a read: (paused, queued, running) and when it was read.
     recorded: Mutex<Option<(RecordedCounts, std::time::Instant)>>,
     /// A background read of the recorded queue is in flight.
-    recording: AtomicBool,
+    pub(crate) recording: AtomicBool,
 }
 
 /// The counts of a recorded queue: paused, queued, running.
@@ -63,7 +55,7 @@ pub struct RecordedCounts {
 /// A run waiting to start.
 pub struct Waiting {
     pub run_id: String,
-    pub spec: RunSpec,
+    pub(crate) spec: RunSpec,
 }
 
 impl Queue {
@@ -80,7 +72,7 @@ impl Queue {
     }
 
     /// Note what a read of the recorded queue found.
-    fn note_recorded(&self, view: &QueueView) {
+    pub(crate) fn note_recorded(&self, view: &QueueView) {
         let counts = RecordedCounts {
             max_runs: view.max_runs,
             paused: view.paused,
@@ -91,7 +83,7 @@ impl Queue {
     }
 
     /// The last recorded counts, and whether they are older than `max_age` (or missing).
-    fn recorded(&self, max_age: std::time::Duration) -> (Option<RecordedCounts>, bool) {
+    pub(crate) fn recorded(&self, max_age: std::time::Duration) -> (Option<RecordedCounts>, bool) {
         let got = *self.recorded.lock().unwrap();
         match got {
             Some((counts, at)) => (Some(counts), at.elapsed() > max_age),
@@ -104,16 +96,17 @@ impl Queue {
         *self.paused_at.lock().unwrap()
     }
 
-    fn set_paused(&self, at: Option<i64>) {
+    pub(crate) fn set_paused(&self, at: Option<i64>) {
         *self.paused_at.lock().unwrap() = at;
     }
 
     /// The ids of the runs waiting, in the order they will start: runs someone asked for
-    /// first, then scheduled runs, each in the order they were accepted.
+    /// first, then scheduled runs and the runs asked to queue last ([`goes_ahead`]), each in
+    /// the order they were accepted.
     pub fn waiting_ids(&self) -> Vec<String> {
         let waiting = self.waiting.lock().unwrap();
         let (asked, scheduled): (Vec<_>, Vec<_>) =
-            waiting.iter().partition(|w| !is_scheduled(&w.spec));
+            waiting.iter().partition(|w| goes_ahead(&w.spec));
         asked
             .into_iter()
             .chain(scheduled)
@@ -163,6 +156,9 @@ struct Stored {
     /// How many times it was put back after its server was killed during a drain.
     #[serde(default)]
     kill_requeues: u32,
+    /// `queue` of `POST /runs`, when it is not the default: `"last"`.
+    #[serde(default, skip_serializing_if = "QueuePlace::is_next")]
+    queue: QueuePlace,
     /// When the server accepted it (unix seconds).
     accepted_at: f64,
 }
@@ -175,7 +171,7 @@ enum StoredPolicy {
     Refresh { names: Vec<String>, cascade: bool },
 }
 
-fn store(spec: &RunSpec, accepted_at: f64) -> String {
+pub(crate) fn store(spec: &RunSpec, accepted_at: f64) -> String {
     let stored = Stored {
         command: spec.command,
         targets: spec.targets.clone(),
@@ -197,12 +193,13 @@ fn store(spec: &RunSpec, accepted_at: f64) -> String {
         tick: spec.rules.tick.clone(),
         timeout: spec.timeout,
         kill_requeues: spec.kill_requeues,
+        queue: spec.queue,
         accepted_at,
     };
     serde_json::to_string(&stored).expect("a run spec is JSON")
 }
 
-fn load(text: &str) -> Result<(RunSpec, f64), String> {
+pub(crate) fn load(text: &str) -> Result<(RunSpec, f64), String> {
     let stored: Stored = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let spec = RunSpec {
         command: stored.command,
@@ -220,995 +217,87 @@ fn load(text: &str) -> Result<(RunSpec, f64), String> {
         values: stored.values,
         partition: stored
             .partition
-            .map(|value| barca_core::selection::PartitionSelection::parse(&value.to_string()))
+            .map(|value| barca_service::selection::PartitionSelection::parse(&value.to_string()))
             .transpose()?,
         batch: stored.batch,
-        rules: barca_core::freshness::RunRules {
+        rules: barca_service::freshness::RunRules {
             pin_manual: stored.pin_manual,
             tick: stored.tick,
             status: false,
         },
         timeout: stored.timeout,
         kill_requeues: stored.kill_requeues,
+        queue: stored.queue,
     };
     Ok((spec, stored.accepted_at))
 }
 
-// ─── admitting and starting runs ────────────────────────────────────────────
-
-/// What [`admit`] answers: the run id, and whether the run started at once or waits (with its
-/// place, 1 = next).
-pub struct Admitted {
-    pub run_id: String,
-    pub status: RunStatus,
-    pub position: Option<usize>,
-    pub waiting_for: Option<barca_core::run_explain::WaitingFor>,
-}
-
-/// The metadata DB exists and has barca's tables: the first run of a new project creates it.
-async fn ensure_db(state: &AppState) -> Result<(), barca_core::BarcaError> {
-    let cfg = &state.config.resolved;
-    let path = std::path::Path::new(&cfg.db_path);
-    if !path.exists() {
-        if !path.parent().is_some_and(std::path::Path::exists) {
-            db::ensure_env_dirs(&cfg.env)?;
-        }
-        db::init_db(&cfg.db_path).await?;
-    }
-    state.record_writer().await
-}
-
-/// Accept a run: allocate its id, record it in the queue (the metadata DB) and in memory, and
-/// start it when the queue lets it. A run that cannot be recorded is refused (`500`): it would
-/// not survive a restart.
-pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError> {
-    admit_as(state, spec, db::generate_run_id()).await
-}
-
-/// [`admit`] under a run id the caller allocated ([`db::generate_run_id`]): the scheduler
-/// names the run on its tick record before the run can start.
-pub async fn admit_as(
-    state: &AppState,
-    spec: RunSpec,
-    run_id: String,
-) -> Result<Admitted, ApiError> {
-    let channel = state.replay.channel()?;
-    let accepted_at = now_ts();
-    {
-        let _admitting = state.queue.admit.lock().await;
-        ensure_db(state).await?;
-        run_queue::push(
-            &state.config.resolved.db_path,
-            &run_id,
-            &store(&spec, accepted_at),
-            &timestamp(accepted_at),
-        )
-        .await
-        .map_err(|e| {
-            ApiError::Barca(barca_core::BarcaError::Db(format!(
-                "could not record the run in the run queue: {e}"
-            )))
-        })?;
-        track(state, &run_id, &spec, accepted_at, channel);
-        state.queue.waiting.lock().unwrap().push_back(Waiting {
-            run_id: run_id.clone(),
-            spec,
-        });
-    }
-    dispatch(state);
-    let status = state
-        .runs
-        .get(&run_id)
-        .map_or(RunStatus::Pending, |r| r.status);
-    let position = state
-        .queue
-        .waiting_ids()
-        .iter()
-        .position(|id| *id == run_id)
-        .map(|at| at + 1);
-    Ok(Admitted {
-        run_id,
-        status,
-        position,
-        waiting_for: state.waiting_for(status),
-    })
-}
-
 /// A run a cron tick started, rather than a person or client.
-fn is_scheduled(spec: &RunSpec) -> bool {
+pub(crate) fn is_scheduled(spec: &RunSpec) -> bool {
     spec.trigger.triggered_by == TriggeredBy::Schedule
 }
 
-/// Whether a scheduled run is executing now.
-fn scheduled_running(state: &AppState) -> bool {
-    state
-        .runs
-        .iter()
-        .any(|r| r.status == RunStatus::Running && r.trigger.triggered_by == TriggeredBy::Schedule)
+/// A run that starts ahead of waiting scheduled work: someone asked for it, and did not ask
+/// for it to queue last (`queue: "last"`). Every other run, a tick's or one queued last, starts
+/// in the order it was accepted, after the runs that go ahead.
+pub(crate) fn goes_ahead(spec: &RunSpec) -> bool {
+    !is_scheduled(spec) && spec.queue != QueuePlace::Last
 }
 
-/// The live record and event channel of a run that joins the queue.
-fn track(state: &AppState, run_id: &str, spec: &RunSpec, accepted_at: f64, channel: RunChannel) {
-    // Child of the server-wide shutdown token: DELETE /runs/{id} cancels just this run;
-    // a forced stop cancels all of them.
-    let cancel = state.shutdown.child_token();
-    state.runs.insert(
-        run_id.to_string(),
-        RunState {
-            handle: run_id.to_string(),
-            db_run_id: None,
-            command: spec.command.as_str().into(),
-            target: (!spec.targets.is_empty()).then(|| spec.targets.join(",")),
-            nodes: spec.nodes.clone(),
-            trigger: spec.trigger.clone(),
-            refreshes: !matches!(spec.policy, CachePolicy::CacheAware),
-            files: spec.files.clone(),
-            status: RunStatus::Pending,
-            result: None,
-            error: None,
-            started_at: accepted_at,
-            finished_at: None,
-            outcome: None,
-            cancel,
-            cancel_requested: false,
-            cancellation: None,
-        },
-    );
-    state.events.insert(run_id.to_string(), channel);
-}
-
-/// Start the runs at the head of the queue while there is room: not paused, not draining, fewer
-/// than `max_runs` executing. Called when a run joins, when one ends and when the queue is
-/// resumed.
-pub fn dispatch(state: &AppState) {
-    loop {
-        if state.is_draining() || state.queue.paused_at().is_some() {
-            return;
-        }
-        let mut waiting = state.queue.waiting.lock().unwrap();
-        // The first run someone asked for goes ahead of scheduled runs.
-        let Some(at) = waiting
-            .iter()
-            .position(|w| !is_scheduled(&w.spec))
-            .or((!waiting.is_empty()).then_some(0))
-        else {
-            return;
-        };
-        let interactive = !is_scheduled(&waiting[at].spec);
-        let permit = match state.run_slots.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            // The extra slot is for running past scheduled work, not for running two
-            // requested runs past `max_runs`.
-            Err(_) if interactive && scheduled_running(state) => {
-                match state.interactive_slot.clone().try_acquire_owned() {
-                    Ok(permit) => permit,
-                    Err(_) => return,
-                }
-            }
-            Err(_) => return,
-        };
-        let next = waiting.remove(at).expect("index in range");
-        drop(waiting);
-        if let Some(mut run) = state.runs.get_mut(&next.run_id) {
-            run.status = RunStatus::Running;
-        }
-        crate::runs::launch(state.clone(), next, permit);
-    }
-}
-
-/// At startup, before anything is admitted: read the queue the last server left. Queued runs
-/// join the queue in their order, under their run ids; a run that was started and never
-/// recorded how it ended (the server was killed) is not started again: it is recorded as
-/// interrupted. Then read whether the queue is paused. Prints what it resumes.
-pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_core::BarcaError> {
-    let path = state.config.resolved.db_path.clone();
-    if !std::path::Path::new(&path).exists() {
-        return Ok(());
-    }
-    let rows = run_queue::list(&path).await?;
-    let paused = run_queue::paused_at(&path).await?;
-    state.queue.set_paused(paused);
-    let mut resumed = 0;
-    for row in rows {
-        match (row.state, load(&row.spec)) {
-            (QueueState::Queued, Ok((spec, accepted_at))) => {
-                track(
-                    state,
-                    &row.run_id,
-                    &spec,
-                    accepted_at,
-                    state.replay.channel()?,
-                );
-                state.queue.waiting.lock().unwrap().push_back(Waiting {
-                    run_id: row.run_id,
-                    spec,
-                });
-                resumed += 1;
-            }
-            // In flight when the last server was told to stop, and it never finished the drain:
-            // what sent the signal killed it (a supervisor's grace period ran out), not a crash
-            // of its own. Back in its place, once: a run killed in two drains in a row is
-            // interrupted like a crash, so a run that keeps its server from stopping cannot
-            // loop (#628).
-            (QueueState::Draining, Ok((mut spec, accepted_at))) if spec.kill_requeues == 0 => {
-                spec.kill_requeues += 1;
-                match run_queue::requeue(&path, &row.run_id, Some(&store(&spec, accepted_at))).await
-                {
-                    Ok(()) => {
-                        barca_core::errln!(
-                            "[barca] run {} was in flight when the last server was killed during \
-                             its drain (SIGKILL after SIGTERM: the stop grace period ran out); \
-                             it is put back in the queue and starts again (steps that finished \
-                             are cached)",
-                            row.run_id
-                        );
-                        track(
-                            state,
-                            &row.run_id,
-                            &spec,
-                            accepted_at,
-                            state.replay.channel()?,
-                        );
-                        state.queue.waiting.lock().unwrap().push_back(Waiting {
-                            run_id: row.run_id,
-                            spec,
-                        });
-                        resumed += 1;
-                    }
-                    Err(e) => {
-                        barca_core::errln!(
-                            "[barca] warning: could not put run {} back in the queue: {e}",
-                            row.run_id
-                        );
-                        interrupted(state, &row.run_id, Some(spec)).await;
-                    }
-                }
-            }
-            (QueueState::Running | QueueState::Draining, loaded) => {
-                interrupted(state, &row.run_id, loaded.ok().map(|(s, _)| s)).await;
-            }
-            (QueueState::Queued, Err(why)) => {
-                barca_core::errln!(
-                    "[barca] warning: queued run {} cannot be read ({why}); it is not resumed",
-                    row.run_id
-                );
-                run_queue::remove(&path, &row.run_id).await?;
-            }
-        }
-    }
-    if resumed > 0 {
-        barca_core::errln!(
-            "[barca] resuming {resumed} queued run{}",
-            if resumed == 1 { "" } else { "s" }
-        );
-    }
-    if let Some(at) = paused {
-        barca_core::errln!(
-            "[barca] the run queue is paused (since {}): queued runs wait for POST /queue/resume \
-             (barca queue resume)",
-            barca_core::outcome::rfc3339(at)
-        );
-    }
-    Ok(())
-}
-
-/// A run the last server started and never finished recording: it was killed (SIGKILL, a
-/// crash, a supervisor's grace period that ran out). It is not started again; its row, when it
-/// wrote one, is recorded `interrupted` by the usual recovery, and one that never wrote a row
-/// gets one with an `error` outcome, so its id is not lost.
-async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
-    let cfg = &state.config.resolved;
-    barca_core::errln!(
-        "[barca] warning: run {run_id} was interrupted when the server last stopped (it was \
-         killed before it finished); it is not started again"
-    );
-    let unrecorded = matches!(db::get_run(&cfg.db_path, run_id).await, Ok(None));
-    if let Some(spec) = &spec {
-        // The tick that started it ends as the run's row does: `interrupted`, or `error` for
-        // a run that never wrote one.
-        let status = if unrecorded { "error" } else { "interrupted" };
-        crate::runs::record_tick_finished(state, run_id, spec, status, None).await;
-    }
-    if unrecorded && let Some(spec) = spec {
-        let outcome = barca_core::outcome::Outcome::ended(
-            barca_core::outcome::OutcomeStatus::Error,
-            &barca_core::envelope::ErrorEnvelope::from_prose(
-                barca_core::envelope::ErrorKind::Infra,
-                "run interrupted: the server was killed before the run recorded itself\nRun it \
-                 again; give the server a longer stop grace period than its drain timeout.",
-            ),
-        );
-        let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
-        let files = if spec.files.is_empty() {
-            &state.config.files
-        } else {
-            &spec.files
-        };
-        let _ = barca_core::serve::record_unstarted_run(
-            &cfg.db_path,
-            barca_core::serve::UnstartedRun {
-                run_id,
-                command: spec.command.as_str(),
-                files,
-                target: target.as_deref(),
-                trigger: &spec.trigger,
-            },
-            "error",
-            outcome.text(),
-        )
-        .await;
-    }
-    if let Err(e) = run_queue::remove(&cfg.db_path, run_id).await {
-        barca_core::errln!("[barca] warning: {e}");
-    }
-}
-
-// ─── the routes ─────────────────────────────────────────────────────────────
-
-/// One run of `GET /queue`.
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct QueueEntry {
-    pub run_id: String,
-    /// `pending` (waiting to start) or `running`.
-    pub status: String,
-    /// Its place among the waiting runs, 1 = next; `null` for a running run.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub position: Option<usize>,
-    pub command: String,
-    /// The targets as given, comma-separated; `null` for every asset.
-    pub target: Option<String>,
-    /// `target` in a few words, as a row shows it (`barca_core::run_list::target_line`):
-    /// `all assets`, `billing.py:orders +21 more`.
-    pub target_line: String,
-    pub triggered_by: TriggeredBy,
-    pub schedule_id: Option<String>,
-    /// When the server accepted it.
-    pub queued_at: String,
-    /// When it started executing (RFC 3339, UTC); `null` while it waits, and from a
-    /// `--read-only` server (the recorded queue does not say).
-    pub started_at: Option<String>,
-    /// For a waiting run: when it is expected to start (RFC 3339, UTC), an estimate rounded
-    /// up to 5 seconds: when a run slot frees, from the typical run time of the runs ahead
-    /// of it over `max_runs` slots. `null` for a running run, while the queue is paused or
-    /// draining, and from a `--read-only` server.
-    pub estimated_start_at: Option<String>,
-    /// How long it waits for a run slot, whole seconds: from `queued_at` to `started_at` for
-    /// a running run, to `estimated_start_at` for a waiting one. `null` when neither is known.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub wait_seconds: Option<u64>,
-    /// Where `run_queue` has it: `queued`, `running`, or `draining` (in flight when its server
-    /// began to stop). Not served: a column of `barca.queue` ([`table_rows`]).
-    #[serde(skip)]
-    #[cfg_attr(feature = "ts", ts(skip))]
-    pub(crate) state: &'static str,
-    /// For a tick's run: its slot (RFC 3339, UTC). Not served: a column of `barca.queue`.
-    #[serde(skip)]
-    #[cfg_attr(feature = "ts", ts(skip))]
-    pub(crate) scheduled_at: Option<String>,
-    /// What else a waiting run waits for: `restart` while the server drains (it starts on the
-    /// next server); `null` otherwise. Experimental.
-    pub waiting_for: Option<barca_core::run_explain::WaitingFor>,
-}
-
-/// `GET /queue` (and the answer of pause and resume).
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct QueueView {
-    /// Paused by an operator: nothing new starts until it is resumed.
-    pub paused: bool,
-    /// When it was paused, RFC 3339; `null` when not paused.
-    pub paused_at: Option<String>,
-    /// The server is stopping: nothing new starts; the queue waits for the next start.
-    pub draining: bool,
-    /// How many runs execute at once.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub max_runs: Option<usize>,
-    /// The runs executing now, oldest first.
-    pub running: Vec<QueueEntry>,
-    /// The runs waiting to start, next first.
-    pub queued: Vec<QueueEntry>,
-    /// The run slots in use, in words (`barca_core::run_list::queue_slots_line`): `1 of 4
-    /// running`, or `1 of 1 running, plus 1 requested run` while a run someone asked for
-    /// executes in the extra slot past `max_runs`.
-    pub slots: String,
-    /// The capacity every run shares (`--capacity`, `[server] capacity`): the weight in use,
-    /// by run, and the steps waiting for it, in the order they are admitted. `null` when the
-    /// server has none (each run has only its own).
-    pub capacity: Option<barca_core::serve::capacity::CapacitySnapshot>,
-}
-
-fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
-    QueueEntry {
-        run_id: run.handle.clone(),
-        status: if run.status == RunStatus::Running {
-            "running"
-        } else {
-            "pending"
-        }
-        .into(),
-        position,
-        command: run.command.clone(),
-        target_line: barca_core::run_list::target_line(run.target.as_deref()),
-        target: run.target.clone(),
-        triggered_by: run.trigger.triggered_by,
-        schedule_id: run.trigger.schedule_id.clone(),
-        queued_at: timestamp(run.started_at),
-        started_at: None,
-        estimated_start_at: None,
-        wait_seconds: None,
-        state: match (run.status == RunStatus::Running, draining) {
-            (false, _) => QueueState::Queued,
-            (true, false) => QueueState::Running,
-            (true, true) => QueueState::Draining,
-        }
-        .as_str(),
-        scheduled_at: run.trigger.scheduled_at.clone(),
-        waiting_for: state.waiting_for(run.status),
-    }
-}
-
-/// When the runs of this server's queue started and are expected to start, as of `now` (unix
-/// seconds): what `GET /queue` and every node's `expected_fresh_at` read.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct QueueEstimate {
-    /// Each running run: when it started executing.
-    pub started: std::collections::HashMap<String, i64>,
-    /// Each waiting run: when it is expected to start. Empty while the queue starts nothing.
-    pub starts: std::collections::HashMap<String, i64>,
-    /// When a run that joined now would start, when no run slot is free.
-    pub clear_at: Option<i64>,
-    /// The queue starts runs: neither paused nor draining.
-    pub open: bool,
-}
-
-/// [`QueueEstimate`] over `ticks`, what is recorded of each schedule's ticks: a run's typical
-/// time is its schedule's ([`barca_core::estimates::typical_run_seconds`]).
-pub(crate) fn estimate(
-    state: &AppState,
-    ticks: &std::collections::HashMap<String, barca_core::schedule_standing::Ticks>,
-    now: i64,
-) -> QueueEstimate {
-    use barca_core::estimates::{QueueRun, queue_starts, typical_run_seconds};
-    let open = !state.is_draining() && state.queue.paused_at().is_none();
-    let of = |run: &RunState, started_at: Option<i64>| QueueRun {
-        run_id: run.handle.clone(),
-        started_at,
-        typical_seconds: typical_run_seconds(ticks, run.trigger.schedule_id.as_deref()),
-    };
-    let mut started = std::collections::HashMap::new();
-    let mut runs: Vec<QueueRun> = state
-        .runs
-        .iter()
-        .filter(|r| r.status == RunStatus::Running)
-        .map(|r| {
-            let at = state
-                .events
-                .get(&r.handle)
-                .and_then(|c| c.progress().started)
-                .unwrap_or(r.started_at) as i64;
-            started.insert(r.handle.clone(), at);
-            of(&r, Some(at))
-        })
-        .collect();
-    let running = runs.len();
-    runs.extend(
-        state
-            .queue
-            .waiting_ids()
-            .iter()
-            .filter_map(|id| state.runs.get(id).map(|r| of(&r, None))),
-    );
-    let (starts, clear) = queue_starts(&runs, state.queue.max_runs, now);
-    QueueEstimate {
-        started,
-        starts: if open { starts } else { Default::default() },
-        // With a free slot and nothing waiting, a run that joins starts at once.
-        clear_at: (open && (running >= state.queue.max_runs || runs.len() > running))
-            .then_some(clear)
-            .filter(|at| *at > now),
-        open,
-    }
-}
-
-/// The ticks recorded of each schedule, for [`estimate`]; none when they cannot be read (the
-/// estimates then use no typical run time).
-async fn recorded_ticks(state: &AppState) -> std::sync::Arc<crate::read_cache::ScheduleFacts> {
-    crate::handlers::published_ticks(state)
-        .await
-        .unwrap_or_default()
-}
-
-/// [`view`] with each run's start: `started_at` of a running run, `estimated_start_at` of a
-/// waiting one, and how long each waits ([`estimate`]).
-pub(crate) async fn view_with_starts(state: &AppState) -> QueueView {
-    let mut view = view(state);
-    let facts = recorded_ticks(state).await;
-    let now = chrono::Utc::now().timestamp();
-    let estimate = estimate(state, &facts.ticks, now);
-    let waited = |entry: &QueueEntry, until: i64| {
-        barca_core::time::parse_rfc3339(&entry.queued_at).map(|from| (until - from).max(0) as u64)
-    };
-    for entry in &mut view.running {
-        if let Some(&at) = estimate.started.get(&entry.run_id) {
-            entry.started_at = barca_core::time::rfc3339_secs(at);
-            entry.wait_seconds = waited(entry, at);
-        }
-    }
-    for entry in &mut view.queued {
-        if let Some(&at) = estimate.starts.get(&entry.run_id) {
-            let at = barca_core::estimates::rounded(at, now);
-            entry.estimated_start_at = barca_core::time::rfc3339_secs(at);
-            entry.wait_seconds = waited(entry, at);
-        }
-    }
-    view
-}
-
-/// The queue as this server holds it.
-pub fn view(state: &AppState) -> QueueView {
-    let draining = state.is_draining();
-    let queued = state
-        .queue
-        .waiting_ids()
-        .iter()
-        .enumerate()
-        .filter_map(|(at, id)| {
-            state
-                .runs
-                .get(id)
-                .map(|r| entry(state, &r, Some(at + 1), draining))
-        })
-        .collect();
-    let mut running: Vec<QueueEntry> = state
-        .runs
-        .iter()
-        .filter(|r| r.status == RunStatus::Running)
-        .map(|r| entry(state, &r, None, draining))
-        .collect();
-    running.sort_by(|a, b| a.queued_at.cmp(&b.queued_at));
-    let paused_at = state.queue.paused_at();
-    QueueView {
-        paused: paused_at.is_some(),
-        paused_at: paused_at.map(barca_core::outcome::rfc3339),
-        draining: state.is_draining(),
-        max_runs: Some(state.queue.max_runs),
-        slots: barca_core::run_list::queue_slots_line(running.len(), state.queue.max_runs),
-        running,
-        queued,
-        capacity: state.capacity.as_ref().map(|c| c.snapshot()),
-    }
-}
-
-/// A `--read-only` server runs nothing: its view is what the metadata DB records, read from a
-/// snapshot (the queue of the server that writes it, as of its last write).
-async fn recorded_view(state: &AppState) -> Result<QueueView, ApiError> {
-    let snapshot = snapshot_db(state).await?;
-    let rows = run_queue::list(&snapshot.path).await?;
-    let paused_at = run_queue::paused_at(&snapshot.path).await?;
-    let now = chrono::Utc::now().timestamp();
-    let timing = if rows.is_empty() {
-        barca_core::liveness::RecordedTiming {
-            max_runs: barca_core::liveness::serving(&snapshot.path)
-                .await?
-                .map(|s| s.max_runs),
-            ..Default::default()
-        }
-    } else {
-        let dag = state.inspect_dag().await?;
-        crate::handlers::recorded_queue(state, &dag, &snapshot.path, now).await?
-    };
-    let (mut running, mut queued) = (Vec::new(), Vec::new());
-    for row in rows {
-        let Ok((spec, accepted_at)) = load(&row.spec) else {
-            continue;
-        };
-        let started = timing.started.contains_key(&row.run_id);
-        let start = timing.started.get(&row.run_id).copied();
-        let estimate = timing
-            .starts
-            .get(&row.run_id)
-            .map(|at| barca_core::estimates::rounded(*at, now));
-        let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
-        let item = QueueEntry {
-            run_id: row.run_id,
-            status: if started { "running" } else { "pending" }.into(),
-            position: (!started).then_some(queued.len() + 1),
-            command: spec.command.as_str().into(),
-            target_line: barca_core::run_list::target_line(target.as_deref()),
-            target,
-            triggered_by: spec.trigger.triggered_by,
-            schedule_id: spec.trigger.schedule_id.clone(),
-            queued_at: timestamp(accepted_at),
-            started_at: start.and_then(barca_core::time::rfc3339_secs),
-            estimated_start_at: estimate.and_then(barca_core::time::rfc3339_secs),
-            wait_seconds: start
-                .or(estimate)
-                .map(|at| (at - accepted_at as i64).max(0) as u64),
-            state: row.state.as_str(),
-            scheduled_at: spec.trigger.scheduled_at.clone(),
-            // A `--read-only` server does not know whether the server that writes drains.
-            waiting_for: None,
-        };
-        if started {
-            running.push(item);
-        } else {
-            queued.push(item);
-        }
-    }
-    queued.sort_by_key(|entry| entry.schedule_id.is_some());
-    for (i, entry) in queued.iter_mut().enumerate() {
-        entry.position = Some(i + 1);
-    }
-    let view = QueueView {
-        paused: paused_at.is_some(),
-        paused_at: paused_at.map(barca_core::outcome::rfc3339),
-        draining: state.is_draining(),
-        max_runs: timing.max_runs,
-        slots: timing.max_runs.map_or_else(
-            || format!("{} running · run slots unknown", running.len()),
-            |max| barca_core::run_list::queue_slots_line(running.len(), max),
-        ),
-        running,
-        queued,
-        capacity: None,
-    };
-    state.queue.note_recorded(&view);
-    Ok(view)
-}
-
-/// `GET /queue` — the runs executing and the runs waiting, in order, and whether the queue is
-/// paused.
-pub async fn get(State(state): State<AppState>) -> Result<Json<QueueView>, ApiError> {
-    if state.config.read_only {
-        return recorded_view(&state).await.map(Json);
-    }
-    Ok(Json(view_with_starts(&state).await))
-}
-
-/// The rows of `barca.queue` (`POST /sql/query`): the entries of `GET /queue`, the started
-/// runs first, then the waiting ones in order. A `--read-only` server lists the recorded
-/// queue, without starts or estimates, as its `GET /queue` does.
-pub(crate) async fn table_rows(
-    state: &AppState,
-) -> Result<Vec<barca_core::sql::tables::QueueRow>, ApiError> {
-    let view = match state.config.read_only {
-        true => recorded_view(state).await?,
-        false => view_with_starts(state).await,
-    };
-    Ok(view
-        .running
-        .into_iter()
-        .chain(view.queued)
-        .map(|e| barca_core::sql::tables::QueueRow {
-            run_id: e.run_id,
-            position: e.position,
-            state: e.state,
-            queued_at: e.queued_at,
-            started_at: e.started_at,
-            estimated_start_at: e.estimated_start_at,
-            wait_seconds: e.wait_seconds,
-            command: e.command,
-            target: e.target,
-            triggered_by: e.triggered_by,
-            schedule_id: e.schedule_id,
-            scheduled_at: e.scheduled_at,
-        })
-        .collect())
-}
-
-/// `POST /queue/pause` — hold every queued run back until `POST /queue/resume`; runs in flight
-/// go on, and new runs (and scheduled ticks) still join the queue. Kept across restarts.
-/// Pausing a paused queue changes nothing. `403` on a `--read-only` server.
-pub async fn pause(State(state): State<AppState>) -> Result<Json<QueueView>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
-    if state.queue.paused_at().is_none() {
-        let now = chrono::Utc::now().timestamp();
-        ensure_db(&state).await?;
-        run_queue::set_paused(&state.config.resolved.db_path, Some(now)).await?;
-        state.queue.set_paused(Some(now));
-        barca_core::errln!(
-            "[barca] run queue paused: queued runs wait until it is resumed ({} queued, {} \
-             running)",
-            state.queue.waiting_ids().len(),
-            state
-                .runs
-                .iter()
-                .filter(|r| r.status == RunStatus::Running)
-                .count()
-        );
-    }
-    Ok(Json(view_with_starts(&state).await))
-}
-
-/// `POST /queue/resume` — let queued runs start again, in order. Resuming a queue that is not
-/// paused changes nothing. `403` on a `--read-only` server.
-pub async fn resume(State(state): State<AppState>) -> Result<Json<QueueView>, ApiError> {
-    crate::runs::refuse_if_read_only(&state)?;
-    if state.queue.paused_at().is_some() {
-        ensure_db(&state).await?;
-        run_queue::set_paused(&state.config.resolved.db_path, None).await?;
-        state.queue.set_paused(None);
-        barca_core::errln!(
-            "[barca] run queue resumed ({} queued)",
-            state.queue.waiting_ids().len()
-        );
-        dispatch(&state);
-    }
-    Ok(Json(view_with_starts(&state).await))
-}
-
-/// `queue` of `GET /health`: whether the queue is paused and how many runs wait and execute.
-/// A `--read-only` server runs nothing itself, so it reports the queue the metadata DB records
-/// (what `GET /queue` lists), not its own empty one. `/health` never waits on a read: it reports
-/// the last recorded counts (read by `GET /queue`, or in the background when they are older than
-/// a few seconds) and its own counts until there are any.
-pub fn health(state: &AppState) -> serde_json::Value {
-    let mut max_runs = Some(state.queue.max_runs);
-    let mut paused = state.queue.paused_at().is_some();
-    let mut queued = state.queue.waiting_ids().len();
-    let mut running = state
-        .runs
-        .iter()
-        .filter(|r| r.status == RunStatus::Running)
-        .count();
-    if state.config.read_only {
-        let (recorded, old) = state.queue.recorded(std::time::Duration::from_secs(5));
-        max_runs = recorded.and_then(|c| c.max_runs);
-        if let Some(c) = recorded {
-            (paused, queued, running) = (c.paused, c.queued, c.running);
-        }
-        if old && !state.queue.recording.swap(true, Ordering::AcqRel) {
-            let state = state.clone();
-            tokio::spawn(async move {
-                let _ = recorded_view(&state).await;
-                state.queue.recording.store(false, Ordering::Release);
-            });
-        }
-    }
-    serde_json::json!({
-        "paused": paused,
-        "queued": queued,
-        "running": running,
-        "max_runs": max_runs,
-        "capacity": state.capacity.as_ref().map(|c| {
-            let s = c.snapshot();
-            serde_json::json!({
-                "total": s.total,
-                "in_use": s.in_use,
-                "waiting": s.waiting.len(),
-            })
-        }),
-    })
+/// Whether a run of this trigger and place is ordered with scheduled work: for the extra run
+/// slot, and for the shared capacity its steps wait for.
+pub(crate) fn with_scheduled(trigger: &Trigger, queue: QueuePlace) -> bool {
+    trigger.triggered_by == TriggeredBy::Schedule || queue == QueuePlace::Last
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet};
 
-    fn state(dir: &std::path::Path) -> AppState {
-        state_with(dir, false)
-    }
-
-    fn state_with(dir: &std::path::Path, read_only: bool) -> AppState {
-        let mut resolved = barca_core::config::resolve_in(None, dir).unwrap();
-        resolved.db_path = dir.join("metadata.db").display().to_string();
-        resolved.server_max_runs = Some(1);
-        AppState::new(crate::ServeConfig {
-            files: vec![dir.join("p.py").display().to_string()],
-            host: "127.0.0.1".parse().unwrap(),
-            port: 0,
-            watch: false,
-            schedule: false,
-            timezone: "utc".into(),
-            python: "/nonexistent-barca-python".into(),
-            resolved,
-            read_only,
-        })
-    }
-
-    #[test]
-    fn a_read_only_server_reports_the_recorded_queue_in_health() {
-        crate::test_support::bounded(|| async {
-            let dir = tempfile::tempdir().unwrap();
-            let writer = state(dir.path());
-            let _ = pause(State(writer.clone())).await.unwrap();
-            for target in ["a", "b"] {
-                let spec = RunSpec::api(RunCommand::Get, vec![target.into()], vec![]);
-                admit(&writer, spec).await.unwrap();
-            }
-            let reader = state_with(dir.path(), true);
-            // Health never waits on a read: the first answer starts one in the background.
-            let _ = health(&reader);
-            let listed = get(State(reader.clone())).await.unwrap().0;
-            assert_eq!(listed.queued.len(), 2);
-            let health = health(&reader);
-            assert_eq!(health["queued"], 2, "/health and /queue agree: {health}");
-            assert_eq!(health["paused"], true, "{health}");
-            assert_eq!(health["running"], 0, "{health}");
-        });
-    }
-
-    #[test]
-    fn a_restarted_server_resumes_the_queue_in_order_under_the_same_ids_and_keeps_the_pause() {
-        crate::test_support::bounded(|| async {
-            let dir = tempfile::tempdir().unwrap();
-            let first = state(dir.path());
-            // Paused: every run waits, recorded in the order it was accepted.
-            let _ = pause(State(first.clone())).await.unwrap();
-            let mut ids = Vec::new();
-            for target in ["a", "b", "c"] {
-                let spec = RunSpec::api(RunCommand::Get, vec![target.into()], vec![]);
-                let admitted = admit(&first, spec).await.unwrap();
-                assert_eq!(admitted.status, RunStatus::Pending);
-                assert_eq!(admitted.position, Some(ids.len() + 1));
-                ids.push(admitted.run_id);
-            }
-            // One leaves the queue before the restart.
-            let gone = first.queue.take(&ids[1]).unwrap();
-            assert_eq!(gone.spec.targets, ["b"]);
-            run_queue::remove(&first.config.resolved.db_path, &ids[1])
-                .await
-                .unwrap();
-            drop(first);
-
-            let next = state(dir.path());
-            resume_at_startup(&next).await.unwrap();
-            assert_eq!(next.queue.waiting_ids(), [ids[0].clone(), ids[2].clone()]);
-            assert!(next.queue.paused_at().is_some(), "the pause is kept");
-            {
-                // A `runs` guard held across `dispatch` below deadlocks when the two runs share a
-                // shard of the map (#637): read it in a scope of its own.
-                let run = next.runs.get(&ids[2]).unwrap();
-                assert_eq!(run.status, RunStatus::Pending);
-                assert_eq!(run.target.as_deref(), Some("c"));
-            }
-            assert!(next.events.contains_key(&ids[2]), "a client can follow it");
-            let view = view(&next);
-            assert_eq!(view.queued.len(), 2);
-            assert_eq!(view.queued[1].position, Some(2));
-            assert_eq!(view.max_runs, Some(1));
-            // Paused, nothing starts; resumed, the head starts (and fails: no Python here).
-            dispatch(&next);
-            assert_eq!(next.queue.waiting_ids().len(), 2);
-            let _ = resume(State(next.clone())).await.unwrap();
-            assert_eq!(
-                next.queue.waiting_ids(),
-                [ids[2].clone()],
-                "one run at a time"
-            );
-        });
-    }
-
-    #[test]
-    fn a_requested_run_starts_ahead_of_scheduled_runs_with_a_slot_of_its_own() {
-        crate::test_support::bounded(|| async {
-            let dir = tempfile::tempdir().unwrap();
-            let state = state(dir.path());
-            let _ = pause(State(state.clone())).await.unwrap();
-            let scheduled = |target: &str| RunSpec {
-                trigger: Trigger::schedule("p.py:a", 0),
-                ..RunSpec::api(RunCommand::Get, vec![target.into()], vec![])
-            };
-            let busy = admit(&state, scheduled("busy")).await.unwrap().run_id;
-            let s1 = admit(&state, scheduled("s1")).await.unwrap().run_id;
-            let a1 = admit(
-                &state,
-                RunSpec::api(RunCommand::Get, vec!["a1".into()], vec![]),
-            )
-            .await
-            .unwrap();
-            assert_eq!(a1.position, Some(1), "ahead of the scheduled runs");
-            let a2 = admit(
-                &state,
-                RunSpec::api(RunCommand::Get, vec!["a2".into()], vec![]),
-            )
-            .await
-            .unwrap()
-            .run_id;
-            // A scheduled run holds the only slot.
-            state.queue.take(&busy).unwrap();
-            let _held = state.run_slots.clone().try_acquire_owned().unwrap();
-            state.runs.get_mut(&busy).unwrap().status = RunStatus::Running;
-            let _ = resume(State(state.clone())).await.unwrap();
-            assert_eq!(
-                state.queue.waiting_ids(),
-                [a2, s1],
-                "one requested run takes the extra slot; the next waits, still ahead of cron"
-            );
-        });
-    }
-
-    #[test]
-    fn a_run_the_last_server_had_started_is_recorded_interrupted_not_started_again() {
-        crate::test_support::bounded(|| async {
-            let dir = tempfile::tempdir().unwrap();
-            let first = state(dir.path());
-            let _ = pause(State(first.clone())).await.unwrap();
-            let spec = RunSpec::api(RunCommand::Get, vec!["a".into()], vec![]);
-            let id = admit(&first, spec).await.unwrap().run_id;
-            let db = first.config.resolved.db_path.clone();
-            // The server started it and was killed before it recorded anything.
-            run_queue::mark_running(&db, &id).await.unwrap();
-            drop(first);
-            let next = state(dir.path());
-            resume_at_startup(&next).await.unwrap();
-            assert!(next.queue.waiting_ids().is_empty());
-            assert!(run_queue::list(&db).await.unwrap().is_empty());
-            let record = db::get_run(&db, &id).await.unwrap().unwrap();
-            assert_eq!(record.status, "error");
-        });
-    }
-
-    #[test]
-    fn queued_exact_keys_do_not_widen_after_reload() {
-        let spec = RunSpec {
-            partition: Some(
-                barca_core::selection::PartitionSelection::parse(
-                    r#"[{"day":"d1","region":"east"},{"day":"d2","region":"west"}]"#,
-                )
-                .unwrap(),
-            ),
-            ..RunSpec::api(
-                RunCommand::Get,
-                vec!["result".into()],
-                vec!["p.py:result".into()],
-            )
-        };
-        let (back, _) = load(&store(&spec, 1.0)).unwrap();
-        assert_eq!(back.partition, spec.partition);
-    }
-
-    #[test]
-    fn a_stored_run_reads_back_as_it_was_accepted() {
-        let mut selection = BTreeMap::new();
-        selection.insert(
-            "region".to_string(),
-            BTreeSet::from(["emea".to_string(), "amer".to_string()]),
-        );
-        let spec = RunSpec {
-            command: RunCommand::Run,
-            targets: vec!["report".into()],
-            nodes: vec!["p.py:report".into()],
-            files: vec!["p.py".into()],
-            policy: CachePolicy::RefreshSelective {
-                names: vec!["raw".into()],
-                cascade: false,
-            },
-            trigger: Trigger::schedule("p.py:report", 1_760_000_000),
-            values: true,
-            partition: Some(
-                barca_core::selection::PartitionSelection::parse(
-                    &serde_json::to_string(&selection).unwrap(),
-                )
-                .unwrap(),
-            ),
-            batch: vec!["all".into()],
-            rules: barca_core::freshness::RunRules::tick("p.py:report"),
-            timeout: None,
-            kill_requeues: 0,
-        };
-        let (back, at) = load(&store(&spec, 12.5)).unwrap();
-        assert_eq!(at, 12.5);
-        assert_eq!(back.command, spec.command);
-        assert_eq!(back.targets, spec.targets);
-        assert_eq!(back.nodes, spec.nodes);
-        assert_eq!(back.files, spec.files);
-        assert!(matches!(
-            back.policy,
-            CachePolicy::RefreshSelective { ref names, cascade: false } if names == &["raw"]
-        ));
-        assert_eq!(back.trigger, spec.trigger);
-        assert!(back.values);
-        assert_eq!(back.partition, spec.partition);
-        assert_eq!(back.rules, spec.rules);
-        for policy in [CachePolicy::CacheAware, CachePolicy::RefreshAll] {
-            let mut spec = RunSpec::api(RunCommand::Get, vec![], vec![]);
-            spec.policy = policy.clone();
-            let (back, _) = load(&store(&spec, 0.0)).unwrap();
-            assert_eq!(format!("{:?}", back.policy), format!("{policy:?}"));
+    fn spec(trigger: Trigger, queue: QueuePlace) -> RunSpec {
+        RunSpec {
+            trigger,
+            queue,
+            ..RunSpec::api(RunCommand::Get, vec!["a".into()], vec![])
         }
-        assert!(load("{\"command\": \"get\"}").is_err());
+    }
+
+    /// The rule of `queue: "last"` for a run slot: requests that did not ask for it first, in
+    /// the order accepted; then the scheduled runs and the runs queued last, together, in the
+    /// order accepted. So a run queued last is behind the scheduled runs accepted before it
+    /// and ahead of the ones accepted after it.
+    #[test]
+    fn a_run_queued_last_waits_with_the_scheduled_runs_in_the_order_accepted() {
+        let queue = Queue::new(1);
+        let tick = |id: &str| Trigger::schedule(id, 0);
+        for (id, spec) in [
+            ("tick-a", spec(tick("p.py:a"), QueuePlace::Next)),
+            ("asked-1", spec(Trigger::api(), QueuePlace::Next)),
+            ("last-1", spec(Trigger::api(), QueuePlace::Last)),
+            ("asked-2", spec(Trigger::api(), QueuePlace::Next)),
+            ("tick-b", spec(tick("p.py:b"), QueuePlace::Next)),
+            ("last-2", spec(Trigger::api(), QueuePlace::Last)),
+        ] {
+            queue.waiting.lock().unwrap().push_back(Waiting {
+                run_id: id.into(),
+                spec,
+            });
+        }
+        assert_eq!(
+            queue.waiting_ids(),
+            ["asked-1", "asked-2", "tick-a", "last-1", "tick-b", "last-2"]
+        );
+    }
+
+    #[test]
+    fn the_place_is_kept_in_the_stored_description_and_absent_by_default() {
+        let last = store(&spec(Trigger::api(), QueuePlace::Last), 1.0);
+        assert!(last.contains(r#""queue":"last""#), "{last}");
+        assert_eq!(load(&last).unwrap().0.queue, QueuePlace::Last);
+        // The default writes no key, so a description is what earlier releases wrote, and
+        // one they wrote reads as the default.
+        let next = store(&spec(Trigger::api(), QueuePlace::Next), 1.0);
+        assert!(!next.contains(r#""queue":"#), "{next}");
+        assert_eq!(load(&next).unwrap().0.queue, QueuePlace::Next);
     }
 }

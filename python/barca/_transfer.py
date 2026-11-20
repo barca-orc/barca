@@ -1,6 +1,6 @@
 """Artifact transfer helper — moves artifact files between local disk and the store.
 
-Spawned once per run by the Rust coordinator (crates/barca-core/src/transfer.rs)
+Spawned once per run by the Rust coordinator (crates/barca-store/src/transfer.rs)
 when the artifact store is not the local artifact directory. Workers only ever
 read and write local files; this process uploads finished artifacts in the
 background and fetches cached artifacts from other machines, so object-store
@@ -332,7 +332,7 @@ def serve(
     from barca._inspection_cache import TransferObserver
 
     observer = TransferObserver(inspection_cache) if inspection_cache else None
-    _runtime._socket = sock
+    _runtime.adopt(sock)
     requests = _Requests(timeout)
     stop = threading.Event()
     if timeout is not None:

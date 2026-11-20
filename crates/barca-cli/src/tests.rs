@@ -1,5 +1,7 @@
 use super::*;
+use crate::input::*;
 use clap::CommandFactory;
+use std::path::PathBuf;
 
 /// Subcommands that must carry runnable examples in help or --examples.
 const DOCUMENTED: &[&str] = &[
@@ -316,7 +318,7 @@ fn clap_error_json(argv: &str) -> serde_json::Value {
     let Err(e) = Cli::try_parse_from(&argv) else {
         panic!("`{argv:?}` must not parse");
     };
-    let err = CliError::from_clap(&e, &argv);
+    let err = CliError::from_clap(&e, &argv, Cli::command());
     assert_eq!(err.code(), 2, "a suggestion never changes the exit code");
     serde_json::from_str(&err.render(true)).unwrap()
 }
@@ -342,7 +344,7 @@ fn a_mistyped_flag_or_subcommand_gets_did_you_mean() {
         let Err(e) = Cli::try_parse_from(&argv) else {
             unreachable!()
         };
-        let human = CliError::from_clap(&e, &argv).render(false);
+        let human = CliError::from_clap(&e, &argv, Cli::command()).render(false);
         assert!(human.contains(&format!("\n\n{meant}\n")), "{human}");
     }
 }
@@ -363,7 +365,7 @@ fn an_unrelated_flag_or_subcommand_gets_no_guess() {
 fn an_unknown_target_suggests_the_closest_node() {
     let files = vec!["pipeline.py".to_string()];
     let e = CliError::from_barca(
-        barca_core::BarcaError::AssetNotFound(
+        barca_service::BarcaError::AssetNotFound(
             "amount".into(),
             "pipeline.py:raw, pipeline.py:amounts, pipeline.py:report".into(),
         ),
@@ -380,7 +382,7 @@ fn an_unknown_target_suggests_the_closest_node() {
         )
     );
     // The `barca list` pointer replaces the remediation and keeps the suggestion.
-    let e = e.with_final_hint(barca_core::envelope::list_hint(&files));
+    let e = e.with_final_hint(barca_service::envelope::list_hint(&files));
     assert_eq!(
         e.remediation.as_deref(),
         Some(
@@ -400,7 +402,7 @@ fn unknown_target_remediation_is_one_wording_on_every_command() {
     let files = vec!["pipeline.py".to_string()];
     for command in ["get", "run", "status", "stats"] {
         let e = CliError::from_barca(
-            barca_core::BarcaError::AssetNotFound("nope".into(), "pipeline.py:a".into()),
+            barca_service::BarcaError::AssetNotFound("nope".into(), "pipeline.py:a".into()),
             &Context {
                 command,
                 files: files.clone(),
@@ -422,17 +424,19 @@ fn only_target_errors_end_with_the_list_hint() {
         files: vec!["pipeline.py".to_string()],
     };
     let hint = "Run `barca list pipeline.py` to see available assets and tasks.";
-    let remediation = |e: barca_core::BarcaError| CliError::from_barca(e, &ctx).remediation;
+    let remediation = |e: barca_service::BarcaError| CliError::from_barca(e, &ctx).remediation;
     assert_eq!(
-        remediation(barca_core::BarcaError::AmbiguousTarget(
+        remediation(barca_service::BarcaError::AmbiguousTarget(
             "'x' matches more than one node".into()
         ))
         .as_deref(),
         Some(hint)
     );
     for e in [
-        barca_core::BarcaError::Usage("'report' is a task — use `barca run` instead".into()),
-        barca_core::BarcaError::Usage("-o url needs a cloud artifact store\nUse -o path.".into()),
+        barca_service::BarcaError::Usage("'report' is a task — use `barca run` instead".into()),
+        barca_service::BarcaError::Usage(
+            "-o url needs a cloud artifact store\nUse -o path.".into(),
+        ),
     ] {
         let r = remediation(e).unwrap_or_default();
         assert!(!r.contains("barca list"), "{r}");

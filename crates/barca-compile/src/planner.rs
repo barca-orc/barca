@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use crate::dag::Dag;
+use barca_model::dag::Dag;
 use barca_model::model::{PartitionKey, StepId};
 
 /// Resource configuration — the knobs the user controls.
@@ -194,7 +194,7 @@ fn decompose_ordered(dag: &Dag, order: Vec<&str>) -> Topology {
 /// True if the node declares partitions, static or dynamic (`partitions_from`).
 fn is_partitioned(dag: &Dag, id: &str) -> bool {
     dag.get_node(id)
-        .is_some_and(|n| !n.extracted.partitions.is_empty())
+        .is_some_and(|n| !n.decl.partitions.is_empty())
 }
 
 /// Detect all maximal chains. Every node belongs to exactly one chain.
@@ -251,7 +251,7 @@ fn detect_chains(dag: &Dag, topo: &[&str]) -> Vec<Chain> {
             }
             // A sensor or a `Manual` asset ends its chain (#183, #548): its consumers' run
             // hashes include its output, so they are decided in a later phase, after it ran.
-            if crate::dag::folds_output(dag, &current) {
+            if barca_model::dag::folds_output(dag, &current) {
                 break;
             }
             nodes.push(next.to_string());
@@ -270,7 +270,7 @@ fn detect_chains(dag: &Dag, topo: &[&str]) -> Vec<Chain> {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Generate an execution plan from a topology and resource config. For tests (here and in
-/// `barca-core`, which a `cfg(test)` item would not reach).
+/// `barca-service`, which a `cfg(test)` item would not reach).
 #[doc(hidden)]
 pub fn plan(dag: &Dag, topology: &Topology, config: &ResourceConfig) -> ExecutionPlan {
     plan_narrowed(dag, topology, config, None)
@@ -329,7 +329,7 @@ fn reads_sensor_of(dag: &Dag, phase: &Phase, prev: &Phase) -> bool {
         .streams
         .iter()
         .flat_map(|s| &s.steps)
-        .filter(|st| crate::dag::folds_output(dag, st.step_id.base_id()))
+        .filter(|st| barca_model::dag::folds_output(dag, st.step_id.base_id()))
         .map(|st| st.step_id.base_id())
         .collect();
     !sensors.is_empty()
@@ -575,38 +575,38 @@ fn chain_to_steps(
         }
 
         // Check for static partitions — expand into N steps.
-        let mut static_partitions = collect_static_partitions(&node.extracted.partitions);
+        let mut static_partitions = collect_static_partitions(&node.decl.partitions);
         if let Some(selection) = selection {
             selection.prefilter(&mut static_partitions);
         }
         // Check for derived partitions — mark for resolution at dispatch time.
-        let derived_partitions = collect_derived_partitions(&node.extracted.partitions);
+        let derived_partitions = collect_derived_partitions(&node.decl.partitions);
         let serializer: Option<Arc<str>> = node
-            .extracted
+            .decl
             .artifact_serializer
             .map(|s| Arc::from(format!("{s:?}").to_lowercase().as_str()));
-        let sinks: Vec<barca_model::model::SinkDecl> = node.extracted.sinks.to_vec();
-        let timeout_seconds = node.extracted.timeout_seconds;
-        let retries = node.extracted.retries;
-        let weight = node.extracted.weight;
-        let retry_backoff_seconds = node.extracted.retry_backoff_seconds;
+        let sinks: Vec<barca_model::model::SinkDecl> = node.decl.sinks.to_vec();
+        let timeout_seconds = node.decl.timeout_seconds;
+        let retries = node.decl.retries;
+        let weight = node.decl.weight;
+        let retry_backoff_seconds = node.decl.retry_backoff_seconds;
         let function_name: Arc<str> = Arc::from(node.function_name());
         let source_file: Arc<str> = Arc::from(node.source_file());
-        let param_types = node.extracted.param_types.clone();
-        let return_type = node.extracted.return_type;
+        let param_types = node.invoke.python().param_types.clone();
+        let return_type = node.invoke.python().return_type;
         // An unpartitioned node a `partitions_from(...)` reads: the worker checks what it
         // returns can be read for keys (a list, or a dict with JSON values).
         let mut keyed = barca_model::keyed::StepKeyed {
             order: None,
             sources: None,
-            is_source: node.extracted.partitions.is_empty() && dag.feeds_partitions(node_id),
+            is_source: node.decl.partitions.is_empty() && dag.feeds_partitions(node_id),
             no_keys: false,
         };
 
         if !static_partitions.is_empty() {
             let combos = expand_partition_combos(&static_partitions);
             let pks: Vec<PartitionKey> = combos.into_iter().map(PartitionKey::from).collect();
-            if node.extracted.batch.is_some() {
+            if node.decl.batch.is_some() {
                 keyed.remember_order(&pks);
             }
             steps.push(StreamStep {
@@ -815,7 +815,7 @@ fn topo_sort_indices(count: usize, deps: &HashMap<usize, HashSet<usize>>) -> Vec
 // Convenience: full pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Full pipeline: DAG → decompose → plan. For tests (here and in `barca-core`, which a
+/// Full pipeline: DAG → decompose → plan. For tests (here and in `barca-service`, which a
 /// `cfg(test)` item would not reach).
 #[doc(hidden)]
 pub fn plan_from_dag(dag: &Dag, config: &ResourceConfig) -> ExecutionPlan {

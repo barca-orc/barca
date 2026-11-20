@@ -1,7 +1,9 @@
-//! The compile layer of barca (#905): source in, `Dag` and `ExecutionPlan` out. Parsing (ruff's
-//! AST, no imports), the DAG, run-hash cones, targets, partition selection and planning. It
-//! depends on `barca-model` only; `barca-core` re-exports it, so its items keep their
-//! `barca_core::` paths.
+//! `barca-compile`: planning (#905, #1056). A graph in (`barca_model::dag`), an `ExecutionPlan`
+//! out: the targets a command names (`targets`), `--partition` (`partition_selection`,
+//! `selection`), the planner (`planner`), what a planned phase expands to when it runs
+//! (`dispatch`: `partitions_from` keys, the inputs a phase provides) and plan-time warnings
+//! (`warnings`). It depends on `barca-model` only and reads nothing of Python's: the frontend is
+//! `barca-python`, a dev-dependency for tests that write a graph as source.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
@@ -9,44 +11,13 @@
 // Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
-mod arg_values;
-#[doc(hidden)]
-pub mod batch_spec;
-#[doc(hidden)]
-pub mod cone;
-pub mod dag;
-#[doc(hidden)]
-pub mod decorator_args;
-mod decorators;
-#[doc(hidden)]
-pub mod definition;
-pub mod discover;
-#[doc(hidden)]
-pub mod env_reads;
-mod file_names;
-pub mod groups;
-#[doc(hidden)]
-pub mod input_params;
+pub mod dispatch;
 #[cfg(test)]
 mod layering_tests;
-pub mod load;
-mod names;
-mod node_refs;
-pub mod parse;
-mod partition_selection;
+#[doc(hidden)]
+pub mod partition_selection;
 #[doc(hidden)]
 pub mod planner;
-#[doc(hidden)]
-pub mod project_modules;
 pub mod selection;
-#[doc(hidden)]
-pub mod sink_args;
-mod syntax_problem;
 pub mod targets;
-#[doc(hidden)]
-pub mod unrelated_modules;
-#[doc(hidden)]
-pub mod unused_inputs;
 pub mod warnings;
-
-pub use dag::Dag;

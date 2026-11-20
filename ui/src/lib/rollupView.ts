@@ -1,13 +1,12 @@
 /**
  * The rollup as the UI draws it: `GET /state/rollup` indexed by id, and the layout of the health
  * map over it. Nothing here counts, sums or classifies: every count shown is an entry's own
- * (`barca-core`'s `rollup`, the same response `barca status --rollup` prints), in nodes
+ * (`barca-service`'s `rollup`, the same response `barca status --rollup` prints), in nodes
  * (`nodes`, `health`, `causes`) and in assets (`assets`, `asset_health`). What stays here is
  * geometry (which angle a segment gets, from the entry's served `weight`), the path to an
  * entry, and words.
  */
 
-import { HEALTH_ORDER, isUnhealthy, type Health } from './healthDisplay'
 import { MAP_PARTS, keyBandPart, type MapPart } from './causeDisplay'
 import type { HeldBy } from './generated/HeldBy'
 import { formatSpan, parseTime } from './time'
@@ -54,11 +53,6 @@ export function indexRollup(rollup: Rollup): RollupTree {
   return { entries: new Map(rollup.entries.map((e) => [e.id, e])), roots: rollup.roots, coverage: rollup.data_coverage, files: new Map(rollup.files.map((f) => [f.file, f])), kinds: rollup.kinds, asOf: rollup.as_of }
 }
 
-/** The most severe health an entry counts (the served order); `ok` for an empty one. */
-export function worstOf(counts: HealthCounts): Health {
-  return HEALTH_ORDER.find((h) => counts[h] > 0) ?? 'ok'
-}
-
 /** The path from the root to `id`, root first; empty when `id` is not in the tree. */
 export function treePath(tree: RollupTree, id: string): RollupEntry[] {
   const out: RollupEntry[] = []
@@ -90,12 +84,6 @@ export function rootsWithin(tree: RollupTree, id: string): RollupRoot[] {
   if (id === ROOT) return [...tree.roots]
   const within = new Set(leafIds(tree, id))
   return tree.roots.filter((r) => within.has(r.node))
-}
-
-/** `3 failing · 169 blocked · 12 behind`: the unhealthy counts of a scope, worst first. */
-export function healthSummary(counts: HealthCounts, limit = HEALTH_ORDER.length): string {
-  const parts = HEALTH_ORDER.filter((h) => isUnhealthy(h) && counts[h] > 0).map((h) => `${counts[h].toLocaleString()} ${h}`)
-  return parts.slice(0, limit).join(' · ')
 }
 
 /**
@@ -171,7 +159,7 @@ type Weighed = Pick<RollupEntry, 'weight' | 'weights'>
 /**
  * The served weight of each colour inside an entry (`weights`), in stacking order, the empty
  * ones left out. How much room an entry takes is its `weight`: its distance from fresh in
- * weighted nodes, which `barca-core` computes ("Distance from fresh": every node counts 1, a
+ * weighted nodes, which `barca-service` computes ("Distance from fresh": every node counts 1, a
  * node that is not fresh its cause's weight) and `barca status --rollup` prints. A level's is
  * exactly the sum of its children's. No weight is decided here.
  */

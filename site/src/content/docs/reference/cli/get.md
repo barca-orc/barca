@@ -33,6 +33,7 @@ barca get [target[,target...]] [file.py|dir/ ...]
 | `-o url`, `--expires <DURATION>` | Print a signed HTTPS link to each result in a cloud store, valid for `--expires` (default `1h`, at most `7d`). Experimental. |
 | `--batch <[NODE=]none\|all\|N>` | Override how keys are grouped into calls for nodes that declare `batch=` ([Batched Partitions](/reference/batched-partitions/)). |
 | `--allow-paused` | Run a target that `barca pause` paused ([Pausing Assets](/reference/cli/pause/)). |
+| `--queue next\|last` | On a server only: `last` joins its run queue behind every waiting run, scheduled ones included, and at scheduled priority ([Operating barca serve](/reference/serve-ops/#queue-a-run-last---queue-last)). A usage error when the command runs on this machine. Experimental. |
 | `--server [URL]`, `--local` | Run on a `barca serve` (its deployed code), or ignore a configured server ([Server Mode](/reference/server-mode/)). |
 
 

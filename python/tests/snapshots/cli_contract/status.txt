@@ -28,6 +28,7 @@ nodes[].id : string
 nodes[].inputs : array
 nodes[].inputs[] : string
 nodes[].kind : string
+nodes[].last_attempt : string
 nodes[].last_check : null
 nodes[].last_materialization : null|object
 nodes[].last_materialization.artifact : null|string
@@ -70,6 +71,7 @@ nodes[].shape.sample : <user value>
 nodes[].shape.type : string
 nodes[].signals : array
 nodes[].stale_since : null|string
+nodes[].typical_run_seconds : null|number
 nodes[].undeclared_env : array  (optional)
 nodes[].undeclared_env[] : string
 rollup : object

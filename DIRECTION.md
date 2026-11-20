@@ -168,11 +168,11 @@ does not meet this, so the redesign is scoped after 0.39.6 (its prototype is PR 
 Amended 2026-11-17 (#953, for 0.44.0). The health words (`failing`, `blocked`, `suspect`,
 `behind`, `undecided`, `never_run`, `ok`) and the cause buckets (`catching_up`, `queued`,
 `no_refresh_path`, `overdue`, `failing`, `undecided`) are barca vocabulary too: defined once in
-Rust (`barca-core`), carried by `barca status --json` and the `barca.*` tables, and shown by the
+Rust (`barca-analysis`), carried by `barca status --json` and the `barca.*` tables, and shown by the
 CLI and the UI alike, beside the cache state and never in place of it. The UI still adds no
 word of its own: the seven health words it shipped in TypeScript in 0.43 move to Rust. Four
 layers, each with one job: **records** (the scheduler writes what it decided and computes no
-analytics), **classification** (`barca-core` derives health, cause, refresh path and
+analytics), **classification** (`barca-analysis` derives health, cause, refresh path and
 estimates), **aggregation** (`barca sql` tables in the `barca` schema, queried with DuckDB over
 rows Rust hands it) and **presentation** (the CLI and the UI render; TypeScript derives
 nothing). Health is judged by when a node will next be fresh: a stale node the next tick

@@ -237,9 +237,11 @@ def test_logs_of_a_server_run_and_following_it(project):
         local = cli(project, "logs", run_id, "--local", "--json")
         assert remote.stdout == local.stdout
         assert lines_of(json.loads(remote.stdout), "stdout") == ["loading orders"]
-        # A configured server answers without --server, and says so; --local reads here.
+        # Without --server the server answers too, and says so; --local reads here. In the
+        # server's own project it is found by its socket, ahead of a configured URL (#1056).
         configured = cli(project, "logs", "--pretty", "--stream", "stdout", BARCA_SERVER=url)
-        assert f"[barca] server {url} (BARCA_SERVER)" in configured.stderr
+        assert "[barca] server .barca/serve.sock (this project's barca serve" in configured.stderr
+        assert f"[barca] server {url}" not in configured.stderr
         assert configured.stdout == "loading orders\n"
         cli(project, "logs", "nope", "--server", url, code=2)
 

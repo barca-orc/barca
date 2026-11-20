@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { runFeedback, runNotice, runOutcomeSummary } from './runFeedback'
 import { runByStatus } from '@/kit/fixtures'
+import { RUN_IDS, runDetail } from './testdata/project'
 import type { LogLine, RunView, StatusKind } from './types'
 
 const LOGS: LogLine[] = [{ nodeId: 'n', text: 'hello' }]
@@ -83,12 +84,16 @@ describe('runNotice', () => {
   })
 
   it('a finished run reports its outcome and stays', () => {
-    expect(runNotice({ ...base, started, run: runByStatus.success })).toEqual({
-      kind: 'finished', target: 'p.py:demand_forecast', runId: '127', status: 'success', summary: 'succeeded in 42.3s',
+    // Two runs of the generated project, as `GET /runs/{id}` serves them.
+    const of = (id: string) => ({ ...base, started: { ...started, runId: id }, run: runDetail(id) })
+    expect(runNotice(of(RUN_IDS.first))).toEqual({
+      kind: 'finished', target: 'p.py:demand_forecast', runId: RUN_IDS.first, status: 'success', summary: 'succeeded in 42.3s',
     })
-    expect(runNotice({ ...base, started, run: runByStatus.failed })).toMatchObject({
-      kind: 'finished', status: 'failed', summary: "failed: orders_enriched: KeyError: 'currency'",
+    expect(runNotice(of(RUN_IDS.failed))).toMatchObject({
+      kind: 'finished', status: 'failed', summary: 'failed: ValueError: 3 rows with a negative total',
     })
+    // One key failed: the run's error names it; the count is said from two up.
+    expect(runNotice(of(RUN_IDS.failedKey))).toMatchObject({ status: 'failed', summary: "failed: KeyError: 'units'" })
     expect(runNotice({ ...base, started, run: runByStatus.cancelled })).toMatchObject({ status: 'cancelled', summary: 'cancelled' })
   })
 
@@ -109,9 +114,11 @@ describe('runOutcomeSummary', () => {
   })
 
   it('counts failed keys from the listed steps otherwise, and names a single failure', () => {
-    const key = (k: string) => ({ ...runByStatus.failed.steps[1]!, node_id: `p.py:a[k=${k}]`, partition_key: `k=${k}` })
-    expect(runOutcomeSummary({ ...runByStatus.failed, steps: [key('1'), key('2')] })).toBe('2 keys failed')
+    // A run whose answer carries no per-node summary: the failed keys among the steps listed.
+    const listed = { ...runByStatus.failed, steps_page: { total: 2, truncated: false } }
+    const key = (k: string) => ({ ...runByStatus.failed.steps[0]!, node_id: `p.py:a[k=${k}]`, partition_key: `k=${k}` })
+    expect(runOutcomeSummary({ ...listed, steps: [key('1'), key('2')] })).toBe('2 keys failed')
     expect(runOutcomeSummary(runByStatus.error)).toBe('failed: could not start a worker: python3 not found')
-    expect(runOutcomeSummary({ ...runByStatus.failed, error: null })).toBe('failed')
+    expect(runOutcomeSummary({ ...listed, error: null, failure: null })).toBe('failed')
   })
 })

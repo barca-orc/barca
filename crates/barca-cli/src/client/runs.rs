@@ -5,9 +5,9 @@
 use super::follow::{Follow, Followed, outcome_of};
 use super::{Server, in_files, reconnect_window};
 use crate::error::{CliError, Context, ErrorKind, list_hint};
-use barca_core::BarcaError;
-use barca_core::outcome::{Outcome, RunCommand, RunRequest};
-use barca_core::{RunEvent, lines::LineWhen};
+use barca_service::BarcaError;
+use barca_service::outcome::{Outcome, RunCommand, RunRequest};
+use barca_service::{RunEvent, lines::LineWhen};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,7 +25,7 @@ pub(crate) struct RunArgs {
     pub(crate) agent: bool,
     /// How the result prints: for `get`, `Json` is `--json`, `Pretty` the summary and paths,
     /// and `Value` the paths alone (`-o path`); for `run`, as its `-o` says.
-    pub(crate) mode: barca_core::report::ResultFormat,
+    pub(crate) mode: barca_service::report::ResultFormat,
     /// `get -o value`: the server reads the values, and they print as locally.
     pub(crate) values: bool,
     /// `get --partition`, as typed.
@@ -36,6 +36,8 @@ pub(crate) struct RunArgs {
     pub(crate) env: Option<String>,
     /// `--allow-paused`.
     pub(crate) allow_paused: bool,
+    /// `--queue`.
+    pub(crate) queue: barca_service::outcome::QueuePlace,
 }
 
 /// `barca get|run ... --server`: start the run on the server, print its lines as they come,
@@ -57,6 +59,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         partition: args.partition.clone(),
         batch: args.batch.clone(),
         allow_paused: args.allow_paused,
+        queue: args.queue,
         reason: None,
     };
     let body = serde_json::to_value(&request).expect("a run request is JSON");
@@ -73,7 +76,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         .map(str::to_string)
         .ok_or_else(|| server.unexpected("POST /runs", "no run_id in the answer"))?;
     if let Some(line) = waiting_line(server, &accepted) {
-        barca_core::errln!("{line}");
+        barca_service::errln!("{line}");
     }
     let outcome = stream(server, &run_id, &args, window).await?;
     let (rendered, error) = outcome
@@ -85,7 +88,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
             args.fields.as_deref(),
         )
         .map_err(|e| server.unexpected("the run's outcome", &e))?;
-    crate::commands::emit(rendered);
+    crate::print::emit(rendered);
     match error {
         Some(envelope) => Err(with_typed_files(envelope, ctx)),
         None => Ok(()),
@@ -134,14 +137,14 @@ async fn print_dry_run(
     args: &RunArgs,
     files: &[String],
 ) -> Result<(), CliError> {
-    let result: barca_core::results::ExplainResult = serde_json::from_str(answer)
+    let result: barca_service::results::ExplainResult = serde_json::from_str(answer)
         .map_err(|e| server.unexpected("POST /runs (dry run)", &e.to_string()))?;
     if args.command == RunCommand::Get && args.targets.is_empty() {
         let list = server.get_json("/list").await?;
-        let nodes: Vec<barca_core::report::ListNode> =
+        let nodes: Vec<barca_service::report::ListNode> =
             serde_json::from_value(list["nodes"].clone())
                 .map_err(|e| server.unexpected("GET /list", &e.to_string()))?;
-        let kinds: Vec<(&str, barca_core::NodeKind)> = nodes
+        let kinds: Vec<(&str, barca_service::NodeKind)> = nodes
             .iter()
             .filter(|n| in_files(&n.id, files))
             .map(|n| (n.id.as_str(), n.kind))
@@ -151,22 +154,22 @@ async fn print_dry_run(
         } else {
             files.to_vec()
         };
-        if let Some(note) = barca_core::targets::skipped_tasks_note_among(&kinds, &file_args) {
-            barca_core::errln!("{note}");
+        if let Some(note) = barca_service::targets::skipped_tasks_note_among(&kinds, &file_args) {
+            barca_service::errln!("{note}");
         }
     }
-    if let Some(note) = barca_core::selection::explain_note(&result) {
-        barca_core::errln!("{note}");
+    if let Some(note) = barca_service::selection::explain_note(&result) {
+        barca_service::errln!("{note}");
     }
-    barca_core::warnings::print(&result.warnings);
-    crate::commands::emit(barca_core::report::render_explain(
+    barca_service::warnings::print(&result.warnings);
+    crate::print::emit(barca_service::report::render_explain(
         &result,
         args.command.as_str(),
         // A `get` dry run prints its plan as `--json` or as text, as locally (`-o path` alone
         // has no plan form of its own).
         match (args.command, args.mode) {
-            (RunCommand::Get, barca_core::report::ResultFormat::Value) => {
-                barca_core::report::ResultFormat::Pretty
+            (RunCommand::Get, barca_service::report::ResultFormat::Value) => {
+                barca_service::report::ResultFormat::Pretty
             }
             (_, mode) => mode,
         },
@@ -232,7 +235,7 @@ async fn stream(
         match event {
             RunEvent::Line { line, when } => {
                 if when == LineWhen::Always || args.agent {
-                    barca_core::errln!("{line}");
+                    barca_service::errln!("{line}");
                 }
             }
             RunEvent::Log {
@@ -243,10 +246,10 @@ async fn stream(
             } => {
                 // A step's stderr stays on the server's stderr, as a local run's stays on
                 // this machine's; it is recorded with the run either way (`barca logs`).
-                if args.mode != barca_core::report::ResultFormat::Json
-                    && stream == barca_core::LogStream::Stdout
+                if args.mode != barca_service::report::ResultFormat::Json
+                    && stream == barca_service::LogStream::Stdout
                 {
-                    barca_core::errln!("[{node_id}] {line}");
+                    barca_service::errln!("[{node_id}] {line}");
                 }
             }
             RunEvent::RunFinished { outcome, .. } => {
@@ -273,7 +276,7 @@ pub(crate) async fn cancel_run(server: &Server, run_id: &str) -> Result<Value, C
 
 async fn cancel(server: &Server, run_id: &str) {
     if let Err(e) = cancel_run(server, run_id).await {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] warning: could not cancel run {run_id} on the server: {}",
             e.error
         );

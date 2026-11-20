@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// How a step or target ended (`barca docs contract`, the result bodies).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     /// Served from cache; the function did not run.
@@ -23,6 +24,18 @@ pub enum StepStatus {
     /// A target that returned, or a recorded step attempt that succeeded.
     Success,
     /// The step (or the target's failing step) failed permanently.
+    Failed,
+}
+
+/// How one recorded execution of a node ended: the words of `last_materialization.status`
+/// (`barca status --json`), of a run of `barca stats --json` (`recent_runs[].status`) and of a
+/// key's attempts. The fields themselves are strings, served as the row recorded them; this
+/// is their vocabulary, for a reader that switches on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum MaterializationStatus {
+    Success,
     Failed,
 }
 

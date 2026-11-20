@@ -2,7 +2,7 @@
  * How a cause is shown: the word, tone and colour of each value. Display only. What a node
  * of a cause weighs on the health map is served (`weight` and `weights` of a rollup entry).
  *
- * Why a node is not fresh is decided in `barca-core` (`specs/behavior/health.md`, "Cause") and
+ * Why a node is not fresh is decided in `barca-service` (`specs/behavior/health.md`, "Cause") and
  * arrives as `cause` on every row and as counts on every rollup entry (`causes`). Nothing here
  * reads two fields to produce a third. The values, in the server's order (what alarms first,
  * the order `barca status --rollup` prints them in):
@@ -112,7 +112,7 @@ export function causeLine(counts: CauseCounts): string {
   return causeParts(counts).map((p) => `${p.count.toLocaleString()} ${p.label}`).join(' · ')
 }
 
-/** Why a node has no estimate (`no_estimate`), in the words `barca-core` gives each reason. */
+/** Why a node has no estimate (`no_estimate`), in the words `barca-service` gives each reason. */
 const NO_ESTIMATE = {
   failing: 'until the failure is fixed',
   paused: 'paused',

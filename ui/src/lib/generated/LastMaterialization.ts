@@ -6,7 +6,8 @@ export type LastMaterialization = {
  */
 content_hash?: string | null,
 /**
- * `success` or `failed`.
+ * `success` or `failed` (the generated `MaterializationStatus` is the vocabulary; a row
+ * recorded by another release is served as it is).
  */
 status: string,
 /**

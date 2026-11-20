@@ -15,7 +15,7 @@
 
 use barca_model::model::BatchSpec;
 
-pub(crate) use barca_compile::batch_spec as spec;
+pub(crate) use barca_python::batch_spec as spec;
 
 pub use spec::evaluate_labels;
 pub use spec::{BatchOverride, OverrideValue};
@@ -54,7 +54,7 @@ impl Grouping {
 /// The grouping of `node` in a run with `over`: `None` for a node that does not declare
 /// `batch=` (one key per call, and its function takes a single key).
 pub fn effective(node: &barca_model::model::DagNode, over: &BatchOverride) -> Option<Grouping> {
-    let spec = node.extracted.batch.as_ref()?;
+    let spec = node.decl.batch.as_ref()?;
     if let Some(v) = over.value_for(node) {
         return Some(match v {
             OverrideValue::One => Grouping::One,
@@ -206,7 +206,7 @@ pub fn grouping_line(plan: &barca_model::reports::BatchPlan) -> String {
 /// Add the grouping of each batched node's keys that will run to its dry-run report: `batch`,
 /// and the line at the end of `detail`.
 pub fn annotate(
-    dag: &barca_compile::dag::Dag,
+    dag: &barca_model::dag::Dag,
     steps: &mut [barca_model::reports::StepReport],
     over: &BatchOverride,
     python: &std::path::Path,
@@ -230,7 +230,7 @@ pub fn annotate(
             let labels = match &grouping {
                 Grouping::By { source_text, .. } => evaluate_labels(
                     python,
-                    &node.extracted.source_file,
+                    &node.invoke.python().source_file,
                     source_text,
                     &parts.will_run_keys,
                 )

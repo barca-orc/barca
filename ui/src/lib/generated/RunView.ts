@@ -2,6 +2,7 @@
 import type { Cancellation } from "./Cancellation";
 import type { LogEntry } from "./LogEntry";
 import type { PlanReasons } from "./PlanReasons";
+import type { QueuePlace } from "./QueuePlace";
 import type { RunExplanation } from "./RunExplanation";
 import type { RunFailure } from "./RunFailure";
 import type { RunStep } from "./RunStep";
@@ -86,6 +87,12 @@ cancellation: Cancellation | null,
  * drains (it starts on the next server); `null` otherwise. Experimental.
  */
 waiting_for: WaitingFor | null,
+/**
+ * `last` while a run asked to queue last (`queue` of `POST /runs`, `--queue last`) waits
+ * or executes on the answering server; `null` for every other run, and once the run has
+ * finished (it is not recorded with the run). Experimental.
+ */
+queue: QueuePlace | null,
 /**
  * The run in words (#956): its steps grouped by the reason they ran, its retries apart
  * from its attempts, its targets as a list and what became of them, and how far a run in

@@ -912,13 +912,13 @@ or roughly tying on 14 of the 20 rows (`deep_diamond`, `etl_duckdb`, `etl_duckdb
 nearly everything. Re-running `deep_diamond`, `mixed_io_cpu`, and `wide_join` a second time
 in isolation reproduced the same ratios within ~2-3%, ruling out sampling noise as the
 explanation. `BARCA_TRACE_TIMING=1` (the waterfall tracer already in
-`crates/barca-core/src/commands.rs`, see its doc comment) pointed at the actual cause: on
+`crates/barca-run/src/commands.rs`, see its doc comment) pointed at the actual cause: on
 `deep_diamond`, the trace showed 18/18 steps complete by ~285ms into a ~1160ms total run —
 the missing ~830ms was entirely inside a single call, `pool.shutdown()`. `fan_out_500`
 showed the identical ~830ms shutdown cost despite doing 500x more real work, while
 `chain_100` — which never needs more than one worker, since a linear chain has no
 independent-branch parallelism to spawn a second one for — paid only ~200ms. That pointed
-straight at `WorkerPool::shutdown()` in `crates/barca-core/src/io_loop.rs`: it looped over
+straight at `WorkerPool::shutdown()` in `crates/barca-service/src/io_loop.rs`: it looped over
 every spawned worker *sequentially*, sending SIGTERM and then unconditionally sleeping
 200ms before checking whether the process had exited (`graceful_kill()`) — a flat
 `pool_size * 200ms` tax on every single run (~800ms for the default 4-worker pool),
@@ -978,7 +978,7 @@ pass below. A future full-suite re-run would fill this table too.
 
 ### Notes
 
-- **The worker-pool shutdown fix** (`crates/barca-core/src/io_loop.rs`,
+- **The worker-pool shutdown fix** (`crates/barca-service/src/io_loop.rs`,
   `WorkerPool::shutdown()`): previously, `graceful_kill()` was called once per worker in a
   plain `for` loop — each call sent SIGTERM, then unconditionally `std::thread::sleep`'d
   200ms before its first liveness check, only moving to SIGKILL if the worker was still

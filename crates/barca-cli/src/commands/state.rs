@@ -1,36 +1,36 @@
 //! `barca state backups`, `barca state restore` (RFC-0009) and `barca state reset`.
 
-use barca_core::BarcaError;
+use barca_service::BarcaError;
 
 pub(crate) async fn state_backups_cmd(
     env: Option<&str>,
     python: &std::path::Path,
     json: bool,
 ) -> Result<(), BarcaError> {
-    let cfg = barca_core::config::resolve(env)?;
-    let listed = barca_core::backup::list(python, &cfg).await?;
+    let cfg = barca_service::config::resolve(env)?;
+    let listed = barca_service::backup::list(python, &cfg).await?;
     if let Some(why) = &listed.store_error {
-        barca_core::errln!("[barca] warning: {why}; listing the local backups only");
+        barca_service::errln!("[barca] warning: {why}; listing the local backups only");
     }
-    let here = barca_core::backup::Writer::of(&cfg.db_path);
-    if let Some(other) = barca_core::backup::interleaved(&listed.backups)
+    let here = barca_service::backup::Writer::of(&cfg.db_path);
+    if let Some(other) = barca_service::backup::interleaved(&listed.backups)
         && let Some(host) = &other.host
     {
-        barca_core::backup::warn_interleaved(
+        barca_service::backup::warn_interleaved(
             listed.store.as_deref().unwrap_or(&listed.local_dir),
             &here.describe(host, other.project.as_deref()),
             &other.name,
         );
     }
     if json {
-        barca_core::outln!(
+        barca_service::outln!(
             "{}",
             serde_json::to_string(&listed).map_err(|e| BarcaError::Other(e.to_string()))?
         );
         return Ok(());
     }
     if listed.backups.is_empty() {
-        barca_core::outln!(
+        barca_service::outln!(
             "no backups in {}{}",
             listed.local_dir,
             match &listed.store {
@@ -52,7 +52,7 @@ pub(crate) async fn state_backups_cmd(
                     Some(false) => format!("{} (differ)", b.location),
                     _ => b.location.clone(),
                 },
-                barca_core::gc::size::human(b.size_bytes),
+                barca_service::gc::size::human(b.size_bytes),
                 b.rows.map_or_else(|| "-".to_string(), |r| r.to_string()),
                 b.run_id.clone().unwrap_or_else(|| "-".to_string()),
                 match (&b.host, b.mine) {
@@ -78,13 +78,13 @@ pub(crate) async fn state_backups_cmd(
         for (i, c) in cells.iter().enumerate() {
             out.push_str(&format!("{c:<w$}  ", w = widths[i]));
         }
-        barca_core::outln!("{}", out.trim_end());
+        barca_service::outln!("{}", out.trim_end());
     };
     line(&header.map(String::from));
     for r in &rows {
         line(r);
     }
-    barca_core::outln!(
+    barca_service::outln!(
         "\nlocal: {}{}",
         listed.local_dir,
         listed
@@ -102,9 +102,9 @@ pub(crate) async fn state_restore_cmd(
     python: &std::path::Path,
     json: bool,
 ) -> Result<(), BarcaError> {
-    let cfg = barca_core::config::resolve(env)?;
-    let restored = barca_core::backup::restore(python, &cfg, from).await?;
-    barca_core::errln!(
+    let cfg = barca_service::config::resolve(env)?;
+    let restored = barca_service::backup::restore(python, &cfg, from).await?;
+    barca_service::errln!(
         "[barca] restored {} from the {} copy ({}){}; {}",
         restored.restored,
         restored.from,
@@ -118,7 +118,7 @@ pub(crate) async fn state_restore_cmd(
             .as_deref()
             .map(|host| format!(
                 " on {}",
-                barca_core::backup::Writer::of(&cfg.db_path)
+                barca_service::backup::Writer::of(&cfg.db_path)
                     .describe(host, restored.project.as_deref())
             ))
             .unwrap_or_default(),
@@ -128,7 +128,7 @@ pub(crate) async fn state_restore_cmd(
         }
     );
     if json {
-        barca_core::outln!(
+        barca_service::outln!(
             "{}",
             serde_json::to_string(&restored).map_err(|e| BarcaError::Other(e.to_string()))?
         );
@@ -142,8 +142,8 @@ pub(crate) async fn state_reset_cmd(
     json: bool,
 ) -> Result<(), BarcaError> {
     use std::io::IsTerminal;
-    let cfg = barca_core::config::resolve(env)?;
-    if let Some(holder) = barca_core::backup::ServeLock::holder(&cfg) {
+    let cfg = barca_service::config::resolve(env)?;
+    if let Some(holder) = barca_service::backup::ServeLock::holder(&cfg) {
         return Err(BarcaError::Other(format!(
             "cannot reset while barca serve is using this environment ({holder}). Nothing was \
              changed.\nUse the Reset database button in its web UI, or POST /state/reset to it; \
@@ -158,22 +158,22 @@ pub(crate) async fn state_reset_cmd(
                     .to_string(),
             ));
         }
-        barca_core::errln!(
+        barca_service::errln!(
             "This moves {} (and its -wal and -shm) aside to {}.reset-<UTC> and starts an empty \
              database: run history, cache records and schedule pauses start over. Nothing is \
              deleted; barca state restore --from <the moved file> undoes it.",
             cfg.db_path,
             cfg.db_path
         );
-        barca_core::term::stderr_str("Reset the metadata database? [y/N] ");
+        barca_service::term::stderr_str("Reset the metadata database? [y/N] ");
         let mut answer = String::new();
         std::io::stdin().read_line(&mut answer)?;
         if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
-            barca_core::errln!("[barca] not reset: nothing was changed");
+            barca_service::errln!("[barca] not reset: nothing was changed");
             return Ok(());
         }
     }
-    let reset = barca_core::backup::reset(&cfg, |running| {
+    let reset = barca_service::backup::reset(&cfg, |running| {
         if running.is_empty() {
             return Ok(());
         }
@@ -185,28 +185,28 @@ pub(crate) async fn state_reset_cmd(
     })
     .await?;
     match (&reset.moved_to, &reset.undo) {
-        (Some(moved), Some(undo)) => barca_core::errln!(
+        (Some(moved), Some(undo)) => barca_service::errln!(
             "[barca] reset the metadata database: the old one is {moved}, {} is new and empty. \
              Undo: {undo}",
             reset.database
         ),
-        _ => barca_core::errln!(
+        _ => barca_service::errln!(
             "[barca] there was no metadata database; {} is new and empty",
             reset.database
         ),
     }
-    let left = barca_core::gc::bytes_under(std::path::Path::new(&cfg.local_artifact_dir));
+    let left = barca_service::gc::bytes_under(std::path::Path::new(&cfg.local_artifact_dir));
     if reset.moved_to.is_some() && left > 0 {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] the {} of artifacts under {} stay on disk, and no record names them now: \
              the cache size limit evicts them first, barca gc --max-size off deletes them now, \
              and until then the undo above brings them back",
-            barca_core::gc::size::human(left),
+            barca_service::gc::size::human(left),
             cfg.local_artifact_dir
         );
     }
     if json {
-        barca_core::outln!(
+        barca_service::outln!(
             "{}",
             serde_json::to_string(&reset).map_err(|e| BarcaError::Other(e.to_string()))?
         );

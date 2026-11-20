@@ -4,7 +4,7 @@ description: "The project root, the .barca/ directory, concurrent runs, killed r
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/layout.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/layout.md (barca docs layout). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/layout.md (barca docs layout). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 Everything barca keeps is under `.barca/` in the project root. Below: where that root
 is and what the directory holds, what happens when several barca processes share one project,
@@ -19,7 +19,7 @@ what a run records while it goes and after it is killed, and what an upgrade rec
 .barca/backups/                             with a store: the five newest backups of the metadata DB (`barca docs remote`)
 ```
 
-Every other entry barca writes under `.barca/` (locks, `run-owners/`, `staging/`, `sql-cache/`,
+Every other entry barca writes under `.barca/` (locks, `serve.sock`, `run-owners/`, `staging/`, `sql-cache/`,
 `range-cache/`, `live-logs/`, `branches/`, `inspection-cache/`, `auth/`, `gc-state.json`, the
 files `state restore` and `state reset` move aside, a batched call's `.batch-*` directory), who
 owns it, when it is removed and whether `barca gc` evicts it or the size budget counts it, is the
@@ -53,12 +53,38 @@ format version and refuses a database it does not support rather than rebuilding
 ## Concurrent runs
 
 Several barca processes can run in one project at once (parallel scripts or agents, `barca serve`
-alongside the CLI). The metadata DB is a single-file database that one process opens at a time,
-so each process holds a short lock on it (`.barca/metadata.db.lock`) only while it reads or
-writes, and releases it while your Python runs. Processes queue instead of failing. If a
-process waits more than 60 seconds for the lock you get an error that names the lock file;
+alongside the CLI). The metadata DB is a single-file database that one process writes at a time,
+so each process holds a short lock on it (`.barca/metadata.db.lock`) for each of its operations
+on it, and releases it while your Python runs. Processes queue instead of failing, and take
+turns: a process that finds the lock held marks the lock file (its modification time), and the
+process holding it lets the next one in before its own next operation. The read commands
+(`status`, `history`, `stats`, `logs`, `doctor`, and what `sql` reads) do not take the lock at
+all: they read the database in place, beside a run's writes, and neither wait for one nor hold
+one up. A process that writes keeps one connection to the database for as long as it runs and folds
+the write-ahead log (`metadata.db-wal`) into `metadata.db` when its command ends: with no other
+process on the database, `metadata.db-wal` and `metadata.db-shm` are then gone. A read command
+only reads, so it cannot fold or delete them: after it, an empty `metadata.db-wal` (0 bytes,
+or a log another process's writes are still in) and a `metadata.db-shm` (32 KB) stay beside the
+database until the next command that writes ends. They hold nothing `metadata.db` lacks when
+the log is empty, they are counted in `.barca/`'s size, and deleting them by hand while no
+barca process runs is harmless. If a
+process waits more than 60 seconds for the lock you get an error that names the lock file and
+the process holding it at that moment (`held now by pid 4312 (barca serve ...)`, read from the
+kernel's lock table on Linux; elsewhere the error says the holder could not be named, and when
+the table does not name it, a process outside this container or on another machine that shares
+the directory, the error says that);
 an `... File is locked by another process` error means something outside barca (a DB browser, a
 backup tool, an older barca) has `.barca/metadata.db` open.
+
+A command typed in a project where `barca serve` is running does not queue on that lock: it
+finds the server by its socket, `.barca/serve.sock`, and the server does the work (`get` and
+`run` join its queue, `gc` runs inside it; [Server Mode: a Shared Ledger and --server: In the server's own project](/reference/server-mode/#in-the-servers-own-project-the-project-socket)). `--local` runs the command in its own process, and then it waits on the lock like
+any second process. `BARCA_TRACE_TIMING=1` prints, at the end of a `get` or `run`, how often the
+process had to wait for the lock, for how long in total and at most:
+`[trace] metadata db opens 4, lock waits 2 (total 31.5ms, longest 20.1ms)`. Every command also
+prints how often it held the lock itself, for how long in total and at most (the longest
+another process can have waited for it):
+`[trace] metadata lock holds 8 (total 9.2ms, longest 6.0ms)`.
 
 If a required database write fails, the command reports an infrastructure error (exit 3) and
 records no new outcome; what was already recorded stays. With an artifact store, a refresh in

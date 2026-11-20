@@ -93,6 +93,13 @@ def connect(role: str = "worker") -> socket.socket | None:
         raise
 
 
+def adopt(sock: socket.socket) -> None:
+    """Use `sock`, a connection already made, as this process's connection to the coordinator:
+    what `send_message` and `recv_message` use from here on."""
+    global _socket
+    _socket = sock
+
+
 def is_worker() -> bool:
     """Are we running inside a barca worker process?"""
     return socket_path() is not None
@@ -253,7 +260,7 @@ def emit_step_error(
 
     `worker_continues` tells the coordinator this worker is still sound and goes on with its
     batch; without it the coordinator stops the worker and starts a fresh one (#523). `phase`
-    is where the failure happened (`_worker.PHASES`).
+    is where the failure happened (`_failure.PHASES`).
     """
     _report_repeated_warnings()
     _emit_result(
@@ -306,7 +313,7 @@ def submit_and_wait(work_items: list[dict]) -> list[dict]:
             "type": "submit",
             "items": work_items,
             # This worker reads results from their artifacts: send where they are, not the
-            # values (crates/barca-engine/src/protocol.rs, `Submit::artifact_results`).
+            # values (crates/barca-proc/src/protocol.rs, `Submit::artifact_results`).
             "artifact_results": True,
         }
     )

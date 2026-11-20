@@ -4,7 +4,7 @@ description: "batch=: one call of a partitioned step computes many keys; groupin
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/batched-partitions.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/batched-partitions.md (barca docs batched-partitions). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/batched-partitions.md (barca docs batched-partitions). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 `batch=` makes one call of a partitioned step compute several keys, for steps where each call
 has a cost of its own (loading a model, opening a connection). Below: how keys are grouped into calls, what a batch function receives and

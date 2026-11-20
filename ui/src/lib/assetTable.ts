@@ -8,12 +8,14 @@
  * to elements.
  */
 
+import { isSuccess } from './runs'
 import { blockerOf } from './healthDisplay'
 import { match } from 'ts-pattern'
-import { CACHE_STATES, lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
+import type { LastAttempt } from './generated/LastAttempt'
 import { mapPartOf, mapPartRank } from './causeDisplay'
 import { streakLabel } from './health'
-import { formatAgo, parseTime } from './time'
+import { formatAgo, parseTime, formatSeconds } from './time'
 import type { CacheStatus, NodeRunning, NodeState } from './types'
 
 export { formatAgo } from './time'
@@ -26,8 +28,10 @@ export interface AssetRow {
   file: string
   kind: NodeState['kind']
   partitioned: boolean
-  /** `cache.state`, as the server says it (`shownCacheState`: a node that always runs and never ran reads `never_run`). */
+  /** `cache.state`, as the server says it. */
   state: CacheState
+  /** `last_attempt`, as the server says it: what a node that always runs shows in place of a cache state. */
+  lastAttempt: LastAttempt
   /** `cache.reason`, verbatim. */
   reason: CacheStatus['reason']
   /** The latest attempt failed (or some keys did): shown beside the state, never in its place. */
@@ -40,6 +44,8 @@ export interface AssetRow {
   keys: { failed: number; total: number; blocked: number; blockedOn: string | null } | null
   /** The failed node upstream that keeps it from running (`blocked`); null when none. */
   blockedBy: string | null
+  /** The id of what holds it (`root.id`): the rollup's root of that id says it in a line. Null when it is fresh. */
+  root: string | null
   /** Pinned (`barca pin`): what it is pinned to, in a line; null when not pinned. Reads `pinned`. */
   pinned: string | null
   /** Why, in words — the server's own explanation (`cache.detail`, a tooltip). */
@@ -58,7 +64,7 @@ export interface AssetRow {
    * for a sensor, the last time what it observed changed. Null when never recorded.
    */
   changedAt: string | null
-  /** Median of recent successful runs, formatted (`~2.3s / run` over a partitioned node's keys); null if it never succeeded. */
+  /** The served `typical_run_seconds`, formatted (`~2.3s / run` over a partitioned node's keys); null if it never succeeded. */
   typical: string | null
   typicalSeconds: number | null
   p95: string | null
@@ -74,26 +80,12 @@ export interface AssetRow {
   no_estimate: NodeState['no_estimate']
 }
 
-/** `40 of 3,077 keys failed`, for a node with failed keys. */
-export function failedKeysLabel(node: NodeState): string | null {
-  const p = node.partitions
-  return p?.failed ? `${p.failed.toLocaleString()} of ${p.total.toLocaleString()} keys failed` : null
-}
-
 /**
- * A node's typical time, in seconds. Durations are recorded per key, whichever call computed
- * it, so a batched node's per-key median is a few milliseconds and says nothing; a partitioned
- * node's figure is the time of a run over all its keys, estimated from that median.
+ * `3.0s`, or `~2.3s / run` for a partitioned node: its served `typical_run_seconds` (the median
+ * of its recent runs, once per key for a partitioned node; `barca status --json` prints it).
  */
-export function typicalSeconds(n: Pick<NodeState, 'durations' | 'partitioned' | 'partitions'>): number | null {
-  if (!n.durations) return null
-  if (n.partitioned && n.partitions) return n.durations.median_seconds * n.partitions.total
-  return n.durations.median_seconds
-}
-
-/** `3.0s`, or `~2.3s / run` for a partitioned node (its keys' medians summed, see `typicalSeconds`). */
-export function typicalLabel(n: Pick<NodeState, 'durations' | 'partitioned' | 'partitions'>): string | null {
-  const s = typicalSeconds(n)
+export function typicalLabel(n: Pick<NodeState, 'typical_run_seconds' | 'partitioned' | 'partitions'>): string | null {
+  const s = n.typical_run_seconds
   if (s === null) return null
   return n.partitioned && n.partitions ? `~${formatSeconds(s)} / run` : formatSeconds(s)
 }
@@ -123,15 +115,17 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         file: fileOf(n.id),
         kind: n.kind,
         partitioned: n.partitioned,
-        state: shownCacheState(n),
+        state: n.cache.state,
+        lastAttempt: n.last_attempt,
         reason: n.cache.reason,
         lastFailed: lastAttemptFailed(n),
         keys: n.partitions ? { failed: n.partitions.failed ?? 0, total: n.partitions.total, blocked: n.partitions.blocked ?? 0, blockedOn: n.partitions.blocked_on ?? null } : null,
         blockedBy: blockerOf(n),
+        root: n.root?.id ?? null,
         pinned: pins.get(n.id) ?? null,
         stateHint: n.cache.detail,
         last: last
-          ? { status: n.partitions?.failed ? 'failed' : last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
+          ? { status: last.status, ago: formatAgo(last.created_at, nowMs), error: last.error ?? null }
           : null,
         cause: n.cause,
         expected_fresh_at: n.expected_fresh_at,
@@ -143,7 +137,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         failures: n.consecutive_failures,
         changedAt: n.last_bytes_change?.created_at ?? null,
         typical: typicalLabel(n),
-        typicalSeconds: typicalSeconds(n),
+        typicalSeconds: n.typical_run_seconds,
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
         scheduleHeld: n.schedule?.state === "held",
         nextRunMs: n.schedule?.state === "held" || n.next_run === null ? null : n.next_run * 1000,
@@ -225,23 +219,6 @@ export function filterRows(rows: AssetRow[], query: string): AssetRow[] {
   return rows.filter((r) => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
 }
 
-/** Count of rows per state (every state present, zero or not), and how many last attempts failed. */
-export function summarize(rows: AssetRow[]): { states: Record<CacheState, number>; lastFailed: number } {
-  const states = Object.fromEntries(CACHE_STATES.map((s) => [s, 0])) as Record<CacheState, number>
-  let lastFailed = 0
-  for (const r of rows) {
-    states[r.state] += 1
-    if (r.lastFailed) lastFailed += 1
-  }
-  return { states, lastFailed }
-}
-
-export function formatSeconds(s: number): string {
-  if (s < 60) return `${s.toFixed(1)}s`
-  if (s < 3600) return `${(s / 60).toFixed(1)}m`
-  return `${(s / 3600).toFixed(1)}h`
-}
-
 // ── One line a row ────────────────────────────────────────────────────────────
 
 /**
@@ -252,10 +229,10 @@ export function formatSeconds(s: number): string {
  */
 export function lastRunText(row: Pick<AssetRow, 'last' | 'lastFailed' | 'lastSuccessAt' | 'partitioned'>, nowMs: number): string {
   if (!row.last) return 'not run'
-  if (row.lastFailed || row.last.status === 'failed') {
+  if (row.lastFailed) {
     return `failed ${row.last.ago} · ${row.lastSuccessAt ? `${row.partitioned ? 'a key last ok' : 'last ok'} ${formatAgo(row.lastSuccessAt, nowMs)}` : 'never succeeded'}`
   }
-  return row.last.status === 'success' ? row.last.ago : `${row.last.status} ${row.last.ago}`
+  return isSuccess(row.last.status) ? row.last.ago : `${row.last.status} ${row.last.ago}`
 }
 
 /** The Last run cell's tooltip: the rest of the story while it fails, how long and how many runs in a row. */

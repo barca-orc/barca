@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CACHE_STATES, cacheStateDisplay, cacheStateRank, lastAttemptFailed, worstCacheState, type CacheState } from './cacheStateDisplay'
-import { TONES } from './tone'
+import { CACHE_STATES, cacheStateDisplay, lastAttemptFailed } from './cacheStateDisplay'
 import { GLYPHS, glyphColor } from './glyph'
 
 // The eight words of `barca docs status`, as `barca status --json` prints them. The UI shows these
@@ -15,7 +14,6 @@ describe('cache state display', () => {
   })
 
   it('gives each state a tone from the design system', () => {
-    for (const state of CACHE_STATES) expect(TONES).toContain(cacheStateDisplay(state).tone)
     expect(cacheStateDisplay('cached').tone).toBe('success')
     expect(cacheStateDisplay('stale').tone).toBe('warning')
     expect(cacheStateDisplay('never_run').tone).toBe('neutral')
@@ -30,16 +28,6 @@ describe('cache state display', () => {
     // The warnings (blocked, stale, partial, unsynced) share a tone, never a glyph or a hue.
     const warnings = CACHE_STATES.filter((s) => cacheStateDisplay(s).tone === 'warning')
     expect(new Set(warnings.map((s) => glyphColor(cacheStateDisplay(s).glyph))).size).toBe(warnings.length)
-  })
-
-  it('ranks what needs attention first, cached last', () => {
-    expect(cacheStateRank('blocked')).toBe(0)
-    expect(cacheStateRank('cached')).toBe(CACHE_STATES.length - 1)
-    expect(worstCacheState(['cached', 'never_run', 'stale'])).toBe('stale')
-    expect(worstCacheState([])).toBeNull()
-    // Every member of the generated union has a rank (the table is exhaustive by type).
-    const states: CacheState[] = [...CLI_WORDS]
-    for (const state of states) expect(cacheStateRank(state)).toBeGreaterThanOrEqual(0)
   })
 
   it('reads a failed last attempt as the server says it: a failing health', () => {

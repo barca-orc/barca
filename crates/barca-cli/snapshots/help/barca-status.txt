@@ -10,7 +10,7 @@ Options:
       --pretty                     Emit human-readable output (the default when stdout is a terminal)
   -l, --limit <LIMIT>              Maximum nodes, in topological order (default: every node in JSON, 100 in a human table)
       --all                        Show every node (no limit)
-      --fields <FIELDS>            Select JSON fields as a comma-separated list; implies --json [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, cause, root, gap_seconds, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, no_estimate, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
+      --fields <FIELDS>            Select JSON fields as a comma-separated list; implies --json [possible values: id, name, kind, inputs, partitioned, cache, health, health_reason, signals, measured, cause, root, gap_seconds, last_check, refresh_path, stale_since, expected_fresh_at, recheck_at, no_estimate, last_attempt, typical_run_seconds, partitions, last_materialization, last_bytes_change, shape, env, undeclared_env, local, schedule]
       --sample <N>                 Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled)
       --state <STATE>              Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh
       --cause <CAUSE>              Keep nodes with this cause [possible values: failing, overdue, no_refresh_path, queued, undecided, catching_up]
@@ -32,7 +32,7 @@ Options:
       --key <KEY>                  Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target
       --env <ENV>                  Use a separate cache and history for this environment
       --server [<URL>]             Use a server (URL or configured); get/run execute its deployed code
-      --local                      Use independent local state; ignore the configured server
+      --local                      Run on this machine; ignore a configured server and this project's barca serve
   -h, --help                       Show concise command help
       --examples                   Show all command examples without running anything
 

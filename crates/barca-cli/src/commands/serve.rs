@@ -1,24 +1,6 @@
 //! Serve command implementation.
 
-use std::path::PathBuf;
-
-/// `barca serve`'s flags, as typed.
-pub(crate) struct ServeArgs {
-    pub(crate) env: Option<String>,
-    pub(crate) auth: Option<barca_core::serve::AuthMode>,
-    pub(crate) files: Vec<PathBuf>,
-    pub(crate) host: std::net::IpAddr,
-    pub(crate) port: u16,
-    pub(crate) watch: bool,
-    /// `!--no-schedule`.
-    pub(crate) schedule: bool,
-    pub(crate) timezone: String,
-    pub(crate) read_only: bool,
-    pub(crate) drain_timeout: Option<u64>,
-    pub(crate) max_runs: Option<usize>,
-    pub(crate) capacity: Option<usize>,
-    pub(crate) run_timeout: Option<u64>,
-}
+use crate::request::ServeArgs;
 
 pub(crate) async fn serve_cmd(
     args: ServeArgs,
@@ -41,12 +23,12 @@ pub(crate) async fn serve_cmd(
         capacity,
         run_timeout,
     } = args;
-    let engine = |e: barca_core::BarcaError| CliError::from_barca(e, ctx);
-    let mut resolved = barca_core::config::resolve(env.as_deref()).map_err(engine)?;
+    let engine = |e: barca_service::BarcaError| CliError::from_barca(e, ctx);
+    let mut resolved = barca_service::config::resolve(env.as_deref()).map_err(engine)?;
     // A Datadog site that is not a host name would make every trace link wrong: a usage error.
-    barca_core::config::datadog_app_url(
+    barca_service::config::datadog_app_url(
         &resolved.project_root,
-        barca_core::telemetry::is_on("datadog"),
+        barca_service::telemetry::is_on("datadog"),
     )
     .map_err(engine)?;
     if let Some(mode) = auth {
@@ -85,7 +67,7 @@ pub(crate) async fn serve_cmd(
     match barca_server::serve(config).await.map_err(|e| match e {
         // Exit 3 with the database named and what to do (#513).
         barca_server::ServeError::Metadata(e) => engine(e),
-        e => engine(barca_core::BarcaError::Other(e.to_string())),
+        e => engine(barca_service::BarcaError::Other(e.to_string())),
     })? {
         // Nothing accepted was lost: the runs in flight finished, or were put back in the queue
         // for the next start.

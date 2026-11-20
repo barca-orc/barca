@@ -8,9 +8,9 @@
  */
 
 import { match } from 'ts-pattern'
-import { formatSeconds } from './assetTable'
-import { parseRunStatus, runStatus } from './runs'
+import { isFailure, parseRunStatus, runStatus } from './runs'
 import type { StatusKind, LogLine, RunView } from './types'
+import { formatSeconds } from './time'
 
 export type RunFeedback =
   | { kind: 'idle' }
@@ -77,7 +77,7 @@ export function runOutcomeSummary(run: RunView): string {
   if (status === 'cancelled' || status === 'interrupted') return status
   const failedKeys = run.steps_page.nodes
     ? run.steps_page.nodes.reduce((n, node) => n + node.failed, 0)
-    : run.steps.filter((s) => s.status === 'failed' && s.partition_key !== null).length
+    : run.steps.filter((s) => isFailure(s.status) && s.partition_key !== null).length
   if (failedKeys > 1) return `${failedKeys.toLocaleString()} keys failed`
   const error = run.error ?? run.failure?.error ?? null
   return error ? `failed: ${error}` : 'failed'

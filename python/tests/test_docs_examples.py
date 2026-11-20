@@ -419,7 +419,7 @@ def test_assets_topic_accepted_arguments_example(binary, topics, tmp_path):
     assert {n["id"]: n["inputs"] for n in nodes}["pipeline.py:report"] == ["pipeline.py:raw"]
 
     # The table against the stubs a type checker reads (the Rust list is held to both by
-    # `cargo test -p barca-core decorator_args`).
+    # `cargo test -p barca-python decorator_args`).
     rows = re.findall(r"^\| `@?(\w+)(?:\(\))?` \| (\w+) \| (.*) \|$", body, re.M)
     assert [r[0] for r in rows] == [
         "group", "asset", "sensor", "task", "sink",
@@ -1251,23 +1251,51 @@ def test_sql_topic_health_queries(binary, topics, tmp_path):
             assert not out["truncated"], out
             return out["rows"]
 
-        (total,) = rows(gap)
+        def minute() -> int:
+            return int(time.time()) // 60
+
+        def asked(query: str) -> tuple[list[dict], range]:
+            """The answer, and the minutes of the clock it may be as of."""
+            before = minute()
+            return rows(query), range(before, minute() + 1)
+
+        def same_gap(gap_seconds: int, minutes: range) -> None:
+            """`gap_seconds` is read at the start of the clock's minute (`barca docs
+            status-fields`, "Root"), and each `barca sql` reads the clock itself. Two answers
+            from the same minute are equal; with minutes between them, each of the four nodes
+            (all `unbounded`: nothing brings them closer to fresh) is 60 seconds further behind
+            per minute. Nothing else may differ."""
+            later = gap_seconds - total["gap_seconds"]
+            assert later in {4 * 60 * (m - t) for m in minutes for t in total_minutes}, (
+                gap_seconds,
+                total,
+            )
+
+        ((total,), total_minutes) = asked(gap)
         assert (total["not_fresh"], total["unbounded"]) == (4, 4), total
         # Four nodes, each out of date for the hour since the file was written.
         assert 4 * 3500 <= total["gap_seconds"] <= 4 * 3700, total
 
-        assert rows(by_file) == [
-            {"file": "pipeline.py", "not_fresh": 4, "gap_seconds": total["gap_seconds"]}
-        ]
+        ((file,), file_minutes) = asked(by_file)
+        assert (file["file"], file["not_fresh"]) == ("pipeline.py", 4), file
+        same_gap(file["gap_seconds"], file_minutes)
 
-        held = rows(roots)
+        held, held_minutes = asked(roots)
         assert [(r["root_kind"], r["root_node"], r["nodes"]) for r in held] == [
             ("no_schedule", "pipeline.py:ledger", 2),
             ("never_run", "pipeline.py:clean", 1),
             ("no_schedule", "pipeline.py:reviewed", 1),
         ], held
-        # Every node that is not fresh is under one root: the roots add up to the gap.
-        assert sum(r["gap_seconds"] for r in held) == total["gap_seconds"]
+        # Every node that is not fresh is under one root: the roots add up to the gap. Exactly,
+        # in one answer (one reading of the clock); and in the topic's own two queries, which
+        # are two answers.
+        (one,) = rows(
+            "select sum(gap_seconds) as gap_seconds,"
+            " sum(gap_seconds) filter (where root_id is not null) as under_a_root"
+            " from barca.nodes"
+        )
+        assert one["under_a_root"] == one["gap_seconds"] > 0, one
+        same_gap(sum(r["gap_seconds"] for r in held), held_minutes)
 
         unrefreshed = rows(no_path)
         assert [(r["name"], r["health"], r["root_node"]) for r in unrefreshed] == [

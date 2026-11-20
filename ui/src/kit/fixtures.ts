@@ -7,13 +7,14 @@
  */
 
 import type { Connection } from '@/lib/connection'
+import { NOW_MS as PROJECT_NOW_MS, RUNS, RUNS_WITHOUT_SCHEDULE, RUN_IDS, row, runDetail, scenario } from '@/lib/testdata/project'
+import type { RunScenarioName } from '@/lib/testdata/project'
 import { served } from '@/lib/testdata/served'
 import type { CacheState } from '@/lib/cacheStateDisplay'
-import type { Failure, ScopeHealth } from '@/lib/health'
+import type { Failure } from '@/lib/health'
 import type { BarScope } from '@/components/HealthBar'
 import type { CauseCounts } from '@/lib/causeDisplay'
-import { causeCounts, counts as healthCountsOf, weightsOf } from '@/lib/testdata/rollup'
-import type { Health } from '@/lib/healthDisplay'
+import { causeCounts, weightsOf } from '@/lib/testdata/rollup'
 import type { QueueStatus } from '@/lib/queue'
 import type { RunFeedback } from '@/lib/runFeedback'
 import type { Remote } from '@/lib/remote'
@@ -22,8 +23,6 @@ import type { ResetPhase } from '@/components/ResetDatabase'
 import type { TokensModel } from '@/lib/tokensPage'
 import { INITIAL_TOKENS } from '@/lib/tokensPage'
 import type {
-  ActivityHour,
-  RunActivity,
   DataSignal,
   RunNow,
   IssuedToken,
@@ -35,14 +34,10 @@ import type {
   NodeStatus,
   QueueEntry,
   QueueView,
-  PlanReasons,
   RunList,
   RunningStep,
   RunSummary,
-  RunExplanation,
   RunView,
-  ReasonRow,
-  WhyRan,
   RunViewStatus,
   StatusKind,
   TokenMetadata,
@@ -53,8 +48,11 @@ export function variants<K extends string>(table: Record<K, unknown>): K[] {
   return Object.keys(table) as K[]
 }
 
-/** The kit's clock: fixtures are dated relative to it, so elapsed times never drift. */
-export const NOW_MS = Date.parse('2026-10-29T12:00:00Z')
+/**
+ * The kit's clock: the instant the generated project (`@/lib/testdata/project`) was answered
+ * at. Fixtures spelled here are dated relative to it, so elapsed times never drift.
+ */
+export const NOW_MS = PROJECT_NOW_MS
 const ago = (seconds: number) => new Date(NOW_MS - seconds * 1000).toISOString()
 const sqlTime = (seconds: number) => ago(seconds).replace('T', ' ').slice(0, 19)
 
@@ -108,22 +106,17 @@ function node(name: string, overrides: Partial<NodeState>): NodeState {
   })
 }
 
-/** A node in each cache state, in the CLI's words (`graphState` reads each back as its key). */
+/**
+ * A node in each cache state, none of which failed last (`graphState` reads each back as its
+ * key). Where the generated project has a node in the state, it is that node's served row; the
+ * three states it has none in (a partitioned node with nothing failed, a sensor that has not
+ * reported, a result not uploaded yet) are spelled here, with the health the server gives such
+ * a row on its own (`served`).
+ */
 export const nodeByState = {
-  blocked: node('promo_plan', {
-    partitioned: true,
-    cache: { state: 'blocked', reason: 'upstream_failed', detail: '39 keys wait on failed upstream keys' },
-    partitions: { total: 3077, cached: 3038, missing: 39, missing_keys: [], blocked: 39, blocked_on: 'planning.py:demand_forecast', behind: 0 },
-  }),
-  stale: node('revenue_daily', {
-    cache: { state: 'stale', reason: 'changed', detail: 'code changed since the last run', changed: ['code'] },
-  }),
-  never_run: node('fx_rates', {
-    cache: { state: 'never_run', reason: 'no_record', detail: 'never materialized' },
-    last_materialization: null,
-    durations: null,
-    last_success_at: null,
-  }),
+  blocked: row('sales_report'),
+  stale: row('orders_enriched'),
+  never_run: row('forecast'),
   partial: node('sessionize', {
     partitioned: true,
     cache: { state: 'partial', reason: 'partitions_missing', detail: '3 of 10 keys have no cached result' },
@@ -132,15 +125,11 @@ export const nodeByState = {
   unknown: node('checkout_events', {
     cache: { state: 'unknown', reason: 'sensor_output_unknown', detail: 'the sensor has not reported its output' },
   }),
-  always_runs: node('daily_report', {
-    kind: 'task',
-    cache: { state: 'always_runs', reason: 'task', detail: 'a task runs every time' },
-    last_materialization: materialized({ artifact: null, format: null }),
-  }),
+  always_runs: row('publish_dashboard'),
   unsynced: node('product_catalog', {
     cache: { state: 'unsynced', reason: 'local_only', detail: 'cached here, not uploaded to the store yet' },
   }),
-  cached: node('orders_clean', {}),
+  cached: row('orders'),
 } satisfies Record<CacheState, NodeState>
 
 /** A node carrying each data-health signal (`NodeState.signals`), as `GET /state` sends it. */
@@ -162,16 +151,11 @@ export const nodeBySignal = {
 } satisfies Record<DataSignal['kind'], NodeState>
 
 /**
- * A node whose last attempt failed: the fact shown beside its state. `stale` with reason `failed`
- * is what the server says of an asset whose newer attempt failed without replacing its result.
+ * A node whose last attempt failed, as served: `invoices` of the generated project, `stale` with
+ * reason `failed` (its newer attempts failed without replacing the result it had), failing for
+ * two runs in a row.
  */
-export const failedNode: NodeState = node('orders_enriched', {
-  cache: { state: 'stale', reason: 'failed', detail: 'the last attempt failed; a cached result from before remains' },
-  last_materialization: materialized({ status: 'failed', artifact: null, format: null, error: "KeyError: 'currency'" }),
-  last_success_at: ago(86_400 * 2),
-  failing_since: ago(50_400),
-  consecutive_failures: 3,
-})
+export const failedNode: NodeState = row('invoices')
 
 /** An asset that has failed every time it ran: `failing`, `never succeeded`. */
 export const neverSucceededNode: NodeState = node('fx_rates_live', {
@@ -182,15 +166,8 @@ export const neverSucceededNode: NodeState = node('fx_rates_live', {
   consecutive_failures: 2,
 })
 
-/** A task whose last run failed: `always_runs`, shown as `failing`. */
-export const failedTask: NodeState = node('check__orders', {
-  kind: 'task',
-  cache: { state: 'always_runs', reason: 'task', detail: 'a task runs every time' },
-  last_materialization: materialized({ status: 'failed', artifact: null, format: null, error: 'AssertionError: 3 rows with negative units' }),
-  last_success_at: ago(86_400),
-  failing_since: ago(3_600),
-  consecutive_failures: 1,
-})
+/** A task whose last run failed, as served: `always_runs`, shown as `failing`. */
+export const failedTask: NodeState = row('check__invoices')
 
 export const runningByStep = {
   waiting: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'waiting', label: 'in this run', partitions: null },
@@ -281,66 +258,39 @@ export const resetPhases = {
 // ── Runs ──────────────────────────────────────────────────────────────────────
 
 /**
- * A run's explanation as the server words it (`barca-core`'s `run_explanation`): the kit shows
- * what the page renders, so these are written out, not derived.
+ * A run in the state of `name` (`run-explanations.json`): the facts the Rust test states for
+ * it, the explanation `barca-service` gives for them, and the rest of a `RunView` (ids, steps,
+ * logs) spelled here. No count, line or reason of the explanation is written in this file.
  */
-function explanation(overrides: Partial<RunExplanation> = {}): RunExplanation {
-  return {
-    targets: ['pipeline.py:orders_clean', 'pipeline.py:revenue_daily'],
-    target_line: 'orders_clean +1 more', outputs: [],
-    counts: { steps: 4, ran: 3, ok: 3, failed: 0, cached: 1, not_reached: 0, nodes: 4, not_reached_nodes: 0, attempts: null, retries: null, outcome: '3 ok · 1 cached', planned: '4 steps planned over 4 nodes', units: 'One step per node or partition key', not_reached_line: null, attempts_line: null },
-    requested_by: 'client',
-    attempts: null,
-    steps: '3 ok · 1 cached',
-    target_outcomes: [],
-    cancellation: null,
-    why: { headline: 'Every step was served from cache.', groups: [], omitted: 0, partial: false },
-    progress: null,
-    slowest: [],
-    ...overrides,
-  }
-}
-
-function runView(status: RunViewStatus, overrides: Partial<RunView> = {}): RunView {
-  const live = status === 'pending' || status === 'running'
+function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunView {
+  const { run, nodes, explanation } = scenario(name)
+  const { first_failure, ...facts } = run
+  const live = run.status === 'pending' || run.status === 'running'
+  const listed = run.status === 'pending' || run.steps_executed === 0 ? [] : [
+    { ...step('pipeline.py:checkout_events', 'cached'), elapsed_seconds: null },
+    step('pipeline.py:orders_clean', 'success'),
+  ]
   return {
     run_id: '127',
-    status,
     command: 'get',
-    target: 'revenue_daily',
     files: ['pipeline.py'],
-    triggered_by: 'client',
     scheduled_at: null,
     schedule_id: null,
-    started_at: ago(192),
     finished_at: live ? null : ago(150),
     elapsed_seconds: live ? null : 42.3,
-    steps_total: 4,
-    steps_executed: live ? 1 : 3,
-    steps_cached: 1,
-    job: 'pipeline.py:orders_clean,pipeline.py:revenue_daily',
-    attempts: null,
     client_run_id: null,
-    failure: null,
-    principal: null,
+    failure: first_failure ? { node: first_failure.node_id, error: first_failure.error } : null,
     trigger_reason: null,
-    retries: null,
-    plan_reasons: null,
-    cancellation: null,
     waiting_for: null,
-    explanation: explanation(live
-      ? { steps: '1 ok · 1 cached', why: { headline: 'No step decided to run yet.', groups: [], omitted: 0, partial: true }, progress: { done: 2, total: 4, percent: 50, executed: 1, cached: 1, eta_seconds: null, eta: null } }
-      : {}),
+    queue: null,
     outcome: null,
-    error: null,
-    steps: status === 'pending' ? [] : [
-      { ...step('pipeline.py:checkout_events', 'cached'), elapsed_seconds: null },
-      step('pipeline.py:orders_clean', 'success'),
-    ],
-    steps_page: { total: status === 'pending' ? 0 : 2, truncated: false },
-    logs: status === 'pending' ? [] : logLines.map((l, seq) => ({
+    steps: listed,
+    steps_page: { total: listed.length, truncated: false, ...(nodes.length > 0 ? { nodes } : {}) },
+    logs: listed.length === 0 ? [] : logLines.map((l, seq) => ({
       node_id: l.nodeId, seq, line: l.text, stream: l.stream ?? 'stdout', ts: l.ts ?? null,
     })),
+    ...facts,
+    explanation,
     ...overrides,
   }
 }
@@ -357,33 +307,29 @@ function step(node_id: string, status: string, error: string | null = null): Run
 const envelope = (kind: string, error: string, remediation: string | null) =>
   ({ error, code: kind === 'step_failed' ? 1 : kind === 'cancelled' ? 130 : 3, kind, remediation })
 
-/** A run's details in each status the server reports (`parseRunStatus` reads each back). */
+/**
+ * A run's details in each status the server reports (`parseRunStatus` reads each back). The
+ * finished ones are runs of the generated project as served; the rest are scenarios.
+ */
 export const runByStatus = {
-  pending: runView('pending'),
+  pending: runView('queued'),
   running: runView('running'),
-  success: runView('success', {
-    outcome: { status: 'success', run_id: '127', final_output: { rows: 12371, revenue: 48210.5 } },
-  }),
-  failed: runView('failed', {
-    error: "orders_enriched: KeyError: 'currency'",
-    steps: [step('pipeline.py:orders_clean', 'success'), step('pipeline.py:orders_enriched', 'failed', "KeyError: 'currency'")],
-    outcome: { status: 'failed', envelope: envelope('step_failed', "orders_enriched: KeyError: 'currency'", 'barca logs 127 --step orders_enriched has the full output.') },
-  }),
-  cancelled: runView('cancelled', {
+  success: runDetail(RUN_IDS.first),
+  failed: runDetail(RUN_IDS.failed),
+  cancelled: runView('cancelled by the server stopping', {
     outcome: { status: 'cancelled', envelope: envelope('cancelled', 'cancelled by DELETE /runs/127', null) },
   }),
   error: runView('error', {
-    steps: [],
-    error: 'could not start a worker: python3 not found',
     outcome: { status: 'error', envelope: envelope('infra', 'could not start a worker: python3 not found', 'Set [python] interpreter in barca.toml.') },
   }),
-  interrupted: runView('interrupted', { error: 'the server stopped while the run was in flight' }),
+  interrupted: runView('interrupted'),
 } satisfies Record<RunViewStatus, RunView>
 
-const runTruncated = runView('failed', {
+const runTruncated: RunView = {
+  ...runDetail(RUN_IDS.failed),
   steps: [step('pipeline.py:orders_enriched', 'failed', "KeyError: 'currency'"), ...Array.from({ length: 4 }, (_, i) => step(`pipeline.py:sessionize[day=2026-10-2${i}]`, 'success'))],
   steps_page: { total: 1440, truncated: true },
-})
+}
 
 /**
  * A failed run of a partitioned node: 5,000 keys, 1,250 failed, 1,000 listed, and a log line per
@@ -394,7 +340,8 @@ const manyKeys = Array.from({ length: 1000 }, (_, i) => {
   const failedKey = i < 250
   return { ...step(`billing.py:invoices_by_account[${key}]`, failedKey ? 'failed' : 'success', failedKey ? 'ValueError: 3 rows with a negative total' : null), partition_key: key }
 })
-const runManyKeys = runView('failed', {
+const runManyKeys: RunView = {
+  ...runDetail(RUN_IDS.failed),
   error: 'invoices_by_account: 1,250 keys failed',
   steps_total: 7644,
   steps_executed: 5021,
@@ -412,70 +359,43 @@ const runManyKeys = runView('failed', {
     node_id: `billing.py:invoices_by_account[account=acct_${String(Math.floor(seq / 5)).padStart(6, '0')}]`,
     seq, line: `exporting acct_${String(Math.floor(seq / 5)).padStart(6, '0')}: page ${seq % 5} of 5, 120 rows`, stream: 'stdout' as const, ts: ago(150),
   })),
-})
+}
 
-function summary(view: RunView, id: string, overrides: Partial<RunSummary> = {}): RunSummary {
+/** The list row of a scenario's run: its facts, and the `line` `barca-service` words them with. */
+function summary(name: RunScenarioName, id: string, overrides: Partial<RunSummary> = {}): RunSummary {
+  const view = runView(name)
+  const { run, line } = scenario(name)
   return {
     id, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
     status: view.status, triggered_by: view.triggered_by, scheduled_at: null, schedule_id: null,
     started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
     steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
-    error: view.error, first_failure: null, principal: view.principal, trigger_reason: view.trigger_reason,
-    cancellation: view.cancellation,
-    // `line` as the server words the row; a fixture about a failure states its own.
-    line: { target: 'revenue_daily', target_count: 1, steps: view.explanation.steps, steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: view.error, failure_detail: view.error },
+    error: view.error, first_failure: run.first_failure, principal: view.principal, trigger_reason: view.trigger_reason,
+    cancellation: view.cancellation, line,
     ...overrides,
   }
 }
 
-/** `activity` of `GET /runs` as a server of every-minute ticks answers it with the schedule's runs hidden. */
-const runActivity: RunActivity = (() => {
-  const start = NOW_MS - 23 * 3_600_000
-  const stamp = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z')
-  const none = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
-  const nobody = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
-  const hour = (i: number, runs: number, bad: number, live = 0): ActivityHour => ({
-    at: stamp(start + i * 3_600_000), until: stamp(start + (i + 1) * 3_600_000),
-    runs, ok: runs - bad - live, not_successful: bad, in_progress: live,
-    by_status: { ...none, success: runs - bad - live, failed: bad, running: live }, by_trigger: { ...nobody, api: runs },
-    median_seconds: runs - live > 0 ? 42 + i : null,
-    failure: bad > 0 ? { text: "sessionize: KeyError: 'currency'", runs: bad } : null,
-  })
-  const hours = Array.from({ length: 24 }, (_, i) => hour(i, i % 5 === 0 ? 2 : i === 23 ? 3 : 0, i === 20 ? 2 : 0, i === 23 ? 1 : 0))
-  const sum = (pick: (h: ActivityHour) => number) => hours.reduce((n, h) => n + pick(h), 0)
-  const total: ActivityHour = {
-    ...hour(0, sum((h) => h.runs), sum((h) => h.not_successful), 1), until: stamp(start + 24 * 3_600_000), median_seconds: 51,
-  }
-  return {
-    since: total.at, until: total.until, triggered_by: [], not_triggered_by: ['schedule'], statuses: [], search: null,
-    hours, total,
-    excluded: { ...hour(0, 1438, 3), until: total.until, by_trigger: { ...nobody, schedule: 1438 }, median_seconds: 1.2, failure: { text: "poll_inbox: TimeoutError: timed out", runs: 3 } },
-    summary: `${total.runs} runs in the last 24 hours · ${total.not_successful} not successful · 1 in progress · median 51.0s · ${total.runs} api`,
-  }
-})()
-
+/**
+ * `GET /runs` as the Runs page asks for it (the schedule's runs left out), served for the
+ * generated project, with a row in each status its history has none in put first.
+ */
 const runList: RunList = {
+  ...RUNS_WITHOUT_SCHEDULE,
   runs: [
-    ...Object.values(runByStatus).map((view, i) => summary(view, String(133 - i), { triggered_by: i % 3 === 0 ? 'schedule' : i % 3 === 1 ? 'client' : null })),
+    summary('queued', '133'),
+    summary('cancelled by the server stopping', '132'),
+    summary('error', '131'),
+    summary('interrupted', '130'),
     // Steps failed but the run itself recorded no error: the row names the first of them.
-    summary(runByStatus.failed, '125', {
-      triggered_by: 'schedule', error: null, steps_total: 28_404, steps_executed: 21_950, steps_cached: 0,
-      first_failure: { node_id: 'pipeline.py:sessionize[day=2026-10-27]', error: "KeyError: 'currency'" },
-      line: { target: 'revenue_daily', target_count: 1,
-        steps: '21,949 ok · 1 failed · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key · 28,404 steps planned · stopped at pipeline.py:sessionize[day=2026-10-27]',
-        failure: "sessionize: 1 key failed · KeyError: 'currency'", failure_detail: "pipeline.py:sessionize[day=2026-10-27]: KeyError: 'currency'",
-      },
-    }),
+    summary('failed at a key', '125'),
     // The same with no failed step on record (a run that died before recording one).
-    summary(runByStatus.failed, '124', {
-      error: null, started_at: ago(7_500),
-      line: { target: 'revenue_daily', target_count: 1, steps: '0 ok · 0 cached', steps_detail: 'Steps are keys: a partitioned node counts one per key', failure: 'No failed step recorded: open the run', failure_detail: 'No failed step recorded: open the run' },
-    }),
+    summary('failed with no step recorded', '124'),
+    ...RUNS_WITHOUT_SCHEDULE.runs,
   ],
-  total: 9,
-  truncated: false,
-  activity: runActivity,
+  total: RUNS_WITHOUT_SCHEDULE.total + 6,
 }
+const runActivity = runList.activity!
 
 /** The run list in each state the Runs page shows. */
 export const runLists = {
@@ -487,14 +407,12 @@ export const runLists = {
   'refresh failed': ready(runList, 'connection refused'),
 } satisfies Record<string, Remote<RunList>>
 
-/** An hour of the activity, as a bar names it. */
-export const runHour = { since: runActivity.hours[20]!.at, until: runActivity.hours[20]!.until }
+/** An hour of the activity with a failed run in it, as a bar names it. */
+const failedHour = runActivity.hours.find((h) => h.not_successful > 0)!
+export const runHour = { since: failedHour.at, until: failedHour.until }
 
-/** Every run, the schedule's included: 37,955 of them, nothing left out. */
-export const everyRunList: Remote<RunList> = ready({
-  ...runList, total: 37_955, truncated: true,
-  activity: { ...runActivity, not_triggered_by: [], excluded: null },
-})
+/** Every run, the schedule's included, as served: nothing left out of the activity. */
+export const everyRunList: Remote<RunList> = ready(RUNS)
 
 /** A filter that keeps nothing. */
 export const noMatchRunList: Remote<RunList> = ready({ ...runList, runs: [], total: 0, truncated: false })
@@ -516,7 +434,7 @@ const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => (
   target_line: overrides.target ?? `web.py:sessions_${String(n).padStart(2, '0')}`,
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
   schedule_id: n % 3 === 0 ? `web.py:sessions_${String(n).padStart(2, '0')}` : null, queued_at: ago(1200 - n * 30),
-  started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null, ...overrides,
+  started_at: null, estimated_start_at: null, wait_seconds: null, waiting_for: null, queue: null, ...overrides,
 })
 const runningEntry = queued(0, { status: 'running', position: null, target: 'web.py:slow_export', queued_at: ago(1500) })
 const deepQueue: QueueView = {
@@ -548,48 +466,6 @@ export const queueStatusStates: Record<string, QueueStatus | null> = {
 
 // ── A run that explains itself (issue 925) ────────────────────────────────────────
 
-const rebuildReasons: PlanReasons = {
-  nodes: 469,
-  steps: 23_278,
-  omitted: 3,
-  reasons: [
-    { category: 'code_changed', subject: 'helper pipelines/common.py:bucket_ltv', nodes: 412, steps: 21_104, example: 'pipeline.py:ltv_by_account' },
-    { category: 'new_keys', subject: null, nodes: 2, steps: 1_205, example: 'pipeline.py:sessionize' },
-    { category: 'inputs_changed', subject: 'input pipeline.py:orders_clean', nodes: 40, steps: 957, example: 'pipeline.py:revenue_daily' },
-    { category: 'never_run', subject: null, nodes: 12, steps: 12, example: 'pipeline.py:churn_model' },
-  ],
-}
-
-const reasonRow = (subject: string | null, nodes: number, steps: number, example: string, of: number): ReasonRow => {
-  const counts = steps === nodes ? `${nodes.toLocaleString()} node${nodes === 1 ? '' : 's'}` : `${steps.toLocaleString()} steps of ${nodes.toLocaleString()} node${nodes === 1 ? '' : 's'}`
-  const name = example.slice(example.lastIndexOf(':') + 1)
-  const example_text = nodes > 1 ? `e.g. ${name}` : name
-  return { subject, counts, nodes, steps, share: steps / of, example, example_text, line: subject ? `${counts}: ${subject}` : `${counts}${nodes > 1 ? ',' : ':'} ${example_text}` }
-}
-
-const rebuildWhy: WhyRan = {
-  headline: '23,278 steps decided to run so far: 21,104 code changed, 1,205 new partition keys, 957 input changed, and 1 more reason',
-  groups: [
-    { category: 'code_changed', label: 'code changed', steps: 21_104, rows: [reasonRow('helper pipelines/common.py:bucket_ltv', 412, 21_104, 'pipeline.py:ltv_by_account', 23_278)] },
-    { category: 'new_keys', label: 'new partition keys', steps: 1_205, rows: [reasonRow(null, 2, 1_205, 'pipeline.py:sessionize', 23_278)] },
-    { category: 'inputs_changed', label: 'input changed', steps: 957, rows: [reasonRow('pipeline.py:orders_clean', 40, 957, 'pipeline.py:revenue_daily', 23_278)] },
-    { category: 'never_run', label: 'never run', steps: 12, rows: [reasonRow(null, 12, 12, 'pipeline.py:churn_model', 23_278)] },
-  ],
-  omitted: 3,
-  partial: true,
-}
-
-/** The audit's run: 29 steps, 27 of them sensors, none retried. */
-const sensorsWhy: WhyRan = {
-  headline: '29 steps ran: 27 sensors (always run), 2 never run',
-  groups: [
-    { category: 'sensor', label: 'sensors (always run)', steps: 27, rows: [reasonRow(null, 27, 27, 'pipeline.py:orders_feed', 29)] },
-    { category: 'never_run', label: 'never run', steps: 2, rows: [reasonRow(null, 2, 2, 'pipeline.py:orders_clean', 29)] },
-  ],
-  omitted: 0,
-  partial: false,
-}
-
 /** `now` of `GET /runs?status=running`, as the server words a rebuild in flight. */
 const rebuildNow: RunNow = {
   running: [
@@ -605,83 +481,20 @@ const rebuildNow: RunNow = {
   line: 'executing 2: sessionize, ltv_by_account · 1 queued · 3,120/5,000 keys',
 }
 
-/** The run overview (`RunOverviewView`) in each state it says something different in. */
+/**
+ * The run overview (`RunOverviewView`) in each state it says something different in: each is a
+ * scenario of `run-explanations.json`, its facts and its explanation from `barca-service`.
+ */
 export const runOverviews: Record<string, { run: RunView; now: RunNow | null; nowMs: number }> = {
   'full rebuild in flight': {
-    run: runView('running', {
-      triggered_by: 'api', principal: 'token:ci-bot', trigger_reason: 'backfill after the bucket_ltv fix',
-      started_at: ago(360), steps_total: 23_278, steps_executed: 19_399, steps_cached: 0, attempts: 19_461, retries: 62,
-      plan_reasons: rebuildReasons,
-      steps_page: { total: 19_399, truncated: true, nodes: [
-        { node_id: 'pipeline.py:sessionize', keys: 3_120, failed: 0, elapsed_seconds: 1_840.5, calls: 0 },
-        { node_id: 'pipeline.py:ltv_by_account', keys: 1, failed: 0, elapsed_seconds: 212.3, calls: 0 },
-      ] },
-      explanation: explanation({
-        requested_by: 'api · token:ci-bot', attempts: '19,399 steps, 62 retries', steps: '19,399 ok · 0 cached', why: rebuildWhy,
-        progress: { done: 19_399, total: 23_278, percent: 83, executed: 19_399, cached: 0, eta_seconds: 72, eta: 'about 1m left' },
-        slowest: [{ node_id: 'pipeline.py:sessionize', seconds: 1_840.5, keys: 3_120 }, { node_id: 'pipeline.py:ltv_by_account', seconds: 212.3, keys: 1 }],
-      }),
-    }),
+    run: runView('full rebuild in flight', { trigger_reason: 'backfill after the bucket_ltv fix', steps_page: { total: 19_399, truncated: true, nodes: scenario('full rebuild in flight').nodes } }),
     now: rebuildNow, nowMs: NOW_MS,
   },
-  'just started': {
-    run: runView('running', {
-      triggered_by: 'schedule', started_at: ago(4), steps_total: 23_278, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false },
-      explanation: explanation({
-        requested_by: 'schedule', steps: '0 ok · 0 cached', why: { headline: 'No step decided to run yet.', groups: [], omitted: 0, partial: true },
-        progress: { done: 0, total: 23_278, percent: 0, executed: 0, cached: 0, eta_seconds: null, eta: null },
-      }),
-    }),
-    now: null, nowMs: NOW_MS,
-  },
-  'finished, served mostly from cache': {
-    run: runView('success', {
-      attempts: 3, retries: 0,
-      plan_reasons: { nodes: 2, steps: 3, omitted: 0, reasons: [{ category: 'inputs_changed', subject: 'sensor pipeline.py:orders_feed', nodes: 2, steps: 3, example: 'pipeline.py:orders_clean' }] },
-      explanation: explanation({
-        attempts: '3 steps, no retries',
-        why: {
-          headline: '3 steps ran: 3 input changed',
-          groups: [{ category: 'inputs_changed', label: 'input changed', steps: 3, rows: [reasonRow('sensor pipeline.py:orders_feed', 2, 3, 'pipeline.py:orders_clean', 3)] }],
-          omitted: 0, partial: false,
-        },
-      }),
-    }),
-    now: null, nowMs: NOW_MS,
-  },
-  'sensors and no retries': {
-    run: runView('success', {
-      steps_total: 29, steps_executed: 29, steps_cached: 0, attempts: 29, retries: 0,
-      explanation: explanation({ attempts: '29 steps, no retries', steps: '29 ok · 0 cached', why: sensorsWhy }),
-    }),
-    now: null, nowMs: NOW_MS,
-  },
-  'cancelled before it started': {
-    run: runView('cancelled', {
-      triggered_by: 'api', principal: 'token:ops', steps_total: 0, steps_executed: 0, steps_cached: 0, steps: [], steps_page: { total: 0, truncated: false },
-      cancellation: { by: 'request', principal: 'token:ops', started: false, waiting_behind: ['a7e8f06a4890'], same_as: 'a7e8f06a4890' },
-      explanation: explanation({
-        requested_by: 'api · token:ops', steps: '0 started · 0 cached',
-        cancellation: {
-          headline: 'Not started: the same target was already running as run a7e8f06a4890.',
-          detail: 'Cancelled by token:ops while it waited in the queue; it executed nothing.',
-          run: 'a7e8f06a4890',
-        },
-        why: { headline: 'It was cancelled before it decided what to run.', groups: [], omitted: 0, partial: false },
-      }),
-    }),
-    now: null, nowMs: NOW_MS,
-  },
-  'cancelled by the server stopping': {
-    run: runView('cancelled', {
-      cancellation: { by: 'shutdown', principal: null, started: true, waiting_behind: [], same_as: null },
-      explanation: explanation({
-        steps: '3 started · 1 cached',
-        cancellation: { headline: 'Cancelled by the server stopping while it ran.', detail: 'Steps that finished before the cancel are cached.', run: null },
-      }),
-    }),
-    now: null, nowMs: NOW_MS,
-  },
+  'just started': { run: runView('just started'), now: null, nowMs: NOW_MS },
+  'finished, served mostly from cache': { run: runView('finished, served mostly from cache'), now: null, nowMs: NOW_MS },
+  'sensors and no retries': { run: runView('sensors and no retries'), now: null, nowMs: NOW_MS },
+  'cancelled before it started': { run: runView('cancelled before it started'), now: null, nowMs: NOW_MS },
+  'cancelled by the server stopping': { run: runView('cancelled by the server stopping'), now: null, nowMs: NOW_MS },
 }
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
@@ -710,9 +523,6 @@ export const tokenStates: Record<string, { model: TokensModel; tokens: Remote<To
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
-/** A rollup entry as served: its nodes by health, how many there are, and run work beside them. */
-const scopeOf = (nodes: number, states: Partial<Record<Health, number>>, running = 0): ScopeHealth => ({ health: healthCountsOf(states), nodes, running })
-
 /** A scope as a bar reads it: its causes as the rollup entry states them, with the weights the server gives them. */
 const barOf = (nodes: number, causes: Partial<CauseCounts>, running = 0): BarScope => {
   const counted = causeCounts(causes)
@@ -729,17 +539,6 @@ export const barStates: Record<string, BarScope> = {
   'every cause': barOf(106, { failing: 4, overdue: 3, no_refresh_path: 7, queued: 2, undecided: 6, catching_up: 4 }),
   'nothing refreshes it': barOf(128, { no_refresh_path: 120 }),
   empty: barOf(0, {}),
-}
-
-/** A scope in each state the health bar distinguishes, and the mixes that matter. */
-export const healthStates: Record<string, ScopeHealth> = {
-  ok: scopeOf(504, { ok: 504 }),
-  'one failure in thousands': scopeOf(2412, { failing: 1, behind: 12, ok: 2399 }),
-  'failing and blocking': scopeOf(562, { failing: 3, blocked: 58, behind: 121, ok: 380 }),
-  running: scopeOf(504, { ok: 500, behind: 4 }, 40),
-  'every health': scopeOf(106, { failing: 2, blocked: 2, suspect: 1, behind: 8, undecided: 6, never_run: 7, ok: 80 }),
-  'not run yet': scopeOf(128, { never_run: 120, ok: 8 }),
-  empty: scopeOf(0, {}),
 }
 
 // ── Failures ──────────────────────────────────────────────────────────────────

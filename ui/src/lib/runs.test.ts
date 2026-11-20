@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RUNS_IDLE_POLL_MS, RUNS_LIVE_POLL_MS, outcomeResult, parseOutcome, parseRunStatus, runIsLive, runLabel, runStatus, runTone, runsPollInterval, triggeredByLabel } from './runs'
+import { RUNS_IDLE_POLL_MS, RUNS_LIVE_POLL_MS, outcomeResult, parseOutcome, parseRunStatus, runIsLive, runLabel, runStatus, runsPollInterval, triggeredByLabel } from './runs'
 
 describe('run status', () => {
   it('pending and running are live; every other status is terminal', () => {
@@ -16,8 +16,6 @@ describe('run status', () => {
     expect(runStatus('cancelled')).toBe('cancelled')
     expect(runStatus('interrupted')).toBe('cancelled')
     expect(runStatus('something new')).toBe('skipped')
-    expect(runTone('failed')).toBe('failed')
-    expect(runTone('cancelled')).toBe('neutral')
   })
   it('reads older spellings of success', () => {
     expect(parseRunStatus('complete')).toBe('success')

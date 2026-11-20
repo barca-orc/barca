@@ -2,7 +2,6 @@
  * Rollup fixtures written out as `GET /state/rollup` answers them. Nothing here sums: a test
  * or a kit page states each entry's counts, as the server would.
  */
-import { FIXTURE_CAUSE } from './served'
 import type { HealthCounts, HeldBy, Rollup, RollupEntry, RollupRoot } from '../rollupView'
 import type { Cause, CauseCounts } from '../causeDisplay'
 import type { Health } from '../healthDisplay'
@@ -12,7 +11,7 @@ import WEIGHTS from './weights.json'
 
 /**
  * The weights an entry of `nodes` nodes with `causes` not fresh is served with ("Distance from
- * fresh"): the table is `barca-core`'s, written out by a Rust test (`weights.json`), so a
+ * fresh"): the table is `barca-service`'s, written out by a Rust test (`weights.json`), so a
  * fixture states what the server would and the app holds no weight of its own.
  */
 export function weightsOf(nodes: number, causes: CauseCounts): Weights {
@@ -35,14 +34,16 @@ function weighed(entry: Omit<RollupEntry, 'weight' | 'weights'> & Partial<Pick<R
   return { ...entry, weights, weight: entry.weight ?? weightOf(weights) }
 }
 
-/** A file's sums, as `files` of the rollup states them: every node in `worst` unless `health` says otherwise. */
+/**
+ * A file's sums, as `files` of the rollup states them: `nodes` nodes, the worst of them `worst`,
+ * `causes` of them not fresh (none unless stated: no health implies a cause here).
+ */
 export function fileSums(file: string, worst: Health, over: Partial<FileRollup> = {}): FileRollup {
   const nodes = over.nodes ?? 1
   const health = over.health ?? counts({ [worst]: nodes })
-  // Every node in the cause the fixtures give `worst` (`FIXTURE_CAUSE`), or fresh, unless `causes` says otherwise.
-  const cause = FIXTURE_CAUSE[worst]
-  const causes = over.causes ?? (cause ? { ...NO_CAUSES, [cause]: nodes } : NO_CAUSES)
-  return { file, nodes, assets: nodes, running: 0, health, asset_health: health, worst, causes, fresh: cause && !over.causes ? 0 : nodes, kinds: NO_KINDS, ...over }
+  const causes = over.causes ?? NO_CAUSES
+  const behind = causes.failing + causes.overdue + causes.no_refresh_path + causes.queued + causes.undecided + causes.catching_up
+  return { file, nodes, assets: nodes, running: 0, health, asset_health: health, worst, causes, fresh: nodes - behind, kinds: NO_KINDS, ...over }
 }
 
 /**

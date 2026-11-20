@@ -2,8 +2,8 @@
 //! use it.
 
 use super::Server;
-use barca_core::config::ServerSource;
-use barca_core::outcome::API_VERSION;
+use barca_service::config::ServerSource;
+use barca_service::outcome::API_VERSION;
 use serde_json::{Value, json};
 
 /// `barca doctor` with a server (`--server`, or a configured one without `--local`): one check
@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 /// a line saying what to do. Nothing is changed on the server or here.
 pub(crate) async fn doctor_checks(
     server: &Server,
-    report: &mut barca_core::diagnostics::DoctorReport,
+    report: &mut barca_service::diagnostics::DoctorReport,
     env: Option<&str>,
 ) {
     let source = server.source.map(ServerSource::describe);
@@ -19,7 +19,7 @@ pub(crate) async fn doctor_checks(
         Some(source) => format!("{} ({source})", server.shown_url),
         None => server.shown_url.clone(),
     };
-    let cfg = barca_core::config::resolve(env).ok();
+    let cfg = barca_service::config::resolve(env).ok();
     let health = match server.get_json("/health").await {
         Ok(health) => health,
         Err(e) => {
@@ -81,11 +81,14 @@ pub(crate) async fn doctor_checks(
         .filter(|c| c.remote_artifacts())
         .map(|c| c.artifact_root.clone());
     let shown = |uri: Option<&str>| {
-        uri.map_or("no store".to_string(), barca_core::transfer::diagnostic_uri)
+        uri.map_or(
+            "no store".to_string(),
+            barca_service::transfer::diagnostic_uri,
+        )
     };
     let store_ok = match (theirs, ours.as_deref()) {
         (Some(t), Some(o)) => {
-            barca_core::ledger::normalize_uri(t) == barca_core::ledger::normalize_uri(o)
+            barca_service::ledger::normalize_uri(t) == barca_service::ledger::normalize_uri(o)
         }
         _ => false,
     };
@@ -115,8 +118,8 @@ pub(crate) async fn doctor_checks(
         "server_store",
         store_ok,
         detail,
-        json!({"server": theirs.map(barca_core::transfer::diagnostic_uri),
-               "project": ours.as_deref().map(barca_core::transfer::diagnostic_uri),
+        json!({"server": theirs.map(barca_service::transfer::diagnostic_uri),
+               "project": ours.as_deref().map(barca_service::transfer::diagnostic_uri),
                "server_env": health["env"], "project_env": cfg.as_ref().map(|c| c.env.clone())}),
     );
 
@@ -186,7 +189,7 @@ pub(crate) async fn doctor_checks(
             "the server did not load {}, so its nodes are missing there: {}\nFix the file \
              and deploy it again: a `barca serve --watch` reloads it, otherwise restart barca \
              serve.",
-            barca_core::report::plural(errors.len() as u64, "file"),
+            barca_service::report::plural(errors.len() as u64, "file"),
             files.join("; "),
         )
     };
@@ -206,7 +209,7 @@ pub(crate) async fn doctor_checks(
 /// (`GET /schedule`, the numbers the web UI shows).
 async fn scheduler(
     server: &Server,
-    report: &mut barca_core::diagnostics::DoctorReport,
+    report: &mut barca_service::diagnostics::DoctorReport,
     health: &Value,
 ) {
     let wanted = health["scheduler"].as_bool().unwrap_or(false);
@@ -267,7 +270,7 @@ async fn scheduler(
     }
     let mut detail = format!(
         "running; {}",
-        barca_core::report::plural(jobs.len() as u64, "schedule")
+        barca_service::report::plural(jobs.len() as u64, "schedule")
     );
     if !paused.is_empty() {
         detail.push_str(&format!(
@@ -303,21 +306,27 @@ async fn scheduler(
 /// did not arrive (`ledger_posts`, state `unsynced`), read from a snapshot of the metadata DB.
 async fn unsynced_posts(
     server: &Server,
-    report: &mut barca_core::diagnostics::DoctorReport,
-    cfg: Option<&barca_core::config::ResolvedConfig>,
+    report: &mut barca_service::diagnostics::DoctorReport,
+    cfg: Option<&barca_service::config::ResolvedConfig>,
 ) {
     let Some(cfg) = cfg else {
         return;
     };
-    let posts = match barca_core::db::DbSnapshot::take(&cfg.db_path).await {
-        Ok(Some(snapshot)) => barca_core::ledger::posts::all(snapshot.path())
+    // In place when the database can be read so, else from a copy: never created or migrated.
+    let posts = match barca_service::db::ReadView::open(&cfg.db_path).await {
+        Ok(Some(view)) => barca_service::ledger::posts::all(view.path())
             .await
             .unwrap_or_default(),
-        _ => Vec::new(),
+        _ => match barca_service::db::DbSnapshot::take(&cfg.db_path).await {
+            Ok(Some(snapshot)) => barca_service::ledger::posts::all(snapshot.path())
+                .await
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        },
     };
     let pending: Vec<_> = posts
         .into_iter()
-        .filter(|p| p.state == barca_core::ledger::posts::UNSYNCED && p.server == server.url)
+        .filter(|p| p.state == barca_service::ledger::posts::UNSYNCED && p.server == server.url)
         .collect();
     let runs: Vec<&str> = pending.iter().map(|p| p.client_run_id.as_str()).collect();
     let data = json!({"unsynced": runs.len(), "runs": runs,
@@ -352,7 +361,7 @@ async fn unsynced_posts(
             "{} computed here {} not recorded on the server yet: {}{why}\nThe next `barca get` or \
              `barca run` against the server sends {} first; `barca status --state unsynced` lists \
              the results.",
-            barca_core::report::plural(runs.len() as u64, "run"),
+            barca_service::report::plural(runs.len() as u64, "run"),
             if runs.len() == 1 { "is" } else { "are" },
             runs.join(", "),
             if runs.len() == 1 { "it" } else { "them" },

@@ -1,7 +1,7 @@
 //! Input validation, project roots, and output selection.
 
 use crate::{
-    args::{Cli, GetOutput, OutputMode},
+    args::{Cli, GetOutput, OutputMode, ServerFlags, StateCommand},
     error::{self, CliError, Context, ErrorKind, shell_quote},
     output::{self, Format, FormatFlags},
 };
@@ -42,8 +42,8 @@ pub(crate) fn cache_policy(
     refresh: Option<Vec<String>>,
     no_cascade: bool,
     refresh_all: bool,
-) -> barca_core::cache::CachePolicy {
-    use barca_core::cache::CachePolicy;
+) -> barca_service::cache::CachePolicy {
+    use barca_service::cache::CachePolicy;
     match (refresh_all, refresh) {
         (true, _) => CachePolicy::RefreshAll,
         (false, Some(names)) => CachePolicy::RefreshSelective {
@@ -154,7 +154,7 @@ pub(crate) const RUN_USAGE: &str =
 /// pointer naming `files`; every other error (task/asset misuse, an unknown `--refresh` name,
 /// `-o url` without a cloud store, a removed setting) carries its own remediation (#492).
 pub(crate) fn get_run_error(
-    e: barca_core::BarcaError,
+    e: barca_service::BarcaError,
     ctx: &Context,
     files: &[PathBuf],
 ) -> CliError {
@@ -179,7 +179,7 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
             fields,
             ..
         } => get_mode(*output, None, *format, fields.as_deref())
-            .is_ok_and(|m| m.shape == barca_core::report::GetShape::Json),
+            .is_ok_and(|m| m.shape == barca_service::report::GetShape::Json),
         Cli::Run {
             output,
             format,
@@ -206,42 +206,148 @@ pub(crate) fn json_output(cli: &Cli) -> bool {
         | Cli::Doctor { format, .. }
         | Cli::Gc { format, .. } => is_json(*format),
         Cli::State { command } => match command {
-            crate::StateCommand::Backups { format, .. }
-            | crate::StateCommand::Restore { format, .. }
-            | crate::StateCommand::Reset { format, .. } => is_json(*format),
+            StateCommand::Backups { format, .. }
+            | StateCommand::Restore { format, .. }
+            | StateCommand::Reset { format, .. } => is_json(*format),
         },
         Cli::Serve { .. } | Cli::Tokens { .. } | Cli::Version => false,
+    }
+}
+
+/// The subcommand an invocation names, as typed.
+pub(crate) fn command_name(cli: &Cli) -> &'static str {
+    match cli {
+        Cli::Get { .. } => "get",
+        Cli::Run { .. } => "run",
+        Cli::Plan { .. } => "plan",
+        Cli::Doctor { .. } => "doctor",
+        Cli::Stats { .. } => "stats",
+        Cli::Pin { .. } => "pin",
+        Cli::Unpin { .. } => "unpin",
+        Cli::Serve { .. } => "serve",
+        Cli::List { .. } => "list",
+        Cli::Sql { .. } => "sql",
+        Cli::Status { .. } => "status",
+        Cli::History { .. } => "history",
+        Cli::Cancel { .. } => "cancel",
+        Cli::Queue { .. } => "queue",
+        Cli::Pause { .. } => "pause",
+        Cli::Resume { .. } => "resume",
+        Cli::Gc { .. } => "gc",
+        Cli::Logs { .. } => "logs",
+        Cli::State { .. } => "state",
+        Cli::Docs { .. } => "docs",
+        Cli::Version => "version",
+        Cli::Tokens { .. } => "tokens",
     }
 }
 
 /// The command name and files of an invocation, for remediation hints.
 pub(crate) fn context(cli: &Cli) -> Context {
     let paths = |files: &[PathBuf]| files.iter().map(|p| p.display().to_string()).collect();
-    let (command, files) = match cli {
-        Cli::Get { args, .. } => ("get", paths(&split_target_files(args.clone()).1)),
-        Cli::Run { args, .. } => ("run", paths(&split_target_files(args.clone()).1)),
-        Cli::Plan { files, .. } => ("plan", paths(files)),
-        Cli::Doctor { files, .. } => ("doctor", paths(files)),
-        Cli::Stats { files, .. } => ("stats", paths(files)),
-        Cli::Pin { files, .. } => ("pin", paths(files)),
-        Cli::Unpin { files, .. } => ("unpin", paths(files)),
-        Cli::Serve { files, .. } => ("serve", paths(files)),
-        Cli::List { files, .. } => ("list", paths(files)),
-        Cli::Sql { files, .. } => ("sql", paths(files)),
-        Cli::Status { args, .. } => ("status", paths(&split_target_files(args.clone()).1)),
-        Cli::History { .. } => ("history", Vec::new()),
-        Cli::Cancel { .. } => ("cancel", Vec::new()),
-        Cli::Queue { .. } => ("queue", Vec::new()),
-        Cli::Pause { .. } => ("pause", Vec::new()),
-        Cli::Resume { .. } => ("resume", Vec::new()),
-        Cli::Gc { .. } => ("gc", Vec::new()),
-        Cli::Logs { .. } => ("logs", Vec::new()),
-        Cli::State { .. } => ("state", Vec::new()),
-        Cli::Docs { .. } => ("docs", Vec::new()),
-        Cli::Version => ("version", Vec::new()),
-        Cli::Tokens { .. } => ("tokens", Vec::new()),
+    let files = match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            paths(&split_target_files(args.clone()).1)
+        }
+        Cli::Plan { files, .. }
+        | Cli::Doctor { files, .. }
+        | Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Serve { files, .. }
+        | Cli::List { files, .. }
+        | Cli::Sql { files, .. } => paths(files),
+        Cli::History { .. }
+        | Cli::Cancel { .. }
+        | Cli::Queue { .. }
+        | Cli::Pause { .. }
+        | Cli::Resume { .. }
+        | Cli::Gc { .. }
+        | Cli::Logs { .. }
+        | Cli::State { .. }
+        | Cli::Docs { .. }
+        | Cli::Version
+        | Cli::Tokens { .. } => Vec::new(),
     };
-    Context { command, files }
+    Context {
+        command: command_name(cli),
+        files,
+    }
+}
+
+/// `--env` of a command that may go to this project's server.
+pub(crate) fn env_of(cli: &Cli) -> Option<&str> {
+    match cli {
+        Cli::Get { env, .. }
+        | Cli::Run { env, .. }
+        | Cli::Status { env, .. }
+        | Cli::History { env, .. }
+        | Cli::Stats { env, .. }
+        | Cli::Logs { env, .. }
+        | Cli::Sql { env, .. }
+        | Cli::Queue { env, .. }
+        | Cli::Pause { env, .. }
+        | Cli::Resume { env, .. }
+        | Cli::Pin { env, .. }
+        | Cli::Unpin { env, .. }
+        | Cli::Cancel { env, .. }
+        | Cli::Gc { env, .. } => env.as_deref(),
+        _ => None,
+    }
+}
+
+/// Whether the command line named files (before discovery fills them in at the project root).
+pub(crate) fn files_given(cli: &Cli) -> bool {
+    match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            !split_target_files(args.clone()).1.is_empty()
+        }
+        Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Sql { files, .. } => !files.is_empty(),
+        _ => false,
+    }
+}
+
+/// Forget the files discovery found for a command that named none ([`files_given`]): a server
+/// then uses every file it has deployed.
+pub(crate) fn drop_discovered_files(cli: &mut Cli) {
+    match cli {
+        Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
+            let (target, _) = split_target_files(std::mem::take(args));
+            args.extend(target);
+        }
+        Cli::Stats { files, .. }
+        | Cli::Pin { files, .. }
+        | Cli::Unpin { files, .. }
+        | Cli::Sql { files, .. } => files.clear(),
+        _ => {}
+    }
+}
+
+/// The `--server` / `--local` flags of the commands `dispatch` places by them: every command
+/// whose row in `route::ROUTES` takes the flags, except `doctor`, which reads its own (a test
+/// in `route` holds this to the table).
+pub(crate) fn server_flags(cli: &Cli) -> Option<&ServerFlags> {
+    match cli {
+        Cli::Get { server, .. }
+        | Cli::Run { server, .. }
+        | Cli::Status { server, .. }
+        | Cli::List { server, .. }
+        | Cli::History { server, .. }
+        | Cli::Stats { server, .. }
+        | Cli::Pin { server, .. }
+        | Cli::Unpin { server, .. }
+        | Cli::Logs { server, .. }
+        | Cli::Cancel { server, .. }
+        | Cli::Queue { server, .. }
+        | Cli::Pause { server, .. }
+        | Cli::Resume { server, .. }
+        | Cli::Gc { server, .. }
+        | Cli::Sql { server, .. } => Some(server),
+        _ => None,
+    }
 }
 
 /// The get/run output mode. `--fields` trims JSON, so it implies JSON; combined with an
@@ -266,7 +372,7 @@ pub(crate) fn get_run_mode(
 /// What `barca get` prints: its shape on stdout and whether it returns paths or values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GetMode {
-    pub shape: barca_core::report::GetShape,
+    pub shape: barca_service::report::GetShape,
     pub values: bool,
     /// `-o url`: sign each returned artifact for this many seconds.
     pub url_expires: Option<u64>,
@@ -315,7 +421,7 @@ pub(crate) fn parse_expires(text: &str) -> Result<u64, String> {
 impl GetMode {
     /// The mode `--dry-run` reports in (it returns nothing, so only the shape matters).
     pub(crate) fn explain_mode(self) -> OutputMode {
-        use barca_core::report::GetShape;
+        use barca_service::report::GetShape;
         match (self.shape, self.values) {
             (GetShape::Json, _) => OutputMode::Json,
             (GetShape::Bare, true) => OutputMode::Value,
@@ -335,7 +441,7 @@ pub(crate) fn get_mode(
     format: FormatFlags,
     fields: Option<&[String]>,
 ) -> Result<GetMode, CliError> {
-    use barca_core::report::GetShape;
+    use barca_service::report::GetShape;
     let usage = |msg: &str| Err(CliError::from_prose(ErrorKind::Usage, msg.to_string()));
     let explicit = format.json || format.pretty;
     let url_expires = match (output, expires) {
@@ -412,22 +518,22 @@ pub(crate) fn project_docs_json(out: String, fields: Option<&[String]>) -> Strin
         return out;
     };
     if v.get("topics").is_some() {
-        barca_core::report::project_key(&mut v, "topics", Some(fields));
+        barca_service::report::project_key(&mut v, "topics", Some(fields));
     } else {
-        barca_core::report::project_one(&mut v, fields);
+        barca_service::report::project_one(&mut v, fields);
     }
     serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"
 }
 
 /// Change into the project root (the nearest barca.toml at or above the cwd, else the cwd) and
 /// turn the file arguments into the project's file list: paths are rebased onto the root, and
-/// directories, or no files at all, are expanded by tree discovery (`barca_core::discover`).
+/// directories, or no files at all, are expanded by tree discovery (`barca_service::discover`).
 /// A note on stderr names the root when it is not the cwd.
-pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaError> {
-    use barca_core::BarcaError;
+pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_service::BarcaError> {
+    use barca_service::BarcaError;
     let cwd = std::env::current_dir()
         .map_err(|e| BarcaError::Other(format!("cannot determine cwd: {e}")))?;
-    let root = barca_core::config::find_root(&cwd).unwrap_or_else(|| cwd.clone());
+    let root = barca_service::config::find_root(&cwd).unwrap_or_else(|| cwd.clone());
     if root != cwd {
         std::env::set_current_dir(&root).map_err(|e| {
             BarcaError::Other(format!(
@@ -435,15 +541,15 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
                 root.display()
             ))
         })?;
-        barca_core::errln!(
+        barca_service::errln!(
             "barca: project root: {} ({} found above the cwd)",
             root.display(),
-            barca_core::config::CONFIG_FILE
+            barca_service::config::CONFIG_FILE
         );
     }
-    let rebase = |p: &Path| barca_core::config::rebase_onto_root(p, &cwd, &root);
+    let rebase = |p: &Path| barca_service::config::rebase_onto_root(p, &cwd, &root);
     // Discovery needs [discovery] from barca.toml; an invalid file is reported here once.
-    let mut discovery: Option<barca_core::config::DiscoveryToml> = None;
+    let mut discovery: Option<barca_service::config::DiscoveryToml> = None;
     let mut expand = |files: Vec<PathBuf>| -> Result<Vec<PathBuf>, BarcaError> {
         let files: Vec<PathBuf> = files.iter().map(|f| rebase(f)).collect();
         // A stray non-path argument (`--refresh a b`) is left for the usage checks to explain.
@@ -459,16 +565,18 @@ pub(crate) fn enter_project_root(cli: &mut Cli) -> Result<(), barca_core::BarcaE
         }
         if discovery.is_none() {
             discovery = Some(
-                barca_core::config::load_toml(Path::new("."))?
+                barca_service::config::load_toml(Path::new("."))?
                     .and_then(|t| t.discovery)
                     .unwrap_or_default(),
             );
         }
         let cfg = discovery.as_ref().expect("loaded above");
-        Ok(barca_core::discover::discover(Path::new("."), &files, cfg)?
-            .into_iter()
-            .map(PathBuf::from)
-            .collect())
+        Ok(
+            barca_service::discover::discover(Path::new("."), &files, cfg)?
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
+        )
     };
     match cli {
         Cli::Get { args, .. } | Cli::Run { args, .. } | Cli::Status { args, .. } => {
@@ -604,7 +712,7 @@ mod expiry_tests {
         let flags = FormatFlags::default();
         let mode = get_mode(Some(GetOutput::Url), None, flags, None).unwrap();
         assert_eq!(mode.url_expires, Some(DEFAULT_URL_EXPIRES_SECS));
-        assert_eq!(mode.shape, barca_core::report::GetShape::Bare);
+        assert_eq!(mode.shape, barca_service::report::GetShape::Bare);
         let mode = get_mode(Some(GetOutput::Url), Some("30m"), flags, None).unwrap();
         assert_eq!(mode.url_expires, Some(1800));
         assert!(get_mode(Some(GetOutput::Path), Some("1h"), flags, None).is_err());

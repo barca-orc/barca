@@ -4,7 +4,7 @@ description: "Containing an incident: barca pause and barca resume, and what sch
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/incidents.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/incidents.md (barca docs incidents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/incidents.md (barca docs incidents). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 When an asset is failing or producing bad data, an operator holds it back on the server so that
 scheduled runs stop computing it (and what reads it) until it is fixed. A pause names a node, a
@@ -14,6 +14,7 @@ node and everything below it, or every node of a file. Pauses are experimental (
 barca pause clean --server                 # scheduled runs skip clean until it is resumed
 barca pause clean --downstream --server    # clean and every node below it
 barca pause pipeline.py --server           # every node defined in pipeline.py
+barca pause clean --downstream --dry-run --server   # pauses nothing: what the pause would cover
 barca pause --server --json                # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
 barca resume clean --server                # the next tick computes clean again
 barca resume clean --downstream --server   # clean and every node below it
@@ -26,6 +27,44 @@ on a schedule. The same is `GET /pauses`, `POST /pauses` (`{"target", "downstrea
 `POST /pauses/resume` (`{"target", "downstream"}` or `{"all": true}`). A target is named as for
 `barca get` (a name, or the full id when the name is ambiguous); one that ends in `.py` names
 every node of that file. A `--read-only` server refuses both with `403`.
+
+## What a pause would cover
+
+`barca pause TARGET [--downstream] --dry-run` pauses nothing and prints what the pause would
+cover; with `--json`, the answer of `barca pause --json` plus `covers` (`GET
+/pauses?target=TARGET&downstream=true`, which a `--read-only` server answers too):
+
+```json
+{
+  "total": 0,
+  "paused": [],
+  "schedules": [],
+  "covers": {
+    "targets": ["pipeline.py:clean"],
+    "downstream": ["pipeline.py:report"],
+    "schedules": [{"id": "pipeline.py:inbox", "relation": "target"}]
+  }
+}
+```
+
+`targets` are the nodes the target names (one node, or every node of a file) and `downstream`
+every node below them, both in dependency order; `downstream` is empty without `--downstream`.
+`schedules` are the schedules whose ticks reach a covered node, sorted by id, each with how its
+ticks touch what the pause names, the first that applies:
+
+| `relation` | The schedule |
+|---|---|
+| `self` | is of a node the pause names |
+| `target` | has a named node as a target of its ticks: every tick brings that node up to date |
+| `input` | reads a named node in its ticks (a target of the tick is below it) |
+| `downstream` | reaches none of the named nodes, only nodes below them |
+
+The schedules are found by the scheduler's own walk of the graph ([Scheduling With Cron](/scheduling/)), so
+one is listed exactly when a tick of it would plan a covered node: a schedule above a `Manual`
+asset does not reach that asset, only the `Always` nodes below it. It is read from the graph
+alone. A node that is pinned or already paused stops a tick's walk at run time, and that is not
+accounted for: the list can name a schedule whose ticks are already held back by another pause.
+The web UI's "Blast radius" and its incident controls show this answer.
 
 ## What a pause does
 

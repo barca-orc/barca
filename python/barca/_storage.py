@@ -51,7 +51,7 @@ _fs_cache: dict[str, Any] = {}
 _fs_lock = threading.Lock()
 
 
-def _scheme(path: "str | Path") -> str | None:
+def scheme_of(path: "str | Path") -> str | None:
     """Return the URI scheme of path, or None for plain local paths."""
     s = str(path)
     if "://" not in s:
@@ -59,9 +59,15 @@ def _scheme(path: "str | Path") -> str | None:
     return s.split("://", 1)[0].lower()
 
 
+def protocol_of(path: "str | Path") -> str:
+    """The fsspec protocol of the store holding `path`, a URI of a supported remote scheme
+    (`s3a://` is `s3`, `gs://` is `gcs`). KeyError for any other path."""
+    return _SCHEMES[str(scheme_of(path))][0]
+
+
 def is_remote(path: "str | Path") -> bool:
     """True iff path is a URI handled by a remote backend (not local/file://)."""
-    scheme = _scheme(path)
+    scheme = scheme_of(path)
     return scheme is not None and scheme != "file"
 
 
@@ -146,7 +152,7 @@ def safe_error(message: str) -> str:
 
 def get_fs(path: "str | Path") -> Any:
     """Return the fsspec filesystem for a remote URI (cached per protocol)."""
-    scheme = _scheme(path)
+    scheme = scheme_of(path)
     if scheme is None or scheme == "file":
         raise ValueError(f"get_fs called with a local path: {path}")
     entry = _SCHEMES.get(scheme)
@@ -227,7 +233,7 @@ def upload_options(dest: str, size: int = 0, blocked_files: int = 1) -> dict[str
     A ``max_concurrency`` given in BARCA_STORAGE_OPTIONS is used in place of barca's (for a
     sink's files too, which adlfs would otherwise send one block at a time).
     """
-    scheme = _scheme(dest)
+    scheme = scheme_of(dest)
     protocol = _SCHEMES.get(scheme or "", ("", "", None))[0]
     if protocol not in ("abfs", "s3"):
         return {}
@@ -502,7 +508,7 @@ def _fingerprint(value: Any) -> str | None:
 
 def context(uri: str, fs: Any = None) -> dict[str, Any]:
     """Configured target and credential source, available even when authentication failed."""
-    scheme = _scheme(uri)
+    scheme = scheme_of(uri)
     protocol = {"s3a": "s3", "abfss": "abfs", "gs": "gcs"}.get(scheme, scheme)
     options = storage_options(protocol) if protocol else {}
     result = {
@@ -700,12 +706,12 @@ def check_store(root: str) -> None:
 
 
 def _container_word(root: str) -> str:
-    return "container" if _scheme(root) in ("abfs", "abfss", "az") else "bucket"
+    return "container" if scheme_of(root) in ("abfs", "abfss", "az") else "bucket"
 
 
 def list_permission(root: str) -> str:
     """The permission that lets these credentials list the store holding `root`."""
-    scheme = _scheme(root)
+    scheme = scheme_of(root)
     if scheme in ("s3", "s3a"):
         return "s3:ListBucket on the bucket"
     if scheme in ("gs", "gcs"):
@@ -761,7 +767,7 @@ def size(path: "str | Path") -> int:
 
 def join(base: "str | Path", name: str) -> "str | Path":
     """Join a filename onto a base dir or URI prefix without mangling the URI."""
-    if is_remote(base) or _scheme(base) == "file":
+    if is_remote(base) or scheme_of(base) == "file":
         return str(base).rstrip("/") + "/" + name
     return Path(base) / name
 

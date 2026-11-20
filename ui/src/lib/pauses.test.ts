@@ -1,41 +1,37 @@
 import { describe, expect, it } from 'vitest'
-import { blastRadius, fileOf, pausedBanner, pausedIds } from './pauses'
+import { affectedSchedules, fileOf, pausedBanner, pausedIds } from './pauses'
+import { pauseCover } from './testdata/project'
 import type { ScheduleJob } from './types'
 
-const graph = [
-  { id: 'p.py:raw', inputs: [] },
-  { id: 'p.py:clean', inputs: ['p.py:raw'] },
-  { id: 'p.py:report', inputs: ['p.py:clean'] },
-  { id: 'p.py:other', inputs: [] },
-]
-
 const job = (id: string, next_fire: number | null): ScheduleJob => ({
-  state: 'on_time', state_detail: null,
+  state: 'on_time', state_detail: null, queue_bound: false, typical_queue_wait_seconds: 0, typical_run_seconds: null,
   id, cron: '* * * * *', kind: 'asset', next_fire, last_fired: null, last_run_id: null, last_run: null, last_status: null, late: false, late_since: null,
   last_skipped: null, skipped_for: null, skip_reason: null, paused: false, paused_until: null,
   failures: 0, max_failures: 5, failing: false,
 })
 
-describe('blastRadius', () => {
-  it('lists every downstream node, transitively', () => {
-    expect(blastRadius('p.py:raw', graph, []).downstream).toEqual(['p.py:clean', 'p.py:report'])
-    expect(blastRadius('p.py:report', graph, []).downstream).toEqual([])
+describe('affectedSchedules', () => {
+  // What a pause of `orders` covers is the server's answer (the scheduler's walk in barca-service).
+  const cover = pauseCover('orders')
+  const [feed, hourly] = cover.schedules.map((s) => s.id) as [string, string]
+
+  it('shows the served schedules and relations, each with its job, soonest next tick first', () => {
+    expect(cover.schedules.map((s) => s.relation)).toEqual(['target', 'input'])
+    const jobs = [job(feed, 30), job(hourly, 10), job('orders.py:nightly_export', 5)]
+    expect(affectedSchedules(cover, jobs).map((s) => [s.job.id, s.relation])).toEqual([[hourly, 'input'], [feed, 'target']])
   })
 
-  it('finds the schedules that compute it, read it or reconcile it, soonest first', () => {
-    const jobs = [job('p.py:report', 30), job('p.py:raw', 10), job('p.py:other', 5), job('p.py:clean', null)]
-    const { schedules } = blastRadius('p.py:clean', graph, jobs)
-    expect(schedules.map((s) => [s.job.id, s.relation])).toEqual([
-      ['p.py:raw', 'upstream'],
-      ['p.py:report', 'downstream'],
-      ['p.py:clean', 'self'],
-    ])
+  it('adds no schedule the server did not name, and waits for the jobs and the answer', () => {
+    expect(affectedSchedules(cover, [job('orders.py:nightly_export', 5)])).toEqual([])
+    expect(affectedSchedules(undefined, [job(feed, 1)])).toEqual([])
+    // A schedule with no next tick (held, paused for good) goes last.
+    expect(affectedSchedules(cover, [job(feed, null), job(hourly, 10)]).map((s) => s.job.id)).toEqual([hourly, feed])
   })
 })
 
 describe('pauses', () => {
   it('reads ids, files and the banner', () => {
-    expect(pausedIds({ total: 1, paused: [{ id: 'p.py:a', paused_at: 1, via: 'a' }] }).has('p.py:a')).toBe(true)
+    expect(pausedIds({ total: 1, paused: [{ id: 'p.py:a', paused_at: 1, via: 'a' }], schedules: [] }).has('p.py:a')).toBe(true)
     expect(pausedIds(undefined).size).toBe(0)
     expect(fileOf('dir/p.py:a')).toBe('dir/p.py')
     expect(pausedBanner(0)).toBeNull()

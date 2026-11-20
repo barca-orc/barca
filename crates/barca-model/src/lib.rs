@@ -1,22 +1,28 @@
 //! The model layer of barca (#905): shared vocabulary every other barca crate uses. Values,
-//! ids, hashes, time, the terminal (`outln!` / `errln!`), the config file and the crate-root
-//! error type. It depends on no other barca crate; `barca-core` re-exports it, so its items keep
-//! their `barca_core::` paths.
+//! ids, the graph (`ir`, the node types; `dag`, the validated container), hashes, time, the
+//! terminal (`outln!` / `errln!`), the config file and the crate-root error type. It depends on
+//! no other barca crate; `barca-service` re-exports what the hosts name.
 
 // Everything barca prints goes through `term` (`outln!` / `errln!`), which cannot panic.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 #[doc(hidden)]
 pub mod artifact_format;
+// The value of `--batch` and its grammar.
+#[doc(hidden)]
+pub mod batch_override;
 pub mod cache_size;
 pub mod cache_state;
 pub mod config;
+// The validated graph: the IR's nodes (`ir`), edges and groups in one container.
+pub mod dag;
 pub mod dag_error;
 #[doc(hidden)]
 pub mod envdeps;
 #[doc(hidden)]
 pub mod events;
 pub mod hash;
+pub mod ir;
 pub mod jsonlog;
 #[doc(hidden)]
 pub mod keyed;
@@ -25,6 +31,9 @@ pub mod layout;
 pub mod ledger_post;
 pub mod lines;
 pub mod model;
+// Node names as people write them.
+#[doc(hidden)]
+pub mod names;
 #[doc(hidden)]
 pub mod node_estimate;
 #[doc(hidden)]
@@ -33,6 +42,10 @@ pub mod reports;
 pub mod run_explain;
 #[doc(hidden)]
 pub mod source_observation;
+// The lexer the source-scanning guards of every crate share (layering, write boundary, status
+// literals). Test support: nothing in a build calls it.
+#[doc(hidden)]
+pub mod source_scan;
 #[doc(hidden)]
 pub mod spawn_lock;
 pub mod step_result;
@@ -96,7 +109,7 @@ pub enum BarcaError {
 
     /// The metadata DB at `path` is there but this barca cannot use it: it is a directory, not
     /// a SQLite file, written by a newer release, or its schema is malformed (an empty file is
-    /// initialized instead, `barca_core::db::init_db_as`). Infra (exit 3);
+    /// initialized instead, `barca_service::db::init_db_as`). Infra (exit 3);
     /// its envelope's `reason` is `metadata_unusable`. A lock or I/O failure stays [`Db`].
     ///
     /// [`Db`]: BarcaError::Db
@@ -157,7 +170,7 @@ pub struct PartialRun {
     /// absent); `None` for an unpartitioned target.
     #[serde(default, skip)]
     pub partitions: Option<Vec<(String, step_result::OutputRef)>>,
-    /// See `barca_core::results::GetResult::key_summary`.
+    /// See `barca_service::results::GetResult::key_summary`.
     #[serde(default, skip)]
     pub key_summary: Option<reports::KeySummary>,
 }
@@ -223,3 +236,6 @@ pub fn release_free_memory() {
         libc::malloc_trim(0);
     }
 }
+
+#[cfg(test)]
+mod float_roundtrip_tests;

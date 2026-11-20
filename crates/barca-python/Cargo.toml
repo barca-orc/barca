@@ -1,0 +1,32 @@
+[package]
+name = "barca-python"
+version = "0.45.0"
+edition = "2024"
+description = "The Python frontend — project files in, a graph out: the parser, decorator arguments, definition fingerprints, the linker and the loader"
+
+# Only barca-model among barca crates (#1056, C6): the graph it produces (`barca_model::dag`)
+# and the IR's nodes are there. Planning (barca-compile) is beside it and names nothing here.
+# tokio only for `load`'s `spawn_blocking` (and through barca-model).
+[dependencies]
+barca-model = { path = "../barca-model" }
+ruff_python_parser = { workspace = true }
+ruff_python_ast = { workspace = true }
+ruff_text_size = { workspace = true }
+petgraph = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+smallvec = { version = "1.13", features = ["serde"] }
+tokio = { version = "1", default-features = false, features = ["rt"] }
+# Optional: TypeScript binding generation (enable with --features ts). Kept out
+# of the production binary; used only to regenerate ui/src/lib/generated/.
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { version = "1", default-features = false, features = ["rt", "macros"] }
+
+[features]
+# Generate TS type bindings for the frontend. Off by default.
+ts = ["dep:ts-rs", "barca-model/ts"]

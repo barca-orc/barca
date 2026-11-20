@@ -1,6 +1,6 @@
 //! `barca-server` — the long-running HTTP API for the barca orchestrator.
 //!
-//! Layering: this crate depends on `barca-core` (pure planning/execution logic)
+//! Layering: this crate depends on `barca-service` (pure planning/execution logic)
 //! and exposes it over an axum JSON API. The CLI's `barca serve` subcommand is a
 //! thin caller of [`serve`]. A future UI is a separate package that consumes this
 //! same HTTP API as its contract.
@@ -11,35 +11,75 @@
 //! async-native, so handlers `.await` them directly on the server's runtime — no
 //! `spawn_blocking`, and every run future is genuinely cancellable.
 
-// Print with `barca_core::outln!` / `errln!`, which cannot panic on a closed pipe (#286).
+// Print with `barca_service::outln!` / `errln!`, which cannot panic on a closed pipe (#286).
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 mod asset_pauses;
+mod assets;
 pub mod auth;
 mod auth_http;
+mod config;
 mod error;
-mod handlers;
+mod fallback;
+mod gc;
+mod guards;
+mod health_view;
 mod inspect;
 mod ledger;
-mod pause;
 mod pins;
+mod progress;
+mod project_socket;
 mod queue;
+mod queue_routes;
+mod queue_view;
 mod read_cache;
 mod replay;
 mod reset;
+mod resolve;
+mod respond;
 mod routes;
+mod run_model;
 mod running;
 mod runs;
+mod schedule_routes;
+mod schedule_view;
 mod scheduler;
+mod snapshot;
+mod sources;
+mod sql_helper;
 mod sql_query;
 mod state;
+mod state_routes;
 mod telemetry;
 mod ui;
+mod views;
 mod watch;
+
+#[cfg(test)]
+mod layering_tests;
 
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::time::Duration;
+
+    /// Move this test process out of the crate's source directory, once, into a directory of
+    /// its own under the build directory. `.barca` is created in the working directory whatever
+    /// `db_path` says (`barca_service::db::ensure_env_dirs`), so a test that opens metadata, starts
+    /// the scheduler or executes a run used to create `crates/barca-server/.barca`. Every unit
+    /// test's state comes from `AppState::new`, which calls this first, so no test reads the
+    /// working directory before it has moved.
+    pub fn leave_source_tree() {
+        static LEFT: std::sync::Once = std::sync::Once::new();
+        LEFT.call_once(|| {
+            // `<target>/<profile>/deps/<test binary>`: beside `deps`, removed with the build.
+            let dir = std::env::current_exe()
+                .ok()
+                .and_then(|exe| Some(exe.parent()?.parent()?.join("barca-server-test-cwd")))
+                .unwrap_or_else(|| std::env::temp_dir().join("barca-server-test-cwd"));
+            std::fs::create_dir_all(&dir).expect("a working directory for the tests");
+            std::env::set_current_dir(&dir).expect("the tests' working directory");
+        });
+    }
 
     /// How long a bounded test may take.
     pub const LIMIT: Duration = Duration::from_secs(30);
@@ -76,8 +116,8 @@ pub(crate) mod test_support {
     }
 }
 
-pub use running::{NodeRunning, PartitionProgress, RunningStep};
-pub use state::{NodeState, ServeConfig};
+pub use config::ServeConfig;
+pub use views::{NodeRunning, NodeState, PartitionProgress, RunningStep};
 
 use state::AppState;
 
@@ -90,11 +130,11 @@ pub enum ServeError {
     #[error("{0}")]
     Timezone(String),
     #[error("source loading failed: {0}")]
-    Load(#[from] barca_core::BarcaError),
+    Load(#[from] barca_service::BarcaError),
     /// A writer server could not set up its metadata DB; nothing was bound. `barca serve`
     /// exits 3 with this error's envelope.
     #[error("{0}")]
-    Metadata(barca_core::BarcaError),
+    Metadata(barca_service::BarcaError),
 }
 
 /// Check a `--timezone` value: `local`, `utc`, or an IANA name such as `America/New_York`.
@@ -116,7 +156,7 @@ pub fn app(config: ServeConfig) -> axum::Router {
 #[doc(hidden)]
 pub fn draining_app(config: ServeConfig) -> axum::Router {
     let state = AppState::new(config);
-    state.draining.cancel();
+    state.lifecycle.draining.cancel();
     routes::router(state)
 }
 
@@ -160,10 +200,11 @@ pub enum Stopped {
 /// second signal comes first, they are cancelled (workers terminated, runs recorded
 /// `cancelled` with reason `server shutdown`) and [`Stopped::Forced`] is returned.
 pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
-    if config.resolved.server_auth == barca_core::serve::AuthMode::Token {
-        auth::Store::open(&config.resolved.project_root)
-            .map_err(|error| ServeError::Load(barca_core::BarcaError::Other(error.to_string())))?;
-        barca_core::errln!(
+    if config.resolved.server_auth == barca_service::serve::AuthMode::Token {
+        auth::Store::open(&config.resolved.project_root).map_err(|error| {
+            ServeError::Load(barca_service::BarcaError::Other(error.to_string()))
+        })?;
+        barca_service::errln!(
             "[barca] token authentication enabled; run `barca tokens bootstrap` on this host to connect"
         );
     }
@@ -181,7 +222,23 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
 
     // `barca state restore` refuses to replace the database under a running server.
     let _serve_lock =
-        barca_core::backup::ServeLock::acquire(&config.resolved, &format!("http://{addr}"));
+        barca_service::backup::ServeLock::acquire(&config.resolved, &format!("http://{addr}"));
+    // The project socket belongs to the server that holds the environment: a second server
+    // on it (a read-only one beside a writer) leaves the first one's alone.
+    let mut project_socket = match &_serve_lock {
+        Some(_) => match project_socket::ProjectSocket::open(&config.resolved.db_path) {
+            Ok(socket) => Some(socket),
+            Err(why) => {
+                barca_service::errln!(
+                    "[barca] warning: no project socket ({why}); barca commands run in this \
+                     project will not find this server and will open its database beside it. \
+                     Pass them --server http://{addr}, or serve the project from a shorter path"
+                );
+                None
+            }
+        },
+        None => None,
+    };
     let backups = (!read_only && config.resolved.backup_uri.is_some())
         .then(|| (config.python.clone(), config.resolved.clone()));
 
@@ -189,22 +246,22 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // Before the sources load and before anything binds: a writer whose metadata DB cannot be
     // set up stops here (exit 3), instead of serving with its scheduler off (#513).
     metadata_startup(&state).await?;
-    state.loaded_dag().await?;
+    state.reads.loaded_dag().await?;
     // The runs the last server accepted and did not start, in their order. Before the
     // scheduler's catch-up, which skips a job whose node has one.
     if !read_only {
         if std::path::Path::new(&state.config.resolved.db_path).exists() {
             state.record_writer().await.map_err(ServeError::Metadata)?;
         }
-        queue::resume_at_startup(&state)
+        runs::resume_at_startup(&state)
             .await
             .map_err(ServeError::Metadata)?;
-        queue::dispatch(&state);
+        runs::dispatch(&state);
     }
 
     // Routine timers and served-run ends share the configured backup policy (RFC-0015).
     // The last one is taken after the runs have stopped and recorded themselves.
-    let backup_stop = barca_core::CancellationToken::new();
+    let backup_stop = barca_service::CancellationToken::new();
     let mut stop = StopBudget::of(
         state.config.resolved.drain_timeout_secs,
         backups.is_some(),
@@ -234,7 +291,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     }
 
     if read_only {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] read-only: runs are refused and the metadata DB is only read from snapshots"
         );
     }
@@ -249,7 +306,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         match watch::spawn(state.clone()) {
             Ok(w) => Some(w),
             Err(e) => {
-                barca_core::errln!("[barca] watch disabled: {e}");
+                barca_service::errln!("[barca] watch disabled: {e}");
                 None
             }
         }
@@ -258,27 +315,34 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     };
 
     // `GET /state` computed ahead of the web UI's polls (`read_cache`).
-    tokio::spawn(read_cache::keep_warm(state.clone()));
+    tokio::spawn(health_view::keep_warm(state.clone()));
 
     let app = routes::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // Cancelled once the runs are over: the listener closes and the connections end.
-    let stopping = barca_core::CancellationToken::new();
+    let stopping = barca_service::CancellationToken::new();
     let mut telemetry = telemetry::ServerTelemetry::start(state.clone(), stopping.clone());
-    barca_core::errln!(
+    barca_service::errln!(
         "[barca] serving on http://{addr}  ({n_files} file{}{})",
         if n_files == 1 { "" } else { "s" },
         if watch { " · watch" } else { "" },
     );
+    if let Some(socket) = &project_socket {
+        barca_service::errln!(
+            "[barca] project socket {} (barca commands in this project use this server; \
+             --local runs them here)",
+            socket.path().display()
+        );
+    }
     if telemetry.is_some() {
         stop.telemetry = Some(telemetry::FINISH_LIMIT);
     }
     if let Some(supervisor) = supervisor() {
-        barca_core::errln!("{}", stop.grace_line(supervisor));
+        barca_service::errln!("{}", stop.grace_line(supervisor));
     }
     if !addr.ip().is_loopback() {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] warning: listening on {} with no authentication — anyone who can reach \
              port {} can trigger runs",
             addr.ip(),
@@ -290,8 +354,27 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // the 503s). Once the runs are over the server stops accepting connections and waits
     // for the open ones, for at most [`CONNECTION_GRACE`].
     use futures::FutureExt;
-    let server =
+    // The same API on the project socket; a request over it is marked, so it needs no token.
+    let on_socket = project_socket
+        .as_mut()
+        .and_then(project_socket::ProjectSocket::listener)
+        .map(|listener| {
+            let app = app
+                .clone()
+                .layer(axum::Extension(project_socket::ViaProjectSocket));
+            axum::serve(listener, app).with_graceful_shutdown(stopping.clone().cancelled_owned())
+        });
+    let on_tcp =
         axum::serve(listener, app).with_graceful_shutdown(stopping.clone().cancelled_owned());
+    let server = async move {
+        use std::future::IntoFuture;
+        match on_socket {
+            Some(on_socket) => {
+                tokio::try_join!(on_tcp.into_future(), on_socket.into_future()).map(|_| ())
+            }
+            None => on_tcp.await,
+        }
+    };
     let lifecycle = {
         let state = state.clone();
         let stopping = stopping.clone();
@@ -304,7 +387,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
             // response stays open after its run finished (a browser tab on a run page holds
             // one), and the server waits for open connections: one such stream used to
             // keep a stopped server alive for ever.
-            state.events.clear();
+            state.runs.events.clear();
             stopped
         }
     }
@@ -321,9 +404,11 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
         } => {}
     }
     let stopped = lifecycle.await;
+    // No longer answering: a command run from here on finds no server.
+    drop(project_socket);
     backup_stop.cancel();
     if let Some(task) = backup_task {
-        let _ = tokio::time::timeout(stop.backup + barca_core::backup::SLACK, task).await;
+        let _ = tokio::time::timeout(stop.backup + barca_service::backup::SLACK, task).await;
     }
     if let Some(telemetry) = telemetry.as_mut() {
         telemetry.finish().await;
@@ -335,7 +420,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
 /// and its format. A writer that cannot use its database fails with [`ServeError::Metadata`];
 /// a read-only server keeps serving and reports the error on `/health` (`metadata_error`).
 async fn metadata_startup(state: &AppState) -> Result<(), ServeError> {
-    use barca_core::{BarcaError, db};
+    use barca_service::{BarcaError, db};
     let cfg = &state.config.resolved;
     let path = cfg.db_path.clone();
     let format = if state.config.read_only {
@@ -359,7 +444,7 @@ async fn metadata_startup(state: &AppState) -> Result<(), ServeError> {
             e => e,
         })
     };
-    barca_core::errln!(
+    barca_service::errln!(
         "{}",
         cfg.serve_startup_line(match &format {
             Ok(Some(n)) => Some(Ok(*n)),
@@ -374,15 +459,15 @@ async fn metadata_startup(state: &AppState) -> Result<(), ServeError> {
         Err(e) => {
             let fix = match &e {
                 BarcaError::MetadataUnusable { path, .. } => {
-                    format!(" {}", barca_core::envelope::metadata_remediation(path))
+                    format!(" {}", barca_service::envelope::metadata_remediation(path))
                 }
                 _ => String::new(),
             };
-            barca_core::errln!(
+            barca_service::errln!(
                 "[barca] warning: {e}; serving read-only without its history (GET /health \
                  metadata_error).{fix}"
             );
-            *state.metadata_error.write().unwrap() = Some(e.to_string());
+            *state.reads.metadata_error.write().unwrap() = Some(e.to_string());
             Ok(())
         }
     }
@@ -391,13 +476,13 @@ async fn metadata_startup(state: &AppState) -> Result<(), ServeError> {
 /// Warn when this server uses a named environment's database and the default environment's
 /// `.barca/metadata.db` is there but empty or not a database: a stray file, often left by a
 /// container that started once without `--env`, that is easy to mistake for this one.
-fn stray_root_db_warning(cfg: &barca_core::config::ResolvedConfig) {
-    let root = barca_core::db::env_local_paths(barca_core::config::DEFAULT_ENV).db_path;
+fn stray_root_db_warning(cfg: &barca_service::config::ResolvedConfig) {
+    let root = barca_service::db::env_local_paths(barca_service::config::DEFAULT_ENV).db_path;
     if cfg.db_path == root {
         return;
     }
-    if let Some(why) = barca_core::db::unusable_file(&root) {
-        barca_core::errln!(
+    if let Some(why) = barca_service::db::unusable_file(&root) {
+        barca_service::errln!(
             "[barca] warning: {root} is not this server's metadata DB (env {} uses {}) and \
              cannot be used ({why}); remove it if nothing else needs it",
             cfg.env,
@@ -406,33 +491,33 @@ fn stray_root_db_warning(cfg: &barca_core::config::ResolvedConfig) {
     }
 }
 
-/// Once a minute, evict if `.barca/` is over its size limit ([`barca_core::gc::checkpoint`]).
+/// Once a minute, evict if `.barca/` is over its size limit ([`barca_service::gc::checkpoint`]).
 /// What runs in flight in this process hold is left alone.
 async fn cache_checkpoint(state: AppState) {
     // tests/simulation compresses long use, so it cannot wait a real minute per check.
-    let secs = barca_core::test_hooks::cache_checkpoint_secs().unwrap_or(60);
+    let secs = barca_service::test_hooks::cache_checkpoint_secs().unwrap_or(60);
     let mut every = tokio::time::interval(std::time::Duration::from_secs(secs));
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = every.tick() => {}
-            _ = state.shutdown.cancelled() => return,
+            _ = state.lifecycle.shutdown.cancelled() => return,
         }
-        barca_core::gc::checkpoint(&state.config.resolved).await;
+        barca_service::gc::checkpoint(&state.config.resolved).await;
     }
 }
 
-/// Back the database up every [`barca_core::backup::interval`] (RFC-0009; none when it is
+/// Back the database up every [`barca_service::backup::interval`] (RFC-0009; none when it is
 /// off) until `stopping`, then once more. Each routine backup gets
-/// [`barca_core::backup::BUDGET`]. A copy identical to the newest one is not taken. Three
+/// [`barca_service::backup::BUDGET`]. A copy identical to the newest one is not taken. Three
 /// failures in a row are reported once, until a backup succeeds again.
 async fn routine_backups(
     python: std::path::PathBuf,
-    cfg: barca_core::config::ResolvedConfig,
-    stopping: barca_core::CancellationToken,
+    cfg: barca_service::config::ResolvedConfig,
+    stopping: barca_service::CancellationToken,
     last_budget: std::time::Duration,
 ) {
-    let mut tick = barca_core::backup::interval(&cfg).map(|every| {
+    let mut tick = barca_service::backup::interval(&cfg).map(|every| {
         let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         tick
@@ -446,36 +531,39 @@ async fn routine_backups(
         let budget = if last {
             last_budget
         } else {
-            barca_core::backup::BUDGET
+            barca_service::backup::BUDGET
         };
-        let until = barca_core::helper_proc::Until {
+        let until = barca_service::helper_proc::Until {
             cancel: None,
             deadline: Some(std::time::Instant::now() + budget),
         };
         let request = if last {
-            barca_core::backup::Request::Final
+            barca_service::backup::Request::Final
         } else {
-            barca_core::backup::Request::Routine
+            barca_service::backup::Request::Routine
         };
-        let failed =
-            match barca_core::backup::take_requested(&python, &cfg, None, request, until).await {
-                Ok(taken) if taken.skipped => continue,
-                Ok(taken) => match taken.upload {
-                    Some(Err(why)) => Some(why),
-                    Some(Ok(at)) if taken.name.is_some() => {
-                        barca_core::errln!("[barca] backed up the metadata DB to {at}");
-                        None
-                    }
-                    _ => None,
-                },
-                Err(e) => Some(e.to_string()),
-            };
+        let failed = match barca_service::backup::take_requested(
+            &python, &cfg, None, request, until,
+        )
+        .await
+        {
+            Ok(taken) if taken.skipped => continue,
+            Ok(taken) => match taken.upload {
+                Some(Err(why)) => Some(why),
+                Some(Ok(at)) if taken.name.is_some() => {
+                    barca_service::errln!("[barca] backed up the metadata DB to {at}");
+                    None
+                }
+                _ => None,
+            },
+            Err(e) => Some(e.to_string()),
+        };
         match failed {
             None => failures = 0,
             Some(why) => {
                 failures += 1;
                 if failures == 3 || last {
-                    barca_core::errln!(
+                    barca_service::errln!(
                         "[barca] warning: the metadata backup failed{} ({why}); the next one \
                          tries again",
                         if failures > 1 {
@@ -526,7 +614,7 @@ impl StopBudget {
         } else {
             Duration::from_secs(1)
         };
-        let backup = drain.clamp(Duration::from_secs(5), barca_core::backup::BUDGET);
+        let backup = drain.clamp(Duration::from_secs(5), barca_service::backup::BUDGET);
         Self {
             drain,
             runs,
@@ -541,7 +629,7 @@ impl StopBudget {
     pub fn after_drain_secs(&self) -> u64 {
         let mut total = self.runs + self.connections;
         if self.with_backup {
-            total += self.backup + barca_core::backup::SLACK;
+            total += self.backup + barca_service::backup::SLACK;
         }
         if let Some(t) = self.telemetry {
             total += t;
@@ -631,8 +719,9 @@ pub const REQUEUE_REASON: &str = "server restart (requeued)";
 fn runs_in_flight(state: &AppState) -> usize {
     state
         .runs
+        .registry
         .iter()
-        .filter(|r| r.status == state::RunStatus::Running)
+        .filter(|r| r.status == run_model::RunStatus::Running)
         .count()
 }
 
@@ -641,8 +730,9 @@ fn runs_queued(state: &AppState) -> usize {
     // Waiting in the queue, or put back in it by this drain.
     state
         .runs
+        .registry
         .iter()
-        .filter(|r| r.status == state::RunStatus::Pending)
+        .filter(|r| r.status == run_model::RunStatus::Pending)
         .count()
 }
 
@@ -664,32 +754,33 @@ async fn drain_then_stop(
     budget: StopBudget,
 ) -> Stopped {
     let secs = state.config.resolved.drain_timeout_secs;
-    state.draining.cancel();
-    state.run_tasks.close();
-    if state.writer_recorded.get().is_some()
-        && let Err(e) = barca_core::liveness::record_stopped(
+    state.lifecycle.draining.cancel();
+    state.runs.tasks.close();
+    if state.runs.writer_recorded.get().is_some()
+        && let Err(e) = barca_service::liveness::record_stopped(
             &state.config.resolved.db_path,
             chrono::Utc::now().timestamp(),
         )
         .await
     {
-        barca_core::errln!("[barca] could not record server stop: {e}");
+        barca_service::errln!("[barca] could not record server stop: {e}");
     }
     // Recorded before anything else: if whatever sent the signal kills the server before the
     // drain ends, the next server puts these runs back in the queue instead of recording them
     // interrupted (#628).
     let flying: Vec<String> = state
         .runs
+        .registry
         .iter()
-        .filter(|r| r.status == state::RunStatus::Running)
+        .filter(|r| r.status == run_model::RunStatus::Running)
         .map(|r| r.handle.clone())
         .collect();
     if !state.config.read_only
         && let Err(e) =
-            barca_core::serve::run_queue::mark_draining(&state.config.resolved.db_path, &flying)
+            barca_service::serve::run_queue::mark_draining(&state.config.resolved.db_path, &flying)
                 .await
     {
-        barca_core::errln!("[barca] warning: could not mark the runs in flight draining: {e}");
+        barca_service::errln!("[barca] warning: could not mark the runs in flight draining: {e}");
     }
     let in_flight = runs_in_flight(state);
     let waiting = runs_queued(state);
@@ -699,7 +790,7 @@ async fn drain_then_stop(
         String::new()
     };
     if in_flight > 0 {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] {first} received: draining — the queue is paused and new runs are queued \
              for the next start; waiting up to {secs}s for {} in flight (then {} back in the \
              queue; send {first} again to cancel {} now){kept}",
@@ -708,25 +799,25 @@ async fn drain_then_stop(
             if in_flight == 1 { "it" } else { "them" },
         );
     } else {
-        barca_core::errln!("[barca] {first} received: no run in flight{kept}; shutting down");
+        barca_service::errln!("[barca] {first} received: no run in flight{kept}; shutting down");
     }
     enum Stop {
         Requeue,
         Cancel(String),
     }
     let stop = tokio::select! {
-        _ = state.run_tasks.wait() => None,
+        _ = state.runs.tasks.wait() => None,
         _ = tokio::time::sleep(std::time::Duration::from_secs(secs)) => Some(Stop::Requeue),
         name = again => Some(Stop::Cancel(format!("{name} received again"))),
     };
     let stopped = match stop {
         None => {
             if in_flight > 0 {
-                barca_core::errln!("[barca] drained: every run finished; shutting down");
+                barca_service::errln!("[barca] drained: every run finished; shutting down");
             }
             let queued = runs_queued(state);
             if queued > 0 {
-                barca_core::errln!(
+                barca_service::errln!(
                     "[barca] {} wait in the queue for the next start",
                     runs(queued)
                 );
@@ -735,7 +826,7 @@ async fn drain_then_stop(
         }
         Some(Stop::Requeue) => {
             let n = runs_in_flight(state);
-            barca_core::errln!(
+            barca_service::errln!(
                 "[barca] the drain timeout ({secs}s) passed: stopping {} and putting {} back in \
                  the queue; {} again from the beginning when the server restarts (steps \
                  that finished are cached)",
@@ -744,31 +835,33 @@ async fn drain_then_stop(
                 if n == 1 { "it starts" } else { "they start" },
             );
             state
+                .runs
                 .queue
                 .requeue
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            state.cancel_reason.set(REQUEUE_REASON);
+            state.lifecycle.cancel_reason.set(REQUEUE_REASON);
             n
         }
         Some(Stop::Cancel(why)) => {
             let n = runs_in_flight(state);
             if n > 0 {
-                barca_core::errln!("[barca] {why}: cancelling {} ({SHUTDOWN_REASON})", runs(n));
+                barca_service::errln!("[barca] {why}: cancelling {} ({SHUTDOWN_REASON})", runs(n));
             }
-            state.cancel_reason.set(SHUTDOWN_REASON);
+            state.lifecycle.cancel_reason.set(SHUTDOWN_REASON);
             n
         }
     };
-    state.shutdown.cancel();
-    let _ = tokio::time::timeout(budget.runs, state.run_tasks.wait()).await;
+    state.lifecycle.shutdown.cancel();
+    let _ = tokio::time::timeout(budget.runs, state.runs.tasks.wait()).await;
     let queued = runs_queued(state);
     if queued > 0 {
-        barca_core::errln!(
+        barca_service::errln!(
             "[barca] {} wait in the queue for the next start",
             runs(queued)
         );
     }
     if state
+        .runs
         .queue
         .requeue
         .load(std::sync::atomic::Ordering::SeqCst)

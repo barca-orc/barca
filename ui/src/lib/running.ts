@@ -106,11 +106,6 @@ export function runHref(runId: string): string {
   return `/runs?run=${encodeURIComponent(runId)}`
 }
 
-/** How many of `ids` a run is working on now. */
-export function runningCount(ids: string[], byId: Map<string, NodeState>): number {
-  return ids.filter((id) => byId.get(id)?.running?.step === 'running').length
-}
-
 /** The distinct runs in progress, by the nodes they are working on. */
 export function runsInProgress(nodes: NodeState[]): string[] {
   return [...new Set(nodes.flatMap((n) => (n.running ? [n.running.run_id] : [])))]

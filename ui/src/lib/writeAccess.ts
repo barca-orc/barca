@@ -7,7 +7,7 @@
  */
 
 import { match } from 'ts-pattern'
-import type { Health } from './types'
+import type { ServerHealth } from './types'
 
 export type WriteAccess =
   /** `/health` has not answered yet. */
@@ -16,7 +16,7 @@ export type WriteAccess =
   | { kind: 'read_only' }
   | { kind: 'writable' }
 
-export function writeAccess(health: Pick<Health, 'read_only'> | undefined): WriteAccess {
+export function writeAccess(health: Pick<ServerHealth, 'read_only'> | undefined): WriteAccess {
   if (!health) return { kind: 'checking' }
   return health.read_only ? { kind: 'read_only' } : { kind: 'writable' }
 }

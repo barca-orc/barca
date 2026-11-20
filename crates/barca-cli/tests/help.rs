@@ -33,7 +33,7 @@ fn help_and_examples_never_load_a_project_or_require_python() {
                 .env("BARCA_OUTPUT", "invalid")
                 .env("BARCA_LOG", "invalid")
                 .env("BARCA_SERVER", "http://127.0.0.1:1");
-            let output = barca_core::helper_proc::output_std(&mut command).unwrap();
+            let output = barca_service::helper_proc::output_std(&mut command).unwrap();
             assert!(output.status.success(), "{path:?} {flag}: {output:?}");
             assert!(output.stderr.is_empty(), "{path:?} {flag}: {output:?}");
             assert!(String::from_utf8(output.stdout).unwrap().contains("Usage:"));

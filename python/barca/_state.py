@@ -36,7 +36,7 @@ import re
 import sys
 from pathlib import Path
 
-from barca import _storage
+from barca import _helper, _storage
 
 BACKUP_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(Z|\.\d{3}Z-[0-9a-f]{8})\.db$")
 
@@ -272,23 +272,28 @@ def inspect_copies(paths: list[str], local_paths: list[str], cache_path: str) ->
         cache.flush()
 
 
-def main(argv: "list[str] | None" = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
+def _work(argv: "list[str]"):
+    """What the verb in `argv` does, as a call that returns its answer; None for no such verb."""
     verb = argv[0] if argv else ""
     if verb == "backup" and len(argv) == 5:
-        result = backup(argv[1], argv[2], argv[3], int(argv[4]))
-    elif verb == "list" and len(argv) == 2:
-        result = list_backups(argv[1])
-    elif verb == "fetch" and len(argv) == 3:
-        result = fetch(argv[1], argv[2])
-    elif verb == "stat" and len(argv) == 1:
-        request = json.load(sys.stdin)
-        result = (
-            inspect_copies(request["paths"], request["locals"], request["inspection_cache"])
-            if "inspection_cache" in request
-            else stat(request["paths"])
-        )
-    else:
+        return lambda: backup(argv[1], argv[2], argv[3], int(argv[4]))
+    if verb == "list" and len(argv) == 2:
+        return lambda: list_backups(argv[1])
+    if verb == "fetch" and len(argv) == 3:
+        return lambda: fetch(argv[1], argv[2])
+    if verb == "stat" and len(argv) == 1:
+        request = _helper.stdin_request()
+        if "inspection_cache" in request:
+            return lambda: inspect_copies(
+                request["paths"], request["locals"], request["inspection_cache"]
+            )
+        return lambda: stat(request["paths"])
+    return None
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    work = _work(sys.argv[1:] if argv is None else argv)
+    if work is None:
         print(
             "usage: python -m barca._state backup <db> <sidecar> <dir> <keep>\n"
             "       python -m barca._state list <dir>\n"
@@ -297,8 +302,17 @@ def main(argv: "list[str] | None" = None) -> int:
             file=sys.stderr,
         )
         return 2
-    print(json.dumps(result))
+    # The answer is the only thing on stdout: what a store's driver prints goes to stderr.
+    _helper.answer(work, newline=True)
     return 0
+
+
+def _describe(exc: Exception) -> str:
+    """A failure as the `error: ...` line says it: in terms of the store the verb was given."""
+    uri = sys.argv[3] if len(sys.argv) > 3 and sys.argv[1] in ("backup",) else ""
+    if not uri and len(sys.argv) > 2:
+        uri = sys.argv[2]
+    return _storage.describe_error(uri, exc)
 
 
 def _stop(signum, frame) -> None:
@@ -309,18 +323,8 @@ def _stop(signum, frame) -> None:
 if __name__ == "__main__":
     import signal
 
-    from barca import _lifeline
-
     # The coordinator starts this helper out of reach of the terminal's Ctrl-C, which is its
-    # own to act on, and stops it with SIGTERM (crates/barca-engine/src/helper_proc.rs). Should
+    # own to act on, and stops it with SIGTERM (crates/barca-proc/src/helper_proc.rs). Should
     # the coordinator be killed, the lifeline ends this process.
     signal.signal(signal.SIGTERM, _stop)
-    _lifeline.watch()
-    try:
-        sys.exit(main())
-    except Exception as exc:
-        uri = sys.argv[3] if len(sys.argv) > 3 and sys.argv[1] in ("backup",) else ""
-        if not uri and len(sys.argv) > 2:
-            uri = sys.argv[2]
-        print(f"error: {_storage.describe_error(uri, exc)}", file=sys.stderr)
-        sys.exit(1)
+    _helper.run(main, lifeline=True, describe=_describe)

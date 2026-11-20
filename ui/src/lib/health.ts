@@ -1,15 +1,13 @@
 /**
  * What is broken and how much it holds, in the words a page shows: the rollup's entries and
- * roots (`GET /state/rollup`, classified and summed in `barca-core`) joined with the rows of
+ * roots (`GET /state/rollup`, classified and summed in `barca-service`) joined with the rows of
  * `GET /state`. Nothing here classifies, counts or attributes; it words and joins.
  */
 
-import { healthDisplay, HEALTH_ORDER, type Health } from './healthDisplay'
-import type { Glyph } from './glyph'
+import { statusFailed } from './status'
 import { memberHealth, type GraphState } from './graphState'
-import type { RollupEntry, RollupRoot } from './rollupView'
+import type { RollupRoot } from './rollupView'
 import type { PartitionErrorGroup } from './generated/PartitionErrorGroup'
-import type { Tone } from './tone'
 import type { NodeState, PartitionKeys } from './types'
 
 /** A node's place in the graph: what `GET /assets` says, all a lineage needs. */
@@ -18,71 +16,9 @@ export interface GraphLink {
   inputs: string[]
 }
 
-/**
- * A scope's health as a bar shows it: the entry of the rollup (`GET /state/rollup`) for that
- * scope. `health` counts its nodes, each once, by the server's word; `running` is how many of
- * them a run is working on, a separate fact beside their health. Nothing here counts: a bar,
- * a group's box and the map read the same entry, so they agree.
- */
-export type ScopeHealth = Pick<RollupEntry, 'health' | 'running' | 'nodes'>
-
-/** A segment of the bar or a part of its label: a health, or run work. */
-type HealthPart = Health | 'running'
-
-/** Most urgent first: the order of the bar's segments. A failure leads, then run work. */
-export const HEALTH_PARTS: readonly HealthPart[] = ['failing', 'running', ...HEALTH_ORDER.filter((h) => h !== 'failing')]
-
-/** The tone of a part of the bar. */
-export function healthPartTone(part: HealthPart): Tone {
-  return part === 'running' ? 'running' : healthDisplay(part).tone
-}
-
-/** The glyph of a part of the bar: the colour of its segment. */
-export function healthPartGlyph(part: HealthPart): Glyph {
-  return part === 'running' ? 'running' : healthDisplay(part).glyph
-}
-
-/** How many nodes a part of `scope` is. */
-export function partCount(scope: ScopeHealth, part: HealthPart): number {
-  return part === 'running' ? scope.running : scope.health[part]
-}
-
-/** The word of a part: `behind`, `running`. */
-function partWord(part: HealthPart): string {
-  return part === 'running' ? part : healthDisplay(part).label
-}
-
-export interface HealthLabelPart {
-  /** What the part counts: a health, or run work. */
-  key: HealthPart
-  tone: Tone
-  glyph: Glyph
-  /** How many nodes it counts. */
-  count: number
-  /** Its word alone: `failing`, `behind`. */
-  word: string
-  /** The part in words: `3 behind`. */
-  text: string
-}
-
-/** Every non-empty part, most urgent first, as the words a label shows. */
-export function healthParts(scope: ScopeHealth, limit = HEALTH_PARTS.length): HealthLabelPart[] {
-  const parts: HealthLabelPart[] = []
-  for (const part of HEALTH_PARTS) {
-    const count = partCount(scope, part)
-    if (count > 0) parts.push({ key: part, tone: healthPartTone(part), glyph: healthPartGlyph(part), count, word: partWord(part), text: `${count.toLocaleString()} ${partWord(part)}` })
-  }
-  return parts.slice(0, limit)
-}
-
-/** `2 failing · 12 blocked · 380 ok`. */
-export function healthLabel(scope: ScopeHealth, limit?: number): string {
-  return healthParts(scope, limit).map((p) => p.text).join(' · ')
-}
-
 /** Whether `state` is the box of a node whose last attempt failed. */
 export function isFailed(state: GraphState): boolean {
-  return (state.kind === 'cache' && state.lastFailed) || (state.kind === 'run' && state.status === 'failed')
+  return (state.kind === 'cache' && state.lastFailed) || (state.kind === 'run' && statusFailed(state.status))
 }
 
 /** Each node's direct consumers. */
@@ -182,7 +118,11 @@ export function streakLabel(failures: number): string {
   return failures === 1 ? '1 failed run' : `${failures.toLocaleString()} failed runs in a row`
 }
 
-/** An error's one line: its first, or a bare traceback's last; no frames. */
+/**
+ * An error's one line: its first, or a bare traceback's last; no frames. For the summary of
+ * `ErrorLine`, which shows errors no route serves a line for (a key's, a step's, a request's). A
+ * failing node's line is served: `detail` of its root in the rollup (`rollup::headline`).
+ */
 export function headline(error: string | null | undefined): string {
   const lines = (error ?? '').split('\n').map((l) => l.trim()).filter((l) => l !== '')
   const first = lines[0]

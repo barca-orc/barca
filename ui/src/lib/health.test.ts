@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { failedKeyNodes, keysLine, consumersOf, downstreamIds, failures, headline, healthLabel, healthParts, partCount, streakLabel, relativeTraceback, pathBreaks, type ScopeHealth } from './health'
+import { failedKeyNodes, keysLine, consumersOf, downstreamIds, failures, headline, streakLabel, relativeTraceback, pathBreaks } from './health'
 import { blockerOf } from './healthDisplay'
-import { counts, failureRoot } from './testdata/rollup'
+import { failureRoot } from './testdata/rollup'
 import type { NodeState, PartitionKeys } from './types'
+import { ROLLUP, STATE, row } from './testdata/project'
 import { blockedBy, served } from './testdata/served'
 
 function node(id: string, inputs: string[], over: Partial<NodeState> = {}): NodeState {
@@ -31,20 +32,6 @@ const consumers = consumersOf(nodes)
 const roots = [failureRoot('p.py:raw', "KeyError: 'currency'", 2), failureRoot('p.py:orphan', 'ZeroDivisionError: division by zero')]
 
 describe('health', () => {
-  it('words a rollup entry: a failure first, then run work, then the rest by severity', () => {
-    // The scope's entry, as served: 5 nodes, of which a run is working on one.
-    const scope: ScopeHealth = { health: counts({ failing: 2, blocked: 1, ok: 2 }), nodes: 5, running: 1 }
-    expect(healthLabel(scope)).toBe('2 failing · 1 running · 1 blocked · 2 ok')
-    expect(healthParts(scope, 2)).toEqual([
-      { key: 'failing', tone: 'failed', glyph: 'failed', count: 2, word: 'failing', text: '2 failing' },
-      { key: 'running', tone: 'running', glyph: 'running', count: 1, word: 'running', text: '1 running' },
-    ])
-    expect(healthLabel(scope, 1)).toBe('2 failing')
-    expect(partCount(scope, 'blocked')).toBe(1)
-    expect(healthLabel({ health: counts(), nodes: 0, running: 0 })).toBe('')
-    expect(healthLabel({ health: counts({ suspect: 1, never_run: 2 }), nodes: 3, running: 0 })).toBe('1 suspect data · 2 never run')
-  })
-
   it('lists the failure roots as served, each with its row and how many nodes it holds', () => {
     const list = failures(roots, byId)
     expect(list.map((f) => [f.name, f.held, f.heldAssets, f.headline, f.group])).toEqual([
@@ -67,6 +54,38 @@ describe('health', () => {
   it('says something for an empty error', () => {
     expect(headline('\n\n  ValueError: x\n trace')).toBe('ValueError: x')
     expect(headline(null)).toBe('failed, with no error recorded')
+  })
+})
+
+describe('the failures of the generated project', () => {
+  const rows = new Map(STATE.map((n) => [n.id, n]))
+
+  it('are its failure roots, each with its row, its streak and what it holds', () => {
+    const list = failures(ROLLUP.roots, rows)
+    expect(list.map((f) => [f.name, f.kind, f.headline, f.held, f.heldAssets, f.failures, f.failingSince])).toEqual([
+      ['invoices', 'asset', 'ValueError: 3 rows with a negative total', 3, 3, 2, '2026-11-17 00:40:01'],
+      ['sales_by_day', 'asset', "KeyError: 'units'", 2, 2, 1, '2026-11-17 02:00:01'],
+      ['check__invoices', 'task', 'AssertionError: 3 rows with a negative total', 1, 0, 1, '2026-11-16 10:00:01'],
+    ])
+    // The server groups errors with their numbers taken out; the two "3 rows" errors differ by type.
+    expect(list.map((f) => f.group)).toEqual(['ValueError: # rows with a negative total', "KeyError: 'units'", 'AssertionError: # rows with a negative total'])
+    // One key of five failed, and one more was never computed.
+    expect(list[1]).toMatchObject({ keys: { failed: 1, total: 5, errors: null, runId: null }, missingKeys: 2 })
+    expect(keysLine(list[1]!.keys!)).toBe('1 of 5 keys')
+    expect(failedKeyNodes(STATE)).toEqual(['orders.py:sales_by_day'])
+  })
+
+  it('name the failing node on every row it blocks, and on no other', () => {
+    expect(STATE.map((n) => [n.name, blockerOf(n)]).filter(([, by]) => by !== null)).toEqual([
+      ['invoice_totals', 'billing.py:invoices'],
+      ['ledger', 'billing.py:invoices'],
+      ['sales_report', 'orders.py:sales_by_day'],
+    ])
+    // A blocked row is served as held by the failure: its cause is `failing`, like the node that failed.
+    expect(['invoice_totals', 'ledger', 'sales_report'].map((name) => [row(name).health, row(name).health_reason, row(name).cause])).toEqual(Array(3).fill(['blocked', 'upstream_failing', 'failing']))
+    // A task that reads the failing node is failing on its own account, not blocked by it.
+    expect(blockerOf(row('check__invoices'))).toBeNull()
+    expect([...downstreamIds('billing.py:invoices', consumersOf(STATE))].sort()).toEqual(['billing.py:check__invoices', 'billing.py:invoice_totals', 'billing.py:ledger'])
   })
 })
 

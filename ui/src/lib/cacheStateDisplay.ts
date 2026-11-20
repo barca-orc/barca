@@ -10,12 +10,14 @@
  * place of it.
  *
  * One word is shown differently: `always_runs` (a task, a sensor, an `always` asset) has no
- * cache to describe, so it shows how its last run went, `succeeded` (or `never run`, see
- * `shownCacheState`; a failed one is `failing` like any node). That it always runs is a
- * property, said in its tooltip (the server's detail, "tasks always re-run").
+ * cache to describe, so it shows how its last attempt went, as the server says it
+ * (`last_attempt` of its row): `succeeded`, or `never run` (`ALWAYS_RUNS`; a failed one is
+ * `failing` like any node). That it always runs is a property, said in its tooltip (the
+ * server's detail, "tasks always re-run").
  */
 
 import type { CacheState } from './generated/CacheState'
+import type { LastAttempt } from './generated/LastAttempt'
 import type { NodeState } from './types'
 import type { Tone } from './tone'
 import type { Glyph } from './glyph'
@@ -65,11 +67,19 @@ export function cacheStateDisplay(state: CacheState): CacheStateDisplay {
 }
 
 /**
- * The state a node is shown and counted in: its `cache.state`, except a node that always runs
- * and never ran, which has no last run to show and reads `never_run`.
+ * How a node that always runs is drawn, by its served `last_attempt`: it has no cache to
+ * describe, so it shows how its last attempt went. One that never ran is drawn as `never_run`.
  */
-export function shownCacheState(node: Pick<NodeState, 'cache' | 'last_materialization'>): CacheState {
-  return node.cache.state === 'always_runs' && node.last_materialization === null ? 'never_run' : node.cache.state
+const ALWAYS_RUNS: Record<LastAttempt, CacheStateDisplay> = {
+  never_run: DISPLAY.never_run,
+  success: DISPLAY.always_runs,
+  // Never shown as a state: a failed attempt reads `failing` first (`nodeStateDisplay`).
+  failed: { word: 'always_runs', label: 'failing', tone: 'failed', glyph: 'failed' },
+}
+
+/** How a state is drawn for a node whose last attempt went `lastAttempt`. */
+function shown(state: CacheState, lastAttempt: LastAttempt | undefined): CacheStateDisplay {
+  return state === 'always_runs' && lastAttempt !== undefined ? ALWAYS_RUNS[lastAttempt] : DISPLAY[state]
 }
 
 /** The words the UI shows for a state: `never run`, `fresh`. */
@@ -87,18 +97,6 @@ export function cacheStateGlyph(state: CacheState): Glyph {
   return DISPLAY[state].glyph
 }
 
-/** A state's place in `CACHE_STATES`: lower is more urgent. */
-export function cacheStateRank(state: CacheState): number {
-  return CACHE_STATES.indexOf(state)
-}
-
-/** The state that needs attention most among `states`; null for none. */
-export function worstCacheState(states: Iterable<CacheState>): CacheState | null {
-  let worst: CacheState | null = null
-  for (const state of states) if (worst === null || cacheStateRank(state) < cacheStateRank(worst)) worst = state
-  return worst
-}
-
 /** The tone of the fact "its last attempt failed", wherever that fact is shown. */
 export const FAILED_TONE: Tone = 'failed'
 
@@ -107,8 +105,8 @@ export const LAST_ATTEMPT_FAILED = 'failing'
 
 /**
  * The word of the fact "a failed node upstream keeps it from running": `blocked`, in the warning
- * tone with the blocked glyph. It is derived on the client from the graph (`blockedBy` in
- * `graphView`), never sent as a cache state; the cache state stays in the tooltip and the panel.
+ * tone with the blocked glyph. The server says which node (`blockerOf` in `healthDisplay`: the
+ * `root` of a row whose `health` is `blocked`); the cache state stays in the tooltip and the panel.
  */
 export const BLOCKED_UPSTREAM = 'blocked'
 
@@ -131,13 +129,15 @@ export interface NodeStateShown {
 /**
  * The one state a node shows: `failing` when its latest attempt failed (it outranks the cache
  * state, which stays in the tooltip and the panel), else `pinned` when it is pinned (`barca pin`), else `blocked` when a failed node upstream
- * keeps it from running, else its cache state's words.
+ * keeps it from running, else its cache state's words (a node that always runs: its served
+ * `last_attempt`'s, see `ALWAYS_RUNS`).
  */
-export function nodeStateDisplay(node: { state: CacheState; lastFailed: boolean; blockedBy?: string | null; pinned?: string | null }): NodeStateShown {
+export function nodeStateDisplay(node: { state: CacheState; lastAttempt?: LastAttempt; lastFailed: boolean; blockedBy?: string | null; pinned?: string | null }): NodeStateShown {
   if (node.lastFailed) return { label: LAST_ATTEMPT_FAILED, tone: FAILED_TONE, glyph: 'failed' }
   if (node.pinned != null) return { label: PINNED, tone: 'warning', glyph: 'pinned' }
   if (node.blockedBy) return { label: BLOCKED_UPSTREAM, tone: 'warning', glyph: 'blocked' }
-  return { label: cacheStateLabel(node.state), tone: cacheStateTone(node.state), glyph: cacheStateGlyph(node.state) }
+  const { label, tone, glyph } = shown(node.state, node.lastAttempt)
+  return { label, tone, glyph }
 }
 
 /**

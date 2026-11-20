@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { runNodeIdle, runNodeLine, runNodeOutcome } from './runs'
 import { NO_STEPS_OPEN, groupRunSteps, runNodeTime, runStepRows, splitRunSteps, toggleStepsOpen } from './runsPage'
-import { failedKeysLabel, formatSeconds } from './assetTable'
 import { keyParts } from './nodeDetail'
 import { lastAttemptFailed } from './cacheStateDisplay'
 import type { NodeState, RunNodeSummary, RunStep } from './types'
+import { formatSeconds } from './time'
 
 const step = (node_id: string, status: string) => ({ node_id, status }) as RunStep
 // `health` as the server sends it for these keys: failing when some failed, else behind.
@@ -68,12 +68,10 @@ describe('a partitioned node with failed keys', () => {
   it('failed last although the key its last materialization names succeeded; its state stays partial', () => {
     expect(lastAttemptFailed(node(partial))).toBe(true)
     expect(node(partial).cache.state).toBe('partial')
-    expect(failedKeysLabel(node(partial))).toBe('40 of 3,077 keys failed')
   })
 
   it('did not fail when its missing keys are only stale', () => {
     expect(lastAttemptFailed(node({ ...partial, failed: 0 }))).toBe(false)
-    expect(failedKeysLabel(node({ ...partial, failed: 0 }))).toBeNull()
   })
 
   it("reads its keys' parts off the counts the server states", () => {

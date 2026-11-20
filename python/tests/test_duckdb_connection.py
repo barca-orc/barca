@@ -351,7 +351,11 @@ def fail(orders):
 """)
         reports = []
         errors = []
-        monkeypatch.setattr(_worker, "_emit", lambda kind, **kw: reports.append((kind, kw)))
+        monkeypatch.setattr(
+            _runtime,
+            "emit_step_completed",
+            lambda node_id, artifact: reports.append({"node_id": node_id, "artifact": artifact}),
+        )
         monkeypatch.setattr(_runtime, "emit_step_error", lambda **kw: errors.append(kw))
         monkeypatch.setattr(_worker, "_ctrl_c_does_nothing", lambda: None)
         monkeypatch.setattr(_worker, "_ctrl_c_interrupts_the_step", lambda: None)
@@ -377,7 +381,7 @@ def fail(orders):
         # A step that raised leaves the worker sound: it goes on to its next step (#523).
         assert ok
         if outcome == "success":
-            artifact = reports[-1][1]["artifact"]
+            artifact = reports[-1]["artifact"]
             assert _artifacts.deserialize(artifact["path"], "parquet")["amount"].tolist() == [14]
         else:
             assert len(errors) == 1
@@ -393,7 +397,7 @@ def fail(orders):
         # Re-importing setup would fail CREATE MACRO/VIEW; closing its connection would fail too.
         step.update(function_name="read", run_hash="second")
         assert _worker._run_daemon_step(step, modules, str(tmp_path / "arts"), lru)
-        artifact = reports[-1][1]["artifact"]
+        artifact = reports[-1]["artifact"]
         assert _artifacts.deserialize(artifact["path"], "parquet")["amount"].tolist() == [14]
         assert con.sql("select twice(x) from project_marker").fetchall() == [(198,)]
         with pytest.raises(duckdb.CatalogException):

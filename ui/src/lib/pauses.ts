@@ -1,37 +1,13 @@
 /**
- * Paused assets (`GET /pauses`, `barca pause`) and an asset's blast radius: what is downstream
- * of it, and which schedules would compute it or what reads it. Pure.
+ * Paused assets (`GET /pauses`, `barca pause`) and what a pause of an asset would cover, as the
+ * server says it (`covers`). Pure.
  */
 
-import { consumersOf, downstreamIds } from './health'
-import type { GraphLink } from './health'
-import type { ScheduleJob } from './types'
+import type { PauseCover } from './generated/PauseCover'
+import type { PauseRelation } from './generated/PauseRelation'
+import type { Pauses, ScheduleJob } from './types'
 
-/** One paused node of `GET /pauses`. */
-export interface AssetPause {
-  id: string
-  /** Unix seconds. */
-  paused_at: number
-  /** What the pause named: the node, the node a downstream pause started from, or a file. */
-  via: string
-}
-
-/** `GET /pauses`, and the answer of `POST /pauses` (`added`) and `POST /pauses/resume` (`removed`). */
-export interface Pauses {
-  total: number
-  paused: AssetPause[]
-  /** Every paused schedule (`barca pause --schedule`); `until` in unix seconds, null until resumed. */
-  schedules?: Array<{ id: string; paused_at: number; until: number | null }>
-  added?: string[]
-  removed?: string[]
-}
-
-/** The body of `POST /pauses` and `POST /pauses/resume`. */
-export interface PauseRequest {
-  target?: string
-  downstream?: boolean
-  all?: boolean
-}
+export type { PauseCover, PauseRelation }
 
 /** The source file of a node id (`dir/pipeline.py:name` → `dir/pipeline.py`). */
 export function fileOf(id: string): string {
@@ -39,50 +15,26 @@ export function fileOf(id: string): string {
   return at < 0 ? id : id.slice(0, at)
 }
 
-/** How a schedule touches the asset: it is the asset, it reads it, or the asset reads it. */
-export type ScheduleRelation = 'self' | 'downstream' | 'upstream'
-
+/** A schedule a pause would hold work back from, with what `GET /schedule` says of it now. */
 export interface AffectedSchedule {
   job: ScheduleJob
-  relation: ScheduleRelation
-}
-
-export interface BlastRadius {
-  /** Every node downstream of the asset, transitively, in graph order. */
-  downstream: string[]
-  /** The schedules whose ticks compute the asset or something downstream of it, soonest first. */
-  schedules: AffectedSchedule[]
-}
-
-/** Every node upstream of `id`, transitively (not `id` itself). */
-function upstreamIds(id: string, inputs: ReadonlyMap<string, readonly string[]>): Set<string> {
-  const seen = new Set<string>()
-  const stack = [...(inputs.get(id) ?? [])]
-  while (stack.length) {
-    const next = stack.pop()!
-    if (seen.has(next)) continue
-    seen.add(next)
-    for (const i of inputs.get(next) ?? []) if (!seen.has(i)) stack.push(i)
-  }
-  return seen
+  relation: PauseRelation
 }
 
 /**
- * What a failure of `id` reaches: its downstream nodes, and the schedules that would compute it
- * or them. A schedule upstream of it counts too: its tick reconciles the `Always` nodes below it.
+ * The schedules a pause covers (`covers.schedules` of `GET /pauses?target=`, found by the
+ * scheduler's own walk in barca-service) joined with their jobs (`GET /schedule`), soonest next
+ * tick first. Which schedules, and how each touches the node, is the server's; this only looks
+ * each one up and orders the list. A schedule `GET /schedule` does not list yet is left out.
  */
-export function blastRadius(id: string, graph: readonly GraphLink[], jobs: readonly ScheduleJob[]): BlastRadius {
-  const below = downstreamIds(id, consumersOf(graph))
-  const above = upstreamIds(id, new Map(graph.map((n) => [n.id, n.inputs])))
-  const downstream = graph.filter((n) => below.has(n.id)).map((n) => n.id)
-  const schedules: AffectedSchedule[] = []
-  for (const job of jobs) {
-    const relation: ScheduleRelation | null =
-      job.id === id ? 'self' : below.has(job.id) ? 'downstream' : above.has(job.id) ? 'upstream' : null
-    if (relation) schedules.push({ job, relation })
-  }
-  schedules.sort((a, b) => (a.job.next_fire ?? Infinity) - (b.job.next_fire ?? Infinity))
-  return { downstream, schedules }
+export function affectedSchedules(cover: PauseCover | undefined, jobs: readonly ScheduleJob[]): AffectedSchedule[] {
+  const byId = new Map(jobs.map((job) => [job.id, job]))
+  return (cover?.schedules ?? [])
+    .flatMap(({ id, relation }) => {
+      const job = byId.get(id)
+      return job ? [{ job, relation }] : []
+    })
+    .sort((a, b) => (a.job.next_fire ?? Infinity) - (b.job.next_fire ?? Infinity))
 }
 
 /** The ids of `GET /pauses`, for a lookup. */

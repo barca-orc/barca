@@ -4,7 +4,7 @@ description: "Backups of the metadata database in the store, barca state backups
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/backup.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/backup.md (barca docs backup). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/backup.md (barca docs backup). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 With a store configured, barca backs up its metadata database, the record of what is cached, so
 you can put it back after losing a disk or a machine. Below: when backups are taken, what one
@@ -148,7 +148,8 @@ none of its own (a fresh machine taking over), it takes the newest and names who
   A copy that fails names the next newest (`barca state restore --from 3`).
 - A copy written by a newer barca in a format this one cannot use: exit 2; upgrade.
 - `barca serve` running on this environment (it holds `.barca/serve.lock`): exit 3, naming the
-  server's pid, host and address; stop it first.
+  server's pid, host and address; stop it first. This is checked by the lock, not by the
+  server's socket, and `--local` does not apply to it.
 
 To undo a restore, with no barca command running, put the kept file back:
 

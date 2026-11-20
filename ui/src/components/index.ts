@@ -34,7 +34,7 @@ export type { SearchInputProps } from './SearchInput'
 export { Tag } from './Tag'
 export type { TagProps, TagTone, TagSize } from './Tag'
 
-export { DagNode, DAG_NODE_WIDTH, DAG_NODE_HEIGHT } from './DagNode'
+export { DagNode } from './DagNode'
 export type { DagNodeProps } from './DagNode'
 
 export { LogViewer } from './LogViewer'

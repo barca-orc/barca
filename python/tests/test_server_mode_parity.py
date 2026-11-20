@@ -420,7 +420,7 @@ def test_the_keys_of_a_node_print_the_same_locally_and_through_a_server(tmp_path
     """`barca status NODE --keys` with each filter, order and page, and `--overview`: a server
     filters, orders and pages the keys itself (`GET /assets/{name}/partitions/keys`,
     `.../partitions/overview`), and the CLI prints the same as it does on this machine, where
-    the same `barca-core` function answers. One project, read both ways: the keys, their
+    the same `barca-service` function answers. One project, read both ways: the keys, their
     attempts and their run ids are the same rows."""
     root = tmp_path / "project"
     root.mkdir()
@@ -556,7 +556,7 @@ def test_bare_server_with_nothing_configured_and_server_on_local_commands_are_us
     for argv in (
         ["get", "total", "--server", "--json"],
         ["plan", "--server"],
-        ["gc", "--server", "http://127.0.0.1:1"],
+        ["state", "backups", "--server", "http://127.0.0.1:1"],
         ["serve", "--local"],
         ["get", "total", "--server", "ftp://nowhere", "--json"],
     ):

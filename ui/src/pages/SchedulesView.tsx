@@ -4,10 +4,11 @@ import { Age, Button, EmptyNote, StatusBadge } from "@/components";
 import { useTimeZone } from "@/context/timeZone";
 import { inPipeline } from "@/lib/pipeline";
 import type { Remote } from "@/lib/remote";
-import { QUEUE_BOUND_HINT, lastStatusLabel, scheduleRows, type ScheduleRow } from "@/lib/schedules";
+import { QUEUE_BOUND_HINT, scheduleRows, type ScheduleRow } from "@/lib/schedules";
+import { isFailure, isSuccess, lastStatusLabel } from "@/lib/runs";
 import { nodeKindLabel } from "@/lib/status";
 import { formatInstant, formatSlot } from "@/lib/time";
-import type { Health, ListNode, NodeState, ScheduleJob } from "@/lib/types";
+import type { ServerHealth, ListNode, NodeState } from "@/lib/types";
 
 export interface SchedulesViewProps {
   title: string;
@@ -18,9 +19,7 @@ export interface SchedulesViewProps {
   states: NodeState[] | undefined;
   /** When `states` was fetched: what "in 5m" is relative to. */
   dataUpdatedAt: number;
-  /** The scheduler's registry (which jobs are paused); without it rows show unpaused. */
-  jobs: ScheduleJob[] | undefined;
-  health: Health | undefined;
+  health: ServerHealth | undefined;
   /** The server did not answer the last health poll: `health` is what it last said. */
   offline: boolean;
   toggle: {
@@ -39,10 +38,10 @@ export interface SchedulesViewProps {
  * Every node with a cron schedule: when it runs (in words and as cron), when
  * it next fires, and how its last run went. Soonest first.
  */
-export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, jobs, health, offline, toggle, onOpen, onToggle, onRetry, actions }: SchedulesViewProps) {
+export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, health, offline, toggle, onOpen, onToggle, onRetry, actions }: SchedulesViewProps) {
   const rows =
     assets.kind === "ready" && states
-      ? scheduleRows(assets.data.filter((a) => inPipeline(a.id, pipeline)), states, jobs ?? [])
+      ? scheduleRows(assets.data.filter((a) => inPipeline(a.id, pipeline)), states)
       : null;
   // A count next to "not reachable" would be read as current; it is shown only with a live server.
   const current = !offline && assets.kind === "ready" && assets.refreshError === null;
@@ -191,10 +190,10 @@ function ScheduleTable({ rows, nowMs, canPause, toggle, onOpen, onToggle }: Pick
             <td>
               {r.last ? (
                 <span
-                  className={r.last.status === "failed" ? "barca-cell-failed" : undefined}
+                  className={r.last.status !== null && isFailure(r.last.status) ? "barca-cell-failed" : undefined}
                   title={r.last.runId ? `run ${r.last.runId}` : undefined}
                 >
-                  {r.last.status !== null && r.last.status !== "success" && `${lastStatusLabel(r.last.status)} `}<Age at={r.last.at} nowMs={nowMs} />
+                  {r.last.status !== null && !isSuccess(r.last.status) && `${lastStatusLabel(r.last.status)} `}<Age at={r.last.at} nowMs={nowMs} />
                 </span>
               ) : (
                 "never"

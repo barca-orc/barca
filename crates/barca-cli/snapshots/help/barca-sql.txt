@@ -13,7 +13,7 @@ Options:
       --all             Return every row (no limit)
       --env <ENV>       Use a separate cache and history for this environment
       --server [<URL>]  Use a server (URL or configured); get/run execute its deployed code
-      --local           Use independent local state; ignore the configured server
+      --local           Run on this machine; ignore a configured server and this project's barca serve
   -h, --help            Show concise command help
       --examples        Show all command examples without running anything
 

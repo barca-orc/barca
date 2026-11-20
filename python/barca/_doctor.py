@@ -1,13 +1,10 @@
 """Finite prerequisite probe. No pipeline imports, state synchronization or store writes."""
 
-import contextlib
 import getpass
-import json
-import os
 import platform
 import sys
 
-from barca import __version__, _lifeline, _storage
+from barca import __version__, _helper, _storage
 
 
 def _local_identity():
@@ -67,21 +64,22 @@ def probe(store):
 
 
 def main():
-    request = json.loads(os.environ.get("BARCA_DOCTOR_REQUEST", "{}"))
-    with contextlib.redirect_stdout(sys.stderr):
-        stores = [probe(store) for store in request["stores"]]
-    result = {
-        "python": {
-            "executable": sys.executable,
-            "version": platform.python_version(),
-            "barca_version": __version__,
-        },
-        "stores": stores,
-    }
-    print(json.dumps(result), flush=True)
+    # Stdin is the lifeline (`run_to_output`), so the request is in the environment.
+    request = _helper.env_request("BARCA_DOCTOR_REQUEST")
+
+    def report():
+        return {
+            "python": {
+                "executable": sys.executable,
+                "version": platform.python_version(),
+                "barca_version": __version__,
+            },
+            "stores": [probe(store) for store in request["stores"]],
+        }
+
+    _helper.answer(report, newline=True)
     return 0
 
 
 if __name__ == "__main__":
-    _lifeline.watch()
-    raise SystemExit(main())
+    _helper.run(main, lifeline=True)

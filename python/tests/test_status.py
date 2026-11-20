@@ -310,8 +310,11 @@ def test_a_partitioned_node_reports_the_same_last_key_every_time(project):
     first = barca(project, "status", "slow.py", "--json")
     again = barca(project, "status", "slow.py", "--json")
     assert first.returncode == 0, first.stderr
-    assert first.stdout == again.stdout
-    assert nodes(json.loads(first.stdout))["part"]["last_materialization"]["partition"] == "k=a"
+    # Everything but the instant each invocation read the clock at.
+    one, two = json.loads(first.stdout), json.loads(again.stdout)
+    assert one.pop("as_of") <= two.pop("as_of")
+    assert one == two
+    assert nodes(one)["part"]["last_materialization"]["partition"] == "k=a"
 
 
 def test_a_failed_last_attempt_is_reported(project):

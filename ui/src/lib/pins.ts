@@ -4,12 +4,7 @@
  * `stale` would mislead: it reads `pinned`, with what it is pinned to. Pure.
  */
 
-import type { AssetPin } from './types'
-
-/** `GET /pins`. */
-export interface Pins {
-  pins: AssetPin[]
-}
+import type { AssetPin, Pins } from './types'
 
 /** The short form of a run id or hash. */
 function short(id: string): string {

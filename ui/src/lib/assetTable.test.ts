@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { served } from './testdata/served'
 import type { CacheStatus, NodeState } from './types'
-import { CACHE_STATES } from './cacheStateDisplay'
+import { CACHE_STATES, cacheStateLabel, nodeStateDisplay } from './cacheStateDisplay'
 import {
   DEFAULT_SORT,
   assetColumns,
@@ -13,15 +13,13 @@ import {
   typicalText,
   filterRows,
   formatAgo,
-  formatSeconds,
   nextSort,
   parseSort,
   sortRows,
-  summarize,
   typicalLabel,
-  typicalSeconds,
   type Sort,
 } from './assetTable'
+import { formatSeconds } from './time'
 
 const NOW = Date.parse('2026-10-02T12:00:00Z')
 
@@ -71,8 +69,11 @@ describe('rows carry the state as the server says it', () => {
   it('shows every cache state in its own word, never another', () => {
     for (const state of CACHE_STATES) {
       const row = only(buildRows([node({ id: 'a', cache: cache(state, 'no_record') })], NOW))
-      // A node that always runs and never ran has no last run to show: it reads `never_run`.
-      expect(row.state).toBe(state === 'always_runs' ? 'never_run' : state)
+      // The row keeps the served state. A node that always runs is drawn by its served
+      // `last_attempt`: one that never ran reads `never run`, not `succeeded`.
+      expect(row.state).toBe(state)
+      expect(row.lastAttempt).toBe('never_run')
+      expect(nodeStateDisplay(row).label).toBe(state === 'always_runs' ? 'never run' : cacheStateLabel(state))
       expect(row.lastFailed).toBe(false)
     }
     // A task keeps `always_runs` whatever its last run did: the run is a second fact.
@@ -134,7 +135,8 @@ describe('buildRows', () => {
               elapsed_seconds: 3.2,
               error: null,
             },
-            durations: { median_seconds: 3.04, p95_seconds: 9.5, samples: 12 },
+            typical_run_seconds: 3.04,
+        durations: { median_seconds: 3.04, p95_seconds: 9.5, samples: 12 },
             next_run: Date.parse('2026-10-03T06:00:00Z') / 1000,
             prev_run: null,
             late_since: null,
@@ -220,19 +222,20 @@ describe('buildRows', () => {
 
 describe('typical time', () => {
   it('is the median of a plain node', () => {
-    const n = node({ id: 'p.py:a', durations: { median_seconds: 3.04, p95_seconds: 9.5, samples: 12 } })
-    expect(typicalSeconds(n)).toBe(3.04)
+    const n = node({ id: 'p.py:a', typical_run_seconds: 3.04, durations: { median_seconds: 3.04, p95_seconds: 9.5, samples: 12 } })
     expect(typicalLabel(n)).toBe('3.0s')
+    expect(only(buildRows([n], NOW)).typicalSeconds).toBe(3.04)
   })
-  it('is a run over every key of a partitioned node, never a per-key figure', () => {
-    // Batched calls record a few milliseconds per key: 0.0007s × 3,077 keys is the 2.2s run.
+  it('is the served time of a run over every key of a partitioned node, never a per-key figure', () => {
+    // Batched calls record a few milliseconds per key; the server serves the run over all
+    // 3,077 keys (`typical_run_seconds`), and the table only words it.
     const n = node({
       id: 'p.py:forecast',
       partitioned: true,
+      typical_run_seconds: 2.1539,
       durations: { median_seconds: 0.0007, p95_seconds: 0.0009, samples: 20 },
       partitions: { total: 3077, cached: 3070, missing: 7, missing_keys: [], failed: 7, behind: 0 },
     })
-    expect(typicalSeconds(n)).toBeCloseTo(2.154, 3)
     expect(typicalLabel(n)).toBe('~2.2s / run')
     expect(only(buildRows([n], NOW)).typical).toBe('~2.2s / run')
   })
@@ -255,19 +258,6 @@ describe('filterRows', () => {
   })
 })
 
-describe('summarize', () => {
-  it('counts every state, including zeroes, and failed last attempts beside them', () => {
-    const rows = buildRows(
-      [node({ id: 'a' }), node({ id: 'b', last_materialization: failedAttempt }), node({ id: 'c', cache: cache('stale', 'changed') })],
-      NOW,
-    )
-    expect(summarize(rows)).toEqual({
-      states: { blocked: 0, stale: 1, partial: 0, unsynced: 0, unknown: 0, never_run: 0, always_runs: 0, cached: 2 },
-      lastFailed: 1,
-    })
-  })
-})
-
 describe('formatting', () => {
   it('formats seconds compactly', () => {
     expect(formatSeconds(0.04)).toBe('0.0s')
@@ -287,11 +277,13 @@ describe('sorting', () => {
     [
       node({
         id: 'p.py:slow',
+        typical_run_seconds: 9,
         durations: { median_seconds: 9, p95_seconds: 12, samples: 3 },
         last_materialization: { ...failedAttempt, status: 'success', error: null, created_at: '2026-10-02 09:00:00' },
       }),
       node({
         id: 'p.py:fast',
+        typical_run_seconds: 0.5,
         durations: { median_seconds: 0.5, p95_seconds: 1, samples: 3 },
         last_materialization: { ...failedAttempt, status: 'success', error: null, created_at: '2026-10-02 11:00:00' },
         next_run: Date.parse('2026-10-03T06:00:00Z') / 1000,
@@ -304,6 +296,7 @@ describe('sorting', () => {
         id: 'p.py:edited',
         cache: cache('stale', 'changed'),
         cause: 'catching_up',
+        typical_run_seconds: 3,
         durations: { median_seconds: 3, p95_seconds: 4, samples: 2 },
         next_run: Date.parse('2026-10-02T13:00:00Z') / 1000,
         prev_run: null,

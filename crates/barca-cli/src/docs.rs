@@ -304,7 +304,7 @@ pub fn run(topic: Option<&str>, all: bool, json: bool) -> Result<String, String>
                 // The closest topic, if one is close, then every topic.
                 let mut msg = format!("error: unknown docs topic '{name}'");
                 if let Some(meant) =
-                    barca_core::suggest::suggestion(name, TOPICS.iter().map(|t| t.name))
+                    barca_service::suggest::suggestion(name, TOPICS.iter().map(|t| t.name))
                 {
                     msg.push_str(&format!("\n\n{meant}"));
                 }

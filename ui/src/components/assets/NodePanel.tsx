@@ -5,10 +5,10 @@ import { plural } from '@/lib/plural'
 import { Link } from 'react-router'
 import { GitBranch, Play, X } from 'lucide-react'
 import { Age, Button, ErrorLine, IconButton, KeyValue, RunningBadge, Section, SidePanel, Skeleton, StatusBadge, StatusGlyph } from '@/components'
-import { runGlyph } from '@/lib/runs'
+import { isSuccess, runGlyph } from '@/lib/runs'
 import { useTimeZone } from '@/context/timeZone'
 import { startedBy } from '@/lib/running'
-import { formatAbsolute, formatEstimate } from '@/lib/time'
+import { formatAbsolute, formatEstimate, formatSeconds } from '@/lib/time'
 import { ArtifactSchema } from './ArtifactSchema'
 import { AssetVersions } from './AssetVersions'
 import { CopyButton, KeyErrors, NodeKeys, PartitionBar } from './NodeKeys'
@@ -26,13 +26,13 @@ import { useAssetDetail } from '@/hooks/useAssetDetail'
 import { useProject } from '@/hooks/useProject'
 import { useRunDetail } from '@/hooks/useRuns'
 import { usePartitionKey } from '@/hooks/usePartitionGrid'
-import { buildRows, formatSeconds } from '@/lib/assetTable'
+import { buildRows } from '@/lib/assetTable'
 import { PINNED_HINT, nodeStateDisplay } from '@/lib/cacheStateDisplay'
 import { blockerOf } from '@/lib/healthDisplay'
 import { freshnessLabel, nodeKindLabel } from '@/lib/status'
 import { signalDisplay, signalLine } from '@/lib/dataSignals'
 import { EDITOR_ROOTS_KEY, changedSummary, collapseRuns, dataKey, dataKeyNote, downstreamOf, durationHistogram, editorLink, editorOpens, editorRoots, errorFirstLine, failuresOnlyNote, formatBytes, historyBars, keyFigures, onlyFailures, rowsLabel, raisedAtLabel, runPace, runsRecorded, shortHash, sinceLastSuccess, sourcePath, whatChanged } from '@/lib/nodeDetail'
-import { consumersOf, downstreamIds, headline, isFailed, streakLabel } from '@/lib/health'
+import { consumersOf, downstreamIds, isFailed, streakLabel } from '@/lib/health'
 import { isLive, memberHealth } from '@/lib/graphState'
 import { shortName } from '@/lib/graph'
 import type { AssetRunEntry, KeyArtifact, ListNode, NodeState, NodeStatus } from '@/lib/types'
@@ -91,7 +91,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   const pins = usePinNotes()
   // Pinned (`barca pin`): it reads `pinned`, not its cache state; a failure above it does not block it.
   const pinned = failed ? null : pins.get(node.id) ?? null
-  const failedRun = stats?.recent_runs.find((r) => r.status !== 'success')?.run_id ?? null
+  const failedRun = stats?.recent_runs.find((r) => !isSuccess(r.status))?.run_id ?? null
   const schema = useAssetSchema(node, upstream)
   const output = schema.data?.find(n => n.id === node.id)
   const change = whatChanged(node.cache, failed)
@@ -122,7 +122,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
   // Which output the Data tab inspects; a key whose last attempt failed shows what it has cached.
   const shownKey = dataKey(node)
   const cachedKey = usePartitionKey(node.id, shownKey.kind === 'cached' && tab === 'data' ? shownKey.key : null)
-  const cachedOutput = cachedKey.data?.output ? { output: cachedKey.data.output, at: cachedKey.data.attempts.find((a) => a.status === 'success')?.created_at ?? null } : null
+  const cachedOutput = cachedKey.data?.output ? { output: cachedKey.data.output, at: cachedKey.data.attempts.find((a) => isSuccess(a.status))?.created_at ?? null } : null
 
   const pausedSet = usePausedSet()
   const runGuard = usePausedRunGuard(node.id, runAction.fire)
@@ -275,7 +275,8 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
                     const failedKeys = up?.partitions?.failed ?? 0
                     return failedKeys > 0 && up?.partitions
                       ? `${failedKeys.toLocaleString()} of ${up.partitions.total.toLocaleString()} keys failed`
-                      : headline(up?.last_materialization?.error)
+                      // Its error in a line, as the root list words it (`detail` of the root that holds this node).
+                      : heldBy?.detail ?? ''
                   })()}</span>
                 </li>
               ))}
@@ -566,7 +567,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
           <p className="barca-note">Open a key in the <Link to={keysHref(node.id)}>key explorer</Link> to inspect its attempts, upload replacement data, or pin an earlier version.</p>
         </Section>
       ) : <AssetVersions node={node} nowMs={nowMs} readOnly={runAction.readOnly} />}
-      <BlastRadius id={node.id} graph={graph} states={byId} paused={pausedSet} onSelect={onSelect} />
+      <BlastRadius id={node.id} states={byId} paused={pausedSet} onSelect={onSelect} />
       </>}
       {runGuard.dialog}
     </SidePanel>
@@ -601,7 +602,7 @@ function RunList({ runs, nowMs, said }: { runs: AssetRunEntry[]; nowMs: number; 
             ) : <Age at={r.created_at} nowMs={nowMs} />}
             {r.elapsed_seconds !== null && count === 1 && <span>{formatSeconds(r.elapsed_seconds)}</span>}
             {r.keys != null && <span>{r.keys.toLocaleString()} keys{r.failed_keys ? `, ${r.failed_keys.toLocaleString()} failed` : ''}{r.empty_keys ? `, ${r.empty_keys.toLocaleString()} empty` : ''}{count > 1 ? ' each' : ''}</span>}
-            {r.status === 'success' && rowsLabel(r.rows) && <span title="Rows the run wrote">{rowsLabel(r.rows)}</span>}
+            {isSuccess(r.status) && rowsLabel(r.rows) && <span title="Rows the run wrote">{rowsLabel(r.rows)}</span>}
             {r.attempts > 1 && <span>{r.attempts} attempts</span>}
           </div>
           {r.error_message && !(saidLine && (errorFirstLine(r.error_message) === saidLine || saidLine.endsWith(errorFirstLine(r.error_message)))) && (

@@ -1,6 +1,6 @@
 //! The ids of a run's and a step's Datadog traces: derived from the run id and the step, never
 //! stored, so a worker's Python spans, a `BARCA_LOG=json` line and the coordinator's spans
-//! agree without a message. The exporter itself is `barca_core::telemetry::datadog`.
+//! agree without a message. The exporter itself is `barca_service::telemetry::datadog`.
 
 use sha2::{Digest, Sha256};
 

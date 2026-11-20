@@ -1,11 +1,11 @@
 //! Target resolution, cone selection, and per-target outcomes.
-use crate::dag::Dag;
 use crate::planner::{self, ExecutionPlan, ResourceConfig};
+use barca_model::dag::Dag;
 use barca_model::step_result;
 use barca_model::{BarcaError, reports::TargetOutcome, step_result::OutputRef};
 use std::collections::HashMap;
 
-pub use crate::names::{refresh_name_matches, short_name, target_name_matches};
+pub use barca_model::names::{refresh_name_matches, short_name, target_name_matches};
 
 /// Why a name cannot be the target of a command. The one place that decides it: `barca get`,
 /// `barca run` and the server's `POST /get/{target}` and `POST /run/{target}` all go through
@@ -450,34 +450,6 @@ pub fn final_output_of(
     })
 }
 
-/// `--batch node=V` against the graph, as [`validate_refresh_names`] is for `--refresh`: the
-/// value is the frontend's ([`crate::batch_spec`]), the check needs the graph.
-impl crate::batch_spec::BatchOverride {
-    /// Every named node must be in the graph and declare `batch=`. A usage error otherwise.
-    pub fn check(&self, dag: &Dag) -> Result<(), String> {
-        for (name, _) in &self.nodes {
-            let found: Vec<&barca_model::model::DagNode> = dag
-                .graph
-                .node_weights()
-                .filter(|n| crate::batch_spec::names_node(n, name))
-                .collect();
-            let Some(node) = found.first() else {
-                return Err(format!(
-                    "--batch {name}=...: no node named '{name}' in the loaded pipeline"
-                ));
-            };
-            if node.extracted.batch.is_none() {
-                return Err(format!(
-                    "--batch {name}=...: '{name}' does not declare batch=, so its function takes \
-                     a single key; add batch= to it to batch it (barca docs partitions, \
-                     \"Processing many keys per call\")"
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod refresh_name_tests {
     use super::refresh_name_matches;
@@ -535,8 +507,8 @@ def lone() -> int:
 "#;
 
     fn dag() -> Dag {
-        let nodes = crate::parse::extract_nodes(SRC, "p.py").unwrap();
-        Dag::build(&nodes).unwrap()
+        let nodes = barca_python::parse::extract_nodes(SRC, "p.py").unwrap();
+        barca_python::link::build(&nodes).unwrap()
     }
 
     fn names(v: &[&str]) -> Vec<String> {
@@ -654,13 +626,17 @@ def lone() -> int:
         assert!(note.contains("barca run check_a p.py"), "{note}");
 
         let only = "from barca import task\n\n@task()\ndef deploy() -> None:\n    pass\n";
-        let only = Dag::build(&crate::parse::extract_nodes(only, "t.py").unwrap()).unwrap();
+        let only =
+            barca_python::link::build(&barca_python::parse::extract_nodes(only, "t.py").unwrap())
+                .unwrap();
         let note = skipped_tasks_note(&only, &names(&["t.py"])).unwrap();
         assert!(note.contains("nothing to get"), "{note}");
         assert!(note.contains("barca run deploy t.py"), "{note}");
 
         let assets = "from barca import asset\n\n@asset()\ndef a() -> int:\n    return 1\n";
-        let assets = Dag::build(&crate::parse::extract_nodes(assets, "a.py").unwrap()).unwrap();
+        let assets =
+            barca_python::link::build(&barca_python::parse::extract_nodes(assets, "a.py").unwrap())
+                .unwrap();
         assert!(skipped_tasks_note(&assets, &names(&["a.py"])).is_none());
     }
 

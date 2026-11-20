@@ -1090,7 +1090,7 @@ fn load_phase_resolves_unpartitioned_upstream_of_partitioned_step() {
 /// phase's completed outputs.
 #[test]
 fn load_phase_delivers_full_collected_list_cross_phase() {
-    use crate::dispatch::{OutputRef, ProvidedInput};
+    use barca_compile::dispatch::{OutputRef, ProvidedInput};
     use barca_compile::planner::{Phase, PhaseReason, StreamStep, WorkerStream};
     use barca_model::StepId;
 

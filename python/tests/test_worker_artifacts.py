@@ -832,7 +832,7 @@ class TestRemoteArtifactStore:
 class TestErrorEmission:
     def test_user_traceback_strips_barca_frames(self, tmp_path):
         from barca._source_import import load_pipeline_module as load_module
-        from barca._worker import _user_traceback
+        from barca._failure import user_traceback as _user_traceback
 
         src = _write_module(
             tmp_path,
@@ -855,7 +855,7 @@ class TestErrorEmission:
         assert "_worker.py" not in tb
 
     def test_user_traceback_empty_when_all_frames_internal(self):
-        from barca._worker import _user_traceback
+        from barca._failure import user_traceback as _user_traceback
 
         # A TypeError raised by calling the fn itself — every frame is barca's.
         def takes_none():

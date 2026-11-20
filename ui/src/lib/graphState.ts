@@ -10,7 +10,7 @@
  * decides either.
  */
 
-import { lastAttemptFailed, shownCacheState, type CacheState } from './cacheStateDisplay'
+import { lastAttemptFailed, type CacheState } from './cacheStateDisplay'
 import { causeDisplay, mapPartGlyph, mapPartLabel, mapPartMeaning, mapPartOf, type MapPart } from './causeDisplay'
 import { blockerOf } from './healthDisplay'
 import { statusMeta } from './status'
@@ -53,7 +53,10 @@ export interface GroupPart {
 export const UNKNOWN_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'unknown', label: 'State unavailable', hint: 'Asset state has not been loaded.' }
 export const PENDING_GRAPH_STATE: GraphState = { kind: 'none', tone: 'neutral', glyph: 'pending', label: 'Checking…', hint: 'Cache state is being checked.' }
 
-/** A partitioned node's keys: how many, how many last failed, how many wait to run (stale or blocked). */
+/**
+ * A partitioned node's keys: how many, how many last failed, how many wait to run: the served
+ * `behind` (stale or never run) and `blocked` of its `partitions`, drawn as one part.
+ */
 export interface GraphKeys {
   total: number
   failed: number
@@ -72,10 +75,10 @@ function partTone(part: MapPart): Tone {
 export function cacheGraphState(node: NodeState): GraphState {
   const part = mapPartOf(node.cause)
   const p = node.partitions
-  const keys = p ? { total: p.total, failed: p.failed ?? 0, waiting: Math.max(0, p.missing - (p.failed ?? 0)) } : undefined
+  const keys = p ? { total: p.total, failed: p.failed ?? 0, waiting: p.behind + (p.blocked ?? 0) } : undefined
   const blockedBy = blockerOf(node)
   const hint = [mapPartMeaning(part), node.cache.detail].filter(Boolean).join(' ')
-  return { kind: 'cache', tone: partTone(part), glyph: mapPartGlyph(part), label: mapPartLabel(part), hint, part, state: shownCacheState(node), lastFailed: lastAttemptFailed(node), ...(keys ? { keys } : {}), ...(blockedBy ? { blockedBy } : {}) }
+  return { kind: 'cache', tone: partTone(part), glyph: mapPartGlyph(part), label: mapPartLabel(part), hint, part, state: node.cache.state, lastFailed: lastAttemptFailed(node), ...(keys ? { keys } : {}), ...(blockedBy ? { blockedBy } : {}) }
 }
 
 /** A run working on the node now (whoever started it) outranks its resting state. */

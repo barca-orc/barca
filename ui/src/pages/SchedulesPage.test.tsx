@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { assetsQuery } from '@/hooks/useAssets'
 import { RECOVER_MS } from '@/hooks/polling'
 import { remote } from '@/lib/remote'
-import type { Health, ListNode } from '@/lib/types'
+import type { ServerHealth, ListNode } from '@/lib/types'
 import { SchedulesView, type SchedulesViewProps } from './SchedulesView'
 
 const nightly: ListNode = {
@@ -17,8 +17,8 @@ const noop = () => {}
 const page = (assets: SchedulesViewProps['assets'], offline = false) =>
   text(renderToStaticMarkup(
     <SchedulesView
-      title="Schedules" pipeline={null} assets={assets} states={[]} dataUpdatedAt={0} jobs={[]}
-      health={{ version: '0.39.0', read_only: false, scheduler: true } as Health}
+      title="Schedules" pipeline={null} assets={assets} states={[]} dataUpdatedAt={0}
+      health={{ version: '0.39.0', read_only: false, scheduler: true } as ServerHealth}
       offline={offline} toggle={{ busyId: null, error: null }} onOpen={noop} onToggle={noop} onRetry={noop}
     />,
   ))

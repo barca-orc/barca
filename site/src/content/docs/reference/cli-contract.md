@@ -4,7 +4,7 @@ description: "Every barca command, flag, environment variable, exit code and JSO
 editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/contract.md
 ---
 
-<!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca contract:: (or scripts/update-cli-snapshots.sh). -->
+<!-- Generated from crates/barca-cli/docs/contract.md (barca docs contract). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
 This page is the written-down CLI surface of this version of barca: every command, argument,
 environment variable, exit code, JSON output schema, the stderr error envelope and the
@@ -79,6 +79,8 @@ command is experimental with it):
 | `barca resume` | new in 0.41: resuming paused assets; the JSON shape and the table may change after field use |
 | `barca get --allow-paused` | new in 0.41: runs a paused target by hand; which requests need it may change after field use |
 | `barca run --allow-paused` | new in 0.41: runs a paused target by hand; which requests need it may change after field use |
+| `barca get --queue` | new in 0.46.0: a place in a server's run queue; the values, what `last` is ordered with and where it shows may change after field use |
+| `barca run --queue` | new in 0.46.0: a place in a server's run queue; the values, what `last` is ordered with and where it shows may change after field use |
 | `barca serve` | the HTTP API and scheduler are young: opt-in project tokens, routes may change; the older trigger routes remain deprecated aliases for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release; runs share identical in-flight asset steps (new in 0.39.4, #654), with cancellation survival, a durable handoff and a decide-to-lease race still open |
 | `barca serve --capacity` | new in 0.31.0 (#628): the admission order across runs and the shape of capacity in /queue and /health may change after field use |
 | `barca state reset` | new in 0.28 (#508): the JSON shape and the name of the moved-aside file may change after field use |
@@ -104,21 +106,21 @@ command is experimental with it):
 | `barca get --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms and the dry run's batch object may change after field use |
 | `barca run --batch` | new in 0.32.0 (RFC-0013): batched partitions; the override's forms may change after field use |
 | `barca get --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca get --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca get --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca run --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca run --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca run --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca status --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca status --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca status --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca list --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca list --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca list --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca history --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca history --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca history --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca stats --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca stats --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca stats --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca logs --server` | server mode is new (RFC-0007): how the server is chosen and the client's messages may change |
-| `barca logs --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca logs --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca sql --server` | new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows and 4MB an answer, four queries at once) and its errors may change |
-| `barca sql --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) |
+| `barca sql --local` | server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) |
 | `barca logs --follow` | new in 0.29.2: how the end of a followed run is reported may change after field use |
 <!-- END GENERATED experimental -->
 
@@ -133,7 +135,8 @@ stability; the row adds the keys and routes that go with it.
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `/events/{run_id}`) are deprecated aliases with no scheduled removal; a removal migrates the Python `Client` first and lands as a breaking change in a minor release |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
-| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [Server Mode: a Shared Ledger and --server](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| `--server [<URL>]` and `--local` on `get`, `run`, `status`, `list`, `history`, `stats`, `logs`, `sql`, `queue`, `pause`, `resume`, `cancel`, `pin`, `unpin`, `gc`, `doctor`; `BARCA_SERVER` and `[server] url` | server mode is new (RFC-0007). A `--server` command prints what the local command prints, with the differences [Server Mode: a Shared Ledger and --server](/reference/server-mode/) lists (the server's paths, `triggered_by: api`, lines the Python workers print themselves stay on the server). Without `--server`, a configured server is the ledger of a local `get`/`run` (`POST /ledger/lookup`, `POST /ledger/runs`) and answers `status` (with `nodes[].local` and the `unsynced`/`not_in_ledger` state), `history`, `stats` and `logs`; `sql` resolves its views and barca's tables from it and runs the query here; `--local` ignores it. How the server is chosen and the client's own messages may change |
+| The project socket: a `barca serve` running in the project is used by the commands typed there (`.barca/serve.sock`, `POST /gc`, `barca gc --server` / `--local`) | new in 0.46.0 (#1056). With a server running in the project and neither `--local` nor `--server`: `get` and `run` join its queue, `status`, `history`, `stats`, `logs`, `queue`, `pause`, `resume`, `pin`, `unpin` and `cancel` are answered by it, `sql` resolves from it, `gc` is run by it, and stderr says once `[barca] server .barca/serve.sock (this project's barca serve; --local runs on this machine)`. `--local` ignores it. No token is asked on the socket. `state restore` and `state reset` refuse while the server is up (exit 3). Which commands are routed, the socket's path, the announcement's wording, the 5-second answer limit and the `POST /gc` body may change after field use ([Server Mode: a Shared Ledger and --server](/reference/server-mode/)) |
 | `barca sql` with a server (`GET /sql/views`, `GET /materializations`) and the `barca` schema (`barca.runs`, `barca.materializations`, `barca.nodes`, `barca.schedules`, `barca.ticks`, `barca.queue`) | new in 0.29.3 (the last three in 0.44.1): the columns of barca's tables, the limit of rows read from a server and the wording of the notes may change after field use; the result JSON is `sql`'s |
 | `barca sql` with a server, for a query that names only barca's tables (`POST /sql/query`) | new in 0.44.0: the server answers it instead of this machine. Which queries are sent to the server, its limits (5 seconds, 10000 rows and 4MB an answer, 100000 rows a table, four queries at once), the `notes` and the wording of its refusals may change; the result JSON is `sql`'s, a refusal is exit 2 with the standard envelope |
 | `logs -f/--follow` | new in 0.29.2: the end-of-run line on stderr (`barca: run <run_id> ended: <status>`) and the choice of the run to follow without a run id may change after field use; the exit codes (0 succeeded, 130 cancelled, 1 otherwise) and the JSON Lines on stdout are stable |
@@ -145,6 +148,7 @@ stability; the row adds the keys and routes that go with it.
 | `BARCA_LOG` and the JSON lines of `barca serve` | new: the fields and how a line's `level` is chosen may change |
 | `barca queue` and its JSON, `barca serve --max-runs`, `[server] max_runs`, `BARCA_SERVER_RECONNECT` | new in 0.29.4: the run queue (`GET /queue`, `POST /queue/pause`, `POST /queue/resume`), its JSON and table, and how long and how often a `--server` client waits for a restarting server may change after field use |
 | `[server] admission`, `[server] scheduled_max_wait_seconds`, and `capacity.admission`, `capacity.scheduled_max_wait_seconds` and `capacity.waiting[].origin` in `GET /queue` | new in 0.45.0 (#1003): which runs count as requested, the default bound and how the order is shown may change after field use; `admission = "first_come"` keeps the order of earlier releases |
+| `queue` of `POST /runs` (`--queue next\|last` of `get` and `run`), and `queue` in the answer of `POST /runs`, on each run of `GET /queue` (`barca queue --json`) and in `GET /runs/{run_id}` | new in 0.46.0: `"last"` queues a requested run behind every waiting run and orders it with scheduled work ([Operating barca serve: Queue a run last](/reference/serve-ops/#queue-a-run-last---queue-last)); the values, the rule and where it shows may change after field use. `--queue` is a usage error (exit 2) on a command that runs on this machine |
 | `undeclared_env`: the plan-warning kind, `steps[].undeclared_env` in `get`/`run` (and `--dry-run`) JSON, `nodes[].undeclared_env` in `status --json` | new in 0.29.1 (#574): which environment reads are found statically may grow |
 | the `[barca] <n> more: ...` line | collapsing repeated library warnings is new; which output counts as a warning may change |
 | `BARCA_ARTIFACT_URI` | 0.4.0 back-compat override, superseded by `BARCA_REMOTE_URI` / `[remote].artifacts_uri` |
@@ -163,6 +167,7 @@ stability; the row adds the keys and routes that go with it.
 | `GET /assets/{name}/partitions/grid` and `GET /assets/{name}/partitions/key`, and the JSON of `barca status NODE --grid` and `--key KEY`, which print them | new in 0.42 (the commands in 0.44, #990): every key of a partitioned node in one body, and one key across its chain; the encoding of the per-key columns and which states are told apart may change after field use |
 | `GET /assets/{name}/partitions/keys` and `GET /assets/{name}/partitions/overview`, and the JSON of `barca status NODE --keys` and `--overview`, which print them; `needs_run` in `GET /assets/{name}/partitions/key`; `causes` and `fresh` of each entry of `files` in `GET /state/rollup` and `barca status --rollup --json` | new in 0.44.1 (#1036): the keys of a partitioned node filtered, ordered and paged by the server, and its keys in one picture; the route's parameters, the page size (at most 1000 keys), the bound on a served `selection` (5,000 keys or values) and on the overview's rows (200,000 cells) may change after field use |
 | `barca pause --schedule`, `barca pause --until`, `barca resume --schedule`, their JSON (the schedule's `GET /schedule` entry), `schedules` in `barca pause --json` and `GET /pauses`, and a duration as `?until=` of `POST /schedule/{id}/pause` | new in 0.44 (#989, [Scheduling With Cron](/scheduling/), "Pausing one schedule"): the entry's keys follow `GET /schedule` |
+| `nodes[].last_attempt` and `nodes[].typical_run_seconds` in `status --json` (and `GET /state`, `GET /nodes`), `barca pause --dry-run` and `covers` in its JSON (`GET /pauses?target=`) | new in 0.46.0 (#1056, [barca status: Fields and JSON: Last attempt](/reference/cli/status-fields/#last-attempt) and "Typical run time"; [barca pause and resume: What a pause would cover](/reference/cli/pause/#what-a-pause-would-cover)): the words of `last_attempt` and of `covers.schedules[].relation` may grow, and what `typical_run_seconds` counts for a batched node may change after field use |
 | Row counts: `last_materialization.rows` and `partitions.empty` in `status --json`, `steps[].rows` in `history RUN_ID --json`, `recent_runs[].rows` and `recent_runs[].empty_keys` in `stats --json` (and `--fields`), `rows` in `barca sql`'s `barca.materializations`, `last_rows` and `partitions_empty` in `barca.nodes` | new in 0.43 (#925, [barca status: Fields and JSON: Row counts](/reference/cli/status-fields/#row-counts)): which results are counted (frames, parquet footers) may widen after field use |
 | `run.plan_reasons`, `run.retries`, `principal`, `trigger_reason` and `cancellation` in `barca history --json` (and `GET /runs`, `GET /runs/{run_id}`), `reason` of `POST /runs`, `?offset=` and `steps_page.next_offset` of `GET /runs/{run_id}`, `explanation` of `barca history RUN_ID --json` and `GET /runs/{run_id}` (#956), the `why:`, `target:`, `reason:` and `cancelled: ...` lines of `barca history RUN_ID` | new in #925: which reasons the engine tells apart, the bounds (64 reasons, 10,000 examined keys per node and phase) and the wording of the lines may change after field use |
 | Health: `health`, `health_reason`, `cause`, `root`, `gap_seconds`, `signals`, `measured`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at` and `no_estimate` of each node, and `data_coverage`, `as_of` and `rollup` beside `summary`, in `status --json` (and `--fields`, `GET /nodes`, `GET /state`), `typical_queue_wait_seconds`, `typical_run_seconds` and `queue_bound` of a node's `schedule` (and of `GET /schedule`), `started_at`, `estimated_start_at` and `wait_seconds` of a run in `barca queue --json`, the `health`, `health_reason`, `cause`, `root_id`, `root_kind`, `root_node`, `gap_seconds`, `signals`, `measured`, `last_check_at`, `last_check_outcome`, `refresh_schedule`, `next_tick`, `missed_ticks`, `stale_since`, `expected_fresh_at`, `recheck_at` and `no_estimate` columns of `barca.nodes`, the `Health:`, `Gap:` and `Data:` lines of the `barca status` table, the `checked 3m ago, up to date` it adds to the `WHY` of an `unknown` node and the `next tick 15:05 UTC by inbox`, `no refresh path`, `fresh ~15:05 UTC` or `overdue 16h` it adds to the `WHY` of a node that is not fresh | new in 0.44 (#954, #957, #961, #962, #963, #964, #968, #973, [barca status: Fields and JSON: Health](/reference/cli/status-fields/#health), "Cause", "Root", "Last check", "Refresh path" and "Times"): how an estimate is computed and rounded, which fact a root names and the order of the cause rules may change after field use; `schedule_late` takes its final definition of late from #958, and when a tick's check decides health (`checked_up_to_date`) may change after field use |
@@ -337,8 +342,9 @@ default, and any aliases.
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `sink_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
+| `--queue` | `next\|last` | - | experimental: new in 0.46.0: a place in a server's run queue; the values, what `last` is ordered with and where it shows may change after field use | On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca run
@@ -359,8 +365,9 @@ default, and any aliases.
 | `--fields` | comma-separated: `id`, `kind`, `action`, `status`, `reason`, `detail`, `changed`, `run_hash`, `artifact`, `warning`, `artifact_mismatch`, `bytes_changed`, `elapsed_seconds`, `attempts`, `import_seconds`, `sink_seconds`, `partitions`, `env`, `undeclared_env`, `weight`, `batch`, `batch_execution` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--allow-paused` | - | default `false` | experimental: new in 0.41: runs a paused target by hand; which requests need it may change after field use | Run a target even though it is paused (experimental) |
+| `--queue` | `next\|last` | - | experimental: new in 0.46.0: a place in a server's run queue; the values, what `last` is ordered with and where it shows may change after field use | On a server, join its run queue `next` (default) or `last`, behind scheduled runs (experimental) |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca plan
@@ -398,7 +405,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca history
@@ -422,7 +429,7 @@ default, and any aliases.
 | `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`, `line`, `now` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca gc
@@ -434,6 +441,8 @@ default, and any aliases.
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
+| `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca stats
@@ -447,7 +456,7 @@ default, and any aliases.
 | `--fields` | comma-separated: `elapsed_seconds`, `status`, `created_at`, `error_message`, `attempts`, `run_id`, `cpu_seconds`, `max_rss_bytes`, `rows`, `empty_keys`, `keys`, `failed_keys` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca pin
@@ -466,7 +475,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca unpin
@@ -479,7 +488,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca serve
@@ -510,7 +519,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Check the server's environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca queue
@@ -522,7 +531,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca pause
@@ -531,13 +540,14 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<TARGET>` | - | - | experimental (with the command) | Node or file.py to pause; omit to list paused nodes and schedules |
 | `--downstream` | - | default `false` | experimental (with the command) | Also pause every node downstream of the target |
+| `--dry-run` | - | default `false` | experimental (with the command) | Pause nothing; print what the pause would cover |
 | `--schedule` | `NODE` | - | experimental (with the command) | Pause the schedule of this scheduled node instead of nodes |
 | `--until` | `WHEN` | - | experimental (with the command) | With --schedule: pause until a duration from now (2h) or an RFC 3339 time |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca resume
@@ -552,7 +562,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental (with the command) | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental (with the command) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental (with the command) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca list
@@ -567,7 +577,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every node (no limit) |
 | `--fields` | comma-separated: `id`, `kind`, `freshness`, `schedule`, `inputs`, `env`, `next_fire`, `file`, `line` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca status
@@ -579,7 +589,7 @@ default, and any aliases.
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
 | `-l, --limit` | `LIMIT` | - | stable | Maximum nodes, in topological order (default: every node in JSON, 100 in a human table) |
 | `--all` | - | default `false` | stable | Show every node (no limit) |
-| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `cause`, `root`, `gap_seconds`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `no_estimate`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `id`, `name`, `kind`, `inputs`, `partitioned`, `cache`, `health`, `health_reason`, `signals`, `measured`, `cause`, `root`, `gap_seconds`, `last_check`, `refresh_path`, `stale_since`, `expected_fresh_at`, `recheck_at`, `no_estimate`, `last_attempt`, `typical_run_seconds`, `partitions`, `last_materialization`, `last_bytes_change`, `shape`, `env`, `undeclared_env`, `local`, `schedule` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--sample` | `N` | - | experimental: sample rows come from a Python helper whose output may grow | Include up to N sample rows from each json/parquet/CSV artifact (off by default; pickles are never sampled) |
 | `--state` | comma-separated names | - | stable | Show only nodes in these cache states (comma-separated): cached, unsynced, stale, never_run, partial, blocked, unknown, always_runs. The summary still counts every node. With --keys: only keys in these key states: failed, blocked, stale, never_run, pinned, fresh |
 | `--cause` | `failing\|overdue\|no_refresh_path\|queued\|undecided\|catching_up` | - | experimental: experimental health inspection (#1043) | Keep nodes with this cause |
@@ -601,7 +611,7 @@ default, and any aliases.
 | `--key` | `KEY` | - | experimental: new in 0.44.0 (#990): a partitioned node's keys; the JSON shape, the table, the key states told apart and the grid's per-key columns may change after field use | Experimental: show one key (day=2026-01-01,region=apac) of one partitioned target |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | stable | Show all command examples without running anything |
 
 #### barca sql
@@ -616,7 +626,7 @@ default, and any aliases.
 | `--all` | - | default `false` | experimental (with the command) | Return every row (no limit) |
 | `--env` | `ENV` | - | experimental (with the command) | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: new in 0.29.3: the views and barca's tables resolved from a server (GET /sql/views, GET /materializations) may change after field use; new in 0.44.0: a query naming only barca's tables is answered by the server (POST /sql/query), and which queries are sent there, its limits (5 seconds, 10000 rows and 4MB an answer, four queries at once) and its errors may change | Use a server (URL or configured); get/run execute its deployed code |
-| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) | Use independent local state; ignore the configured server |
+| `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
 | `--examples` | - | - | experimental (with the command) | Show all command examples without running anything |
 
 #### barca state
@@ -1784,6 +1794,7 @@ fetched) is still exit 3.
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | object | always |
 | `nodes[].last_materialization.artifact` | string | always |
@@ -1812,6 +1823,7 @@ fetched) is still exit 3.
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null | always |
+| `nodes[].typical_run_seconds` | number | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |
@@ -2275,6 +2287,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | null \| object | always |
 | `nodes[].last_materialization.artifact` | null \| string | always |
@@ -2317,6 +2330,7 @@ counts every node even when `nodes` is truncated.
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null \| string | always |
+| `nodes[].typical_run_seconds` | null \| number | always |
 | `nodes[].undeclared_env` | array | sometimes |
 | `nodes[].undeclared_env[]` | string | always |
 | `rollup` | object | always |
@@ -2624,6 +2638,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | null \| object | always |
 | `nodes[].last_materialization.artifact` | null | always |
@@ -2655,6 +2670,7 @@ attention, adds `filter`, and leaves `summary` counting every node; `--state <st
 | `nodes[].shape` | null | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | string | always |
+| `nodes[].typical_run_seconds` | null | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |
@@ -3249,6 +3265,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].inputs` | array | always |
 | `nodes[].inputs[]` | string | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_check` | null | always |
 | `nodes[].last_materialization` | null \| object | always |
 | `nodes[].last_materialization.artifact` | string | always |
@@ -3277,6 +3294,7 @@ After `total`'s input `numbers` changed its code, `barca status pipeline.py --js
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | string | always |
+| `nodes[].typical_run_seconds` | null \| number | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |
@@ -3542,7 +3560,10 @@ hex digits) and `span_id` (its root `barca.step` span, decimal); the two keys ar
 every other step (experimental, additive, 0.41.0; [Telemetry (Datadog)](/reference/telemetry/)).
 Cached steps are not listed: `run.steps_cached` counts them. `steps_page` is `{total,
 truncated}`: how many steps the run recorded and whether `steps` lists fewer (the table
-prints a note on stderr). `run.retries` (experimental, #925) counts the attempts that retried a
+prints a note on stderr). When `--limit` cut the list short it also has `next_offset`, the
+position of the first step not listed, as `GET /runs/{run_id}` gives it (experimental; a run
+read from this machine's database once lacked it); `barca history` has no flag that reads from an
+offset, `--all` lists every step. `run.retries` (experimental, #925) counts the attempts that retried a
 step (`attempts` minus one per recorded step), so `attempts` = steps recorded + `retries`.
 `run.plan_reasons` (experimental, #925), absent for a run that executed nothing and in the
 `barca history` list, says why the run executed the steps it did instead of serving them from
@@ -4455,6 +4476,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].id` | string | always |
 | `nodes[].inputs` | array | always |
 | `nodes[].kind` | string | always |
+| `nodes[].last_attempt` | string | always |
 | `nodes[].last_bytes_change` | object | always |
 | `nodes[].last_bytes_change.content_hash` | string | always |
 | `nodes[].last_bytes_change.created_at` | string | always |
@@ -4482,6 +4504,7 @@ runs) prints the same warning and sets the same flag. Server-post semantics rema
 | `nodes[].shape.type` | string | always |
 | `nodes[].signals` | array | always |
 | `nodes[].stale_since` | null | always |
+| `nodes[].typical_run_seconds` | number | always |
 | `rollup` | object | always |
 | `rollup.also_in` | array | always |
 | `rollup.asset_causes` | object | always |

@@ -4,10 +4,10 @@ import { Pin } from 'lucide-react'
 import { Age, Button, ConfirmDialog, Section } from '@/components'
 import { api } from '@/lib/api'
 import { UPLOAD_EXTENSIONS, uploadFormat } from '@/lib/pins'
-import { formatSeconds } from '@/lib/assetTable'
 import { formatBytes, shortHash } from '@/lib/nodeDetail'
 import { shortName } from '@/lib/graph'
 import type { AssetVersion, AssetVersions as Versions, NodeState } from '@/lib/types'
+import { formatSeconds } from '@/lib/time'
 
 /**
  * barca · Versions

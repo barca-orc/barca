@@ -165,7 +165,7 @@ def test_state_signals_empty_keys_changed_counts_and_a_fan_in_behind_its_input(p
     # Unscheduled nodes have no slots.
     assert (state["orders"]["prev_run"], state["orders"]["late_since"]) == (None, None)
 
-    # Health, signals and coverage are classified once, in barca-core (specs/behavior/health.md,
+    # Health, signals and coverage are classified once, in barca-service (specs/behavior/health.md,
     # INV-HEALTH-02): the CLI, `GET /nodes`, `GET /state` and `barca.nodes` say the same.
     classified = ("health", "health_reason", "signals", "measured")
     status = json.loads(barca(project, "status", "pipeline.py", "--json").stdout)

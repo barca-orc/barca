@@ -3,7 +3,7 @@ import { useAssets } from "@/hooks/useAssets";
 import { useAssetStates } from "@/hooks/useAssetStates";
 import { useHealth } from "@/hooks/useHealth";
 import { usePageTopbarRun } from "@/hooks/useTopbarRun";
-import { useSchedule, useToggleSchedulePause } from "@/hooks/useSchedule";
+import { useToggleSchedulePause } from "@/hooks/useSchedule";
 import { pipelineName } from "@/lib/pipeline";
 import { remote } from "@/lib/remote";
 import { PageRunButton } from "@/components";
@@ -14,7 +14,6 @@ export function SchedulesPage() {
   const assets = useAssets();
   const { data: states, dataUpdatedAt } = useAssetStates();
   const health = useHealth();
-  const { data: jobs } = useSchedule();
   const toggle = useToggleSchedulePause();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -37,7 +36,6 @@ export function SchedulesPage() {
       assets={remote(assets)}
       states={states}
       dataUpdatedAt={dataUpdatedAt}
-      jobs={jobs}
       health={health.data}
       offline={health.isError}
       toggle={{
