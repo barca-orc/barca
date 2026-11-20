@@ -198,7 +198,7 @@ These keep the documentation and the command line in agreement.
   with `python/tests/snapshots/cli_contract/`.
 - `python/tests/test_docs_examples.py` runs the example pipelines in the manual and checks
   what the text says about them.
-- `cargo test -p barca-compile decorator_args` compares the arguments each decorator and helper
+- `cargo test -p barca-python decorator_args` compares the arguments each decorator and helper
   accepts (`SIGNATURES` in `crates/barca-python/src/decorator_args.rs`) with the signatures in
   `python/barca/__init__.py` and with the "Accepted arguments" tables in `barca docs assets`
   and on the decorators page. Adding an argument means changing all four.
@@ -256,7 +256,7 @@ the diff can affect, chosen by `scripts/ci-rust-tests.py`. Each changed file sel
 | The file | Selects |
 | --- | --- |
 | Is inside a crate (`crates/<dir>/`) | Every test of that crate and of every crate that depends on it, directly or not. The crates and their dependencies (normal, dev and build) are read from `cargo metadata`, so a new crate needs no entry anywhere |
-| Is read by a test in another crate | That test alone, in its own crate. The script's `READERS` table lists them: the guards in `barca-service` and `barca-engine` that scan every crate's sources and manifests, the CLI crate's tests of the site, `README.md` and `SKILL.md`, the tests of `specs/interfaces/artifact-formats.md` and `specs/interfaces/server-api.openapi.yaml`, the UI fixtures in `ui/src/lib/testdata/`, and the unused-input sweep over every pipeline in `examples/`, `benchmarks/`, `python/`, the manual and the site |
+| Is read by a test in another crate | That test alone, in its own crate. The script's `READERS` table lists them: the guards in `barca-service` and `barca-proc` that scan every crate's sources and manifests, the CLI crate's tests of the site, `README.md` and `SKILL.md`, the tests of `specs/interfaces/artifact-formats.md` and `specs/interfaces/server-api.openapi.yaml`, the UI fixtures in `ui/src/lib/testdata/`, and the unused-input sweep over every pipeline in `examples/`, `benchmarks/`, `python/`, the manual and the site |
 | Is the root `Cargo.toml`, `Cargo.lock`, a toolchain file, `.cargo/`, anything under `.depot/` (the CI workflow and its actions), the selection or tier scripts and their tests, `python/barca/` or `pyproject.toml` | The whole workspace |
 | Is known to affect no Rust test (the rest of `site/`, `ui/`, `specs/`, `docs/`, `scripts/`, `python/tests/`, the root documents) | Nothing |
 | Is anything else: a new top-level directory, a file under `crates/` that no crate owns, a workflow the script does not list | The whole workspace |

@@ -177,7 +177,63 @@ graph (an edit to the parser rebuilds them), though neither names it.
 
 ## Measured
 
-MEASUREMENTS
+Before is `integrate/modularity` at 78faf8fc, after is this branch's head, on one machine (32
+cores, Linux) on 2026-11-19 while other builds ran on it (load 4 to 15), so times are
+indicative and sizes and counts are exact.
+
+**Release binary and budgets** (`cargo build --release -p barca`, fat LTO; `scripts/perf-gate.py`
+on the release wheel, `TRIVIAL_RUNS=40`, three runs each):
+
+| | Before | After |
+|---|---|---|
+| release binary, bytes | 20,344,112 | 20,580,880 (+236,768, +1.2%) |
+| trivial run, wall median, ms | 54.1, 55.9, 51.0 | 47.1, 49.7, 48.6 |
+| trivial run, coordinator CPU median, ms (budget 50) | 9.7, 9.8, 9.9 | 9.6, 10.0, 9.8 |
+| trivial run, coordinator peak, KiB (budget 19,531) | 15,876, 15,860, 15,860 | 15,988, 16,024, 15,936 |
+| incremental, coordinator CPU max, ms (budget 40) | 35.9, 18.4, 19.3 | 17.7, 16.6, 17.3 |
+| incremental, coordinator peak, KiB (budget 19,531) | 16,212, 16,264, 16,132 | 16,660, 16,164, 16,604 |
+| history, plan-reasons median, ms (budget 25) | 2.1, 1.6, 1.6 | 2.0, 1.9, 1.6 |
+
+Every budget is met in every run. The binary is 1.2% larger and the coordinator's peak about
+100 to 150 KiB higher (0.7%); the peak has 3.5 MiB of room under its budget on this machine.
+No code was added: the growth is what seven more crate boundaries cost under `opt-level = "s"`
+with fat LTO (each crate instantiates the generic code it uses, and items that were
+crate-private are exported), and it was not chased further. #905 measured +0.3% for four
+boundaries.
+
+**Builds** (dev profile, a target directory of its own; "touch" is `touch` on one file, then
+the same command; the count is workspace crates recompiled):
+
+| | Before | After |
+|---|---|---|
+| clean `cargo build -p barca`, s | 40.4 (7 crates) | 35.8 (13 crates) |
+| clean `cargo test --workspace --no-run` after it, s | 38.7 | 36.9 |
+
+| One file touched | Crates rebuilt, before | after | `cargo build`, s | `cargo test --no-run`, s | Rust tests the merge tier selects, before | after |
+|---|---|---|---|---|---|---|
+| a read model (`health.rs`) | 3 | 4 | 5.5 → 2.3 | 19.7 → 5.4 | 938 | 641 |
+| the run orchestrator (`execution.rs`) | 3 | 4 | 3.0 → 2.2 | 5.9 → 4.4 | 938 | 601 |
+| the service layer (`report.rs`) | 3 | 3 | 3.0 → 1.8 | 12.1 → 15.5 | 938 | 509 |
+| a decision (`cache.rs`) | 3 | 6 | 3.2 → 2.3 | 5.7 → 14.2 | 938 | 812 |
+| storage (`transfer.rs`) | 3 | 7 | 3.1 → 2.6 | 13.5 → 5.7 | 938 | 938 |
+| the engine (`coordinator.rs`) | 4 | 5 | 5.3 → 2.1 | 5.9 → 5.1 | 1,080 | 696 |
+| the database (`db/runs.rs`) | 4 | 8 | 3.5 → 3.0 | 8.3 → 5.7 | 1,077 | 1,077 |
+| the planner (`planner.rs`) | 5 | 9 | 3.6 → 2.8 | 11.4 → 12.2 | 1,385 | 1,110 |
+| the parser (`parse.rs`) | 5 | 9 (10 with tests) | 3.5 → 2.9 | 13.2 → 13.9 | 1,385 | 1,349 |
+| the model (`model.rs`) | 7 | 13 | 3.8 → 3.4 | 6.4 → 12.5 | 1,626 | 1,626 |
+
+More crates are recompiled by one edit, and each is smaller: before, any edit above the
+engine recompiled all 67k lines of `barca-core` and relinked its one test binary of 617
+tests. The times of a touch are dominated by linking and by the machine's load and do not
+separate cleanly; the count of tests is the plan's point. An edit to a read model, to the run
+orchestrator or to the service layer no longer selects the other two layers' tests or the
+decisions' and the stores'; an edit to the engine no longer selects the read models'. The
+workspace has 1,626 Rust tests before and after (tests moved crates; the dropped guards' unit
+tests and the added per-crate ones cancel): `barca` 107, `barca-analysis` 132, `barca-compile`
+77, `barca-db` 139, `barca-decide` 79, `barca-engine` 95, `barca-model` 103, `barca-proc` 36,
+`barca-python` 239, `barca-run` 92, `barca-server` 213, `barca-service` 188, `barca-store`
+126. Before: `barca` 107, `barca-compile` 305, `barca-core` 617, `barca-db` 139, `barca-engine`
+143, `barca-model` 102, `barca-server` 213.
 
 ## Follow-ups
 
