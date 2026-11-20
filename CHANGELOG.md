@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.46.0 (2026-11-20)
+
 - Internal: `barca-core` is dissolved into crates that match its layers (`barca-store`, `barca-decide`, `barca-run`, `barca-analysis` and `barca-service`, the one crate the CLI and the server import), with child processes and the socket protocol in `barca-proc`, the Python frontend in `barca-python` and the graph in `barca-model`; `barca-decide`, `barca-analysis` and planning (`barca-compile`) take a graph and do not depend on the frontend (`docs/engineering/crate-split-2.md`, #1056); no behavior change.
 
 - Internal: before that split, the layers were made real inside the crate (#1056): helpers and types moved to the layer that owns them, the storage modules name no higher layer, the dry-run prediction and run sizing moved out of the run orchestrator into the decisions layer, the read models (status, health, rollup, estimates) depend on each other in one checked order, and the renderer is named by nothing below it (a run's progress lines live with the run orchestrator). The wrong-way module edges went from 42 to none and the largest dependency cycle from 38 modules to none; each crate keeps a layering test. No behavior change.

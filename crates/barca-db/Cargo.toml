@@ -1,6 +1,6 @@
 [package]
 name = "barca-db"
-version = "0.45.0"
+version = "0.46.0"
 edition = "2024"
 description = "Metadata database layer — `.barca/metadata.db`: its schema, its writes and the rows' owners"
 
