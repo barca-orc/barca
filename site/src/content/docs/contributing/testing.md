@@ -48,7 +48,7 @@ real `barca` binary on it, and check the output, exit code and files.
 Each test has a timeout (pytest-timeout, from the `test` extra): 120 s by default (`timeout` in
 `[tool.pytest.ini_options]` in `pyproject.toml`), 300 s in the files whose tests are known to
 take longer (`test_minute_checkpoints.py`, `test_remote_faults.py`, `test_simulation.py`, with a
-module-level `pytest.mark.timeout(300)`). A test past its timeout fails with the stacks of its
+module-level `pytest.mark.timeout(300)`; `test_owner_serve.py` marks its one long test). A test past its timeout fails with the stacks of its
 threads, so a hang costs minutes instead of the CI job's own limit. A test that needs optional packages (pandas, pyarrow, duckdb,
 jsonschema) skips without them through `pytest.importorskip`, so the suite collects without
 the `test` extra.

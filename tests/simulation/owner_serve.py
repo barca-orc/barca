@@ -46,6 +46,7 @@ Exit codes: 0 passed, 1 a check failed, 3 the harness itself failed.
 from __future__ import annotations
 
 import argparse
+import calendar
 import fcntl
 import hashlib
 import json
@@ -154,7 +155,7 @@ NEVER = {
     "could not trim": "trim failed",
     "cache size check failed": "gc failed",
     "panicked at": "panic",
-    "metadata_error\": \"": "server lost its database",
+    'metadata_error": "': "server lost its database",
     "Database error": "database error",
     "failed to open DB": "open failed",
     "cache lookup of": "a read lost to a writer",
@@ -310,7 +311,10 @@ class Harness:
         said = [word for word in NEVER if word in out.stderr or word in out.stdout]
         if out.returncode not in ok or said:
             self.problem(
-                kind, f"exit {out.returncode}" + (f", says {said}" if said else ""), out.stderr, began
+                kind,
+                f"exit {out.returncode}" + (f", says {said}" if said else ""),
+                out.stderr,
+                began,
             )
             return None
         return out
@@ -444,11 +448,18 @@ class Harness:
         )
         if status != 202 or not body:
             if status and status < 500:
-                self.problem("api run", f"POST /runs answered {status}", json.dumps(body), self.now())
+                self.problem(
+                    "api run", f"POST /runs answered {status}", json.dumps(body), self.now()
+                )
             return None
         run_id = body["run_id"]
         with self.lock:
-            self.accepted[run_id] = {"at": self.now(), "via": "api", "expect": expect}
+            self.accepted[run_id] = {
+                "at": self.now(),
+                "wall": time.time(),
+                "via": "api",
+                "expect": expect,
+            }
         if wait:
             self.follow(run_id, expect, loop)
         return run_id
@@ -486,7 +497,11 @@ class Harness:
         if done.get("status") != "success" or done.get("steps_executed") != expect:
             self.problem("local get", f"not {expect} steps", json.dumps(done)[:800], began)
         with self.lock:
-            self.local_runs[done["run_id"]] = {"at": began, "steps": done.get("steps_executed")}
+            self.local_runs[done["run_id"]] = {
+                "at": began,
+                "wall": time.time(),
+                "steps": done.get("steps_executed"),
+            }
 
     def socket_commands(self, rng: random.Random) -> None:
         """Commands with neither `--local` nor `--server`: sent to the server over its socket."""
@@ -500,6 +515,7 @@ class Harness:
                     with self.lock:
                         self.accepted[done["run_id"]] = {
                             "at": began,
+                            "wall": time.time(),
                             "via": "socket",
                             "expect": LAST_STEPS,
                             "ended": done.get("status"),
@@ -532,7 +548,9 @@ class Harness:
         if pick == 0:
             status = self.json_of("local status", "status", "pipeline.py", "--local", "--json")
             if status is not None and len(status.get("nodes", [])) != 6:
-                self.problem("torn", "status lists fewer nodes than the file", str(status)[:800], began)
+                self.problem(
+                    "torn", "status lists fewer nodes than the file", str(status)[:800], began
+                )
         elif pick == 1:
             history = self.json_of("local history", "history", "--local", "--json", "--all")
             if history is not None:
@@ -554,7 +572,13 @@ class Harness:
             self.json_of("local stats", "stats", "last", "pipeline.py", "--local", "--json")
         elif pick == 3:
             self.json_of(
-                "local status --keys", "status", "keyed", "pipeline.py", "--keys", "--local", "--json"
+                "local status --keys",
+                "status",
+                "keyed",
+                "pipeline.py",
+                "--keys",
+                "--local",
+                "--json",
             )
         elif pick == 4:
             self.cli("local logs", "logs", "--local")
@@ -568,16 +592,22 @@ class Harness:
                     self.problem("lost", f"run {run_id} reads {detail['run']['status']}", "", began)
         else:
             history = self.json_of("local history", "history", "--local", "--json")
-            live = [r["run_id"] for r in (history or {}).get("runs", []) if r["status"] == "running"]
+            live = [
+                r["run_id"] for r in (history or {}).get("runs", []) if r["status"] == "running"
+            ]
             if live:
                 # Follow a run that is going until it ends; the exit code is the run's.
-                self.cli("local logs -f", "logs", live[0], "-f", "--local", timeout=90, ok=(0, 1, 130))
+                self.cli(
+                    "local logs -f", "logs", live[0], "-f", "--local", timeout=90, ok=(0, 1, 130)
+                )
 
     def check_run_counts(self, kind: str, run: dict, began: float) -> None:
         total = run.get("steps_total")
         done = (run.get("steps_executed") or 0) + (run.get("steps_cached") or 0)
         if run.get("status") == "success" and total is not None and done != total:
-            self.problem("torn", f"{kind}: a success with {done} of {total} steps", str(run)[:800], began)
+            self.problem(
+                "torn", f"{kind}: a success with {done} of {total} steps", str(run)[:800], began
+            )
 
     def http_reads(self, rng: random.Random) -> None:
         began = self.now()
@@ -585,7 +615,9 @@ class Harness:
         if pick == 0:
             status, body = self.http("http GET /state", "GET", "/state")
             if status == 200 and len({node.get("id") for node in body or []}) != 7:
-                self.problem("torn", "/state does not list the 7 nodes once each", str(body)[:500], began)
+                self.problem(
+                    "torn", "/state does not list the 7 nodes once each", str(body)[:500], began
+                )
         elif pick in (1, 2):
             status, body = self.http("http GET /runs", "GET", "/runs?limit=50")
             if status != 200 or not body:
@@ -872,7 +904,9 @@ class Harness:
             if not left:
                 break
             if time.monotonic() > deadline:
-                raise Failed(f"runs in flight at a SIGKILL are not ended by the next server: {left}")
+                raise Failed(
+                    f"runs in flight at a SIGKILL are not ended by the next server: {left}"
+                )
             time.sleep(0.2)
         if run_id and record.get("run status") not in ("interrupted", "error"):
             raise Failed(f"the run a SIGKILL caught mid-step reads {record.get('run status')}")
@@ -905,15 +939,25 @@ class Harness:
         """Every accepted run, every `--local` run that exited 0 and every fired tick is in the
         history as it ended. The trim may delete runs past the newest KEPT_RUNS."""
         newest = max((row[-1] for row in final.values()), default=0)
-        oldest_kept = sorted(row[-1] for row in final.values())[-KEPT_RUNS:][:1]
-        trimmed_runs = sum(int(n) for n in re.findall(r"and (\d+) old runs", self.log_text()))
+        oldest_kept = min((row[-1] for row in final.values()), default=0)
+        # The trim deletes the oldest runs past the newest KEPT_RUNS, in whichever process
+        # checks the size: a run that is gone is explained only by being older than every
+        # run that is left, with KEPT_RUNS of them left.
+        full = len(final) >= KEPT_RUNS
+        oldest_started = min(
+            (
+                calendar.timegm(time.strptime(row[4][:19].replace("T", " "), "%Y-%m-%d %H:%M:%S"))
+                for row in final.values()
+                if row[4]
+            ),
+            default=0,
+        )
         lost: list[str] = []
         trimmed = 0
 
-        def missing(run_id: str, what: str) -> None:
+        def missing(run_id: str, what: str, older: bool) -> None:
             nonlocal trimmed
-            # A run the trim may have deleted: there are KEPT_RUNS newer ones.
-            if len(final) >= KEPT_RUNS and trimmed_runs > trimmed:
+            if full and older:
                 trimmed += 1
             else:
                 lost.append(f"{what} {run_id} is not in the history")
@@ -921,7 +965,7 @@ class Harness:
         for run_id, seen in self.accepted.items():
             row = final.get(run_id)
             if row is None:
-                missing(run_id, f"accepted ({seen['via']})")
+                missing(run_id, f"accepted ({seen['via']})", seen["wall"] < oldest_started + 5)
                 continue
             status, executed = row[0], (row[1] or 0) + (row[2] or 0)
             if status not in TERMINAL:
@@ -933,7 +977,7 @@ class Harness:
         for run_id, seen in self.local_runs.items():
             row = final.get(run_id)
             if row is None:
-                missing(run_id, "--local run")
+                missing(run_id, "--local run", seen["wall"] < oldest_started + 5)
             elif row[0] != "success" or row[1] != seen["steps"]:
                 lost.append(f"--local run {run_id} reads {row[0]} with {row[1]} steps")
         fired = re.findall(r"scheduled run (\S+) → (\w+)", self.log_text())
@@ -944,19 +988,21 @@ class Harness:
             )
         }
         per_schedule: Counter[str] = Counter()
-        without_tick = 0
-        for schedule, run_id in reversed(fired):
+        # In the order fired: the ones the trim deleted come before the first one left.
+        first_kept = next((n for n, (_, run_id) in enumerate(fired) if run_id in final), 0)
+        for n, (schedule, run_id) in reversed(list(enumerate(fired))):
             per_schedule[schedule] += 1
             row = final.get(run_id)
             if row is None:
-                missing(run_id, f"tick of {schedule}")
+                missing(run_id, f"tick of {schedule}", n < first_kept + 20)
             elif row[0] not in TERMINAL:
                 lost.append(f"scheduled run {run_id} is left {row[0]}")
             if run_id not in ticks and per_schedule[schedule] <= TICKS_PER_SCHEDULE - 50:
-                without_tick += 1
                 lost.append(f"scheduled run {run_id} of {schedule} has no tick record")
         # Step rows: a success's rows are there, unless the trim removed superseded results.
-        removed_rows = sum(int(n) for n in re.findall(r"removed (\d+) old results", self.log_text()))
+        removed_rows = sum(
+            int(n) for n in re.findall(r"removed (\d+) old results", self.log_text())
+        )
         short = self.query(
             "SELECT r.run_id, r.steps_executed, count(m.id) FROM runs r LEFT JOIN materializations m "
             "ON m.run_id = r.run_id AND m.status = 'success' WHERE r.status = 'success' "
@@ -979,20 +1025,18 @@ class Harness:
         return {
             "runs in the final history": len(final),
             "newest run row id": newest,
-            "oldest kept row id": oldest_kept[0] if oldest_kept else None,
+            "oldest kept row id": oldest_kept,
             "accepted by the server": len(self.accepted),
             "local runs that exited 0": len(self.local_runs),
             "ticks the server fired": len(fired),
             "tick records": len(ticks),
-            "runs deleted by the trim": trimmed_runs,
-            "missing runs the trim explains": trimmed,
+            "runs ever recorded": newest,
+            "tracked runs the trim deleted": trimmed,
             "step rows removed by the trim": removed_rows,
-            "recorded steps": self.query(
-                "SELECT coalesce(max(id), 0) FROM materializations"
-            )[0][0],
-            "step rows in the final database": self.query(
-                "SELECT count(*) FROM materializations"
-            )[0][0],
+            "recorded steps": self.query("SELECT coalesce(max(id), 0) FROM materializations")[0][0],
+            "step rows in the final database": self.query("SELECT count(*) FROM materializations")[
+                0
+            ][0],
         }
 
     def check_backups(self, final: dict[str, tuple]) -> dict:
@@ -1043,7 +1087,9 @@ class Harness:
             then = self.runs_of(project / ".barca/metadata.db")
             if set(history) != set(then):
                 raise Failed(f"backup {name}: `barca history` lists other runs than its rows")
-            with closing(sqlite3.connect(f"file:{project / '.barca/metadata.db'}?mode=ro", uri=True)) as conn:
+            with closing(
+                sqlite3.connect(f"file:{project / '.barca/metadata.db'}?mode=ro", uri=True)
+            ) as conn:
                 if conn.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                     raise Failed(f"backup {name}: the restored database fails integrity_check")
             for run_id, row in then.items():
@@ -1055,7 +1101,9 @@ class Harness:
                 if row[0] not in TERMINAL:
                     continue  # Still going when the backup was taken.
                 if row[:6] != now[:6]:
-                    raise Failed(f"run {run_id} is {row[:6]} in backup {name} and {now[:6]} at the end")
+                    raise Failed(
+                        f"run {run_id} is {row[:6]} in backup {name} and {now[:6]} at the end"
+                    )
             shutil.rmtree(scratch / name)
             checked += 1
         takers: Counter[str] = Counter()
@@ -1205,6 +1253,8 @@ class Harness:
             "wal samples under 64 KiB": sum(1 for w in wal if w <= 65536),
             "wal last": wal[-1] if wal else None,
             "db max": max(db, default=0),
+            # A database file only shrinks by `VACUUM`.
+            "times the db file shrank": sum(1 for a, b in zip(db, db[1:]) if b < a),
             "db last": db[-1] if db else None,
             "rss first": rss[0] if rss else None,
             "rss max": max(rss, default=0),

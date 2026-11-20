@@ -834,6 +834,12 @@ pub async fn run_list(req: RunListRequest<'_>) -> Result<RunList, BarcaError> {
         if runs.iter().any(|r| r.id == run.handle) {
             continue;
         }
+        // A finished run that wrote its row is the database's to list, and counted there:
+        // nothing to add, so nothing to look up. A server remembers every run of the last
+        // hour, and one lookup for each made a list of 50 take 0.8 s beside 2,000 of them.
+        if !run.status.in_progress() && run.db_run_id.is_some() {
+            continue;
+        }
         match db::get_run(read_path, &run.handle).await? {
             // An older run than the page holds: listed while it is in progress (#941), and
             // already counted.
@@ -877,7 +883,9 @@ pub async fn run_list(req: RunListRequest<'_>) -> Result<RunList, BarcaError> {
             .cmp(&!b.in_progress())
             .then_with(|| b.started_at.cmp(&a.started_at))
     });
-    let total = durable_total + extra;
+    // Never fewer than are listed: a run recorded after the count was found by its own
+    // lookup above, as a row the count did not see.
+    let total = (durable_total + extra).max(runs.len());
     let in_progress = runs.iter().filter(|r| r.in_progress()).count();
     runs.truncate(limit.max(in_progress));
     Ok(RunList {
@@ -986,4 +994,75 @@ pub fn in_flight_now(rows: Vec<RunSummary>) -> crate::report::HistoryNow {
         out.insert(run.id, now);
     }
     out
+}
+
+#[cfg(test)]
+mod run_list_tests {
+    use super::*;
+
+    fn remembered(handle: &str, status: LiveStatus, recorded: bool) -> LiveRun {
+        LiveRun {
+            handle: handle.into(),
+            db_run_id: recorded.then(|| handle.into()),
+            status,
+            command: "get".into(),
+            target: None,
+            files: Vec::new(),
+            trigger: Trigger::api(),
+            started_at: 1.0,
+            finished_at: (!status.in_progress()).then_some(2.0),
+            outcome: None,
+            error: None,
+            cancellation: None,
+            waiting_for: None,
+            steps: None,
+        }
+    }
+
+    /// A server remembers the runs of the last hour. The list asks the database about one
+    /// only when it can add a row: a run still going that the page does not hold, or a run
+    /// that never wrote its row. One lookup for each finished run (0.4 ms) made
+    /// `GET /runs?limit=50` take 0.8 s on a server that had finished 2,000 runs that hour.
+    #[tokio::test]
+    async fn a_finished_run_that_wrote_its_row_is_listed_from_the_database_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        db::init_db(&path).await.unwrap();
+        for id in ["r1", "r2", "r3"] {
+            db::create_run(&path, id, "get", "p.py", None, Some(1))
+                .await
+                .unwrap();
+            db::finish_run(&path, id, "success", 1, 0, 0.1)
+                .await
+                .unwrap();
+        }
+        let live = [
+            // In the database, and not on a page of two: counted there, not listed again.
+            remembered("r1", LiveStatus::Complete, true),
+            // Its row is gone (the trim deleted it): it is not listed again from memory.
+            remembered("trimmed", LiveStatus::Complete, true),
+            // Finished without a row: only the server knows it.
+            remembered("unrecorded", LiveStatus::Failed, false),
+            // Accepted and waiting: listed whatever the page holds.
+            remembered("waiting", LiveStatus::Pending, false),
+        ];
+        let filter = HistoryFilter::default();
+        let list = run_list(RunListRequest {
+            read_path: &path,
+            db_path: &path,
+            limit: 2,
+            filter: &filter,
+            live: &live,
+            default_files: &[],
+            now: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+        // Three recorded, and the two only the server knows.
+        assert_eq!(list.total, 5);
+        let ids: HashSet<&str> = list.runs.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains("waiting"), "{ids:?}");
+        assert!(!ids.contains("trimmed"), "{ids:?}");
+        assert!(list.truncated);
+    }
 }

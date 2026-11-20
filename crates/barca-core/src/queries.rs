@@ -120,6 +120,9 @@ pub async fn history_at(
     let total = db::count_runs_filtered(db_path, &kept).await?;
     if filter.target.is_none() {
         let runs = db::get_runs_filtered(db_path, limit.unwrap_or(total), &kept).await?;
+        // Counted, then listed, each at its own moment beside a writer: a run recorded
+        // between the two is listed, so it is counted (`total: 18` over 19 rows otherwise).
+        let total = total.max(runs.len());
         return Ok((runs, total));
     }
     let mut runs = db::get_runs_filtered(db_path, total, &kept).await?;
