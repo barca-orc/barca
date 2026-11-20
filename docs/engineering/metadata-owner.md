@@ -175,8 +175,14 @@ hold. `VACUUM` is one statement and cannot be split: see "Not done".
   Before, `doctor` copied the database under the lock, and every writer waited for the copy.
 - **Eviction marks were not measured.** They are recorded 1000 per hold; the fixture has
   nothing to evict.
-- **`barca serve` does not close its owned connection on exit**: its log is folded in by the
-  next command that closes one.
+- **`barca serve` does not call `close_connections` on exit.** Measured with a live server
+  (`tests/simulation/owner_serve.py`, 2026-11-19, five clean stops with no other barca process
+  on the database): after SIGTERM and the drain, `metadata.db` is alone on disk, with no `-wal`
+  and no `-shm`, so the kept connection does close on that path (as the last one, it folds the
+  log in and deletes it), though no code asks it to. A killed server leaves the log as it was
+  (21 to 227 KB at three SIGKILLs, with CLI processes writing beside it); the next process to
+  open the database recovers it and says nothing, and the next command that writes folds it
+  in.
 - **A database file replaced in place by something outside barca** (written over, same
   inode) while a process holds a connection is not detected. It was never safe (SQLite
   documents it as corruption); per-operation opens made it less likely to matter.
