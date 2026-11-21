@@ -128,7 +128,7 @@ async fn trigger(
     job: &ScheduledJob,
     epoch: i64,
     run_id: String,
-) -> Option<String> {
+) -> Result<String, barca_service::BarcaError> {
     let command = match job.kind {
         NodeKind::Task => barca_service::outcome::RunCommand::Run,
         NodeKind::Asset | NodeKind::Sensor => barca_service::outcome::RunCommand::Get,
@@ -154,15 +154,10 @@ async fn trigger(
         },
     )
     .await
-    .map_err(|e| {
-        let (_, envelope) = e.parts();
-        barca_service::errln!(
-            "[barca] scheduled run {} not started: {}",
-            job.id,
-            envelope.error
-        );
+    .map_err(|e| match e {
+        crate::error::ApiError::Barca(error) => error,
+        other => barca_service::BarcaError::Other(other.parts().1.error),
     })
-    .ok()
 }
 
 /// Admission commits the fired tick, queue row and restart cursor together.
@@ -172,8 +167,9 @@ async fn fire(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<String
     let started = progress
         .bounded("trigger", trigger(state, job, epoch, handle))
         .await
-        .ok()
-        .flatten();
+        .and_then(|r| r)
+        .map_err(|e| barca_service::errln!("[barca] scheduled run {} not started: {e}", job.id))
+        .ok();
     if started.is_some() {
         progress.enqueued();
     }
@@ -198,16 +194,16 @@ async fn catch_up(
 ) -> Result<Bookkeeping, barca_service::BarcaError> {
     let progress = &state.scheduling.progress;
     let saved = progress
-        .bounded("schedule_state", db::get_schedule_state(db_path))
-        .await??;
+        .startup("schedule_state", || db::get_schedule_state(db_path))
+        .await?;
     let pauses = progress
-        .bounded("schedule_pauses", db::get_schedule_pauses(db_path))
-        .await??;
+        .startup("schedule_pauses", || db::get_schedule_pauses(db_path))
+        .await?;
     let mut book = Bookkeeping {
         last_fired: saved.clone(),
         failures: progress
-            .bounded("schedule_failures", db::get_schedule_failures(db_path))
-            .await??,
+            .startup("schedule_failures", || db::get_schedule_failures(db_path))
+            .await?,
         ..Bookkeeping::default()
     };
     for job in jobs {
@@ -280,26 +276,35 @@ async fn catch_up(
                             Some(&handle),
                         )
                         .await;
-                    } else if let Some(handle) = fire(state, job, now.timestamp()).await {
+                    } else {
+                        let handle = progress
+                            .startup("trigger", || {
+                                trigger(state, job, now.timestamp(), db::generate_run_id())
+                            })
+                            .await?;
+                        progress.enqueued();
                         barca_service::jsonlog::line(
                             barca_service::jsonlog::Level::Info,
                             Some(&job.id),
                             &format!("[barca] catch-up run {} → {handle}", job.id),
                         );
                         book.accepted(job, handle);
-                    } else {
-                        return Err(barca_service::BarcaError::Db(format!(
-                            "catch-up admission failed for {}",
-                            job.id
-                        )));
                     }
                     book.last_fired.insert(job.id.clone(), now.timestamp());
-                    persist_fired(db_path, &job.id, now.timestamp()).await?;
+                    progress
+                        .startup("persist_fired", || {
+                            db::upsert_schedule_state(db_path, &job.id, now.timestamp())
+                        })
+                        .await?;
                 }
             }
             None => {
                 book.last_fired.insert(job.id.clone(), now.timestamp());
-                persist_fired(db_path, &job.id, now.timestamp()).await?;
+                progress
+                    .startup("persist_fired", || {
+                        db::upsert_schedule_state(db_path, &job.id, now.timestamp())
+                    })
+                    .await?;
             }
         }
     }
@@ -355,20 +360,6 @@ async fn trim_ticks(db_path: &str, book: &mut Bookkeeping, epoch: i64) {
     if let Err(e) = metadata("trim_ticks", db::trim_ticks(db_path, epoch)).await {
         barca_service::errln!("[barca] tick record trim failed: {e}");
     }
-}
-
-/// Persist the startup anchor before accepting live ticks.
-async fn persist_fired(
-    db_path: &str,
-    node_id: &str,
-    epoch: i64,
-) -> Result<(), barca_service::BarcaError> {
-    metadata(
-        "persist_fired",
-        db::upsert_schedule_state(db_path, node_id, epoch),
-    )
-    .await?;
-    Ok(())
 }
 
 /// Publish the current job set with its last-skip and failure bookkeeping into shared state
@@ -499,6 +490,14 @@ where
 }
 
 async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
+    tokio::select! {
+        biased;
+        _ = state.lifecycle.draining.cancelled() => Ok("draining"),
+        result = scheduler_loop(&state) => result,
+    }
+}
+
+async fn scheduler_loop(state: &AppState) -> Result<&'static str, String> {
     let progress = &state.scheduling.progress;
     // `serve` checks the timezone before it starts anything, so this only fails for a caller
     // that spawned the scheduler on its own.
@@ -512,9 +511,10 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
 
     // Associate the initial jobs with the generation before loading them. Edits during
     // loading, DB initialization or catch-up must remain pending for the first tick.
+    let startup = zone.now();
     let mut seen_gen = state.reads.sources.generation.load(Ordering::Relaxed);
     let mut jobs = progress
-        .bounded("reload_jobs", reload_jobs(&state))
+        .startup("reload_jobs", || async { Ok(reload_jobs(state).await) })
         .await
         .map_err(|e| e.to_string())?;
 
@@ -531,11 +531,7 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
             let path = state.config.resolved.db_path.clone();
             // `serve` initialized it before binding and exits 3 when it cannot; this is for a
             // caller that spawned the scheduler on its own, or a database broken since.
-            if let Err(error) = progress
-                .bounded("init_db", db::init_db(&path))
-                .await
-                .and_then(|v| v)
-            {
+            if let Err(error) = progress.startup("init_db", || db::init_db(&path)).await {
                 barca_service::errln!(
                     "[barca] scheduler disabled: metadata initialization failed: {error}"
                 );
@@ -543,9 +539,8 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
                 return Err(error.to_string());
             }
             if let Err(error) = progress
-                .bounded("record_writer", state.record_writer())
+                .startup("record_writer", || state.record_writer())
                 .await
-                .and_then(|v| v)
             {
                 state.scheduler_failed(error.to_string());
                 return Err(error.to_string());
@@ -560,31 +555,36 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
 
     // Paused schedules, for the tick to skip. They are kept in step by the pause routes.
     if let Err(e) = progress
-        .bounded("pauses", crate::schedule_view::pauses(&state))
+        .startup("pauses", || async {
+            crate::schedule_view::pauses(state)
+                .await
+                .map_err(|e| match e {
+                    crate::error::ApiError::Barca(err) => err,
+                    other => barca_service::BarcaError::Other(other.parts().1.error),
+                })
+        })
         .await
-        .map_err(|e| e.to_string())?
     {
-        let (_, envelope) = e.parts();
-        barca_service::errln!(
-            "[barca] scheduler: cannot read paused schedules: {}",
-            envelope.error
-        );
+        barca_service::errln!("[barca] scheduler: cannot read paused schedules: {}", e);
+        state.scheduler_failed(e.to_string());
+        return Err(e.to_string());
     }
 
     // Handle issued, last-fired epoch and last skip per job, for the `/schedule` view;
     // `last_fired` also powers durability. The overlap skip reads `state.runs.registry` and the
     // `running` rows of the metadata database, not these. Entries for jobs removed on reload are harmless.
     // Catch-up requires durability; it is skipped entirely if the DB is unavailable.
-    let startup = zone.now();
     let mut evaluated = startup.timestamp();
     let mut book = match &db_path {
         Some(dbp) => match progress
             .waiting(
                 "catch_up",
                 catch_up(
-                    &state,
+                    state,
                     &progress
-                        .bounded("alive_running_runs", db::alive_running_runs(dbp))
+                        .startup("alive_running_runs", || async {
+                            Ok(db::alive_running_runs(dbp).await)
+                        })
                         .await
                         .map_err(|e| e.to_string())?,
                     &jobs,
@@ -633,7 +633,7 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
     if state.scheduling.stopped.swap(false, Ordering::Relaxed) {
         *state.reads.metadata_error.write().unwrap() = None;
     }
-    publish_registry(&state, &jobs, &book);
+    publish_registry(state, &jobs, &book);
 
     let mut last_heartbeat = zone.now().timestamp();
     loop {
@@ -652,7 +652,7 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
         // `--watch`: re-read the job set when a source file changed.
         let current_gen = state.reads.sources.generation.load(Ordering::Relaxed);
         if current_gen != seen_gen {
-            let Ok(fresh) = progress.bounded("reload_jobs", reload_jobs(&state)).await else {
+            let Ok(fresh) = progress.bounded("reload_jobs", reload_jobs(state)).await else {
                 continue;
             };
             seen_gen = current_gen;
@@ -681,11 +681,11 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
                 barca_service::errln!("[barca] could not record scheduler: {e}");
             }
             log_schedule(&jobs, &zone);
-            publish_registry(&state, &jobs, &book);
+            publish_registry(state, &jobs, &book);
         }
 
         evaluated = evaluate_through(
-            &state,
+            state,
             &jobs,
             &mut book,
             &zone,

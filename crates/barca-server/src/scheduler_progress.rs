@@ -90,8 +90,35 @@ impl Progress {
                 let reason = format!("scheduler timed out waiting for {name}");
                 barca_service::errln!("[barca] {reason}");
                 self.0.lock().unwrap().timeout = Some(reason.clone());
-                barca_service::BarcaError::Db(reason)
+                std::io::Error::new(std::io::ErrorKind::TimedOut, reason).into()
             })
+    }
+
+    /// Keep startup's original epoch and completed work while a metadata lock is busy.
+    pub async fn startup<T, F>(
+        &self,
+        name: &'static str,
+        mut work: impl FnMut() -> F,
+    ) -> Result<T, barca_service::BarcaError>
+    where
+        F: Future<Output = Result<T, barca_service::BarcaError>>,
+    {
+        let mut delay = Duration::from_millis(100);
+        loop {
+            self.beat();
+            match self.bounded(name, work()).await.and_then(|result| result) {
+                Err(error) if transient(&error) => {
+                    self.0.lock().unwrap().timeout =
+                        Some(format!("scheduler retrying {name}: {error}"));
+                    self.waiting(name, tokio::time::sleep(delay)).await;
+                    delay = (delay * 2).min(Duration::from_secs(1));
+                }
+                result => {
+                    self.recovered();
+                    return result;
+                }
+            }
+        }
     }
 
     pub fn recovered(&self) {
@@ -124,5 +151,16 @@ impl Progress {
             p.timeout.clone()
         };
         Some(view)
+    }
+}
+
+fn transient(error: &barca_service::BarcaError) -> bool {
+    match error {
+        barca_service::BarcaError::Io(e) => e.kind() == std::io::ErrorKind::TimedOut,
+        // The metadata file-lock API reports its finite lock wait as a database error.
+        barca_service::BarcaError::Db(reason) => {
+            reason.contains("timed out after") && reason.contains(".lock")
+        }
+        _ => false,
     }
 }

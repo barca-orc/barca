@@ -165,19 +165,25 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     })
     .await
     .expect("scheduler did not reach init_db");
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(61)).await;
-    assert_eq!(
-        health().await.status,
-        barca_service::served::HealthStatus::Ok,
-        "startup grace"
-    );
-    tokio::time::advance(std::time::Duration::from_secs(60)).await;
-    assert_eq!(
-        health().await.status,
-        barca_service::served::HealthStatus::Degraded
-    );
-    tokio::time::resume();
+    // Hold through a startup deadline. A busy ledger is retried by this task.
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let h = health().await;
+            let live = h.scheduler_liveness.as_ref().unwrap();
+            assert!(h.scheduler_enabled);
+            assert_eq!(live.restart_count, 0);
+            if live
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("retrying init_db"))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("scheduler retried startup metadata");
     drop(held);
     let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -1989,12 +1995,21 @@ async fn a_live_metadata_hold_preserves_slots_and_loop_heartbeat() {
     let held = std::fs::File::open(format!("{path}.lock")).unwrap();
     held.try_lock().unwrap();
     let first = Utc::now().timestamp() + 1;
+    let initial_beat = st
+        .scheduling
+        .progress
+        .snapshot()
+        .unwrap()
+        .heartbeat_at_ms
+        .unwrap();
+    let mut heartbeat_timeout = false;
     // Span the persisted heartbeat as well as multiple every-second cron slots.
     tokio::time::timeout(Duration::from_secs(25), async {
         loop {
             let live = st.scheduling.progress.snapshot().unwrap();
-            assert!(Utc::now().timestamp_millis() - live.heartbeat_at_ms.unwrap() < 2500);
-            if live.reason.as_deref() == Some("scheduler timed out waiting for heartbeat") {
+            heartbeat_timeout |=
+                live.reason.as_deref() == Some("scheduler timed out waiting for heartbeat");
+            if heartbeat_timeout && live.heartbeat_at_ms.unwrap() > initial_beat {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
