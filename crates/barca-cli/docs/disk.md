@@ -96,11 +96,22 @@ share stays over it. It says what it did on stderr:
 A check after a command or a run, and `serve`'s minute checkpoint, never run `VACUUM` or a
 checkpoint under the metadata lock: both hold it while the file is rewritten, and a reader on the
 log can make them wait. Such a pass works to the **used size**, the pages that hold data (the file
-less its free pages), not to the file's length, and all four orders run in it. The pages the
-deletes free are reused by later writes, so the used size comes under the share while the file
-keeps its length. Only `barca gc` rewrites the file (`VACUUM`, not while a run is alive) and
-shortens it. The write-ahead log is not counted: only a checkpoint shrinks it, and deleting
-history cannot. Each pass reports the longest hold of the lock it took (`longest_hold_ms`).
+less its free pages), not to the file's length. The pages its deletes free are reused by later
+writes, so the used size comes under the share while the file keeps its length. Only `barca gc`
+rewrites the file (`VACUUM`, not while a run is alive) and shortens it. The write-ahead log is not
+counted: only a checkpoint shrinks it, and deleting history cannot.
+
+**On a server that is never idle, automatic trim does not remove history** (orders 3 and 4: old
+results, old runs and their logs). Those tiers run only when no run is `running` or queued, of any
+owner (a `running` row left by another process or host counts), because a pass with a budget cannot
+tell which rows such a run, a pin or a store-backed consumer still reads. Orders 1 and 2 (component
+records, run reports) run as before. Run `barca gc` in a quiet window. Safe online history removal
+is planned for 0.46.2.
+
+A pass with a budget also does not wait for locks: it takes the process's metadata lock and the
+cross-process lock for at most 250 ms each, and when it cannot it stops (`busy`). The deadline
+starts before any lock is taken. Each pass reports the longest hold of the lock it took, waits
+included (`longest_hold_ms`).
 
 ### When it stays over its share
 
@@ -109,18 +120,20 @@ A pass that ends over its share says why, on stderr and in `disk_usage.metadata_
 
 | `reason` | Meaning |
 |---|---|
-| `nothing_eligible` | The data (`used_after_bytes`) is over the share and the pass cleared no component records, run reports, old results or old runs under the current retention (the last 100 outcomes, the last 1000 runs; fixed in this release). What is left is the current working set and the history retention keeps. |
+| `live_run` | The data (`used_after_bytes`) is over the share and a run is running or queued (`run_id` names one), so no history was removed. `barca gc` in a quiet window removes it. |
+| `nothing_eligible` | The data is over the share and the pass cleared no component records, run reports, old results or old runs under the current retention (the last 100 outcomes, the last 1000 runs; fixed in this release). What is left is the current working set and the history retention keeps. |
 | `vacuum_deferred` | The data fits the share (`used_after_bytes` is at or below `allowance_bytes`) but the file is longer (`after_bytes` is above it), because it only shrinks through a `VACUUM`. Run `barca gc` when a pause is acceptable. |
+| `busy` | The pass could not get the metadata lock within 250 ms and stopped; it tries again in a minute. |
 | `null` | The file is within its share, **or** the data is over it and the pass cleared records and ran out of its time, so a later pass goes on. `null` does not say the file is within its share if `after_bytes` is above `allowance_bytes`: read `used_after_bytes` too. |
 
-No other cause is reported: a run alive, a reader holding the log and a working set larger than
-the share show as `nothing_eligible` (or `vacuum_deferred` for the file's length).
+No other cause is reported: a reader holding the log and a working set larger than the share show
+as `nothing_eligible` (or `vacuum_deferred` for the file's length).
 
 A pass that freed nothing (cleared no record and did not shrink the file) is not repeated at once.
 The next waits a minute, then 2, 4, 8, 16 and at most 30 minutes (`zero_progress_passes`,
 `next_attempt`). The wait ends sooner when the file and its log grow by a tenth, when 200 more runs
-have finished in the server after a `nothing_eligible`, or when `barca gc` runs. Deciding to skip
-reads no database and takes no lock. The backoff and the last outcome are kept in
+have finished in the server after a `nothing_eligible` or `live_run`, or when `barca gc` runs.
+Deciding to skip reads no database and takes no lock. The backoff and the last outcome are kept in
 `.barca/gc-state.json` and survive a survey, `barca gc` and `barca gc --dry-run`.
 
 ## After `barca state reset` or `barca state restore`

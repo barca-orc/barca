@@ -343,6 +343,9 @@ struct TrimMemory {
 }
 
 /// Why a pass left the database over its share, or its file long:
+/// - `busy`: the pass could not get the metadata lock within a quarter of a second and stopped;
+/// - `live_run`: the data is over the share and a run is running or queued (of any owner), so the
+///   tiers that delete history (old results, old runs and logs) did not run;
 /// - `nothing_eligible`: the data (the file less its free pages) is over the share and the pass
 ///   cleared nothing under the current retention;
 /// - `vacuum_deferred`: the data fits the share but the file does not, because it only shrinks
@@ -350,8 +353,14 @@ struct TrimMemory {
 /// - `None`: the file is within its share, or the data is over it and the pass cleared records
 ///   and ran out of time, so a later pass goes on.
 fn trim_reason(outcome: &barca_db::metadata_size::Trimmed, allowance: u64) -> Option<&'static str> {
-    if outcome.used_after_bytes > allowance {
-        (!outcome.removed()).then_some("nothing_eligible")
+    if outcome.busy {
+        Some("busy")
+    } else if outcome.used_after_bytes > allowance {
+        if outcome.live_run.is_some() {
+            Some("live_run")
+        } else {
+            (!outcome.removed()).then_some("nothing_eligible")
+        }
     } else if outcome.after_bytes > allowance {
         Some("vacuum_deferred")
     } else {
@@ -361,6 +370,12 @@ fn trim_reason(outcome: &barca_db::metadata_size::Trimmed, allowance: u64) -> Op
 
 fn trim_reason_words(reason: &str) -> &'static str {
     match reason {
+        "busy" => "busy: the metadata lock was not free within 250 ms, so the pass was skipped",
+        "live_run" => {
+            "live run: a run is running or queued, so old results, old runs and logs are not \
+             removed while it is; `barca gc` in a quiet window removes them (safe online \
+             removal is planned for 0.46.2)"
+        }
         "vacuum_deferred" => {
             "VACUUM deferred: the data fits its share but the file keeps its length until \
              `barca gc` rewrites it (not while a run is alive)"
@@ -395,11 +410,15 @@ pub struct MetadataTrim {
     /// The bytes the pages that hold data take after the pass (the file less its free pages):
     /// what a pass with a time budget measures against `allowance_bytes`.
     pub used_after_bytes: u64,
+    /// `busy` (the pass could not get the metadata lock in 250 ms), `live_run` (the data is over
+    /// its share and a run is running or queued, so no history was removed),
     /// `nothing_eligible` (the data is over its share and the pass cleared nothing),
     /// `vacuum_deferred` (the data fits but the file is longer than the share until `barca gc`)
     /// or `null` (the file is within its share, or the data is over it and the pass cleared
     /// records and ran out of time, so a later pass goes on).
     pub reason: Option<String>,
+    /// The run that kept history from being removed, for `live_run`.
+    pub run_id: Option<String>,
     /// The reason in words.
     pub detail: Option<String>,
     /// Passes in a row that freed nothing.
@@ -427,6 +446,7 @@ impl TrimMemory {
             runs: o.runs,
             longest_hold_ms: o.longest_hold_ms,
             reason: reason.map(str::to_string),
+            run_id: o.live_run.clone(),
             detail: reason.map(|r| trim_reason_words(r).to_string()),
             zero_progress_passes: self.streak,
             next_attempt: (self.streak > 0)
@@ -1788,13 +1808,16 @@ fn note_pass(db_path: &str) {
 /// Whether a check skips trimming for now. Reads no database and takes no lock: the file sizes
 /// (`size_now`: the file and its log), the clock and a count of runs kept in memory are all it
 /// looks at. It skips while the backoff of a pass that freed nothing has not ended, unless the
-/// file and its log grew by a tenth, or (for `nothing_eligible`) `runs_since` runs finished.
+/// file and its log grew by a tenth, or (for `nothing_eligible` and `live_run`) `runs_since` runs
+/// finished.
 fn skip_trim(memory: &TrimMemory, size_now: u64, now: u64, runs_since: u64) -> bool {
     memory.streak > 0
         && now < memory.retry_at
         && size_now <= memory.base_bytes / 10 * 11
-        && !(trim_reason(&memory.outcome, memory.allowance_bytes) == Some("nothing_eligible")
-            && runs_since >= RUNS_UNTIL_RETRY)
+        && !(matches!(
+            trim_reason(&memory.outcome, memory.allowance_bytes),
+            Some("nothing_eligible" | "live_run")
+        ) && runs_since >= RUNS_UNTIL_RETRY)
 }
 
 /// The file and its write-ahead log, in bytes.
@@ -1806,7 +1829,7 @@ fn db_and_log_bytes(db_path: &str) -> u64 {
 /// Keep each metadata DB within its share of `limit` ([`barca_db::metadata_size`]). A pass that
 /// freed nothing says why ([`MetadataTrim::reason`]) and is not repeated for a minute, then two,
 /// up to half an hour ([`trim_backoff`]), until the file and its log grow by a tenth, enough runs
-/// finish after a `nothing_eligible` ([`skip_trim`]), or `barca gc` runs (`time` is `None`: it
+/// finish after a `nothing_eligible` or `live_run` ([`skip_trim`]), or `barca gc` runs (`time` is `None`: it
 /// always trims). Never fails a command. True when one ran out of `time` while it was still
 /// removing things. One waiting for a moment with no run alive does not count: that can last,
 /// and artifacts cannot go unbounded meanwhile.
@@ -1840,12 +1863,19 @@ async fn trim_metadata(
             Ok(Some(done)) => {
                 under_way |= done.out_of_time && done.removed();
                 let reason = trim_reason(&done, allowance);
-                let streak = if done.progressed() || reason.is_none() {
+                let before = memory.as_ref().map_or(0, |m| m.streak);
+                let streak = if done.busy {
+                    // A lock that was not free says nothing about the store: try again in a
+                    // minute, without lengthening the wait.
+                    before.max(1)
+                } else if done.progressed() || reason.is_none() {
                     0
                 } else {
-                    memory.as_ref().map_or(0, |m| m.streak).saturating_add(1)
+                    before.saturating_add(1)
                 };
-                let wait = if streak > 0 {
+                let wait = if done.busy {
+                    TRIM_BACKOFF_FIRST
+                } else if streak > 0 {
                     trim_backoff(streak)
                 } else {
                     Duration::ZERO

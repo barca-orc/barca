@@ -879,7 +879,7 @@ Once a metadata database has gone over its share of the limit, `disk_usage.metad
 entry per environment, experimental) reports the last trim pass: bytes before and after (and the
 used size, the file less its free pages), records
 cleared per tier, the longest hold of the metadata lock, and, while the file is over its share,
-`reason` (`nothing_eligible` or `vacuum_deferred`, null otherwise; `barca docs disk`, "The
+`reason` (`busy`, `live_run`, `nothing_eligible` or `vacuum_deferred`, null otherwise; `barca docs disk`, "The
 metadata database" says exactly what null means) and when the next pass may start
 (`next_attempt`). It is read from the state file; status runs no trim.
 The UI's `/state` node array does no additional disk-accounting work.

@@ -1245,8 +1245,8 @@ async fn over_its_share() -> (Fixture, Vec<EnvDb>) {
         let _g = barca_db::db::db_guard().await;
         let (_h, conn) = barca_db::db::open_conn(&f.db).await.unwrap();
         conn.execute(
-            "INSERT INTO runs (run_id, command, files, outcome_json) \
-             VALUES ('big', 'get', 'p.py', zeroblob(8000000))",
+            "INSERT INTO runs (run_id, command, files, status, outcome_json) \
+             VALUES ('big', 'get', 'p.py', 'success', zeroblob(8000000))",
             (),
         )
         .await

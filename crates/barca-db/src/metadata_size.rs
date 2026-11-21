@@ -85,6 +85,13 @@ pub struct Trimmed {
     pub used_before_bytes: u64,
     #[serde(default)]
     pub used_after_bytes: u64,
+    /// A run was running or queued (this one, by id) so the tiers that delete history (old results,
+    /// old runs and logs) did not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_run: Option<String>,
+    /// The pass could not get a lock within [`LOCK_WAIT`] and stopped.
+    #[serde(default)]
+    pub busy: bool,
     /// A full `VACUUM` was wanted and not run: the pass had a time budget (only `barca gc` runs
     /// one) or a run was alive. The file keeps its size until `barca gc`.
     #[serde(default)]
@@ -181,11 +188,6 @@ const LATEST_SUCCESS: &str = "(SELECT s.id FROM materializations s INDEXED BY id
      WHERE s.node_id = m.node_id AND s.status = 'success' AND s.artifact_path IS NOT NULL \
      ORDER BY s.id DESC LIMIT 1)";
 
-/// A row `m` written by a run that is running or in the queue: with the tier that deletes old
-/// results no longer waiting for a moment with no run alive, those rows are left to the run.
-const NOT_LIVE: &str = "m.run_id NOT IN (SELECT run_id FROM runs WHERE status = 'running') \
-     AND m.run_id NOT IN (SELECT run_id FROM run_queue)";
-
 async fn ids_in(conn: &Connection, filter: &str, from: i64) -> Result<Vec<i64>, BarcaError> {
     let sql = format!(
         "SELECT m.id FROM materializations m WHERE m.id > {from} AND m.id <= {} AND {filter}",
@@ -216,7 +218,7 @@ async fn row_batch(conn: &Connection, step: u8, from: i64) -> Result<u64, BarcaE
     }
     // The newest byte change of a node stays: `barca status` shows it.
     let filter = format!(
-        "m.id < {LATEST_SUCCESS} AND {NOT_LIVE} \
+        "m.id < {LATEST_SUCCESS} \
          AND NOT (m.status = 'success' AND m.artifact_path IS NOT NULL AND m.evicted_at IS NULL) \
          AND NOT (m.bytes_changed = 1 AND m.id = (SELECT max(c.id) FROM materializations c \
              INDEXED BY idx_mat_changed WHERE c.node_id = m.node_id AND c.bytes_changed = 1))"
@@ -279,18 +281,29 @@ pub async fn trim(
     allowance: u64,
     time: Option<Duration>,
 ) -> Result<Option<Trimmed>, BarcaError> {
+    // The budget starts here: before the schema check and every wait for a lock.
+    let deadline = time.map(|time| Instant::now() + time);
     let before_bytes = file_bytes(db_path);
     if before_bytes <= allowance {
         return Ok(None);
     }
-    db::init_db(db_path).await?;
     let longest = AtomicU64::new(0);
     let vacuum_allowed = time.is_none();
-    let used_before = {
-        let _guard = db::db_guard_for(db_path).await;
-        let _hold = Hold::start(&longest);
-        let (_handle, conn) = db::open_conn(db_path).await?;
-        used_bytes(&conn).await?
+    let busy = |used: u64| Trimmed {
+        before_bytes,
+        after_bytes: before_bytes,
+        used_before_bytes: used,
+        used_after_bytes: used,
+        finished: false,
+        busy: true,
+        longest_hold_ms: longest.load(Ordering::Relaxed).div_ceil(1000),
+        ..Trimmed::default()
+    };
+    if vacuum_allowed {
+        db::init_db(db_path).await?;
+    }
+    let Some(used_before) = used_now(db_path, vacuum_allowed, &longest).await? else {
+        return Ok(Some(busy(0)));
     };
     if !vacuum_allowed && used_before <= allowance {
         // The data fits its share; only the file is long, and only `barca gc` shortens it.
@@ -306,7 +319,6 @@ pub async fn trim(
         }));
     }
     let target = allowance / 100 * LOW_WATERMARK_PERCENT;
-    let deadline = time.map(|time| Instant::now() + time);
     let out_of_time = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     let mut done = Trimmed {
         before_bytes,
@@ -328,10 +340,30 @@ pub async fn trim(
             done.vacuumed = true;
             dirty = false;
         }
-        let _guard = db::db_guard_for(db_path).await;
+        let Some(_guard) = guard(db_path, vacuum_allowed).await else {
+            done.busy = true;
+            done.finished = false;
+            break;
+        };
         let _hold = Hold::start(&longest);
-        let (_handle, conn) = db::open_conn(db_path).await?;
+        let Some((_handle, conn)) = connect(db_path, vacuum_allowed).await? else {
+            done.busy = true;
+            done.finished = false;
+            break;
+        };
         if used_bytes(&conn).await? <= target {
+            break;
+        }
+        // The tiers that delete history (old results, old runs and their logs) wait for a
+        // moment with no run running or queued, of any owner: a pass with a budget cannot tell a
+        // run that is gone from one that is only not ours, and a row a live run or a pin still
+        // reads is not told from one nothing reads. `barca gc` makes its own check.
+        if !vacuum_allowed
+            && step >= 2
+            && let Some(run) = live_run(&conn).await
+        {
+            done.live_run = Some(run);
+            done.finished = false;
             break;
         }
         match step {
@@ -386,14 +418,78 @@ pub async fn trim(
         }
     }
     done.after_bytes = file_bytes(db_path);
-    done.used_after_bytes = {
-        let _guard = db::db_guard_for(db_path).await;
-        let _hold = Hold::start(&longest);
-        let (_handle, conn) = db::open_conn(db_path).await?;
-        used_bytes(&conn).await?
-    };
+    done.used_after_bytes = used_now(db_path, vacuum_allowed, &longest)
+        .await?
+        .unwrap_or_else(|| {
+            done.busy = true;
+            used_before
+        });
     done.longest_hold_ms = longest.load(Ordering::Relaxed).div_ceil(1000);
     Ok(Some(done))
+}
+
+/// How long a pass with a time budget waits for the lock of this process or of another one: a
+/// wait that is longer is a pass skipped (`busy`), because the wait is spent with the others
+/// waiting too.
+const LOCK_WAIT: Duration = Duration::from_millis(250);
+
+/// The lock of this process: waited for until it is free for `barca gc`, for [`LOCK_WAIT`] for a
+/// pass with a budget (`None`: it was not).
+async fn guard(
+    db_path: &str,
+    wait_for_ever: bool,
+) -> Option<Option<tokio::sync::MutexGuard<'static, ()>>> {
+    if wait_for_ever {
+        return Some(db::db_guard_for(db_path).await);
+    }
+    tokio::time::timeout(LOCK_WAIT, db::db_guard_for(db_path))
+        .await
+        .ok()
+}
+
+/// A connection under the cross-process lock, waited for as [`guard`] says.
+async fn connect(
+    db_path: &str,
+    wait_for_ever: bool,
+) -> Result<Option<(db::DbHandle, Connection)>, BarcaError> {
+    if wait_for_ever {
+        return db::open_conn(db_path).await.map(Some);
+    }
+    db::open_conn_within(db_path, LOCK_WAIT).await
+}
+
+/// The used size of the database ([`used_bytes`]) in one hold of the lock; `None` when a pass
+/// with a budget could not get the lock in time.
+async fn used_now(
+    db_path: &str,
+    wait_for_ever: bool,
+    longest: &AtomicU64,
+) -> Result<Option<u64>, BarcaError> {
+    let Some(_guard) = guard(db_path, wait_for_ever).await else {
+        return Ok(None);
+    };
+    let _hold = Hold::start(longest);
+    let Some((_handle, conn)) = connect(db_path, wait_for_ever).await? else {
+        return Ok(None);
+    };
+    used_bytes(&conn).await.map(Some)
+}
+
+/// A run that is running or in the queue, of any owner: the `running` rows are not judged by
+/// whether their process exists.
+async fn live_run(conn: &Connection) -> Option<String> {
+    for sql in [
+        "SELECT run_id FROM runs WHERE status = 'running' LIMIT 1",
+        "SELECT run_id FROM run_queue LIMIT 1",
+    ] {
+        if let Ok(mut rows) = conn.query(sql, ()).await
+            && let Ok(Some(row)) = rows.next().await
+            && let Ok(id) = row.get::<String>(0)
+        {
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// `VACUUM`, unless `allowed` is false (a pass with a time budget) or a run is alive: it writes
@@ -654,44 +750,86 @@ mod tests {
         );
     }
 
-    /// The old-results tier does not wait for a moment with no run alive, and leaves only the rows
-    /// the live run wrote: a busy server's passes used to stop at the `VACUUM` gate and remove
-    /// nothing, however many old results there were.
+    /// A `running` row of any owner (here one nothing can judge) keeps a pass with a budget from
+    /// deleting history; the tiers that main ran beside a live run still run.
     #[tokio::test]
-    async fn with_a_run_alive_a_budgeted_pass_removes_old_results_but_not_the_runs() {
+    async fn with_a_run_running_a_budgeted_pass_deletes_no_history_and_says_live_run() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m.db").display().to_string();
-        bloated(&path, 10).await;
-        db::create_run(&path, "alive", "get", "p.py", None, Some(1))
-            .await
-            .unwrap();
+        bloated(&path, 1500).await;
         exec(
             &path,
-            "UPDATE materializations SET run_id = 'alive' WHERE id <= 50",
+            "INSERT INTO runs (run_id, command, files, status) \
+             VALUES ('foreign', 'get', 'p.py', 'running')",
         )
         .await;
         let done = trim(&path, 8192, Some(Duration::from_secs(60)))
             .await
             .unwrap()
             .unwrap();
-        assert!(done.finished && !done.vacuumed, "{done:?}");
-        assert!(done.rows >= 1900, "old results went: {done:?}");
+        assert_eq!(done.live_run.as_deref(), Some("foreign"), "{done:?}");
+        assert_eq!((done.rows, done.runs), (0, 0), "{done:?}");
+        assert!(done.components > 0, "components are not history: {done:?}");
+        assert!(!done.vacuumed && !done.finished, "{done:?}");
         for (sql, want) in [
+            ("SELECT count(*) FROM runs", 1501),
             (
-                "SELECT count(*) FROM materializations WHERE run_id = 'alive'",
-                50,
-            ),
-            (
-                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:old' AND id < 2101 \
-                 AND run_id != 'alive'",
-                0,
-            ),
-            (
-                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:live'",
-                100,
+                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:old'",
+                2002,
             ),
         ] {
             assert_eq!(count(&path, sql).await, want, "{sql}");
         }
+        // The run ends: the next pass deletes the history.
+        exec(
+            &path,
+            "UPDATE runs SET status = 'success' WHERE run_id = 'foreign'",
+        )
+        .await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            done.live_run.is_none() && done.rows > 0 && done.runs > 0,
+            "{done:?}"
+        );
+    }
+
+    /// The cross-process lock held by another connection: a pass with a budget gives up within
+    /// a fraction of a second, with the process lock held no longer than that.
+    #[tokio::test]
+    async fn a_budgeted_pass_that_cannot_get_the_lock_is_busy_within_a_second() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        let other = std::fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{path}.lock"))
+            .unwrap();
+        other.lock().unwrap();
+        let started = Instant::now();
+        let done = trim(&path, 8192, Some(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        let took = started.elapsed();
+        eprintln!(
+            "busy pass: {took:?}, longest hold {} ms",
+            done.longest_hold_ms
+        );
+        assert!(done.busy && !done.progressed(), "{done:?}");
+        assert!(took < Duration::from_secs(1), "{took:?}");
+        assert!(
+            done.longest_hold_ms < 1000 && done.longest_hold_ms >= 200,
+            "{done:?}"
+        );
+        // Released: the same pass works.
+        other.unlock().unwrap();
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!done.busy && done.components > 0, "{done:?}");
     }
 }
