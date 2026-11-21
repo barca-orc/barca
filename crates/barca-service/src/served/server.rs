@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum HealthStatus {
     Ok,
+    Degraded,
     /// The server was told to stop: it finishes its runs and starts none.
     Draining,
 }
@@ -60,6 +61,24 @@ pub struct HealthQueue {
     pub running: usize,
 }
 
+/// Progress of the scheduler in this process. Slot and enqueue times are Unix seconds.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SchedulerLiveness {
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub heartbeat_at_ms: Option<i64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub last_due_slot: Option<i64>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub last_enqueue: Option<i64>,
+    pub operation: Option<String>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub operation_started_at_ms: Option<i64>,
+    pub restart_count: u32,
+    pub last_exit_reason: Option<String>,
+    pub reason: Option<String>,
+}
+
 /// `GET /health`: liveness (or `draining`), the versions a client checks, the environment and
 /// artifact store the server uses, and what it can do.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -85,8 +104,11 @@ pub struct ServerHealth {
     pub read_only: bool,
     /// Whether this server fires `Schedule(...)` nodes.
     pub scheduler: bool,
-    /// `scheduler`, and false once the scheduler stopped on an error.
+    /// `scheduler`, and false while stopped on a metadata error until a successful restart.
     pub scheduler_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub scheduler_liveness: Option<super::SchedulerLiveness>,
     /// When this server started (RFC 3339): a client that reconnects tells a restart by it.
     pub started_at: String,
     pub status: HealthStatus,

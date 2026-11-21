@@ -73,6 +73,7 @@ impl Runs {
 /// What the scheduler publishes and what holds a schedule back.
 #[derive(Clone)]
 pub struct Scheduling {
+    pub(crate) progress: Arc<crate::scheduler_progress::Progress>,
     /// Live scheduler view, published by the scheduler and read by `GET /schedule`.
     pub jobs: Arc<RwLock<Vec<JobStatus>>>,
     /// Paused schedules by node id, read from `schedule_state` on first use and kept in step
@@ -207,6 +208,7 @@ impl AppState {
                 writer_recorded: Default::default(),
             },
             scheduling: Scheduling {
+                progress: Default::default(),
                 jobs: Arc::new(RwLock::new(Vec::new())),
                 pauses: Arc::new(tokio::sync::OnceCell::new()),
                 stopped: scheduler_stopped,

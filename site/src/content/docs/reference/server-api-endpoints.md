@@ -118,8 +118,8 @@ GET /health
   "queue": { "running": 0, "queued": 0, "paused": false, "max_runs": 16, "capacity": null } }
 ```
 
-`status` is `ok`, or `draining` from the first SIGTERM or SIGINT until the server exits (see
-[the drain](#stopping-the-drain)); the response is `200` either way. `queue` is the run queue as
+`status` is `ok`, `degraded` for a stalled or unexpectedly exited scheduler, or `draining` from the first SIGTERM or SIGINT until the server exits (see
+[the drain](#stopping-the-drain)); the response is `200` in each case. `queue` is the run queue as
 `GET /queue` reports it, `started_at` when this server started, and `capabilities` the optional
 protocol features it supports (`event_resume`: run event streams resume from `Last-Event-ID`).
 With `--auth token`, `/health` needs a bearer token like every other API route.
@@ -137,8 +137,23 @@ gains `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}` when the 
 found `.barca/` over its limit.
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
-`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` once
-the scheduler stopped on an error; `metadata_error` then says why.
+`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` while
+stopped on a metadata error. It returns to true after a successful restart.
+
+A writable scheduler publishes the experimental `scheduler_liveness` object on
+`GET /health`. Request `GET /schedule?include_liveness=true` for the same object
+beside the `jobs` array. The default `GET /schedule` response is the jobs array.
+`heartbeat_at_ms` and `operation_started_at_ms` are absolute Unix milliseconds;
+the loop publishes its heartbeat every 20 seconds. Subtract the operation start from the
+current time to measure how long `operation` has waited. The normal wait for the next
+cron second leaves `operation` null.
+`last_due_slot` and `last_enqueue` are Unix seconds. Values are null until observed.
+Health returns HTTP 200 with `status: degraded` and a liveness `reason` during
+restart backoff or after 60 seconds without a loop heartbeat (120 seconds during
+startup). Retries start one second after an unexpected exit, double up to sixty
+seconds, and reset to one second after ten minutes of uptime. `restart_count` and
+`last_exit_reason` survive task restarts within the process. Draining takes precedence.
+Servers without a local scheduler omit liveness on health and return null in the schedule envelope.
 
 `metadata_error` (from 0.28) is why the metadata DB cannot be used, while it cannot, and `null`
 otherwise. A writer server sets its database up before it binds, and exits 3 when it cannot,

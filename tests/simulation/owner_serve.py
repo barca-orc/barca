@@ -1239,12 +1239,29 @@ class Harness:
         self.pause_writers.set()
         self.stop_loops()
         self.say("clean stop")
+        # A successful enqueue is durable in run_queue but has no history row until
+        # execution. Stop the last two producers before deciding the queue is empty.
+        scheduled = {"pipeline.py:tick", "pipeline.py:tock"}
+        for node in sorted(scheduled):
+            status, body = self.http("pause schedule", "POST", f"/schedule/{node}/pause")
+            if status != 200:
+                raise Failed(f"could not pause {node} before the clean stop: {status} {body}")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            _, queue = self.http("http GET /queue", "GET", "/queue")
-            if queue and not queue.get("running") and not queue.get("queued"):
-                break
+            # A tick already planned when the pause was posted may still admit runs.
+            # A paused decision for both jobs acknowledges that plan has finished.
+            status, jobs = self.http("http GET /schedule", "GET", "/schedule")
+            if status == 200 and scheduled <= {
+                j["id"] for j in jobs if j["skip_reason"] == "paused"
+            }:
+                status, queue = self.http("http GET /queue", "GET", "/queue")
+                if status == 200 and not queue["running"] and not queue["queued"]:
+                    break
             time.sleep(0.2)
+        else:
+            raise Failed(
+                "scheduled admissions and queued runs did not settle before the clean stop"
+            )
         before = self.sidecars()
         self.proc.send_signal(signal.SIGTERM)
         code = self.wait_exit(90)

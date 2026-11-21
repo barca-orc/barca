@@ -44,6 +44,7 @@ mod runs;
 mod schedule_routes;
 mod schedule_view;
 mod scheduler;
+mod scheduler_progress;
 mod snapshot;
 mod sources;
 mod sql_helper;
@@ -168,9 +169,7 @@ pub fn app_with_scheduler(
 ) -> (axum::Router, impl FnOnce() -> tokio::task::JoinHandle<()>) {
     let state = AppState::new(config);
     let router = routes::router(state.clone());
-    (router, move || {
-        tokio::spawn(scheduler::run_scheduler(state))
-    })
+    (router, move || scheduler::spawn(state))
 }
 
 /// How [`serve`] ended. `queued` is how many runs wait in the run queue for the next start.
@@ -298,7 +297,7 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
 
     // Fire `Schedule(...)` assets on their cron ticks (local time). On by default.
     if schedule {
-        tokio::spawn(scheduler::run_scheduler(state.clone()));
+        scheduler::spawn(state.clone());
     }
 
     // Dev-mode hot reload. The watcher must be held for the server's lifetime.
