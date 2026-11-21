@@ -243,15 +243,14 @@ async fn catch_up(
                     Some(until) if !paused_now => last_epoch.max(until),
                     _ => last_epoch,
                 };
-                let last = zone.timestamp(state.scheduling.progress.cursor(&job.id, since));
-                if barca_service::schedule::next_fire(
+                let cursor = state.scheduling.progress.cursor(&job.id, since);
+                if let Some(slot) = barca_service::schedule::prev_fire(
                     &job.cron,
                     zone,
-                    last.with_timezone(&chrono::Utc),
-                )
-                .is_some_and(|next| next <= *now)
+                    now.with_timezone(&chrono::Utc),
+                ) && slot.timestamp() > cursor
                 {
-                    state.scheduling.progress.due(now.timestamp());
+                    state.scheduling.progress.due(slot.timestamp());
                     if !paused_now && book.failures(job) >= job.max_failures {
                         let failures = book.failures.get(&job.id).cloned().unwrap_or_default();
                         if failing_reset(state, job, &failures, db_path).await {
@@ -452,7 +451,7 @@ fn log_schedule(jobs: &[ScheduledJob], zone: &Zone) {
 /// The scheduler background task. Spawned from `serve_async` when scheduling is
 /// enabled; runs for the lifetime of the server.
 pub fn spawn(state: AppState) -> tokio::task::JoinHandle<()> {
-    state.scheduling.progress.beat();
+    state.scheduling.progress.start();
     tokio::spawn(supervise(state, run_scheduler))
 }
 
@@ -467,7 +466,8 @@ where
             progress.exited("draining".into(), false);
             return;
         }
-        progress.beat();
+        progress.start();
+        let started = tokio::time::Instant::now();
         // Dropping the supervisor (including the test server handle) aborts its child.
         let mut child = tokio::task::JoinSet::new();
         child.spawn(run(state.clone()));
@@ -479,6 +479,9 @@ where
             Ok(Err(reason)) => reason,
             Err(join) => join.to_string(),
         };
+        if started.elapsed() >= std::time::Duration::from_secs(600) {
+            delay = std::time::Duration::from_secs(1);
+        }
         progress.exited(why.clone(), true);
         barca_service::jsonlog::line(
             barca_service::jsonlog::Level::Error,

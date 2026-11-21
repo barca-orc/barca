@@ -1,10 +1,10 @@
 //! Process-local scheduler progress. No metadata or async locks on the health read path.
 use barca_service::served::SchedulerLiveness;
-use std::{
-    collections::HashMap,
-    sync::Mutex,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Mutex, time::Duration};
+
+use tokio::time::Instant;
+
+const STALE: Duration = Duration::from_secs(3 * barca_service::liveness::HEARTBEAT_SECONDS as u64);
 
 #[derive(Default)]
 pub(crate) struct Progress(Mutex<Inner>);
@@ -12,7 +12,8 @@ pub(crate) struct Progress(Mutex<Inner>);
 #[derive(Default)]
 struct Inner {
     heartbeat: Option<Instant>,
-    operation: Option<(&'static str, Instant)>,
+    operation: Option<(&'static str, i64)>,
+    starting: bool,
     exited: bool,
     view: SchedulerLiveness,
     // Catch-up's durable cursor can lag an admitted run when the task unwinds.
@@ -20,9 +21,19 @@ struct Inner {
 }
 
 impl Progress {
+    pub fn start(&self) {
+        self.heartbeat(true);
+    }
+
     pub fn beat(&self) {
+        self.heartbeat(false);
+    }
+
+    fn heartbeat(&self, starting: bool) {
         let mut p = self.0.lock().unwrap();
         p.heartbeat = Some(Instant::now());
+        p.view.heartbeat_at_ms = Some(chrono::Utc::now().timestamp_millis());
+        p.starting = starting;
         p.exited = false;
     }
 
@@ -44,7 +55,7 @@ impl Progress {
             .lock()
             .unwrap()
             .operation
-            .replace((name, Instant::now()));
+            .replace((name, chrono::Utc::now().timestamp_millis()));
         let value = work.await;
         self.0.lock().unwrap().operation = previous;
         value
@@ -81,14 +92,14 @@ impl Progress {
         }
         let mut view = p.view.clone();
         let age = p.heartbeat.map(|at| at.elapsed());
-        view.heartbeat_age_ms = age.map(|d| d.as_millis() as u64);
+        let grace = if p.starting { STALE * 2 } else { STALE };
         if let Some((name, at)) = p.operation {
             view.operation = Some(name.into());
-            view.operation_age_ms = Some(at.elapsed().as_millis() as u64);
+            view.operation_started_at_ms = Some(at);
         }
         view.reason = if p.exited {
             view.last_exit_reason.clone()
-        } else if age.is_some_and(|d| d > Duration::from_secs(3)) {
+        } else if age.is_some_and(|d| d > grace) {
             Some("scheduler heartbeat is stale".into())
         } else {
             None

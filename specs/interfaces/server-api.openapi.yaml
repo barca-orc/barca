@@ -203,7 +203,7 @@ paths:
         load_errors reports unloaded sources and excluded dependent definitions from
         the selected served graph. Healthy loads return an empty array; healthy
         definitions remain inspectable beside those diagnostics. scheduler_enabled is
-        false when the scheduler does not run or stopped on an error; metadata_error says why
+        false while disabled or stopped on a metadata error. A successful restart restores it. metadata_error says why
         the metadata DB cannot be used, while it cannot.
     head:
       summary: Server liveness and operating modes (headers only)
@@ -2744,6 +2744,11 @@ paths:
     get:
       summary: Scheduler job registry
       operationId: get_schedule
+      parameters:
+      - name: include_liveness
+        in: query
+        description: Return jobs and process-local scheduler progress in one object (experimental).
+        schema: {type: boolean, default: false}
       responses:
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -2753,9 +2758,19 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Job'
+                oneOf:
+                - &schedule_jobs
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Job'
+                - type: object
+                  required: [jobs, scheduler_liveness]
+                  properties:
+                    jobs: *schedule_jobs
+                    scheduler_liveness:
+                      anyOf:
+                      - $ref: '#/components/schemas/SchedulerLiveness'
+                      - type: 'null'
         '304':
           description: Not modified; the body is the one whose ETag the request's If-None-Match names. No body.
           headers: *id_etag
@@ -4622,13 +4637,13 @@ components:
     SchedulerLiveness:
       type: object
       additionalProperties: false
-      required: [heartbeat_age_ms, last_due_slot, last_enqueue, operation, operation_age_ms, restart_count, last_exit_reason, reason]
+      required: [heartbeat_at_ms, last_due_slot, last_enqueue, operation, operation_started_at_ms, restart_count, last_exit_reason, reason]
       properties:
-        heartbeat_age_ms: {type: [integer, 'null'], minimum: 0}
+        heartbeat_at_ms: {type: [integer, 'null'], description: Unix milliseconds}
         last_due_slot: {type: [integer, 'null'], description: Unix seconds}
         last_enqueue: {type: [integer, 'null'], description: Unix seconds}
         operation: {type: [string, 'null']}
-        operation_age_ms: {type: [integer, 'null'], minimum: 0}
+        operation_started_at_ms: {type: [integer, 'null'], description: Unix milliseconds}
         restart_count: {type: integer, minimum: 0}
         last_exit_reason: {type: [string, 'null']}
         reason: {type: [string, 'null']}
@@ -4677,7 +4692,7 @@ components:
         scheduler_enabled:
           type: boolean
           description: Whether the scheduler is running. scheduler (configured on, not
-            --no-schedule or --read-only), and false once the scheduler stopped on an error.
+            --no-schedule or --read-only), and false while stopped on a metadata error. Returns to true after successful restart.
         metadata_error:
           anyOf:
           - type: string
@@ -7421,8 +7436,6 @@ components:
       - typical_run_seconds
       - queue_bound
       properties:
-        scheduler_liveness:
-          $ref: '#/components/schemas/SchedulerLiveness'
         state: *schedule_state
         state_detail:
           type: [string, 'null']

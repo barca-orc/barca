@@ -66,14 +66,14 @@ pub struct HealthQueue {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct SchedulerLiveness {
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub heartbeat_age_ms: Option<u64>,
+    pub heartbeat_at_ms: Option<i64>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub last_due_slot: Option<i64>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub last_enqueue: Option<i64>,
     pub operation: Option<String>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub operation_age_ms: Option<u64>,
+    pub operation_started_at_ms: Option<i64>,
     pub restart_count: u32,
     pub last_exit_reason: Option<String>,
     pub reason: Option<String>,
@@ -104,7 +104,7 @@ pub struct ServerHealth {
     pub read_only: bool,
     /// Whether this server fires `Schedule(...)` nodes.
     pub scheduler: bool,
-    /// `scheduler`, and false once the scheduler stopped on an error.
+    /// `scheduler`, and false while stopped on a metadata error until a successful restart.
     pub scheduler_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]

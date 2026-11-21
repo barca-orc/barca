@@ -137,18 +137,21 @@ gains `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}` when the 
 found `.barca/` over its limit.
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
-`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` once
-the scheduler stopped on an error; `metadata_error` then says why.
+`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` while
+stopped on a metadata error. It returns to true after a successful restart.
 
-A writable scheduler publishes `scheduler_liveness` on `GET /health` and on each
-`GET /schedule` entry. `heartbeat_age_ms` measures time since startup or the last loop
-iteration. `operation` and `operation_age_ms` identify the current wait. `last_due_slot`
-and `last_enqueue` are Unix seconds. Values are null until observed. Health stays HTTP 200
-and reports `status: degraded` with a liveness `reason` during restart backoff or after
-three seconds without progress. An unexpected exit restarts the scheduler after one second,
-doubling the delay up to sixty seconds. `restart_count` and `last_exit_reason` survive task
-restarts within the process. Draining takes precedence. A server without a local scheduler
-omits this object.
+A writable scheduler publishes the experimental `scheduler_liveness` object on
+`GET /health`. Request `GET /schedule?include_liveness=true` for the same object
+beside the `jobs` array. The default `GET /schedule` response is the jobs array.
+`heartbeat_at_ms` and `operation_started_at_ms` are absolute Unix milliseconds;
+subtract the latter from the current time to measure how long `operation` has waited.
+`last_due_slot` and `last_enqueue` are Unix seconds. Values are null until observed.
+Health returns HTTP 200 with `status: degraded` and a liveness `reason` during
+restart backoff or after 60 seconds without a loop heartbeat (120 seconds during
+startup). Retries start one second after an unexpected exit, double up to sixty
+seconds, and reset to one second after ten minutes of uptime. `restart_count` and
+`last_exit_reason` survive task restarts within the process. Draining takes precedence.
+Servers without a local scheduler omit liveness on health and return null in the schedule envelope.
 
 `metadata_error` (from 0.28) is why the metadata DB cannot be used, while it cannot, and `null`
 otherwise. A writer server sets its database up before it binds, and exits 3 when it cannot,

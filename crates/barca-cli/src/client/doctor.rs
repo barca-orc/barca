@@ -124,16 +124,20 @@ pub(crate) async fn doctor_checks(
     );
 
     // Draining, and a metadata DB the server cannot use.
-    let draining = health["status"].as_str() == Some("draining");
+    let status = health["status"].as_str();
     let metadata_error = health["metadata_error"].as_str();
-    let (ok, detail) = match (draining, metadata_error) {
-        (true, _) => (
+    let (ok, detail) = match (status, metadata_error) {
+        (Some("draining"), _) => (
             false,
             "the server is shutting down (draining): it finishes its runs, starts none and \
              refuses posts\nStart barca serve again (or wait for the deploy that stopped it)."
                 .to_string(),
         ),
-        (false, Some(error)) => (
+        (Some("degraded"), _) => (
+            false,
+            format!("server degraded: {}", scheduler_reason(&health)),
+        ),
+        (_, Some(error)) => (
             false,
             format!(
                 "the server cannot use its metadata DB: {}\nOn the server, put a backup back \
@@ -141,7 +145,7 @@ pub(crate) async fn doctor_checks(
                 error.lines().next().unwrap_or(error)
             ),
         ),
-        (false, None) => (
+        (_, None) => (
             true,
             format!(
                 "serving{}",
@@ -205,6 +209,12 @@ pub(crate) async fn doctor_checks(
     unsynced_posts(server, report, cfg.as_ref()).await;
 }
 
+fn scheduler_reason(health: &Value) -> &str {
+    health["scheduler_liveness"]["reason"]
+        .as_str()
+        .unwrap_or("no reason reported")
+}
+
 /// The `server_scheduler` check: running or not, and how many schedules are paused or failing
 /// (`GET /schedule`, the numbers the web UI shows).
 async fn scheduler(
@@ -214,6 +224,15 @@ async fn scheduler(
 ) {
     let wanted = health["scheduler"].as_bool().unwrap_or(false);
     let running = health["scheduler_enabled"].as_bool().unwrap_or(false);
+    if wanted && health["status"] == "degraded" {
+        report.add(
+            "server_scheduler",
+            false,
+            format!("scheduler degraded: {}", scheduler_reason(health)),
+            health["scheduler_liveness"].clone(),
+        );
+        return;
+    }
     let jobs = match server.get_json("/schedule").await {
         Ok(Value::Array(jobs)) => jobs,
         Ok(_) | Err(_) if !running => Vec::new(),

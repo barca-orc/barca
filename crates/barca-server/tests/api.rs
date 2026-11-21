@@ -1956,8 +1956,12 @@ async fn a_paused_schedule_skips_its_ticks_and_stays_paused_across_a_restart() {
     let (restarted, start_scheduler) = barca_server::app_with_scheduler(config.clone());
     let scheduler = start_scheduler();
     let job = skipped_tick(&restarted).await;
-    assert!(job["scheduler_liveness"]["last_due_slot"].is_i64());
-    assert_eq!(job["scheduler_liveness"]["restart_count"], 0);
+    assert!(job.get("scheduler_liveness").is_none());
+    let (status, summary) = send(&restarted, "GET", "/schedule?include_liveness=true").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(summary["jobs"][0]["id"], job["id"]);
+    assert!(summary["scheduler_liveness"]["last_due_slot"].is_i64());
+    assert_eq!(summary["scheduler_liveness"]["restart_count"], 0);
     assert_eq!(job["paused"], true, "{job}");
     assert_eq!(job["skip_reason"], "paused", "{job}");
     assert!(

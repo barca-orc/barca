@@ -311,8 +311,8 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let mut stalled = ok.clone();
     stalled["status"] = json!("degraded");
     stalled["scheduler_liveness"] = json!({
-        "heartbeat_age_ms": 3100, "last_due_slot": 123, "last_enqueue": null,
-        "operation": "heartbeat", "operation_age_ms": 3090, "restart_count": 1,
+        "heartbeat_at_ms": 3100, "last_due_slot": 123, "last_enqueue": null,
+        "operation": "heartbeat", "operation_started_at_ms": 3090, "restart_count": 1,
         "last_exit_reason": "scheduler task panicked", "reason": "scheduler heartbeat is stale"
     });
     assert!(health.is_valid(&stalled));

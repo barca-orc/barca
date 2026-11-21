@@ -3,4 +3,4 @@
 /**
  * Progress of the scheduler in this process. Slot and enqueue times are Unix seconds.
  */
-export type SchedulerLiveness = { heartbeat_age_ms: number | null, last_due_slot: number | null, last_enqueue: number | null, operation: string | null, operation_age_ms: number | null, restart_count: number, last_exit_reason: string | null, reason: string | null, };
+export type SchedulerLiveness = { heartbeat_at_ms: number | null, last_due_slot: number | null, last_enqueue: number | null, operation: string | null, operation_started_at_ms: number | null, restart_count: number, last_exit_reason: string | null, reason: string | null, };

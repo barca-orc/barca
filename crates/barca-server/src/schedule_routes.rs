@@ -11,13 +11,44 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use barca_service::db::{self, SchedulePause};
 use barca_service::served::{ScheduleJob, SchedulePauseAnswer};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Default, Deserialize)]
+pub struct ScheduleQuery {
+    #[serde(default)]
+    include_liveness: bool,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ScheduleResponse {
+    Jobs(Vec<ScheduleJob>),
+    WithLiveness {
+        jobs: Vec<ScheduleJob>,
+        scheduler_liveness: Option<barca_service::served::SchedulerLiveness>,
+    },
+}
 
 /// `GET /schedule` — list scheduled jobs with next fire time and last run status.
 /// Reads the scheduler's published registry; volatile fields (next fire, live
 /// status) are computed per request.
-pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<ScheduleJob>>, ApiError> {
-    crate::schedule_view::pauses(&state).await?;
+pub async fn schedule(
+    State(state): State<AppState>,
+    Query(query): Query<ScheduleQuery>,
+) -> Result<Json<ScheduleResponse>, ApiError> {
+    let jobs = schedule_jobs(&state).await?;
+    Ok(Json(if query.include_liveness {
+        ScheduleResponse::WithLiveness {
+            jobs,
+            scheduler_liveness: state.scheduling.progress.snapshot(),
+        }
+    } else {
+        ScheduleResponse::Jobs(jobs)
+    }))
+}
+
+async fn schedule_jobs(state: &AppState) -> Result<Vec<ScheduleJob>, ApiError> {
+    crate::schedule_view::pauses(state).await?;
     if state.config.read_only || !state.config.schedule {
         let dag = state.reads.loaded_dag().await?;
         let jobs = barca_service::schedule::jobs_from_dag(&dag);
@@ -31,8 +62,8 @@ pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<Schedule
             )
             .await?;
         // No scheduler here: failed ticks are the recorded ones, in the recorded zone.
-        return Ok(Json(schedule_items(
-            &state,
+        return Ok(schedule_items(
+            state,
             chrono::Utc::now(),
             &facts,
             &[],
@@ -41,15 +72,10 @@ pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<Schedule
                 .await?
                 .zone()
                 .unwrap_or_else(|| crate::config::zone_of(&state.config)),
-        )));
+        ));
     }
-    let facts = published_ticks(&state).await?;
-    let mut jobs = schedule_at(&state, chrono::Utc::now(), &facts);
-    let progress = state.scheduling.progress.snapshot();
-    for job in &mut jobs {
-        job.scheduler_liveness = progress.clone();
-    }
-    Ok(Json(jobs))
+    let facts = published_ticks(state).await?;
+    Ok(schedule_at(state, chrono::Utc::now(), &facts))
 }
 
 #[derive(Default, Deserialize)]

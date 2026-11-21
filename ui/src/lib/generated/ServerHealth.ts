@@ -46,7 +46,7 @@ read_only: boolean,
  */
 scheduler: boolean,
 /**
- * `scheduler`, and false once the scheduler stopped on an error.
+ * `scheduler`, and false while stopped on a metadata error until a successful restart.
  */
 scheduler_enabled: boolean, scheduler_liveness?: SchedulerLiveness,
 /**
