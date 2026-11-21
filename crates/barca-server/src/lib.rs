@@ -219,6 +219,11 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // A read-only server never runs anything, so it never schedules either.
     let schedule = config.schedule && !config.read_only;
     let read_only = config.read_only;
+    // Before anything is dispatched or spawned: a run restored at startup ends with a trim, and
+    // a trim inside a server never waits on a lock or runs a VACUUM (`barca_store::gc::serving`).
+    if !read_only {
+        barca_service::gc::serving();
+    }
 
     // `barca state restore` refuses to replace the database under a running server.
     let _serve_lock =

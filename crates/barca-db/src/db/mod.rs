@@ -1316,6 +1316,41 @@ pub async fn open_conn_with_until(
     connection_for(db_path, lock).await
 }
 
+/// [`open_conn`] for an operation that must not wait: the cross-process lock is tried for `wait`
+/// at most, and `None` says it was not free. The caller holds [`db_guard`], so a wait here is a
+/// wait of every other operation of this process too.
+pub async fn open_conn_within(
+    db_path: &str,
+    wait: Duration,
+) -> Result<Option<(DbHandle, libsql::Connection)>, BarcaError> {
+    if is_read_view(db_path) {
+        return open_conn(db_path).await.map(Some);
+    }
+    let lock_path = format!("{db_path}.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| BarcaError::Db(format!("failed to open lock file {lock_path}: {e}")))?;
+    let deadline = Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(fs::TryLockError::Error(e)) => {
+                return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
+            }
+        }
+    }
+    connection_for(db_path, FileLock::held(file, lock_path))
+        .await
+        .map(Some)
+}
+
 /// Fold the write-ahead log into the main database file (`PRAGMA wal_checkpoint(TRUNCATE)`).
 /// No other connection may be open on the file.
 pub async fn checkpoint(conn: &libsql::Connection) -> Result<(), BarcaError> {
