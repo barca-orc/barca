@@ -19,6 +19,10 @@ pub(super) struct Bookkeeping {
     pub(super) last_handle: HashMap<String, String>,
     /// Last-fired epoch per job; persisted for catch-up.
     pub(super) last_fired: HashMap<String, i64>,
+    /// Failed admissions waiting for their next attempt (slot and permanent-error count).
+    pub(super) retries: HashMap<String, (i64, u8)>,
+    /// A clock correction whose durable update is still pending.
+    pub(super) rewind: Option<i64>,
     /// Last skipped tick per job: its epoch, why (`in_flight`, `paused`) and the run in
     /// flight that caused it.
     pub(super) last_skip: HashMap<String, (i64, &'static str, Option<String>)>,
@@ -118,23 +122,30 @@ pub(super) async fn count_outcomes(
 ) -> bool {
     let mut changed = false;
     for job in jobs {
-        let previous = book.outstanding.get(&job.id).and_then(|q| q.front());
-        let Some(handle) = previous.or_else(|| book.last_handle.get(&job.id)) else {
+        let failed = loop {
+            let previous = book.outstanding.get(&job.id).and_then(|q| q.front());
+            let Some(handle) = previous.or_else(|| book.last_handle.get(&job.id)) else {
+                break None;
+            };
+            let outcome = match state.runs.registry.get(handle) {
+                Some(run) if matches!(run.status, RunStatus::Pending | RunStatus::Running) => {
+                    break None;
+                }
+                Some(run) => tick_outcome(&run, job),
+                None => None,
+            };
+            if previous.is_some() {
+                book.outstanding.get_mut(&job.id).unwrap().pop_front();
+            } else {
+                book.last_handle.remove(&job.id);
+            }
+            if outcome.is_some() {
+                break outcome;
+            }
+        };
+        let Some(failed) = failed else {
             continue;
         };
-        let Some(failed) = state
-            .runs
-            .registry
-            .get(handle)
-            .and_then(|r| tick_outcome(&r, job))
-        else {
-            continue;
-        };
-        if previous.is_some() {
-            book.outstanding.get_mut(&job.id).unwrap().pop_front();
-        } else {
-            book.last_handle.remove(&job.id);
-        }
         let before = book.failures(job);
         let next = if failed.is_empty() {
             db::ScheduleFailures::default()

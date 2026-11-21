@@ -10,7 +10,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
-- The scheduler bounds metadata waits and retries delayed live slots in order. A queued scheduled run and its restart cursor are committed together (#1087).
+- The scheduler bounds metadata waits and coalesces delayed live slots to one run per schedule. A queued scheduled run and its restart cursor are committed together (#1087).
 
 - A writable server restarts its scheduler after an unexpected exit. Health and the optional schedule summary report scheduler progress, the current wait and restart history. Health reports degraded during restart backoff or when the loop stalls (#1087).
 

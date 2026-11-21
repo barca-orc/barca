@@ -161,19 +161,17 @@ async fn trigger(
 }
 
 /// Admission commits the fired tick, queue row and restart cursor together.
-async fn fire(state: &AppState, job: &ScheduledJob, epoch: i64) -> Option<String> {
+async fn fire(
+    state: &AppState,
+    job: &ScheduledJob,
+    epoch: i64,
+) -> Result<String, barca_service::BarcaError> {
     let progress = &state.scheduling.progress;
-    let handle = db::generate_run_id();
-    let started = progress
-        .bounded("trigger", trigger(state, job, epoch, handle))
-        .await
-        .and_then(|r| r)
-        .map_err(|e| barca_service::errln!("[barca] scheduled run {} not started: {e}", job.id))
-        .ok();
-    if started.is_some() {
-        progress.enqueued();
-    }
-    started
+    let handle = progress
+        .bounded("trigger", trigger(state, job, epoch, db::generate_run_id()))
+        .await??;
+    progress.enqueued();
+    Ok(handle)
 }
 
 /// Catch-up at startup, as of `now`: fire once each job whose scheduled tick elapsed while
@@ -193,9 +191,23 @@ async fn catch_up(
     db_path: &str,
 ) -> Result<Bookkeeping, barca_service::BarcaError> {
     let progress = &state.scheduling.progress;
-    let saved = progress
+    let mut saved = progress
         .startup("schedule_state", || db::get_schedule_state(db_path))
         .await?;
+    if saved.values().any(|cursor| *cursor > now.timestamp()) {
+        barca_service::errln!(
+            "[barca] clamping future schedule cursors to startup time {}",
+            now.timestamp()
+        );
+        progress
+            .startup("clamp_schedule_cursors", || {
+                db::clamp_schedule_cursors(db_path, now.timestamp())
+            })
+            .await?;
+        for cursor in saved.values_mut() {
+            *cursor = (*cursor).min(now.timestamp());
+        }
+    }
     let pauses = progress
         .startup("schedule_pauses", || db::get_schedule_pauses(db_path))
         .await?;
@@ -663,6 +675,13 @@ async fn scheduler_loop(state: &AppState) -> Result<&'static str, String> {
                     book.last_fired.insert(job.id.clone(), discovered);
                 }
             }
+            book.retries
+                .retain(|id, _| fresh.iter().any(|job| job.id == *id));
+            for old in &jobs {
+                if !fresh.iter().any(|job| job.id == old.id) {
+                    progress.admission_recovered(&old.id);
+                }
+            }
             jobs = fresh;
             if let Some(path) = &db_path
                 && let Err(e) = progress
@@ -695,6 +714,7 @@ async fn scheduler_loop(state: &AppState) -> Result<&'static str, String> {
         )
         .await;
         let wall = zone.now();
+        last_heartbeat = last_heartbeat.min(wall.timestamp());
         if let Some(path) = &db_path
             && wall.timestamp() - last_heartbeat >= barca_service::liveness::HEARTBEAT_SECONDS
         {
@@ -713,98 +733,123 @@ async fn scheduler_loop(state: &AppState) -> Result<&'static str, String> {
     }
 }
 
-/// Evaluate (last, wall] in bounded batches. A failed admission retains the suffix.
+/// Coalesce (last, wall] to the latest cron slot per job, independent of downtime length.
 async fn evaluate_through(
     state: &AppState,
     jobs: &[ScheduledJob],
     book: &mut Bookkeeping,
     zone: &Zone,
-    mut last: i64,
+    last: i64,
     wall: i64,
     db_path: Option<&str>,
 ) -> i64 {
-    for epoch in last + 1..=wall.min(last.saturating_add(60)) {
-        state.scheduling.progress.beat();
-        if !evaluate_slot(state, jobs, book, zone, epoch, wall, db_path).await {
-            break;
-        }
-        last = epoch;
-        state.scheduling.progress.recovered();
-    }
-    last
-}
-
-/// False keeps this slot at the front of the next pass. Individual decisions already
-/// completed in the slot are remembered if another job still needs admission.
-async fn evaluate_slot(
-    state: &AppState,
-    jobs: &[ScheduledJob],
-    book: &mut Bookkeeping,
-    zone: &Zone,
-    epoch: i64,
-    wall: i64,
-    db_path: Option<&str>,
-) -> bool {
     let progress = &state.scheduling.progress;
-    let now = zone.timestamp(epoch);
+    progress.beat();
+    if wall < last {
+        barca_service::errln!(
+            "[barca] scheduler clock stepped back from {last} to {wall}; clamping cursors"
+        );
+        book.rewind = Some(book.rewind.unwrap_or(wall).min(wall));
+        for cursor in book.last_fired.values_mut() {
+            *cursor = (*cursor).min(wall);
+        }
+        book.retries.retain(|_, (slot, _)| *slot <= wall);
+    }
+    let since = book.rewind.unwrap_or(last).min(wall);
+    if let Some(anchor) = book.rewind {
+        if let Some(path) = db_path {
+            match progress
+                .bounded(
+                    "clamp_schedule_cursors",
+                    db::clamp_schedule_cursors(path, anchor),
+                )
+                .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    barca_service::errln!("[barca] could not clamp schedule cursors: {e}");
+                    return since;
+                }
+                Err(_) => return since,
+            }
+        }
+        book.rewind = None;
+    }
     let mut changed = progress
         .waiting("count_outcomes", count_outcomes(state, jobs, book, db_path))
         .await;
-    if let Some(dbp) = db_path {
-        progress
-            .waiting("reset_failing", reset_failing(state, &now, jobs, book, dbp))
-            .await;
-    }
-    // NOTE: benchmarks/scheduler_overhead/barca/run.sh's CI smoke greps stderr for
-    // "scheduled run.*:probe" to count ticks independent of worker execution — keep
-    // that substring ("scheduled run", plus the job id) if this wording changes.
-    let mut retry = false;
-    // CLI runs on the same project, read only on a second some job is due: one indexed
-    // query of the `running` rows.
-    let cli = match db_path {
-        Some(dbp) if !due_jobs(&now, jobs).is_empty() => {
-            let Ok(rows) = progress
-                .bounded("alive_running_runs", db::alive_running_runs(dbp))
-                .await
-            else {
-                return false;
-            };
-            rows
+    let now = zone.timestamp(wall);
+    let mut due = Vec::new();
+    for job in jobs {
+        let retry = book.retries.get(&job.id).copied();
+        let lower = retry
+            .map(|(epoch, _)| epoch)
+            .unwrap_or(since)
+            .max(book.last_fired.get(&job.id).copied().unwrap_or(i64::MIN));
+        let latest = if lower >= wall {
+            None
+        } else if lower == wall - 1 {
+            job.cron
+                .is_time_matching(&now)
+                .unwrap_or(false)
+                .then_some(wall)
+        } else {
+            barca_service::schedule::prev_fire(&job.cron, zone, now.with_timezone(&chrono::Utc))
+                .map(|slot| slot.timestamp())
+                .filter(|slot| *slot > lower)
+        };
+        // Preserve a permanently failing slot until its bounded retry finishes. Lock
+        // timeouts instead coalesce with newer due work as the backlog grows.
+        let slot = match retry {
+            Some((epoch, n)) if n > 0 => Some(epoch),
+            _ => latest.or(retry.map(|(epoch, _)| epoch)),
+        };
+        if let Some(epoch) = slot {
+            due.push((epoch, job, latest.filter(|t| *t > epoch)));
         }
+    }
+    due.sort_by_key(|(epoch, _, _)| *epoch);
+    let cli = match db_path {
+        Some(path) if !due.is_empty() => match progress
+            .bounded("alive_running_runs", db::alive_running_runs(path))
+            .await
+        {
+            Ok(rows) => rows,
+            Err(_) => return since,
+        },
         _ => Vec::new(),
     };
-    let actions = plan_tick(
-        &now,
-        jobs,
-        |job| {
-            crate::schedule_view::active(state, &job.id, epoch)
-                .is_some_and(|p| p.paused_at <= epoch)
-        },
-        |job| {
-            run_in_flight_at(state, job, epoch, wall).or_else(|| cli_run_in_flight_for(&cli, job))
-        },
-        |job| book.failures(job),
-    );
-    if !actions.is_empty() {
-        progress.due(epoch);
-    }
-    for action in actions {
+    progress.recovered();
+    for (epoch, job, deferred) in due {
         if state.lifecycle.is_draining() {
-            return false;
+            break;
         }
         progress.beat();
-        let job = match &action {
-            TickAction::Paused(j) | TickAction::Fire(j) => j,
-            TickAction::Skip { job, .. } | TickAction::Failing { job, .. } => job,
-        };
-        let id = job.id.clone();
-        if book
-            .last_fired
-            .get(&job.id)
-            .is_some_and(|last| *last >= epoch)
-        {
-            continue;
+        progress.due(epoch);
+        let slot = zone.timestamp(epoch);
+        let one = std::slice::from_ref(job);
+        if let Some(path) = db_path {
+            progress
+                .waiting(
+                    "reset_failing",
+                    reset_failing(state, &slot, one, book, path),
+                )
+                .await;
         }
+        let Some(action) = plan_tick(
+            &slot,
+            one,
+            |j| {
+                crate::schedule_view::active(state, &j.id, epoch)
+                    .is_some_and(|p| p.paused_at <= epoch)
+            },
+            |j| any_run_in_flight_for(state, &cli, j),
+            |j| book.failures(j),
+        )
+        .pop() else {
+            continue;
+        };
+        let mut persist_decision = true;
         match action {
             TickAction::Paused(job) => {
                 record_skip(book, job, None, epoch, "scheduled run");
@@ -848,19 +893,68 @@ async fn evaluate_slot(
                 }
             }
             TickAction::Fire(job) => {
-                let Some(handle) = fire(state, job, epoch).await else {
-                    retry = true;
-                    continue;
-                };
-                barca_service::jsonlog::line(
-                    barca_service::jsonlog::Level::Info,
-                    Some(&job.id),
-                    &format!("[barca] scheduled run {} → {handle}", job.id),
-                );
-                book.accepted(job, handle);
+                match fire(state, job, epoch).await {
+                    Ok(handle) => {
+                        progress.admission_recovered(&job.id);
+                        barca_service::jsonlog::line(
+                            barca_service::jsonlog::Level::Info,
+                            Some(&job.id),
+                            &format!("[barca] scheduled run {} → {handle}", job.id),
+                        );
+                        book.accepted(job, handle);
+                        // Admission already committed this cursor with the queue row.
+                        persist_decision = false;
+                    }
+                    Err(error) => {
+                        let retry = book.retries.entry(job.id.clone()).or_insert((epoch, 0));
+                        retry.0 = epoch;
+                        if crate::scheduler_progress::transient(&error) {
+                            progress.admission_failure(
+                                &job.id,
+                                format!(
+                                    "schedule {} waiting for trigger at {epoch}: {error}",
+                                    job.id
+                                ),
+                            );
+                            continue;
+                        }
+                        retry.1 += 1;
+                        let reason = format!(
+                            "schedule {} failed to enqueue slot {epoch} (attempt {}): {error}",
+                            job.id, retry.1
+                        );
+                        progress.admission_failure(&job.id, reason.clone());
+                        if retry.1 < 3 {
+                            barca_service::errln!("[barca] {reason}");
+                            continue;
+                        }
+                        barca_service::jsonlog::line(
+                            barca_service::jsonlog::Level::Error,
+                            Some(&job.id),
+                            &format!("[barca] abandoning slot: {reason}"),
+                        );
+                    }
+                }
             }
         }
-        book.last_fired.insert(id, epoch);
+        if persist_decision
+            && let Some(path) = db_path
+            && let Err(error) = metadata(
+                "persist_decision",
+                db::upsert_schedule_state(path, &job.id, epoch),
+            )
+            .await
+        {
+            barca_service::errln!(
+                "[barca] failed to persist cursor for {} at {epoch}: {error}",
+                job.id
+            );
+        }
+        book.retries.remove(&job.id);
+        if let Some(latest) = deferred {
+            book.retries.insert(job.id.clone(), (latest, 0));
+        }
+        book.last_fired.insert(job.id.clone(), epoch);
         changed = true;
     }
     if let Some(path) = db_path {
@@ -873,9 +967,9 @@ async fn evaluate_slot(
         publish_registry(state, jobs, book);
         if let Some(dbp) = db_path {
             progress
-                .waiting("trim_ticks", trim_ticks(dbp, book, epoch))
+                .waiting("trim_ticks", trim_ticks(dbp, book, wall))
                 .await;
         }
     }
-    !retry
+    wall
 }

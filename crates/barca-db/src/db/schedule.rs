@@ -49,6 +49,19 @@ pub async fn advance_schedule_cursor(
     Ok(())
 }
 
+/// Reset future anchors after a wall-clock correction, preserving pause fields.
+pub async fn clamp_schedule_cursors(db_path: &str, wall: i64) -> Result<(), BarcaError> {
+    let _guard = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "UPDATE schedule_state SET last_fired_at = ?1 WHERE last_fired_at > ?1",
+        [wall],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to clamp schedule cursors: {e}")))?;
+    Ok(())
+}
+
 /// A schedule held back by `POST /schedule/{id}/pause`: since when, and until when (`None`:
 /// until it is resumed). Unix epoch seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

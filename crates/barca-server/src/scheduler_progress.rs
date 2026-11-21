@@ -17,6 +17,7 @@ struct Inner {
     starting: bool,
     exited: bool,
     timeout: Option<String>,
+    admission_errors: std::collections::BTreeMap<String, String>,
     view: SchedulerLiveness,
 }
 
@@ -125,6 +126,16 @@ impl Progress {
         self.0.lock().unwrap().timeout = None;
     }
 
+    pub fn admission_failure(&self, job: &str, reason: String) {
+        self.0
+            .lock()
+            .unwrap()
+            .admission_errors
+            .insert(job.to_owned(), reason);
+    }
+    pub fn admission_recovered(&self, job: &str) {
+        self.0.lock().unwrap().admission_errors.remove(job);
+    }
     pub fn due(&self, epoch: i64) {
         self.0.lock().unwrap().view.last_due_slot = Some(epoch);
     }
@@ -148,13 +159,15 @@ impl Progress {
         } else if age.is_some_and(|d| d > grace) {
             Some("scheduler heartbeat is stale".into())
         } else {
-            p.timeout.clone()
+            p.timeout
+                .clone()
+                .or_else(|| p.admission_errors.values().next().cloned())
         };
         Some(view)
     }
 }
 
-fn transient(error: &barca_service::BarcaError) -> bool {
+pub(super) fn transient(error: &barca_service::BarcaError) -> bool {
     match error {
         barca_service::BarcaError::Io(e) => e.kind() == std::io::ErrorKind::TimedOut,
         // The metadata file-lock API reports its finite lock wait as a database error.

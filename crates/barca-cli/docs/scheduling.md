@@ -279,7 +279,7 @@ sensor once and let the `Always` nodes below it follow instead.
 
 ## A schedule that missed its slot
 
-A running server checks elapsed cron slots in order, in batches of up to 60 seconds per pass. A delayed slot keeps its original scheduled time. When metadata is busy, admission retries on the next pass. A pause covering the slot or a run already in flight can still cause a skip. On startup, each existing schedule instead receives at most one catch-up run for the downtime, and a new schedule starts from the startup time.
+After a delayed wakeup, each existing schedule fires at most once for its latest missed cron slot. Pauses, failure limits and runs already in flight still apply. A busy metadata store postpones admission. Other admission errors degrade health and the scheduler retries that job's slot up to three attempts before logging that it gave up. Other jobs keep ticking. Startup also coalesces downtime into one catch-up per existing schedule, and anchors new schedules at startup. A backward clock step resets future cursors to the corrected time.
 
 Where a schedule stands is decided once, on the server, and every surface reads that answer:
 `GET /schedule`, the `schedule` block of `GET /state` and of `barca status --json` (`GET
