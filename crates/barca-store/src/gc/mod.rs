@@ -344,6 +344,8 @@ struct TrimMemory {
 
 /// Why a pass left the database over its share, or its file long:
 /// - `busy`: the pass could not get the metadata lock within a quarter of a second and stopped;
+/// - `needs_gc`: the database lacks an index a pass with a budget needs (an older format), or the
+///   pass failed; `barca gc` (or the next full open) migrates it;
 /// - `live_run`: the data is over the share and a run is running or queued (of any owner), so the
 ///   tiers that delete history (old results, old runs and logs) did not run;
 /// - `nothing_eligible`: the data (the file less its free pages) is over the share and the pass
@@ -355,6 +357,8 @@ struct TrimMemory {
 fn trim_reason(outcome: &barca_db::metadata_size::Trimmed, allowance: u64) -> Option<&'static str> {
     if outcome.busy {
         Some("busy")
+    } else if outcome.needs_gc {
+        Some("needs_gc")
     } else if outcome.used_after_bytes > allowance {
         if outcome.live_run.is_some() {
             Some("live_run")
@@ -371,6 +375,10 @@ fn trim_reason(outcome: &barca_db::metadata_size::Trimmed, allowance: u64) -> Op
 fn trim_reason_words(reason: &str) -> &'static str {
     match reason {
         "busy" => "busy: the metadata lock was not free within 250 ms, so the pass was skipped",
+        "needs_gc" => {
+            "needs gc: this database lacks an index the online trim needs, or the pass failed; \
+             `barca gc` migrates it"
+        }
         "live_run" => {
             "live run: a run is running or queued, so old results, old runs and logs are not \
              removed while it is; `barca gc` in a quiet window removes them (safe online \
@@ -410,7 +418,8 @@ pub struct MetadataTrim {
     /// The bytes the pages that hold data take after the pass (the file less its free pages):
     /// what a pass with a time budget measures against `allowance_bytes`.
     pub used_after_bytes: u64,
-    /// `busy` (the pass could not get the metadata lock in 250 ms), `live_run` (the data is over
+    /// `busy` (the pass could not get the metadata lock in 250 ms), `needs_gc` (an older database
+    /// lacks an index the online pass needs, or the pass failed), `live_run` (the data is over
     /// its share and a run is running or queued, so no history was removed),
     /// `nothing_eligible` (the data is over its share and the pass cleared nothing),
     /// `vacuum_deferred` (the data fits but the file is longer than the share until `barca gc`)
@@ -1767,6 +1776,16 @@ async fn off_the_event_loop<F: std::future::Future>(fut: F) -> F::Output {
     }
 }
 
+/// Whether this process is a `barca serve`: its trims never wait on a lock or run a `VACUUM`
+/// ([`barca_db::metadata_size::trim_as`]). A CLI command keeps its own: it may wait for the lock,
+/// and compacts when no run is alive.
+static SERVING: AtomicBool = AtomicBool::new(false);
+
+/// Mark this process as a running `barca serve`.
+pub fn serving() {
+    SERVING.store(true, Ordering::Relaxed);
+}
+
 /// A pass that freed nothing is not repeated at once: the first wait is this, and each further
 /// one doubles, up to [`TRIM_BACKOFF_MAX`].
 const TRIM_BACKOFF_FIRST: Duration = Duration::from_secs(60);
@@ -1838,6 +1857,7 @@ async fn trim_metadata(
     envs: &[EnvDb],
     limit: Option<u64>,
     time: Option<Duration>,
+    serving: bool,
 ) -> bool {
     let mut under_way = false;
     let allowance = barca_db::metadata_size::allowance(limit);
@@ -1859,7 +1879,8 @@ async fn trim_metadata(
         {
             continue;
         }
-        match barca_db::metadata_size::trim(&env.db_path, allowance, time).await {
+        let online = time.is_some() && serving;
+        match barca_db::metadata_size::trim_as(&env.db_path, allowance, time, online).await {
             Ok(Some(done)) => {
                 under_way |= done.out_of_time && done.removed();
                 let reason = trim_reason(&done, allowance);
@@ -1926,7 +1947,38 @@ async fn trim_metadata(
                 write_state(project, &state);
             }
             Ok(None) => {}
-            Err(e) => barca_model::errln!("[barca] warning: could not trim {}: {e}", env.db_path),
+            Err(e) => {
+                // Not an error of the command, and not one to repeat at every command: remember
+                // it as a pass that needs `barca gc`, with a backoff like any other.
+                let before = memory.as_ref().map_or(0, |m| m.streak);
+                let streak = before.saturating_add(1);
+                barca_model::errln!(
+                    "[barca] warning: could not trim {}: {e}; next attempt in {} min (`barca gc` migrates an older database)",
+                    env.db_path,
+                    trim_backoff(streak).as_secs() / 60
+                );
+                let mut state = read_state(project).unwrap_or_default();
+                state.metadata_trim.insert(
+                    env.db_path.clone(),
+                    TrimMemory {
+                        env: env.env.clone(),
+                        at: now_secs(),
+                        allowance_bytes: allowance,
+                        streak,
+                        retry_at: now_secs() + trim_backoff(streak).as_secs(),
+                        base_bytes: db_and_log_bytes(&env.db_path),
+                        outcome: barca_db::metadata_size::Trimmed {
+                            before_bytes: size,
+                            after_bytes: size,
+                            used_before_bytes: size,
+                            used_after_bytes: size,
+                            needs_gc: true,
+                            ..Default::default()
+                        },
+                    },
+                );
+                write_state(project, &state);
+            }
         }
     }
     under_way
@@ -1999,7 +2051,15 @@ async fn check_in(
         return Ok(None);
     };
     let envs = envs(project);
-    if trim_metadata(project, &envs, Some(limit), Some(AFTER_COMMAND_BUDGET)).await {
+    if trim_metadata(
+        project,
+        &envs,
+        Some(limit),
+        Some(AFTER_COMMAND_BUDGET),
+        SERVING.load(Ordering::Relaxed),
+    )
+    .await
+    {
         // The file is about to shrink: evicting against its size now would delete artifacts
         // that fit.
         return Ok(None);
@@ -2260,7 +2320,7 @@ async fn gc_in(
         envs.retain(|e| &e.env == only);
     }
     if !opts.dry_run {
-        trim_metadata(project, &envs, limit, None).await;
+        trim_metadata(project, &envs, limit, None, false).await;
     }
     let survey = if project.barca.is_dir() {
         survey(project, &envs).await?

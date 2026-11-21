@@ -9016,7 +9016,7 @@ components:
               minimum: 0
             metadata_trim:
               type: array
-              description: The last trim pass of each metadata database that went over its share of the cache limit. Omitted until one did. reason is busy (the pass could not get the metadata lock in 250 ms), live_run (the data is over its share and a run is running or queued, so no history was removed), nothing_eligible (the data is over its share and the pass cleared nothing), vacuum_deferred (the data fits but the file is longer, until barca gc runs VACUUM) or null (the file is within its share, or the data is over it and the pass cleared records and ran out of time, so a later pass goes on). Experimental.
+              description: The last trim pass of each metadata database that went over its share of the cache limit. Omitted until one did. reason is busy (the pass could not get the metadata lock in 250 ms), needs_gc (an older database lacks an index the online pass needs, or the pass failed), live_run (the data is over its share and a run is running or queued, so no history was removed), nothing_eligible (the data is over its share and the pass cleared nothing), vacuum_deferred (the data fits but the file is longer, until barca gc runs VACUUM) or null (the file is within its share, or the data is over it and the pass cleared records and ran out of time, so a later pass goes on). Experimental.
               items:
                 type: object
                 additionalProperties: false
@@ -9062,7 +9062,7 @@ components:
                     description: The longest hold of the metadata lock in the pass.
                   reason:
                     type: [string, 'null']
-                    enum: [busy, live_run, nothing_eligible, vacuum_deferred, null]
+                    enum: [busy, needs_gc, live_run, nothing_eligible, vacuum_deferred, null]
                   run_id:
                     type: [string, 'null']
                     description: The run that kept history from being removed, for live_run.

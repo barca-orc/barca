@@ -2245,7 +2245,7 @@ backup files. Budgeted bytes use maintained GC accounting, and backup measuremen
 at most 4096 directory entries. Unknown counts are `null`. No artifact walk is added to
 status, and node selection does not narrow this storage scope.
 Experimental `disk_usage.metadata_trim`, present once a metadata database went over its share,
-lists each environment's last trim pass and its `reason` (`busy`, `live_run`, `nothing_eligible`,
+lists each environment's last trim pass and its `reason` (`busy`, `needs_gc`, `live_run`, `nothing_eligible`,
 `vacuum_deferred` or null).
 
 The status document: the same envelope keys as `list` (`total`, `truncated`, `hint`) beside
