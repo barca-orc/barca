@@ -342,7 +342,7 @@ impl NodeAgesIndex {
         // One snapshot for the mark and the rows, so a row written in between is either in both
         // or in neither.
         conn.execute("BEGIN", ()).await.map_err(failure)?;
-        let result = self.read_in(&conn, db_path).await;
+        let result = super::read_activity::local_read(self.read_in(&conn, db_path));
         let _ = conn.execute("COMMIT", ()).await;
         if result.is_err() {
             // Partly folded in: the next read starts again from nothing.
@@ -731,7 +731,7 @@ pub async fn node_histories(
     // One snapshot for the mark and the rows, so a row written in between is either in both
     // or in neither.
     conn.execute("BEGIN", ()).await.map_err(failure)?;
-    let result = index.read(&conn, db_path, base_ids).await;
+    let result = super::read_activity::local_read(index.read(&conn, db_path, base_ids));
     let _ = conn.execute("COMMIT", ()).await;
     result
 }

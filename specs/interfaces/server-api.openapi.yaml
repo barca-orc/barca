@@ -4662,6 +4662,21 @@ components:
           type: boolean
           description: Whether the scheduler is running. scheduler (configured on, not
             --no-schedule or --read-only), and false once the scheduler stopped on an error.
+        metadata_wal:
+          description: Last periodic checkpoint on this writable server, or null before the first sample.
+          anyOf:
+          - type: 'null'
+          - type: object
+            additionalProperties: false
+            required: [blocker, busy, frames, checkpointed, wal_bytes, threshold_bytes, over_threshold]
+            properties:
+              blocker: {type: [string, 'null']}
+              busy: {type: boolean}
+              frames: {type: integer}
+              checkpointed: {type: integer}
+              wal_bytes: {type: integer, minimum: 0}
+              threshold_bytes: {type: integer, minimum: 0}
+              over_threshold: {type: boolean}
         metadata_error:
           anyOf:
           - type: string

@@ -52,11 +52,10 @@ A backup whose bytes would equal the newest one is not taken. None is taken unde
 
 ## What a backup is
 
-A backup is the database's main file, copied right after its write-ahead log is folded in,
-so a write in progress never produces a torn copy. Only the fold holds the database's lock: a read
-of the folded file, started before the lock is released, keeps every checkpoint out of the main
-file until the copy is hashed and written, so other barca processes (the CLI beside a `barca
-serve` that is backing up) keep reading and recording meanwhile. It is written
+SQLite copies a consistent database using its online backup API. It releases the source
+read transaction every 64 pages. Writes and checkpoints can proceed between batches and while
+the private copy is hashed. If continuous writes keep restarting the copy, it gives up after
+five minutes or the caller's earlier deadline. It is written
 locally first, to `.barca/backups/<name>.db` (for a named environment
 `.barca/envs/<env>/backups/`), named like `2026-10-14T18-02-11.482Z-3f9a1c2e.db`: the UTC time
 to the millisecond and a suffix from this machine's host name, the database's path and the

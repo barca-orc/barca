@@ -6,6 +6,7 @@
 //! module instead: `pauses::{list, pause, resume}`, `serve::record_unstarted_run`. The one
 //! defined here is [`open_metadata`], which every such operation starts with.
 
+pub use barca_db::db::{WAL_THRESHOLD_BYTES, WalCheckpoint, maintain_wal};
 pub use barca_db::open::open_metadata;
 
 /// This environment's metadata DB for a command that only reads it: its configuration with

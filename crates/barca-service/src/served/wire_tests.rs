@@ -23,6 +23,7 @@ fn health_is_the_body_the_route_built_by_hand() {
         graph_stale: Some(false),
         load_errors: Vec::new(),
         metadata_error: None,
+        metadata_wal: None,
         queue: HealthQueue {
             capacity: Some(HealthCapacity {
                 in_use: 1,
@@ -63,6 +64,7 @@ fn health_is_the_body_the_route_built_by_hand() {
         "scheduler": true,
         "scheduler_enabled": true,
         "metadata_error": null,
+        "metadata_wal": null,
         "cache": {"size_bytes": 10, "limit_bytes": 20},
     });
     assert_eq!(bytes(&health), by_hand.to_string());

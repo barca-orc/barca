@@ -42,8 +42,10 @@ pub mod ledger_posts;
 mod logs;
 pub mod materializations;
 pub mod notifications;
+mod online_backup;
 mod partition_keys;
 pub(crate) mod pins;
+mod read_activity;
 mod run_filter;
 mod run_liveness;
 pub mod run_queue;
@@ -53,6 +55,8 @@ mod schedule;
 pub mod schema;
 pub(crate) mod sink_publications;
 mod snapshots;
+mod wal;
+pub use wal::{WAL_THRESHOLD_BYTES, WalCheckpoint, maintain_wal};
 mod stats;
 mod ticks;
 pub(crate) mod uploads;
@@ -279,7 +283,7 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
         .build()
         .await
         .map_err(db_open_error)?;
-    let conn = db.connect().map_err(db_open_error)?;
+    let conn = read_activity::connect(&db, path)?;
     // Before the first query: the first reader after the last writer closed rebuilds the log's
     // index, and a reader that comes then waits for it instead of failing.
     wait_when_busy(&conn)?;
@@ -1771,63 +1775,8 @@ mod owner_tests;
 
 #[cfg(test)]
 mod fold_log_tests {
-    use super::{
-        acquire_file_lock, connect, copy_for_backup, create_run, fold_log, init_db, lock_db,
-        wal_is_clean,
-    };
-    use crate::db::snapshots::pin_main_file;
+    use super::{acquire_file_lock, connect, copy_for_backup, create_run, init_db, lock_db};
     use libsql::Builder;
-
-    /// The guarantee a backup copies under: while the pin is held, commits from other
-    /// connections land in the log and no checkpoint (automatic or asked for) writes them to the
-    /// main file, so the copy reads stable bytes without barca's lock.
-    #[tokio::test]
-    async fn a_pinned_main_file_takes_writes_without_changing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("metadata.db").display().to_string();
-        init_db(&path).await.unwrap();
-        create_run(&path, "before", "get", "p.py", None, None)
-            .await
-            .unwrap();
-        let pin = {
-            let _lock = lock_db(&path).await.unwrap();
-            fold_log(&path).await.unwrap();
-            pin_main_file(&path).await.unwrap()
-        };
-        let before = std::fs::read(&path).unwrap();
-        // Enough commits to pass the automatic checkpoint's 1000 pages.
-        for i in 0..300 {
-            create_run(
-                &path,
-                &format!("during-{i}"),
-                "get",
-                &"p".repeat(4000),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        }
-        {
-            let (_db, conn) = connect(&path).await.unwrap();
-            let mut rows = conn
-                .query("PRAGMA wal_checkpoint(PASSIVE)", ())
-                .await
-                .unwrap();
-            while rows.next().await.unwrap().is_some() {}
-        }
-        assert!(!wal_is_clean(&path), "the writes are in the log");
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            before,
-            "the main file did not change"
-        );
-        drop(pin);
-        let _lock = lock_db(&path).await.unwrap();
-        fold_log(&path).await.unwrap();
-        assert_ne!(std::fs::read(&path).unwrap(), before);
-        assert_eq!(open_and_count(&path, "runs").await, 301);
-    }
 
     /// A backup leaves barca's lock while it hashes and copies: a run's writes go on beside it,
     /// and the copy is still one whole database whose digest is the one returned.

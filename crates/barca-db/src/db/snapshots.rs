@@ -1,7 +1,6 @@
 //! Copies and views of the metadata DB for readers and backups: a [`ReadView`] reads the live
 //! database in place, a [`DbSnapshot`] reads a private copy, and [`copy_for_backup`] copies it
-//! whole, holding its lock only to fold the log in. Every read of the file goes through
-//! [`held_file`].
+//! in committed page batches. Direct filesystem reads of the live file go through [`held_file`].
 
 use super::*;
 
@@ -87,95 +86,74 @@ async fn view_usable(conn: &libsql::Connection) -> bool {
     mode.is_some_and(|mode| mode.eq_ignore_ascii_case("wal"))
 }
 
-/// Fold the local database's write-ahead log into its main file and, unless that file's
-/// SHA-256 is `unless`, copy it to `copy`. The copy is one consistent database, whatever other
-/// barca processes do to the database meanwhile: a running write never produces a torn backup
-/// (RFC-0009). Returns the digest of what was copied, or `None` when the database is still the
-/// one `unless` names and nothing was copied. A copy cut short (cancelled, failed) is removed.
-///
-/// Only the checkpoint holds the database's lock. Before releasing it, a read transaction is
-/// opened on the folded database ([`pin_main_file`]), which keeps every checkpoint from writing
-/// to the main file until the copy is done; other processes' writes meanwhile go to the log.
-/// Hashing and copying a database of gigabytes thus no longer stop every other barca process
-/// (a `barca serve` backing up held off the CLI for as long as the copy took).
+/// Copy a consistent committed database in small page batches. Only the private
+/// destination is held across yields and while calculating its digest.
 pub async fn copy_for_backup(
     db_path: &str,
     copy: &Path,
     unless: Option<&str>,
     until: barca_model::process::Until<'_>,
 ) -> Result<Option<String>, BarcaError> {
-    let pin = {
-        let _lock = lock_db_with_until(db_path, until).await?;
-        // Finish the admitted WAL checkpoint safely, then observe cancellation again.
-        fold_log(db_path).await?;
-        pin_main_file(db_path).await?
-    };
     until.check()?;
-    let tracing = std::env::var_os("BARCA_TRACE_TIMING").is_some();
-    let hashing = Instant::now();
-    let digest = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        // Through the held file: closing a descriptor of the database drops this process's
-        // locks on it ([`HELD_FILES`]).
-        read_held(Path::new(db_path), |chunk| {
-            hasher.update(chunk);
-            Ok(())
-        })?;
-        format!("{:x}", hasher.finalize())
-    };
-    let bytes = tracing.then(|| fs::metadata(db_path).map(|m| m.len()).unwrap_or(0));
-    if let Some(bytes) = bytes {
-        barca_model::errln!(
-            "[timing] metadata backup hash: {bytes} bytes in {:.3} ms",
-            hashing.elapsed().as_secs_f64() * 1000.0
-        );
+    let failed = |e| BarcaError::Db(format!("metadata backup staging: {e}"));
+    let parent = copy
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    // Contain any SQLite sidecars as well, including on cancellation.
+    let dir = tempfile::tempdir_in(parent).map_err(failed)?;
+    let stage = tempfile::NamedTempFile::new_in(dir.path()).map_err(failed)?;
+    {
+        let mut backup = {
+            // Serialize the source open with restore/reset, then yield the lock.
+            let _lock = lock_db_with_until(db_path, until).await?;
+            super::online_backup::Backup::open(Path::new(db_path), stage.path())?
+        };
+        let started = Instant::now();
+        loop {
+            until.check()?;
+            if started.elapsed() > Duration::from_secs(300) {
+                return Err(BarcaError::Db(
+                    "online metadata backup exceeded five minutes".into(),
+                ));
+            }
+            match backup.step()? {
+                libsql::ffi::SQLITE_DONE => break,
+                libsql::ffi::SQLITE_OK => tokio::task::yield_now().await,
+                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
     }
-    if unless == Some(digest.as_str()) {
+    // Validate the exact committed image that will be published.
+    let stage_path = stage
+        .path()
+        .to_str()
+        .ok_or_else(|| BarcaError::Db("backup path is not UTF-8".into()))?;
+    drop(
+        connect_read_only(stage_path)
+            .await
+            .map_err(|e| named(e, db_path))?,
+    );
+    let mut reader = std::io::BufReader::new(stage.reopen().map_err(failed)?);
+    let mut buf = vec![0; 64 * 1024];
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut hash = Sha256::new();
+    loop {
+        until.check()?;
+        let n = reader.read(&mut buf).map_err(failed)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+        tokio::task::yield_now().await;
+    }
+    let digest = format!("{:x}", hash.finalize());
+    if unless == Some(&digest) {
         return Ok(None);
     }
-    let copying = Instant::now();
-    let copied = copy_snapshot_bytes(db_path, copy, until).await;
-    if let Some(bytes) = bytes {
-        barca_model::errln!(
-            "[timing] metadata backup copy: {bytes} bytes in {:.3} ms (complete={})",
-            copying.elapsed().as_secs_f64() * 1000.0,
-            copied.is_ok()
-        );
-    }
-    drop(pin);
-    if copied.is_err() {
-        let _ = fs::remove_file(copy);
-    }
-    copied.map(|()| Some(digest))
-}
-
-/// A read transaction on the database at `db_path`, opened while its write-ahead log is empty
-/// (the caller holds the database's lock and has just folded the log in). Until it is dropped
-/// the main file does not change: a reader that started with nothing in the log reads the main
-/// file alone, so SQLite lets no checkpoint copy later commits into it (it waits for that
-/// reader's lock, `WAL_READ_LOCK(0)`, and leaves the commits in the log). Writers are not held
-/// up; the log just grows until the pin is dropped.
-pub(super) async fn pin_main_file(db_path: &str) -> Result<MainFilePin, BarcaError> {
-    let failed = |e| BarcaError::Db(format!("failed to start a read of {db_path}: {e}"));
-    let (db, conn) = connect_read_only(db_path).await?;
-    conn.execute("BEGIN", ()).await.map_err(failed)?;
-    // A deferred transaction takes its read lock at its first read.
-    let mut rows = conn
-        .query("SELECT COUNT(*) FROM sqlite_master", ())
-        .await
-        .map_err(failed)?;
-    while rows.next().await.map_err(failed)?.is_some() {}
-    Ok(MainFilePin {
-        _conn: conn,
-        _db: db,
-    })
-}
-
-/// See [`pin_main_file`]. Field order: the connection (and its transaction) closes first.
-pub(super) struct MainFilePin {
-    _conn: libsql::Connection,
-    _db: libsql::Database,
+    stage.persist(copy).map_err(|e| failed(e.error))?;
+    Ok(Some(digest))
 }
 
 /// Each chunk of the database file at `path`, in order, read through [`held_file`].
@@ -213,43 +191,6 @@ fn copy_held(path: &Path, target: &Path) -> Result<(), BarcaError> {
     out.set_permissions(fs::metadata(path).map_err(failed)?.permissions())
         .map_err(failed)?;
     read_held(path, |chunk| out.write_all(chunk).map_err(failed))
-}
-
-async fn copy_snapshot_bytes(
-    db_path: &str,
-    target_path: &Path,
-    until: barca_model::process::Until<'_>,
-) -> Result<(), BarcaError> {
-    use std::io::Write;
-    use std::os::unix::fs::FileExt;
-    let failed = |e| {
-        BarcaError::Db(format!(
-            "failed to copy {db_path} to {} for a backup: {e}",
-            target_path.display(),
-        ))
-    };
-    // Through the held file: closing a descriptor of the database drops this process's locks
-    // on it ([`HELD_FILES`]).
-    let source = held_file(Path::new(db_path)).map_err(failed)?;
-    let mut target = fs::File::create(target_path).map_err(failed)?;
-    target
-        .set_permissions(source.metadata().map_err(failed)?.permissions())
-        .map_err(failed)?;
-    let mut bytes = [0u8; 64 * 1024];
-    let mut offset = 0u64;
-    loop {
-        until.check()?;
-        let count = source.read_at(&mut bytes, offset).map_err(failed)?;
-        if count == 0 {
-            break;
-        }
-        offset += count as u64;
-        target.write_all(&bytes[..count]).map_err(failed)?;
-        // No background filesystem worker may outlive the lock or partial-copy cleanup.
-        tokio::task::yield_now().await;
-    }
-    until.check()?;
-    Ok(())
 }
 
 /// A private, point-in-time copy of a metadata DB (main file + WAL) in a temp
@@ -316,47 +257,6 @@ impl DbSnapshot {
 impl Drop for DbSnapshot {
     fn drop(&mut self) {
         SNAPSHOT_COPIES.lock().unwrap().remove(&self.path);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[tokio::test]
-    async fn cancelled_snapshot_copy_stops_between_chunks_and_cleans_partial_stage() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source.db");
-        std::fs::File::create(&source)
-            .unwrap()
-            .set_len(4 * 1024 * 1024)
-            .unwrap();
-        let stage_path = dir.path().join("stage.db");
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let source_path = source.to_string_lossy();
-        let target_path = stage_path.clone();
-        let work = super::copy_snapshot_bytes(
-            &source_path,
-            &target_path,
-            barca_model::process::Until::cancelled(&cancel),
-        );
-        tokio::pin!(work);
-        tokio::select! {
-            biased;
-            _ = &mut work => panic!("copy finished without yielding between chunks"),
-            _ = async {
-                loop {
-                    if std::fs::metadata(&stage_path).is_ok_and(|m| m.len() > 0) {break;}
-                    tokio::task::yield_now().await;
-                }
-            } => {},
-        }
-        let copied = std::fs::metadata(&stage_path).unwrap().len();
-        assert!(copied > 0 && copied < std::fs::metadata(&source).unwrap().len());
-        cancel.cancel();
-        assert!(matches!(
-            work.await,
-            Err(barca_model::BarcaError::Cancelled)
-        ));
-        assert_eq!(std::fs::metadata(&source).unwrap().len(), 4 * 1024 * 1024);
     }
 }
 
