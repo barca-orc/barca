@@ -1898,6 +1898,7 @@ impl Drop for Surveying {
     }
 }
 
+#[cfg(test)]
 async fn check_in(
     project: &Project,
     max_size: MaxSize,
