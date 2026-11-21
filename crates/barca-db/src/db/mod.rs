@@ -117,9 +117,9 @@ pub use runs::{
 };
 pub use runs::{RunFailure, StartedRun, split_exception, start_run};
 pub use schedule::{
-    SCHEDULED_RUNS_WINDOW, ScheduleFailures, SchedulePause, ScheduledRun, get_schedule_failures,
-    get_schedule_pauses, get_schedule_state, scheduled_runs, set_schedule_failures,
-    set_schedule_pause, upsert_schedule_state,
+    SCHEDULED_RUNS_WINDOW, ScheduleFailures, SchedulePause, ScheduledRun, advance_schedule_cursor,
+    get_schedule_failures, get_schedule_pauses, get_schedule_state, scheduled_runs,
+    set_schedule_failures, set_schedule_pause, upsert_schedule_state,
 };
 use schema::{has_column, has_index, initialized};
 pub use schema::{init_db, init_db_as, probe_metadata};
