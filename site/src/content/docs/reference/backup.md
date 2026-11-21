@@ -58,10 +58,12 @@ A backup whose bytes would equal the newest one is not taken. None is taken unde
 
 ## What a backup is
 
-SQLite copies a consistent database using its online backup API. It releases the source
-read transaction every 64 pages. Writes and checkpoints can proceed between batches and while
-the private copy is hashed. If continuous writes keep restarting the copy, it gives up after
-five minutes or the caller's earlier deadline. It is written
+SQLite normally copies 64 pages per read transaction. Writes and checkpoints can proceed
+between batches and while the private copy is hashed. A concurrent commit can restart the
+copy. Barca logs the restart count and, after three restarts, copies the remaining database
+in one step outside Barca's metadata lock. That step can hold off a checkpoint until it
+finishes. Deadlines are checked between SQLite calls. The published copy has the source
+database's file permissions. It is written
 locally first, to `.barca/backups/<name>.db` (for a named environment
 `.barca/envs/<env>/backups/`), named like `2026-10-14T18-02-11.482Z-3f9a1c2e.db`: the UTC time
 to the millisecond and a suffix from this machine's host name, the database's path and the

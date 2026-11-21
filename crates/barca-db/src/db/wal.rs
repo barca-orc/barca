@@ -11,6 +11,7 @@ pub struct WalCheckpoint {
     pub busy: bool,
     pub checkpointed: i32,
     pub frames: i32,
+    pub measured_at: String,
     pub over_threshold: bool,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub threshold_bytes: u64,
@@ -48,20 +49,40 @@ pub async fn maintain_wal(path: &str, threshold: u64) -> Result<Option<WalCheckp
     }
     let (busy, frames, checkpointed) = result;
     let busy = busy || checkpointed < frames;
-    let blocker = busy.then(|| {
-        if let Some(local) = super::read_activity::active(path) {
+    let blocker = if busy {
+        // SQLite does not identify the conflicting connection. Check whether
+        // a writer still owns its lock before attributing this to a reader.
+        conn.busy_timeout(Duration::ZERO).map_err(db_open_error)?;
+        let writer = match conn.execute("BEGIN IMMEDIATE", ()).await {
+            Ok(_) => {
+                conn.execute("ROLLBACK", ()).await.map_err(db_open_error)?;
+                false
+            }
+            Err(libsql::Error::SqliteFailure(code, _))
+                if code & 255 == libsql::ffi::SQLITE_BUSY =>
+            {
+                true
+            }
+            Err(e) => return Err(db_open_error(e)),
+        };
+        Some(if writer {
+            "blocked by an active writer".into()
+        } else if let Some(local) = super::read_activity::active(path) {
             local
         } else if frames >= 0 {
             "blocked by a reader outside this process".into()
         } else {
-            "another writer or checkpoint is active".into()
-        }
-    });
+            "another checkpoint is active".into()
+        })
+    } else {
+        None
+    };
     Ok(Some(WalCheckpoint {
         blocker,
         busy,
         checkpointed,
         frames,
+        measured_at: barca_model::events::log_timestamp(),
         over_threshold,
         threshold_bytes: threshold,
         wal_bytes: size()?,
@@ -157,7 +178,20 @@ mod tests {
         let report = maintain_wal(&path, 1).await.unwrap().unwrap();
         assert!(!report.busy && report.over_threshold);
         assert_eq!(report.wal_bytes, 0);
-        while backup.step().unwrap() != libsql::ffi::SQLITE_DONE {}
+        // Restart at page one three times, even on a database that grows.
+        for revision in 0..3 {
+            if revision != 0 {
+                conn.execute("INSERT INTO payload VALUES (234)", ())
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(backup.step().unwrap(), libsql::ffi::SQLITE_OK);
+        }
+        // Another write cannot restart this final, single-step copy.
+        conn.execute("INSERT INTO payload VALUES (345)", ())
+            .await
+            .unwrap();
+        assert_eq!(backup.step().unwrap(), libsql::ffi::SQLITE_DONE);
         drop(backup);
         let db = Builder::new_local(stage.path()).build().await.unwrap();
         let conn = db.connect().unwrap();
@@ -167,8 +201,55 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
-            2
+            5
         );
+    }
+
+    #[tokio::test]
+    async fn busy_writer_is_reported_as_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        let (_db, writer) = connect(&path).await.unwrap();
+        writer.execute("CREATE TABLE probe(id)", ()).await.unwrap();
+        writer.execute("BEGIN IMMEDIATE", ()).await.unwrap();
+        let report = maintain_wal(&path, 1).await.unwrap().unwrap();
+        assert!(report.busy);
+        assert_eq!(
+            report.blocker.as_deref(),
+            Some("blocked by an active writer")
+        );
+        writer.execute("ROLLBACK", ()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn partially_read_cached_statement_releases_its_snapshot_between_lookups() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        let view = ReadView::open(&path).await.unwrap().unwrap();
+        let reader = CacheReader::open(view.path()).await.unwrap();
+        create_run(&path, "before", "get", "[]", None, None)
+            .await
+            .unwrap();
+        {
+            let stmt = reader.lookup_statement(&["SELECT run_id FROM runs"]).await;
+            let mut rows = stmt.query(()).await.unwrap();
+            assert!(rows.next().await.unwrap().is_some());
+            // Cache hits return after the first row, before SQLITE_DONE.
+        }
+        create_run(&path, "after", "get", "[]", None, None)
+            .await
+            .unwrap();
+        assert!(!maintain_wal(&path, 1).await.unwrap().unwrap().busy);
+        let stmt = reader.lookup_statement(&["SELECT run_id FROM runs"]).await;
+        let mut rows = stmt.query(()).await.unwrap();
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            ids.push(row.get::<String>(0).unwrap());
+        }
+        ids.sort();
+        assert_eq!(ids, ["after", "before"]);
     }
 
     #[tokio::test]

@@ -143,8 +143,9 @@ the scheduler stopped on an error; `metadata_error` then says why.
 `metadata_wal` is the last periodic checkpoint on the writable server, or null before
 the first sample. Every minute it runs PASSIVE and attempts TRUNCATE when the WAL exceeded
 64 MiB. `over_threshold` describes the file before the check; `wal_bytes` is its length
-afterwards. `frames`, `checkpointed`, `busy` and `blocker` describe the last attempt.
-Read views have a 30-second SQLite execution budget. A read-only observer running older
+afterwards. `measured_at` is the UTC time of the sample. `frames`, `checkpointed`, `busy` and `blocker` describe the last attempt.
+Read views have a 30-second SQLite execution budget. A full node-age index scan that reaches
+this budget retries against a private database copy. A read-only observer running older
 code or an external reader may keep truncation blocked until its transaction ends.
 
 `metadata_error` (from 0.28) is why the metadata DB cannot be used, while it cannot, and `null`

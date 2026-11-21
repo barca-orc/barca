@@ -103,27 +103,16 @@ pub async fn copy_for_backup(
     // Contain any SQLite sidecars as well, including on cancellation.
     let dir = tempfile::tempdir_in(parent).map_err(failed)?;
     let stage = tempfile::NamedTempFile::new_in(dir.path()).map_err(failed)?;
-    {
-        let mut backup = {
-            // Serialize the source open with restore/reset, then yield the lock.
-            let _lock = lock_db_with_until(db_path, until).await?;
-            super::online_backup::Backup::open(Path::new(db_path), stage.path()).await?
-        };
-        let started = Instant::now();
-        loop {
-            until.check()?;
-            if started.elapsed() > Duration::from_secs(300) {
-                return Err(BarcaError::Db(
-                    "online metadata backup exceeded five minutes".into(),
-                ));
-            }
-            match backup.step()? {
-                libsql::ffi::SQLITE_DONE => break,
-                libsql::ffi::SQLITE_OK => tokio::task::yield_now().await,
-                _ => tokio::time::sleep(Duration::from_millis(10)).await,
-            }
-        }
-    }
+    let permissions = {
+        let _lock = lock_db_with_until(db_path, until).await?;
+        let permissions = fs::metadata(db_path).map_err(failed)?.permissions();
+        let mut backup =
+            super::online_backup::Backup::open(Path::new(db_path), stage.path()).await?;
+        let first = backup.step()?;
+        drop(_lock);
+        finish_backup(&mut backup, first, until).await?;
+        permissions
+    };
     // Validate the exact committed image that will be published.
     let stage_path = stage
         .path()
@@ -152,8 +141,35 @@ pub async fn copy_for_backup(
     if unless == Some(&digest) {
         return Ok(None);
     }
+    stage
+        .as_file()
+        .set_permissions(permissions)
+        .map_err(failed)?;
     stage.persist(copy).map_err(|e| failed(e.error))?;
     Ok(Some(digest))
+}
+
+pub(super) async fn finish_backup(
+    backup: &mut super::online_backup::Backup,
+    mut status: i32,
+    until: barca_model::process::Until<'_>,
+) -> Result<(), BarcaError> {
+    let started = Instant::now();
+    while status != libsql::ffi::SQLITE_DONE {
+        if status == libsql::ffi::SQLITE_OK {
+            tokio::task::yield_now().await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        until.check()?;
+        if started.elapsed() >= Duration::from_secs(300) {
+            return Err(BarcaError::Db(
+                "online metadata backup exceeded five minutes".into(),
+            ));
+        }
+        status = backup.step()?;
+    }
+    until.check()
 }
 
 /// Each chunk of the database file at `path`, in order, read through [`held_file`].

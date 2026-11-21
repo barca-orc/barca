@@ -48,6 +48,9 @@ pub(super) struct Backup {
     handle: *mut ffi::sqlite3_backup,
     dest: Connection,
     _source: Connection,
+    copied_pages: i32,
+    restarts: u32,
+    activity: super::read_activity::BackupReader,
 }
 // Exclusive ownership, serialized connections, and no shared access across tasks.
 unsafe impl Send for Backup {}
@@ -55,6 +58,7 @@ unsafe impl Send for Backup {}
 impl Backup {
     pub(super) async fn open(source: &Path, dest: &Path) -> Result<Self, BarcaError> {
         initialize_libsql().await?;
+        let activity = super::read_activity::BackupReader::new(source);
         let source = Connection::open(source, ffi::SQLITE_OPEN_READONLY)?;
         let dest = Connection::open(dest, ffi::SQLITE_OPEN_READWRITE)?;
         let handle = unsafe {
@@ -67,12 +71,38 @@ impl Backup {
             handle,
             dest,
             _source: source,
+            copied_pages: 0,
+            restarts: 0,
+            activity,
         })
     }
 
     pub(super) fn step(&mut self) -> Result<i32, BarcaError> {
         // No enclosing read transaction: SQLite releases the source lock on return.
-        let rc = unsafe { ffi::sqlite3_backup_step(self.handle, 64) };
+        let pages = if self.restarts >= 3 { -1 } else { 64 };
+        let _active = self.activity.stepping();
+        let rc = unsafe { ffi::sqlite3_backup_step(self.handle, pages) };
+        if rc == ffi::SQLITE_OK {
+            let copied = unsafe {
+                ffi::sqlite3_backup_pagecount(self.handle)
+                    - ffi::sqlite3_backup_remaining(self.handle)
+            };
+            // An external commit restarts SQLite at page one. Ordinary steps
+            // always advance until DONE, even when the database grows.
+            if copied <= self.copied_pages {
+                self.restarts += 1;
+                barca_model::errln!(
+                    "[barca] metadata backup restarted {} time(s){}",
+                    self.restarts,
+                    if self.restarts == 3 {
+                        "; finishing in a single step"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            self.copied_pages = copied;
+        }
         match rc {
             ffi::SQLITE_DONE | ffi::SQLITE_OK | ffi::SQLITE_BUSY | ffi::SQLITE_LOCKED => Ok(rc),
             _ => Err(self.dest.error()),

@@ -4668,13 +4668,14 @@ components:
           - type: 'null'
           - type: object
             additionalProperties: false
-            required: [blocker, busy, frames, checkpointed, wal_bytes, threshold_bytes, over_threshold]
+            required: [blocker, busy, frames, measured_at, checkpointed, wal_bytes, threshold_bytes, over_threshold]
             properties:
               blocker: {type: [string, 'null']}
               busy: {type: boolean}
               frames: {type: integer}
               checkpointed: {type: integer}
               wal_bytes: {type: integer, minimum: 0}
+              measured_at: {type: string, format: date-time}
               threshold_bytes: {type: integer, minimum: 0}
               over_threshold: {type: boolean}
         metadata_error:

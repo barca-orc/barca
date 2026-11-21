@@ -1360,17 +1360,24 @@ pub(crate) async fn checkpoint_once(conn: &libsql::Connection) -> Result<bool, B
         .map_err(failed)?
         .ok_or_else(|| BarcaError::Db("missing SQLite busy timeout".into()))?;
     let previous = row.get::<i64>(0).map_err(failed)? as u64;
+    drop(row);
     drop(rows);
-    // The trim caller owns DB_LOCK and may be using the kept connection.
-    // Do not yield with its normal timeout disabled, even if the check fails.
+    struct RestoreTimeout<'a>(&'a libsql::Connection, Duration);
+    impl Drop for RestoreTimeout<'_> {
+        fn drop(&mut self) {
+            if let Err(e) = self.0.busy_timeout(self.1) {
+                barca_model::errln!("[barca] could not restore SQLite busy timeout: {e}");
+            }
+        }
+    }
+
     conn.busy_timeout(Duration::ZERO).map_err(failed)?;
-    let result = read_activity::local_read(wal::checkpoint_row(
+    let _restore = RestoreTimeout(conn, Duration::from_millis(previous));
+    read_activity::local_read(wal::checkpoint_row(
         conn,
         "PRAGMA main.wal_checkpoint(TRUNCATE)",
-    ));
-    conn.busy_timeout(Duration::from_millis(previous))
-        .map_err(failed)?;
-    result.map(|(busy, _, _)| busy)
+    ))
+    .map(|(busy, _, _)| busy)
 }
 
 fn checkpoint_busy() -> BarcaError {
@@ -1836,15 +1843,44 @@ mod fold_log_tests {
                 }
             })
         };
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
         let copy = dir.path().join("backup.db");
         let digest = copy_for_backup(&path, &copy, None, barca_model::process::Until::done())
             .await
             .unwrap()
             .unwrap();
         writer.await.unwrap();
+        assert_eq!(
+            std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         assert_eq!(barca_model::hash::file_sha256(&copy).unwrap(), digest);
-        let copied = open_and_count(&copy.display().to_string(), "runs").await;
-        assert!((2000..=2200).contains(&copied), "{copied}");
+        // One committed prefix with every pre-existing row intact. A broad
+        // count range alone would also accept missing or reordered history.
+        let saved = Builder::new_local(&copy).build().await.unwrap();
+        let conn = saved.connect().unwrap();
+        let mut rows = conn
+            .query("SELECT run_id FROM runs ORDER BY id", ())
+            .await
+            .unwrap();
+        for i in 1..=2000 {
+            assert_eq!(
+                rows.next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .get::<String>(0)
+                    .unwrap(),
+                format!("old-{i}")
+            );
+        }
+        let mut new = 0;
+        while let Some(row) = rows.next().await.unwrap() {
+            assert_eq!(row.get::<String>(0).unwrap(), format!("new-{new}"));
+            new += 1;
+        }
+        assert!(new <= 200);
         assert_eq!(open_and_count(&path, "runs").await, 2200);
         // Nothing is held after the backup: the lock is free at once.
         acquire_file_lock(&path, std::time::Duration::from_millis(100))

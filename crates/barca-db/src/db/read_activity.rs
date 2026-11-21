@@ -8,11 +8,48 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock, Weak};
 thread_local! { static OPENING: std::cell::Cell<Option<FileId>> = const { std::cell::Cell::new(None) }; }
 static INIT: OnceLock<i32> = OnceLock::new();
 static READERS: LazyLock<Mutex<Vec<Weak<Reader>>>> = LazyLock::new(Default::default);
+#[cfg(test)]
+thread_local! {
+    pub(super) static EXPIRE_NEXT_AGE_READ: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 const READ_BUDGET: Duration = Duration::from_secs(30);
 
 struct Reader {
     id: FileId,
     active: Mutex<Option<(Instant, &'static str)>>,
+}
+
+fn register(id: FileId) -> Arc<Reader> {
+    let reader = Arc::new(Reader {
+        id,
+        active: Mutex::new(None),
+    });
+    let mut readers = READERS.lock().unwrap();
+    readers.retain(|r| r.strong_count() > 0);
+    readers.push(Arc::downgrade(&reader));
+    reader
+}
+
+pub(super) struct BackupReader(Option<Arc<Reader>>);
+pub(super) struct BackupStep<'a>(Option<&'a Reader>);
+impl BackupReader {
+    pub(super) fn new(path: &Path) -> Self {
+        Self(path.to_str().and_then(file_id).map(register))
+    }
+
+    pub(super) fn stepping(&self) -> BackupStep<'_> {
+        if let Some(reader) = &self.0 {
+            *reader.active.lock().unwrap() = Some((Instant::now(), "metadata backup"));
+        }
+        BackupStep(self.0.as_deref())
+    }
+}
+impl Drop for BackupStep<'_> {
+    fn drop(&mut self) {
+        if let Some(reader) = self.0 {
+            *reader.active.lock().unwrap() = None;
+        }
+    }
 }
 
 pub(super) async fn connect(
@@ -52,14 +89,7 @@ unsafe extern "C" fn opened(
     let Some(id) = OPENING.get() else {
         return ffi::SQLITE_OK;
     };
-    let reader = Arc::new(Reader {
-        id,
-        active: Mutex::new(None),
-    });
-    let mut readers = READERS.lock().unwrap();
-    readers.retain(|r| r.strong_count() > 0);
-    readers.push(Arc::downgrade(&reader));
-    drop(readers);
+    let reader = register(id);
     // SQLite owns this reference until TRACE_CLOSE. Both callbacks run under
     // its serialized connection mutex and use it only for this connection.
     let context = Arc::into_raw(reader).cast_mut().cast();
@@ -121,6 +151,12 @@ unsafe extern "C" fn trace(
         };
         let entry = active.get_or_insert_with(|| (Instant::now(), name));
         entry.1 = name;
+        #[cfg(test)]
+        if sql.starts_with("SELECT COALESCE(max(id), 0) FROM materializations")
+            && EXPIRE_NEXT_AGE_READ.replace(false)
+        {
+            entry.0 -= READ_BUDGET;
+        }
         // A transaction can also consist entirely of statements too short to
         // invoke the VM progress handler. Always let transaction cleanup run.
         if entry.0.elapsed() >= READ_BUDGET && !matches!(sql, "COMMIT" | "ROLLBACK") {
