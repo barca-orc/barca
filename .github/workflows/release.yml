@@ -87,7 +87,7 @@ jobs:
           path: ui/dist
           key: ui-dist-v1-${{ hashFiles('ui/**') }}
       - if: steps.ui-dist.outputs.cache-hit != 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           package_json_file: ui/package.json
       - if: steps.ui-dist.outputs.cache-hit != 'true'
@@ -188,7 +188,7 @@ jobs:
           path: ui/dist
           key: ui-dist-v1-${{ hashFiles('ui/**') }}
       - if: steps.ui-dist.outputs.cache-hit != 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           package_json_file: ui/package.json
       - if: steps.ui-dist.outputs.cache-hit != 'true'
