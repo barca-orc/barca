@@ -326,7 +326,7 @@ async fn catch_up(
 /// How often the scheduler trims the tick record by age across every schedule
 /// ([`db::trim_ticks`]): the ticks of a schedule that no longer fires.
 const TICK_TRIM_EVERY_SECONDS: i64 = 3600;
-pub(crate) const METADATA_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
+use crate::scheduler_progress::METADATA_WAIT;
 
 async fn metadata<T>(
     name: &str,
@@ -504,7 +504,12 @@ where
 async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
     tokio::select! {
         biased;
-        _ = state.lifecycle.draining.cancelled() => Ok("draining"),
+        _ = state.lifecycle.draining.cancelled() => {
+            // This arm wins a drain that lands anywhere in the loop, so the line the loop
+            // logs on a drain it sees itself is logged here too (never both: one drops the other).
+            barca_service::errln!("[barca] scheduler stopped: the server is draining");
+            Ok("draining")
+        }
         result = scheduler_loop(&state) => result,
     }
 }

@@ -4,6 +4,10 @@ use std::{sync::Mutex, time::Duration};
 
 use tokio::time::Instant;
 
+/// How long a live scheduler step waits for the metadata database before it gives up. It
+/// lives here, below the scheduler, so the progress record can use it.
+pub(crate) const METADATA_WAIT: Duration = Duration::from_millis(300);
+
 const STALE: Duration = Duration::from_secs(3 * barca_service::liveness::HEARTBEAT_SECONDS as u64);
 
 #[derive(Default)]
@@ -83,7 +87,7 @@ impl Progress {
         } else if name == "init_db" {
             Duration::from_secs(5)
         } else {
-            crate::scheduler::METADATA_WAIT
+            METADATA_WAIT
         };
         self.waiting(name, tokio::time::timeout(budget, work))
             .await
