@@ -1274,7 +1274,7 @@ async fn a_budgeted_pass_never_runs_vacuum_and_backs_off_until_gc() {
     let (f, envs) = over_its_share().await;
     let size = || std::fs::metadata(&f.db).unwrap().len();
     let before = size();
-    trim_metadata(&f.project, &envs, LIMIT, BUDGET).await;
+    trim_metadata(&f.project, &envs, LIMIT, BUDGET, true).await;
     let first = remembered(&f);
     assert!(
         !first.outcome.vacuumed && first.outcome.vacuum_deferred,
@@ -1286,7 +1286,7 @@ async fn a_budgeted_pass_never_runs_vacuum_and_backs_off_until_gc() {
     let held = barca_db::db::db_guard().await;
     tokio::time::timeout(
         Duration::from_secs(2),
-        trim_metadata(&f.project, &envs, LIMIT, BUDGET),
+        trim_metadata(&f.project, &envs, LIMIT, BUDGET, true),
     )
     .await
     .expect("a skipped check must not wait for the database lock");

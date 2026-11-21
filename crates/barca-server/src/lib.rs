@@ -493,6 +493,8 @@ fn stray_root_db_warning(cfg: &barca_service::config::ResolvedConfig) {
 /// Once a minute, evict if `.barca/` is over its size limit ([`barca_service::gc::checkpoint`]).
 /// What runs in flight in this process hold is left alone.
 async fn cache_checkpoint(state: AppState) {
+    // From here the trims of this process run inside a server (`barca_store::gc::serving`).
+    barca_service::gc::serving();
     // tests/simulation compresses long use, so it cannot wait a real minute per check.
     let secs = barca_service::test_hooks::cache_checkpoint_secs().unwrap_or(60);
     let mut every = tokio::time::interval(std::time::Duration::from_secs(secs));

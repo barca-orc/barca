@@ -92,6 +92,10 @@ pub struct Trimmed {
     /// The pass could not get a lock within [`LOCK_WAIT`] and stopped.
     #[serde(default)]
     pub busy: bool,
+    /// The database lacks an index an online pass needs (an older format, which `barca gc` or
+    /// the next full open migrates), or the pass failed.
+    #[serde(default)]
+    pub needs_gc: bool,
     /// A full `VACUUM` was wanted and not run: the pass had a time budget (only `barca gc` runs
     /// one) or a run was alive. The file keeps its size until `barca gc`.
     #[serde(default)]
@@ -281,6 +285,19 @@ pub async fn trim(
     allowance: u64,
     time: Option<Duration>,
 ) -> Result<Option<Trimmed>, BarcaError> {
+    trim_as(db_path, allowance, time, time.is_some()).await
+}
+
+/// [`trim`], with `online` saying whether it runs inside `barca serve`: then it never runs
+/// `VACUUM`, deletes no history while a run is running or queued, and waits at most
+/// [`LOCK_WAIT`] for a lock. Otherwise (`barca gc`, a CLI command) it is as it was: it waits for
+/// the locks and runs a `VACUUM` when no run is alive, whatever its budget.
+pub async fn trim_as(
+    db_path: &str,
+    allowance: u64,
+    time: Option<Duration>,
+    online: bool,
+) -> Result<Option<Trimmed>, BarcaError> {
     // The budget starts here: before the schema check and every wait for a lock.
     let deadline = time.map(|time| Instant::now() + time);
     let before_bytes = file_bytes(db_path);
@@ -288,7 +305,7 @@ pub async fn trim(
         return Ok(None);
     }
     let longest = AtomicU64::new(0);
-    let vacuum_allowed = time.is_none();
+    let vacuum_allowed = !online;
     let busy = |used: u64| Trimmed {
         before_bytes,
         after_bytes: before_bytes,
@@ -302,9 +319,17 @@ pub async fn trim(
     if vacuum_allowed {
         db::init_db(db_path).await?;
     }
-    let Some(used_before) = used_now(db_path, vacuum_allowed, &longest).await? else {
+    let Some((used_before, ready)) = used_now(db_path, vacuum_allowed, &longest).await? else {
         return Ok(Some(busy(0)));
     };
+    if !ready {
+        // Not an error of every command: the pass is skipped, remembered, and left to `barca gc`.
+        return Ok(Some(Trimmed {
+            needs_gc: true,
+            busy: false,
+            ..busy(used_before)
+        }));
+    }
     if !vacuum_allowed && used_before <= allowance {
         // The data fits its share; only the file is long, and only `barca gc` shortens it.
         return Ok(Some(Trimmed {
@@ -409,7 +434,12 @@ pub async fn trim(
             break;
         }
     }
-    save_resume(db_path, (!done.finished).then_some((step, from)));
+    // A pass the live-run guard stopped starts over at step 0: a server that is never idle
+    // would otherwise never clear component records or run reports again.
+    save_resume(
+        db_path,
+        (!done.finished && done.live_run.is_none()).then_some((step, from)),
+    );
     if dirty && done.finished {
         if vacuum(db_path, vacuum_allowed, &longest).await? {
             done.vacuumed = true;
@@ -420,10 +450,13 @@ pub async fn trim(
     done.after_bytes = file_bytes(db_path);
     done.used_after_bytes = used_now(db_path, vacuum_allowed, &longest)
         .await?
-        .unwrap_or_else(|| {
-            done.busy = true;
-            used_before
-        });
+        .map_or_else(
+            || {
+                done.busy = true;
+                used_before
+            },
+            |(used, _)| used,
+        );
     done.longest_hold_ms = longest.load(Ordering::Relaxed).div_ceil(1000);
     Ok(Some(done))
 }
@@ -458,13 +491,14 @@ async fn connect(
     db::open_conn_within(db_path, LOCK_WAIT).await
 }
 
-/// The used size of the database ([`used_bytes`]) in one hold of the lock; `None` when a pass
-/// with a budget could not get the lock in time.
+/// The used size of the database ([`used_bytes`]), and whether it has everything this release adds
+/// (the indexes a pass reads through with `INDEXED BY` among them), in one hold of the lock; `None` when a pass with a budget could not
+/// get the lock in time.
 async fn used_now(
     db_path: &str,
     wait_for_ever: bool,
     longest: &AtomicU64,
-) -> Result<Option<u64>, BarcaError> {
+) -> Result<Option<(u64, bool)>, BarcaError> {
     let Some(_guard) = guard(db_path, wait_for_ever).await else {
         return Ok(None);
     };
@@ -472,21 +506,32 @@ async fn used_now(
     let Some((_handle, conn)) = connect(db_path, wait_for_ever).await? else {
         return Ok(None);
     };
-    used_bytes(&conn).await.map(Some)
+    // Every column, table and index this release adds to a version-1 database (which
+    // `init_db`, left to `barca gc` here, would add).
+    let ready = !crate::db::schema::ddl::additions_missing(&conn).await?;
+    Ok(Some((used_bytes(&conn).await?, ready)))
 }
 
 /// A run that is running or in the queue, of any owner: the `running` rows are not judged by
-/// whether their process exists.
+/// whether their process exists. A query that fails, or a row that cannot be read, counts as a
+/// run (`unknown`): history is deleted only when it is known that none is.
 async fn live_run(conn: &Connection) -> Option<String> {
     for sql in [
         "SELECT run_id FROM runs WHERE status = 'running' LIMIT 1",
         "SELECT run_id FROM run_queue LIMIT 1",
     ] {
-        if let Ok(mut rows) = conn.query(sql, ()).await
-            && let Ok(Some(row)) = rows.next().await
-            && let Ok(id) = row.get::<String>(0)
-        {
-            return Some(id);
+        let Ok(mut rows) = conn.query(sql, ()).await else {
+            return Some("unknown".to_string());
+        };
+        match rows.next().await {
+            Ok(Some(row)) => {
+                return Some(
+                    row.get::<String>(0)
+                        .unwrap_or_else(|_| "unknown".to_string()),
+                );
+            }
+            Ok(None) => {}
+            Err(_) => return Some("unknown".to_string()),
         }
     }
     None
@@ -771,6 +816,8 @@ mod tests {
         assert_eq!((done.rows, done.runs), (0, 0), "{done:?}");
         assert!(done.components > 0, "components are not history: {done:?}");
         assert!(!done.vacuumed && !done.finished, "{done:?}");
+        // The guard did not leave step 2 as the resume point: the next pass starts over.
+        assert_eq!(resume_at(&path), (0, 0));
         for (sql, want) in [
             ("SELECT count(*) FROM runs", 1501),
             (
@@ -820,10 +867,9 @@ mod tests {
         );
         assert!(done.busy && !done.progressed(), "{done:?}");
         assert!(took < Duration::from_secs(1), "{took:?}");
-        assert!(
-            done.longest_hold_ms < 1000 && done.longest_hold_ms >= 200,
-            "{done:?}"
-        );
+        // Another test may hold this process's lock for the whole wait (a hold of 0 here), so
+        // only the bound is asserted.
+        assert!(done.longest_hold_ms < 1000, "{done:?}");
         // Released: the same pass works.
         other.unlock().unwrap();
         let done = trim(&path, 8192, Some(Duration::from_secs(60)))
@@ -831,5 +877,63 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!done.busy && done.components > 0, "{done:?}");
+    }
+
+    /// A query that fails is not "no run alive": history stays.
+    #[tokio::test]
+    async fn a_failed_check_for_live_runs_counts_as_a_live_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 1500).await;
+        exec(&path, "DROP TABLE run_queue").await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        // `run_queue` is also a table this release adds, so the pass may stop even earlier, as
+        // `needs_gc`; either way no history is deleted.
+        assert!(
+            done.live_run.as_deref() == Some("unknown") || done.needs_gc,
+            "{done:?}"
+        );
+        assert_eq!((done.rows, done.runs), (0, 0), "{done:?}");
+    }
+
+    /// A database without the indexes an online pass reads through is skipped and remembered, not
+    /// an error of every command; `barca gc` (which opens it fully) migrates it.
+    #[tokio::test]
+    async fn an_older_database_without_its_indexes_needs_gc_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        exec(&path, "DROP INDEX idx_mat_node_latest").await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            done.needs_gc && !done.busy && !done.progressed(),
+            "{done:?}"
+        );
+        let done = trim(&path, 8192, None).await.unwrap().unwrap();
+        assert!(!done.needs_gc && done.vacuumed, "{done:?}");
+    }
+
+    /// Outside `barca serve` a pass with a budget is as it was on main: it compacts when no run
+    /// is alive, and then history the compaction makes unnecessary to delete stays.
+    #[tokio::test]
+    async fn outside_a_server_a_budgeted_pass_may_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        let done = trim_as(&path, 8_000_000, Some(Duration::from_secs(60)), false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(done.vacuumed && !done.vacuum_deferred, "{done:?}");
+        assert!(
+            done.after_bytes <= 8_000_000 && (done.rows, done.runs) == (0, 0),
+            "{done:?}"
+        );
     }
 }
