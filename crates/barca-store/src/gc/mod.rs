@@ -324,6 +324,146 @@ impl Measurement {
     }
 }
 
+/// What the last trim pass of one metadata DB did, kept in the state file with the backoff that
+/// follows a pass that freed nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct TrimMemory {
+    env: String,
+    /// Seconds since the epoch.
+    at: u64,
+    allowance_bytes: u64,
+    /// Passes in a row that freed nothing (0: the last one freed something or got under).
+    streak: u32,
+    /// Seconds since the epoch before which a check does not trim again unless something
+    /// changed ([`skip_trim`]).
+    retry_at: u64,
+    /// The file and its log after the pass: what growth is measured against.
+    base_bytes: u64,
+    outcome: barca_db::metadata_size::Trimmed,
+}
+
+/// Why a pass left the database over its share, or its file long:
+/// - `busy`: the pass could not get the metadata lock within a quarter of a second and stopped;
+/// - `needs_gc`: the database lacks an index a pass with a budget needs (an older format), or the
+///   pass failed; `barca gc` (or the next full open) migrates it;
+/// - `live_run`: the data is over the share and a run is running or queued (of any owner), so the
+///   tiers that delete history (old results, old runs and logs) did not run;
+/// - `nothing_eligible`: the data (the file less its free pages) is over the share and the pass
+///   cleared nothing under the current retention;
+/// - `vacuum_deferred`: the data fits the share but the file does not, because it only shrinks
+///   through a `VACUUM`, which only `barca gc` runs (not with a run alive);
+/// - `None`: the file is within its share, or the data is over it and the pass cleared records
+///   and ran out of time, so a later pass goes on.
+fn trim_reason(outcome: &barca_db::metadata_size::Trimmed, allowance: u64) -> Option<&'static str> {
+    if outcome.busy {
+        Some("busy")
+    } else if outcome.needs_gc {
+        Some("needs_gc")
+    } else if outcome.used_after_bytes > allowance {
+        if outcome.live_run.is_some() {
+            Some("live_run")
+        } else {
+            (!outcome.removed()).then_some("nothing_eligible")
+        }
+    } else if outcome.after_bytes > allowance {
+        Some("vacuum_deferred")
+    } else {
+        None
+    }
+}
+
+fn trim_reason_words(reason: &str) -> &'static str {
+    match reason {
+        "busy" => "busy: the metadata lock was not free within 250 ms, so the pass was skipped",
+        "needs_gc" => {
+            "needs gc: this database lacks an index the online trim needs, or the pass failed; \
+             `barca gc` migrates it"
+        }
+        "live_run" => {
+            "live run: a run is running or queued, so old results, old runs and logs are not \
+             removed while it is; `barca gc` in a quiet window removes them (safe online \
+             removal is planned for 0.46.2)"
+        }
+        "vacuum_deferred" => {
+            "VACUUM deferred: the data fits its share but the file keeps its length until \
+             `barca gc` rewrites it (not while a run is alive)"
+        }
+        _ => {
+            "nothing eligible: no component records, run reports, old results or old runs to \
+             clear under the current retention (the last 100 outcomes, the last 1000 runs); what \
+             is left is the current working set and the history retention keeps"
+        }
+    }
+}
+
+/// The last trim pass of a metadata DB, as `barca status` and the server's status report it
+/// (`disk_usage.metadata_trim`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetadataTrim {
+    pub env: String,
+    /// When the pass ran (RFC 3339, UTC).
+    pub at: String,
+    /// The share of the limit the database may use, in bytes.
+    pub allowance_bytes: u64,
+    /// The file before and after the pass, in bytes.
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    /// Records cleared, by tier: component records, run reports, old results, old runs.
+    pub components: u64,
+    pub outcomes: u64,
+    pub rows: u64,
+    pub runs: u64,
+    /// The longest hold of the metadata lock in the pass, in milliseconds.
+    pub longest_hold_ms: u64,
+    /// The bytes the pages that hold data take after the pass (the file less its free pages):
+    /// what a pass with a time budget measures against `allowance_bytes`.
+    pub used_after_bytes: u64,
+    /// `busy` (the pass could not get the metadata lock in 250 ms), `needs_gc` (an older database
+    /// lacks an index the online pass needs, or the pass failed), `live_run` (the data is over
+    /// its share and a run is running or queued, so no history was removed),
+    /// `nothing_eligible` (the data is over its share and the pass cleared nothing),
+    /// `vacuum_deferred` (the data fits but the file is longer than the share until `barca gc`)
+    /// or `null` (the file is within its share, or the data is over it and the pass cleared
+    /// records and ran out of time, so a later pass goes on).
+    pub reason: Option<String>,
+    /// The run that kept history from being removed, for `live_run`.
+    pub run_id: Option<String>,
+    /// The reason in words.
+    pub detail: Option<String>,
+    /// Passes in a row that freed nothing.
+    pub zero_progress_passes: u32,
+    /// When the next pass may start after one that freed nothing (RFC 3339, UTC), unless the
+    /// file grows by a tenth, enough runs finish (`nothing_eligible`) or `barca gc` runs; `null`
+    /// otherwise.
+    pub next_attempt: Option<String>,
+}
+
+impl TrimMemory {
+    fn report(&self) -> MetadataTrim {
+        let o = &self.outcome;
+        let reason = trim_reason(o, self.allowance_bytes);
+        MetadataTrim {
+            env: self.env.clone(),
+            at: barca_model::time::rfc3339(self.at as i64),
+            allowance_bytes: self.allowance_bytes,
+            before_bytes: o.before_bytes,
+            after_bytes: o.after_bytes,
+            used_after_bytes: o.used_after_bytes,
+            components: o.components,
+            outcomes: o.outcomes,
+            rows: o.rows,
+            runs: o.runs,
+            longest_hold_ms: o.longest_hold_ms,
+            reason: reason.map(str::to_string),
+            run_id: o.live_run.clone(),
+            detail: reason.map(|r| trim_reason_words(r).to_string()),
+            zero_progress_passes: self.streak,
+            next_attempt: (self.streak > 0)
+                .then(|| barca_model::time::rfc3339(self.retry_at as i64)),
+        }
+    }
+}
+
 /// Project-wide storage, using maintained cache evidence and a bounded backup survey.
 /// No artifact walk or database scan is performed by status.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -332,6 +472,10 @@ pub struct DiskUsage {
     pub budget_bytes: Option<u64>,
     pub backup_bytes: Option<u64>,
     pub limit_bytes: Option<u64>,
+    /// The last trim pass of each metadata database that has had one. Absent until a database
+    /// went over its share.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metadata_trim: Vec<MetadataTrim>,
 }
 
 pub fn disk_usage(cfg: &ResolvedConfig) -> DiskUsage {
@@ -343,10 +487,16 @@ pub fn disk_usage(cfg: &ResolvedConfig) -> DiskUsage {
 
 fn disk_usage_in(project: &Project, max_size: MaxSize) -> DiskUsage {
     let backup_bytes = measure_backups(project);
-    let budget_bytes = read_state(project)
+    let state = read_state(project);
+    let metadata_trim = state
+        .as_ref()
+        .map(|s| s.metadata_trim.values().map(TrimMemory::report).collect())
+        .unwrap_or_default();
+    let budget_bytes = state
         .and_then(|s| s.measurement)
         .map(Measurement::budget_bytes);
     DiskUsage {
+        metadata_trim,
         size_bytes: budget_bytes
             .zip(backup_bytes)
             .map(|(budget, backups)| budget.saturating_add(backups)),
@@ -425,10 +575,10 @@ struct State {
     checked_size: u64,
     #[serde(default)]
     checked_limit: u64,
-    /// By metadata DB: when trimming last found nothing more to remove with the file still over
-    /// its share, and the size it left ([`trim_metadata`]).
+    /// By metadata DB: what the last trim pass did and when the next may start
+    /// ([`trim_metadata`]). A full survey keeps it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    metadata_short: BTreeMap<String, (u64, u64)>,
+    metadata_trim: BTreeMap<String, TrimMemory>,
     /// When the artifact store was last checked and found there, by environment, store URI and
     /// storage options: seconds since the epoch ([`store_checked_recently`], #593).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1231,6 +1381,7 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
         .artifacts
         .saturating_sub(moved_aside)
         .saturating_sub(unnamed_bytes);
+    let previous = read_state(project);
     write_state(
         project,
         &State {
@@ -1242,9 +1393,13 @@ async fn survey(project: &Project, envs: &[EnvDb]) -> Result<Survey, BarcaError>
             surveyed_at: now_secs(),
             recorded: BTreeMap::new(),
             artifact_adjust: walked.artifacts as i64 - recorded as i64,
-            store_checks: read_state(project)
-                .map(|s| s.store_checks)
+            store_checks: previous
+                .as_ref()
+                .map(|s| s.store_checks.clone())
                 .unwrap_or_default(),
+            // Backoff and the last outcome of a trim outlive a survey: `barca gc` and its dry run
+            // survey too.
+            metadata_trim: previous.map(|s| s.metadata_trim).unwrap_or_default(),
             ..Default::default()
         },
     );
@@ -1580,6 +1735,13 @@ pub async fn after_command(
     own: &Own,
     pin: Option<&Pin>,
 ) -> Option<CacheReport> {
+    if !own.wrote_nothing {
+        RUNS_FINISHED.fetch_add(1, Ordering::Relaxed);
+    }
+    check_after(cfg, own, pin).await
+}
+
+async fn check_after(cfg: &ResolvedConfig, own: &Own, pin: Option<&Pin>) -> Option<CacheReport> {
     if cfg.cache_max_size == MaxSize::Off {
         return None;
     }
@@ -1614,16 +1776,92 @@ async fn off_the_event_loop<F: std::future::Future>(fut: F) -> F::Output {
     }
 }
 
-/// Keep each metadata DB within its share of `limit` ([`barca_db::metadata_size`]). One that cannot
-/// get there with everything removable gone is not looked at again until [`STUCK_FOR`] passes,
-/// or until it has grown a tenth. Never fails a command. True when one ran out of `time` while
-/// it was still removing things. One waiting for a moment with no run alive does not count:
-/// that can last, and artifacts cannot go unbounded meanwhile.
+/// Whether this process is a `barca serve`: its trims never wait on a lock or run a `VACUUM`
+/// ([`barca_db::metadata_size::trim_as`]). A CLI command keeps its own: it may wait for the lock,
+/// and compacts when no run is alive.
+static SERVING: AtomicBool = AtomicBool::new(false);
+
+/// Mark this process as a running `barca serve`.
+pub fn serving() {
+    SERVING.store(true, Ordering::Relaxed);
+}
+
+/// A pass that freed nothing is not repeated at once: the first wait is this, and each further
+/// one doubles, up to [`TRIM_BACKOFF_MAX`].
+const TRIM_BACKOFF_FIRST: Duration = Duration::from_secs(60);
+const TRIM_BACKOFF_MAX: Duration = Duration::from_secs(30 * 60);
+/// Runs finished in this process since a pass that found `nothing_eligible` after which the next
+/// is worth its time: they may have pushed older runs out of the retention window.
+const RUNS_UNTIL_RETRY: u64 = 200;
+
+/// The wait after `streak` passes in a row that freed nothing: 1, 2, 4, 8, 16, 30 minutes.
+fn trim_backoff(streak: u32) -> Duration {
+    TRIM_BACKOFF_FIRST
+        .saturating_mul(1u32 << streak.saturating_sub(1).min(10))
+        .min(TRIM_BACKOFF_MAX)
+}
+
+/// Runs this process finished that wrote something ([`Own::wrote_nothing`] false), and its
+/// value at each database's last pass. In memory: a restart starts both at zero.
+static RUNS_FINISHED: AtomicU64 = AtomicU64::new(0);
+static RUNS_AT_PASS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+
+fn runs_since_pass(db_path: &str) -> u64 {
+    let at = RUNS_AT_PASS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(db_path).copied())
+        .unwrap_or(0);
+    RUNS_FINISHED.load(Ordering::Relaxed).saturating_sub(at)
+}
+
+fn note_pass(db_path: &str) {
+    RUNS_AT_PASS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(db_path.to_string(), RUNS_FINISHED.load(Ordering::Relaxed));
+}
+
+/// Whether a check skips trimming for now. Reads no database and takes no lock: the file sizes
+/// (`size_now`: the file and its log), the clock and a count of runs kept in memory are all it
+/// looks at. It skips while the backoff of a pass that freed nothing has not ended, unless the
+/// file and its log grew by a tenth, or (for `nothing_eligible` and `live_run`) `runs_since` runs
+/// finished. A process that is not a server ignores a `vacuum_deferred` backoff.
+fn skip_trim(memory: &TrimMemory, size_now: u64, now: u64, runs_since: u64, serving: bool) -> bool {
+    let reason = trim_reason(&memory.outcome, memory.allowance_bytes);
+    // A server's `vacuum_deferred` is a wait for `barca gc`; a CLI command compacts, so it is
+    // not held back by it.
+    if !serving && reason == Some("vacuum_deferred") {
+        return false;
+    }
+    memory.streak > 0
+        && now < memory.retry_at
+        && size_now <= memory.base_bytes / 10 * 11
+        && !(matches!(reason, Some("nothing_eligible" | "live_run"))
+            && runs_since >= RUNS_UNTIL_RETRY)
+}
+
+/// The file and its write-ahead log, in bytes.
+fn db_and_log_bytes(db_path: &str) -> u64 {
+    let bytes = |path: &str| std::fs::metadata(path).map_or(0, |m| m.len());
+    bytes(db_path) + bytes(&format!("{db_path}-wal"))
+}
+
+/// Keep each metadata DB within its share of `limit` ([`barca_db::metadata_size`]). A pass that
+/// freed nothing says why ([`MetadataTrim::reason`]) and is not repeated for a minute, then two,
+/// up to half an hour ([`trim_backoff`]), until the file and its log grow by a tenth, enough runs
+/// finish after a `nothing_eligible` or `live_run` ([`skip_trim`]), or `barca gc` runs (`time` is `None`: it
+/// always trims). Never fails a command. True when one ran out of `time` while it was still
+/// removing things. One waiting for a moment with no run alive does not count: that can last,
+/// and artifacts cannot go unbounded meanwhile.
 async fn trim_metadata(
     project: &Project,
     envs: &[EnvDb],
     limit: Option<u64>,
     time: Option<Duration>,
+    serving: bool,
 ) -> bool {
     let mut under_way = false;
     let allowance = barca_db::metadata_size::allowance(limit);
@@ -1632,43 +1870,120 @@ async fn trim_metadata(
         if size <= allowance {
             continue;
         }
-        let short = read_state(project).and_then(|s| s.metadata_short.get(&env.db_path).copied());
+        let memory = read_state(project).and_then(|s| s.metadata_trim.get(&env.db_path).cloned());
         if time.is_some()
-            && short.is_some_and(|(at, bytes)| {
-                now_secs().saturating_sub(at) < STUCK_FOR.as_secs() && size <= bytes / 10 * 11
+            && memory.as_ref().is_some_and(|memory| {
+                skip_trim(
+                    memory,
+                    db_and_log_bytes(&env.db_path),
+                    now_secs(),
+                    runs_since_pass(&env.db_path),
+                    serving,
+                )
             })
         {
             continue;
         }
-        match barca_db::metadata_size::trim(&env.db_path, allowance, time).await {
+        let online = time.is_some() && serving;
+        match barca_db::metadata_size::trim_as(&env.db_path, allowance, time, online).await {
             Ok(Some(done)) => {
                 under_way |= done.out_of_time && done.removed();
-                if done.after_bytes < done.before_bytes || (done.finished && done.removed()) {
+                let reason = trim_reason(&done, allowance);
+                let before = memory.as_ref().map_or(0, |m| m.streak);
+                let streak = if done.busy {
+                    // A lock that was not free says nothing about the store: try again in a
+                    // minute, without lengthening the wait.
+                    before.max(1)
+                } else if done.progressed() || reason.is_none() {
+                    0
+                } else {
+                    before.saturating_add(1)
+                };
+                let wait = if done.busy {
+                    TRIM_BACKOFF_FIRST
+                } else if streak > 0 {
+                    trim_backoff(streak)
+                } else {
+                    Duration::ZERO
+                };
+                if done.removed() || done.after_bytes < done.before_bytes || reason.is_some() {
                     barca_model::errln!(
                         "[barca] metadata {} over its {} share of the limit: now {}; cleared \
                          {} component records and {} run reports, removed {} old results and \
-                         {} old runs",
+                         {} old runs{}",
                         size::human(done.before_bytes),
                         size::human(allowance),
                         size::human(done.after_bytes),
                         done.components,
                         done.outcomes,
                         done.rows,
-                        done.runs
+                        done.runs,
+                        reason
+                            .map(|r| format!(
+                                "; still over: {}{}",
+                                trim_reason_words(r),
+                                if streak > 0 {
+                                    format!(
+                                        "; next attempt in {} min unless it grows",
+                                        wait.as_secs() / 60
+                                    )
+                                } else {
+                                    String::new()
+                                }
+                            ))
+                            .unwrap_or_default()
                     );
                 }
+                note_pass(&env.db_path);
+                // Read again: the pass took a while, and a survey may have written the file.
                 let mut state = read_state(project).unwrap_or_default();
-                if done.finished && done.after_bytes > allowance {
-                    state
-                        .metadata_short
-                        .insert(env.db_path.clone(), (now_secs(), done.after_bytes));
-                } else {
-                    state.metadata_short.remove(&env.db_path);
-                }
+                state.metadata_trim.insert(
+                    env.db_path.clone(),
+                    TrimMemory {
+                        env: env.env.clone(),
+                        at: now_secs(),
+                        allowance_bytes: allowance,
+                        streak,
+                        retry_at: now_secs() + wait.as_secs(),
+                        base_bytes: db_and_log_bytes(&env.db_path),
+                        outcome: done,
+                    },
+                );
                 write_state(project, &state);
             }
             Ok(None) => {}
-            Err(e) => barca_model::errln!("[barca] warning: could not trim {}: {e}", env.db_path),
+            Err(e) => {
+                // Not an error of the command, and not one to repeat at every command: remember
+                // it as a pass that needs `barca gc`, with a backoff like any other.
+                let before = memory.as_ref().map_or(0, |m| m.streak);
+                let streak = before.saturating_add(1);
+                barca_model::errln!(
+                    "[barca] warning: could not trim {}: {e}; next attempt in {} min (`barca gc` migrates an older database)",
+                    env.db_path,
+                    trim_backoff(streak).as_secs() / 60
+                );
+                let mut state = read_state(project).unwrap_or_default();
+                state.metadata_trim.insert(
+                    env.db_path.clone(),
+                    TrimMemory {
+                        env: env.env.clone(),
+                        at: now_secs(),
+                        allowance_bytes: allowance,
+                        streak,
+                        retry_at: now_secs() + trim_backoff(streak).as_secs(),
+                        base_bytes: db_and_log_bytes(&env.db_path),
+                        outcome: barca_db::metadata_size::Trimmed {
+                            before_bytes: size,
+                            after_bytes: size,
+                            used_before_bytes: size,
+                            used_after_bytes: size,
+                            needs_gc: true,
+                            ..Default::default()
+                        },
+                    },
+                );
+                write_state(project, &state);
+            }
         }
     }
     under_way
@@ -1692,7 +2007,7 @@ fn metadata_excess(envs: &[EnvDb], limit: Option<u64>) -> u64 {
 
 /// `serve`'s minute checkpoint: [`after_command`] with nothing of its own to protect.
 pub async fn checkpoint(cfg: &ResolvedConfig) -> Option<CacheReport> {
-    after_command(cfg, &Own::default(), None).await
+    check_after(cfg, &Own::default(), None).await
 }
 
 async fn check(
@@ -1741,7 +2056,15 @@ async fn check_in(
         return Ok(None);
     };
     let envs = envs(project);
-    if trim_metadata(project, &envs, Some(limit), Some(AFTER_COMMAND_BUDGET)).await {
+    if trim_metadata(
+        project,
+        &envs,
+        Some(limit),
+        Some(AFTER_COMMAND_BUDGET),
+        SERVING.load(Ordering::Relaxed),
+    )
+    .await
+    {
         // The file is about to shrink: evicting against its size now would delete artifacts
         // that fit.
         return Ok(None);
@@ -2002,7 +2325,7 @@ async fn gc_in(
         envs.retain(|e| &e.env == only);
     }
     if !opts.dry_run {
-        trim_metadata(project, &envs, limit, None).await;
+        trim_metadata(project, &envs, limit, None, false).await;
     }
     let survey = if project.barca.is_dir() {
         survey(project, &envs).await?

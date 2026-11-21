@@ -101,7 +101,9 @@ def test_a_run_list_never_counts_fewer_runs_than_it_lists(tmp_path, serve):
     server = serve("--max-runs", "4", "--timezone", "utc")
     stop = threading.Event()
     torn: list[str] = []
-    polls = [0]
+    samples_ready = threading.Event()
+    sample_lock = threading.Lock()
+    polls = 0
 
     def submit() -> None:
         while not stop.is_set():
@@ -110,22 +112,30 @@ def test_a_run_list_never_counts_fewer_runs_than_it_lists(tmp_path, serve):
             )
 
     def poll() -> None:
+        nonlocal polls
         while not stop.is_set():
             status, listing = server.request("GET", "/runs?limit=1000")
-            polls[0] += 1
-            if status == 200 and listing["total"] < len(listing["runs"]):
+            if status != 200:
+                continue
+            with sample_lock:
+                polls += 1
+                if polls > 100:
+                    samples_ready.set()
+            if listing["total"] < len(listing["runs"]):
                 torn.append(f"total {listing['total']} over {len(listing['runs'])} rows")
 
     threads = [threading.Thread(target=submit) for _ in range(2)]
     threads += [threading.Thread(target=poll) for _ in range(4)]
     for thread in threads:
         thread.start()
+    # Keep the original load window, extending it on slow runners to collect enough lists.
     stop.wait(8)
+    samples_ready.wait(timeout=52)
     stop.set()
     for thread in threads:
         thread.join()
-    assert polls[0] > 100, polls
-    assert not torn, f"{len(torn)} of {polls[0]} lists: {torn[:3]}"
+    assert polls > 100, polls
+    assert not torn, f"{len(torn)} of {polls} lists: {torn[:3]}"
 
 
 def test_a_run_list_stays_prompt_beside_the_runs_a_server_remembers(tmp_path, serve):

@@ -30,13 +30,35 @@ pub async fn upsert_schedule_state(
 ) -> Result<(), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
+    advance_schedule_cursor(&conn, node_id, epoch_secs).await
+}
+
+/// Advance a schedule's cursor in the same transaction as the queue row.
+pub async fn advance_schedule_cursor(
+    conn: &libsql::Connection,
+    node_id: &str,
+    epoch_secs: i64,
+) -> Result<(), BarcaError> {
     conn.execute(
         "INSERT INTO schedule_state (node_id, last_fired_at) VALUES (?1, ?2)
-         ON CONFLICT(node_id) DO UPDATE SET last_fired_at = ?2",
+         ON CONFLICT(node_id) DO UPDATE SET last_fired_at = MAX(last_fired_at, excluded.last_fired_at)",
         [node_id.to_string(), epoch_secs.to_string()],
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to upsert schedule_state: {e}")))?;
+    Ok(())
+}
+
+/// Reset future anchors after a wall-clock correction, preserving pause fields.
+pub async fn clamp_schedule_cursors(db_path: &str, wall: i64) -> Result<(), BarcaError> {
+    let _guard = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "UPDATE schedule_state SET last_fired_at = ?1 WHERE last_fired_at > ?1",
+        [wall],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to clamp schedule cursors: {e}")))?;
     Ok(())
 }
 

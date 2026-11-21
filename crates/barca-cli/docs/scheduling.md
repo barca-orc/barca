@@ -279,6 +279,8 @@ sensor once and let the `Always` nodes below it follow instead.
 
 ## A schedule that missed its slot
 
+After a delayed wakeup, each existing schedule fires at most once for its latest missed cron slot. Pauses, failure limits and runs already in flight still apply. A busy metadata store postpones admission. Other admission errors degrade health and the scheduler retries that job's slot up to three attempts before logging that it gave up. Other jobs keep ticking. Startup also coalesces downtime into one catch-up per existing schedule, and anchors new schedules at startup. A backward clock step resets future cursors to the corrected time.
+
 Where a schedule stands is decided once, on the server, and every surface reads that answer:
 `GET /schedule`, the `schedule` block of `GET /state` and of `barca status --json` (`GET
 /nodes`), and the web UI, which shows the values and compares no times itself.
@@ -469,7 +471,22 @@ error envelope, `reason` `metadata_unusable` and the remediation. `metadata_erro
 `null` once a read succeeds again (after the writer migrated the file, or it was restored).
 
 `GET /health` also has `scheduler_enabled`: `false` with `--no-schedule` or `--read-only`, and
-once the scheduler stopped on an error (it then says why in `metadata_error`).
+while stopped on a metadata error. It returns to true after a successful restart.
+
+A writable scheduler publishes the experimental `scheduler_liveness` object on
+`GET /health`. Request `GET /schedule?include_liveness=true` for the same object
+beside the `jobs` array. The default `GET /schedule` response is the jobs array.
+`heartbeat_at_ms` and `operation_started_at_ms` are absolute Unix milliseconds;
+the loop publishes its heartbeat every 20 seconds. Subtract the operation start from the
+current time to measure how long `operation` has waited. The normal wait for the next
+cron second leaves `operation` null.
+`last_due_slot` and `last_enqueue` are Unix seconds. Values are null until observed.
+Health returns HTTP 200 with `status: degraded` and a liveness `reason` during
+restart backoff or after 60 seconds without a loop heartbeat (120 seconds during
+startup). Retries start one second after an unexpected exit, double up to sixty
+seconds, and reset to one second after ten minutes of uptime. `restart_count` and
+`last_exit_reason` survive task restarts within the process. Draining takes precedence.
+Servers without a local scheduler omit liveness on health and return null in the schedule envelope.
 
 With `--env <name>` the database is `.barca/envs/<name>/metadata.db`. If `.barca/metadata.db` (the
 default environment's) is also there but empty or not a database, often left by a container that

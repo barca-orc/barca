@@ -54,11 +54,12 @@ pub async fn admit_as(
     {
         let _admitting = state.runs.queue.admit.lock().await;
         ensure_db(state).await?;
-        run_queue::push(
+        run_queue::push_with_slot(
             &state.config.resolved.db_path,
             &run_id,
             &store(&spec, accepted_at),
             &timestamp(accepted_at),
+            super::lifecycle::tick_of(&spec),
         )
         .await
         .map_err(|e| {

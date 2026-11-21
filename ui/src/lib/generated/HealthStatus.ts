@@ -3,4 +3,4 @@
 /**
  * `status` of `GET /health`.
  */
-export type HealthStatus = "ok" | "draining";
+export type HealthStatus = "ok" | "degraded" | "draining";

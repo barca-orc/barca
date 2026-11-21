@@ -117,9 +117,9 @@ pub use runs::{
 };
 pub use runs::{RunFailure, StartedRun, split_exception, start_run};
 pub use schedule::{
-    SCHEDULED_RUNS_WINDOW, ScheduleFailures, SchedulePause, ScheduledRun, get_schedule_failures,
-    get_schedule_pauses, get_schedule_state, scheduled_runs, set_schedule_failures,
-    set_schedule_pause, upsert_schedule_state,
+    SCHEDULED_RUNS_WINDOW, ScheduleFailures, SchedulePause, ScheduledRun, advance_schedule_cursor,
+    clamp_schedule_cursors, get_schedule_failures, get_schedule_pauses, get_schedule_state,
+    scheduled_runs, set_schedule_failures, set_schedule_pause, upsert_schedule_state,
 };
 use schema::{has_column, has_index, initialized};
 pub use schema::{init_db, init_db_as, probe_metadata};
@@ -132,7 +132,7 @@ pub(crate) use ticks::CREATE as CREATE_SCHEDULE_TICKS;
 pub use ticks::{
     LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
     TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, TickTimings,
-    latest_ticks, newest_decided, recent_ticks, record_tick, record_tick_finished,
+    latest_ticks, newest_decided, recent_ticks, record_tick, record_tick_finished, record_tick_on,
     record_tick_started, tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
 };
 
@@ -1314,6 +1314,41 @@ pub async fn open_conn_with_until(
         .await??;
     until.check()?;
     connection_for(db_path, lock).await
+}
+
+/// [`open_conn`] for an operation that must not wait: the cross-process lock is tried for `wait`
+/// at most, and `None` says it was not free. The caller holds [`db_guard`], so a wait here is a
+/// wait of every other operation of this process too.
+pub async fn open_conn_within(
+    db_path: &str,
+    wait: Duration,
+) -> Result<Option<(DbHandle, libsql::Connection)>, BarcaError> {
+    if is_read_view(db_path) {
+        return open_conn(db_path).await.map(Some);
+    }
+    let lock_path = format!("{db_path}.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| BarcaError::Db(format!("failed to open lock file {lock_path}: {e}")))?;
+    let deadline = Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(fs::TryLockError::Error(e)) => {
+                return Err(BarcaError::Db(format!("failed to lock {lock_path}: {e}")));
+            }
+        }
+    }
+    connection_for(db_path, FileLock::held(file, lock_path))
+        .await
+        .map(Some)
 }
 
 /// Fold the write-ahead log into the main database file (`PRAGMA wal_checkpoint(TRUNCATE)`).
