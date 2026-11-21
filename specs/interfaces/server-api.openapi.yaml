@@ -9016,11 +9016,11 @@ components:
               minimum: 0
             metadata_trim:
               type: array
-              description: The last trim pass of each metadata database that went over its share of the cache limit, and why it is still over when it is (reason working_set, live_run, checkpoint_blocked, no_eligible_history or vacuum_deferred). Omitted until a database went over its share. Experimental.
+              description: The last trim pass of each metadata database that went over its share of the cache limit. Omitted until one did. reason is vacuum_deferred (the file only shrinks through a VACUUM, which only barca gc runs, and not with a run alive) or nothing_eligible (the pass cleared nothing); it is null when after_bytes is within allowance_bytes, and also when the pass cleared records and ran out of time so a later pass goes on. Experimental.
               items:
                 type: object
                 additionalProperties: false
-                required: [env, at, allowance_bytes, before_bytes, after_bytes, log_bytes, components, outcomes, rows, runs, reason, detail, run_id, longest_hold_ms, vacuum, zero_progress_passes, next_attempt]
+                required: [env, at, allowance_bytes, before_bytes, after_bytes, components, outcomes, rows, runs, longest_hold_ms, reason, detail, zero_progress_passes, next_attempt]
                 properties:
                   env:
                     type: string
@@ -9036,10 +9036,6 @@ components:
                   after_bytes:
                     type: integer
                     minimum: 0
-                  log_bytes:
-                    type: integer
-                    minimum: 0
-                    description: The write-ahead log beside the file after the pass.
                   components:
                     type: integer
                     minimum: 0
@@ -9056,29 +9052,22 @@ components:
                     type: integer
                     minimum: 0
                     description: Old runs removed.
-                  reason:
-                    type: [string, 'null']
-                    enum: [working_set, live_run, checkpoint_blocked, no_eligible_history, vacuum_deferred, null]
-                    description: Why the file is still over its share; null when it is not.
-                  detail:
-                    type: [string, 'null']
-                  run_id:
-                    type: [string, 'null']
-                    description: The run protecting what is left, for live_run.
                   longest_hold_ms:
                     type: integer
                     minimum: 0
                     description: The longest hold of the metadata lock in the pass.
-                  vacuum:
-                    type: string
-                    enum: [none, incremental, full]
+                  reason:
+                    type: [string, 'null']
+                    enum: [vacuum_deferred, nothing_eligible, null]
+                  detail:
+                    type: [string, 'null']
                   zero_progress_passes:
                     type: integer
                     minimum: 0
                   next_attempt:
                     type: [string, 'null']
                     format: date-time
-                    description: When the next pass may start after one that freed nothing, unless the store grows or what held it back changes.
+                    description: When the next pass may start after one that freed nothing, unless the file grows by a tenth, enough runs finish (nothing_eligible) or barca gc runs.
         nodes:
           type: array
           items:

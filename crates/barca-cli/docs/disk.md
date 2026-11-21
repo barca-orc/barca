@@ -91,42 +91,35 @@ share stays over it. It says what it did on stderr:
 [barca] metadata 39.2 GB over its 1.1 GB share of the limit: now 848 MB; cleared 566986 component records and 16826 run reports, removed 0 old results and 0 old runs
 ```
 
-### Giving the space back, and what a pass holds
+### Only `barca gc` runs `VACUUM`
 
-The file shrinks only when freed space goes back to it, and that is bounded so a busy server
-keeps running. No hold of the metadata lock lasts much past a quarter of a second: the batches of
-orders 1 to 4 shrink when one took longer, and each pass reports its longest hold
-(`longest_hold_ms`).
+A check after a command or a run, and `serve`'s minute checkpoint, never run `VACUUM` or a
+checkpoint under the metadata lock: both hold it while the file is rewritten, and a reader on the
+log can make them wait. Such a pass clears records (orders 1 and 2), which frees space inside the
+file but does not shrink it, and says `vacuum_deferred`. Orders 3 and 4 wait for a `VACUUM`, so
+they too wait for `barca gc`, which has no time budget and runs it (not with a run alive).
+Each pass reports the longest hold of the lock it took (`longest_hold_ms`).
 
-- A database created with `auto_vacuum=INCREMENTAL` gives pages back in chunks
-  (`PRAGMA incremental_vacuum`), each under its own hold of the lock.
-- Every other database, including all that earlier releases created (barca does not change the
-  mode of an existing file), needs a full `VACUUM`. It rewrites the live data with the lock held
-  and cannot be cut short, so a check with a time budget runs one only when its estimated time
-  (about 25 MiB a second) fits the budget, with no run alive, and when a checkpoint can finish at
-  once: a full `VACUUM` writes a copy of the store to the log, and with a reader holding the log
-  that copy would only add to it. Otherwise it says why it did not (`vacuum_deferred`,
-  `live_run`, `checkpoint_blocked` below). `barca gc` has no budget and runs it. Orders 3 and 4
-  delete history, so they wait for a `VACUUM` of what orders 1 and 2 cleared: with a run alive,
-  or with the `VACUUM` deferred, they wait too.
+### When it stays over its share
 
-### When it cannot get under its share
+A pass that ends over its share says why, on stderr and in `disk_usage.metadata_trim` of
+`barca status --json` and of the server's status:
 
-A pass that ends over its share says why, in the stderr line and in `disk_usage.metadata_trim` of
-`barca status --json` and of the server's `GET /state` (`reason`, `detail`, `run_id`):
+| `reason` | Meaning |
+|---|---|
+| `vacuum_deferred` | The file only shrinks through a `VACUUM`, and only `barca gc` runs one (not with a run alive). Run `barca gc` when a pause is acceptable. |
+| `nothing_eligible` | The pass cleared no component records, run reports, old results or old runs under the current retention (the last 100 outcomes, the last 1000 runs; fixed in this release). What is left is the current working set and the history retention keeps. |
+| `null` | The file is within its share (`after_bytes` is at or below `allowance_bytes`), **or** the pass cleared records and ran out of its time, so a later pass goes on. `null` does not say the file is within its share if `after_bytes` is above `allowance_bytes`. |
 
-| `reason` | Meaning | What to do |
-|---|---|---|
-| `working_set` | What is left without run history (the results on disk, each node's latest success, the definitions) is larger than the share. No trim removes it. | Raise `[cache] max_size`, or evict results |
-| `live_run` | A run alive on this machine protects the rest: `VACUUM` (deferred: server busy) and orders 3 and 4 wait for it. `run_id` names it. Only a run whose owner is seen alive here counts; a `running` row of another host or an unknown owner does not block a trim. | Wait for the run to end; the next check after it trims |
-| `checkpoint_blocked` | A reader holds the write-ahead log, so a checkpoint cannot fold it into the file: space freed in the database is not freed on disk yet. A full `VACUUM` is not started in this state. | Find the long-lived reader (a `barca` process with a read transaction, a backup); the log folds in once it ends |
-| `no_eligible_history` | What is left is run history the retention constants keep (the last 100 outcomes, the last 1000 runs and their logs): nothing more is eligible. The retention constants are fixed in this release. | Nothing; `detail` estimates the bytes the kept history takes |
-| `vacuum_deferred` | A full `VACUUM` would hold the lock longer than the check's budget. | Run `barca gc` when a pause is acceptable |
+No other cause is reported: a run alive, a reader holding the log and a working set larger than
+the share show as `vacuum_deferred` or `nothing_eligible`.
 
-A pass that freed nothing is not repeated at once. The next waits a minute, then 2, 4, 8, 16 and
-at most 30 minutes (`zero_progress_passes`, `next_attempt`), and starts sooner when the file grows
-by a tenth, when a run that protected it ended (`live_run`), when 200 more runs have finished past
-the retention window (`no_eligible_history`), or when `barca gc` runs.
+A pass that freed nothing (cleared no record and did not shrink the file) is not repeated at once.
+The next waits a minute, then 2, 4, 8, 16 and at most 30 minutes (`zero_progress_passes`,
+`next_attempt`). The wait ends sooner when the file and its log grow by a tenth, when 200 more runs
+have finished in the server after a `nothing_eligible`, or when `barca gc` runs. Deciding to skip
+reads no database and takes no lock. The backoff and the last outcome are kept in
+`.barca/gc-state.json` and survive a survey, `barca gc` and `barca gc --dry-run`.
 
 ## After `barca state reset` or `barca state restore`
 
