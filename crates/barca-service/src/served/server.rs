@@ -80,6 +80,8 @@ pub struct ServerHealth {
     pub load_errors: Vec<LoadError>,
     /// Why the metadata DB cannot be used, while it cannot; `null` otherwise.
     pub metadata_error: Option<String>,
+    /// Last periodic WAL checkpoint on this writable server.
+    pub metadata_wal: Option<crate::db::WalCheckpoint>,
     pub queue: HealthQueue,
     /// `barca serve --read-only`: run and cancel endpoints are refused.
     pub read_only: bool,

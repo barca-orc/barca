@@ -3,6 +3,8 @@ read-only server keeps serving and says why on `/health`, and the startup line n
 
 import json
 import sqlite3
+import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -233,3 +235,30 @@ def test_get_on_an_empty_database_initializes_it(project):
     again = barca(project, "get", "quick", "pipeline.py", "--json")
     assert again.returncode == 0, again.stderr
     assert "was empty" not in again.stderr
+
+
+def test_read_only_polling_releases_wal_snapshots(project, serve):
+    seed = barca(project, "get", "quick", "pipeline.py")
+    assert seed.returncode == 0, seed.stderr
+    db = project / ".barca" / "metadata.db"
+    observer = serve("--read-only")
+    # The test is the only writer. Keep its connection and the observer alive
+    # through TRUNCATE so a last-close checkpoint cannot mask a pinned reader.
+    with closing(sqlite3.connect(f"file:{db}?mode=rw", uri=True, timeout=1)) as writer:
+        assert writer.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        started = time.monotonic()
+        polls = 0
+        while polls < 2 or time.monotonic() - started < 3:
+            assert observer.request("GET", "/state")[0] == 200
+            assert observer.request("GET", "/runs?limit=1")[0] == 200
+            writer.execute(
+                "UPDATE runs SET elapsed_seconds = ? WHERE rowid = (SELECT min(rowid) FROM runs)",
+                (polls + 1,),
+            )
+            writer.commit()
+            polls += 1
+            time.sleep(0.1)
+        assert Path(f"{db}-wal").stat().st_size > 0
+        assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (0, 0, 0)
+        assert Path(f"{db}-wal").stat().st_size == 0

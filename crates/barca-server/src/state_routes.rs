@@ -42,6 +42,7 @@ pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
         // `scheduler`, and false once the scheduler stopped on an error.
         scheduler_enabled: state.scheduler_enabled(),
         // Why the metadata DB cannot be used, while it cannot; null otherwise.
+        metadata_wal: state.reads.metadata_wal.read().unwrap().clone(),
         metadata_error: state.reads.metadata_error.read().unwrap().clone(),
         // `.barca/` against its size limit, as last measured after a run or on the minute
         // checkpoint (RFC-0012); null before the first measurement or with the limit off.

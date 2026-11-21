@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Metadata backups release their SQLite reader between page batches. Writable servers checkpoint the metadata WAL every minute, attempt truncation above 64 MiB, and report blocked checkpoints in `GET /health` (#1087).
+
 - A worker whose DuckDB database is invalidated (after a DuckDB fatal or internal error, every later statement in the process fails with `FatalException: database has been invalidated`) is replaced, and the step that hit it is tried once more in a fresh worker, whatever its `retries`. The worker used to stay in the pool and every DuckDB step it was given next failed the same way: one fault became 1,462 failed steps in one run (#1083).
 
 ## 0.46.0 (2026-11-20)

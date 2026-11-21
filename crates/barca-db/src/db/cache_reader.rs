@@ -35,6 +35,23 @@ pub struct CacheReader {
     _guard: Option<MutexGuard<'static, ()>>,
 }
 
+/// An exclusive lookup on a reusable statement. A hit can return directly from
+/// SQLITE_ROW: dropping Rows alone leaves the cached statement on that row.
+struct LookupStatement<'a>(tokio::sync::MappedMutexGuard<'a, libsql::Statement>);
+
+impl std::ops::Deref for LookupStatement<'_> {
+    type Target = libsql::Statement;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for LookupStatement<'_> {
+    fn drop(&mut self) {
+        self.0.reset();
+    }
+}
+
 impl CacheReader {
     pub async fn open(db_path: &str) -> Result<Self, BarcaError> {
         // Same order as every other helper: in-process guard first, then the file lock.
@@ -74,7 +91,7 @@ impl CacheReader {
     pub async fn lookup_statement(
         &self,
         sql: &[&str],
-    ) -> tokio::sync::MappedMutexGuard<'_, libsql::Statement> {
+    ) -> impl std::ops::Deref<Target = libsql::Statement> + '_ {
         Self::kept_statement(&self.conn, &self.lookup, sql)
             .await
             .expect("the materializations table accepts a lookup")
@@ -86,7 +103,7 @@ impl CacheReader {
         conn: &libsql::Connection,
         slot: &'a tokio::sync::Mutex<Option<libsql::Statement>>,
         sql: &[&str],
-    ) -> Option<tokio::sync::MappedMutexGuard<'a, libsql::Statement>> {
+    ) -> Option<LookupStatement<'a>> {
         let mut slot = slot.lock().await;
         if slot.is_none() {
             for candidate in sql {
@@ -98,8 +115,7 @@ impl CacheReader {
             }
         }
         let statement = tokio::sync::MutexGuard::try_map(slot, Option::as_mut).ok()?;
-        statement.reset();
-        Some(statement)
+        Some(LookupStatement(statement))
     }
 
     /// `barca_service::cache::lookup_cached` of each `(node id, run hash)`, in order, a few thousand
@@ -216,17 +232,12 @@ impl CacheReader {
             .await
             .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
         let mut out = KeyRows::default();
-        let mut read = 0usize;
+
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
         {
-            // A long read that never waits: let the thread's other tasks run now and then.
-            read += 1;
-            if read.is_multiple_of(4096) {
-                tokio::task::yield_now().await;
-            }
             let (Ok(id), Ok(node), Ok(run_hash), Ok(path)) = (
                 row.get::<i64>(0),
                 row.get::<String>(1),

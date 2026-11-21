@@ -42,8 +42,10 @@ pub mod ledger_posts;
 mod logs;
 pub mod materializations;
 pub mod notifications;
+mod online_backup;
 mod partition_keys;
 pub(crate) mod pins;
+mod read_activity;
 mod run_filter;
 mod run_liveness;
 pub mod run_queue;
@@ -53,6 +55,8 @@ mod schedule;
 pub mod schema;
 pub(crate) mod sink_publications;
 mod snapshots;
+mod wal;
+pub use wal::{WAL_THRESHOLD_BYTES, WalCheckpoint, maintain_wal};
 mod stats;
 mod ticks;
 pub(crate) mod uploads;
@@ -271,6 +275,24 @@ const BUSY_WAIT: Duration = Duration::from_secs(5);
 /// SQLite's own locks ([`BUSY_WAIT`]), which is how long one try used to block.
 const CHECKPOINT_BUSY_WAIT: Duration = BUSY_WAIT;
 
+/// Let libsql configure serialized threading before any direct SQLite C API
+/// call can initialize SQLite implicitly. A file-backed Builder defers this
+/// configuration until connect; the memory Builder performs it during build,
+/// without opening a connection or touching the filesystem.
+async fn initialize_libsql() -> Result<(), BarcaError> {
+    static READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    READY
+        .get_or_try_init(|| async {
+            Builder::new_local(":memory:")
+                .build()
+                .await
+                .map(drop)
+                .map_err(db_open_error)
+        })
+        .await
+        .copied()
+}
+
 /// A read-only connection to a [`ReadView`]'s database.
 async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
     OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -279,7 +301,7 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
         .build()
         .await
         .map_err(db_open_error)?;
-    let conn = db.connect().map_err(db_open_error)?;
+    let conn = read_activity::connect(&db, path).await?;
     // Before the first query: the first reader after the last writer closed rebuilds the log's
     // index, and a reader that comes then waits for it instead of failing.
     wait_when_busy(&conn)?;
@@ -1328,17 +1350,34 @@ pub async fn checkpoint(conn: &libsql::Connection) -> Result<(), BarcaError> {
 /// One `PRAGMA wal_checkpoint(TRUNCATE)`: true when another connection kept it from finishing.
 pub(crate) async fn checkpoint_once(conn: &libsql::Connection) -> Result<bool, BarcaError> {
     let failed = |e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}"));
-    // The pragma returns one (busy, log_pages, checkpointed_pages) row; busy means another
-    // connection kept it from finishing.
     let mut rows = conn
-        .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
+        .query("PRAGMA busy_timeout", ())
         .await
         .map_err(failed)?;
-    let mut busy = false;
-    while let Some(row) = rows.next().await.map_err(failed)? {
-        busy |= row.get::<i64>(0).unwrap_or(0) != 0;
+    let row = rows
+        .next()
+        .await
+        .map_err(failed)?
+        .ok_or_else(|| BarcaError::Db("missing SQLite busy timeout".into()))?;
+    let previous = row.get::<i64>(0).map_err(failed)? as u64;
+    drop(row);
+    drop(rows);
+    struct RestoreTimeout<'a>(&'a libsql::Connection, Duration);
+    impl Drop for RestoreTimeout<'_> {
+        fn drop(&mut self) {
+            if let Err(e) = self.0.busy_timeout(self.1) {
+                barca_model::errln!("[barca] could not restore SQLite busy timeout: {e}");
+            }
+        }
     }
-    Ok(busy)
+
+    conn.busy_timeout(Duration::ZERO).map_err(failed)?;
+    let _restore = RestoreTimeout(conn, Duration::from_millis(previous));
+    read_activity::local_read(wal::checkpoint_row(
+        conn,
+        "PRAGMA main.wal_checkpoint(TRUNCATE)",
+    ))
+    .map(|(busy, _, _)| busy)
 }
 
 fn checkpoint_busy() -> BarcaError {
@@ -1771,63 +1810,8 @@ mod owner_tests;
 
 #[cfg(test)]
 mod fold_log_tests {
-    use super::{
-        acquire_file_lock, connect, copy_for_backup, create_run, fold_log, init_db, lock_db,
-        wal_is_clean,
-    };
-    use crate::db::snapshots::pin_main_file;
+    use super::{acquire_file_lock, connect, copy_for_backup, create_run, init_db, lock_db};
     use libsql::Builder;
-
-    /// The guarantee a backup copies under: while the pin is held, commits from other
-    /// connections land in the log and no checkpoint (automatic or asked for) writes them to the
-    /// main file, so the copy reads stable bytes without barca's lock.
-    #[tokio::test]
-    async fn a_pinned_main_file_takes_writes_without_changing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("metadata.db").display().to_string();
-        init_db(&path).await.unwrap();
-        create_run(&path, "before", "get", "p.py", None, None)
-            .await
-            .unwrap();
-        let pin = {
-            let _lock = lock_db(&path).await.unwrap();
-            fold_log(&path).await.unwrap();
-            pin_main_file(&path).await.unwrap()
-        };
-        let before = std::fs::read(&path).unwrap();
-        // Enough commits to pass the automatic checkpoint's 1000 pages.
-        for i in 0..300 {
-            create_run(
-                &path,
-                &format!("during-{i}"),
-                "get",
-                &"p".repeat(4000),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        }
-        {
-            let (_db, conn) = connect(&path).await.unwrap();
-            let mut rows = conn
-                .query("PRAGMA wal_checkpoint(PASSIVE)", ())
-                .await
-                .unwrap();
-            while rows.next().await.unwrap().is_some() {}
-        }
-        assert!(!wal_is_clean(&path), "the writes are in the log");
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            before,
-            "the main file did not change"
-        );
-        drop(pin);
-        let _lock = lock_db(&path).await.unwrap();
-        fold_log(&path).await.unwrap();
-        assert_ne!(std::fs::read(&path).unwrap(), before);
-        assert_eq!(open_and_count(&path, "runs").await, 301);
-    }
 
     /// A backup leaves barca's lock while it hashes and copies: a run's writes go on beside it,
     /// and the copy is still one whole database whose digest is the one returned.
@@ -1859,15 +1843,44 @@ mod fold_log_tests {
                 }
             })
         };
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
         let copy = dir.path().join("backup.db");
         let digest = copy_for_backup(&path, &copy, None, barca_model::process::Until::done())
             .await
             .unwrap()
             .unwrap();
         writer.await.unwrap();
+        assert_eq!(
+            std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         assert_eq!(barca_model::hash::file_sha256(&copy).unwrap(), digest);
-        let copied = open_and_count(&copy.display().to_string(), "runs").await;
-        assert!((2000..=2200).contains(&copied), "{copied}");
+        // One committed prefix with every pre-existing row intact. A broad
+        // count range alone would also accept missing or reordered history.
+        let saved = Builder::new_local(&copy).build().await.unwrap();
+        let conn = saved.connect().unwrap();
+        let mut rows = conn
+            .query("SELECT run_id FROM runs ORDER BY id", ())
+            .await
+            .unwrap();
+        for i in 1..=2000 {
+            assert_eq!(
+                rows.next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .get::<String>(0)
+                    .unwrap(),
+                format!("old-{i}")
+            );
+        }
+        let mut new = 0;
+        while let Some(row) = rows.next().await.unwrap() {
+            assert_eq!(row.get::<String>(0).unwrap(), format!("new-{new}"));
+            new += 1;
+        }
+        assert!(new <= 200);
         assert_eq!(open_and_count(&path, "runs").await, 2200);
         // Nothing is held after the backup: the lock is free at once.
         acquire_file_lock(&path, std::time::Duration::from_millis(100))

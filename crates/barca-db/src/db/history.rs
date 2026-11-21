@@ -342,11 +342,42 @@ impl NodeAgesIndex {
         // One snapshot for the mark and the rows, so a row written in between is either in both
         // or in neither.
         conn.execute("BEGIN", ()).await.map_err(failure)?;
-        let result = self.read_in(&conn, db_path).await;
+        let result = super::read_activity::local_read(self.read_in(&conn, db_path));
         let _ = conn.execute("COMMIT", ()).await;
         if result.is_err() {
             // Partly folded in: the next read starts again from nothing.
             *self = Self::default();
+        }
+        if is_read_view(db_path)
+            && matches!(&result, Err(BarcaError::Db(msg)) if msg.contains("interrupted"))
+        {
+            // A cold full-history scan can exceed the live ReadView budget on
+            // every retry. Release its reader, then rebuild on a private image.
+            drop(conn);
+            drop(_h);
+            let dir = tempfile::tempdir()?;
+            let stage = tempfile::NamedTempFile::new_in(dir.path())?;
+            {
+                let mut copy =
+                    super::online_backup::Backup::open(Path::new(db_path), stage.path()).await?;
+                let first = copy.step()?;
+                super::snapshots::finish_backup(
+                    &mut copy,
+                    first,
+                    barca_model::process::Until::done(),
+                )
+                .await?;
+            }
+            let path = stage
+                .path()
+                .to_str()
+                .ok_or_else(|| BarcaError::Db("invalid private snapshot path".into()))?;
+            let (_db, private) = super::connect_read_only(path).await?;
+            // Publish the rebuilt index only after the private scan succeeds.
+            let mut rebuilt = Self::default();
+            let ages = rebuilt.read_in(&private, path).await?;
+            *self = rebuilt;
+            return Ok(ages);
         }
         result
     }
@@ -731,7 +762,7 @@ pub async fn node_histories(
     // One snapshot for the mark and the rows, so a row written in between is either in both
     // or in neither.
     conn.execute("BEGIN", ()).await.map_err(failure)?;
-    let result = index.read(&conn, db_path, base_ids).await;
+    let result = super::read_activity::local_read(index.read(&conn, db_path, base_ids));
     let _ = conn.execute("COMMIT", ()).await;
     result
 }
@@ -1212,6 +1243,25 @@ pub(super) async fn query_i64(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn interrupted_age_scan_rebuilds_the_same_index_on_a_private_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        {
+            let (_handle, conn) = open_conn(&path).await.unwrap();
+            conn.execute("INSERT INTO materializations (node_id, status, rows) VALUES ('p.py:a', 'success', 7)", ()).await.unwrap();
+        }
+        let expected = node_ages(&path).await.unwrap();
+        assert!(expected.contains_key("p.py:a"));
+        let view = ReadView::open(&path).await.unwrap().unwrap();
+        let mut index = NodeAgesIndex::default();
+        crate::db::read_activity::EXPIRE_NEXT_AGE_READ.set(true);
+        assert_eq!(index.read(view.path()).await.unwrap(), expected);
+        assert!(!crate::db::read_activity::EXPIRE_NEXT_AGE_READ.get());
+        assert_eq!(index.read(view.path()).await.unwrap(), expected);
+    }
 
     /// A small deterministic generator, so a failing seed can be replayed.
     struct Lcg(u64);

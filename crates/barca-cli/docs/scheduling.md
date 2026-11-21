@@ -471,6 +471,13 @@ error envelope, `reason` `metadata_unusable` and the remediation. `metadata_erro
 `GET /health` also has `scheduler_enabled`: `false` with `--no-schedule` or `--read-only`, and
 once the scheduler stopped on an error (it then says why in `metadata_error`).
 
+A writable server checks the metadata WAL every minute. `GET /health` reports the last
+measurement under `metadata_wal`: remaining bytes, the threshold (64 MiB), whether the WAL
+exceeded it before the check, frame counts, and any blocker. Above the threshold the server
+also tries TRUNCATE with a 100 ms busy timeout. An external transaction can keep the WAL
+growing until its reader closes. The next check retries.
+
+
 With `--env <name>` the database is `.barca/envs/<name>/metadata.db`. If `.barca/metadata.db` (the
 default environment's) is also there but empty or not a database, often left by a container that
 started once without `--env`, `serve` warns once, naming both files. A valid one is the default

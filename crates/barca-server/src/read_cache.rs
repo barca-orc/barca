@@ -331,6 +331,7 @@ pub struct Reads {
     /// it unusable (it keeps serving) or the scheduler stops on a metadata error, cleared when a
     /// read-only request reads it again. `GET /health` `metadata_error`.
     pub metadata_error: Arc<std::sync::RwLock<Option<String>>>,
+    pub metadata_wal: Arc<std::sync::RwLock<Option<barca_service::db::WalCheckpoint>>>,
     /// Set when the scheduler stopped on a metadata error: the error then stays reported
     /// whatever a read finds.
     scheduler_stopped: Arc<std::sync::atomic::AtomicBool>,
@@ -346,6 +347,7 @@ impl Reads {
             config,
             cache: Arc::default(),
             metadata_error: Arc::default(),
+            metadata_wal: Arc::default(),
             scheduler_stopped,
         }
     }
