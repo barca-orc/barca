@@ -1217,24 +1217,26 @@ fn the_backoff_doubles_from_a_minute_to_half_an_hour() {
 #[test]
 fn a_pass_is_skipped_until_the_backoff_ends_or_something_changes() {
     let m = memory(2, 1000, 10_000, true);
-    assert!(skip_trim(&m, 10_000, 500, 0), "inside the backoff");
-    assert!(!skip_trim(&m, 10_000, 1000, 0), "the backoff ended");
+    assert!(skip_trim(&m, 10_000, 500, 0, true), "inside the backoff");
+    assert!(!skip_trim(&m, 10_000, 1000, 0, true), "the backoff ended");
     assert!(
-        skip_trim(&m, 11_000, 500, 0),
+        skip_trim(&m, 11_000, 500, 0, true),
         "a tenth of growth is not material"
     );
     assert!(
-        !skip_trim(&m, 11_001, 500, 0),
+        !skip_trim(&m, 11_001, 500, 0, true),
         "the file and its log grew by a tenth"
     );
     assert!(
-        !skip_trim(&memory(0, 1000, 10_000, true), 10_000, 500, 0),
+        !skip_trim(&memory(0, 1000, 10_000, true), 10_000, 500, 0, true),
         "nothing freed: no streak"
     );
     // Runs that finished matter for `nothing_eligible`, not for a deferred VACUUM.
-    assert!(!skip_trim(&m, 10_000, 500, RUNS_UNTIL_RETRY));
+    assert!(!skip_trim(&m, 10_000, 500, RUNS_UNTIL_RETRY, true));
     let deferred = memory(2, 1000, 10_000, false);
-    assert!(skip_trim(&deferred, 10_000, 500, RUNS_UNTIL_RETRY));
+    assert!(skip_trim(&deferred, 10_000, 500, RUNS_UNTIL_RETRY, true));
+    // A CLI command is not held back by a server's wait for `barca gc`.
+    assert!(!skip_trim(&deferred, 10_000, 500, 0, false));
 }
 
 /// A database of 8 MB over a 2 MB share, whose one big run report is kept: nothing in it is

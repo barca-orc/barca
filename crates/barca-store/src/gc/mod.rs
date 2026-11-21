@@ -1828,15 +1828,19 @@ fn note_pass(db_path: &str) {
 /// (`size_now`: the file and its log), the clock and a count of runs kept in memory are all it
 /// looks at. It skips while the backoff of a pass that freed nothing has not ended, unless the
 /// file and its log grew by a tenth, or (for `nothing_eligible` and `live_run`) `runs_since` runs
-/// finished.
-fn skip_trim(memory: &TrimMemory, size_now: u64, now: u64, runs_since: u64) -> bool {
+/// finished. A process that is not a server ignores a `vacuum_deferred` backoff.
+fn skip_trim(memory: &TrimMemory, size_now: u64, now: u64, runs_since: u64, serving: bool) -> bool {
+    let reason = trim_reason(&memory.outcome, memory.allowance_bytes);
+    // A server's `vacuum_deferred` is a wait for `barca gc`; a CLI command compacts, so it is
+    // not held back by it.
+    if !serving && reason == Some("vacuum_deferred") {
+        return false;
+    }
     memory.streak > 0
         && now < memory.retry_at
         && size_now <= memory.base_bytes / 10 * 11
-        && !(matches!(
-            trim_reason(&memory.outcome, memory.allowance_bytes),
-            Some("nothing_eligible" | "live_run")
-        ) && runs_since >= RUNS_UNTIL_RETRY)
+        && !(matches!(reason, Some("nothing_eligible" | "live_run"))
+            && runs_since >= RUNS_UNTIL_RETRY)
 }
 
 /// The file and its write-ahead log, in bytes.
@@ -1874,6 +1878,7 @@ async fn trim_metadata(
                     db_and_log_bytes(&env.db_path),
                     now_secs(),
                     runs_since_pass(&env.db_path),
+                    serving,
                 )
             })
         {

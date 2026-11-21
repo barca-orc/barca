@@ -218,6 +218,11 @@ pub async fn serve(config: ServeConfig) -> Result<Stopped, ServeError> {
     // A read-only server never runs anything, so it never schedules either.
     let schedule = config.schedule && !config.read_only;
     let read_only = config.read_only;
+    // Before anything is dispatched or spawned: a run restored at startup ends with a trim, and
+    // a trim inside a server never waits on a lock or runs a VACUUM (`barca_store::gc::serving`).
+    if !read_only {
+        barca_service::gc::serving();
+    }
 
     // `barca state restore` refuses to replace the database under a running server.
     let _serve_lock =
@@ -493,8 +498,6 @@ fn stray_root_db_warning(cfg: &barca_service::config::ResolvedConfig) {
 /// Once a minute, evict if `.barca/` is over its size limit ([`barca_service::gc::checkpoint`]).
 /// What runs in flight in this process hold is left alone.
 async fn cache_checkpoint(state: AppState) {
-    // From here the trims of this process run inside a server (`barca_store::gc::serving`).
-    barca_service::gc::serving();
     // tests/simulation compresses long use, so it cannot wait a real minute per check.
     let secs = barca_service::test_hooks::cache_checkpoint_secs().unwrap_or(60);
     let mut every = tokio::time::interval(std::time::Duration::from_secs(secs));

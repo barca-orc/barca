@@ -385,7 +385,7 @@ pub async fn trim_as(
         // reads is not told from one nothing reads. `barca gc` makes its own check.
         if !vacuum_allowed
             && step >= 2
-            && let Some(run) = live_run(&conn).await
+            && let Some(run) = live_run(&conn, db_path).await
         {
             done.live_run = Some(run);
             done.finished = false;
@@ -512,14 +512,30 @@ async fn used_now(
     Ok(Some((used_bytes(&conn).await?, ready)))
 }
 
+/// Per database, SQL a test makes the check run in place of its own: to make it fail.
+#[cfg(test)]
+static LIVE_SQL: Mutex<Option<HashMap<String, &'static str>>> = Mutex::new(None);
+
 /// A run that is running or in the queue, of any owner: the `running` rows are not judged by
 /// whether their process exists. A query that fails, or a row that cannot be read, counts as a
 /// run (`unknown`): history is deleted only when it is known that none is.
-async fn live_run(conn: &Connection) -> Option<String> {
-    for sql in [
+async fn live_run(conn: &Connection, db_path: &str) -> Option<String> {
+    #[cfg_attr(not(test), allow(unused_mut))]
+    let mut queries = vec![
         "SELECT run_id FROM runs WHERE status = 'running' LIMIT 1",
         "SELECT run_id FROM run_queue LIMIT 1",
-    ] {
+    ];
+    #[cfg(test)]
+    if let Some(sql) = LIVE_SQL
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(db_path).copied())
+    {
+        queries = vec![sql];
+    }
+    let _ = db_path;
+    for sql in queries {
         let Ok(mut rows) = conn.query(sql, ()).await else {
             return Some("unknown".to_string());
         };
@@ -879,24 +895,26 @@ mod tests {
         assert!(!done.busy && done.components > 0, "{done:?}");
     }
 
-    /// A query that fails is not "no run alive": history stays.
+    /// A query that fails is not "no run alive": history stays. The check is made to fail with
+    /// a query on a table that does not exist, on a database that is otherwise complete.
     #[tokio::test]
     async fn a_failed_check_for_live_runs_counts_as_a_live_run() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m.db").display().to_string();
         bloated(&path, 1500).await;
-        exec(&path, "DROP TABLE run_queue").await;
+        LIVE_SQL
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert(path.clone(), "SELECT run_id FROM no_such_table");
         let done = trim(&path, 8192, Some(Duration::from_secs(60)))
             .await
             .unwrap()
             .unwrap();
-        // `run_queue` is also a table this release adds, so the pass may stop even earlier, as
-        // `needs_gc`; either way no history is deleted.
-        assert!(
-            done.live_run.as_deref() == Some("unknown") || done.needs_gc,
-            "{done:?}"
-        );
+        assert_eq!(done.live_run.as_deref(), Some("unknown"), "{done:?}");
+        assert!(!done.needs_gc, "{done:?}");
         assert_eq!((done.rows, done.runs), (0, 0), "{done:?}");
+        assert_eq!(count(&path, "SELECT count(*) FROM runs").await, 1500);
     }
 
     /// A database without the indexes an online pass reads through is skipped and remembered, not
