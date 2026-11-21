@@ -19,9 +19,8 @@ in seconds and not in five-minute slots:
   the wall-clock second it wakes in (`scheduler/tick.rs::due_jobs`), with no live replay. The
   lost ticks are gone, not late.
 
-The reader test is `xfail(strict=True)`: it states the behavior a fix must give (every slot
-fires while a trim holds the lock), and the PR that fixes it removes the marker. The control
-test passes today and must keep passing.
+The reader test states the behavior the fix gives (every slot fires while a trim holds the
+lock). The control test must keep passing.
 
 The soak script `scripts/soak/scheduler_stall_soak.py` runs the same shape at the size of the
 issue (a store of about 1.2 GB, a log of similar size, a run of 110,000 steps).
@@ -34,8 +33,6 @@ can write it (`served.py`).
 import sqlite3
 import time
 from pathlib import Path
-
-import pytest
 
 from . import served
 from .helpers import clean_env
@@ -128,12 +125,6 @@ def test_an_over_share_store_alone_costs_no_tick(tmp_path):
     assert not in_a_row, f"slots with no tick, two in a row: {missed}\n{seen['stderr']}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1087: a trim holds the metadata lock for its VACUUM and a 5 s checkpoint wait on a "
-    "reader's transaction, and the scheduler awaits that lock with no limit and never replays "
-    "a live slot it did not evaluate",
-)
 def test_a_reader_on_an_over_share_store_does_not_lose_live_ticks(tmp_path):
     """Over its share, with a read transaction held: every slot must still fire, and
     `scheduler_enabled` must not be the only sign of life. Today about half of them are
