@@ -2185,6 +2185,10 @@ async fn lasting_admission_error_only_retries_the_affected_job() {
         cursor =
             evaluate_through(&st, &jobs, &mut book, &Zone::Utc, cursor, wall, Some(&path)).await;
         let health = crate::state_routes::health(axum::extract::State(st.clone())).await;
+        if wall == 102 {
+            assert_eq!(health.status, barca_service::served::HealthStatus::Ok);
+            continue;
+        }
         assert_eq!(health.status, barca_service::served::HealthStatus::Degraded);
         assert!(
             health
@@ -2241,4 +2245,53 @@ async fn backwards_clock_clamps_live_and_restart_cursors() {
     evaluate_through(&st, &jobs, &mut book, &Zone::Utc, last, 102, Some(&path)).await;
     assert_eq!(book.last_fired[&jobs[0].id], 102);
     assert_eq!(st.runs.registry.len(), 1);
+}
+
+#[tokio::test]
+async fn edited_cron_discards_its_old_slot_and_admission_error() {
+    let (_dir, state, path) = recording_state().await;
+    let old = [job("p.py:probe", NodeKind::Task, "40 * * * * *")];
+    let fresh = [job("p.py:probe", NodeKind::Task, "41 * * * * *")];
+    let id = &old[0].id;
+    let mut book = Bookkeeping::default();
+    state.scheduling.progress.beat();
+    book.retries.insert(id.clone(), (100, 1));
+    state
+        .scheduling
+        .progress
+        .admission_failure(id, "old admission".into());
+    discard_changed_retries(&state, &mut book, &old, &old);
+    assert_eq!(book.retries.get(id), Some(&(100, 1)));
+    discard_changed_retries(&state, &mut book, &old, &fresh);
+    assert!(!book.retries.contains_key(id));
+    assert!(
+        state
+            .scheduling
+            .progress
+            .snapshot()
+            .unwrap()
+            .reason
+            .is_none()
+    );
+
+    // Also exercise a stale retry reaching the planner after a schedule edit.
+    book.retries.insert(id.clone(), (100, 1));
+    state
+        .scheduling
+        .progress
+        .admission_failure(id, "old admission".into());
+    evaluate_through(&state, &fresh, &mut book, &Zone::Utc, 100, 100, Some(&path)).await;
+    assert!(!book.retries.contains_key(id));
+    assert!(
+        state
+            .scheduling
+            .progress
+            .snapshot()
+            .unwrap()
+            .reason
+            .is_none()
+    );
+    evaluate_through(&state, &fresh, &mut book, &Zone::Utc, 100, 101, Some(&path)).await;
+    assert_eq!(book.last_fired[id], 101);
+    assert_eq!(state.runs.registry.len(), 1);
 }

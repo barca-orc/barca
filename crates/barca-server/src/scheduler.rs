@@ -675,13 +675,7 @@ async fn scheduler_loop(state: &AppState) -> Result<&'static str, String> {
                     book.last_fired.insert(job.id.clone(), discovered);
                 }
             }
-            book.retries
-                .retain(|id, _| fresh.iter().any(|job| job.id == *id));
-            for old in &jobs {
-                if !fresh.iter().any(|job| job.id == old.id) {
-                    progress.admission_recovered(&old.id);
-                }
-            }
+            discard_changed_retries(state, &mut book, &jobs, &fresh);
             jobs = fresh;
             if let Some(path) = &db_path
                 && let Err(e) = progress
@@ -729,6 +723,24 @@ async fn scheduler_loop(state: &AppState) -> Result<&'static str, String> {
                 barca_service::errln!("[barca] could not record scheduler heartbeat: {e}");
             }
             last_heartbeat = wall.timestamp();
+        }
+    }
+}
+
+/// A queued retry belongs to the cron expression that selected its slot.
+fn discard_changed_retries(
+    state: &AppState,
+    book: &mut Bookkeeping,
+    old: &[ScheduledJob],
+    fresh: &[ScheduledJob],
+) {
+    for job in old {
+        if !fresh
+            .iter()
+            .any(|next| next.id == job.id && next.cron_str == job.cron_str)
+        {
+            book.retries.remove(&job.id);
+            state.scheduling.progress.admission_recovered(&job.id);
         }
     }
 }
@@ -847,6 +859,11 @@ async fn evaluate_through(
             |j| book.failures(j),
         )
         .pop() else {
+            book.retries.remove(&job.id);
+            progress.admission_recovered(&job.id);
+            if let Some(latest) = deferred {
+                book.retries.insert(job.id.clone(), (latest, 0));
+            }
             continue;
         };
         let mut persist_decision = true;
@@ -895,7 +912,6 @@ async fn evaluate_through(
             TickAction::Fire(job) => {
                 match fire(state, job, epoch).await {
                     Ok(handle) => {
-                        progress.admission_recovered(&job.id);
                         barca_service::jsonlog::line(
                             barca_service::jsonlog::Level::Info,
                             Some(&job.id),
@@ -937,6 +953,7 @@ async fn evaluate_through(
                 }
             }
         }
+        progress.admission_recovered(&job.id);
         if persist_decision
             && let Some(path) = db_path
             && let Err(error) = metadata(
