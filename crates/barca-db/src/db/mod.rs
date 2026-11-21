@@ -1341,6 +1341,18 @@ pub(crate) async fn checkpoint_once(conn: &libsql::Connection) -> Result<bool, B
     Ok(busy)
 }
 
+/// [`checkpoint_once`] that does not wait on a reader: the connection's own busy wait (5 s) would
+/// be spent with the caller's hold of the database lock, and a reader that holds the log is
+/// reported as busy at once. The wait is put back afterwards, the connection being the one the
+/// process keeps.
+pub(crate) async fn checkpoint_nowait(conn: &libsql::Connection) -> Result<bool, BarcaError> {
+    conn.busy_timeout(Duration::ZERO)
+        .map_err(|e| BarcaError::Db(format!("failed to set busy timeout: {e}")))?;
+    let busy = checkpoint_once(conn).await;
+    wait_when_busy(conn)?;
+    busy
+}
+
 fn checkpoint_busy() -> BarcaError {
     BarcaError::Db(
         "wal_checkpoint(TRUNCATE) could not finish: the database is in use by another \

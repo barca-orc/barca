@@ -443,6 +443,21 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
         .unwrap_or_else(|| "off".to_string());
     writeln!(&mut rendered, "Cache: {} budgeted (limit {limit}); {} metadata backups outside the budget; {} physical total",
         bytes(usage.budget_bytes), bytes(usage.backup_bytes), bytes(usage.size_bytes)).unwrap();
+    for trim in usage.metadata_trim.iter().filter(|t| t.reason.is_some()) {
+        writeln!(
+            &mut rendered,
+            "Metadata ({}): {} over its {} share; {}{}",
+            trim.env,
+            crate::text::human(trim.after_bytes),
+            crate::text::human(trim.allowance_bytes),
+            trim.detail.as_deref().unwrap_or_default(),
+            trim.next_attempt
+                .as_ref()
+                .map(|at| format!("; next trim attempt after {at}"))
+                .unwrap_or_default()
+        )
+        .unwrap();
+    }
     rendered
 }
 
