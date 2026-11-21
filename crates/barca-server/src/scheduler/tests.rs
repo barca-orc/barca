@@ -124,7 +124,7 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     config.resolved.db_path = dir.path().join("metadata.db").to_string_lossy().into();
     let state = AppState::new(config);
     let held = db::db_guard().await;
-    let task = tokio::spawn(run_scheduler(state.clone()));
+    let task = spawn(state.clone());
     // The initial selected graph is published before scheduler DB admission.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while state.reads.sources.loaded.lock().await.is_none() {
@@ -149,6 +149,21 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
             .len(),
         2
     );
+    let health = || crate::state_routes::health(axum::extract::State(state.clone()));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let h = health().await;
+            if h.status == barca_service::served::HealthStatus::Degraded {
+                let live = h.0.scheduler_liveness.unwrap();
+                assert_eq!(live.operation.as_deref(), Some("init_db"));
+                assert!(live.heartbeat_age_ms.unwrap() >= 3000);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
     drop(held);
     let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -166,6 +181,10 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
         }
     })
     .await;
+    assert_eq!(
+        health().await.status,
+        barca_service::served::HealthStatus::Ok
+    );
     task.abort();
     let _ = task.await;
     repaired.expect("startup swallowed the repaired source generation");
@@ -1672,4 +1691,90 @@ async fn a_run_nobody_scheduled_writes_no_tick() {
     }
     assert!(st.runs.registry.get(&handle).unwrap().finished_at.is_some());
     assert!(ticks(&path, &j).await.is_empty());
+}
+
+#[tokio::test]
+async fn supervisor_reports_exit_and_restart_then_stops_for_drain() {
+    let st = app_state();
+    let (started, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = tokio::spawn(supervise(st.clone(), move |state| {
+        let started = started.clone();
+        async move {
+            let attempt = state.scheduling.progress.snapshot().unwrap().restart_count;
+            started.send(attempt).unwrap();
+            if attempt == 0 {
+                panic!("scheduler test failure");
+            }
+            state.lifecycle.draining.cancelled().await;
+            Ok("draining")
+        }
+    }));
+    assert_eq!(attempts.recv().await, Some(0));
+    let health = || crate::state_routes::health(axum::extract::State(st.clone()));
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while health().await.status != barca_service::served::HealthStatus::Degraded {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(attempts.recv().await, Some(1));
+    let h = health().await;
+    assert_eq!(h.status, barca_service::served::HealthStatus::Ok);
+    let live = h.0.scheduler_liveness.unwrap();
+    assert_eq!(live.restart_count, 1);
+    assert!(
+        live.last_exit_reason
+            .unwrap()
+            .contains("scheduler test failure")
+    );
+    st.lifecycle.draining.cancel();
+    supervisor.await.unwrap();
+    assert_eq!(attempts.recv().await, None);
+    assert_eq!(
+        health()
+            .await
+            .scheduler_liveness
+            .as_ref()
+            .unwrap()
+            .restart_count,
+        1
+    );
+}
+
+#[tokio::test]
+async fn restart_after_enqueue_before_cursor_write_preserves_root_and_pause() {
+    let (_dir, st, path) = recording_state().await;
+    let jobs = [
+        job("f.py:daily", NodeKind::Asset, "0 6 * * *"),
+        job("f.py:paused", NodeKind::Asset, "0 6 * * *"),
+    ];
+    let before = utc(2, 5, 0);
+    let due = utc(2, 6, 0);
+    catch_up(&st, &[], &jobs, &Zone::Utc, &before, &path)
+        .await
+        .unwrap();
+    let pause = db::SchedulePause {
+        paused_at: before.timestamp(),
+        until: None,
+    };
+    db::set_schedule_pause(&path, &jobs[1].id, Some(pause), before.timestamp())
+        .await
+        .unwrap();
+    let root = fire(&st, &jobs[0], due.timestamp(), Some(&path))
+        .await
+        .unwrap();
+    finished_tick(&path, &jobs[0]).await;
+    // Restart after the root finished, with the old cursor still on disk.
+    let book = catch_up(&st, &[], &jobs, &Zone::Utc, &utc(2, 7, 0), &path)
+        .await
+        .unwrap();
+    assert!(book.last_handle.is_empty());
+    let records = ticks(&path, &jobs[0]).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].run_id.as_deref(), Some(root.as_str()));
+    assert_eq!(
+        ticks(&path, &jobs[1]).await[0].action,
+        db::TickDecision::Paused
+    );
 }

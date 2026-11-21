@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- A writable server restarts its scheduler after an unexpected exit. Health and schedule entries report scheduler progress, the current wait and restart history. Health reports degraded during restart backoff or when the loop stalls (#1087).
+
 - A worker whose DuckDB database is invalidated (after a DuckDB fatal or internal error, every later statement in the process fails with `FatalException: database has been invalidated`) is replaced, and the step that hit it is tried once more in a fresh worker, whatever its `retries`. The worker used to stay in the pool and every DuckDB step it was given next failed the same way: one fault became 1,462 failed steps in one run (#1083).
 
 ## 0.46.0 (2026-11-20)

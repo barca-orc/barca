@@ -308,6 +308,14 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     let health = validator(&json!({"$ref":"#/components/schemas/Health"}));
     let ok = json!({"status":"ok","version":"1","api_version":1,"env":"default","store_uri":null,"read_only":false,"scheduler":false,"load_errors":[],"scheduler_enabled":false,"metadata_error":null,"started_at":"2026-10-22T10:00:00.000Z","queue":{"paused":false,"queued":0,"running":0,"max_runs":4,"capacity":null}});
     assert!(health.is_valid(&ok));
+    let mut stalled = ok.clone();
+    stalled["status"] = json!("degraded");
+    stalled["scheduler_liveness"] = json!({
+        "heartbeat_age_ms": 3100, "last_due_slot": 123, "last_enqueue": null,
+        "operation": "heartbeat", "operation_age_ms": 3090, "restart_count": 1,
+        "last_exit_reason": "scheduler task panicked", "reason": "scheduler heartbeat is stale"
+    });
+    assert!(health.is_valid(&stalled));
     let mut shared = ok.clone();
     shared["queue"]["capacity"] = json!({"total": 4, "in_use": 3, "waiting": 1});
     assert!(health.is_valid(&shared));

@@ -44,7 +44,12 @@ pub async fn schedule(State(state): State<AppState>) -> Result<Json<Vec<Schedule
         )));
     }
     let facts = published_ticks(&state).await?;
-    Ok(Json(schedule_at(&state, chrono::Utc::now(), &facts)))
+    let mut jobs = schedule_at(&state, chrono::Utc::now(), &facts);
+    let progress = state.scheduling.progress.snapshot();
+    for job in &mut jobs {
+        job.scheduler_liveness = progress.clone();
+    }
+    Ok(Json(jobs))
 }
 
 #[derive(Default, Deserialize)]

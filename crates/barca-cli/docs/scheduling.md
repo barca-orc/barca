@@ -471,6 +471,16 @@ error envelope, `reason` `metadata_unusable` and the remediation. `metadata_erro
 `GET /health` also has `scheduler_enabled`: `false` with `--no-schedule` or `--read-only`, and
 once the scheduler stopped on an error (it then says why in `metadata_error`).
 
+A writable scheduler publishes `scheduler_liveness` on `GET /health` and on each
+`GET /schedule` entry. `heartbeat_age_ms` measures time since startup or the last loop
+iteration. `operation` and `operation_age_ms` identify the current wait. `last_due_slot`
+and `last_enqueue` are Unix seconds. Values are null until observed. Health stays HTTP 200
+and reports `status: degraded` with a liveness `reason` during restart backoff or after
+three seconds without progress. An unexpected exit restarts the scheduler after one second,
+doubling the delay up to sixty seconds. `restart_count` and `last_exit_reason` survive task
+restarts within the process. Draining takes precedence. A server without a local scheduler
+omits this object.
+
 With `--env <name>` the database is `.barca/envs/<name>/metadata.db`. If `.barca/metadata.db` (the
 default environment's) is also there but empty or not a database, often left by a container that
 started once without `--env`, `serve` warns once, naming both files. A valid one is the default

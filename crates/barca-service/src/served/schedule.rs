@@ -92,6 +92,9 @@ pub struct ScheduleJob {
     /// Its typical queue wait exceeds its interval (#962).
     #[serde(default)]
     pub queue_bound: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub scheduler_liveness: Option<super::SchedulerLiveness>,
     /// Why the last due tick was skipped.
     pub skip_reason: Option<SkipReason>,
     /// The run in flight the last due tick was skipped for.
@@ -140,6 +143,7 @@ pub fn schedule_jobs(
             let (standing, block) = (&view.standing, &view.block);
             let skip = skips.get(&job.id);
             Some(ScheduleJob {
+                scheduler_liveness: None,
                 state: block.state,
                 state_detail: block.state_detail.clone(),
                 id: job.id.clone(),

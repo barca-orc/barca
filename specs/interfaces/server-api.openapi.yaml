@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '27'
-  description: 'Normative current wire contract; specification version 27 is independent of package versions.
+  version: '28'
+  description: 'Normative current wire contract; specification version 28 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -4619,6 +4619,19 @@ components:
           - invalid_event_cursor
           - event_cursor_mismatch
           - event_cursor_expired
+    SchedulerLiveness:
+      type: object
+      additionalProperties: false
+      required: [heartbeat_age_ms, last_due_slot, last_enqueue, operation, operation_age_ms, restart_count, last_exit_reason, reason]
+      properties:
+        heartbeat_age_ms: {type: [integer, 'null'], minimum: 0}
+        last_due_slot: {type: [integer, 'null'], description: Unix seconds}
+        last_enqueue: {type: [integer, 'null'], description: Unix seconds}
+        operation: {type: [string, 'null']}
+        operation_age_ms: {type: [integer, 'null'], minimum: 0}
+        restart_count: {type: integer, minimum: 0}
+        last_exit_reason: {type: [string, 'null']}
+        reason: {type: [string, 'null']}
     Health:
       type: object
       additionalProperties: false
@@ -4636,6 +4649,8 @@ components:
       - started_at
       - queue
       properties:
+        scheduler_liveness:
+          $ref: '#/components/schemas/SchedulerLiveness'
         capabilities:
           type: object
           required: [event_resume]
@@ -4647,11 +4662,12 @@ components:
         queue:
           $ref: '#/components/schemas/QueueHealth'
         status:
-          description: ok, or draining once the server was told to stop (SIGTERM or
+          description: ok, degraded when the local scheduler exited unexpectedly or its heartbeat is stale, or draining once the server was told to stop (SIGTERM or
             SIGINT); a draining server starts no queued run, queues new runs for the next
             start and finishes the runs in flight
           enum:
           - ok
+          - degraded
           - draining
         version:
           type: string
@@ -7405,6 +7421,8 @@ components:
       - typical_run_seconds
       - queue_bound
       properties:
+        scheduler_liveness:
+          $ref: '#/components/schemas/SchedulerLiveness'
         state: *schedule_state
         state_detail:
           type: [string, 'null']

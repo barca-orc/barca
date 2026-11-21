@@ -13,6 +13,7 @@ fn bytes<T: serde::Serialize>(value: &T) -> String {
 #[test]
 fn health_is_the_body_the_route_built_by_hand() {
     let health = ServerHealth {
+        scheduler_liveness: None,
         api_version: 1,
         cache: Some(CacheSize {
             limit_bytes: 20,
@@ -78,6 +79,7 @@ fn health_is_the_body_the_route_built_by_hand() {
 #[test]
 fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
     let job = ScheduleJob {
+        scheduler_liveness: None,
         cron: "0 5 * * *".into(),
         failing: false,
         failures: 1,
