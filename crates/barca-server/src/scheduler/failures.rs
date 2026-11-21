@@ -25,7 +25,7 @@ pub(super) struct Bookkeeping {
     /// Consecutive failed ticks per job (RFC-0008 rule 9); persisted for restarts.
     pub(super) failures: HashMap<String, db::ScheduleFailures>,
     /// Earlier runs admitted during replay, in admission order.
-    outstanding: HashMap<String, std::collections::VecDeque<String>>,
+    pub(super) outstanding: HashMap<String, std::collections::VecDeque<String>>,
     pub(super) dirty_failures: HashSet<String>,
     /// When the tick record was last trimmed by age (unix seconds); 0 before the first trim.
     pub(super) ticks_trimmed_at: i64,
