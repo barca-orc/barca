@@ -58,7 +58,7 @@ jobs:
           done
           echo "present=$present" >> "$GITHUB_OUTPUT"
       - if: steps.secrets.outputs.present == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - if: steps.secrets.outputs.present == 'true'
         uses: actions/setup-node@v4
         with:
