@@ -15,7 +15,11 @@ struct Reader {
     active: Mutex<Option<(Instant, &'static str)>>,
 }
 
-pub(super) fn connect(db: &libsql::Database, path: &str) -> Result<libsql::Connection, BarcaError> {
+pub(super) async fn connect(
+    db: &libsql::Database,
+    path: &str,
+) -> Result<libsql::Connection, BarcaError> {
+    initialize_libsql().await?;
     if *INIT.get_or_init(|| unsafe { ffi::sqlite3_auto_extension(Some(opened)) }) != ffi::SQLITE_OK
     {
         return Err(BarcaError::Db(

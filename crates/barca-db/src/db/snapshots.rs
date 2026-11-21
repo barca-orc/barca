@@ -107,7 +107,7 @@ pub async fn copy_for_backup(
         let mut backup = {
             // Serialize the source open with restore/reset, then yield the lock.
             let _lock = lock_db_with_until(db_path, until).await?;
-            super::online_backup::Backup::open(Path::new(db_path), stage.path())?
+            super::online_backup::Backup::open(Path::new(db_path), stage.path()).await?
         };
         let started = Instant::now();
         loop {

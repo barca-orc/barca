@@ -68,7 +68,7 @@ pub async fn maintain_wal(path: &str, threshold: u64) -> Result<Option<WalCheckp
     }))
 }
 
-async fn checkpoint_row(
+pub(super) async fn checkpoint_row(
     conn: &libsql::Connection,
     sql: &str,
 ) -> Result<(bool, i32, i32), BarcaError> {
@@ -107,6 +107,19 @@ mod tests {
         create_run(&path, "new", "get", "[]", None, None)
             .await
             .unwrap();
+        {
+            let _guard = db_guard().await;
+            let (_handle, conn) = open_conn(&path).await.unwrap();
+            conn.busy_timeout(Duration::from_secs(5)).unwrap();
+            let started = Instant::now();
+            assert!(checkpoint_once(&conn).await.unwrap());
+            assert!(started.elapsed() < Duration::from_secs(1));
+            let mut rows = conn.query("PRAGMA busy_timeout", ()).await.unwrap();
+            assert_eq!(
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+                5000
+            );
+        }
         let blocked = maintain_wal(&path, 1).await.unwrap().unwrap();
         assert!(blocked.busy && blocked.over_threshold && blocked.wal_bytes > 1);
         assert!(blocked.frames > blocked.checkpointed);
@@ -134,8 +147,9 @@ mod tests {
         .await
         .unwrap();
         let stage = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
-        let mut backup =
-            super::super::online_backup::Backup::open(Path::new(&path), stage.path()).unwrap();
+        let mut backup = super::super::online_backup::Backup::open(Path::new(&path), stage.path())
+            .await
+            .unwrap();
         assert_eq!(backup.step().unwrap(), libsql::ffi::SQLITE_OK);
         conn.execute("INSERT INTO payload VALUES (123)", ())
             .await

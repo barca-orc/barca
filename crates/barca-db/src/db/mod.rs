@@ -275,6 +275,24 @@ const BUSY_WAIT: Duration = Duration::from_secs(5);
 /// SQLite's own locks ([`BUSY_WAIT`]), which is how long one try used to block.
 const CHECKPOINT_BUSY_WAIT: Duration = BUSY_WAIT;
 
+/// Let libsql configure serialized threading before any direct SQLite C API
+/// call can initialize SQLite implicitly. A file-backed Builder defers this
+/// configuration until connect; the memory Builder performs it during build,
+/// without opening a connection or touching the filesystem.
+async fn initialize_libsql() -> Result<(), BarcaError> {
+    static READY: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    READY
+        .get_or_try_init(|| async {
+            Builder::new_local(":memory:")
+                .build()
+                .await
+                .map(drop)
+                .map_err(db_open_error)
+        })
+        .await
+        .copied()
+}
+
 /// A read-only connection to a [`ReadView`]'s database.
 async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connection), BarcaError> {
     OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -283,7 +301,7 @@ async fn connect_view(path: &str) -> Result<(libsql::Database, libsql::Connectio
         .build()
         .await
         .map_err(db_open_error)?;
-    let conn = read_activity::connect(&db, path)?;
+    let conn = read_activity::connect(&db, path).await?;
     // Before the first query: the first reader after the last writer closed rebuilds the log's
     // index, and a reader that comes then waits for it instead of failing.
     wait_when_busy(&conn)?;
@@ -1332,17 +1350,27 @@ pub async fn checkpoint(conn: &libsql::Connection) -> Result<(), BarcaError> {
 /// One `PRAGMA wal_checkpoint(TRUNCATE)`: true when another connection kept it from finishing.
 pub(crate) async fn checkpoint_once(conn: &libsql::Connection) -> Result<bool, BarcaError> {
     let failed = |e| BarcaError::Db(format!("wal_checkpoint(TRUNCATE) failed: {e}"));
-    // The pragma returns one (busy, log_pages, checkpointed_pages) row; busy means another
-    // connection kept it from finishing.
     let mut rows = conn
-        .query("PRAGMA wal_checkpoint(TRUNCATE)", ())
+        .query("PRAGMA busy_timeout", ())
         .await
         .map_err(failed)?;
-    let mut busy = false;
-    while let Some(row) = rows.next().await.map_err(failed)? {
-        busy |= row.get::<i64>(0).unwrap_or(0) != 0;
-    }
-    Ok(busy)
+    let row = rows
+        .next()
+        .await
+        .map_err(failed)?
+        .ok_or_else(|| BarcaError::Db("missing SQLite busy timeout".into()))?;
+    let previous = row.get::<i64>(0).map_err(failed)? as u64;
+    drop(rows);
+    // The trim caller owns DB_LOCK and may be using the kept connection.
+    // Do not yield with its normal timeout disabled, even if the check fails.
+    conn.busy_timeout(Duration::ZERO).map_err(failed)?;
+    let result = read_activity::local_read(wal::checkpoint_row(
+        conn,
+        "PRAGMA main.wal_checkpoint(TRUNCATE)",
+    ));
+    conn.busy_timeout(Duration::from_millis(previous))
+        .map_err(failed)?;
+    result.map(|(busy, _, _)| busy)
 }
 
 fn checkpoint_busy() -> BarcaError {

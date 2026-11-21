@@ -53,7 +53,8 @@ pub(super) struct Backup {
 unsafe impl Send for Backup {}
 
 impl Backup {
-    pub(super) fn open(source: &Path, dest: &Path) -> Result<Self, BarcaError> {
+    pub(super) async fn open(source: &Path, dest: &Path) -> Result<Self, BarcaError> {
+        initialize_libsql().await?;
         let source = Connection::open(source, ffi::SQLITE_OPEN_READONLY)?;
         let dest = Connection::open(dest, ffi::SQLITE_OPEN_READWRITE)?;
         let handle = unsafe {
