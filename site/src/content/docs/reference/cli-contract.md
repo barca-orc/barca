@@ -2257,6 +2257,9 @@ and `limit_bytes`. Physical size includes backups; budget excludes recognized lo
 backup files. Budgeted bytes use maintained GC accounting, and backup measurements inspect
 at most 4096 directory entries. Unknown counts are `null`. No artifact walk is added to
 status, and node selection does not narrow this storage scope.
+Experimental `disk_usage.metadata_trim`, present once a metadata database went over its share,
+lists each environment's last trim pass and its `reason` (`busy`, `needs_gc`, `live_run`, `nothing_eligible`,
+`vacuum_deferred` or null).
 
 The status document: the same envelope keys as `list` (`total`, `truncated`, `hint`) beside
 `target`, `targets`, `nodes` and `summary`. `target` is the one target given (`null` for the whole
