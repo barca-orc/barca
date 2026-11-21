@@ -872,7 +872,7 @@ row per due tick of a schedule:
 Three writes, each one transaction: the decision, when the scheduler makes it (the row names
 the run before the run can start); the run's start, when it leaves the queue; the run's end,
 with the outcomes. A startup catch-up records its decision at the time it is made, the slot
-its run carries. A fired tick whose run could not join the queue has no `run_id`. A run put
+its run carries. A fired decision commits with its queue row and restart cursor. A run put
 back in the queue by a draining server records its latest start; a run its server was killed
 under ends its tick as its run row ends (`interrupted`, or `error` for a run that never wrote
 one) with every target `not_reached`. A plain CLI run, a run someone asked a server for and a
