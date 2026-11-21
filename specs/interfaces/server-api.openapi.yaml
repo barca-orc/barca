@@ -9045,6 +9045,67 @@ components:
             limit_bytes:
               type: [integer, 'null']
               minimum: 0
+            metadata_trim:
+              type: array
+              description: The last trim pass of each metadata database that went over its share of the cache limit. Omitted until one did. reason is busy (the pass could not get the metadata lock in 250 ms), live_run (the data is over its share and a run is running or queued, so no history was removed), nothing_eligible (the data is over its share and the pass cleared nothing), vacuum_deferred (the data fits but the file is longer, until barca gc runs VACUUM) or null (the file is within its share, or the data is over it and the pass cleared records and ran out of time, so a later pass goes on). Experimental.
+              items:
+                type: object
+                additionalProperties: false
+                required: [env, at, allowance_bytes, before_bytes, after_bytes, used_after_bytes, components, outcomes, rows, runs, longest_hold_ms, reason, run_id, detail, zero_progress_passes, next_attempt]
+                properties:
+                  env:
+                    type: string
+                  at:
+                    type: string
+                    format: date-time
+                  allowance_bytes:
+                    type: integer
+                    minimum: 0
+                  before_bytes:
+                    type: integer
+                    minimum: 0
+                  after_bytes:
+                    type: integer
+                    minimum: 0
+                  used_after_bytes:
+                    type: integer
+                    minimum: 0
+                    description: The bytes the pages that hold data take after the pass (the file less its free pages); what a pass with a time budget measures against allowance_bytes.
+                  components:
+                    type: integer
+                    minimum: 0
+                    description: Component records cleared.
+                  outcomes:
+                    type: integer
+                    minimum: 0
+                    description: Run reports cleared.
+                  rows:
+                    type: integer
+                    minimum: 0
+                    description: Old results removed.
+                  runs:
+                    type: integer
+                    minimum: 0
+                    description: Old runs removed.
+                  longest_hold_ms:
+                    type: integer
+                    minimum: 0
+                    description: The longest hold of the metadata lock in the pass.
+                  reason:
+                    type: [string, 'null']
+                    enum: [busy, live_run, nothing_eligible, vacuum_deferred, null]
+                  run_id:
+                    type: [string, 'null']
+                    description: The run that kept history from being removed, for live_run.
+                  detail:
+                    type: [string, 'null']
+                  zero_progress_passes:
+                    type: integer
+                    minimum: 0
+                  next_attempt:
+                    type: [string, 'null']
+                    format: date-time
+                    description: When the next pass may start after one that freed nothing, unless the file grows by a tenth, enough runs finish (nothing_eligible) or barca gc runs.
         nodes:
           type: array
           items:

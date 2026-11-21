@@ -19,14 +19,26 @@
 //! Each batch takes the database lock for itself, so a run's writes go on between batches.
 //! SQLite reuses freed pages but does not give them back, and a page a row left half empty still
 //! counts as used, so only `VACUUM` says what the database really takes. Steps 3 and 4 delete
-//! history, so each waits for one and runs only if that was not enough: with a run alive, they
-//! wait for the next check.
+//! history, so under `barca gc` each waits for one and runs only if that was not enough: with a
+//! run alive, they wait. A pass with a budget does not wait (below).
+//!
+//! **`VACUUM` is for `barca gc` only.** It rewrites the live data with the lock held and cannot
+//! be cut short, so a pass with a time budget (the check after a command or a run, `serve`'s
+//! minute checkpoint) never runs one, and with it no checkpoint under the lock. Such a pass
+//! measures the database by its used size, the pages that hold data (`page_count` less
+//! `freelist_count`, times `page_size`; the log is left out, only a checkpoint shrinks it), and
+//! orders 3 and 4 run without waiting for a `VACUUM`: SQLite reuses the pages their deletes free,
+//! so the used size comes under the share while the file keeps its length until `barca gc`
+//! ([`Trimmed::vacuum_deferred`]). A pass reports the longest hold of the lock it took
+//! ([`Trimmed::longest_hold_ms`]).
 
 use crate::db;
 use barca_model::BarcaError;
 use libsql::Connection;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// The largest share of the disk the database gets, however large the limit.
@@ -55,7 +67,7 @@ pub fn allowance(limit: Option<u64>) -> u64 {
 }
 
 /// What one [`trim`] did.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Trimmed {
     pub components: u64,
     pub outcomes: u64,
@@ -67,11 +79,61 @@ pub struct Trimmed {
     pub finished: bool,
     /// Stopped because time ran out, not to wait for a moment with no run alive.
     pub out_of_time: bool,
+    /// The bytes the pages that hold data take (the file less its free pages), before and after
+    /// the pass. A pass with a time budget works to this size, not the file's.
+    #[serde(default)]
+    pub used_before_bytes: u64,
+    #[serde(default)]
+    pub used_after_bytes: u64,
+    /// A run was running or queued (this one, by id) so the tiers that delete history (old results,
+    /// old runs and logs) did not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_run: Option<String>,
+    /// The pass could not get a lock within [`LOCK_WAIT`] and stopped.
+    #[serde(default)]
+    pub busy: bool,
+    /// A full `VACUUM` was wanted and not run: the pass had a time budget (only `barca gc` runs
+    /// one) or a run was alive. The file keeps its size until `barca gc`.
+    #[serde(default)]
+    pub vacuum_deferred: bool,
+    /// A full `VACUUM` ran.
+    #[serde(default)]
+    pub vacuumed: bool,
+    /// The longest time one hold of the database lock lasted in the pass, in milliseconds.
+    #[serde(default)]
+    pub longest_hold_ms: u64,
 }
 
 impl Trimmed {
     pub fn removed(&self) -> bool {
         self.components + self.outcomes + self.rows + self.runs > 0
+    }
+
+    /// The pass freed something: it cleared records or the file shrank.
+    pub fn progressed(&self) -> bool {
+        self.removed() || self.after_bytes < self.before_bytes
+    }
+}
+
+/// A hold of the database lock: the longest of a pass is what it reports.
+struct Hold<'a> {
+    longest: &'a AtomicU64,
+    since: Instant,
+}
+
+impl<'a> Hold<'a> {
+    fn start(longest: &'a AtomicU64) -> Self {
+        Self {
+            longest,
+            since: Instant::now(),
+        }
+    }
+}
+
+impl Drop for Hold<'_> {
+    fn drop(&mut self) {
+        let micros = self.since.elapsed().as_micros() as u64;
+        self.longest.fetch_max(micros, Ordering::Relaxed);
     }
 }
 
@@ -211,23 +273,56 @@ async fn drop_unnamed_definitions(conn: &Connection) -> Result<(), BarcaError> {
     Ok(())
 }
 
-/// Bring `db_path` within `allowance`, for at most `time` (`None`: until it is done); `VACUUM` is
-/// not counted. `None` when its file is within the allowance already.
+/// Bring `db_path` within `allowance`, for at most `time` (`None`: until it is done, as `barca
+/// gc` does, and the only case that runs `VACUUM`). `None` when its file is within the allowance
+/// already.
 pub async fn trim(
     db_path: &str,
     allowance: u64,
     time: Option<Duration>,
 ) -> Result<Option<Trimmed>, BarcaError> {
+    // The budget starts here: before the schema check and every wait for a lock.
+    let deadline = time.map(|time| Instant::now() + time);
     let before_bytes = file_bytes(db_path);
     if before_bytes <= allowance {
         return Ok(None);
     }
-    db::init_db(db_path).await?;
+    let longest = AtomicU64::new(0);
+    let vacuum_allowed = time.is_none();
+    let busy = |used: u64| Trimmed {
+        before_bytes,
+        after_bytes: before_bytes,
+        used_before_bytes: used,
+        used_after_bytes: used,
+        finished: false,
+        busy: true,
+        longest_hold_ms: longest.load(Ordering::Relaxed).div_ceil(1000),
+        ..Trimmed::default()
+    };
+    if vacuum_allowed {
+        db::init_db(db_path).await?;
+    }
+    let Some(used_before) = used_now(db_path, vacuum_allowed, &longest).await? else {
+        return Ok(Some(busy(0)));
+    };
+    if !vacuum_allowed && used_before <= allowance {
+        // The data fits its share; only the file is long, and only `barca gc` shortens it.
+        return Ok(Some(Trimmed {
+            before_bytes,
+            after_bytes: before_bytes,
+            used_before_bytes: used_before,
+            used_after_bytes: used_before,
+            finished: true,
+            vacuum_deferred: true,
+            longest_hold_ms: longest.load(Ordering::Relaxed).div_ceil(1000),
+            ..Trimmed::default()
+        }));
+    }
     let target = allowance / 100 * LOW_WATERMARK_PERCENT;
-    let deadline = time.map(|time| Instant::now() + time);
     let out_of_time = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     let mut done = Trimmed {
         before_bytes,
+        used_before_bytes: used_before,
         finished: true,
         ..Trimmed::default()
     };
@@ -235,17 +330,40 @@ pub async fn trim(
     // Whether the file may hold space only `VACUUM` gives back, and the step that last asked.
     let (mut dirty, mut asked) = (true, None);
     'steps: while step < 4 {
-        if step >= 2 && dirty && asked != Some(step) {
+        if vacuum_allowed && step >= 2 && dirty && asked != Some(step) {
             asked = Some(step);
-            if !vacuum(db_path).await? {
+            if !vacuum(db_path, vacuum_allowed, &longest).await? {
                 done.finished = false;
+                done.vacuum_deferred = true;
                 break;
             }
+            done.vacuumed = true;
             dirty = false;
         }
-        let _guard = db::db_guard_for(db_path).await;
-        let (_handle, conn) = db::open_conn(db_path).await?;
+        let Some(_guard) = guard(db_path, vacuum_allowed).await else {
+            done.busy = true;
+            done.finished = false;
+            break;
+        };
+        let _hold = Hold::start(&longest);
+        let Some((_handle, conn)) = connect(db_path, vacuum_allowed).await? else {
+            done.busy = true;
+            done.finished = false;
+            break;
+        };
         if used_bytes(&conn).await? <= target {
+            break;
+        }
+        // The tiers that delete history (old results, old runs and their logs) wait for a
+        // moment with no run running or queued, of any owner: a pass with a budget cannot tell a
+        // run that is gone from one that is only not ours, and a row a live run or a pin still
+        // reads is not told from one nothing reads. `barca gc` makes its own check.
+        if !vacuum_allowed
+            && step >= 2
+            && let Some(run) = live_run(&conn).await
+        {
+            done.live_run = Some(run);
+            done.finished = false;
             break;
         }
         match step {
@@ -293,16 +411,95 @@ pub async fn trim(
     }
     save_resume(db_path, (!done.finished).then_some((step, from)));
     if dirty && done.finished {
-        vacuum(db_path).await?;
+        if vacuum(db_path, vacuum_allowed, &longest).await? {
+            done.vacuumed = true;
+        } else {
+            done.vacuum_deferred = true;
+        }
     }
     done.after_bytes = file_bytes(db_path);
+    done.used_after_bytes = used_now(db_path, vacuum_allowed, &longest)
+        .await?
+        .unwrap_or_else(|| {
+            done.busy = true;
+            used_before
+        });
+    done.longest_hold_ms = longest.load(Ordering::Relaxed).div_ceil(1000);
     Ok(Some(done))
 }
 
-/// `VACUUM`, unless a run is alive: it writes the live data again with the lock held, so a run
-/// would wait for it. False when a run is alive.
-async fn vacuum(db_path: &str) -> Result<bool, BarcaError> {
+/// How long a pass with a time budget waits for the lock of this process or of another one: a
+/// wait that is longer is a pass skipped (`busy`), because the wait is spent with the others
+/// waiting too.
+const LOCK_WAIT: Duration = Duration::from_millis(250);
+
+/// The lock of this process: waited for until it is free for `barca gc`, for [`LOCK_WAIT`] for a
+/// pass with a budget (`None`: it was not).
+async fn guard(
+    db_path: &str,
+    wait_for_ever: bool,
+) -> Option<Option<tokio::sync::MutexGuard<'static, ()>>> {
+    if wait_for_ever {
+        return Some(db::db_guard_for(db_path).await);
+    }
+    tokio::time::timeout(LOCK_WAIT, db::db_guard_for(db_path))
+        .await
+        .ok()
+}
+
+/// A connection under the cross-process lock, waited for as [`guard`] says.
+async fn connect(
+    db_path: &str,
+    wait_for_ever: bool,
+) -> Result<Option<(db::DbHandle, Connection)>, BarcaError> {
+    if wait_for_ever {
+        return db::open_conn(db_path).await.map(Some);
+    }
+    db::open_conn_within(db_path, LOCK_WAIT).await
+}
+
+/// The used size of the database ([`used_bytes`]) in one hold of the lock; `None` when a pass
+/// with a budget could not get the lock in time.
+async fn used_now(
+    db_path: &str,
+    wait_for_ever: bool,
+    longest: &AtomicU64,
+) -> Result<Option<u64>, BarcaError> {
+    let Some(_guard) = guard(db_path, wait_for_ever).await else {
+        return Ok(None);
+    };
+    let _hold = Hold::start(longest);
+    let Some((_handle, conn)) = connect(db_path, wait_for_ever).await? else {
+        return Ok(None);
+    };
+    used_bytes(&conn).await.map(Some)
+}
+
+/// A run that is running or in the queue, of any owner: the `running` rows are not judged by
+/// whether their process exists.
+async fn live_run(conn: &Connection) -> Option<String> {
+    for sql in [
+        "SELECT run_id FROM runs WHERE status = 'running' LIMIT 1",
+        "SELECT run_id FROM run_queue LIMIT 1",
+    ] {
+        if let Ok(mut rows) = conn.query(sql, ()).await
+            && let Ok(Some(row)) = rows.next().await
+            && let Ok(id) = row.get::<String>(0)
+        {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// `VACUUM`, unless `allowed` is false (a pass with a time budget) or a run is alive: it writes
+/// the live data again with the lock held, so a run would wait for it. False when it did not run.
+async fn vacuum(db_path: &str, allowed: bool, longest: &AtomicU64) -> Result<bool, BarcaError> {
+    if !allowed {
+        return Ok(false);
+    }
     let _guard = db::db_guard_for(db_path).await;
+    let _hold = Hold::start(longest);
     let (_handle, conn) = db::open_conn(db_path).await?;
     if !db::runs_alive_here(&conn, db_path).await.is_empty() {
         return Ok(false);
@@ -467,5 +664,172 @@ mod tests {
         let done = trim(&path, 8192, None).await.unwrap().unwrap();
         assert!(done.finished, "{done:?}");
         assert!(done.rows > 0, "{done:?}");
+    }
+
+    /// A pass with a time budget never runs `VACUUM`: it clears records and says it deferred
+    /// one. `barca gc` (no budget) runs it, and the file shrinks.
+    #[tokio::test]
+    async fn a_budgeted_pass_never_runs_vacuum_and_gc_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        let done = trim(&path, 8_000_000, Some(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(done.vacuum_deferred && !done.vacuumed, "{done:?}");
+        assert!(done.components >= 2000, "{done:?}");
+        assert!(
+            done.after_bytes >= done.before_bytes,
+            "no VACUUM, no shrink: {done:?}"
+        );
+        assert!(done.progressed());
+        let done = trim(&path, 8_000_000, None).await.unwrap().unwrap();
+        assert!(done.vacuumed && !done.vacuum_deferred, "{done:?}");
+        assert!(done.after_bytes <= 8_000_000, "{done:?}");
+        eprintln!("gc pass: longest lock hold {} ms", done.longest_hold_ms);
+        assert!(done.longest_hold_ms > 0);
+    }
+
+    /// A pass with a time budget works to the used size and deletes eligible history without a
+    /// `VACUUM`: the pages its deletes free are reused, and the file keeps its length.
+    #[tokio::test]
+    async fn a_budgeted_pass_deletes_eligible_history_without_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 1500).await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            done.finished && !done.vacuumed && done.vacuum_deferred,
+            "{done:?}"
+        );
+        assert!(
+            done.rows > 0 && done.runs > 0 && done.progressed(),
+            "{done:?}"
+        );
+        assert!(done.used_after_bytes < done.used_before_bytes, "{done:?}");
+        assert!(
+            done.after_bytes >= done.before_bytes,
+            "the file keeps its length: {done:?}"
+        );
+        assert_eq!(count(&path, "SELECT count(*) FROM runs").await, KEPT_RUNS);
+        assert_eq!(
+            count(
+                &path,
+                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:live'"
+            )
+            .await,
+            100
+        );
+    }
+
+    /// Once the data fits, the file is long only until `barca gc`: the next budgeted pass changes
+    /// nothing and says so.
+    #[tokio::test]
+    async fn a_file_longer_than_its_data_waits_for_gc() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        trim(&path, 8_000_000, Some(Duration::from_secs(60)))
+            .await
+            .unwrap();
+        let again = trim(&path, 8_000_000, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            again.used_after_bytes <= 8_000_000 && again.after_bytes > 8_000_000,
+            "{again:?}"
+        );
+        assert!(
+            again.vacuum_deferred && !again.vacuumed && !again.progressed(),
+            "{again:?}"
+        );
+    }
+
+    /// A `running` row of any owner (here one nothing can judge) keeps a pass with a budget from
+    /// deleting history; the tiers that main ran beside a live run still run.
+    #[tokio::test]
+    async fn with_a_run_running_a_budgeted_pass_deletes_no_history_and_says_live_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 1500).await;
+        exec(
+            &path,
+            "INSERT INTO runs (run_id, command, files, status) \
+             VALUES ('foreign', 'get', 'p.py', 'running')",
+        )
+        .await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(done.live_run.as_deref(), Some("foreign"), "{done:?}");
+        assert_eq!((done.rows, done.runs), (0, 0), "{done:?}");
+        assert!(done.components > 0, "components are not history: {done:?}");
+        assert!(!done.vacuumed && !done.finished, "{done:?}");
+        for (sql, want) in [
+            ("SELECT count(*) FROM runs", 1501),
+            (
+                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:old'",
+                2002,
+            ),
+        ] {
+            assert_eq!(count(&path, sql).await, want, "{sql}");
+        }
+        // The run ends: the next pass deletes the history.
+        exec(
+            &path,
+            "UPDATE runs SET status = 'success' WHERE run_id = 'foreign'",
+        )
+        .await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            done.live_run.is_none() && done.rows > 0 && done.runs > 0,
+            "{done:?}"
+        );
+    }
+
+    /// The cross-process lock held by another connection: a pass with a budget gives up within
+    /// a fraction of a second, with the process lock held no longer than that.
+    #[tokio::test]
+    async fn a_budgeted_pass_that_cannot_get_the_lock_is_busy_within_a_second() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        let other = std::fs::OpenOptions::new()
+            .write(true)
+            .open(format!("{path}.lock"))
+            .unwrap();
+        other.lock().unwrap();
+        let started = Instant::now();
+        let done = trim(&path, 8192, Some(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        let took = started.elapsed();
+        eprintln!(
+            "busy pass: {took:?}, longest hold {} ms",
+            done.longest_hold_ms
+        );
+        assert!(done.busy && !done.progressed(), "{done:?}");
+        assert!(took < Duration::from_secs(1), "{took:?}");
+        assert!(
+            done.longest_hold_ms < 1000 && done.longest_hold_ms >= 200,
+            "{done:?}"
+        );
+        // Released: the same pass works.
+        other.unlock().unwrap();
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!done.busy && done.components > 0, "{done:?}");
     }
 }

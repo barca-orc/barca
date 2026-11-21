@@ -357,8 +357,14 @@ which have none are deleted, and all but the last 1000 runs are deleted with the
 naming a file on disk, a node's latest success and later rows, and a node's newest `bytes_changed`
 row stay. A `materializations.run_id` can therefore name a run that is gone, and a run's rows can be
 gone while its `runs` row stays. Nothing a cache decision needs is lost: a deleted row costs a
-recompute. `VACUUM`, the only way the file shrinks, comes before any row is deleted and needs no
-run alive. Eviction counts the database and its log as at most this share, so a large file never evicts
+recompute. A pass with a time budget (the check after a command or run, `serve`'s minute
+checkpoint) works to the used size (the file less its free pages), without `VACUUM` or a checkpoint
+under the lock; the file keeps its length. It deletes old results and old runs only when no run is
+`running` or queued (any owner); otherwise it says `live_run`. It waits at most 250 ms for each
+lock and stops with `busy`. `VACUUM`, the only way the file shrinks, runs only under `barca gc`
+(no budget), with no run alive. `disk_usage.metadata_trim` reports `busy`, `live_run`,
+`nothing_eligible`, `vacuum_deferred` or null. A pass that freed nothing backs off from 1 to 30
+minutes. Eviction counts the database and its log as at most this share, so a large file never evicts
 artifacts that fit. Connections set `journal_size_limit` to 64 MiB, so a checkpoint hands back a large log.
 Conformance: the tests in `metadata_size.rs`.
 

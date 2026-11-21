@@ -1184,3 +1184,129 @@ fn a_second_survey_of_the_same_cache_waits_for_none() {
     drop(first);
     assert!(Surveying::start(&a).is_some());
 }
+
+// ─── Metadata trim backoff ──────────────────────────────────────────────────
+
+fn memory(streak: u32, retry_at: u64, base: u64, reason_nothing: bool) -> TrimMemory {
+    TrimMemory {
+        env: "default".into(),
+        at: 0,
+        allowance_bytes: 1000,
+        streak,
+        retry_at,
+        base_bytes: base,
+        outcome: barca_db::metadata_size::Trimmed {
+            before_bytes: base,
+            after_bytes: base,
+            // `nothing_eligible`: the data is over the share; otherwise it fits and only the
+            // file is long.
+            used_after_bytes: if reason_nothing { base } else { 0 },
+            finished: true,
+            vacuum_deferred: !reason_nothing,
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn the_backoff_doubles_from_a_minute_to_half_an_hour() {
+    let minutes: Vec<u64> = (1..=8).map(|n| trim_backoff(n).as_secs() / 60).collect();
+    assert_eq!(minutes, [1, 2, 4, 8, 16, 30, 30, 30]);
+}
+
+#[test]
+fn a_pass_is_skipped_until_the_backoff_ends_or_something_changes() {
+    let m = memory(2, 1000, 10_000, true);
+    assert!(skip_trim(&m, 10_000, 500, 0), "inside the backoff");
+    assert!(!skip_trim(&m, 10_000, 1000, 0), "the backoff ended");
+    assert!(
+        skip_trim(&m, 11_000, 500, 0),
+        "a tenth of growth is not material"
+    );
+    assert!(
+        !skip_trim(&m, 11_001, 500, 0),
+        "the file and its log grew by a tenth"
+    );
+    assert!(
+        !skip_trim(&memory(0, 1000, 10_000, true), 10_000, 500, 0),
+        "nothing freed: no streak"
+    );
+    // Runs that finished matter for `nothing_eligible`, not for a deferred VACUUM.
+    assert!(!skip_trim(&m, 10_000, 500, RUNS_UNTIL_RETRY));
+    let deferred = memory(2, 1000, 10_000, false);
+    assert!(skip_trim(&deferred, 10_000, 500, RUNS_UNTIL_RETRY));
+}
+
+/// A database of 8 MB over a 2 MB share, whose one big run report is kept: nothing in it is
+/// eligible, and only a VACUUM could change its size.
+async fn over_its_share() -> (Fixture, Vec<EnvDb>) {
+    let f = Fixture::new().await;
+    {
+        let _g = barca_db::db::db_guard().await;
+        let (_h, conn) = barca_db::db::open_conn(&f.db).await.unwrap();
+        conn.execute(
+            "INSERT INTO runs (run_id, command, files, status, outcome_json) \
+             VALUES ('big', 'get', 'p.py', 'success', zeroblob(8000000))",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    let envs = envs(&f.project);
+    (f, envs)
+}
+
+const LIMIT: Option<u64> = Some(20_000_000);
+const BUDGET: Option<Duration> = Some(Duration::from_secs(5));
+
+fn remembered(f: &Fixture) -> TrimMemory {
+    let state = read_state(&f.project).unwrap();
+    state
+        .metadata_trim
+        .values()
+        .next()
+        .cloned()
+        .expect("a remembered pass")
+}
+
+#[tokio::test]
+async fn a_budgeted_pass_never_runs_vacuum_and_backs_off_until_gc() {
+    let (f, envs) = over_its_share().await;
+    let size = || std::fs::metadata(&f.db).unwrap().len();
+    let before = size();
+    trim_metadata(&f.project, &envs, LIMIT, BUDGET).await;
+    let first = remembered(&f);
+    assert!(
+        !first.outcome.vacuumed && first.outcome.vacuum_deferred,
+        "{first:?}"
+    );
+    assert_eq!(first.report().reason.as_deref(), Some("nothing_eligible"));
+    assert_eq!((first.streak, size() >= before), (1, true));
+    // Skipped inside the backoff, with the lock held by someone else: the check takes none.
+    let held = barca_db::db::db_guard().await;
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        trim_metadata(&f.project, &envs, LIMIT, BUDGET),
+    )
+    .await
+    .expect("a skipped check must not wait for the database lock");
+    drop(held);
+    assert_eq!(
+        remembered(&f),
+        first,
+        "the skipped check did not run a pass"
+    );
+    // The backoff and the outcome survive a survey, a dry run and a real `barca gc`.
+    f.gc(MaxSize::Bytes(20_000_000), true).await;
+    assert_eq!(remembered(&f), first, "a dry run surveys");
+    f.gc(MaxSize::Bytes(20_000_000), false).await;
+    let after_gc = remembered(&f);
+    // `barca gc` is not skipped: it ran the VACUUM, found nothing to clear, and the streak grew.
+    assert!(after_gc.outcome.vacuumed, "{after_gc:?}");
+    assert_eq!(
+        after_gc.report().reason.as_deref(),
+        Some("nothing_eligible")
+    );
+    assert_eq!(after_gc.streak, 2);
+    assert!(after_gc.retry_at > now_secs());
+}
