@@ -62,7 +62,16 @@ const LAYERS: &[(Layer, &[&str])] = &[
             "views",
         ],
     ),
-    (Layer::Part, &["auth_http", "queue", "replay", "sources"]),
+    (
+        Layer::Part,
+        &[
+            "auth_http",
+            "queue",
+            "replay",
+            "scheduler_progress",
+            "sources",
+        ],
+    ),
     (Layer::Part, &["read_cache"]),
     (Layer::Part, &["sql_helper"]),
     (Layer::State, &["state"]),

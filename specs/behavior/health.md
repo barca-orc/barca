@@ -872,11 +872,13 @@ row per due tick of a schedule:
 Three writes, each one transaction: the decision, when the scheduler makes it (the row names
 the run before the run can start); the run's start, when it leaves the queue; the run's end,
 with the outcomes. A startup catch-up records its decision at the time it is made, the slot
-its run carries. A fired tick whose run could not join the queue has no `run_id`. A run put
+its run carries. A fired decision commits with its queue row and restart cursor. A run put
 back in the queue by a draining server records its latest start; a run its server was killed
 under ends its tick as its run row ends (`interrupted`, or `error` for a run that never wrote
 one) with every target `not_reached`. A plain CLI run, a run someone asked a server for and a
 `--read-only` server write nothing.
+
+After a delayed wakeup, each existing schedule fires at most once for its latest missed cron slot. Pauses, failure limits and runs already in flight still apply. A busy metadata store postpones admission. Other admission errors degrade health and the scheduler retries that job's slot up to three attempts before logging that it gave up. Other jobs keep ticking. Startup also coalesces downtime into one catch-up per existing schedule, and anchors new schedules at startup. A backward clock step resets future cursors to the corrected time.
 
 Outcomes come from the run's own step results: a step that executed is `rebuilt` (a task that
 fired, a partitioned node with at least one key computed), a cache hit `up_to_date`, a failed

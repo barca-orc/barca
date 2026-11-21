@@ -41,6 +41,14 @@ outside the `GENERATED` blocks is written by hand.
 
 ### Experimental items
 
+The HTTP scheduler diagnostics are experimental as the loop operations and timing
+bounds evolve. `GET /health` adds the status value `degraded`; `barca doctor`
+reports its reason. `scheduler_enabled` can return to true after a successful
+scheduler restart. `scheduler_liveness` on health and the opt-in
+`GET /schedule?include_liveness=true` envelope contains `heartbeat_at_ms`,
+`operation_started_at_ms`, `operation`, `last_due_slot`, `last_enqueue`,
+`restart_count`, `last_exit_reason` and `reason`.
+
 Commands and arguments, from `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` (the
 `Stability` column of the tables below comes from the same list; an argument of an experimental
 command is experimental with it):

@@ -339,11 +339,18 @@ class Sim:
             )
 
     def sabotage_integrity(self) -> None:
-        self.writer.stop(signal.SIGKILL)
-        self.reader.stop(signal.SIGKILL)
+        for server in (self.writer, self.reader):
+            server.stop(signal.SIGKILL)
+            server.reap_group()
+        # Sabotage the live image: WAL frames can shadow a main-file page,
+        # and damage to an unused page can still pass integrity_check.
+        with closing(sqlite3.connect(self.db, timeout=60)) as conn:
+            busy, _, _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if busy:
+                raise Violation("could not checkpoint the sabotage fixture")
         with self.db.open("r+b") as f:
-            f.seek(4096 * 3)
-            f.write(os.urandom(4096))
+            f.seek(100)  # Page one's sqlite_schema b-tree header, after the file header.
+            f.write(b"\xff")  # Invalid b-tree page type.
         self.check_integrity()
 
     def sabotage_eviction(self) -> None:
