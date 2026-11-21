@@ -19,18 +19,32 @@ pub(super) struct Bookkeeping {
     pub(super) last_handle: HashMap<String, String>,
     /// Last-fired epoch per job; persisted for catch-up.
     pub(super) last_fired: HashMap<String, i64>,
+    /// Failed admissions waiting for their next attempt (slot and permanent-error count).
+    pub(super) retries: HashMap<String, (i64, u8)>,
+    /// A clock correction whose durable update is still pending.
+    pub(super) rewind: Option<i64>,
     /// Last skipped tick per job: its epoch, why (`in_flight`, `paused`) and the run in
     /// flight that caused it.
     pub(super) last_skip: HashMap<String, (i64, &'static str, Option<String>)>,
     /// Consecutive failed ticks per job (RFC-0008 rule 9); persisted for restarts.
     pub(super) failures: HashMap<String, db::ScheduleFailures>,
-    /// Handles of tick runs whose outcome has been counted.
-    pub(super) counted: HashSet<String>,
+    /// Earlier runs admitted during replay, in admission order.
+    pub(super) outstanding: HashMap<String, std::collections::VecDeque<String>>,
+    pub(super) dirty_failures: HashSet<String>,
     /// When the tick record was last trimmed by age (unix seconds); 0 before the first trim.
     pub(super) ticks_trimmed_at: i64,
 }
 
 impl Bookkeeping {
+    pub(super) fn accepted(&mut self, job: &ScheduledJob, handle: String) {
+        if let Some(previous) = self.last_handle.insert(job.id.clone(), handle) {
+            self.outstanding
+                .entry(job.id.clone())
+                .or_default()
+                .push_back(previous);
+        }
+    }
+
     pub(super) fn failures(&self, job: &ScheduledJob) -> u32 {
         self.failures.get(&job.id).map_or(0, |f| f.failures)
     }
@@ -108,27 +122,41 @@ pub(super) async fn count_outcomes(
 ) -> bool {
     let mut changed = false;
     for job in jobs {
-        let Some(handle) = book.last_handle.get(&job.id).cloned() else {
+        let failed = loop {
+            let previous = book.outstanding.get(&job.id).and_then(|q| q.front());
+            let Some(handle) = previous.or_else(|| book.last_handle.get(&job.id)) else {
+                break None;
+            };
+            let outcome = match state.runs.registry.get(handle) {
+                Some(run) if matches!(run.status, RunStatus::Pending | RunStatus::Running) => {
+                    break None;
+                }
+                Some(run) => tick_outcome(&run, job),
+                None => None,
+            };
+            if previous.is_some() {
+                book.outstanding.get_mut(&job.id).unwrap().pop_front();
+            } else {
+                book.last_handle.remove(&job.id);
+            }
+            if outcome.is_some() {
+                break outcome;
+            }
+        };
+        let Some(failed) = failed else {
             continue;
         };
-        if book.counted.contains(&handle) {
-            continue;
-        }
-        let Some(failed) = state
-            .runs
-            .registry
-            .get(&handle)
-            .and_then(|r| tick_outcome(&r, job))
-        else {
-            continue;
-        };
-        book.counted.insert(handle);
         let before = book.failures(job);
         let next = if failed.is_empty() {
             db::ScheduleFailures::default()
         } else {
             let mark = match db_path {
-                Some(dbp) => db::max_materialization_id(dbp).await.unwrap_or(0),
+                Some(dbp) => super::metadata("failure watermark", db::max_materialization_id(dbp))
+                    .await
+                    .unwrap_or_else(|e| {
+                        barca_service::errln!("[barca] {e}");
+                        0
+                    }),
                 None => 0,
             };
             db::ScheduleFailures {
@@ -151,9 +179,7 @@ pub(super) async fn count_outcomes(
                 ),
             );
         }
-        if let Some(dbp) = db_path {
-            persist_failures(dbp, job, &next).await;
-        }
+        book.dirty_failures.insert(job.id.clone());
         book.failures.insert(job.id.clone(), next);
         changed = true;
     }
@@ -171,14 +197,18 @@ pub(super) async fn failing_reset(
 ) -> bool {
     let mut watch: Vec<String> = vec![job.id.clone()];
     watch.extend(failures.failed_nodes.iter().cloned());
-    if let Ok(dag) = state.reads.loaded_dag().await {
+    if let Ok(Ok(dag)) = tokio::time::timeout(super::METADATA_WAIT, state.reads.loaded_dag()).await
+    {
         for node in &failures.failed_nodes {
             watch.extend(dag.upstream(node).into_iter().map(str::to_string));
         }
     }
-    db::succeeded_since(db_path, failures.mark, &watch)
-        .await
-        .unwrap_or(false)
+    super::metadata(
+        "failure reset",
+        db::succeeded_since(db_path, failures.mark, &watch),
+    )
+    .await
+    .unwrap_or(false)
 }
 
 /// Clear the failures of each due failing job that may fire again ([`failing_reset`]).
@@ -207,17 +237,18 @@ pub(super) async fn reset_failing<Tz: TimeZone>(
             ),
         );
         book.failures.remove(&job.id);
-        persist_failures(db_path, job, &db::ScheduleFailures::default()).await;
+        book.dirty_failures.insert(job.id.clone());
     }
 }
 
 /// Record a job's consecutive failed ticks. Best-effort durability, like [`persist_fired`].
-pub(super) async fn persist_failures(
-    db_path: &str,
-    job: &ScheduledJob,
-    failures: &db::ScheduleFailures,
-) {
-    if let Err(e) = db::set_schedule_failures(db_path, &job.id, failures).await {
-        barca_service::errln!("[barca] schedule_failures write failed for {}: {e}", job.id);
+pub(super) async fn persist_failures(db_path: &str, job: &str, failures: &db::ScheduleFailures) {
+    if let Err(e) = super::metadata(
+        "persist_failures",
+        db::set_schedule_failures(db_path, job, failures),
+    )
+    .await
+    {
+        barca_service::errln!("[barca] schedule_failures write failed for {}: {e}", job);
     }
 }

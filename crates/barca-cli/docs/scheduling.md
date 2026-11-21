@@ -279,6 +279,8 @@ sensor once and let the `Always` nodes below it follow instead.
 
 ## A schedule that missed its slot
 
+After a delayed wakeup, each existing schedule fires at most once for its latest missed cron slot. Pauses, failure limits and runs already in flight still apply. A busy metadata store postpones admission. Other admission errors degrade health and the scheduler retries that job's slot up to three attempts before logging that it gave up. Other jobs keep ticking. Startup also coalesces downtime into one catch-up per existing schedule, and anchors new schedules at startup. A backward clock step resets future cursors to the corrected time.
+
 Where a schedule stands is decided once, on the server, and every surface reads that answer:
 `GET /schedule`, the `schedule` block of `GET /state` and of `barca status --json` (`GET
 /nodes`), and the web UI, which shows the values and compares no times itself.

@@ -117,9 +117,9 @@ pub use runs::{
 };
 pub use runs::{RunFailure, StartedRun, split_exception, start_run};
 pub use schedule::{
-    SCHEDULED_RUNS_WINDOW, ScheduleFailures, SchedulePause, ScheduledRun, get_schedule_failures,
-    get_schedule_pauses, get_schedule_state, scheduled_runs, set_schedule_failures,
-    set_schedule_pause, upsert_schedule_state,
+    SCHEDULED_RUNS_WINDOW, ScheduleFailures, SchedulePause, ScheduledRun, advance_schedule_cursor,
+    clamp_schedule_cursors, get_schedule_failures, get_schedule_pauses, get_schedule_state,
+    scheduled_runs, set_schedule_failures, set_schedule_pause, upsert_schedule_state,
 };
 use schema::{has_column, has_index, initialized};
 pub use schema::{init_db, init_db_as, probe_metadata};
@@ -132,7 +132,7 @@ pub(crate) use ticks::CREATE as CREATE_SCHEDULE_TICKS;
 pub use ticks::{
     LatestTicks, NewTick, NodeTickOutcome, TICK_MAX_AGE_SECONDS, TICKS_PER_SCHEDULE,
     TICKS_WITH_TARGETS, TickCounts, TickDecision, TickRecord, TickTargetOutcome, TickTimings,
-    latest_ticks, newest_decided, recent_ticks, record_tick, record_tick_finished,
+    latest_ticks, newest_decided, recent_ticks, record_tick, record_tick_finished, record_tick_on,
     record_tick_started, tick_outcomes_for_node, tick_timings, ticks_for_schedule, trim_ticks,
 };
 

@@ -134,8 +134,14 @@ async fn set(
     {
         let mut pauses = pauses(state).await?.write().unwrap();
         match pause {
-            Some(pause) => pauses.insert(node.clone(), pause),
-            None => pauses.remove(&node),
+            Some(pause) => {
+                pauses.insert(node.clone(), pause);
+            }
+            None => {
+                if let Some(previous) = pauses.get_mut(&node) {
+                    previous.until = Some(previous.until.unwrap_or(now).min(now));
+                }
+            }
         };
     }
     barca_service::errln!(
