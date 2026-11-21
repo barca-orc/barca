@@ -12,6 +12,7 @@ pub(crate) struct Progress(Mutex<Inner>);
 #[derive(Default)]
 struct Inner {
     heartbeat: Option<Instant>,
+    published: Option<Instant>,
     operation: Option<(&'static str, i64)>,
     starting: bool,
     exited: bool,
@@ -31,8 +32,18 @@ impl Progress {
 
     fn heartbeat(&self, starting: bool) {
         let mut p = self.0.lock().unwrap();
-        p.heartbeat = Some(Instant::now());
-        p.view.heartbeat_at_ms = Some(chrono::Utc::now().timestamp_millis());
+        let now = Instant::now();
+        p.heartbeat = Some(now);
+        // Keep conditional health reads stable between published heartbeats.
+        if starting
+            || p.starting
+            || p.published.is_none_or(|last| {
+                now - last >= Duration::from_secs(barca_service::liveness::HEARTBEAT_SECONDS as u64)
+            })
+        {
+            p.view.heartbeat_at_ms = Some(chrono::Utc::now().timestamp_millis());
+            p.published = Some(now);
+        }
         p.starting = starting;
         p.exited = false;
     }

@@ -632,7 +632,7 @@ async fn run_scheduler(state: AppState) -> Result<&'static str, String> {
         // A draining server starts no run: the scheduler stops, and a tick it misses is
         // caught up by the next server's startup catch-up.
         tokio::select! {
-            _ = progress.waiting("next_tick", sleep_to_next_second(&zone)) => {}
+            _ = sleep_to_next_second(&zone) => {}
             _ = state.lifecycle.draining.cancelled() => {}
         }
         if state.lifecycle.is_draining() {

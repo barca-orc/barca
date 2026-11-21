@@ -150,17 +150,21 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
         2
     );
     let health = || crate::state_routes::health(axum::extract::State(state.clone()));
-    while health()
-        .await
-        .scheduler_liveness
-        .as_ref()
-        .unwrap()
-        .operation
-        .as_deref()
-        != Some("init_db")
-    {
-        tokio::task::yield_now().await;
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while health()
+            .await
+            .scheduler_liveness
+            .as_ref()
+            .unwrap()
+            .operation
+            .as_deref()
+            != Some("init_db")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("scheduler did not reach init_db");
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_secs(61)).await;
     assert_eq!(
@@ -1721,13 +1725,11 @@ async fn supervisor_reports_exit_and_restart_then_stops_for_drain() {
     }));
     assert_eq!(attempts.recv().await, Some(0));
     let health = || crate::state_routes::health(axum::extract::State(st.clone()));
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while health().await.status != barca_service::served::HealthStatus::Degraded {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_backoff(&st).await;
+    assert_eq!(
+        health().await.status,
+        barca_service::served::HealthStatus::Degraded
+    );
     assert_eq!(attempts.recv().await, Some(1));
     let h = health().await;
     assert_eq!(h.status, barca_service::served::HealthStatus::Ok);
@@ -1850,18 +1852,26 @@ async fn idle_heartbeat_waiting_for_metadata_has_a_three_period_grace() {
     assert_eq!(health().await.status, HealthStatus::Ok);
 }
 
+async fn wait_for_backoff(state: &AppState) {
+    for _ in 0..100 {
+        if state
+            .scheduling
+            .progress
+            .snapshot()
+            .is_some_and(|s| s.reason.is_some())
+        {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("scheduler did not enter restart backoff");
+}
+
 #[tokio::test(start_paused = true)]
 async fn drain_during_backoff_starts_no_replacement() {
     let state = app_state();
     let task = tokio::spawn(supervise(state.clone(), |_| async { Err("exited".into()) }));
-    while !state
-        .scheduling
-        .progress
-        .snapshot()
-        .is_some_and(|s| s.reason.is_some())
-    {
-        tokio::task::yield_now().await;
-    }
+    wait_for_backoff(&state).await;
     state.lifecycle.draining.cancel();
     task.await.unwrap();
     let view = state.scheduling.progress.snapshot().unwrap();
@@ -1896,4 +1906,61 @@ async fn backoff_resets_after_a_long_lived_attempt() {
     assert_eq!(third - second, Duration::from_secs(2));
     assert_eq!(fourth - third, Duration::from_secs(601));
     supervisor.await.unwrap();
+}
+
+#[tokio::test]
+async fn idle_scheduler_keeps_health_etag_across_loop_iterations() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use std::time::Duration;
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("pipeline.py");
+    std::fs::write(&source, "from barca import task, Schedule\n@task(freshness=Schedule('0 5 1 1 *'))\ndef yearly(): pass\n").unwrap();
+    let mut cfg = app_state().config.as_ref().clone();
+    cfg.files = vec![source.display().to_string()];
+    cfg.resolved.db_path = dir.path().join("metadata.db").display().to_string();
+    let state = AppState::new(cfg);
+    let task = spawn(state.clone());
+    let router = crate::routes::router(state.clone());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while state.scheduling.jobs.read().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("scheduler did not publish the yearly job");
+    let first = router
+        .clone()
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let tag = first.headers()[header::ETAG].clone();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    // Bookkeeping may be visible mid-iteration. Poll until the loop is idle again.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::get("/health")
+                        .header(header::IF_NONE_MATCH, tag.clone())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if response.status() == StatusCode::NOT_MODIFIED {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("idle loop changed the health ETag");
+    state.lifecycle.draining.cancel();
+    task.await.unwrap();
 }

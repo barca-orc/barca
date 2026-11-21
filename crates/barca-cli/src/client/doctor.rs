@@ -133,10 +133,6 @@ pub(crate) async fn doctor_checks(
              refuses posts\nStart barca serve again (or wait for the deploy that stopped it)."
                 .to_string(),
         ),
-        (Some("degraded"), _) => (
-            false,
-            format!("server degraded: {}", scheduler_reason(&health)),
-        ),
         (_, Some(error)) => (
             false,
             format!(
@@ -144,6 +140,10 @@ pub(crate) async fn doctor_checks(
                  with `barca state restore` or start over with `barca state reset`.",
                 error.lines().next().unwrap_or(error)
             ),
+        ),
+        (Some("degraded"), _) => (
+            false,
+            format!("server degraded: {}", scheduler_reason(&health)),
         ),
         (_, None) => (
             true,

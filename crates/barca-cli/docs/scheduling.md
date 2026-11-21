@@ -475,7 +475,9 @@ A writable scheduler publishes the experimental `scheduler_liveness` object on
 `GET /health`. Request `GET /schedule?include_liveness=true` for the same object
 beside the `jobs` array. The default `GET /schedule` response is the jobs array.
 `heartbeat_at_ms` and `operation_started_at_ms` are absolute Unix milliseconds;
-subtract the latter from the current time to measure how long `operation` has waited.
+the loop publishes its heartbeat every 20 seconds. Subtract the operation start from the
+current time to measure how long `operation` has waited. The normal wait for the next
+cron second leaves `operation` null.
 `last_due_slot` and `last_enqueue` are Unix seconds. Values are null until observed.
 Health returns HTTP 200 with `status: degraded` and a liveness `reason` during
 restart backoff or after 60 seconds without a loop heartbeat (120 seconds during
