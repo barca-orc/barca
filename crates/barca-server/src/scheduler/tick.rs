@@ -104,11 +104,22 @@ pub(super) fn run_covers(command: &str, nodes: &[String], job: &ScheduledJob) ->
 /// The handle of the oldest pending or running run that covers `job` ([`run_covers`]),
 /// whoever started it: the scheduler or an HTTP request.
 pub(super) fn run_in_flight_for(state: &AppState, job: &ScheduledJob) -> Option<String> {
+    run_in_flight_at(state, job, 0, 0)
+}
+
+/// Runs admitted during replay cannot have overlapped an earlier missed slot.
+pub(super) fn run_in_flight_at(
+    state: &AppState,
+    job: &ScheduledJob,
+    epoch: i64,
+    wall: i64,
+) -> Option<String> {
     state
         .runs
         .registry
         .iter()
         .filter(|r| matches!(r.status, RunStatus::Pending | RunStatus::Running))
+        .filter(|r| epoch == wall || r.started_at < (epoch + 1) as f64)
         .filter(|r| run_covers(&r.command, &r.nodes, job))
         .min_by(|a, b| a.started_at.total_cmp(&b.started_at))
         .map(|r| r.handle.clone())

@@ -878,6 +878,8 @@ under ends its tick as its run row ends (`interrupted`, or `error` for a run tha
 one) with every target `not_reached`. A plain CLI run, a run someone asked a server for and a
 `--read-only` server write nothing.
 
+A running server checks elapsed cron slots in order, in batches of up to 60 seconds per pass. A delayed slot keeps its original scheduled time. When metadata is busy, admission retries on the next pass. A pause covering the slot or a run already in flight can still cause a skip. On startup, each existing schedule instead receives at most one catch-up run for the downtime, and a new schedule starts from the startup time.
+
 Outcomes come from the run's own step results: a step that executed is `rebuilt` (a task that
 fired, a partitioned node with at least one key computed), a cache hit `up_to_date`, a failed
 step `failed`. `not_reached` covers a target a failure upstream, a cancellation or the run's

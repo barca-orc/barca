@@ -98,6 +98,17 @@ pub async fn push(
     spec: &str,
     queued_at: &str,
 ) -> Result<i64, BarcaError> {
+    push_with_slot(db_path, run_id, spec, queued_at, None).await
+}
+
+/// A scheduled root and its restart cursor become durable at the same commit.
+pub async fn push_with_slot(
+    db_path: &str,
+    run_id: &str,
+    spec: &str,
+    queued_at: &str,
+    slot: Option<(&str, i64)>,
+) -> Result<i64, BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
@@ -122,6 +133,17 @@ pub async fn push(
         db::run_queue::insert_queued(&conn, run_id, seq, spec, queued_at)
             .await
             .map_err(failed("adding a run"))?;
+        if let Some((job, epoch)) = slot {
+            db::record_tick_on(&conn, db::NewTick {
+                schedule_id: job, scheduled_at: epoch, action: db::TickDecision::Fired,
+                skipped_for: None, run_id: Some(run_id),
+            }).await?;
+            conn.execute(
+                "INSERT INTO schedule_state(node_id,last_fired_at) VALUES (?1,?2)
+                 ON CONFLICT(node_id) DO UPDATE SET last_fired_at=MAX(last_fired_at,excluded.last_fired_at)",
+                libsql::params![job,epoch],
+            ).await.map_err(failed("recording scheduled admission"))?;
+        }
         Ok(seq)
     })
     .await

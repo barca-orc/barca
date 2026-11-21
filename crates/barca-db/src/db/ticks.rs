@@ -216,8 +216,21 @@ fn text(value: Option<&str>) -> libsql::Value {
 pub async fn record_tick(db_path: &str, tick: NewTick<'_>) -> Result<(), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
-    with_tx(&conn, "BEGIN IMMEDIATE", "tick record", async {
-        conn.execute(
+    with_tx(
+        &conn,
+        "BEGIN IMMEDIATE",
+        "tick record",
+        record_tick_on(&conn, tick),
+    )
+    .await
+}
+
+/// Write the decision inside the caller's transaction (scheduled queue admission).
+pub async fn record_tick_on(
+    conn: &libsql::Connection,
+    tick: NewTick<'_>,
+) -> Result<(), BarcaError> {
+    conn.execute(
             "INSERT OR REPLACE INTO schedule_ticks (schedule_id, scheduled_at, action, skipped_for, run_id)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             libsql::params![
@@ -230,7 +243,7 @@ pub async fn record_tick(db_path: &str, tick: NewTick<'_>) -> Result<(), BarcaEr
         )
         .await
         .map_err(failed("recording a tick"))?;
-        conn.execute(
+    conn.execute(
             "DELETE FROM schedule_ticks WHERE schedule_id = ?1 AND (scheduled_at < ?2 OR scheduled_at <= (
                  SELECT scheduled_at FROM schedule_ticks WHERE schedule_id = ?1
                  ORDER BY scheduled_at DESC LIMIT 1 OFFSET ?3))",
@@ -242,9 +255,7 @@ pub async fn record_tick(db_path: &str, tick: NewTick<'_>) -> Result<(), BarcaEr
         )
         .await
         .map_err(failed("trimming"))?;
-        Ok(())
-    })
-    .await
+    Ok(())
 }
 
 /// Remove every tick older than [`TICK_MAX_AGE_SECONDS`] before `now`, of any schedule: the

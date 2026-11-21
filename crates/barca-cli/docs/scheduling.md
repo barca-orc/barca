@@ -279,6 +279,8 @@ sensor once and let the `Always` nodes below it follow instead.
 
 ## A schedule that missed its slot
 
+A running server checks elapsed cron slots in order, in batches of up to 60 seconds per pass. A delayed slot keeps its original scheduled time. When metadata is busy, admission retries on the next pass. A pause covering the slot or a run already in flight can still cause a skip. On startup, each existing schedule instead receives at most one catch-up run for the downtime, and a new schedule starts from the startup time.
+
 Where a schedule stands is decided once, on the server, and every surface reads that answer:
 `GET /schedule`, the `schedule` block of `GET /state` and of `barca status --json` (`GET
 /nodes`), and the web UI, which shows the values and compares no times itself.

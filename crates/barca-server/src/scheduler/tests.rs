@@ -1486,7 +1486,7 @@ async fn a_fired_paused_skipped_and_failing_tick_each_leave_one_row() {
     record_tick(&path, &j, 60, db::TickDecision::Paused, None).await;
     record_tick(&path, &j, 120, db::TickDecision::Skipped, Some("run-x")).await;
     record_tick(&path, &j, 180, db::TickDecision::Failing, None).await;
-    let handle = fire(&st, &j, 240, Some(&path)).await.unwrap();
+    let handle = fire(&st, &j, 240).await.unwrap();
 
     let done = finished_tick(&path, &j).await;
     let rows = ticks(&path, &j).await;
@@ -1591,7 +1591,7 @@ async fn queue_wait_runs_from_joining_the_queue_to_the_runs_start() {
     let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
         .await
         .unwrap();
-    let handle = fire(&st, &j, 240, Some(&path)).await.unwrap();
+    let handle = fire(&st, &j, 240).await.unwrap();
     let queued_at = st.runs.registry.get(&handle).unwrap().started_at;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let waiting = &ticks(&path, &j).await[0];
@@ -1622,8 +1622,8 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
         .await
         .unwrap();
-    let q = fire(&st, &queued, 240, Some(&path)).await.unwrap();
-    let k = fire(&st, &killed, 240, Some(&path)).await.unwrap();
+    let q = fire(&st, &queued, 240).await.unwrap();
+    let k = fire(&st, &killed, 240).await.unwrap();
     // `killed`'s run had started when the server was killed: its queue row says `running`.
     db::record_tick_started(&path, &killed.id, 240, &k, 241.0, 1.0)
         .await
@@ -1774,11 +1774,11 @@ async fn restart_after_enqueue_before_cursor_write_preserves_root_and_pause() {
     db::set_schedule_pause(&path, &jobs[1].id, Some(pause), before.timestamp())
         .await
         .unwrap();
-    let root = fire(&st, &jobs[0], due.timestamp(), Some(&path))
-        .await
-        .unwrap();
+    let root = fire(&st, &jobs[0], due.timestamp()).await.unwrap();
     finished_tick(&path, &jobs[0]).await;
-    // Restart after the root finished, with the old cursor still on disk.
+    // A fresh process has no in-memory claim. Its durable cursor was committed with the root.
+    let st = state_at(&path);
+    st.scheduling.progress.start();
     let book = catch_up(&st, &[], &jobs, &Zone::Utc, &utc(2, 7, 0), &path)
         .await
         .unwrap();
@@ -1963,4 +1963,140 @@ async fn idle_scheduler_keeps_health_etag_across_loop_iterations() {
     .expect("idle loop changed the health ETag");
     state.lifecycle.draining.cancel();
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_live_metadata_hold_preserves_slots_and_loop_heartbeat() {
+    use std::time::Duration;
+    let (dir, st, path) = recording_state().await;
+    let source = dir.path().join("pipeline.py");
+    std::fs::write(&source,"from barca import task, Schedule\n@task(freshness=Schedule('* * * * * *'))\ndef probe(): pass\n").unwrap();
+    let mut config = (*st.config).clone();
+    config.files = vec![source.display().to_string()];
+    let st = AppState::new(config);
+    let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
+        .await
+        .unwrap();
+    let scheduler = spawn(st.clone());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while st.scheduling.jobs.read().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The actual file lock isolates this hold from other tests' databases.
+    let held = std::fs::File::open(format!("{path}.lock")).unwrap();
+    held.try_lock().unwrap();
+    let first = Utc::now().timestamp() + 1;
+    // Span the persisted heartbeat as well as multiple every-second cron slots.
+    tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let live = st.scheduling.progress.snapshot().unwrap();
+            assert!(Utc::now().timestamp_millis() - live.heartbeat_at_ms.unwrap() < 2500);
+            if live.reason.as_deref() == Some("scheduler timed out waiting for heartbeat") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let last = Utc::now().timestamp() - 1;
+    assert!(last - first >= 3);
+    drop(held);
+    tokio::time::timeout(Duration::from_secs(12), async {
+        loop {
+            let mut epochs: Vec<_> = st
+                .runs
+                .registry
+                .iter()
+                .filter_map(|r| {
+                    barca_service::time::parse_rfc3339(r.trigger.scheduled_at.as_deref()?)
+                })
+                .filter(|epoch| (first..=last).contains(epoch))
+                .collect();
+            epochs.sort_unstable();
+            if epochs.len() >= (last - first + 1) as usize {
+                assert_eq!(epochs, (first..=last).collect::<Vec<_>>());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    scheduler.abort();
+}
+
+#[tokio::test]
+async fn failed_admission_retries_once_and_replay_respects_a_pause() {
+    let (_dir, st, path) = recording_state().await;
+    let jobs = [job("p.py:probe", NodeKind::Task, "*/2 * * * * *")];
+    let mut book = Bookkeeping::default();
+    let gate = st.runs.queue.admit.lock().await;
+    assert!(!evaluate_slot(&st, &jobs, &mut book, &Zone::Utc, 100, 110, Some(&path)).await);
+    assert_eq!(
+        st.scheduling.progress.snapshot().unwrap().reason.as_deref(),
+        Some("scheduler timed out waiting for trigger")
+    );
+    assert!(db::get_schedule_state(&path).await.unwrap().is_empty());
+    drop(gate);
+    for epoch in [100, 100, 101] {
+        assert!(evaluate_slot(&st, &jobs, &mut book, &Zone::Utc, epoch, 110, Some(&path)).await);
+    }
+    let pauses = crate::schedule_view::pauses(&st).await.unwrap();
+    pauses.write().unwrap().insert(
+        jobs[0].id.clone(),
+        db::SchedulePause {
+            paused_at: 102,
+            until: Some(106),
+        },
+    );
+    assert!(evaluate_slot(&st, &jobs, &mut book, &Zone::Utc, 104, 110, Some(&path)).await);
+    assert_eq!(st.runs.registry.len(), 1);
+    assert_eq!(
+        ticks(&path, &jobs[0])
+            .await
+            .iter()
+            .map(|t| (t.scheduled_at, t.action))
+            .collect::<Vec<_>>(),
+        vec![
+            (104, db::TickDecision::Paused),
+            (100, db::TickDecision::Fired)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn delayed_wakeup_between_cron_seconds_replays_the_open_closed_interval() {
+    let (_dir, state, path) = recording_state().await;
+    let jobs = [job("p.py:probe", NodeKind::Task, "*/2 * * * * *")];
+    let mut book = Bookkeeping::default();
+    // Neither wakeup lands on a cron second. The second wakeup must still see both slots.
+    let cursor =
+        evaluate_through(&state, &jobs, &mut book, &Zone::Utc, 101, 105, Some(&path)).await;
+    assert_eq!(cursor, 105);
+    assert_eq!(
+        evaluate_through(
+            &state,
+            &jobs,
+            &mut book,
+            &Zone::Utc,
+            cursor,
+            105,
+            Some(&path)
+        )
+        .await,
+        105
+    );
+    assert_eq!(
+        ticks(&path, &jobs[0])
+            .await
+            .into_iter()
+            .map(|t| t.scheduled_at)
+            .collect::<Vec<_>>(),
+        vec![104, 102]
+    );
+    assert_eq!(state.runs.registry.len(), 2);
 }

@@ -1,6 +1,6 @@
 //! Process-local scheduler progress. No metadata or async locks on the health read path.
 use barca_service::served::SchedulerLiveness;
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{sync::Mutex, time::Duration};
 
 use tokio::time::Instant;
 
@@ -16,9 +16,8 @@ struct Inner {
     operation: Option<(&'static str, i64)>,
     starting: bool,
     exited: bool,
+    timeout: Option<String>,
     view: SchedulerLiveness,
-    // Catch-up's durable cursor can lag an admitted run when the task unwinds.
-    claimed: HashMap<String, i64>,
 }
 
 impl Progress {
@@ -72,30 +71,39 @@ impl Progress {
         value
     }
 
+    pub async fn bounded<T>(
+        &self,
+        name: &'static str,
+        work: impl Future<Output = T>,
+    ) -> Result<T, barca_service::BarcaError> {
+        // Startup may initialize an older ledger. Live lock acquisition has a shorter budget.
+        let budget = if name == "reload_jobs" {
+            Duration::from_secs(30)
+        } else if name == "init_db" {
+            Duration::from_secs(5)
+        } else {
+            crate::scheduler::METADATA_WAIT
+        };
+        self.waiting(name, tokio::time::timeout(budget, work))
+            .await
+            .map_err(|_| {
+                let reason = format!("scheduler timed out waiting for {name}");
+                barca_service::errln!("[barca] {reason}");
+                self.0.lock().unwrap().timeout = Some(reason.clone());
+                barca_service::BarcaError::Db(reason)
+            })
+    }
+
+    pub fn recovered(&self) {
+        self.0.lock().unwrap().timeout = None;
+    }
+
     pub fn due(&self, epoch: i64) {
         self.0.lock().unwrap().view.last_due_slot = Some(epoch);
     }
     pub fn enqueued(&self) {
         self.0.lock().unwrap().view.last_enqueue = Some(chrono::Utc::now().timestamp());
     }
-    pub fn claim(&self, id: &str, epoch: i64) {
-        self.0.lock().unwrap().claimed.insert(id.into(), epoch);
-    }
-    pub fn release(&self, id: &str) {
-        self.0.lock().unwrap().claimed.remove(id);
-    }
-
-    pub fn cursor(&self, id: &str, saved: i64) -> i64 {
-        self.0
-            .lock()
-            .unwrap()
-            .claimed
-            .get(id)
-            .copied()
-            .unwrap_or(saved)
-            .max(saved)
-    }
-
     pub fn snapshot(&self) -> Option<SchedulerLiveness> {
         let p = self.0.lock().unwrap();
         if p.heartbeat.is_none() && p.view.last_exit_reason.is_none() {
@@ -113,7 +121,7 @@ impl Progress {
         } else if age.is_some_and(|d| d > grace) {
             Some("scheduler heartbeat is stale".into())
         } else {
-            None
+            p.timeout.clone()
         };
         Some(view)
     }
