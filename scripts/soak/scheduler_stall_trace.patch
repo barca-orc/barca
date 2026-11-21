@@ -1,0 +1,112 @@
+diff --git a/crates/barca-db/src/metadata_size.rs b/crates/barca-db/src/metadata_size.rs
+index bf1d1ea9..a570fca9 100644
+--- a/crates/barca-db/src/metadata_size.rs
++++ b/crates/barca-db/src/metadata_size.rs
+@@ -309,7 +309,9 @@ async fn vacuum(db_path: &str) -> Result<bool, BarcaError> {
+     }
+     drop_unnamed_definitions(&conn).await?;
+     let started = Instant::now();
++    eprintln!("[stall-trace] {}:{} VACUUM begins, DB_LOCK held", file!(), line!());
+     conn.execute("VACUUM", ()).await.map_err(failed("VACUUM"))?;
++    eprintln!("[stall-trace] {}:{} VACUUM ends after {} ms", file!(), line!(), started.elapsed().as_millis());
+     // The one piece of a trim that cannot be cut into shorter holds of the lock.
+     if std::env::var_os("BARCA_TRACE_TIMING").is_some() {
+         barca_model::errln!(
+@@ -319,7 +321,9 @@ async fn vacuum(db_path: &str) -> Result<bool, BarcaError> {
+         );
+     }
+     // A reader in the way leaves the log to the next checkpoint.
++    let __c = Instant::now();
+     let _ = db::checkpoint_once(&conn).await;
++    eprintln!("[stall-trace] {}:{} checkpoint_once took {} ms (DB_LOCK still held)", file!(), line!(), __c.elapsed().as_millis());
+     Ok(true)
+ }
+
+diff --git a/crates/barca-server/src/scheduler.rs b/crates/barca-server/src/scheduler.rs
+index 46023269..ef1f2084 100644
+--- a/crates/barca-server/src/scheduler.rs
++++ b/crates/barca-server/src/scheduler.rs
+@@ -32,6 +32,20 @@ use barca_service::{NodeKind, db};
+ use chrono::{DateTime, FixedOffset};
+ use std::sync::atomic::Ordering;
+
++
++/// TEMPORARY stall tracing (not committed): log an await that took over 250 ms, with its call site.
++macro_rules! stall {
++    ($label:expr, $e:expr) => {{
++        let __t = std::time::Instant::now();
++        let __r = $e.await;
++        let __ms = __t.elapsed().as_millis();
++        if __ms >= 250 {
++            eprintln!("[stall-trace] {}:{} awaited {} for {} ms", file!(), line!(), $label, __ms);
++        }
++        __r
++    }};
++}
++
+ mod failures;
+ #[cfg(test)]
+ mod tests;
+@@ -526,6 +540,7 @@ pub async fn run_scheduler(state: AppState) {
+     publish_registry(&state, &jobs, &book);
+
+     let mut last_heartbeat = zone.now().timestamp();
++    let mut __last_iter = zone.now().timestamp();
+     loop {
+         // A draining server starts no run: the scheduler stops, and a tick it misses is
+         // caught up by the next server's startup catch-up.
+@@ -561,17 +576,24 @@ pub async fn run_scheduler(state: AppState) {
+         }
+
+         let now = zone.now();
++        {
++            let t = now.timestamp();
++            if t - __last_iter > 1 {
++                eprintln!("[stall-trace] scheduler iteration at {t} follows {__last_iter}: {} second(s) not evaluated (cron slots in them are never matched)", t - __last_iter - 1);
++            }
++            __last_iter = t;
++        }
+         if let Some(path) = &db_path
+             && now.timestamp() - last_heartbeat >= barca_service::liveness::HEARTBEAT_SECONDS
+         {
+-            if let Err(e) = barca_service::liveness::heartbeat(path, now.timestamp()).await {
++            if let Err(e) = stall!("liveness::heartbeat", barca_service::liveness::heartbeat(path, now.timestamp())) {
+                 barca_service::errln!("[barca] could not record scheduler heartbeat: {e}");
+             }
+             last_heartbeat = now.timestamp();
+         }
+-        let mut changed = count_outcomes(&state, &jobs, &mut book, db_path.as_deref()).await;
++        let mut changed = stall!("count_outcomes", count_outcomes(&state, &jobs, &mut book, db_path.as_deref()));
+         if let Some(dbp) = &db_path {
+-            reset_failing(&state, &now, &jobs, &mut book, dbp).await;
++            stall!("reset_failing", reset_failing(&state, &now, &jobs, &mut book, dbp));
+         }
+         // NOTE: benchmarks/scheduler_overhead/barca/run.sh's CI smoke greps stderr for
+         // "scheduled run.*:probe" to count ticks independent of worker execution — keep
+@@ -580,7 +602,7 @@ pub async fn run_scheduler(state: AppState) {
+         // CLI runs on the same project, read only on a second some job is due: one indexed
+         // query of the `running` rows.
+         let cli = match &db_path {
+-            Some(dbp) if !due_jobs(&now, &jobs).is_empty() => db::alive_running_runs(dbp).await,
++            Some(dbp) if !due_jobs(&now, &jobs).is_empty() => stall!("alive_running_runs", db::alive_running_runs(dbp)),
+             _ => Vec::new(),
+         };
+         let actions = plan_tick(
+@@ -620,7 +642,7 @@ pub async fn run_scheduler(state: AppState) {
+                     }
+                 }
+                 TickAction::Fire(job) => {
+-                    let Some(handle) = fire(&state, job, epoch, db_path.as_deref()).await else {
++                    let Some(handle) = stall!("fire", fire(&state, job, epoch, db_path.as_deref())) else {
+                         continue;
+                     };
+                     barca_service::jsonlog::line(
+@@ -631,7 +653,7 @@ pub async fn run_scheduler(state: AppState) {
+                     book.last_handle.insert(job.id.clone(), handle);
+                     book.last_fired.insert(job.id.clone(), now.timestamp());
+                     if let Some(dbp) = &db_path {
+-                        persist_fired(dbp, &job.id, now.timestamp()).await;
++                        stall!("persist_fired", persist_fired(dbp, &job.id, now.timestamp()));
+                     }
+                 }
+             }

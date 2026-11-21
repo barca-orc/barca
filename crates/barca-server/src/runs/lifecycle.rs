@@ -33,7 +33,7 @@ pub(crate) async fn start_as(
 
 /// The tick a scheduled run was started for: its schedule and slot (unix seconds). `None` for
 /// every other run, which the tick record does not concern.
-fn tick_of(spec: &RunSpec) -> Option<(&str, i64)> {
+pub(super) fn tick_of(spec: &RunSpec) -> Option<(&str, i64)> {
     if spec.trigger.triggered_by != barca_service::outcome::TriggeredBy::Schedule {
         return None;
     }

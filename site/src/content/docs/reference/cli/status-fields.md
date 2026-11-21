@@ -881,6 +881,12 @@ refresh that measurement. Backup directories are checked directly with a bounded
 (at most 4096 directory entries across environments and backup files). Unmeasured counts,
 including an incomplete backup survey, are `null` and displayed as unmeasured. Use `barca
 doctor` or `barca gc --dry-run` for a full measurement. Server status reports server storage.
+Once a metadata database has gone over its share of the limit, `disk_usage.metadata_trim` (one
+entry per environment, experimental) reports the last trim pass: bytes before and after (and the
+used size, the file less its free pages), records
+cleared per tier, the longest hold of the metadata lock, and, while the file is over its share,
+`reason` (`busy`, `needs_gc`, `live_run`, `nothing_eligible` or `vacuum_deferred`, null otherwise; [Disk Use: The metadata database](/reference/disk/#the-metadata-database) says exactly what null means) and when the next pass may start
+(`next_attempt`). It is read from the state file; status runs no trim.
 The UI's `/state` node array does no additional disk-accounting work.
 
 Status inspection reuses bounded evidence instead of re-reading unchanged artifact bytes.

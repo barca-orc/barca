@@ -27,5 +27,5 @@ pub use runs::{
 pub use schedule::{JobSkips, ScheduleJob, SchedulePauseAnswer, SkipReason, schedule_jobs};
 pub use server::{
     AuthMode, AuthStatus, CacheSize, Capabilities, HealthCapacity, HealthQueue, HealthStatus,
-    Project, ProjectFile, ProjectTelemetry, ServerHealth,
+    Project, ProjectFile, ProjectTelemetry, SchedulerLiveness, ServerHealth,
 };

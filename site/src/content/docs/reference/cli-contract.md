@@ -47,6 +47,14 @@ outside the `GENERATED` blocks is written by hand.
 
 ### Experimental items
 
+The HTTP scheduler diagnostics are experimental as the loop operations and timing
+bounds evolve. `GET /health` adds the status value `degraded`; `barca doctor`
+reports its reason. `scheduler_enabled` can return to true after a successful
+scheduler restart. `scheduler_liveness` on health and the opt-in
+`GET /schedule?include_liveness=true` envelope contains `heartbeat_at_ms`,
+`operation_started_at_ms`, `operation`, `last_due_slot`, `last_enqueue`,
+`restart_count`, `last_exit_reason` and `reason`.
+
 Commands and arguments, from `EXPERIMENTAL` in `crates/barca-cli/src/contract.rs` (the
 `Stability` column of the tables below comes from the same list; an argument of an experimental
 command is experimental with it):
@@ -2249,6 +2257,9 @@ and `limit_bytes`. Physical size includes backups; budget excludes recognized lo
 backup files. Budgeted bytes use maintained GC accounting, and backup measurements inspect
 at most 4096 directory entries. Unknown counts are `null`. No artifact walk is added to
 status, and node selection does not narrow this storage scope.
+Experimental `disk_usage.metadata_trim`, present once a metadata database went over its share,
+lists each environment's last trim pass and its `reason` (`busy`, `needs_gc`, `live_run`, `nothing_eligible`,
+`vacuum_deferred` or null).
 
 The status document: the same envelope keys as `list` (`total`, `truncated`, `hint`) beside
 `target`, `targets`, `nodes` and `summary`. `target` is the one target given (`null` for the whole

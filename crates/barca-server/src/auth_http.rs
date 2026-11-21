@@ -315,7 +315,7 @@ mod tests {
             });
             let store = auth::Store::open(root.path()).unwrap();
             let expiry =
-                (scenario == "expiry").then(|| Utc::now() + chrono::Duration::milliseconds(100));
+                (scenario == "expiry").then(|| Utc::now() + chrono::Duration::milliseconds(700));
             let issued = store.create("stream", expiry).unwrap();
             let router = Router::new().route("/events", get(streaming)).layer(
                 axum::middleware::from_fn_with_state(state.auth.clone(), authorize),

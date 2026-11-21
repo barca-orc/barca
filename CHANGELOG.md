@@ -10,6 +10,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- The scheduler bounds metadata waits and coalesces delayed live slots to one run per schedule. A queued scheduled run and its restart cursor are committed together (#1087).
+
+- A writable server restarts its scheduler after an unexpected exit. Health and the optional schedule summary report scheduler progress, the current wait and restart history. Health reports degraded during restart backoff or when the loop stalls (#1087).
+
+- Metadata trim no longer burns time and holds the metadata lock while freeing nothing. Inside `barca serve`, automatic trim keeps the used size under the share; the file shrinks on `barca gc`: a pass works to the pages that hold data, never runs a full `VACUUM` or a checkpoint under the lock, and waits at most 250 ms for each lock before it stops (`busy`). On a server that is never idle, automatic trim does not remove history (old results, old runs and logs): while any run is running or queued, of any owner (a failed check counts as running), it clears component records and run reports only and reports `live_run`; run `barca gc` in a quiet window. Safe online history removal is planned for 0.46.2. A CLI command (`barca get`, `barca run`) trims as before, compacting when no run is alive. A database from an older format that lacks an index the online pass needs is skipped (`needs_gc`) instead of failing every command. A pass that freed nothing backs off from one minute up to 30, starting sooner when the file and its log grow by a tenth, 200 more runs finish, or `barca gc` runs; the backoff and the last outcome survive a survey and `barca gc`. The last pass is in `disk_usage.metadata_trim` of `barca status --json` and the server's status (bytes before and after, used bytes, records cleared per tier, the longest lock hold, and `reason`: `busy`, `needs_gc`, `live_run`, `nothing_eligible`, `vacuum_deferred` or null) (#1082, #1087).
+
+- Cache lookups now reset their prepared SELECT when the lookup ends, so a read-only observer releases the SQLite read snapshot as soon as it has its result (#1087).
+
 - A worker whose DuckDB database is invalidated (after a DuckDB fatal or internal error, every later statement in the process fails with `FatalException: database has been invalidated`) is replaced, and the step that hit it is tried once more in a fresh worker, whatever its `retries`. The worker used to stay in the pool and every DuckDB step it was given next failed the same way: one fault became 1,462 failed steps in one run (#1083).
 
 ## 0.46.0 (2026-11-20)

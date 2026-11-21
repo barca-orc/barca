@@ -15,10 +15,16 @@ use barca_service::served::{CacheSize, Capabilities, HealthStatus, ServerHealth}
 /// cannot, and the cache size against its limit. No core work, and no wait on a read.
 pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
     let cfg = &state.config.resolved;
+    let scheduler_liveness = state.scheduling.progress.snapshot();
     Json(ServerHealth {
         // `draining` once the server was told to stop: it finishes its runs and starts none.
         status: if state.lifecycle.is_draining() {
             HealthStatus::Draining
+        } else if scheduler_liveness
+            .as_ref()
+            .is_some_and(|s| s.reason.is_some())
+        {
+            HealthStatus::Degraded
         } else {
             HealthStatus::Ok
         },
@@ -41,6 +47,7 @@ pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
         scheduler: state.config.schedule && !state.config.read_only,
         // `scheduler`, and false once the scheduler stopped on an error.
         scheduler_enabled: state.scheduler_enabled(),
+        scheduler_liveness,
         // Why the metadata DB cannot be used, while it cannot; null otherwise.
         metadata_error: state.reads.metadata_error.read().unwrap().clone(),
         // `.barca/` against its size limit, as last measured after a run or on the minute
