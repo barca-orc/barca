@@ -91,14 +91,16 @@ share stays over it. It says what it did on stderr:
 [barca] metadata 39.2 GB over its 1.1 GB share of the limit: now 848 MB; cleared 566986 component records and 16826 run reports, removed 0 old results and 0 old runs
 ```
 
-### Only `barca gc` runs `VACUUM`
+### Automatic trim keeps the used size under the share; the file shrinks on `barca gc`
 
 A check after a command or a run, and `serve`'s minute checkpoint, never run `VACUUM` or a
 checkpoint under the metadata lock: both hold it while the file is rewritten, and a reader on the
-log can make them wait. Such a pass clears records (orders 1 and 2), which frees space inside the
-file but does not shrink it, and says `vacuum_deferred`. Orders 3 and 4 wait for a `VACUUM`, so
-they too wait for `barca gc`, which has no time budget and runs it (not with a run alive).
-Each pass reports the longest hold of the lock it took (`longest_hold_ms`).
+log can make them wait. Such a pass works to the **used size**, the pages that hold data (the file
+less its free pages), not to the file's length, and all four orders run in it. The pages the
+deletes free are reused by later writes, so the used size comes under the share while the file
+keeps its length. Only `barca gc` rewrites the file (`VACUUM`, not while a run is alive) and
+shortens it. The write-ahead log is not counted: only a checkpoint shrinks it, and deleting
+history cannot. Each pass reports the longest hold of the lock it took (`longest_hold_ms`).
 
 ### When it stays over its share
 
@@ -107,12 +109,12 @@ A pass that ends over its share says why, on stderr and in `disk_usage.metadata_
 
 | `reason` | Meaning |
 |---|---|
-| `vacuum_deferred` | The file only shrinks through a `VACUUM`, and only `barca gc` runs one (not with a run alive). Run `barca gc` when a pause is acceptable. |
-| `nothing_eligible` | The pass cleared no component records, run reports, old results or old runs under the current retention (the last 100 outcomes, the last 1000 runs; fixed in this release). What is left is the current working set and the history retention keeps. |
-| `null` | The file is within its share (`after_bytes` is at or below `allowance_bytes`), **or** the pass cleared records and ran out of its time, so a later pass goes on. `null` does not say the file is within its share if `after_bytes` is above `allowance_bytes`. |
+| `nothing_eligible` | The data (`used_after_bytes`) is over the share and the pass cleared no component records, run reports, old results or old runs under the current retention (the last 100 outcomes, the last 1000 runs; fixed in this release). What is left is the current working set and the history retention keeps. |
+| `vacuum_deferred` | The data fits the share (`used_after_bytes` is at or below `allowance_bytes`) but the file is longer (`after_bytes` is above it), because it only shrinks through a `VACUUM`. Run `barca gc` when a pause is acceptable. |
+| `null` | The file is within its share, **or** the data is over it and the pass cleared records and ran out of its time, so a later pass goes on. `null` does not say the file is within its share if `after_bytes` is above `allowance_bytes`: read `used_after_bytes` too. |
 
 No other cause is reported: a run alive, a reader holding the log and a working set larger than
-the share show as `vacuum_deferred` or `nothing_eligible`.
+the share show as `nothing_eligible` (or `vacuum_deferred` for the file's length).
 
 A pass that freed nothing (cleared no record and did not shrink the file) is not repeated at once.
 The next waits a minute, then 2, 4, 8, 16 and at most 30 minutes (`zero_progress_passes`,

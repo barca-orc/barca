@@ -342,18 +342,18 @@ struct TrimMemory {
     outcome: barca_db::metadata_size::Trimmed,
 }
 
-/// Why a pass left the file over its share: `vacuum_deferred` (records were cleared or
-/// could be, but the file only shrinks through a `VACUUM`, which only `barca gc` runs, and not
-/// with a run alive) or `nothing_eligible` (the pass cleared nothing). `None` when the file is
-/// within its share, or when the pass cleared records and ran out of time, so a later pass goes
-/// on.
+/// Why a pass left the database over its share, or its file long:
+/// - `nothing_eligible`: the data (the file less its free pages) is over the share and the pass
+///   cleared nothing under the current retention;
+/// - `vacuum_deferred`: the data fits the share but the file does not, because it only shrinks
+///   through a `VACUUM`, which only `barca gc` runs (not with a run alive);
+/// - `None`: the file is within its share, or the data is over it and the pass cleared records
+///   and ran out of time, so a later pass goes on.
 fn trim_reason(outcome: &barca_db::metadata_size::Trimmed, allowance: u64) -> Option<&'static str> {
-    if outcome.after_bytes <= allowance {
-        None
-    } else if outcome.vacuum_deferred {
+    if outcome.used_after_bytes > allowance {
+        (!outcome.removed()).then_some("nothing_eligible")
+    } else if outcome.after_bytes > allowance {
         Some("vacuum_deferred")
-    } else if !outcome.removed() {
-        Some("nothing_eligible")
     } else {
         None
     }
@@ -362,8 +362,8 @@ fn trim_reason(outcome: &barca_db::metadata_size::Trimmed, allowance: u64) -> Op
 fn trim_reason_words(reason: &str) -> &'static str {
     match reason {
         "vacuum_deferred" => {
-            "VACUUM deferred: only `barca gc` rewrites the file, and not while a run is alive; \
-             cleared records are free space inside it until then"
+            "VACUUM deferred: the data fits its share but the file keeps its length until \
+             `barca gc` rewrites it (not while a run is alive)"
         }
         _ => {
             "nothing eligible: no component records, run reports, old results or old runs to \
@@ -392,10 +392,13 @@ pub struct MetadataTrim {
     pub runs: u64,
     /// The longest hold of the metadata lock in the pass, in milliseconds.
     pub longest_hold_ms: u64,
-    /// Why the file is still over its share: `vacuum_deferred` or `nothing_eligible`. `null`
-    /// when the file is within its share, or when the pass cleared records and ran out of time
-    /// (a later pass goes on): it does not say the file is within its share if `after_bytes` is
-    /// above `allowance_bytes`.
+    /// The bytes the pages that hold data take after the pass (the file less its free pages):
+    /// what a pass with a time budget measures against `allowance_bytes`.
+    pub used_after_bytes: u64,
+    /// `nothing_eligible` (the data is over its share and the pass cleared nothing),
+    /// `vacuum_deferred` (the data fits but the file is longer than the share until `barca gc`)
+    /// or `null` (the file is within its share, or the data is over it and the pass cleared
+    /// records and ran out of time, so a later pass goes on).
     pub reason: Option<String>,
     /// The reason in words.
     pub detail: Option<String>,
@@ -417,6 +420,7 @@ impl TrimMemory {
             allowance_bytes: self.allowance_bytes,
             before_bytes: o.before_bytes,
             after_bytes: o.after_bytes,
+            used_after_bytes: o.used_after_bytes,
             components: o.components,
             outcomes: o.outcomes,
             rows: o.rows,

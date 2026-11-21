@@ -19,15 +19,18 @@
 //! Each batch takes the database lock for itself, so a run's writes go on between batches.
 //! SQLite reuses freed pages but does not give them back, and a page a row left half empty still
 //! counts as used, so only `VACUUM` says what the database really takes. Steps 3 and 4 delete
-//! history, so each waits for one and runs only if that was not enough: with a run alive, they
-//! wait for the next check.
+//! history, so under `barca gc` each waits for one and runs only if that was not enough: with a
+//! run alive, they wait. A pass with a budget does not wait (below).
 //!
 //! **`VACUUM` is for `barca gc` only.** It rewrites the live data with the lock held and cannot
 //! be cut short, so a pass with a time budget (the check after a command or a run, `serve`'s
-//! minute checkpoint) never runs one, and with it no checkpoint under the lock: such a pass
-//! clears records, then stops with [`Trimmed::vacuum_deferred`] set, and orders 3 and 4, which
-//! wait for a `VACUUM`, wait for `barca gc`. A pass reports the longest hold of the lock it
-//! took ([`Trimmed::longest_hold_ms`]).
+//! minute checkpoint) never runs one, and with it no checkpoint under the lock. Such a pass
+//! measures the database by its used size, the pages that hold data (`page_count` less
+//! `freelist_count`, times `page_size`; the log is left out, only a checkpoint shrinks it), and
+//! orders 3 and 4 run without waiting for a `VACUUM`: SQLite reuses the pages their deletes free,
+//! so the used size comes under the share while the file keeps its length until `barca gc`
+//! ([`Trimmed::vacuum_deferred`]). A pass reports the longest hold of the lock it took
+//! ([`Trimmed::longest_hold_ms`]).
 
 use crate::db;
 use barca_model::BarcaError;
@@ -76,6 +79,12 @@ pub struct Trimmed {
     pub finished: bool,
     /// Stopped because time ran out, not to wait for a moment with no run alive.
     pub out_of_time: bool,
+    /// The bytes the pages that hold data take (the file less its free pages), before and after
+    /// the pass. A pass with a time budget works to this size, not the file's.
+    #[serde(default)]
+    pub used_before_bytes: u64,
+    #[serde(default)]
+    pub used_after_bytes: u64,
     /// A full `VACUUM` was wanted and not run: the pass had a time budget (only `barca gc` runs
     /// one) or a run was alive. The file keeps its size until `barca gc`.
     #[serde(default)]
@@ -172,6 +181,11 @@ const LATEST_SUCCESS: &str = "(SELECT s.id FROM materializations s INDEXED BY id
      WHERE s.node_id = m.node_id AND s.status = 'success' AND s.artifact_path IS NOT NULL \
      ORDER BY s.id DESC LIMIT 1)";
 
+/// A row `m` written by a run that is running or in the queue: with the tier that deletes old
+/// results no longer waiting for a moment with no run alive, those rows are left to the run.
+const NOT_LIVE: &str = "m.run_id NOT IN (SELECT run_id FROM runs WHERE status = 'running') \
+     AND m.run_id NOT IN (SELECT run_id FROM run_queue)";
+
 async fn ids_in(conn: &Connection, filter: &str, from: i64) -> Result<Vec<i64>, BarcaError> {
     let sql = format!(
         "SELECT m.id FROM materializations m WHERE m.id > {from} AND m.id <= {} AND {filter}",
@@ -202,7 +216,7 @@ async fn row_batch(conn: &Connection, step: u8, from: i64) -> Result<u64, BarcaE
     }
     // The newest byte change of a node stays: `barca status` shows it.
     let filter = format!(
-        "m.id < {LATEST_SUCCESS} \
+        "m.id < {LATEST_SUCCESS} AND {NOT_LIVE} \
          AND NOT (m.status = 'success' AND m.artifact_path IS NOT NULL AND m.evicted_at IS NULL) \
          AND NOT (m.bytes_changed = 1 AND m.id = (SELECT max(c.id) FROM materializations c \
              INDEXED BY idx_mat_changed WHERE c.node_id = m.node_id AND c.bytes_changed = 1))"
@@ -270,13 +284,33 @@ pub async fn trim(
         return Ok(None);
     }
     db::init_db(db_path).await?;
+    let longest = AtomicU64::new(0);
+    let vacuum_allowed = time.is_none();
+    let used_before = {
+        let _guard = db::db_guard_for(db_path).await;
+        let _hold = Hold::start(&longest);
+        let (_handle, conn) = db::open_conn(db_path).await?;
+        used_bytes(&conn).await?
+    };
+    if !vacuum_allowed && used_before <= allowance {
+        // The data fits its share; only the file is long, and only `barca gc` shortens it.
+        return Ok(Some(Trimmed {
+            before_bytes,
+            after_bytes: before_bytes,
+            used_before_bytes: used_before,
+            used_after_bytes: used_before,
+            finished: true,
+            vacuum_deferred: true,
+            longest_hold_ms: longest.load(Ordering::Relaxed).div_ceil(1000),
+            ..Trimmed::default()
+        }));
+    }
     let target = allowance / 100 * LOW_WATERMARK_PERCENT;
     let deadline = time.map(|time| Instant::now() + time);
     let out_of_time = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
-    let longest = AtomicU64::new(0);
-    let vacuum_allowed = time.is_none();
     let mut done = Trimmed {
         before_bytes,
+        used_before_bytes: used_before,
         finished: true,
         ..Trimmed::default()
     };
@@ -284,7 +318,7 @@ pub async fn trim(
     // Whether the file may hold space only `VACUUM` gives back, and the step that last asked.
     let (mut dirty, mut asked) = (true, None);
     'steps: while step < 4 {
-        if step >= 2 && dirty && asked != Some(step) {
+        if vacuum_allowed && step >= 2 && dirty && asked != Some(step) {
             asked = Some(step);
             if !vacuum(db_path, vacuum_allowed, &longest).await? {
                 done.finished = false;
@@ -352,6 +386,12 @@ pub async fn trim(
         }
     }
     done.after_bytes = file_bytes(db_path);
+    done.used_after_bytes = {
+        let _guard = db::db_guard_for(db_path).await;
+        let _hold = Hold::start(&longest);
+        let (_handle, conn) = db::open_conn(db_path).await?;
+        used_bytes(&conn).await?
+    };
     done.longest_hold_ms = longest.load(Ordering::Relaxed).div_ceil(1000);
     Ok(Some(done))
 }
@@ -553,5 +593,105 @@ mod tests {
         assert!(done.after_bytes <= 8_000_000, "{done:?}");
         eprintln!("gc pass: longest lock hold {} ms", done.longest_hold_ms);
         assert!(done.longest_hold_ms > 0);
+    }
+
+    /// A pass with a time budget works to the used size and deletes eligible history without a
+    /// `VACUUM`: the pages its deletes free are reused, and the file keeps its length.
+    #[tokio::test]
+    async fn a_budgeted_pass_deletes_eligible_history_without_vacuum() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 1500).await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            done.finished && !done.vacuumed && done.vacuum_deferred,
+            "{done:?}"
+        );
+        assert!(
+            done.rows > 0 && done.runs > 0 && done.progressed(),
+            "{done:?}"
+        );
+        assert!(done.used_after_bytes < done.used_before_bytes, "{done:?}");
+        assert!(
+            done.after_bytes >= done.before_bytes,
+            "the file keeps its length: {done:?}"
+        );
+        assert_eq!(count(&path, "SELECT count(*) FROM runs").await, KEPT_RUNS);
+        assert_eq!(
+            count(
+                &path,
+                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:live'"
+            )
+            .await,
+            100
+        );
+    }
+
+    /// Once the data fits, the file is long only until `barca gc`: the next budgeted pass changes
+    /// nothing and says so.
+    #[tokio::test]
+    async fn a_file_longer_than_its_data_waits_for_gc() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        trim(&path, 8_000_000, Some(Duration::from_secs(60)))
+            .await
+            .unwrap();
+        let again = trim(&path, 8_000_000, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            again.used_after_bytes <= 8_000_000 && again.after_bytes > 8_000_000,
+            "{again:?}"
+        );
+        assert!(
+            again.vacuum_deferred && !again.vacuumed && !again.progressed(),
+            "{again:?}"
+        );
+    }
+
+    /// The old-results tier does not wait for a moment with no run alive, and leaves only the rows
+    /// the live run wrote: a busy server's passes used to stop at the `VACUUM` gate and remove
+    /// nothing, however many old results there were.
+    #[tokio::test]
+    async fn with_a_run_alive_a_budgeted_pass_removes_old_results_but_not_the_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        bloated(&path, 10).await;
+        db::create_run(&path, "alive", "get", "p.py", None, Some(1))
+            .await
+            .unwrap();
+        exec(
+            &path,
+            "UPDATE materializations SET run_id = 'alive' WHERE id <= 50",
+        )
+        .await;
+        let done = trim(&path, 8192, Some(Duration::from_secs(60)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(done.finished && !done.vacuumed, "{done:?}");
+        assert!(done.rows >= 1900, "old results went: {done:?}");
+        for (sql, want) in [
+            (
+                "SELECT count(*) FROM materializations WHERE run_id = 'alive'",
+                50,
+            ),
+            (
+                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:old' AND id < 2101 \
+                 AND run_id != 'alive'",
+                0,
+            ),
+            (
+                "SELECT count(*) FROM materializations WHERE node_id = 'p.py:live'",
+                100,
+            ),
+        ] {
+            assert_eq!(count(&path, sql).await, want, "{sql}");
+        }
     }
 }

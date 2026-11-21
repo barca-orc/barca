@@ -1198,6 +1198,9 @@ fn memory(streak: u32, retry_at: u64, base: u64, reason_nothing: bool) -> TrimMe
         outcome: barca_db::metadata_size::Trimmed {
             before_bytes: base,
             after_bytes: base,
+            // `nothing_eligible`: the data is over the share; otherwise it fits and only the
+            // file is long.
+            used_after_bytes: if reason_nothing { base } else { 0 },
             finished: true,
             vacuum_deferred: !reason_nothing,
             ..Default::default()
@@ -1277,7 +1280,7 @@ async fn a_budgeted_pass_never_runs_vacuum_and_backs_off_until_gc() {
         !first.outcome.vacuumed && first.outcome.vacuum_deferred,
         "{first:?}"
     );
-    assert_eq!(first.report().reason.as_deref(), Some("vacuum_deferred"));
+    assert_eq!(first.report().reason.as_deref(), Some("nothing_eligible"));
     assert_eq!((first.streak, size() >= before), (1, true));
     // Skipped inside the backoff, with the lock held by someone else: the check takes none.
     let held = barca_db::db::db_guard().await;

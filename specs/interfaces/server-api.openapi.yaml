@@ -9016,11 +9016,11 @@ components:
               minimum: 0
             metadata_trim:
               type: array
-              description: The last trim pass of each metadata database that went over its share of the cache limit. Omitted until one did. reason is vacuum_deferred (the file only shrinks through a VACUUM, which only barca gc runs, and not with a run alive) or nothing_eligible (the pass cleared nothing); it is null when after_bytes is within allowance_bytes, and also when the pass cleared records and ran out of time so a later pass goes on. Experimental.
+              description: The last trim pass of each metadata database that went over its share of the cache limit. Omitted until one did. reason is nothing_eligible (the data is over its share and the pass cleared nothing), vacuum_deferred (the data fits but the file is longer, until barca gc runs VACUUM) or null (the file is within its share, or the data is over it and the pass cleared records and ran out of time, so a later pass goes on). Experimental.
               items:
                 type: object
                 additionalProperties: false
-                required: [env, at, allowance_bytes, before_bytes, after_bytes, components, outcomes, rows, runs, longest_hold_ms, reason, detail, zero_progress_passes, next_attempt]
+                required: [env, at, allowance_bytes, before_bytes, after_bytes, used_after_bytes, components, outcomes, rows, runs, longest_hold_ms, reason, detail, zero_progress_passes, next_attempt]
                 properties:
                   env:
                     type: string
@@ -9036,6 +9036,10 @@ components:
                   after_bytes:
                     type: integer
                     minimum: 0
+                  used_after_bytes:
+                    type: integer
+                    minimum: 0
+                    description: The bytes the pages that hold data take after the pass (the file less its free pages); what a pass with a time budget measures against allowance_bytes.
                   components:
                     type: integer
                     minimum: 0
@@ -9058,7 +9062,7 @@ components:
                     description: The longest hold of the metadata lock in the pass.
                   reason:
                     type: [string, 'null']
-                    enum: [vacuum_deferred, nothing_eligible, null]
+                    enum: [nothing_eligible, vacuum_deferred, null]
                   detail:
                     type: [string, 'null']
                   zero_progress_passes:
