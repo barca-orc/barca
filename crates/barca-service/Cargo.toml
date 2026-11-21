@@ -1,6 +1,6 @@
 [package]
 name = "barca-service"
-version = "0.46.0"
+version = "0.46.1"
 edition = "2024"
 description = "Service layer — one operation per command, its typed result and its text; the one crate barca-cli and barca-server import"
 

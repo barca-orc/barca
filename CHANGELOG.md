@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.46.1 (2026-11-21)
+
 ### Bug Fixes
 
 - The scheduler bounds metadata waits and coalesces delayed live slots to one run per schedule. A queued scheduled run and its restart cursor are committed together (#1087).
