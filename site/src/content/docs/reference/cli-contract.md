@@ -4739,7 +4739,6 @@ of refresh coordinates independently of the target domain. Each selector has one
 The existing refresh list in CLI, Python and server requests shares these semantics;
 `--partition` continues to narrow execution and skip affected fan-ins.
 
-See also: [Scripts and AI Agents](/reference/agents/) (how to drive barca from scripts and agents), [Agent Skill](/reference/agent-skill/).
 
 ### Retained execution attempts (experimental)
 
@@ -4950,6 +4949,8 @@ while queue ownership shows the request will resume. Step/stream filters also ap
 | `steps_page.total` | integer | always |
 | `steps_page.truncated` | boolean | always |
 <!-- END GENERATED schema history_attempt -->
+
+See also: [Scripts and AI Agents](/reference/agents/) (how to drive barca from scripts and agents), [Agent Skill](/reference/agent-skill/).
 
 ---
 
