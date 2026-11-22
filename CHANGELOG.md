@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Terminal Ctrl-C now drains server-owned workers instead of interrupting their running steps; the drain deadline requeues remaining work and a second signal still cancels it (#926).
+
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).
 - Batched nodes split across worker streams no longer stall when the planner packs multiple chunks of the same node or chain into one stream (#1100). Stream adjacency no longer makes unrelated work depend on each other; declared input dependencies and batch boundaries are preserved. This fixes cold runs and explicit refreshes at larger pools, including small pools with several partitioned chains.
 

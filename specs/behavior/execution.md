@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 8. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -100,6 +100,14 @@ nothing and names the runs it waited behind, among them one doing the same work.
 not deduplicate identical requests: each is a run, and the later one waits in the queue or
 shares the earlier one's in-flight asset steps. A server drain
 stops admission and waits; its configured deadline/requeue rules determine interrupted work.
+A terminal SIGINT reaches the server but not its workers: server-owned workers remain outside
+the terminal process group so the first Ctrl-C drains, and the second cancels through the
+server. Local `get`/`run` workers retain their terminal interruption behavior (#926).
+Conformance: `test_a_stop_signal_drains_the_runs_in_flight_and_exits_0`,
+`test_the_drain_timeout_requeues_the_runs_left_and_exits_0`, and
+`test_a_second_signal_stops_the_drain_at_once` in
+[server robustness](../../python/tests/test_serve_robustness.py), plus
+[local Ctrl-C](../../python/tests/test_ctrl_c_worker.py).
 Retry after a user exception may use the same worker. Crash, timeout, `sys.exit()` and failed
 import retries use a replacement worker. Backoff is enforced, not merely declared.
 These are physical step retries under the declared budget, not new invocation attempts.

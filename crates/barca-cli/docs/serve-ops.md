@@ -145,7 +145,9 @@ lost and done again.
 ## Stopping the server
 
 SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way: the
-first one starts a drain, which loses nothing the server accepted.
+first one starts a drain, which loses nothing the server accepted. Server workers remain
+outside the terminal’s process group, so terminal Ctrl-C starts this drain without interrupting
+their running steps. A second signal still cancels the remaining runs.
 
 ```bash
 barca serve pipeline.py                      # on SIGTERM, runs in flight get 30 seconds

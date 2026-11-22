@@ -8,7 +8,8 @@ step's function runs:
   The coordinator starts a worker in a process group of its own
   (`helper_proc::start_outside_the_job`), since nothing written here can keep an interrupt
   that arrives that early from ending the process with a traceback. `join_the_job` moves
-  the worker into the coordinator's group once the handler below is installed.
+  the worker into the coordinator's group once the handler below is installed. Server
+  workers stay in their own group: the server owns Ctrl-C and drains their runs first.
 - While a step's module is imported, between steps, and while a result or an error is
   reported: nothing happens (`ctrl_c_does_nothing`). An interrupt there used to end the
   worker with a `KeyboardInterrupt` traceback of barca's own frames or of the module's
@@ -83,7 +84,7 @@ def join_the_job() -> None:
     group of its own, out of the terminal's reach."""
     job = os.environ.get("BARCA_JOB_PGID")
     if not job:
-        return  # started by hand, or by a coordinator that leaves workers in its group
+        return  # server worker (keeps its own group), or a worker started by hand
     try:
         os.setpgid(0, int(job))
     except (OSError, ValueError):
