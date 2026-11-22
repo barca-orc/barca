@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '29'
-  description: 'Normative current wire contract; specification version 29 is independent of package versions.
+  version: '30'
+  description: 'Normative current wire contract; specification version 30 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -3494,7 +3494,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '202':
-          description: Accepted and recorded in the run queue; stream GET /runs/{run_id}/events
+          description: Accepted and durably recorded; stream GET /runs/{run_id}/events. A provably
+            fresh get can finish using bounded artifact I/O before its handle is returned, without
+            entering execution admission. Misses, stale results and refreshes enter the run queue.
           content:
             application/json:
               schema:

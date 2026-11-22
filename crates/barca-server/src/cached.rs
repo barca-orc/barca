@@ -18,6 +18,11 @@ pub async fn get(
             "cached read files must belong to this deployment".into(),
         ));
     }
+    let _permit = reads
+        .artifact_reads
+        .acquire()
+        .await
+        .expect("read capacity stays open");
     let mut answer =
         barca_service::cached::get(&reads.config.resolved, &reads.config.python, &request).await?;
     answer.path_scope = "server".into();

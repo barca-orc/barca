@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 10. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -36,7 +36,7 @@ behavior follows the coordinator dependency rules, not ordinary data-failure pro
 
 | Event | Required transition/effect |
 | --- | --- |
-| Server accepts a request | Persist its queue entry before acknowledging its run identity |
+| Server accepts a request | Persist its queue entry, or its completed cache-read outcome, before acknowledging its run identity |
 | Admission/capacity permits execution | Begin work under that run's cancellation and progress ownership |
 | Work succeeds | Commit completed results and progress; a final successful outcome does not invent computations for cache hits |
 | A key fails | Preserve completed peers; skip data dependents that cannot proceed: only the same key of a dependent that reads it key for key (reported `upstream_key_failed`), the whole of one that reads every key (`upstream_failed`); the run goes on to later phases; finish the run with its real failures |
@@ -184,6 +184,26 @@ or inspected while off. A matching recorded local result may be reused; otherwis
 computed locally. Empty/unset values retain configuration and other values are usage errors.
 The selected local environment is unchanged. This does not block network I/O in user code.
 The removed `BARCA_STATE=off` spelling and shared-history pull are not current alternatives.
+
+### Ordinary server cache hits
+
+Ordinary server `get` requests whose selected plan is provably cached use the same
+retained-artifact read operation, under request freshness rules. They do not wait for a run
+slot or allocate a pipeline worker. Four artifact reads may proceed at once per server,
+shared with explicit cached-only reads and independent of execution capacity. Store fetches
+count as reads and refresh their retention stamps; active reads pin their selected artifacts
+and retain completed inodes in process-owned staging through concurrent GC.
+
+A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
+resolution follows normal execution admission. Executable pickle reconstruction also follows
+normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
+128 keys with one retained inode at a time. The existing output listing limit affects only
+presentation: a larger unselected cache hit returns its usual partition counts, while an
+explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
+results even when stale.
+
+Conformance: `python/tests/test_cached_admission.py` exercises a saturated server, freshness
+controls, independent I/O admission and concurrent GC.
 
 ## Invariants
 

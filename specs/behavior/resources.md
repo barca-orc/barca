@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 4. Status: approved requirements; implementation remains incomplete.
+Specification version: 5. Status: approved requirements; implementation remains incomplete.
 Version 3 replaces first come, first served admission with requested runs first and a bounded
 wait for scheduled runs, implemented for the capacity a server's runs share (#1003).
 Requirements are still being elicited. This is not a new supported TOML section or a claim
@@ -113,6 +113,26 @@ exhaustion must not erase successful peers or masquerade as a cache hit. Identif
 affected attempt and allow unrelated work to continue. Internal ownership,
 backpressure, estimation and process-control mechanisms remain open.
 
+
+### Ordinary server cache hits
+
+Ordinary server `get` requests whose selected plan is provably cached use the same
+retained-artifact read operation, under request freshness rules. They do not wait for a run
+slot or allocate a pipeline worker. Four artifact reads may proceed at once per server,
+shared with explicit cached-only reads and independent of execution capacity. Store fetches
+count as reads and refresh their retention stamps; active reads pin their selected artifacts
+and retain completed inodes in process-owned staging through concurrent GC.
+
+A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
+resolution follows normal execution admission. Executable pickle reconstruction also follows
+normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
+128 keys with one retained inode at a time. The existing output listing limit affects only
+presentation: a larger unselected cache hit returns its usual partition counts, while an
+explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
+results even when stale.
+
+Conformance: `python/tests/test_cached_admission.py` exercises a saturated server, freshness
+controls, independent I/O admission and concurrent GC.
 
 ## Invariants
 
