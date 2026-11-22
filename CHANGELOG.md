@@ -14,6 +14,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Warn once per sensor per CLI/server process when `(True, value)` supplies a non-`None` value: it always counts as changed. Return the value alone for comparison or `(True, None)` for a silent explicit change (#673).
 - Refresh locked OAuthLib, OpenTelemetry API and Astro dependencies to their patched versions (#1112).
 
+### Performance
+
+- Reduce allocation and repeated SQL preparation when installing metadata writer-version triggers.
+
 ## 0.46.3 (2026-11-22)
 
 ### Bug Fixes
