@@ -29,28 +29,55 @@ pub(in crate::db) async fn install(conn: &Connection) -> Result<(), BarcaError> 
     if !exists(conn).await? {
         return Ok(());
     }
-    // Initialization can revisit this connection after adding tables. Ask for each missing
-    // event, so an interrupted installation is repaired without reparsing existing triggers.
-    let mut rows = conn.query("SELECT t.name, e.event FROM sqlite_master AS t CROSS JOIN (SELECT 'INSERT' AS event UNION ALL SELECT 'UPDATE' UNION ALL SELECT 'DELETE') AS e WHERE t.type='table' AND t.name NOT LIKE 'sqlite_%' AND t.name != 'metadata_info' AND NOT EXISTS (SELECT 1 FROM sqlite_temp_master WHERE type='trigger' AND name = 'barca_writer_' || t.name || '_' || e.event)", ()).await.map_err(failed)?;
+    // Share the marker statement across table/event triggers. SQLite keeps each trigger's
+    // parsed body on the connection; duplicating the upsert retains it thirty-three times.
+    // A TEMP view stores no rows, and its INSTEAD OF trigger runs in the caller's transaction.
+    conn.execute(
+        "CREATE TEMP VIEW IF NOT EXISTS barca_writer_mark AS SELECT 0 AS value",
+        (),
+    )
+    .await
+    .map_err(failed)?;
+    conn.execute(&format!("CREATE TEMP TRIGGER IF NOT EXISTS barca_writer_mark_insert INSTEAD OF INSERT ON barca_writer_mark BEGIN INSERT INTO metadata_info (key,value) VALUES ('last_writer_version','{VERSION}') ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value != excluded.value; END;"), ()).await.map_err(failed)?;
+    // Initialization can revisit the connection after adding tables. Read the small TEMP
+    // catalog once instead of compiling a correlated query over a materialized event union.
+    let mut rows = conn
+        .query(
+            "SELECT name FROM sqlite_temp_master WHERE type='trigger'",
+            (),
+        )
+        .await
+        .map_err(failed)?;
+    let mut installed = std::collections::HashSet::new();
+    while let Some(row) = rows.next().await.map_err(failed)? {
+        installed.insert(row.get::<String>(0).map_err(failed)?);
+    }
+    drop(rows);
+    let mut rows = conn
+        .query("SELECT name FROM sqlite_master WHERE type='table'", ())
+        .await
+        .map_err(failed)?;
     let mut missing = Vec::new();
     while let Some(row) = rows.next().await.map_err(failed)? {
         let name: String = row.get(0).map_err(failed)?;
-        if crate::state_validate::TABLES
-            .iter()
-            .any(|(table, _)| *table == name)
+        if name != "metadata_info"
+            && crate::state_validate::TABLES
+                .iter()
+                .any(|(table, _)| *table == name)
         {
-            missing.push((name, row.get::<String>(1).map_err(failed)?));
+            for event in ["INSERT", "UPDATE", "DELETE"] {
+                if !installed.contains(&format!("barca_writer_{name}_{event}")) {
+                    missing.push((name.clone(), event));
+                }
+            }
         }
     }
     // Finish reading both schemas before changing the TEMP schema.
     drop(rows);
     for (name, event) in missing {
         let name = name.replace('"', "\"\"");
-        // Keep only one statement alive: execute_batch copies each remaining SQL tail.
-        // The conflict predicate avoids rewriting an already-current marker without a
-        // separate SELECT in every row trigger. Both insert and update roll back with the row.
         let sql = format!(
-            "CREATE TEMP TRIGGER IF NOT EXISTS \"barca_writer_{name}_{event}\" AFTER {event} ON main.\"{name}\" BEGIN INSERT INTO metadata_info (key,value) VALUES ('last_writer_version','{VERSION}') ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE value != excluded.value; END;"
+            "CREATE TEMP TRIGGER IF NOT EXISTS \"barca_writer_{name}_{event}\" AFTER {event} ON main.\"{name}\" BEGIN INSERT INTO barca_writer_mark VALUES(0); END;"
         );
         conn.execute(&sql, ()).await.map_err(failed)?;
     }
@@ -104,6 +131,48 @@ pub(super) async fn warn(conn: &Connection) -> Result<(), BarcaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reinstall_repairs_shared_marker_trigger_without_recording_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db");
+        let path = path.to_str().unwrap();
+        crate::db::init_db(path).await.unwrap();
+        let _guard = crate::db::db_guard().await;
+        let (_handle, conn) = crate::db::open_conn(path).await.unwrap();
+        for object in ["TRIGGER barca_writer_mark_insert", "VIEW barca_writer_mark"] {
+            conn.execute(&format!("DROP {object}"), ()).await.unwrap();
+            conn.execute("UPDATE metadata_info SET value='99.0.0'", ())
+                .await
+                .unwrap();
+            install(&conn).await.unwrap();
+            let read = || async {
+                conn.query(
+                    "SELECT value FROM metadata_info WHERE key='last_writer_version'",
+                    (),
+                )
+                .await
+                .unwrap()
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap()
+            };
+            assert_eq!(read().await, "99.0.0");
+            conn.execute("BEGIN", ()).await.unwrap();
+            conn.execute(
+                "INSERT INTO server_state (key,value) VALUES ('shared-test','value')",
+                (),
+            )
+            .await
+            .unwrap();
+            assert_eq!(read().await, VERSION);
+            conn.execute("ROLLBACK", ()).await.unwrap();
+            assert_eq!(read().await, "99.0.0");
+        }
+    }
 
     #[tokio::test]
     async fn reinstall_repairs_missing_triggers_and_missing_writer_marker() {
