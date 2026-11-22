@@ -14,6 +14,7 @@ change those contracts.
 - [The CLI's layers](cli-layering.md): one request and one dispatch, the table of where each command can run, the module rows the layering test enforces (#1056, track E) and what is left.
 - [Layers inside barca-core](layering.md): the layer of every module of what was `barca-core`, the rule and the cuts that made each layer a crate (#1056 track C). The layers are crates now: [part two](crate-split-2.md).
 - [One owner of the metadata connection per process](metadata-owner.md): reads without the lock, turns at the lock and the kept connection (#1056, A7 and A8), the safety properties with their tests, measurements and what is not done.
+- [Writer-version performance investigation](writer-version-perf.md): trigger allocation controls, executable-cache effects, retained measurements and the unresolved queue-budget question (#1113).
 - [Requirements discussion handoff](requirements-handoff.md): unanswered proposals and remaining decisions.
 - [User API rationale](user-api-decisions.md): reasons behind declaration choices.
 - [DuckDB lifetime investigation](history/duckdb-step-isolation.md): retained empirical evidence and rejected isolation alternatives.

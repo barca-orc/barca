@@ -155,6 +155,7 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         &["run_id", "seq", "state", "spec", "queued_at"],
     ),
     ("server_state", &["key", "value"]),
+    ("metadata_info", &["key", "value"]),
     ("asset_pauses", &["node_id", "paused_at", "via"]),
     (
         "schedule_ticks",

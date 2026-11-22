@@ -10,7 +10,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Warn when metadata was last written by a newer barca, and have `barca doctor` check the running version against `pyproject.toml`'s barca dependency (#672).
+- Warn once per sensor per CLI/server process when `(True, value)` supplies a non-`None` value: it always counts as changed. Return the value alone for comparison or `(True, None)` for a silent explicit change (#673).
 - Refresh locked OAuthLib, OpenTelemetry API and Astro dependencies to their patched versions (#1112).
+
+### Performance
+
+- Share transactional metadata writer-version trigger programs and move doctor requirement parsing into its finite Python helper, reducing coordinator memory without external Python dependencies.
 
 ## 0.46.3 (2026-11-22)
 
