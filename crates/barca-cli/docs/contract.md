@@ -4734,4 +4734,18 @@ of refresh coordinates independently of the target domain. Each selector has one
 The existing refresh list in CLI, Python and server requests shares these semantics;
 `--partition` continues to narrow execution and skip affected fan-ins.
 
+### Cancelling a queued run
+
+`barca cancel RUN_ID --server URL --json` reports `status: "cancelled"` after removing a
+queued run durably, including a run just requeued during drain. A running run reports
+`status: "cancelling"` until its workers or partition/batch resolvers stop. Resolver
+shutdown allows one second for SIGTERM, then kills and reaps the subprocess.
+
+<!-- BEGIN GENERATED schema cancel_queued -->
+| Key | Type | Present |
+|---|---|---|
+| `run_id` | string | always |
+| `status` | string | always |
+<!-- END GENERATED schema cancel_queued -->
+
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

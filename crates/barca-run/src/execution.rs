@@ -26,7 +26,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use barca_python::load::build_dag;
+use barca_python::load::build_dag_until;
 use barca_store::results::{GetResult, MultiResult, StepReport, TargetOutcome};
 
 use crate::persist::{
@@ -1218,12 +1218,13 @@ struct BatchKeys {
 /// display ids of its keys in key order)`. Only the keys that run are in the phase, so only
 /// those are grouped. A node whose grouping cannot be made (a `batches_by` function that
 /// raises, `strict=True` with a key in no group) is returned with why, to be failed.
-fn plan_calls(
+async fn plan_calls(
     dag: &Dag,
     over: &barca_engine::batch::BatchOverride,
     phase: &Phase,
     python: &std::path::Path,
     next_call: &mut u64,
+    cancel: &CancellationToken,
 ) -> PlannedCalls {
     let mut keys_of: Vec<BatchKeys> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -1270,12 +1271,15 @@ fn plan_calls(
         };
         let labels = match &grouping {
             barca_engine::batch::Grouping::By { source_text, .. } => {
-                match barca_engine::batch::evaluate_labels(
+                match barca_engine::batch::evaluate_labels_until(
                     python,
                     &node.invoke.python().source_file,
                     source_text,
                     &keys,
-                ) {
+                    barca_model::process::Until::cancelled(cancel),
+                )
+                .await
+                {
                     Ok(labels) => Some(labels),
                     Err(e) => {
                         errors.push((base.clone(), format!("could not group the keys: {e}")));
@@ -1358,7 +1362,13 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
             &phase,
             session.request.python,
             &mut session.state.next_call,
-        );
+            &session.started.cancel,
+        )
+        .await;
+        if session.started.cancel.is_cancelled() {
+            session.state.phase_error = Some("run cancelled".into());
+            break;
+        }
         if let Some((base, message)) = ungrouped.first() {
             session.state.usage_error = Some(format!("{base}: {message}"));
             for (base, message) in ungrouped {

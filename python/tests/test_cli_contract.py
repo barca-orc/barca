@@ -282,6 +282,7 @@ SINK_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_sink", ["get", "exported", "pipeline.py", "--json"], "stdout", 0),
     ("history_sink", ["history", "RUN_ID", "--json"], "stdout", 0),
 ]
+CANCEL_CASE = ("cancel_queued", ["cancel", "RUN_ID", "--server", "SERVER", "--json"], "stdout", 0)
 ALL_CASES = (
     CASES
     + SETUP_CASES
@@ -290,6 +291,7 @@ ALL_CASES = (
     + CHANGED_CASES
     + [PARTITION_RUN_CASE]
     + SINK_CASES
+    + [CANCEL_CASE]
 )
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
@@ -652,6 +654,28 @@ def runs(tmp_path_factory) -> dict:
         s = command_schema(doc)
         shown = next(c[1] for c in SINK_CASES if c[0] == case)
         out[case] = (s, render_snapshot(shown, stream, code, s), proc)
+    from .served import Serve
+
+    cancel_root = cwd / "cancel-project"
+    cancel_root.mkdir()
+    (cancel_root / "pipeline.py").write_text("from barca import task\n@task()\ndef one(): pass\n")
+    with Serve(cancel_root, "--no-schedule", env=env) as server:
+        server.post("/queue/pause", {})
+        run_id = server.submit("one")["run_id"]
+        case, argv, stream, code = CANCEL_CASE
+        proc = subprocess.run(
+            [binary, "cancel", run_id, "--server", server.url, "--json"],
+            cwd=cancel_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=RUN,
+        )
+        assert proc.returncode == code, proc.stderr
+        doc = json.loads(proc.stdout)
+        assert doc == {"run_id": run_id, "status": "cancelled"}
+        s = command_schema(doc)
+        out[case] = (s, render_snapshot(argv, stream, code, s), proc)
     return out
 
 

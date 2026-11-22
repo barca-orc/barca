@@ -8,7 +8,13 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Completed queued cancellation (`DELETE /runs/{id}` and `barca cancel --json`) now returns `status: "cancelled"`; running cancellations still return `"cancelling"` (#936).
+
 ### Bug Fixes
+
+- Cancelling a run just requeued by server drain durably removes it so a restart cannot run it. Hanging partition-key and `batches_by` resolvers stop on cancellation, with a bounded subprocess shutdown (#936).
 
 - A loopback server refuses foreign HTTP Host names before dispatch, preventing DNS rebinding. Trusted reverse proxies can list exact DNS names in `[server] allowed_hosts`; loopback CLI/UI access and the owner-only project socket keep working (#998).
 - Pinning an asset no longer removes unrelated partitioned nodes from status prediction: their cache state and partition counts remain visible (#1069).

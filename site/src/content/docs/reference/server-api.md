@@ -246,7 +246,11 @@ DELETE /runs/{run_id}
 Cancels a pending or running run. Its Python workers are terminated, the results of steps
 that had already finished are kept, and the run ends `cancelled` (in its events, in
 `GET /runs/{run_id}` and in `barca history`). The response is
-`{ "run_id": "...", "status": "cancelling" }`. Cancelling a run that already finished returns
+`{ "run_id": "...", "status": "cancelling" }` while execution stops. A queued run,
+including one just requeued by drain, is durably removed and returns `"status": "cancelled"`;
+a restart cannot resume it. Partition-key and `batches_by` resolvers also stop on cancellation:
+after one second without responding to SIGTERM they are killed and reaped.
+Cancelling a run that already finished returns
 `409`, and an unknown id `404`.
 
 The run records why it was cancelled as `cancellation` (experimental): `by` is `request` (this

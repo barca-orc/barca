@@ -6,6 +6,6 @@ import type { Cancelling } from "./Cancelling";
  */
 export type RunCancelling = { run_id: string,
 /**
- * Always `cancelling`.
+ * `cancelled` after a queued cancellation completes; `cancelling` while a run stops.
  */
 status: Cancelling, };
