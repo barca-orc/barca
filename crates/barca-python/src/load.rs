@@ -21,6 +21,17 @@ pub async fn build_dag(file_args: &[String], python: &std::path::Path) -> Result
         .map_err(|e| BarcaError::Other(format!("DAG analysis task failed: {e}")))?
 }
 
+/// Load source without importing it or evaluating dynamic partition expressions.
+/// Cached reads use literal keys, recorded keys or an explicit selection instead.
+pub async fn build_static_dag(files: &[String]) -> Result<Dag, BarcaError> {
+    let files = files.to_vec();
+    tokio::task::spawn_blocking(move || {
+        load_files(&files, &[], std::path::Path::new("python"), false, false).map(|(dag, _, _)| dag)
+    })
+    .await
+    .map_err(|e| BarcaError::Other(format!("static DAG analysis failed: {e}")))?
+}
+
 /// A source or definition that could not join the served graph.
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -162,7 +173,7 @@ pub fn build_dag_and_extracted_blocking(
     file_args: &[String],
     python: &std::path::Path,
 ) -> Result<(Dag, Vec<crate::extracted::ExtractedNode>), BarcaError> {
-    load_files(file_args, &[], python, false).map(|loaded| (loaded.0, loaded.2))
+    load_files(file_args, &[], python, false, true).map(|loaded| (loaded.0, loaded.2))
 }
 
 fn load_blocking(
@@ -170,7 +181,7 @@ fn load_blocking(
     python: &std::path::Path,
     partial: bool,
 ) -> Result<(Dag, Vec<LoadError>), BarcaError> {
-    load_files(file_args, &[], python, partial).map(|(dag, errors, _)| (dag, errors))
+    load_files(file_args, &[], python, partial, true).map(|(dag, errors, _)| (dag, errors))
 }
 
 /// [`load_blocking`] of `file_args`, after `imported`: pipeline files read only because a
@@ -181,6 +192,7 @@ fn load_files(
     imported: &[String],
     python: &std::path::Path,
     partial: bool,
+    evaluate: bool,
 ) -> Result<(Dag, Vec<LoadError>, Vec<crate::extracted::ExtractedNode>), BarcaError> {
     let file_args: Vec<String> = imported.iter().chain(file_args).cloned().collect();
     let file_args = file_args.as_slice();
@@ -304,7 +316,7 @@ fn load_files(
         if !more.is_empty() {
             // Dependencies first, so the given files' nodes stay last.
             let more: Vec<String> = more.into_iter().rev().collect();
-            return load_files(file_args, &more, python, partial);
+            return load_files(file_args, &more, python, partial, evaluate);
         }
     }
     if !imported.is_empty() {
@@ -333,7 +345,11 @@ fn load_files(
         crate::link::validate_partition_dimensions(&all_nodes)?;
         // Like a file that does not parse: the command cannot plan with a node whose keys are
         // unknown, so it stops with the node named (exit 2).
-        let unevaluated = resolve_dynamic_partitions(&mut all_nodes, python)?;
+        let unevaluated = if evaluate {
+            resolve_dynamic_partitions(&mut all_nodes, python)?
+        } else {
+            Vec::new()
+        };
         if !unevaluated.is_empty() {
             let detail: Vec<String> = unevaluated
                 .iter()

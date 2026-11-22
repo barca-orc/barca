@@ -135,10 +135,10 @@ impl<'a> Follow<'a> {
                     self.lose(why)?;
                     Ok(true)
                 }
-                Err(Attempt::Refused(error)) => Err(error),
+                Err(Attempt::Refused(error)) => Err(*error),
                 Err(_) => unreachable!("JSON requests have no cursor"),
             },
-            Err(Attempt::Refused(e)) => Err(e),
+            Err(Attempt::Refused(e)) => Err(*e),
             Err(Attempt::Expired) => {
                 self.gap()?;
                 Ok(true)
@@ -160,7 +160,7 @@ impl<'a> Follow<'a> {
             .server
             .http
             .request(reqwest::Method::GET, &self.path)
-            .map_err(Attempt::Refused)?
+            .map_err(Attempt::refused)?
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .timeout(STREAM_LIMIT);
         if self.resume
@@ -192,7 +192,7 @@ impl<'a> Follow<'a> {
             return Err(Attempt::Unreachable(format!("HTTP {status}")));
         }
         let body = response.bytes().await.unwrap_or_default();
-        Err(Attempt::Refused(self.server.refusal(
+        Err(Attempt::refused(self.server.refusal(
             status,
             &body,
             &format!("GET {}", self.path),
@@ -205,7 +205,7 @@ impl<'a> Follow<'a> {
             .server
             .http
             .request(reqwest::Method::GET, path)
-            .map_err(Attempt::Refused)?
+            .map_err(Attempt::refused)?
             .send()
             .await
             .map_err(|error| {
@@ -219,14 +219,14 @@ impl<'a> Follow<'a> {
             Attempt::Unreachable(self.server.http.redact(&transport_reason(&error)))
         })?;
         if !status.is_success() {
-            return Err(Attempt::Refused(self.server.refusal(
+            return Err(Attempt::refused(self.server.refusal(
                 status,
                 &body,
                 &format!("GET {path}"),
             )));
         }
         serde_json::from_slice(&body).map_err(|_| {
-            Attempt::Refused(
+            Attempt::refused(
                 self.server
                     .unexpected(&format!("GET {path}"), "invalid JSON"),
             )
@@ -273,7 +273,7 @@ impl<'a> Follow<'a> {
                         return Ok(Followed::Ended(body));
                     }
                 }
-                Err(Attempt::Refused(error)) => return Err(error),
+                Err(Attempt::Refused(error)) => return Err(*error),
                 Err(Attempt::Unreachable(why)) => {
                     if self.window.is_zero() {
                         return Err(dropped(self.server, &self.run_id, &why));
@@ -420,7 +420,7 @@ impl<'a> Follow<'a> {
             tokio::time::sleep(RECONNECT_PAUSE).await;
             let health = match self.json_attempt("/health").await {
                 Ok(health) => health,
-                Err(Attempt::Refused(error)) => return Err(error),
+                Err(Attempt::Refused(error)) => return Err(*error),
                 Err(_) => continue,
             };
             self.resume = resume_capability(&health);
@@ -430,7 +430,7 @@ impl<'a> Follow<'a> {
             let instance = started_at(health);
             match self.request().await {
                 Err(Attempt::Unreachable(_)) => continue,
-                Err(Attempt::Refused(e)) => return Err(e),
+                Err(Attempt::Refused(e)) => return Err(*e),
                 Err(Attempt::Expired) => {
                     self.gap()?;
                     return Ok(None);
@@ -526,7 +526,13 @@ enum Attempt {
     /// No answer, or one from a proxy whose server is away: try again.
     Unreachable(String),
     /// The server's answer: stop.
-    Refused(CliError),
+    Refused(Box<CliError>),
+}
+
+impl Attempt {
+    fn refused(error: CliError) -> Self {
+        Self::Refused(Box::new(error))
+    }
 }
 
 fn resume_capability(health: &Value) -> bool {

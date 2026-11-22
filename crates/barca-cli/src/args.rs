@@ -208,6 +208,8 @@ fn quick_help(name: &str, examples: &str) -> String {
 
 const GET_HELP: &str = "\
 Examples:
+  barca get total pipeline.py --cached-only          # latest completed result: disk, then store, else CacheMiss
+  barca get total pipeline.py --cached-only=local    # disk only; no store calls or computation
   BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
   barca get total                          # find `total` anywhere in the project and get it
   barca get total pipeline.py --json --fields id,status,elapsed_seconds,attempts   # timing and retries
@@ -656,6 +658,9 @@ pub(crate) enum Cli {
     /// multiple assets or split the work inside a single step before returning.
     #[command(after_help = quick_help("get", GET_HELP), after_long_help = GET_HELP, long_about = None)]
     Get {
+        /// Read completed results without execution; local excludes every store call
+        #[arg(long, num_args = 0..=1, default_missing_value = "store", require_equals = true, value_parser = ["store", "local"], conflicts_with_all = ["refresh", "refresh_all", "no_cascade", "dry_run", "batch", "queue", "allow_paused"])]
+        cached_only: Option<String>,
         /// [TARGET[,TARGET...]] [file.py|dir/ ...] — both optional: no target gets every asset
         /// and sensor; no files reads the whole project (`barca docs discovery`)
         #[arg(help = "Target(s), then optional files/directories; omit files to discover the project", long_help = None)]

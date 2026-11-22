@@ -580,7 +580,7 @@ impl TransferClient {
     }
 
     /// Wait for the fetches of `locals` (paths not being fetched are ready).
-    pub(crate) async fn await_fetches(&mut self, locals: &[PathBuf]) -> TransferReport {
+    pub async fn await_fetches(&mut self, locals: &[PathBuf]) -> TransferReport {
         let mut report = TransferReport::default();
         for local in locals {
             let Some(p) = self.fetches.remove(local) else {

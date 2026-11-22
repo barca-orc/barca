@@ -131,6 +131,43 @@ pub struct LatestSuccess {
     pub output: OutputRef,
 }
 
+/// Read the last completed artifact of each step of a node, preserving errors instead of
+/// treating a failed metadata read as absence. This is local metadata only, never a ledger.
+pub async fn cached_successes(
+    cache: &CacheReader,
+    base: &str,
+) -> Result<std::collections::BTreeMap<String, LatestSuccess>, BarcaError> {
+    let fail = |e| BarcaError::Db(format!("reading cached results: {e}"));
+    let mut rows = cache.conn().query(
+        "SELECT node_id, id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash \
+         FROM materializations WHERE status = 'success' AND artifact_path IS NOT NULL \
+         AND (node_id = ?1 OR substr(node_id, 1, length(?1) + 1) = ?1 || '[') ORDER BY id DESC",
+        [base],
+    ).await.map_err(fail)?;
+    let mut out = std::collections::BTreeMap::new();
+    while let Some(row) = rows.next().await.map_err(fail)? {
+        let node: String = row.get(0).map_err(fail)?;
+        if out.contains_key(&node) {
+            continue;
+        }
+        out.insert(
+            node,
+            LatestSuccess {
+                id: row.get(1).map_err(fail)?,
+                run_hash: row.get(2).map_err(fail)?,
+                output: OutputRef {
+                    path: row.get(3).map_err(fail)?,
+                    format: row.get(4).map_err(fail)?,
+                    size_bytes: row.get::<i64>(5).map_err(fail)? as u64,
+                    content_hash: row.get::<String>(6).ok().filter(|s| !s.is_empty()),
+                    elapsed_seconds: None,
+                },
+            },
+        );
+    }
+    Ok(out)
+}
+
 /// The latest successful materialization of `node_id` (a display id) whose artifact this run may
 /// read; `None` when it never succeeded.
 pub async fn latest_success(cache: &CacheReader, node_id: &str) -> Option<LatestSuccess> {

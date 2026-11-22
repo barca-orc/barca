@@ -9,6 +9,8 @@ The planning-pipeline fixture (#250) runs a shorter table the same way.
 Normalized, because they differ by design (the declared differences, listed in
 `barca docs server-mode`):
 
+- Cached-only `path_scope` identifies local versus server ownership; retained reference
+  directory names are unique per read and are normalized after validating the scope.
 - `root`, artifact paths and tracebacks name the server's project directory: both roots read
   `<root>`.
 - `triggered_by` is `manual` for a run typed here and `api` for a run started over HTTP.
@@ -166,6 +168,7 @@ TRIGGER = re.compile(r"\btriggered by (manual|api)\b")
 def _text(s: str, roots: list[str]) -> str:
     for root in roots:
         s = s.replace(root, "<root>")
+    s = re.sub(r"/sql-cache/cached-[^/]+/", "/sql-cache/<read>/", s)
     s = TRIGGER.sub("triggered by <trigger>", s)
     s = TIMESTAMP.sub("<t>", s)
     s = RUN_ID.sub("<run_id>", s)
@@ -177,6 +180,9 @@ def _text(s: str, roots: list[str]) -> str:
 
 
 def _value(v, roots: list[str], key: str = ""):
+    if key == "path_scope":
+        assert v in ("local", "server")
+        return "<host>"
     if key == "disk_usage" and isinstance(v, dict):
         assert set(v) == {"size_bytes", "budget_bytes", "backup_bytes", "limit_bytes"}
         assert all(
