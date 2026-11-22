@@ -321,6 +321,7 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
         }
         stores
     });
+    let has_pyproject = root.join("pyproject.toml").exists();
     command.env(
         "BARCA_DOCTOR_REQUEST",
         json!({"stores":stores, "project_root":root, "cli_version":env!("CARGO_PKG_VERSION")})
@@ -340,7 +341,9 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
                         .iter()
                         .map(|store| store.name.as_str())
                         .collect();
-                    if actual != expected || actual.len() != result.stores.len() {
+                    if result.project_version.is_some() != has_pyproject {
+                        Err("missing or unsolicited project-version check".into())
+                    } else if actual != expected || actual.len() != result.stores.len() {
                         Err("missing, duplicated or unsolicited store checks".into())
                     } else {
                         Ok(result)

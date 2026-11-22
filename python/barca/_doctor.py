@@ -118,7 +118,7 @@ def project_version(root, running):
 
     try:
         return {"ok": True, "detail": check()}
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, KeyError) as exc:
         return {"ok": False, "detail": str(exc)}
 
 
