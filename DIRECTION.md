@@ -1,6 +1,6 @@
 # Direction
 
-Last updated: 2026-11-20, after v0.46.0 (the modularity series, #1056). The pinned
+Last updated: 2026-11-22, after v0.46.2; release milestones reconciled through 0.49.0. The pinned
 [Direction issue](https://github.com/barca-orc/barca/issues/395) mirrors this file; it replaced
 the roadmap issue (#344) and the adoption tracker (#108).
 
@@ -25,21 +25,27 @@ An embedded orchestrator. You mark Python functions with `@asset`, `@sensor`, `@
 
 An issue's milestone is the release it ships in; the milestones below are the order.
 
-**0.46.1, small fixes.** The Host header check for a loopback-bound server (#998), the
-partitioned-node status fault once an asset is pinned (#1069), and the production feedback left
-unscheduled since October (#668, #671, #672, #673, #811, #814).
+**0.46.3, correctness fixes.** Batched stream deadlocks (#1100), remote and optional input
+types (#1103, #814), loaded-runner test timing (#1096), loopback Host validation (#998),
+and partition status after pinning (#1069).
+
+**0.46.4 cleanup.** Warn about older installed versions (#672) and sensor tuples that always
+report a change (#673).
 
 **0.47.0, the run lifecycle on a server ([#944](https://github.com/barca-orc/barca/issues/944)).**
-Stop and drain, restart and requeue, cancel, rerun scope and live progress (#926 to #942), with
-the breaking changes decided for it: one set of run status words (#943: `failed`, `pending`),
-the run and schedule shapes that still differ between routes and commands made one, and the
-web UI's Run doing what a plain run does (#937).
+Stop and drain, restart and requeue, cancel, rerun scope and live progress (#926 to #943),
+including consistent status words and route shapes. Also cache-only reads (#1085), first-cause
+failure summaries (#1106), worker errors (#671), and skipped scheduled ticks (#811).
 
-**0.48.0, resource bounds.** The cache size limit while runs are always active (#1054), gc on a
-large catalog (#750, #754), coordinator and inspection memory at partition scale (#655, #656).
+**0.47.1 cleanup.** Response compression, polling and key-explorer gaps (#1044), and freshness-gap follow-up (#974).
 
-**0.49.0, time outside the steps on a server.** Computed and published (#1006), the measurements
-of #951, shared in-flight steps (#654).
+**0.48.0, resource bounds.** Cache eviction while runs remain active (#1054), gc on a large
+catalog (#750, #754), coordinator and inspection memory at partition scale (#655, #656),
+and metadata trimming without starving the control API or scheduler (#1082).
+
+**0.49.0, time outside the steps on a server.** Computed and published (#1006), measurements
+(#951), shared in-flight steps (#654), scheduled-work capacity share (#1105), recovered-key
+batching (#1097), artifact measurements and a format RFC (#1104), tracing (#845), and out-of-call batch keys (#668). A new shared artifact format is outside this release's scope.
 
 RFC-0014 pipeline fuzzing is deferred, with no action on its working branch. It has no
 scheduled release. DuckDB 1.x and 2.x remain supported (`duckdb>=1.4,<3`), with CI on both.
@@ -89,12 +95,19 @@ Each release is a GitHub milestone with a due date; the milestone page is the sc
 | 0.39.5 (the 0.39 cleanup) | 2026-11-04 | No features: #799 documented (a refresh recomputes only its target's cone); 0.39.4 measured (31.7 ms trivial run) with a performance gate in the merge tier; the documents made true; one `CacheState` enum, one metadata write boundary, serve out of the embedded hot loop, the `.barca/` layout spec; per-test timeouts, Playwright and type drift in CI, isolated backup tests, Dependabot at zero critical and high | #800: #804 (#799), #810, #803, #802, #819, #817, #805, #806, #809, #808 |
 | 0.39.6 to 0.45.0 | 2026-11-05 to 2026-11-19 | The second cleanup, pins, pauses, the health map and the freshness gap, server query route, run counts and queue state; see each version's notes | [CHANGELOG.md](CHANGELOG.md) |
 | 0.46.0 | 2026-11-20 | Breaking: a command beside a running `barca serve` goes to it (`--local` runs here). The modularity series: `barca-core` dissolved into layer crates, one definition per view for the CLI and the server, the metadata lock (lock-free reads, turns, one kept connection), an IR that is not the parser's | #1056 ([#1062](https://github.com/barca-orc/barca/pull/1062)), #945, part of #1054 |
-| 0.46.1 | planned | Small fixes | #998, #1069, #668, #671 to #673, #811, #814 |
-| 0.47.0 | planned | The run lifecycle on a server; one set of status words and run shapes | #944: #926 to #943 |
-| 0.48.0 | planned | Resource bounds | #1054, #750, #754, #655, #656 |
-| 0.49.0 | planned | Time outside the steps on a server | #1006, #951, #654 |
+| 0.46.1 | 2026-11-22 | Scheduler, metadata trimming and worker-fatal recovery fixes | [Release notes](https://github.com/barca-orc/barca/releases/tag/v0.46.1) |
+| 0.46.2 | 2026-11-22 | Batched calls preserve per-key results | [Release notes](https://github.com/barca-orc/barca/releases/tag/v0.46.2) |
+| 0.46.3 | planned | Correctness fixes | #1100, #1103, #1096, #998, #1069, #814 |
+| 0.46.4 cleanup | planned | Version and sensor compatibility warnings | #672, #673 |
+| 0.47.0 | planned | Server run lifecycle and cache-only reads | #944: #926 to #943, #1085, #1106, #671, #811 |
+| 0.47.1 cleanup | planned | Polling, key exploration and freshness follow-up | #1044, #974 |
+| 0.48.0 | planned | Resource bounds | #1054, #750, #754, #655, #656, #1082 |
+| 0.49.0 | planned | Time outside the steps on a server | #1006, #951, #654, #1105, #1097, #1104, #845, #668 |
 
-An open issue with no milestone is unscheduled on purpose (for example the production feedback in #666 to #676); it is scheduled when it becomes the next most important thing.
+The milestone is the authoritative assignment. Tickets that missed an earlier milestone have
+been moved to the release where their remaining work is scheduled. #1087 remains a deployment
+validation follow-up on shipped 0.46.1. Simple tokens remain the authentication scope; roles
+and SSO (#187) are parked for the future.
 
 ### Cleanup releases
 
