@@ -1137,3 +1137,91 @@ def job(retailer: list[str]):
             barca.run("job", "pipeline.py", batch="all", server=f"http://127.0.0.1:{serve.port}")
             == expected
         )
+
+
+# ─── A batched function is never called with a single key ────────────────────
+
+# `plain` (not batched) and `scored` (batched) read the same key of `cleaned`, so both are ready
+# in one wave: a lease that starts with a `plain` key must not carry keys of a call away from it.
+GUARDED = """
+import os
+
+TYPES = HERE / "types.txt"
+STATE = HERE / "state.json"
+
+
+def _state():
+    return json.loads(STATE.read_text()) if STATE.exists() else {}
+
+
+def _count(retailer):
+    with TYPES.open("a") as f:
+        f.write(type(retailer).__name__ + "\\n")
+
+
+@asset(partitions={"retailer": partitions_from(cleaned)})
+def plain(retailer: str, cleaned: dict) -> dict:
+    return {"retailer": retailer}
+
+
+@asset(partitions={"retailer": partitions_from(cleaned)}, batch=2, retries=3)
+def scored(retailer: list[str], cleaned: dict[str, dict]) -> dict:
+    _count(retailer)
+    state = _state()
+    if state.get("die") and not (HERE / "died").exists():
+        (HERE / "died").touch()
+        os._exit(9)
+    if state.get("fail_once") and not (HERE / "failed").exists():
+        (HERE / "failed").touch()
+        return {r: Failed("once") if r == retailer[0] else {"r": r} for r in retailer}
+    return {r: {"r": r, "n": cleaned[r]["amount"]} for r in retailer}
+
+
+@asset(inputs={"p": collect(plain), "s": collect(scored)})
+def both(p: list, s: list) -> int:
+    return len(p) + len(s)
+"""
+
+
+def types_seen(project: Path) -> list[str]:
+    path = project / "types.txt"
+    return path.read_text().split() if path.exists() else []
+
+
+def guarded(project: Path, state: dict) -> None:
+    write(project, GUARDED)
+    (project / "state.json").write_text(json.dumps(state))
+
+
+def test_a_batched_function_never_gets_a_single_key_across_retry_kill_and_eviction(keys5):
+    guarded(keys5, {})
+    # Many keys, cheap steps: the leases are sized to take several of the ready items, and a
+    # warm second run knows how cheap they are.
+    set_versions(keys5, {f"r{i}": "a" for i in range(1, 301)})
+    get(keys5, "both")
+    set_versions(keys5, {f"r{i}": "b" for i in range(1, 301)})
+    res = get(keys5, "both")
+    assert step(res, "scored")["partitions"]["will_run"] == 300
+
+    # A retry of failed keys.
+    guarded(keys5, {"fail_once": True})
+    set_versions(keys5, {f"r{i}": "c" for i in range(1, 301)})
+    assert get(keys5, "both")["final_output"]
+
+    # A worker killed in the middle of a call.
+    guarded(keys5, {"die": True})
+    set_versions(keys5, {f"r{i}": "d" for i in range(1, 301)})
+    assert get(keys5, "both")["final_output"]
+
+    # An input evicted from disk: its node is computed again, then the batched node runs.
+    guarded(keys5, {})
+    cleaned_out = get(keys5, "cleaned")
+    for pointer in cleaned_out["final_output"].values():
+        (keys5 / pointer["_barca_artifact"]["path"]).unlink()
+    set_versions(keys5, {f"r{i}": "e" for i in range(1, 301)})
+    res = get(keys5, "both")
+    assert step(res, "scored")["partitions"]["will_run"] == 300
+
+    seen = types_seen(keys5)
+    assert seen, "the batched function never ran"
+    assert set(seen) == {"list"}, f"called with a single key: {seen}"

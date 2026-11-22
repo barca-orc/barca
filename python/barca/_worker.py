@@ -16,6 +16,7 @@ by `barca/_failure.py`, and results and errors leave through `barca/_runtime.py`
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import sys
@@ -771,6 +772,10 @@ class _Run:
                 self.cleanup()
 
 
+# Numbers the calls a worker makes of a batched key that arrived with none.
+_ALONE = itertools.count(1)
+
+
 def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactLRU) -> bool:
     """Execute one step in daemon mode and emit its result or error.
 
@@ -778,7 +783,19 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
     with an exception that left the interpreter sound), False when it must stop. Socket
     errors raised while emitting propagate to the caller (the connection is gone — exit the
     loop).
+
+    A step of a batched node (`batched`) that arrives with no call is run as a call of its one
+    key: that function takes a list of keys, never a single one.
     """
+    if step.get("batched"):
+        call = {"id": f"w{os.getpid()}-{next(_ALONE)}"}
+        print(
+            f"[barca] warning: {step.get('node_id')} of a batched node arrived with no call; "
+            f"running it as a call of its one key ({call['id']})",
+            file=sys.stderr,
+            flush=True,
+        )
+        return _run_daemon_call([step], call, modules, art_dir, lru)
     node_id = step.get("node_id", "unknown")
     # Set when this step is a parallel() branch whose return value could not be written.
     unwritable = False

@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- A batched node (`batch=`) is never called with a single key. A worker lease that started with a step of another node could take the first keys of a batched call into it: the lease was sent without the call, so the function got a bare key where it takes a list, and those keys were written empty with no batch id while the rest of the call ran normally. A lease now never mixes keys of a call with other steps. As a second guard, every key of a batched node that is loaded without a planned call gets a call of its own (and the run warns that the plan gave it none), and a worker that is handed a step of a batched node with no call runs it as a call of its one key.
+
 ## 0.46.1 (2026-11-21)
 
 ### Bug Fixes

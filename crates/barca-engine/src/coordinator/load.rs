@@ -41,6 +41,8 @@ impl Coordinator {
         if let Some(&(call, position)) = self.call_assign.get(&step_id.display()) {
             self.call_of.insert(id, call);
             self.calls[call].members[position] = Some(id);
+        } else {
+            self.call_for_unassigned(id, &step_id);
         }
         let item = Item {
             id,
