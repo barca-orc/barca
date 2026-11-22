@@ -95,7 +95,7 @@ export function liveGraphState(status: StatusKind): GraphState {
 
 /** Whether the box shows run work: the run's colours and pulse, not a resting state. */
 export function isLive(state: GraphState): boolean {
-  return state.kind === 'run' && (state.status === 'running' || state.status === 'queued')
+  return state.kind === 'run' && (state.status === 'running' || state.status === 'pending')
 }
 
 /** A node's box from its state, or the not-loaded box when the state is missing. */

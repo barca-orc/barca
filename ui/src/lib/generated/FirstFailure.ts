@@ -7,7 +7,7 @@ export type FirstFailure = {
 /**
  * The step's node id, with its partition key when it has one.
  */
-node_id: string,
+node: string,
 /**
  * `ErrorType: message`, the message's first line only.
  */

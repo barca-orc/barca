@@ -12,7 +12,7 @@ pub async fn insert_queued(
     queued_at: &str,
 ) -> Result<u64, libsql::Error> {
     conn.execute(
-        "INSERT INTO run_queue (run_id, seq, state, spec, queued_at) VALUES (?1, ?2, 'queued', ?3, ?4)",
+        "INSERT INTO run_queue (run_id, seq, state, spec, queued_at) VALUES (?1, ?2, 'pending', ?3, ?4)",
         [
             run_id.to_string(),
             seq.to_string(),
@@ -26,7 +26,7 @@ pub async fn insert_queued(
 /// Mark a queued `run_id` running; one in another state keeps it.
 pub async fn mark_running(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
     conn.execute(
-        "UPDATE run_queue SET state = 'running' WHERE run_id = ?1 AND state = 'queued'",
+        "UPDATE run_queue SET state = 'running' WHERE run_id = ?1 AND state IN ('pending', 'queued')",
         [run_id],
     )
     .await
@@ -47,7 +47,7 @@ pub async fn delete(conn: &Connection, run_id: &str) -> Result<u64, libsql::Erro
 
 pub async fn mark_queued(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
     conn.execute(
-        "UPDATE run_queue SET state = 'queued' WHERE run_id = ?1",
+        "UPDATE run_queue SET state = 'pending' WHERE run_id = ?1",
         [run_id],
     )
     .await

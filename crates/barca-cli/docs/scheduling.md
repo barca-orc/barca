@@ -413,7 +413,7 @@ in the tz database. Any other value is a usage error: the server exits 2 and nam
 `barca list` talks to no server and does not know its `--timezone`. Its next fire times (the
 `NEXT FIRE (LOCAL TIME)` column, `next_fire` in JSON) are the next match of the cron expression
 in the local time of the machine `list` runs on. For a server started with another zone, ask the
-server: `GET /schedule` returns `next_fire` as unix epoch seconds, computed in the server's zone.
+server: `GET /schedule` returns `next_fire` as RFC 3339 UTC, computed in the server's zone.
 
 ```bash
 curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "next_fire": 1791522000, "failures": 0, "failing": false, ...}]

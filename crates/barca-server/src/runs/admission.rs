@@ -284,12 +284,12 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
     if let Some(spec) = &spec {
         // The tick that started it ends as the run's row does: `interrupted`, or `error` for
         // a run that never wrote one.
-        let status = if unrecorded { "error" } else { "interrupted" };
+        let status = "interrupted";
         crate::runs::record_tick_finished(state, run_id, spec, status, None).await;
     }
     if unrecorded && let Some(spec) = spec {
         let outcome = barca_service::outcome::Outcome::ended(
-            barca_service::outcome::OutcomeStatus::Error,
+            barca_service::outcome::OutcomeStatus::Interrupted,
             &barca_service::envelope::ErrorEnvelope::from_prose(
                 barca_service::envelope::ErrorKind::Infra,
                 "run interrupted: the server was killed before the run recorded itself\nRun it \
@@ -311,7 +311,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
                 target: target.as_deref(),
                 trigger: &spec.trigger,
             },
-            "error",
+            "interrupted",
             outcome.text(),
         )
         .await;

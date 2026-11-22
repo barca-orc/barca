@@ -45,7 +45,7 @@ pub struct JobSkips {
     pub skip_reason: Option<SkipReason>,
 }
 
-/// One entry of `GET /schedule`. Times are unix seconds.
+/// One entry of `GET /schedule`. Times are RFC 3339 UTC.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ScheduleJob {
@@ -61,34 +61,29 @@ pub struct ScheduleJob {
     pub id: String,
     pub kind: NodeKind,
     /// The newest tick the scheduler fired.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub last_fired: Option<i64>,
+    pub last_fired: Option<String>,
     /// `last_run_id` under its older name.
     pub last_run: Option<String>,
     /// The run that tick started.
     pub last_run_id: Option<String>,
     /// When a due tick was last skipped; `null` after a restart.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub last_skipped: Option<i64>,
+    pub last_skipped: Option<String>,
     /// That run's status, in the run list's words (`pending` while it waits in the run queue).
     pub last_status: Option<String>,
     /// The server's one answer to "is it late" (`barca docs scheduling`).
     #[serde(default)]
     pub late: bool,
     /// The first slot after `last_fired` that has passed; `null` while on time or paused.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub late_since: Option<i64>,
+    pub late_since: Option<String>,
     /// `Schedule(cron, max_failures=N)`, default 5.
     #[serde(default)]
     pub max_failures: u32,
     /// The next slot, in the zone the scheduler evaluates cron in.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub next_fire: Option<i64>,
+    pub next_fire: Option<String>,
     #[serde(default)]
     pub paused: bool,
     /// When a timed pause ends; `null` for an open-ended pause.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub paused_until: Option<i64>,
+    pub paused_until: Option<String>,
     /// Its typical queue wait exceeds its interval (#962).
     #[serde(default)]
     pub queue_bound: bool,
@@ -119,9 +114,8 @@ pub enum SchedulePauseAnswer {
     Pause {
         id: String,
         paused: bool,
-        /// Unix seconds; `null` for an open-ended pause.
-        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-        paused_until: Option<i64>,
+        /// RFC 3339 UTC; `null` for an open-ended pause.
+        paused_until: Option<String>,
     },
 }
 
@@ -145,17 +139,17 @@ pub fn schedule_jobs(
                 id: job.id.clone(),
                 cron: job.cron_str.clone(),
                 kind: job.kind,
-                next_fire: standing.next_fire,
-                last_fired: standing.last_fired,
+                next_fire: standing.next_fire.map(crate::time::rfc3339),
+                last_fired: standing.last_fired.map(crate::time::rfc3339),
                 last_run_id: standing.last_run_id.clone(),
                 last_run: standing.last_run_id.clone(),
                 last_status: standing.last_status.clone(),
                 late: standing.late,
-                late_since: standing.late_since,
+                late_since: standing.late_since.map(crate::time::rfc3339),
                 typical_queue_wait_seconds: block.typical_queue_wait_seconds,
                 typical_run_seconds: block.typical_run_seconds,
                 queue_bound: standing.queue_bound,
-                last_skipped: skip.and_then(|s| s.last_skipped),
+                last_skipped: skip.and_then(|s| s.last_skipped).map(crate::time::rfc3339),
                 skipped_for: skip.and_then(|s| s.skipped_for.clone()),
                 skip_reason: skip.and_then(|s| s.skip_reason),
                 paused: block.paused,
@@ -163,7 +157,8 @@ pub fn schedule_jobs(
                     .pauses
                     .get(&job.id)
                     .filter(|_| block.paused)
-                    .and_then(|p| p.until),
+                    .and_then(|p| p.until)
+                    .map(crate::time::rfc3339),
                 failures: block.failures,
                 max_failures: block.max_failures,
                 failing: block.failing,

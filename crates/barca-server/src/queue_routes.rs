@@ -231,7 +231,8 @@ mod tests {
             assert!(next.runs.queue.waiting_ids().is_empty());
             assert!(run_queue::list(&db).await.unwrap().is_empty());
             let record = db::get_run(&db, &id).await.unwrap().unwrap();
-            assert_eq!(record.status, "error");
+            assert_eq!(record.status, "interrupted");
+            assert!(record.reason.as_deref().is_some_and(|reason| !reason.is_empty()));
         });
     }
 

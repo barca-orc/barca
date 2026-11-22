@@ -148,9 +148,9 @@ fn rows(
             n.schedule = schedule.map(|s| s.block.clone());
             NodeState {
                 durations: facts.durations.get(&n.id).cloned(),
-                next_run: slot.and_then(|s| s.next_fire),
-                prev_run: slot.and_then(|s| s.prev_fire),
-                late_since: slot.and_then(|s| s.late_since),
+                next_run: slot.and_then(|s| s.next_fire).map(barca_service::time::rfc3339),
+                prev_run: slot.and_then(|s| s.prev_fire).map(barca_service::time::rfc3339),
+                late_since: slot.and_then(|s| s.late_since).map(barca_service::time::rfc3339),
                 running: running.remove(&n.id),
                 status: n,
                 last_success_at: age.last_success_at,

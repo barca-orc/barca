@@ -125,9 +125,6 @@ After every minor, a `0.x.1 cleanup` milestone: one week, no features. The check
 
 Design questions nobody has answered yet, the issue each blocks, and the release it must be decided by. Proposals in issue status lines are proposals until they appear under "Decided".
 
-- Whether `GET /schedule` and the `schedule` block of `GET /state` settle on RFC 3339 times, and
-  whether a run in a list takes `barca history`'s key names (`run_id`, `failure`). Proposed with
-  #943; blocks 0.47.0.
 - `[cache] max_size`: a hard cap or a target, and whether a run is refused or delayed when gc
   cannot make room (#1054). Blocks 0.48.0.
 - What a run with an owed sink reports, and when a server's ledger tells other machines of a
@@ -171,6 +168,9 @@ name and meaning in the CLI and the API. The web UI's Run does the default, offe
 refresh as its own action, and has "Including Manual", off by default.
 
 **Run status words (2026-11-19, #943).** `failed`, not `error`; `pending`, not `queued`.
+
+**Run shapes (2026-11-22, #943).** Schedule and run timestamps use RFC 3339 UTC. Run lists
+use `run_id` and `failure`; detail uses `{run, steps, steps_page, explanation}` on every surface.
 
 **The 0.39 cleanup (2026-11-04, #800).** The cleanup weeks after 0.36, 0.37, 0.38 and 0.39 were
 skipped: four minors and six patches shipped in five days with no checklist pass. 0.39.5 is the

@@ -8,7 +8,7 @@ import { served } from './testdata/served'
 const index = paletteIndex(
   [{ id: 'billing.py:invoices', kind: 'asset' }, { id: 'billing.py:check__invoices', kind: 'task' }, { id: 'crm.py:poll', kind: 'sensor' }],
   [{ id: 'group:billing.py:raw', name: 'Raw' }],
-  [{ id: 'run-1', target: 'billing.py', status: 'failed' }],
+  [{ run_id: 'run-1', target: 'billing.py', status: 'failed' }],
 )
 
 describe('paletteIndex', () => {
@@ -37,7 +37,7 @@ describe('a result\'s state', () => {
     // The project's rollup entries: the group's, and the file of the nodes in no group.
     entries: new Map<string, GroupScope>([['group:a.py:raw', groupScope({}, 2)], ['file:b.py', groupScope({ failing: 1 })]]),
   }
-  const withStates = paletteIndex(assets, [{ id: 'group:a.py:raw', name: 'Raw' }], [{ id: 'run-9', target: null, status: 'failed' }], states)
+  const withStates = paletteIndex(assets, [{ id: 'group:a.py:raw', name: 'Raw' }], [{ run_id: 'run-9', target: null, status: 'failed' }], states)
   const of = (key: string) => withStates.find((i) => i.key === key)?.state
 
   it('draws each node, group, file and run with its glyph', () => {

@@ -183,7 +183,7 @@ export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, Runs
 /** Whether the recovery action should offer to re-run failed steps. */
 export function rerunLabel(status: string): string | null {
   const known = parseRunStatus(status)
-  if (known === 'failed' || known === 'error') return 'Re-run failed'
+  if (known === 'failed') return 'Re-run failed'
   if (known === 'cancelled' || known === 'interrupted') return 'Re-run'
   return null
 }

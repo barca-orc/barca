@@ -11,7 +11,7 @@ Options:
           After verifying a run stopped, record it as interrupted; refuses a proven live owner
 
       --status <STATUS[,...]>
-          Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted; not_successful is every one but success and running
+          Only runs with one of these statuses (comma-separated): success, failed, cancelled, pending, running, interrupted; not_successful selects failed, cancelled and interrupted
 
       --target <NAME>
           Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out
@@ -49,7 +49,7 @@ Options:
       --fields <FIELDS>
           Select JSON fields as a comma-separated list; implies --json
 
-          [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure, failed_node, error, principal, trigger_reason, cancellation, line, now]
+          [possible values: run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, attempts, started_at, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, client_run_id, failure, reason, failed_node, error, principal, trigger_reason, cancellation, line, now]
 
       --env <ENV>
           Use a separate cache and history for this environment

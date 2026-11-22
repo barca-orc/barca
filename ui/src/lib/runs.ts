@@ -6,7 +6,7 @@ import { shortName } from './graph'
 import type { ErrorEnvelope, RunNodeSummary, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
 const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
-  'pending', 'running', 'success', 'failed', 'cancelled', 'error', 'interrupted',
+  'pending', 'running', 'success', 'failed', 'cancelled', 'interrupted',
 ]
 
 /**
@@ -15,6 +15,7 @@ const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
  * older spellings of `success`.
  */
 export function parseRunStatus(status: string): RunViewStatus | null {
+  if (status === 'error') return 'failed'
   if (status === 'complete' || status === 'ran') return 'success'
   return (RUN_VIEW_STATUSES as readonly string[]).includes(status) ? (status as RunViewStatus) : null
 }
@@ -27,10 +28,10 @@ export function runStatus(status: string): StatusKind {
   const known = parseRunStatus(status)
   if (known === null) return 'skipped'
   return match<RunViewStatus, StatusKind>(known)
-    .with('pending', () => 'queued')
+    .with('pending', () => 'pending')
     .with('running', () => 'running')
     .with('success', () => 'success')
-    .with('failed', 'error', () => 'failed')
+    .with('failed', () => 'failed')
     // Stopped by the operator or a server shutdown: inert, not an error.
     .with('cancelled', 'interrupted', () => 'cancelled')
     .exhaustive()
@@ -56,7 +57,7 @@ export function runIsWaiting(status: string): boolean {
 
 /** The status of a tick's run in the page's words: a run that waits for a run slot is `queued`. */
 export function lastStatusLabel(status: string): string {
-  return status === 'pending' ? 'queued' : status
+  return status === 'pending' ? 'pending' : status
 }
 
 /** The error envelope of an outcome that is not a success; null for a success or no outcome. */
@@ -101,7 +102,7 @@ export function runNodeOutcome(n: RunNodeSummary): { kind: StatusKind; label: st
 
 export function runLabel(status: string): string {
   const known = parseRunStatus(status)
-  return known === 'pending' ? 'queued' : known ?? status
+  return known === 'pending' ? 'pending' : known ?? status
 }
 
 /** The runs list's poll: every 2s while a listed run is live (its status changes), else every 10s. */

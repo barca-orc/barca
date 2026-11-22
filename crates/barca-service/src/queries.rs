@@ -118,6 +118,40 @@ pub async fn history_at(
 ) -> Result<(Vec<db::RunRecord>, usize), BarcaError> {
     let kept = filter.run_filter();
     let total = db::count_runs_filtered(db_path, &kept).await?;
+    let pending = pending_runs(db_path).await?;
+    if !pending.is_empty() {
+        // Fill only the requested page, plus space for rows replaced by queued requests.
+        // A long history must not become an unbounded read when one request waits.
+        let read_limit = if filter.target.is_some() {
+            total
+        } else {
+            limit.unwrap_or(total).saturating_add(pending.len())
+        };
+        let mut runs = db::get_runs_filtered(db_path, read_limit, &kept).await?;
+        let pending_ids: std::collections::HashSet<_> =
+            pending.iter().map(|r| r.run_id.as_str()).collect();
+        runs.retain(|r| !pending_ids.contains(r.run_id.as_str()));
+        let mut total = total;
+        for pending in pending {
+            if let Some(old) = db::get_run(db_path, &pending.run_id).await?
+                && filter.matches(&old)
+            {
+                total = total.saturating_sub(1);
+            }
+            if filter.matches(&pending) {
+                total += 1;
+                runs.push(pending);
+            }
+        }
+        runs.retain(|r| filter.names(r));
+        if filter.target.is_some() {
+            total = runs.len();
+        }
+        total = total.max(runs.len());
+        runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        runs.truncate(limit.unwrap_or(total));
+        return Ok((runs, total));
+    }
     if filter.target.is_none() {
         let runs = db::get_runs_filtered(db_path, limit.unwrap_or(total), &kept).await?;
         // Counted, then listed, each at its own moment beside a writer: a run recorded
@@ -130,6 +164,40 @@ pub async fn history_at(
     let total = runs.len();
     runs.truncate(limit.unwrap_or(total));
     Ok((runs, total))
+}
+
+/// Accepted requests waiting for execution, including after a restart.
+pub(crate) async fn pending_runs(path: &str) -> Result<Vec<db::RunRecord>, BarcaError> {
+    #[derive(serde::Deserialize)]
+    struct Request {
+        command: String,
+        targets: Vec<String>,
+        files: Vec<String>,
+        trigger: crate::trigger::Trigger,
+    }
+    let mut records = Vec::new();
+    for row in crate::run_queue::list(path).await? {
+        if row.state != crate::run_queue::QueueState::Queued {
+            continue;
+        }
+        let request: Request = serde_json::from_str(&row.spec)
+            .map_err(|e| BarcaError::Db(format!("invalid queued request: {e}")))?;
+        records.push(db::RunRecord {
+            run_id: row.run_id,
+            status: "pending".into(),
+            command: request.command,
+            target: (!request.targets.is_empty()).then(|| request.targets.join(",")),
+            files: request.files,
+            started_at: crate::time::sql_datetime_rfc3339(&row.queued_at),
+            triggered_by: Some(request.trigger.triggered_by),
+            scheduled_at: request.trigger.scheduled_at,
+            schedule_id: request.trigger.schedule_id,
+            principal: request.trigger.principal,
+            trigger_reason: request.trigger.reason,
+            ..Default::default()
+        });
+    }
+    Ok(records)
 }
 
 /// The runs started in the last 24 hours that `filter` keeps, hour by hour, in this
@@ -153,7 +221,33 @@ pub async fn activity_at(
     let since = crate::run_list::activity_since(now)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
-    let facts = db::run_activity(db_path, &since, &filter.run_filter()).await?;
+    let mut facts = db::run_activity(db_path, &since, &filter.run_filter()).await?;
+    for pending in pending_runs(db_path).await? {
+        if !filter.names(&pending) {
+            continue;
+        }
+        if let Some(search) = &filter.search
+            && ![
+                pending.run_id.as_str(),
+                pending.target.as_deref().unwrap_or(""),
+            ]
+            .iter()
+            .any(|s| s.to_lowercase().contains(&search.to_lowercase()))
+        {
+            continue;
+        }
+        facts.counts.push(db::ActivityRow {
+            hour: pending
+                .started_at
+                .chars()
+                .take(13)
+                .collect::<String>()
+                .replace('T', " "),
+            status: "pending".into(),
+            triggered_by: pending.triggered_by,
+            runs: 1,
+        });
+    }
     Ok(crate::run_list::run_activity(
         &facts,
         &crate::run_list::ActivityFilter::of(filter),

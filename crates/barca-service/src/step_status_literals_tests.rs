@@ -12,6 +12,7 @@ const WORDS: [&str; 5] = ["cached", "ran", "partial", "skipped", "blocked"];
 /// Files that may spell one of [`WORDS`] as a bare literal, each with why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     ("step_status.rs", "*", "the vocabulary"),
+    ("db/runs.rs", "skipped", "a task-only terminal run status, independent of step status"),
     (
         "cache_state.rs",
         "*",

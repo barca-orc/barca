@@ -66,6 +66,7 @@ pub const RUN_COLUMNS: &[(&str, &str)] = &[
     ("target", V),
     ("job", V),
     ("status", V),
+    ("reason", V),
     ("steps_total", I),
     ("steps_executed", I),
     ("steps_cached", I),
@@ -698,7 +699,7 @@ mod tests {
         let rows = table.rows.unwrap();
         assert_eq!(sorted_keys(&rows[0]), sorted_columns(QUEUE_COLUMNS));
         assert_eq!(rows[0]["triggered_by"], "schedule");
-        assert_eq!(rows[0]["state"], "queued");
+        assert_eq!(rows[0]["state"], "pending");
     }
 
     #[test]

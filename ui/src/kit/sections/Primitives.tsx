@@ -138,7 +138,7 @@ const [query, setQuery] = useState('')
 
     <Spec title="CommandPaletteView" note="⌘K: results with their state's glyph, failing first among equal matches; before states load; nothing found.">
       {[
-        { label: 'results', query: 'orders', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: nodeByState.cached.id, kind: 'asset' }, { id: failedNode.id, kind: 'asset' }], [], [{ id: 'orders-run', target: failedNode.id, status: 'failed' }], { byId: new Map([[nodeByState.cached.id, nodeByState.cached], [failedNode.id, failedNode]]), entries: new Map() })], 'orders') },
+        { label: 'results', query: 'orders', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: nodeByState.cached.id, kind: 'asset' }, { id: failedNode.id, kind: 'asset' }], [], [{ run_id: 'orders-run', target: failedNode.id, status: 'failed' }], { byId: new Map([[nodeByState.cached.id, nodeByState.cached], [failedNode.id, failedNode]]), entries: new Map() })], 'orders') },
         { label: 'states not loaded', query: 'inv', items: searchPalette([...paletteActions('Run billing.py (505 assets, 1 sensor)', true), ...paletteIndex([{ id: 'billing.py:invoices_00', kind: 'asset' }, { id: 'billing.py:check__invoices_00', kind: 'task' }], [], [])], 'inv') },
         { label: 'nothing found', query: 'zzz', items: [] },
       ].map((v) => (

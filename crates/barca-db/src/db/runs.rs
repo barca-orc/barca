@@ -67,6 +67,8 @@ pub struct RunRecord {
     #[serde(default)]
     pub job: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub reason: Option<String>,
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
     pub steps_cached: i64,
@@ -115,6 +117,47 @@ pub struct RunRecord {
     /// and for a run that executed nothing. Experimental.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_reasons: Option<barca_model::run_explain::PlanReasons>,
+}
+
+/// Older database rows used `error` for a failure outside a step.
+pub fn canonical_status(status: &str) -> &str {
+    if status == "error" { "failed" } else { status }
+}
+
+/// Every terminal non-success has a reason, including legacy rows without diagnostics.
+/// Fallback wording explicitly avoids claiming a cause the old record did not retain.
+pub fn terminal_reason(
+    status: &str,
+    recorded: Option<&str>,
+    failure: Option<&str>,
+    cancellation: Option<&barca_model::run_explain::Cancellation>,
+) -> Option<String> {
+    if matches!(status, "pending" | "running" | "success") {
+        return None;
+    }
+    recorded
+        .or(failure)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            Some(
+                match status {
+                    "interrupted" => "Execution stopped before recording completion",
+                    "cancelled" => match cancellation.map(|c| c.by) {
+                        Some(barca_model::run_explain::CancelledBy::Request) => {
+                            "Cancelled by request"
+                        }
+                        Some(barca_model::run_explain::CancelledBy::Shutdown) => {
+                            "Cancelled by server shutdown"
+                        }
+                        None => "Execution was cancelled; no further reason was recorded",
+                    },
+                    "skipped" => "Task skipped; no further reason was recorded",
+                    _ => "Execution failed; no further reason was recorded",
+                }
+                .to_string(),
+            )
+        })
 }
 
 /// A recorded step error as (type, message, traceback). A worker reports a Python exception as
@@ -337,7 +380,7 @@ pub async fn record_unstarted_run(
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, '')) ON CONFLICT(run_id) DO NOTHING",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason, terminal_reason) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), json_extract(?9, '$.envelope.error')) ON CONFLICT(run_id) DO NOTHING",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -369,7 +412,7 @@ pub async fn set_run_outcome(
     let (_db, conn) = open_conn(db_path).await?;
     let changed = conn
         .execute(
-            "UPDATE runs SET outcome_json = ?2, status = CASE WHEN status = 'running' THEN ?3 ELSE status END, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
+            "UPDATE runs SET terminal_reason = json_extract(?2, '$.envelope.error'), outcome_json = ?2, status = CASE WHEN status = 'running' THEN ?3 ELSE status END, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
             [
                 run_id.to_string(),
                 outcome_json.to_string(),
@@ -394,7 +437,7 @@ pub async fn replace_run_outcome(
     let (_db, conn) = open_conn(db_path).await?;
     let changed = conn
         .execute(
-            "UPDATE runs SET outcome_json = ?2, status = ?3, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
+            "UPDATE runs SET terminal_reason = json_extract(?2, '$.envelope.error'), outcome_json = ?2, status = ?3, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
             [
                 run_id.to_string(),
                 outcome_json.to_string(),
@@ -684,6 +727,16 @@ async fn read_runs(
     } else {
         "NULL, NULL, NULL, NULL"
     };
+    let reason = if has_column(&conn, "runs", "terminal_reason").await? {
+        "terminal_reason"
+    } else {
+        "NULL"
+    };
+    let outcome_reason = if has_column(&conn, "runs", "outcome_json").await? {
+        "CASE WHEN json_valid(outcome_json) THEN json_extract(outcome_json, '$.envelope.error') END"
+    } else {
+        "NULL"
+    };
     let retries = if run_id.is_none() || !(names.contains("run_id") && names.contains("attempts")) {
         "NULL"
     } else if has_index(&conn, "idx_mat_attempts").await? {
@@ -717,7 +770,7 @@ async fn read_runs(
     };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries}, COALESCE({reason}, {outcome_reason}) FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -732,7 +785,7 @@ async fn read_runs(
         let status = if interrupted.contains(&run_id) {
             "interrupted".to_string()
         } else {
-            row.get::<String>(4).unwrap_or_default()
+            canonical_status(&row.get::<String>(4).unwrap_or_default()).to_string()
         };
         records.push(RunRecord {
             run_id,
@@ -742,16 +795,32 @@ async fn read_runs(
                 let t = row.get::<String>(3).unwrap_or_default();
                 if t.is_empty() { None } else { Some(t) }
             },
+            reason: terminal_reason(
+                &status,
+                row.get::<String>(24).ok().as_deref(),
+                row.get::<String>(17)
+                    .ok()
+                    .and_then(|raw| failure_of(&raw))
+                    .as_ref()
+                    .map(|f| f.error.as_str()),
+                None,
+            ),
             status,
             steps_total: row.get::<i64>(5).ok(),
             steps_executed: row.get::<i64>(6).unwrap_or(0),
             steps_cached: row.get::<i64>(7).unwrap_or(0),
             steps_failed: row.get::<i64>(18).ok(),
             attempts: row.get::<i64>(11).ok(),
-            started_at: row.get::<String>(8).unwrap_or_default(),
+            started_at: barca_model::time::sql_datetime_rfc3339(
+                &row.get::<String>(8).unwrap_or_default(),
+            ),
             finished_at: {
                 let t = row.get::<String>(9).unwrap_or_default();
-                if t.is_empty() { None } else { Some(t) }
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(barca_model::time::sql_datetime_rfc3339(&t))
+                }
             },
             elapsed_seconds: row.get::<f64>(10).ok(),
             triggered_by: row
@@ -905,7 +974,7 @@ pub async fn run_activity(
     while let Some(row) = rows.next().await.map_err(failed)? {
         facts.counts.push(ActivityRow {
             hour: row.get::<String>(0).unwrap_or_default(),
-            status: row.get::<String>(1).unwrap_or_default(),
+            status: canonical_status(&row.get::<String>(1).unwrap_or_default()).to_string(),
             triggered_by: parsed(row.get::<String>(2).ok()),
             runs: row.get::<i64>(3).unwrap_or(0).max(0) as usize,
         });
@@ -924,7 +993,7 @@ pub async fn run_activity(
     while let Some(row) = rows.next().await.map_err(failed)? {
         facts.durations.push(ActivityDuration {
             hour: row.get::<String>(0).unwrap_or_default(),
-            status: row.get::<String>(1).unwrap_or_default(),
+            status: canonical_status(&row.get::<String>(1).unwrap_or_default()).to_string(),
             triggered_by: parsed(row.get::<String>(2).ok()),
             seconds: row.get::<f64>(3).unwrap_or(0.0),
         });
@@ -954,7 +1023,7 @@ pub async fn run_activity(
             row.get::<i64>(4).unwrap_or(0),
             ActivityFailure {
                 hour: row.get::<String>(0).unwrap_or_default(),
-                status: row.get::<String>(1).unwrap_or_default(),
+                status: canonical_status(&row.get::<String>(1).unwrap_or_default()).to_string(),
                 triggered_by: parsed(row.get::<String>(2).ok()),
                 failure: row.get::<String>(3).ok().and_then(|raw| failure_of(&raw)),
             },

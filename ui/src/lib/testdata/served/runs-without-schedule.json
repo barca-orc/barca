@@ -4,9 +4,9 @@
       "at": "2026-11-16T15:00:00Z",
       "by_status": {
         "cancelled": 0,
-        "error": 0,
         "failed": 0,
         "interrupted": 0,
+        "pending": 1,
         "running": 0,
         "success": 5
       },
@@ -14,15 +14,15 @@
         "api": 0,
         "client": 0,
         "manual": 0,
-        "schedule": 5,
+        "schedule": 6,
         "unknown": 0
       },
       "failure": null,
-      "in_progress": 0,
+      "in_progress": 1,
       "median_seconds": 0.5,
       "not_successful": 0,
       "ok": 5,
-      "runs": 5,
+      "runs": 6,
       "until": "2026-11-17T15:00:00Z"
     },
     "hours": [
@@ -30,9 +30,9 @@
         "at": "2026-11-16T15:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -55,9 +55,9 @@
         "at": "2026-11-16T16:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -80,9 +80,9 @@
         "at": "2026-11-16T17:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -105,9 +105,9 @@
         "at": "2026-11-16T18:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -130,9 +130,9 @@
         "at": "2026-11-16T19:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -155,9 +155,9 @@
         "at": "2026-11-16T20:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -180,9 +180,9 @@
         "at": "2026-11-16T21:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -205,9 +205,9 @@
         "at": "2026-11-16T22:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -230,9 +230,9 @@
         "at": "2026-11-16T23:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -255,9 +255,9 @@
         "at": "2026-11-17T00:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 1,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -283,9 +283,9 @@
         "at": "2026-11-17T01:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -308,9 +308,9 @@
         "at": "2026-11-17T02:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 1,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -336,9 +336,9 @@
         "at": "2026-11-17T03:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -361,9 +361,9 @@
         "at": "2026-11-17T04:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -386,9 +386,9 @@
         "at": "2026-11-17T05:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -411,9 +411,9 @@
         "at": "2026-11-17T06:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -436,9 +436,9 @@
         "at": "2026-11-17T07:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -461,9 +461,9 @@
         "at": "2026-11-17T08:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -486,9 +486,9 @@
         "at": "2026-11-17T09:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -511,9 +511,9 @@
         "at": "2026-11-17T10:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -536,9 +536,9 @@
         "at": "2026-11-17T11:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -561,9 +561,9 @@
         "at": "2026-11-17T12:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 0,
           "running": 0,
           "success": 0
         },
@@ -586,9 +586,9 @@
         "at": "2026-11-17T13:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 1,
           "interrupted": 0,
+          "pending": 0,
           "running": 1,
           "success": 0
         },
@@ -614,25 +614,25 @@
         "at": "2026-11-17T14:00:00Z",
         "by_status": {
           "cancelled": 0,
-          "error": 0,
           "failed": 0,
           "interrupted": 0,
+          "pending": 1,
           "running": 0,
           "success": 0
         },
         "by_trigger": {
-          "api": 0,
+          "api": 1,
           "client": 0,
           "manual": 0,
           "schedule": 0,
           "unknown": 0
         },
         "failure": null,
-        "in_progress": 0,
+        "in_progress": 1,
         "median_seconds": null,
         "not_successful": 0,
         "ok": 0,
-        "runs": 0,
+        "runs": 1,
         "until": "2026-11-17T15:00:00Z"
       }
     ],
@@ -642,19 +642,19 @@
     "search": null,
     "since": "2026-11-16T15:00:00Z",
     "statuses": [],
-    "summary": "4 runs in the last 24 hours · 3 not successful · 1 in progress · median 0.9s · 1 api, 3 manual",
+    "summary": "5 runs in the last 24 hours · 3 not successful · 2 in progress · median 0.9s · 2 api, 3 manual",
     "total": {
       "at": "2026-11-16T15:00:00Z",
       "by_status": {
         "cancelled": 0,
-        "error": 0,
         "failed": 3,
         "interrupted": 0,
+        "pending": 1,
         "running": 1,
         "success": 0
       },
       "by_trigger": {
-        "api": 1,
+        "api": 2,
         "client": 0,
         "manual": 3,
         "schedule": 0,
@@ -664,11 +664,11 @@
         "runs": 2,
         "text": "invoices: ValueError: 3 rows with a negative total"
       },
-      "in_progress": 1,
+      "in_progress": 2,
       "median_seconds": 0.9,
       "not_successful": 3,
       "ok": 0,
-      "runs": 4,
+      "runs": 5,
       "until": "2026-11-17T15:00:00Z"
     },
     "triggered_by": [],
@@ -680,13 +680,12 @@
       "command": "get",
       "elapsed_seconds": null,
       "error": null,
+      "failure": null,
       "files": [
         "orders.py"
       ],
       "finished_at": null,
-      "first_failure": null,
       "handle": null,
-      "id": "a1f0c0000008",
       "line": {
         "failure": null,
         "failure_detail": null,
@@ -696,6 +695,7 @@
         "target_count": 1
       },
       "principal": null,
+      "reason": null,
       "run_id": "a1f0c0000008",
       "schedule_id": null,
       "scheduled_at": null,
@@ -714,16 +714,15 @@
       "command": "get",
       "elapsed_seconds": 0.9,
       "error": null,
+      "failure": {
+        "error": "ValueError: 3 rows with a negative total",
+        "node": "billing.py:invoices"
+      },
       "files": [
         "billing.py"
       ],
       "finished_at": "2026-11-17T13:55:00.000Z",
-      "first_failure": {
-        "error": "ValueError: 3 rows with a negative total",
-        "node_id": "billing.py:invoices"
-      },
       "handle": null,
-      "id": "a1f0c0000005",
       "line": {
         "failure": "stopped at invoices · ValueError: 3 rows with a negative total",
         "failure_detail": "billing.py:invoices: ValueError: 3 rows with a negative total",
@@ -733,6 +732,7 @@
         "target_count": 1
       },
       "principal": "token:ci-bot",
+      "reason": "ValueError: 3 rows with a negative total",
       "run_id": "a1f0c0000005",
       "schedule_id": null,
       "scheduled_at": null,
@@ -751,16 +751,15 @@
       "command": "get",
       "elapsed_seconds": 0.7,
       "error": null,
+      "failure": {
+        "error": "KeyError: 'units'",
+        "node": "orders.py:sales_by_day[day=2026-11-16]"
+      },
       "files": [
         "orders.py"
       ],
       "finished_at": "2026-11-17T02:00:00.000Z",
-      "first_failure": {
-        "error": "KeyError: 'units'",
-        "node_id": "orders.py:sales_by_day[day=2026-11-16]"
-      },
       "handle": null,
-      "id": "a1f0c0000006",
       "line": {
         "failure": "sales_by_day: 1 key failed · KeyError: 'units'",
         "failure_detail": "orders.py:sales_by_day[day=2026-11-16]: KeyError: 'units'",
@@ -770,6 +769,7 @@
         "target_count": 1
       },
       "principal": null,
+      "reason": "KeyError: 'units'",
       "run_id": "a1f0c0000006",
       "schedule_id": null,
       "scheduled_at": null,
@@ -788,16 +788,15 @@
       "command": "get",
       "elapsed_seconds": 0.9,
       "error": null,
+      "failure": {
+        "error": "ValueError: 3 rows with a negative total",
+        "node": "billing.py:invoices"
+      },
       "files": [
         "billing.py"
       ],
       "finished_at": "2026-11-17T00:40:00.000Z",
-      "first_failure": {
-        "error": "ValueError: 3 rows with a negative total",
-        "node_id": "billing.py:invoices"
-      },
       "handle": null,
-      "id": "a1f0c0000004",
       "line": {
         "failure": "stopped at invoices · ValueError: 3 rows with a negative total",
         "failure_detail": "billing.py:invoices: ValueError: 3 rows with a negative total",
@@ -807,6 +806,7 @@
         "target_count": 1
       },
       "principal": null,
+      "reason": "ValueError: 3 rows with a negative total",
       "run_id": "a1f0c0000004",
       "schedule_id": null,
       "scheduled_at": null,
@@ -825,16 +825,15 @@
       "command": "run",
       "elapsed_seconds": 1.2,
       "error": null,
+      "failure": {
+        "error": "AssertionError: 3 rows with a negative total",
+        "node": "billing.py:check__invoices"
+      },
       "files": [
         "billing.py"
       ],
       "finished_at": "2026-11-16T10:00:01.000Z",
-      "first_failure": {
-        "error": "AssertionError: 3 rows with a negative total",
-        "node_id": "billing.py:check__invoices"
-      },
       "handle": null,
-      "id": "a1f0c0000003",
       "line": {
         "failure": "stopped at check__invoices · AssertionError: 3 rows with a negative total",
         "failure_detail": "billing.py:check__invoices: AssertionError: 3 rows with a negative total",
@@ -844,6 +843,7 @@
         "target_count": 1
       },
       "principal": null,
+      "reason": "AssertionError: 3 rows with a negative total",
       "run_id": "a1f0c0000003",
       "schedule_id": null,
       "scheduled_at": null,
@@ -862,13 +862,12 @@
       "command": "get",
       "elapsed_seconds": 5.1,
       "error": null,
+      "failure": null,
       "files": [
         "billing.py"
       ],
       "finished_at": "2026-11-16T09:30:05.000Z",
-      "first_failure": null,
       "handle": null,
-      "id": "a1f0c0000002",
       "line": {
         "failure": null,
         "failure_detail": null,
@@ -878,6 +877,7 @@
         "target_count": 1
       },
       "principal": null,
+      "reason": null,
       "run_id": "a1f0c0000002",
       "schedule_id": null,
       "scheduled_at": null,
@@ -896,13 +896,12 @@
       "command": "run",
       "elapsed_seconds": 2.0,
       "error": null,
+      "failure": null,
       "files": [
         "orders.py"
       ],
       "finished_at": "2026-11-16T09:10:02.000Z",
-      "first_failure": null,
       "handle": null,
-      "id": "a1f0c0000007",
       "line": {
         "failure": null,
         "failure_detail": null,
@@ -912,6 +911,7 @@
         "target_count": 1
       },
       "principal": null,
+      "reason": null,
       "run_id": "a1f0c0000007",
       "schedule_id": null,
       "scheduled_at": null,
@@ -930,13 +930,12 @@
       "command": "get",
       "elapsed_seconds": 42.3,
       "error": null,
+      "failure": null,
       "files": [
         "orders.py"
       ],
       "finished_at": "2026-11-16T09:00:42.000Z",
-      "first_failure": null,
       "handle": null,
-      "id": "a1f0c0000001",
       "line": {
         "failure": null,
         "failure_detail": null,
@@ -946,6 +945,7 @@
         "target_count": 0
       },
       "principal": null,
+      "reason": null,
       "run_id": "a1f0c0000001",
       "schedule_id": null,
       "scheduled_at": null,

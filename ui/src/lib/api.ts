@@ -107,6 +107,9 @@ export type StateScope = { group: string } | { file: string }
 /** First rows asked for with an output's schema (the panel's Preview). */
 const PREVIEW_ROWS = 5
 
+// Keep the UI's flat view model behind the shared wire envelope.
+const runView = (doc: import('./generated/RunDocument').RunDocument): RunView => ({ ...doc.run, steps: doc.steps, steps_page: doc.steps_page, explanation: doc.explanation })
+
 export const api = {
   authStatus: (signal?: AbortSignal) => request<AuthStatus>('/auth/status', { signal }, { token: null }),
   bootstrap: (code: string) => request<IssuedToken>('/auth/bootstrap', { method: 'POST', body: JSON.stringify({ code }) }, { token: null, secret: code }),
@@ -168,10 +171,10 @@ export const api = {
    */
   runs: (query: RunsQuery) =>
     request<RunList>(`/runs?${new URLSearchParams(Object.entries(query).flatMap(([key, value]) => (value === null ? [] : [[key, String(value)]])))}`),
-  runDetail: (id: string) => request<RunView>(`/runs/${encodeURIComponent(id)}`),
+  runDetail: (id: string) => request<import('./generated/RunDocument').RunDocument>(`/runs/${encodeURIComponent(id)}`).then(runView),
   /** One page of a run's steps (`?offset=`, failed steps first): `steps_page.next_offset` is the next. */
   runStepsPage: (id: string, offset: number, limit = 1000) =>
-    request<RunView>(`/runs/${encodeURIComponent(id)}?${new URLSearchParams({ offset: String(offset), limit: String(limit) })}`),
+    request<import('./generated/RunDocument').RunDocument>(`/runs/${encodeURIComponent(id)}?${new URLSearchParams({ offset: String(offset), limit: String(limit) })}`).then(runView),
   /** The runs in flight, each with the nodes it is working on now (`active_steps`). */
   runsInFlight: () => request<RunList>('/runs?status=running'),
   startRun,

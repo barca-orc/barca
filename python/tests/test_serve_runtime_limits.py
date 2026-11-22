@@ -448,7 +448,7 @@ def ticking() -> None:
 
 def assert_timed_out(server: Serve, run_id: str, source: str) -> None:
     run = server.finished(run_id)
-    assert run["status"] == "error", run
+    assert run["status"] == "failed", run
     text = json.dumps(run)
     assert "run timed out after" in text and source in text, text
 
@@ -470,7 +470,7 @@ def test_the_run_timeout_flag_stops_a_long_run(tmp_path):
         run_id = submit(server, "slow")
         assert_timed_out(server, run_id, "run timed out after 2s (--run-timeout)")
     history = barca(project, "history", "--json", "--local", BARCA_REMOTE="off")
-    assert json.loads(history.stdout)["runs"][0]["status"] == "error", history.stdout
+    assert json.loads(history.stdout)["runs"][0]["status"] == "failed", history.stdout
     logs = barca(project, "logs", run_id, "--local", BARCA_REMOTE="off")
     assert "[barca] run cancelled: run timed out after 2s (--run-timeout)" in logs.stdout + (
         logs.stderr

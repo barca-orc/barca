@@ -67,7 +67,7 @@ export const RUNS = runs as unknown as RunList
 /** `GET /runs?not_triggered_by=schedule`: what the Runs page asks for until told to show the schedule's runs. */
 export const RUNS_WITHOUT_SCHEDULE = runsWithoutSchedule as unknown as RunList
 /** `GET /runs/{run_id}` of the runs in `RUN_IDS`. */
-export const RUN_DETAILS = runDetails as unknown as Record<string, RunView>
+export const RUN_DETAILS = Object.fromEntries(Object.entries(runDetails as unknown as Record<string, import('../generated/RunDocument').RunDocument>).map(([id, doc]) => [id, { ...doc.run, steps: doc.steps, steps_page: doc.steps_page, explanation: doc.explanation }])) as Record<string, RunView>
 /** `GET /pauses`. */
 export const PAUSES = pauses as unknown as Pauses
 
@@ -96,7 +96,7 @@ function found<T>(value: T | undefined, what: string): T {
  * the list-row words `barca-service` gives for exactly those facts.
  */
 export interface RunScenario {
-  run: Pick<RunView, 'status' | 'target' | 'job' | 'triggered_by' | 'principal' | 'attempts' | 'retries' | 'steps_total' | 'steps_executed' | 'steps_cached' | 'started_at' | 'plan_reasons' | 'cancellation' | 'error'> & Pick<RunSummary, 'first_failure'>
+  run: Pick<RunView, 'status' | 'target' | 'job' | 'triggered_by' | 'principal' | 'attempts' | 'retries' | 'steps_total' | 'steps_executed' | 'steps_cached' | 'started_at' | 'plan_reasons' | 'cancellation' | 'error'> & Pick<RunSummary, 'failure'>
   nodes: RunNodeSummary[]
   explanation: RunExplanation
   line: RunLine
@@ -138,7 +138,7 @@ export function root(id: string): RollupRoot {
 
 /** The run list row of run `id`. */
 export function runRow(id: string): RunSummary {
-  return found(RUNS.runs.find((r) => r.id === id), `run ${id}`)
+  return found(RUNS.runs.find((r) => r.run_id === id), `run ${id}`)
 }
 
 /** The detail of run `id` (one of `RUN_IDS`). */

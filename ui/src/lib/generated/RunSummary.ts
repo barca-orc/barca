@@ -9,7 +9,7 @@ import type { TriggeredBy } from "./TriggeredBy";
 /**
  * One run of `GET /runs`.
  */
-export type RunSummary = { id: string, handle: string | null, run_id: string | null, command: string, files: Array<string>, target: string | null, status: string, triggered_by: TriggeredBy | null, scheduled_at: string | null, schedule_id: string | null, started_at: string, finished_at: string | null, elapsed_seconds: number | null, steps_total: number | null, steps_executed: number, steps_cached: number,
+export type RunSummary = { reason: string | null, run_id: string, handle: string | null, command: string, files: Array<string>, target: string | null, status: string, triggered_by: TriggeredBy | null, scheduled_at: string | null, schedule_id: string | null, started_at: string, finished_at: string | null, elapsed_seconds: number | null, steps_total: number | null, steps_executed: number, steps_cached: number,
 /**
  * Recorded steps that failed, a partitioned node's keys each counted (#758); absent for
  * a run not yet recorded. Experimental.
@@ -18,7 +18,7 @@ steps_failed?: number | null, error: string | null,
 /**
  * The run's first failed step and its error; `null` when no step failed.
  */
-first_failure: FirstFailure | null,
+failure: FirstFailure | null,
 /**
  * Who asked for the run (`token:<name>`), when the server knows. Experimental.
  */

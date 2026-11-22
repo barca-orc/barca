@@ -82,6 +82,7 @@ run.plan_reasons.reasons[].steps : integer
 run.plan_reasons.reasons[].subject : null
 run.plan_reasons.steps : integer
 run.principal : null
+run.reason : null
 run.retries : integer
 run.run_id : string
 run.schedule_id : null

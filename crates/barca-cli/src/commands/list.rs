@@ -21,13 +21,13 @@ pub(crate) async fn list_cmd(
     let total = assets.len();
     assets.truncate(limit.unwrap_or(total));
 
-    // Next fire times (local time) for scheduled definitions. Empty when nothing is
+    // Next fire times (RFC 3339) for scheduled definitions. Empty when nothing is
     // scheduled, so the table's NEXT FIRE column only appears when it carries information.
     let next_fires: std::collections::HashMap<String, String> =
         barca_service::loaded::describe_schedule(&file_args, python)
             .await
             .into_iter()
-            .filter_map(|j| j.next_fire_local.map(|t| (j.id, t)))
+            .filter_map(|j| j.next_fire.map(|t| (j.id, barca_service::time::rfc3339(t))))
             .collect();
     let root = super::project_root();
     super::emit(barca_service::report::render_list(

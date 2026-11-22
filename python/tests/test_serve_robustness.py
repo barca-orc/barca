@@ -126,7 +126,7 @@ def test_the_server_reports_next_fire_in_its_own_timezone(serve):
     server = serve("--timezone", "Asia/Kolkata")
     jobs = wait_until(lambda: server.request("GET", "/schedule")[1], "the scheduler to publish")
     assert [j["id"] for j in jobs] == ["pipeline.py:nightly"]
-    assert jobs[0]["next_fire"] % 86400 == 23 * 3600 + 1800
+    assert jobs[0]["next_fire"].endswith("T23:30:00Z")
     status, nodes = server.request("GET", "/state")
     assert status == 200
     next_run = {n["id"]: n["next_run"] for n in nodes}
@@ -139,10 +139,12 @@ def test_list_says_its_next_fire_times_are_local(project):
     assert out.returncode == 0, out.stderr
     header = out.stdout.splitlines()[0]
     assert "NEXT FIRE (LOCAL TIME)" in header
-    # JSON keeps the same wall-clock string; `barca docs contract` says which zone it is in.
+    # JSON carries the same instant as RFC 3339.
     nodes = json.loads(barca(project, "list", "pipeline.py", "--json").stdout)["nodes"]
     nightly = next(n for n in nodes if n["id"] == "pipeline.py:nightly")
-    assert nightly["next_fire"].endswith(" 05:00:00")
+    from datetime import datetime
+
+    assert datetime.fromisoformat(nightly["next_fire"]).astimezone().hour == 5
 
 
 # ─── POST /get/{target} and POST /run/{target} ───────────────────────────────
@@ -184,7 +186,7 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project, se
 
     # A full id picks one of two nodes with the same name, and that run happens.
     result = client.get("other.py:quick").wait(timeout=30)
-    assert result["status"] == "complete", result
+    assert result["run"]["status"] == "success", result
     # It is the only run there has been: the refused requests started none.
     assert [r["status"] for r in history(project)] == ["success"]
 
@@ -220,7 +222,7 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     # that keeps its event stream open the way a browser tab on a run page does.
     done = server.request("POST", "/get/quick")[1]["run_id"]
     wait_until(
-        lambda: server.request("GET", f"/status/{done}")[1]["status"] == "complete",
+        lambda: server.request("GET", f"/status/{done}")[1]["run"]["status"] == "success",
         "the quick run to complete",
     )
     going = start_slow_run(server, project)
@@ -240,8 +242,8 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     for path in ("/run", "/get/quick", "/run/nightly"):
         status, body = server.request("POST", path)
         assert status == 200, (path, body)
-        assert server.request("GET", f"/status/{body['run_id']}")[1]["status"] == "pending"
-    assert server.request("GET", f"/status/{going}")[1]["status"] == "running"
+        assert server.request("GET", f"/status/{body['run_id']}")[1]["run"]["status"] == "pending"
+    assert server.request("GET", f"/status/{going}")[1]["run"]["status"] == "running"
     assert server.proc.poll() is None, "the server waits for the run"
 
     (project / "release").write_text("")
@@ -279,12 +281,13 @@ def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, se
 
     # Not recorded as an attempt that ended: the next server starts it again (its first step,
     # which finished, is a cache hit then).
-    assert history(project) == []
+    assert [(r["run_id"], r["status"]) for r in history(project)] == [(going, "pending")]
     (project / "release").write_text("")
     restarted = serve("--no-schedule")
     assert "[barca] resuming 1 queued run" in restarted.stderr
     run = wait_until(
-        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["status"] == "success" and r,
+        lambda: (r := restarted.request("GET", f"/runs/{going}")[1]["run"])["status"] == "success"
+        and r,
         "the requeued run to finish",
     )
     assert {s["node_id"].rsplit(":", 1)[1] for s in run["steps"]} >= {"quick", "slow"}, run

@@ -46,6 +46,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // Why a cancelled run was cancelled (`barca_model::run_explain::Cancellation`, JSON; #925).
     // NULL otherwise and on older rows.
     "cancellation TEXT",
+    "terminal_reason TEXT",
 ];
 
 /// A schedule held back by `POST /schedule/{id}/pause` (#435): since when and until when
@@ -193,7 +194,7 @@ pub(crate) const FRESHNESS_PROOFS: &str = "CREATE TABLE IF NOT EXISTS freshness_
 pub const RUN_QUEUE: &str = "CREATE TABLE IF NOT EXISTS run_queue (
     run_id TEXT PRIMARY KEY,
     seq INTEGER NOT NULL,
-    state TEXT NOT NULL DEFAULT 'queued',
+    state TEXT NOT NULL DEFAULT 'pending',
     spec TEXT NOT NULL,
     queued_at TEXT NOT NULL
 )";

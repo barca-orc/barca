@@ -17,6 +17,7 @@ pub enum RunStatus {
     /// Executing in a background task.
     Running,
     /// Finished successfully.
+    #[serde(rename = "success")]
     Complete,
     /// Finished with an error.
     Failed,

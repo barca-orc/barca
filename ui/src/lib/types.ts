@@ -39,7 +39,9 @@ export type { RunList } from './generated/RunList'
 export type { RunActivity } from './generated/RunActivity'
 export type { ActivityHour } from './generated/ActivityHour'
 export type { LeadingFailure } from './generated/LeadingFailure'
-export type { RunView } from './generated/RunView'
+import type { RunView as RunHead } from './generated/RunView'
+import type { RunDocument } from './generated/RunDocument'
+export type RunView = RunHead & Pick<RunDocument, 'steps' | 'steps_page' | 'explanation'>
 export type { PlanReasons } from './generated/PlanReasons'
 export type { PlanReason } from './generated/PlanReason'
 export type { ReasonCategory } from './generated/ReasonCategory'
@@ -158,7 +160,7 @@ export interface LogLine {
  * One axis: a node's cache state is another (`lib/cacheStateDisplay.ts`) and never maps here.
  */
 export type StatusKind =
-  | 'queued'
+  | 'pending'
   | 'running'
   | 'success'
   | 'failed'

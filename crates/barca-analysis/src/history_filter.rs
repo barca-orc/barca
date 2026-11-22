@@ -13,7 +13,7 @@ pub(crate) const STATUSES: &[&str] = &[
     "success",
     "failed",
     "cancelled",
-    "error",
+    "pending",
     "running",
     "interrupted",
 ];
@@ -23,8 +23,7 @@ pub(crate) const STATUSES: &[&str] = &[
 pub const NOT_SUCCESSFUL: &str = "not_successful";
 
 /// The statuses [`NOT_SUCCESSFUL`] names.
-pub(crate) const NOT_SUCCESSFUL_STATUSES: &[&str] =
-    &["failed", "error", "cancelled", "interrupted"];
+pub(crate) const NOT_SUCCESSFUL_STATUSES: &[&str] = &["failed", "cancelled", "interrupted"];
 
 /// The values of `--triggered-by`.
 pub(crate) const TRIGGERS: &[&str] = &["manual", "api", "schedule", "client"];
@@ -84,7 +83,7 @@ impl HistoryFilter {
             if !STATUSES.contains(&status) {
                 return Err(format!(
                     "--status '{status}' is not a run status: use {}, or {NOT_SUCCESSFUL} \
-                     (every status but success and running)",
+                     (every terminal status but success)",
                     STATUSES.join(", ")
                 ));
             }
@@ -168,11 +167,6 @@ impl HistoryFilter {
         started_at: &str,
         texts: &[&str],
     ) -> bool {
-        let status = if status == "pending" {
-            "running"
-        } else {
-            status
-        };
         if !self.statuses.is_empty() && !self.statuses.iter().any(|s| s == status) {
             return false;
         }
@@ -550,10 +544,7 @@ mod tests {
             status: Some("not_successful,failed"),
             ..Default::default()
         });
-        assert_eq!(
-            bad.statuses,
-            ["failed", "error", "cancelled", "interrupted"]
-        );
+        assert_eq!(bad.statuses, ["failed", "cancelled", "interrupted"]);
         assert_eq!(
             bad.query_pairs(),
             vec![("status", "not_successful,failed".to_string())]
@@ -573,7 +564,7 @@ mod tests {
             status: Some("running"),
             ..Default::default()
         });
-        assert!(live.keeps_unrecorded("pending", api, at, &[]));
+        assert!(!live.keeps_unrecorded("pending", api, at, &[]));
         assert!(!live.keeps_unrecorded("success", api, at, &[]));
         // `--target` narrows the database's read by the node's name without its key.
         let keyed = flags(HistoryFlags {

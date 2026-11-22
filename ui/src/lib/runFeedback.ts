@@ -39,7 +39,7 @@ export function runFeedback(
     )
     .with('failed', (): RunFeedback => ({ kind: 'failed', error, logs }))
     // Pre-run / inert states show no feedback panel — just the trigger button.
-    .with('queued', 'skipped', 'cancelled', (): RunFeedback => ({ kind: 'idle' }))
+    .with('pending', 'skipped', 'cancelled', (): RunFeedback => ({ kind: 'idle' }))
     .exhaustive()
 }
 
@@ -50,7 +50,7 @@ export type RunNotice =
   | { kind: 'starting'; target: string | null }
   | { kind: 'rejected'; target: string | null; error: string }
   /** `restart`: the server is draining, and the run starts on the next server. */
-  | { kind: 'queued'; target: string | null; runId: string; restart: boolean }
+  | { kind: 'pending'; target: string | null; runId: string; restart: boolean }
   | { kind: 'running'; target: string | null; runId: string; done: number; total: number | null }
   | { kind: 'finished'; target: string | null; runId: string; status: StatusKind; summary: string }
 
@@ -74,12 +74,12 @@ export function runOutcomeSummary(run: RunView): string {
     const took = run.elapsed_seconds === null ? '' : ` in ${formatSeconds(run.elapsed_seconds)}`
     return `succeeded${took}`
   }
-  if (status === 'cancelled' || status === 'interrupted') return status
+  if (status === 'cancelled' || status === 'interrupted') return run.reason ? `${status}: ${run.reason}` : status
   const failedKeys = run.steps_page.nodes
     ? run.steps_page.nodes.reduce((n, node) => n + node.failed, 0)
     : run.steps.filter((s) => isFailure(s.status) && s.partition_key !== null).length
   if (failedKeys > 1) return `${failedKeys.toLocaleString()} keys failed`
-  const error = run.error ?? run.failure?.error ?? null
+  const error = run.reason ?? run.error ?? run.failure?.error ?? null
   return error ? `failed: ${error}` : 'failed'
 }
 
@@ -94,10 +94,10 @@ export function runNotice({ target, pending, error, started, run }: RunNoticeInp
   if (!started) return null
   const { runId } = started
   const named = started.target
-  if (!run || run.run_id !== runId) return { kind: 'queued', target: named, runId, restart: false }
+  if (!run || run.run_id !== runId) return { kind: 'pending', target: named, runId, restart: false }
   const status = parseRunStatus(run.status)
   if (status === 'pending' || status === null) {
-    return { kind: 'queued', target: named, runId, restart: run.waiting_for === 'restart' }
+    return { kind: 'pending', target: named, runId, restart: run.waiting_for === 'restart' }
   }
   if (status === 'running') {
     return { kind: 'running', target: named, runId, done: run.steps_executed, total: run.steps_total }

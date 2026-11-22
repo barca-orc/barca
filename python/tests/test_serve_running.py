@@ -112,7 +112,7 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
         detail = _get(port, "/assets/slow")
         assert detail["running"]["run_id"] == running["run_id"], detail
         [run] = _get(port, "/runs?status=running")["runs"]
-        assert run["id"] == running["run_id"], run
+        assert run["run_id"] == running["run_id"], run
         assert run["status"] == "running", run
         assert [s["node_id"].split(":")[-1] for s in run["active_steps"]] == ["slow"], run
 
@@ -236,7 +236,8 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
         # the run ends, and does not read as executing (#969).
         done = _post(port, "/runs", {"command": "get", "targets": ["upstream"]})["run_id"]
         wait_until(
-            lambda: _get(port, f"/runs/{done}")["status"] == "success", "the first run to finish"
+            lambda: _get(port, f"/runs/{done}")["run"]["status"] == "success",
+            "the first run to finish",
         )
         slow = _post(port, "/runs", {"command": "get", "targets": ["slow"]})["run_id"]
         wait_until(lambda: (tmp_path / "cli.started").exists(), "the slow step to start")
@@ -270,7 +271,7 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
             activity["summary"],
         ), activity["summary"]
         # The hour's median is of its one finished run; nothing went wrong in it.
-        assert total["median_seconds"] == _get(port, f"/runs/{done}")["elapsed_seconds"]
+        assert total["median_seconds"] == _get(port, f"/runs/{done}")["run"]["elapsed_seconds"]
         assert total["failure"] is None and activity["excluded"] is None, activity
         # The same database read without the server gives the same counts.
         local = json.loads(_history(tmp_path, "--activity", "--json", "--local").stdout)
@@ -313,18 +314,20 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
         for _ in range(2):
             newer = _post(port, "/runs", {"command": "get", "targets": ["upstream"]})["run_id"]
             wait_until(
-                lambda run=newer: _get(port, f"/runs/{run}")["status"] == "success",
+                lambda run=newer: _get(port, f"/runs/{run}")["run"]["status"] == "success",
                 "a newer run to finish",
             )
         page = _get(port, "/runs?limit=1")
-        assert [r["id"] for r in page["runs"]] == [slow], page["runs"]
+        assert [r["run_id"] for r in page["runs"]] == [slow], page["runs"]
         assert (page["total"], page["truncated"]) == (4, True), page
-        assert [r["id"] for r in _get(port, "/runs?limit=2")["runs"]] == [slow, newer]
+        assert [r["run_id"] for r in _get(port, "/runs?limit=2")["runs"]] == [slow, newer]
         only = _get(port, "/runs?limit=1&status=success")
-        assert [r["id"] for r in only["runs"]] == [newer] and only["total"] == 3, only
+        assert [r["run_id"] for r in only["runs"]] == [newer] and only["total"] == 3, only
 
         (tmp_path / "release").write_text("")
-        wait_until(lambda: _get(port, f"/runs/{slow}")["status"] == "success", "the run to finish")
+        wait_until(
+            lambda: _get(port, f"/runs/{slow}")["run"]["status"] == "success", "the run to finish"
+        )
         assert _in_flight(tmp_path, *server) == []
         after = json.loads(_history(tmp_path, "--activity", "--json", *server).stdout)
         assert after["activity"]["total"]["in_progress"] == 0

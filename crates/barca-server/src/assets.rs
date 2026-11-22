@@ -30,7 +30,7 @@ pub async fn plan(
 pub async fn assets(State(reads): State<Reads>) -> Result<Json<Vec<Value>>, ApiError> {
     let dag = reads.loaded_dag().await?;
     let result = queries::list_assets_from_dag(&dag);
-    let next_fires = next_fires(&dag);
+    let next_fires = next_fires(&dag, &reads.config.timezone);
     let nodes = result
         .iter()
         .map(|a| barca_service::report::list_node_json(a, next_fires.get(&a.id)))
@@ -115,7 +115,7 @@ pub async fn asset_detail(
     let root = std::env::current_dir().unwrap_or_default();
     let failure = db::failure_facts(&snap.path, &summary.id, &root).await?;
 
-    let next_fire = next_fires(&dag).remove(&summary.id);
+    let next_fire = next_fires(&dag, &state.config.timezone).remove(&summary.id);
     let running = running_node(&state, &db_state, &snap, &summary.id).await?;
     Ok(Json(json!({
         "asset": barca_service::report::list_node_json(&summary, next_fire.as_ref()),

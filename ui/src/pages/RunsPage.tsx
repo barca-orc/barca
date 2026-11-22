@@ -83,7 +83,7 @@ export function RunsPage() {
   const listed = runs.data?.runs
   const startedAt = useMemo(() => {
     const at = new Map<string, string>()
-    for (const run of listed ?? []) for (const id of [run.id, run.run_id, run.handle]) if (id) at.set(id, run.started_at)
+    for (const run of listed ?? []) for (const id of [run.run_id, run.run_id, run.handle]) if (id) at.set(id, run.started_at)
     return (runId: string) => at.get(runId) ?? null
   }, [listed])
 

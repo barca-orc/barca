@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Unify run statuses: use `failed` instead of `error`, and `pending` instead of `queued`. Pending requests appear in history and accept `--status pending`; every terminal non-success has `reason`. Run and schedule timestamps are RFC 3339 UTC. `GET /runs` uses `run_id`/`failure` instead of `id`/`first_failure`, and `GET /runs/{id}` uses `{run, steps, steps_page, explanation}`: read status and outcome under `run`. Error-envelope kinds and exit codes are unchanged (#943).
+
 ### Bug Fixes
 
 - Warn when metadata was last written by a newer barca, and have `barca doctor` check the running version against `pyproject.toml`'s barca dependency (#672).

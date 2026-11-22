@@ -236,7 +236,7 @@ const SUMMARY_STEPS = 5
 function runSummaryError(data: RunView): string | null {
   if (failedSteps(data).length > 0) return null
   const outcome = parseOutcome(data.outcome)
-  return data.error ?? outcomeEnvelope(outcome)?.error ?? null
+  return data.reason ?? data.error ?? outcomeEnvelope(outcome)?.error ?? null
 }
 
 /** One fact of a run: a muted label over its value; `wide` takes the whole line. */
@@ -511,10 +511,10 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
     // The row's words are the server's (`line`, as `barca history --json` prints them).
     const failure = run.line.failure
     // The whole row opens the run's panel (its error in full there): the row's height never changes.
-    return <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}
+    return <tr key={run.run_id} aria-selected={selected !== null && (selected === run.run_id || selected === run.handle)}
       data-failing={failure ? true : undefined}
-      onClick={(event) => { if (!(event.target instanceof Element && event.target.closest('button'))) dispatch({ type: 'run_selected', id: run.id }) }}>
-    <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
+      onClick={(event) => { if (!(event.target instanceof Element && event.target.closest('button'))) dispatch({ type: 'run_selected', id: run.run_id }) }}>
+    <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.run_id })}>{run.run_id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
     <td><span className="barca-run-target">{run.line.target}</span></td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
     <td><StatusBadge size="sm" glyph={runGlyph(run.status)} label={runLabel(run.status)} live={runIsLive(run.status)} /></td>

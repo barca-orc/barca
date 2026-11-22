@@ -163,7 +163,9 @@ async fn set(
         None => SchedulePauseAnswer::Pause {
             id: node,
             paused: pause.is_some(),
-            paused_until: pause.and_then(|p| p.until),
+            paused_until: pause
+                .and_then(|p| p.until)
+                .map(barca_service::time::rfc3339),
         },
     }))
 }

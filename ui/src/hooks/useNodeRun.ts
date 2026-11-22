@@ -74,7 +74,7 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   const target = run?.nodeId ?? null
   const statuses = useMemo(() => {
     if (!stream.running) return {}
-    return target && !(target in stream.statuses) ? { ...stream.statuses, [target]: 'queued' as const } : stream.statuses
+    return target && !(target in stream.statuses) ? { ...stream.statuses, [target]: 'pending' as const } : stream.statuses
   }, [stream.running, stream.statuses, target])
   const liveStatus = node ? statuses[node.id] : undefined
   const action: NodeRunAction = {

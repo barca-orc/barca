@@ -34,7 +34,7 @@ export function statePollInterval(nodes: NodeState[] | undefined): number {
 
 /** The visual status of a node a run is working on. */
 export function runningStatus(running: NodeRunning): StatusKind {
-  return running.step === 'running' ? 'running' : 'queued'
+  return running.step === 'running' ? 'running' : 'pending'
 }
 
 /** `3/10 keys` for a partitioned node, else null. */

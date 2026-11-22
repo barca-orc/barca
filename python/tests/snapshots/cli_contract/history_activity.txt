@@ -4,9 +4,9 @@ activity.excluded : object
 activity.excluded.at : string
 activity.excluded.by_status : object
 activity.excluded.by_status.cancelled : integer
-activity.excluded.by_status.error : integer
 activity.excluded.by_status.failed : integer
 activity.excluded.by_status.interrupted : integer
+activity.excluded.by_status.pending : integer
 activity.excluded.by_status.running : integer
 activity.excluded.by_status.success : integer
 activity.excluded.by_trigger : object
@@ -27,9 +27,9 @@ activity.hours[] : object
 activity.hours[].at : string
 activity.hours[].by_status : object
 activity.hours[].by_status.cancelled : integer
-activity.hours[].by_status.error : integer
 activity.hours[].by_status.failed : integer
 activity.hours[].by_status.interrupted : integer
+activity.hours[].by_status.pending : integer
 activity.hours[].by_status.running : integer
 activity.hours[].by_status.success : integer
 activity.hours[].by_trigger : object
@@ -57,9 +57,9 @@ activity.total : object
 activity.total.at : string
 activity.total.by_status : object
 activity.total.by_status.cancelled : integer
-activity.total.by_status.error : integer
 activity.total.by_status.failed : integer
 activity.total.by_status.interrupted : integer
+activity.total.by_status.pending : integer
 activity.total.by_status.running : integer
 activity.total.by_status.success : integer
 activity.total.by_trigger : object

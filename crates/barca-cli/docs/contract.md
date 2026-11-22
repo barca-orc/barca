@@ -178,7 +178,7 @@ stability; the row adds the keys and routes that go with it.
 | `now` of each run in progress in `barca history --status running --json` (and `GET /history?status=running`; `running`, `queued`, `keys`, `groups`, `line`), the `now:` line under its row, and the output of `barca history --activity` (`activity`: `since`, `until`, `triggered_by`, `hours`, `total`, `summary`; also `activity` and `?triggered_by=` of `GET /runs`) | new in 0.44 (#991, `barca docs status`, "Runs in progress and the last day's activity"): what the web UI's Runs page shows, computed once for the CLI and the UI; the keys, the window and the wording may change after field use |
 | `--agent` lines other than `step:`, the end-of-run line and `run failed:` | progress notes (`still running`, skipped tasks, the text of warnings, dataset sink deletions) whose wording may change |
 
-HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `prev_run` and `late_since` (rows of `GET /state`, `barca docs server-mode`, "Data health"; `signals` moved from here onto every status node in 0.44), and `steps_failed` and `first_failure` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
+HTTP-only keys: `failing_since`, `consecutive_failures`, and (experimental, new in 0.43, #925) `prev_run` and `late_since` (rows of `GET /state`, `barca docs server-mode`, "Data health"; `signals` moved from here onto every status node in 0.44), and `steps_failed` (entries of `GET /runs`) are in the server's HTTP responses only, specified in `specs/interfaces/server-api.openapi.yaml`; no CLI command prints them.
 
 ### Accepted exceptions
 
@@ -416,7 +416,7 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<RUN_ID>` | - | - | experimental: new in 0.29.3: the run detail's step keys and human layout may change after field use | One run in detail: its fields, the steps it recorded (the first 1000, failed steps always; --limit and --all change it), and each failed step's error, traceback and how its worker ended |
 | `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
-| `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted; not_successful is every one but success and running |
+| `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, pending, running, interrupted; not_successful selects failed, cancelled and interrupted |
 | `--target` | `NAME` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out |
 | `--triggered-by` | `TRIGGER[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started this way (comma-separated): manual, api, schedule, client |
 | `--not-triggered-by` | `T[,...]` | - | experimental: new in 0.44 (#969): the history filters' values and matching may change after field use | Without the runs started this way (comma-separated): schedule hides the cron ticks and keeps the runs that recorded no trigger |
@@ -428,7 +428,7 @@ default, and any aliases.
 | `--all` | - | default `false` | stable | Show every recorded run (no limit); with a RUN_ID, every step it recorded |
 | `--json` | - | default `false` | stable | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | stable | Emit human-readable output (the default when stdout is a terminal) |
-| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`, `line`, `now` | - | stable | Select JSON fields as a comma-separated list; implies --json |
+| `--fields` | comma-separated: `run_id`, `command`, `files`, `target`, `job`, `status`, `steps_total`, `steps_executed`, `steps_cached`, `attempts`, `started_at`, `finished_at`, `elapsed_seconds`, `triggered_by`, `scheduled_at`, `schedule_id`, `client_run_id`, `failure`, `reason`, `failed_node`, `error`, `principal`, `trigger_reason`, `cancellation`, `line`, `now` | - | stable | Select JSON fields as a comma-separated list; implies --json |
 | `--env` | `ENV` | - | stable | Use a separate cache and history for this environment |
 | `--server` | `URL` | - | experimental: server mode is new (RFC-0007): how the server is chosen and the client's messages may change | Use a server (URL or configured); get/run execute its deployed code |
 | `--local` | - | default `false` | experimental: server mode is new (RFC-0007): ignores the configured server (its ledger, the answers of status, history, stats and logs, and the views of sql) and, new in 0.46.0, a barca serve running in this project (its socket, .barca/serve.sock) | Run on this machine; ignore a configured server and this project's barca serve |
@@ -1235,6 +1235,7 @@ says what a sink writes.
 | `run.plan_reasons.reasons[].subject` | null | always |
 | `run.plan_reasons.steps` | integer | always |
 | `run.principal` | null | always |
+| `run.reason` | null | always |
 | `run.retries` | integer | always |
 | `run.run_id` | string | always |
 | `run.schedule_id` | null | always |
@@ -2189,9 +2190,9 @@ Truncated (`--limit 1`):
 
 `nodes[].kind` is `asset`, `task` or `sensor`; `nodes[].freshness` is `always`, `manual` or
 `schedule`, lowercase like `kind`. A scheduled node also has `schedule` (the cron expression) and
-`next_fire` (string, `YYYY-MM-DD HH:MM:SS`): the next match of the cron expression in the local
-time of the machine `list` runs on. `list` talks to no server, so the value does not follow a
-server's `--timezone`; `GET /schedule` on the running server does (`barca docs scheduling`).
+`next_fire` (RFC 3339 UTC): the next match of the cron expression. Local inspection computes
+the schedule in the machine's local zone; server inspection uses the server's `--timezone`.
+The human-readable table displays the instant in local time.
 `list` reads no state, so it takes no `--env`.
 
 ### sql (experimental)
@@ -3527,7 +3528,7 @@ failed step's node id and the first line of its error (`ZeroDivisionError: divis
 `<function>: <error>`, cut at 72 characters with `…`.
 
 Experimental filters (0.29.3): `--status` (comma-separated: `success`, `failed`, `cancelled`,
-`error`, `running`, `interrupted`; `not_successful`, 0.44, is every one but `success` and
+`pending`, `running`, `interrupted`; `not_successful`, 0.44, is every one but `success` and
 `running`), `--target NAME` (the run's target or job names the node), `--triggered-by`
 (comma-separated: `manual`, `api`, `schedule`, `client`) and `--since` (a duration
 `30m`/`24h`/`7d`/`2w`, an RFC 3339 time or a UTC date). Added in 0.44 (#969):
@@ -3651,6 +3652,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].line.target` | string | always |
 | `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
+| `runs[].reason` | string | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -3695,6 +3697,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `runs[].line.target` | string | always |
 | `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
+| `runs[].reason` | string | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
 | `runs[].scheduled_at` | null | always |
@@ -3720,9 +3723,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.excluded.at` | string | always |
 | `activity.excluded.by_status` | object | always |
 | `activity.excluded.by_status.cancelled` | integer | always |
-| `activity.excluded.by_status.error` | integer | always |
 | `activity.excluded.by_status.failed` | integer | always |
 | `activity.excluded.by_status.interrupted` | integer | always |
+| `activity.excluded.by_status.pending` | integer | always |
 | `activity.excluded.by_status.running` | integer | always |
 | `activity.excluded.by_status.success` | integer | always |
 | `activity.excluded.by_trigger` | object | always |
@@ -3743,9 +3746,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.hours[].at` | string | always |
 | `activity.hours[].by_status` | object | always |
 | `activity.hours[].by_status.cancelled` | integer | always |
-| `activity.hours[].by_status.error` | integer | always |
 | `activity.hours[].by_status.failed` | integer | always |
 | `activity.hours[].by_status.interrupted` | integer | always |
+| `activity.hours[].by_status.pending` | integer | always |
 | `activity.hours[].by_status.running` | integer | always |
 | `activity.hours[].by_status.success` | integer | always |
 | `activity.hours[].by_trigger` | object | always |
@@ -3773,9 +3776,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.total.at` | string | always |
 | `activity.total.by_status` | object | always |
 | `activity.total.by_status.cancelled` | integer | always |
-| `activity.total.by_status.error` | integer | always |
 | `activity.total.by_status.failed` | integer | always |
 | `activity.total.by_status.interrupted` | integer | always |
+| `activity.total.by_status.pending` | integer | always |
 | `activity.total.by_status.running` | integer | always |
 | `activity.total.by_status.success` | integer | always |
 | `activity.total.by_trigger` | object | always |
@@ -3880,6 +3883,7 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `run.plan_reasons.reasons[].subject` | null | always |
 | `run.plan_reasons.steps` | integer | always |
 | `run.principal` | null | always |
+| `run.reason` | string | always |
 | `run.retries` | integer | always |
 | `run.run_id` | string | always |
 | `run.schedule_id` | null | always |
@@ -3961,13 +3965,14 @@ Reconciled history (same envelope; unknown end timestamp and duration remain nul
 | `runs[].finished_at` | null | always |
 | `runs[].job` | null | always |
 | `runs[].line` | object | always |
-| `runs[].line.failure` | null | always |
-| `runs[].line.failure_detail` | null | always |
+| `runs[].line.failure` | string | always |
+| `runs[].line.failure_detail` | string | always |
 | `runs[].line.steps` | string | always |
 | `runs[].line.steps_detail` | string | always |
 | `runs[].line.target` | string | always |
 | `runs[].line.target_count` | integer | always |
 | `runs[].principal` | null | always |
+| `runs[].reason` | string | always |
 | `runs[].retries` | integer | always |
 | `runs[].run_id` | string | always |
 | `runs[].schedule_id` | null | always |
@@ -4733,5 +4738,27 @@ Keyed refresh selectors (`--refresh 'source[account=A],source[account=C]'`) sele
 of refresh coordinates independently of the target domain. Each selector has one dimension.
 The existing refresh list in CLI, Python and server requests shares these semantics;
 `--partition` continues to narrow execution and skip affected fan-ins.
+
+
+### Run lifecycle contract (0.47)
+
+Run status is `pending`, `running`, `success`, `failed`, `cancelled` or `interrupted`.
+Failures outside a step, including timeouts, use `failed`; the error envelope retains its
+`kind` and exit code. Pending requests appear in history, including `--status pending`.
+Every terminal non-success has `reason`; older records without a cause say that no further
+reason was recorded. `failure` still identifies the first failed step, when there is one.
+
+All run and schedule timestamps use RFC 3339 UTC. `GET /runs` uses `run_id` and `failure`
+(with `node` and `error`), matching history. `GET /runs/{id}` and its `/status/{id}` alias
+return `{run, steps, steps_page, explanation}`, as history detail does. Read `run.status`,
+`run.reason`, `run.outcome` and `run.logs` from the nested run. The Python client's
+`Run.status()` and `Run.wait()` return this same envelope.
+
+Migration: replace run status `error` with `failed`, and the displayed `queued` with
+`pending`; replace list `id`/`first_failure` with `run_id`/`failure`, move flat detail
+fields under `run`, and parse schedule times as RFC 3339 instead of epoch seconds.
+Durations remain numeric seconds. Queue collections and step-wait counts named `queued`
+are counts or containers, not run statuses. Older databases and stored `error` outcomes
+remain readable; reads normalize them without rewriting history.
 
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

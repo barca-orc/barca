@@ -75,13 +75,14 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
         job = schedule(second)
         handle = job["last_run"]
         assert handle is not None, f"no catch-up run was started: {job}"
-        assert job["last_fired"] >= anchored
+        assert datetime.datetime.fromisoformat(job["last_fired"]).timestamp() >= anchored
         run = second.wait(
             "the catch-up run to finish",
-            lambda: (r := second.get(f"/status/{handle}"))["status"] not in ("pending", "running")
+            lambda: (r := second.get(f"/status/{handle}")["run"])["status"]
+            not in ("pending", "running")
             and r,
         )
-        assert run["status"] == "complete", run
+        assert run["status"] == "success", run
         caught_up = job["last_fired"]
         done = schedule(second)
         assert (done["last_run_id"], done["last_status"]) == (handle, "success"), done
@@ -89,7 +90,7 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
     assert second.stderr.count("catch-up run") == 1, second.stderr
     assert _rows(tmp_path) == {"yearly": 1}
     # The record moved forward with the catch-up.
-    assert _last_fired(tmp_path) == {"pipeline.py:yearly": caught_up}
+    assert _last_fired(tmp_path) == {"pipeline.py:yearly": int(datetime.datetime.fromisoformat(caught_up).timestamp())}
 
     # A third start has nothing to catch up: the run does not repeat.
     with Serve(tmp_path) as third:

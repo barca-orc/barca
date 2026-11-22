@@ -77,7 +77,7 @@ class _ServerRedirects(urllib.request.HTTPRedirectHandler):
 
 
 # Terminal run states reported by ``GET /status``.
-_TERMINAL = {"complete", "failed", "cancelled"}
+_TERMINAL = {"success", "failed", "cancelled", "interrupted", "skipped"}
 
 
 def _quote(target: str) -> str:
@@ -107,12 +107,12 @@ class Run:
         """Poll until the run reaches a terminal state, returning its status.
 
         Raises :class:`BarcaError` if ``timeout`` seconds elapse first. Does not
-        raise on run failure — inspect ``["status"]``/``["error"]`` in the result.
+        raise on run failure — inspect ``["run"]["status"]``/``["run"]["reason"]`` in the result.
         """
         deadline = time.monotonic() + timeout
         while True:
             payload = self.status()
-            if payload.get("status") in _TERMINAL:
+            if payload["run"]["status"] in _TERMINAL:
                 return payload
             if time.monotonic() >= deadline:
                 raise BarcaError(f"run {self.run_id} did not finish within {timeout}s")

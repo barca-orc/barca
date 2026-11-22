@@ -147,12 +147,15 @@ impl RunFilter {
         }
         let gone = in_list(interrupted.iter().map(String::as_str));
         let mut any = Vec::new();
-        let plain: Vec<&str> = self
+        let mut plain: Vec<&str> = self
             .statuses
             .iter()
             .map(String::as_str)
             .filter(|s| *s != "running")
             .collect();
+        if plain.contains(&"failed") && !plain.contains(&"error") {
+            plain.push("error");
+        }
         if !plain.is_empty() {
             any.push(format!("status IN ({})", in_list(plain.iter().copied())));
         }
@@ -302,7 +305,7 @@ mod tests {
         );
         assert_eq!(
             sql(&of(&["failed", "interrupted"]), &["r1"]),
-            "|(status IN ('failed','interrupted') OR run_id IN ('r1'))"
+            "|(status IN ('failed','interrupted','error') OR run_id IN ('r1'))"
         );
         assert_eq!(sql(&of(&["running"]), &[]), "|(status = 'running')");
     }

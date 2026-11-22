@@ -783,13 +783,6 @@
         "reason": "the tag of the failures table's own row union (a failure row or a heading), not a root kind"
       },
       {
-        "file": "hooks/polling.ts",
-        "words": [
-          "error"
-        ],
-        "reason": "the status of a react-query query, not a run's"
-      },
-      {
         "file": "lib/runsPage.ts",
         "words": [
           "failed"
@@ -799,7 +792,6 @@
       {
         "file": "lib/runFeedback.ts",
         "words": [
-          "queued",
           "running",
           "success",
           "cancelled",

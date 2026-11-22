@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use crate::guards::refuse_if_read_only;
 use crate::replay::RunChannel;
 use crate::respond::{json_text, stdout_of};
-use crate::run_model::{RunState, RunStatus};
+use crate::run_model::RunStatus;
 use crate::state::AppState;
 use axum::Extension;
 use axum::extract::{Path, Query, State};
@@ -22,7 +22,9 @@ use axum::response::{IntoResponse, Response, Sse};
 use axum::{Json, http::StatusCode};
 use barca_service::cache::CachePolicy;
 use barca_service::envelope::Context;
-use barca_service::outcome::{Outcome, OutcomeStatus, RunCommand, RunRequest, RunView, Trigger};
+use barca_service::outcome::{
+    Outcome, OutcomeStatus, RunCommand, RunDocument, RunRequest, Trigger,
+};
 use barca_service::run_explain::{Cancellation, CancelledBy};
 use barca_service::served::{
     ActiveStep, LiveRun, RunCancelling, RunHandle, RunLogs, RunSummary, RunViewStatus,
@@ -244,17 +246,12 @@ pub async fn get_target(
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
-/// `GET /status/{run_id}` (alias) — the live state of a run this server started.
+/// `GET /status/{run_id}`: the same durable detail as `/runs/{run_id}`.
 pub async fn status(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<Json<RunState>, ApiError> {
-    state
-        .runs
-        .registry
-        .get(&run_id)
-        .map(|r| Json(r.clone()))
-        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))
+) -> Result<Json<RunDocument>, ApiError> {
+    Ok(Json(view(&state, &run_id).await?.into()))
 }
 
 // ─── cancel ─────────────────────────────────────────────────────────────────
@@ -384,10 +381,10 @@ pub async fn detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(page): Query<StepsQuery>,
-) -> Result<Json<RunView>, ApiError> {
+) -> Result<Json<RunDocument>, ApiError> {
     let limit = (!page.all).then(|| page.limit.unwrap_or(db::RUN_STEPS_LIMIT));
     let offset = if page.all { 0 } else { page.offset };
-    Ok(Json(view_page(&state, &id, limit, offset).await?))
+    Ok(Json(view_page(&state, &id, limit, offset).await?.into()))
 }
 
 /// `GET /runs/{run_id}?limit=N&offset=M` lists at most N of the run's steps (default

@@ -134,12 +134,12 @@ A read-only server refuses every other run with `403`.
 The check is made against the source as it is now: the server keeps the list of nodes between
 requests and reads the files again when one of them has changed size, modification time or
 change time. A run that was started can still fail on its target if the source changes between
-the check and the run; its outcome is then an `error` with the CLI's envelope.
+the check and the run; its outcome is then a `failed` outcome with the CLI's envelope.
 
 Every run is one node: it executes in worker processes on the server's machine, bounded by a
 run pool sized to the machine's CPUs, and is written to `.barca/metadata.db` like a run from the
 command line, with `triggered_by: "api"`. A run that exceeds the run timeout (`--run-timeout`
-or `[server] run_timeout_seconds`; no limit by default) is stopped and ends with an `error`
+or `[server] run_timeout_seconds`; no limit by default) is stopped and ends with a `failed`
 outcome.
 
 ### Following a run
@@ -185,6 +185,7 @@ GET /runs/{run_id}
 
 ```json
 {
+  "run": {
   "run_id": "1b942bb33182",
   "status": "success",
   "command": "get",
@@ -199,8 +200,11 @@ GET /runs/{run_id}
   "steps_total": 2, "steps_executed": 1, "steps_cached": 1,
   "outcome": { "status": "success", "run_id": "1b942bb33182", "final_output": {"_barca_artifact": {"path": ".barca/default/artifacts/pipeline.py:daily_report/9f2c.json", "format": "json", "size_bytes": 8}}, "steps": [], "...": "..." },
   "error": null,
-  "steps": [{ "node_id": "pipeline.py:daily_report", "status": "success", "elapsed_seconds": 0.4, "error": null }],
-  "logs": [{ "node_id": "pipeline.py:daily_report", "seq": 0, "line": "wrote 3 rows", "stream": "stdout", "ts": "2026-10-20T05:00:00.512Z" }]
+  "reason": null
+  },
+  "explanation": null,
+  "steps_page": null,
+  "steps": [{ "node_id": "pipeline.py:daily_report", "status": "success", "elapsed_seconds": 0.4, "error": null }]
 }
 ```
 
@@ -222,7 +226,7 @@ tagged by `status`:
   pointer for binary formats. Several targets carry `targets`, in the order given.
 - `failed`: the CLI's failed-run stdout body (`failed_node`, `error`, `steps`, ...) plus
   `envelope`, the stderr error envelope with the traceback.
-- `cancelled`, `error`: `{"status", "envelope"}` only.
+- `cancelled`, `interrupted`, and failures before execution: `{"status", "envelope"}` only.
 
 The outcome is stored with the run's row (`runs.outcome_json`), so `GET /runs/{run_id}` gives
 the same answer after the server restarts. A run cancelled while it was still queued, or refused
@@ -301,9 +305,9 @@ and `slowest`. The `counts` object gives planned steps and nodes, attempts, retr
 newest first. `limit` defaults to 100 and is bounded to 1–1000. It includes runs from the CLI,
 HTTP and the scheduler in this environment's local metadata DB, plus queued server runs. There
 is no source filter: a historical run remains visible even when its pipeline is no longer served.
-Each row has `first_failure`: `{ node_id, error }`, the run's first failed step (with its partition
+Each row has `failure`: `{ node, error }`, the run's first failed step (with its partition
 key) and the first line of its error, or `null` when no step failed. `error` is only a run-level
-error, so a run whose steps failed usually has `first_failure` and `error: null`. Each row
+error, so a run whose steps failed usually has `failure` and `error: null`. Each row
 also has `line` (experimental), the run in the words of a list row, computed by the server and
 printed as is by the web UI and by `barca history --json`: `{ steps, steps_detail, failure,
 failure_detail }` (`7 ok · 1 failed · 0 cached`; `stopped at orders · KeyError: 'region'`, or
@@ -322,7 +326,7 @@ first, each node under the group the rollup counts it in). Any other `status` is
 Each summary has `id` and `run_id` (the database run id), `handle` (the same id while the
 server keeps the run in memory, `null` otherwise), `command`, `files`, `target`, `status`,
 `triggered_by`, `scheduled_at`, `schedule_id`, UTC `started_at` and `finished_at`,
-`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, `error`, `first_failure` and
+`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, `error`, `failure` and
 `line`; with `?status=running`, also `active_steps` and `now`.
 
 The UI's **Runs** view lists this history and shows what started each run; each run opens its
@@ -347,7 +351,7 @@ from barca import Client
 
 c = Client("http://127.0.0.1:8274")
 run = c.get("daily_report")       # POST /get/{target} (alias), returns immediately
-result = run.wait(timeout=30)     # poll /status (alias) until complete/failed
+result = run.wait(timeout=30)     # poll /status (alias) until terminal
 print(result["status"])
 
 for job in c.schedules():         # GET /schedule
@@ -365,7 +369,8 @@ for job in c.schedules():         # GET /schedule
 separate: they start the `barca` binary for one command and do not talk to a server.
 
 `Client` still talks to the older routes, retained as deprecated compatibility aliases; its
-statuses are those of `GET /status/{run_id}` (`complete`, not `success`).
+responses are the same detail envelope as `GET /runs/{run_id}`, with `run.status` equal to
+`success`, `failed`, `cancelled` or `interrupted` when terminal.
 
 ## Errors
 
@@ -402,3 +407,24 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 Every route, with health, state, the run queue and scheduling, is on
 [Server API Endpoints](/reference/server-api-endpoints/).
+
+### Run lifecycle contract (0.47)
+
+Run status is `pending`, `running`, `success`, `failed`, `cancelled` or `interrupted`.
+Failures outside a step, including timeouts, use `failed`; the error envelope retains its
+`kind` and exit code. Pending requests appear in history, including `--status pending`.
+Every terminal non-success has `reason`; older records without a cause say that no further
+reason was recorded. `failure` still identifies the first failed step, when there is one.
+
+All run and schedule timestamps use RFC 3339 UTC. `GET /runs` uses `run_id` and `failure`
+(with `node` and `error`), matching history. `GET /runs/{id}` and its `/status/{id}` alias
+return `{run, steps, steps_page, explanation}`, as history detail does. Read `run.status`,
+`run.reason`, `run.outcome` and `run.logs` from the nested run. The Python client's
+`Run.status()` and `Run.wait()` return this same envelope.
+
+Migration: replace run status `error` with `failed`, and the displayed `queued` with
+`pending`; replace list `id`/`failure` with `run_id`/`failure`, move flat detail
+fields under `run`, and parse schedule times as RFC 3339 instead of epoch seconds.
+Durations remain numeric seconds. Queue collections and step-wait counts named `queued`
+are counts or containers, not run statuses. Older databases and stored `error` outcomes
+remain readable; reads normalize them without rewriting history.

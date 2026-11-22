@@ -62,6 +62,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "trigger_reason",
     "plan_reasons",
     "cancellation",
+    "terminal_reason",
 ];
 
 /// Every column of `materializations` except its row id.

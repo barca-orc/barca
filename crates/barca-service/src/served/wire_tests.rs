@@ -84,15 +84,15 @@ fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
         failures: 1,
         id: "p.py:daily".into(),
         kind: crate::NodeKind::Asset,
-        last_fired: Some(1_700_000_000),
+        last_fired: Some(crate::time::rfc3339(1_700_000_000)),
         last_run: Some("run-1".into()),
         last_run_id: Some("run-1".into()),
-        last_skipped: Some(1_700_000_100),
+        last_skipped: Some(crate::time::rfc3339(1_700_000_100)),
         last_status: Some("success".into()),
         late: true,
-        late_since: Some(1_700_000_200),
+        late_since: Some(crate::time::rfc3339(1_700_000_200)),
         max_failures: 5,
-        next_fire: Some(1_700_086_400),
+        next_fire: Some(crate::time::rfc3339(1_700_086_400)),
         paused: true,
         paused_until: None,
         queue_bound: false,
@@ -109,17 +109,17 @@ fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
         "id": "p.py:daily",
         "cron": "0 5 * * *",
         "kind": "asset",
-        "next_fire": 1_700_086_400,
-        "last_fired": 1_700_000_000,
+        "next_fire": crate::time::rfc3339(1_700_086_400),
+        "last_fired": crate::time::rfc3339(1_700_000_000),
         "last_run_id": "run-1",
         "last_run": "run-1",
         "last_status": "success",
         "late": true,
-        "late_since": 1_700_000_200,
+        "late_since": crate::time::rfc3339(1_700_000_200),
         "typical_queue_wait_seconds": 3,
         "typical_run_seconds": 40,
         "queue_bound": false,
-        "last_skipped": 1_700_000_100,
+        "last_skipped": crate::time::rfc3339(1_700_000_100),
         "skipped_for": "run-0",
         "skip_reason": "in_flight",
         "paused": true,
@@ -141,9 +141,10 @@ fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
     let pause = SchedulePauseAnswer::Pause {
         id: "p.py:daily".into(),
         paused: true,
-        paused_until: Some(5),
+        paused_until: Some(crate::time::rfc3339(5)),
     };
-    let by_hand = json!({"id": "p.py:daily", "paused": true, "paused_until": 5});
+    let by_hand =
+        json!({"id": "p.py:daily", "paused": true, "paused_until": crate::time::rfc3339(5)});
     assert_eq!(bytes(&pause), by_hand.to_string());
     assert_eq!(
         serde_json::from_value::<SchedulePauseAnswer>(by_hand).unwrap(),
@@ -245,7 +246,6 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
         RunViewStatus::Success,
         RunViewStatus::Failed,
         RunViewStatus::Cancelled,
-        RunViewStatus::Error,
         RunViewStatus::Interrupted,
     ]
     .iter()
@@ -259,7 +259,6 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
             "success",
             "failed",
             "cancelled",
-            "error",
             "interrupted"
         ]
     );

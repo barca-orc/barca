@@ -34,7 +34,7 @@ pub enum QueueState {
 impl QueueState {
     pub fn as_str(self) -> &'static str {
         match self {
-            QueueState::Queued => "queued",
+            QueueState::Queued => "pending",
             QueueState::Running => "running",
             QueueState::Draining => "draining",
         }
@@ -339,7 +339,7 @@ pub async fn progress(
     let mut rows = conn.query(
         "SELECT q.run_id, unixepoch(r.started_at),
                 (SELECT unixepoch(MAX(m.created_at)) FROM materializations m WHERE m.run_id = q.run_id)
-         FROM run_queue q JOIN runs r ON r.run_id = q.run_id WHERE q.state != 'queued'", ())
+         FROM run_queue q JOIN runs r ON r.run_id = q.run_id WHERE q.state NOT IN ('pending', 'queued')", ())
         .await.map_err(failed("reading run progress"))?;
     let mut progress = std::collections::HashMap::new();
     while let Some(row) = rows.next().await.map_err(failed("reading run progress"))? {

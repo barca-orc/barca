@@ -69,6 +69,7 @@ pub const HISTORY_FIELDS: &[&str] = &[
     "schedule_id",
     "client_run_id",
     "failure",
+    "reason",
     "failed_node",
     "error",
     "principal",

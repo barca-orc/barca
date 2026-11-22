@@ -185,6 +185,13 @@ computed locally. Empty/unset values retain configuration and other values are u
 The selected local environment is unchanged. This does not block network I/O in user code.
 The removed `BARCA_STATE=off` spelling and shared-history pull are not current alternatives.
 
+Run lifecycle views use `pending`, `running`, `success`, `failed`, `cancelled` and
+`interrupted`. A failure outside a step still has status `failed`; its envelope preserves
+the failure category and exit code. Every terminal non-success carries a reason; legacy
+records without evidence state that limitation. Accepted pending requests are inspectable
+in history before execution starts, including after restart. Exact envelopes and time
+representations are owned by the HTTP and CLI interface specifications.
+
 ## Invariants
 
 - **INV-TASK-01:** Distinct explicit task invocations execute separately; an asset cache hit
@@ -298,3 +305,5 @@ Full bootstrap and validation still retain work proportional to partition count:
 [#655](https://github.com/barca-orc/barca/issues/655). Bounded scheduling is an accepted target,
 not a current whole-engine memory guarantee. Performance workload scope and budgets are
 owned by [the performance contract](performance.md).
+
+Conformance (run lifecycle, #943): [CLI, HTTP, persistence and restart](../../python/tests/test_run_status_contract.py).

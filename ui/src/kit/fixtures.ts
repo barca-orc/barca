@@ -57,7 +57,7 @@ const ago = (seconds: number) => new Date(NOW_MS - seconds * 1000).toISOString()
 const sqlTime = (seconds: number) => ago(seconds).replace('T', ' ').slice(0, 19)
 
 export const STATUS_KINDS = variants({
-  queued: 1, running: 1, success: 1, failed: 1, cancelled: 1, skipped: 1,
+  pending: 1, running: 1, success: 1, failed: 1, cancelled: 1, skipped: 1,
 } satisfies Record<StatusKind, 1>)
 
 export const NODE_KINDS = variants({ asset: 1, task: 1, sensor: 1 } satisfies Record<NodeKind, 1>)
@@ -192,7 +192,7 @@ export const logLines: LogLine[] = [
 
 /** What the inspector is given for each feedback it shows (`runFeedback` reads each back). */
 export const feedbackInputs = {
-  idle: { status: 'queued', logs: [], error: null },
+  idle: { status: 'pending', logs: [], error: null },
   streaming: { status: 'running', logs: logLines.slice(0, 3), error: null },
   output: { status: 'success', logs: logLines, error: null },
   done: { status: 'success', logs: [], error: null },
@@ -264,7 +264,7 @@ export const resetPhases = {
  */
 function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunView {
   const { run, nodes, explanation } = scenario(name)
-  const { first_failure, ...facts } = run
+  const { failure, ...facts } = run
   const live = run.status === 'pending' || run.status === 'running'
   const listed = run.status === 'pending' || run.steps_executed === 0 ? [] : [
     { ...step('pipeline.py:checkout_events', 'cached'), elapsed_seconds: null },
@@ -272,6 +272,7 @@ function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunVi
   ]
   return {
     run_id: '127',
+    reason: null,
     command: 'get',
     files: ['pipeline.py'],
     scheduled_at: null,
@@ -279,7 +280,7 @@ function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunVi
     finished_at: live ? null : ago(150),
     elapsed_seconds: live ? null : 42.3,
     client_run_id: null,
-    failure: first_failure ? { node: first_failure.node_id, error: first_failure.error } : null,
+    failure: failure ? { node: failure.node, error: failure.error } : null,
     trigger_reason: null,
     waiting_for: null,
     queue: null,
@@ -318,9 +319,6 @@ export const runByStatus = {
   failed: runDetail(RUN_IDS.failed),
   cancelled: runView('cancelled by the server stopping', {
     outcome: { status: 'cancelled', envelope: envelope('cancelled', 'cancelled by DELETE /runs/127', null) },
-  }),
-  error: runView('error', {
-    outcome: { status: 'error', envelope: envelope('infra', 'could not start a worker: python3 not found', 'Set [python] interpreter in barca.toml.') },
   }),
   interrupted: runView('interrupted'),
 } satisfies Record<RunViewStatus, RunView>
@@ -366,11 +364,11 @@ function summary(name: RunScenarioName, id: string, overrides: Partial<RunSummar
   const view = runView(name)
   const { run, line } = scenario(name)
   return {
-    id, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
+    reason: view.reason, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
     status: view.status, triggered_by: view.triggered_by, scheduled_at: null, schedule_id: null,
     started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
     steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
-    error: view.error, first_failure: run.first_failure, principal: view.principal, trigger_reason: view.trigger_reason,
+    error: view.error, failure: run.failure, principal: view.principal, trigger_reason: view.trigger_reason,
     cancellation: view.cancellation, line,
     ...overrides,
   }

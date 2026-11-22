@@ -28,7 +28,7 @@ fn root() -> Option<String> {
 pub async fn list(State(reads): State<Reads>) -> Result<Response, ApiError> {
     let dag = reads.loaded_dag().await?;
     let assets = barca_service::queries::list_assets_from_dag(&dag);
-    let next_fires = crate::schedule_view::next_fires(&dag);
+    let next_fires = crate::schedule_view::next_fires(&dag, &reads.config.timezone);
     let rendered = barca_service::report::render_list(
         &assets,
         assets.len(),

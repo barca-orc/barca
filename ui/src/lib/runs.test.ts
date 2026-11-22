@@ -8,7 +8,7 @@ describe('run status', () => {
     for (const s of ['success', 'failed', 'cancelled', 'error', 'interrupted']) expect(runIsLive(s)).toBe(false)
   })
   it('maps each status to a visual status', () => {
-    expect(runStatus('pending')).toBe('queued')
+    expect(runStatus('pending')).toBe('pending')
     expect(runStatus('running')).toBe('running')
     expect(runStatus('success')).toBe('success')
     expect(runStatus('failed')).toBe('failed')
@@ -23,7 +23,7 @@ describe('run status', () => {
     expect(parseRunStatus('nope')).toBeNull()
   })
   it('labels pending as queued and keeps unknown statuses as given', () => {
-    expect(runLabel('pending')).toBe('queued')
+    expect(runLabel('pending')).toBe('pending')
     expect(runLabel('complete')).toBe('success')
     expect(runLabel('weird')).toBe('weird')
   })

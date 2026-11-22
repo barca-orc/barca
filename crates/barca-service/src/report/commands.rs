@@ -602,6 +602,7 @@ struct HistoryItem<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_reasons: &'a Option<crate::run_explain::PlanReasons>,
     principal: &'a Option<String>,
+    reason: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retries: &'a Option<i64>,
     run_id: &'a str,
@@ -627,6 +628,7 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
     fn from(run: &'a crate::db::RunRecord) -> Self {
         let crate::db::RunRecord {
             run_id,
+            reason,
             command,
             files,
             target,
@@ -656,6 +658,7 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             node: &f.node,
         });
         HistoryItem {
+            reason,
             attempts,
             cancellation,
             client_run_id,
@@ -1740,7 +1743,11 @@ pub fn render_list(
             };
             let mut row = vec![a.id.clone(), kind, freshness];
             if has_schedule {
-                row.push(next_fires.get(&a.id).cloned().unwrap_or_else(|| "-".into()));
+                row.push(next_fires.get(&a.id).map(|next| {
+                    chrono::DateTime::parse_from_rfc3339(next)
+                        .map(|at| at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|_| next.clone())
+                }).unwrap_or_else(|| "-".into()));
             }
             row.push(list_or_dash(&a.inputs));
             if has_env {
@@ -2399,6 +2406,7 @@ mod history_json_tests {
     #[test]
     fn history_json_is_the_same_bytes_as_the_record_through_values() {
         let full = RunRecord {
+            reason: None,
             run_id: "run-1".into(),
             command: "run".into(),
             files: vec!["a.py".into(), "dir/b \"q\".py".into()],

@@ -16,7 +16,7 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
   if (!notice) return null
   const name = notice.target ? shortName(notice.target) : null
   const status = match(notice)
-    .with({ kind: 'starting' }, { kind: 'queued' }, () => 'queued' as const)
+    .with({ kind: 'starting' }, { kind: 'pending' }, () => 'pending' as const)
     .with({ kind: 'running' }, () => 'running' as const)
     .with({ kind: 'rejected' }, () => 'failed' as const)
     .with({ kind: 'finished' }, (n) => n.status)
@@ -24,7 +24,7 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
   const text = match(notice)
     .with({ kind: 'starting' }, () => 'starting…')
     .with({ kind: 'rejected' }, (n) => `could not start: ${n.error}`)
-    .with({ kind: 'queued' }, (n) => (n.restart ? 'queued · starts after the server restarts' : 'queued'))
+    .with({ kind: 'pending' }, (n) => (n.restart ? 'queued · starts after the server restarts' : 'pending'))
     .with({ kind: 'running' }, (n) => `running · ${n.total === null ? plural(n.done, 'step') : `${n.done.toLocaleString()} of ${plural(n.total, 'step')}`}`)
     .with({ kind: 'finished' }, (n) => n.summary)
     .exhaustive()

@@ -388,3 +388,8 @@ both versions. This is advisory; schema compatibility still decides admission. T
 is deduplicated within a process. Missing or unrecognized writer versions do not block access.
 Conformance: `python/tests/test_version_warnings.py` and the writer transaction tests in
 `crates/barca-db/src/db/schema/writer.rs`.
+
+Run rows may carry nullable `terminal_reason`, retained when large outcomes are trimmed.
+Legacy `error` rows read as `failed`. Queue state writes use `pending`; old `queued` rows
+remain readable and can transition to running. Storage timestamps remain compatible;
+run-history responses normalize them to RFC 3339 UTC.

@@ -112,7 +112,7 @@ impl<'a> From<&'a barca_db::db::RunRecord> for RunLineFacts<'a> {
             steps_executed: r.steps_executed,
             steps_cached: r.steps_cached,
             steps_failed: r.steps_failed,
-            error: None,
+            error: r.reason.as_deref(),
             first_failure: r
                 .failure
                 .as_ref()
@@ -443,7 +443,7 @@ pub struct StatusCounts {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub failed: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub error: usize,
+    pub pending: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub cancelled: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -524,6 +524,10 @@ impl ActivityHour {
                 by_status.success += runs;
                 self.ok += runs;
             }
+            "pending" => {
+                by_status.pending += runs;
+                self.in_progress += runs;
+            }
             "running" => {
                 by_status.running += runs;
                 self.in_progress += runs;
@@ -535,7 +539,7 @@ impl ActivityHour {
                     "cancelled" => by_status.cancelled += runs,
                     "interrupted" => by_status.interrupted += runs,
                     // `error`, and a status this barca does not know.
-                    _ => by_status.error += runs,
+                    _ => by_status.failed += runs,
                 }
             }
         }
@@ -1128,7 +1132,7 @@ mod tests {
             StatusCounts {
                 running: 1,
                 interrupted: 1,
-                error: 1,
+                failed: 1,
                 ..Default::default()
             }
         );

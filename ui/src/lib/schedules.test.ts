@@ -76,7 +76,7 @@ describe('scheduleRows', () => {
   ]
   const states = [
     state('job.py:refresh', {
-      next_run: now / 1000 + 300,
+      next_run: new Date(now + 300 * 1000).toISOString(),
       last_materialization: {
         status: 'failed',
         created_at: '2026-10-06 11:50:00',
@@ -89,7 +89,7 @@ describe('scheduleRows', () => {
         error: 'boom',
       },
     }),
-    state('job.py:heartbeat', { next_run: now / 1000 + 10 }),
+    state('job.py:heartbeat', { next_run: new Date(now + 10 * 1000).toISOString() }),
     state('job.py:manual_thing', { kind: 'asset' }),
   ]
 
@@ -121,7 +121,7 @@ describe('scheduleRows', () => {
 
 describe('lateness', () => {
   const now = Date.parse('2026-11-16T12:21:30Z')
-  const s = (iso: string) => Date.parse(iso) / 1000
+  const s = (iso: string) => iso
   const stands = (over: Partial<ScheduleStatus> = {}): ScheduleStatus => ({
     cron: '* * * * *', next_fire: null, last_fired: null, last_status: null, last_run_id: null,
     state: 'on_time', state_detail: null, late: false, late_since: null, failures: 0, max_failures: 5, failing: false, paused: false,
@@ -132,7 +132,7 @@ describe('lateness', () => {
   it('shows a held schedule without a next-run countdown', () => {
     const id = 'job.py:pulse'
     const [row] = scheduleRows([asset(id, '* * * * *')], [
-      state(id, { next_run: now / 1000 + 10, schedule: stands({ state: 'held', state_detail: 'held after 3 failed ticks' }) }),
+      state(id, { next_run: new Date(now + 10 * 1000).toISOString(), schedule: stands({ state: 'held', state_detail: 'held after 3 failed ticks' }) }),
     ])
     expect(row).toMatchObject({ standing: 'held', nextRunMs: null, detail: 'held after 3 failed ticks' })
   })
@@ -170,7 +170,7 @@ describe('lateness', () => {
     ])
     expect(rows[0]?.last).toEqual({ status: 'success', at: '2026-11-16T12:08:00Z', runId: 'r3' })
     expect(rows[1]?.last).toEqual({ status: 'pending', at: '2026-11-16T12:00:00Z', runId: 'r7' })
-    expect(lastStatusLabel('pending')).toBe('queued')
+    expect(lastStatusLabel('pending')).toBe('pending')
     expect(lastStatusLabel('failed')).toBe('failed')
     expect(rows[2]?.last).toBeNull()
   })

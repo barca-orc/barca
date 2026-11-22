@@ -112,15 +112,18 @@ def test_real_client_requests_and_terminal_parsing_match_openapi(server, monkeyp
         server.schedules, "the scheduler to publish the configured job", timeout=10, interval=0.02
     )
     assert schedules[0]["cron"] == "0 0 1 1 *"
-    assert server.get("value").wait(timeout=20, poll=0.02)["status"] == "complete"
-    assert server.get("sub/pipeline.py:value").wait(timeout=20, poll=0.02)["status"] == "complete"
-    assert server.run("publish").wait(timeout=20, poll=0.02)["status"] == "complete"
-    assert server.get("broken").wait(timeout=20, poll=0.02)["status"] == "failed"
+    assert server.get("value").wait(timeout=20, poll=0.02)["run"]["status"] == "success"
+    assert (
+        server.get("sub/pipeline.py:value").wait(timeout=20, poll=0.02)["run"]["status"]
+        == "success"
+    )
+    assert server.run("publish").wait(timeout=20, poll=0.02)["run"]["status"] == "success"
+    assert server.get("broken").wait(timeout=20, poll=0.02)["run"]["status"] == "failed"
     # The no-target current Client maps to POST /run, not a proposed command endpoint.
-    assert server.get().wait(timeout=20, poll=0.02)["status"] == "failed"
+    assert server.get().wait(timeout=20, poll=0.02)["run"]["status"] == "failed"
     slow = server.run("slow")
     assert slow.cancel()["status"] == "cancelling"
-    assert slow.wait(timeout=20, poll=0.02)["status"] == "cancelled"
+    assert slow.wait(timeout=20, poll=0.02)["run"]["status"] == "cancelled"
     with pytest.raises(BarcaError, match=r"failed \(404\)"):
         server.get("no-such-node")
     with pytest.raises(BarcaError, match=r"failed \(409\)"):
@@ -161,7 +164,7 @@ def test_real_client_partial_load_health_and_empty_admission_match_openapi(tmp_p
             affected = {node for error in health["load_errors"] for node in error["affected_nodes"]}
             assert affected == {"pipeline.py:blocked", "pipeline.py:dependent"}
             result = client.get("safe").wait(timeout=20, poll=0.02)
-            assert result["status"] == "complete"
+            assert result["run"]["status"] == "success"
     finally:
         process.kill()
 
@@ -250,8 +253,10 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         assert pointer["format"] == "json"
         assert json.loads((tmp_path / pointer["path"]).read_text()) == {"n": 2}
         view, _ = _checked(server, "GET", f"/runs/{run_id}", 200)
-        assert view["triggered_by"] == "api" and view["outcome"] == finished["outcome"]
-        assert view["waiting_for"] is None
+        assert (
+            view["run"]["triggered_by"] == "api" and view["run"]["outcome"] == finished["outcome"]
+        )
+        assert view["run"]["waiting_for"] is None
         status, content_type, raw = _raw(server, "GET", f"/runs/{run_id}/output")
         assert (status, content_type, json.loads(raw)) == (200, "application/json", {"n": 2})
         # `values` (`get -o value`): the server reads the value, as `-o value --json` prints it.
@@ -295,7 +300,7 @@ def test_run_contract_and_inspection_match_openapi_and_the_cli(tmp_path):
         assert nodes["pipeline.py:after_broken"]["blocked_by"] == "pipeline.py:broken"
         assert [n["node_id"] for n in view["steps_page"]["nodes"]][-1] == "pipeline.py:after_broken"
         listed, _ = _checked(server, "GET", "/runs", 200)
-        [row] = [r for r in listed["runs"] if r["id"] == failed["run_id"]]
+        [row] = [r for r in listed["runs"] if r["run_id"] == failed["run_id"]]
         assert row["steps_failed"] == 1
         _checked(server, "DELETE", f"/runs/{failed['run_id']}", 409)
         _checked(server, "POST", "/runs", 404, {"command": "get", "targets": ["missing"]})

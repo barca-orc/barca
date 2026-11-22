@@ -121,7 +121,7 @@ export function RunOverview({ run }: { run: RunView }) {
     refetchInterval: recovering(2_000),
     retry: false,
   })
-  const row = inFlight.data?.runs.find((r) => r.id === run.run_id || r.run_id === run.run_id)
+  const row = inFlight.data?.runs.find((r) => r.run_id === run.run_id || r.run_id === run.run_id)
   return (
     <RunOverviewView
       run={run}

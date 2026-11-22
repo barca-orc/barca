@@ -838,7 +838,7 @@ impl Project {
         let queued = |node: &str, trigger: serde_json::Value| {
             serde_json::json!({
                 "command": "get", "policy": {"kind": "cache_aware"}, "trigger": trigger,
-                "nodes": [self.id(node)],
+                "nodes": [self.id(node)], "targets": [node], "files": [],
             })
             .to_string()
         };
@@ -1022,15 +1022,15 @@ impl Project {
                 );
                 fields.insert(
                     "next_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.next_fire)),
+                    serde_json::json!(slot.and_then(|s| s.next_fire).map(barca_model::time::rfc3339)),
                 );
                 fields.insert(
                     "prev_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.prev_fire)),
+                    serde_json::json!(slot.and_then(|s| s.prev_fire).map(barca_model::time::rfc3339)),
                 );
                 fields.insert(
                     "late_since".into(),
-                    serde_json::json!(slot.and_then(|s| s.late_since)),
+                    serde_json::json!(slot.and_then(|s| s.late_since).map(barca_model::time::rfc3339)),
                 );
                 // No run of this server's is in flight: the queued one has not started.
                 fields.insert("running".into(), serde_json::Value::Null);
@@ -1101,7 +1101,7 @@ impl Project {
                     target: record.target.as_deref(),
                 });
                 let mut row = serde_json::json!({
-                    "id": record.run_id, "handle": null, "run_id": record.run_id,
+                    "handle": null, "run_id": record.run_id, "reason": record.reason,
                     "command": record.command, "files": record.files, "target": record.target,
                     "status": record.status, "triggered_by": record.triggered_by,
                     "scheduled_at": record.scheduled_at, "schedule_id": record.schedule_id,
@@ -1111,7 +1111,7 @@ impl Project {
                     "steps_total": record.steps_total, "steps_executed": record.steps_executed,
                     "steps_cached": record.steps_cached,
                     "error": null,
-                    "first_failure": first_failure.map(|(node_id, error)| serde_json::json!({"node_id": node_id, "error": error})),
+                    "failure": first_failure.map(|(node_id, error)| serde_json::json!({"node": node_id, "error": error})),
                     "principal": record.principal, "trigger_reason": record.trigger_reason,
                     "cancellation": record.cancellation,
                     "line": line,
@@ -1167,6 +1167,7 @@ impl Project {
             }
         }
         let mut view = crate::outcome::RunView {
+            reason: record.reason.clone(),
             run_id: record.run_id.clone(),
             status: record.status.clone(),
             command: record.command.clone(),
@@ -1217,7 +1218,7 @@ impl Project {
             &crate::run_explanation::output_targets(view.target.as_deref(), view.job.as_deref()),
             &view.steps,
         );
-        serde_json::to_value(view).unwrap()
+        serde_json::to_value(crate::outcome::RunDocument::from(view)).unwrap()
     }
 
     /// `value` as checked-in text: the scratch directory is not part of an id or a path.

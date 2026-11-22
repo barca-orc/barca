@@ -177,7 +177,7 @@ def test_multi_target_counts_match_queue_history_and_run_detail(project, serve):
     assert counts["ok"] + counts["failed"] + counts["cached"] + counts["not_reached"] == 3
     assert len(detail["outputs"]) == 3
     rows = server.request("GET", "/runs")[1]["runs"]
-    row = next(row for row in rows if row["id"] == run_id)["line"]
+    row = next(row for row in rows if row["run_id"] == run_id)["line"]
     assert row["steps"] == counts["outcome"]
     assert row["target"] == detail["target_line"] == "alpha +2 more"
 
@@ -208,7 +208,7 @@ def output(middle: int) -> int:
     assert counts["ok"] == counts["cached"] == counts["retries"] == 0
     assert counts["not_reached"] == counts["not_reached_nodes"] == 2
     assert counts["outcome"] == "0 ok · 1 failed · 0 cached · 2 not reached"
-    row = next(r for r in server.get("/runs")["runs"] if r["id"] == run_id)
+    row = next(r for r in server.get("/runs")["runs"] if r["run_id"] == run_id)
     assert row["line"]["steps"] == counts["outcome"]
     history = barca(project, "history", run_id, "--server", server.url, "--json")
     assert history.returncode == 0, history.stderr

@@ -26,7 +26,7 @@ describe('kit fixtures', () => {
   })
 
   it('has a running node at each step', () => {
-    for (const step of variants(runningByStep)) expect(runningStatus(runningByStep[step])).toBe(step === 'waiting' ? 'queued' : step)
+    for (const step of variants(runningByStep)) expect(runningStatus(runningByStep[step])).toBe(step === 'running' ? 'running' : 'pending')
   })
 
   it('has inspector inputs for each feedback', () => {

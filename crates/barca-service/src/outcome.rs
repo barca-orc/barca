@@ -196,8 +196,8 @@ pub enum OutcomeStatus {
     Failed,
     /// Cancelled. The outcome is `envelope` only.
     Cancelled,
-    /// barca or the request failed (`usage` or `infra`). The outcome is `envelope` only.
-    Error,
+    /// Execution stopped without a completion record.
+    Interrupted,
 }
 
 impl OutcomeStatus {
@@ -206,7 +206,7 @@ impl OutcomeStatus {
             OutcomeStatus::Success => "success",
             OutcomeStatus::Failed => "failed",
             OutcomeStatus::Cancelled => "cancelled",
-            OutcomeStatus::Error => "error",
+            OutcomeStatus::Interrupted => "interrupted",
         }
     }
 }
@@ -215,7 +215,7 @@ impl OutcomeStatus {
 ///
 /// - `success`: the exact `barca get --json` / `barca run --json` body;
 /// - `failed`: the CLI's failed-run stdout body plus `envelope`, the stderr error envelope;
-/// - `cancelled`, `error`: `{"status", "envelope"}`.
+/// - `cancelled`, `interrupted`, and failures before execution: `{"status", "envelope"}`.
 ///
 /// Kept as text, not a parsed value, so the order of a multi-target run's `targets` (the order
 /// they were given in) is what the client prints.
@@ -226,7 +226,15 @@ pub struct Outcome(Box<RawValue>);
 impl Outcome {
     /// Read an outcome back from its JSON text.
     pub fn from_text(text: impl Into<String>) -> Result<Self, String> {
-        let raw = RawValue::from_string(text.into()).map_err(|e| e.to_string())?;
+        let text = text.into();
+        let mut value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let text = if value["status"] == "error" {
+            value["status"] = "failed".into();
+            value.to_string()
+        } else {
+            text
+        };
+        let raw = RawValue::from_string(text).map_err(|e| e.to_string())?;
         let outcome = Self(raw);
         outcome.parsed()?;
         Ok(outcome)
@@ -255,7 +263,7 @@ impl Outcome {
             .get("status")
             .and_then(Value::as_str)
             .ok_or_else(|| "an outcome has a string `status`".to_string())?;
-        if !["success", "failed", "cancelled", "error"].contains(&status) {
+        if !["success", "failed", "cancelled", "interrupted"].contains(&status) {
             return Err(format!("unknown outcome status '{status}'"));
         }
         Ok(value)
@@ -336,7 +344,7 @@ impl Outcome {
             }
             (ErrorKind::StepFailed, None) => Self::ended(OutcomeStatus::Failed, &envelope),
             (ErrorKind::Cancelled, _) => Self::ended(OutcomeStatus::Cancelled, &envelope),
-            _ => Self::ended(OutcomeStatus::Error, &envelope),
+            _ => Self::ended(OutcomeStatus::Failed, &envelope),
         }
     }
 
@@ -358,7 +366,8 @@ impl Outcome {
             Some("success") => OutcomeStatus::Success,
             Some("failed") => OutcomeStatus::Failed,
             Some("cancelled") => OutcomeStatus::Cancelled,
-            _ => OutcomeStatus::Error,
+            Some("interrupted") => OutcomeStatus::Interrupted,
+            _ => OutcomeStatus::Failed,
         }
     }
 
@@ -421,7 +430,8 @@ impl Outcome {
         let status = self.status();
         let multi = value.get("targets").is_some();
         let rendered = match status {
-            OutcomeStatus::Cancelled | OutcomeStatus::Error => RenderedOutput::default(),
+            OutcomeStatus::Cancelled | OutcomeStatus::Interrupted => RenderedOutput::default(),
+            OutcomeStatus::Failed if value.get("run_id").is_none() => RenderedOutput::default(),
             _ if multi => {
                 #[derive(Deserialize)]
                 struct Targets {
@@ -551,8 +561,10 @@ impl<'de> Deserialize<'de> for OrderedMap {
 pub struct RunView {
     /// The database run id, the one `barca history` shows.
     pub run_id: String,
-    /// `pending`, `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
+    /// `pending`, `running`, `success`, `failed`, `cancelled` or `interrupted`.
     pub status: String,
+    /// Why a terminal run did not succeed; null while live or successful.
+    pub reason: Option<String>,
     /// `get` or `run`.
     pub command: String,
     /// The targets as given, comma-separated; `null` for every asset.
@@ -610,6 +622,7 @@ pub struct RunView {
     /// from its attempts, its targets as a list and what became of them, and how far a run in
     /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.
     /// Experimental.
+    #[serde(skip)]
     pub explanation: crate::run_explanation::RunExplanation,
     /// The run's full result once it finished; `null` while it runs, and for runs not started
     /// through `barca serve`.
@@ -620,11 +633,34 @@ pub struct RunView {
     /// Each step the run recorded, then each step it streamed and has not recorded yet: at
     /// most `?limit=N` of them (default 1000, failed recorded steps first), every one with
     /// `?all=true`.
+    #[serde(skip)]
     pub steps: Vec<crate::db::RunStep>,
     /// How many steps there are in all, and whether `steps` lists fewer (#623).
+    #[serde(skip)]
     pub steps_page: crate::db::StepsPage,
     /// The lines the run's steps printed.
     pub logs: Vec<crate::db::LogEntry>,
+}
+
+/// The shared run detail envelope. Execution data and explanation have one location.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunDocument {
+    pub run: RunView,
+    pub steps: Vec<crate::db::RunStep>,
+    pub steps_page: crate::db::StepsPage,
+    pub explanation: crate::run_explanation::RunExplanation,
+}
+
+impl From<RunView> for RunDocument {
+    fn from(mut run: RunView) -> Self {
+        Self {
+            steps: std::mem::take(&mut run.steps),
+            steps_page: std::mem::take(&mut run.steps_page),
+            explanation: std::mem::take(&mut run.explanation),
+            run,
+        }
+    }
 }
 
 impl<'a> From<&'a RunView> for crate::run_explanation::RunFacts<'a> {
@@ -822,7 +858,7 @@ mod tests {
         assert_eq!(cancelled.status(), OutcomeStatus::Cancelled);
         assert_eq!(cancelled.exit_code(), 130);
         let usage = Outcome::of_error(BarcaError::Usage("no such thing".into()), &ctx);
-        assert_eq!(usage.status(), OutcomeStatus::Error);
+        assert_eq!(usage.status(), OutcomeStatus::Failed);
         assert_eq!(usage.exit_code(), 2);
         let value: Value = serde_json::from_str(usage.text()).unwrap();
         assert_eq!(value["envelope"]["kind"], "usage");

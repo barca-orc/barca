@@ -3,10 +3,7 @@ import type { Cancellation } from "./Cancellation";
 import type { LogEntry } from "./LogEntry";
 import type { PlanReasons } from "./PlanReasons";
 import type { QueuePlace } from "./QueuePlace";
-import type { RunExplanation } from "./RunExplanation";
 import type { RunFailure } from "./RunFailure";
-import type { RunStep } from "./RunStep";
-import type { StepsPage } from "./StepsPage";
 import type { TriggeredBy } from "./TriggeredBy";
 import type { WaitingFor } from "./WaitingFor";
 
@@ -21,9 +18,13 @@ export type RunView = {
  */
 run_id: string,
 /**
- * `pending`, `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
+ * `pending`, `running`, `success`, `failed`, `cancelled` or `interrupted`.
  */
 status: string,
+/**
+ * Why a terminal run did not succeed; null while live or successful.
+ */
+reason: string | null,
 /**
  * `get` or `run`.
  */
@@ -94,13 +95,6 @@ waiting_for: WaitingFor | null,
  */
 queue: QueuePlace | null,
 /**
- * The run in words (#956): its steps grouped by the reason they ran, its retries apart
- * from its attempts, its targets as a list and what became of them, and how far a run in
- * progress is. The same object as `explanation` of `barca history RUN_ID --json`.
- * Experimental.
- */
-explanation: RunExplanation,
-/**
  * The run's full result once it finished; `null` while it runs, and for runs not started
  * through `barca serve`.
  */
@@ -109,16 +103,6 @@ outcome: Record<string, unknown> | null,
  * The first error of the run, in one line, for a list or a page title.
  */
 error: string | null,
-/**
- * Each step the run recorded, then each step it streamed and has not recorded yet: at
- * most `?limit=N` of them (default 1000, failed recorded steps first), every one with
- * `?all=true`.
- */
-steps: Array<RunStep>,
-/**
- * How many steps there are in all, and whether `steps` lists fewer (#623).
- */
-steps_page: StepsPage,
 /**
  * The lines the run's steps printed.
  */

@@ -898,7 +898,7 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all", "status", "target", "triggered_by", "not_triggered_by", "since", "until", "search"])]
         reconcile: Option<String>,
         /// Only runs with one of these statuses (comma-separated): success, failed, cancelled,
-        /// error, running, interrupted; not_successful is every one but success and running
+        /// pending, running, interrupted; not_successful selects failed, cancelled and interrupted
         #[arg(long, value_name = "STATUS[,...]")]
         status: Option<String>,
         /// Only runs whose target or job is this node (a function name or node id); runs of

@@ -175,16 +175,17 @@ pub(crate) async fn recorded_queue(
     )
 }
 
-/// Each scheduled node's next fire time in this machine's local time, as `barca list` shows.
+/// Each scheduled node's next fire time as RFC 3339 in the server's configured zone.
 pub(crate) fn next_fires(
     dag: &barca_service::dag::Dag,
+    timezone: &str,
 ) -> std::collections::HashMap<String, String> {
     barca_service::schedule::describe_schedule_from_dag(
         Some(dag),
-        &barca_service::schedule::Zone::Local,
+        &barca_service::schedule::Zone::parse(timezone).unwrap_or(barca_service::schedule::Zone::Local),
     )
     .into_iter()
-    .filter_map(|j| j.next_fire_local.map(|t| (j.id, t)))
+    .filter_map(|j| j.next_fire.map(|t| (j.id, barca_service::time::rfc3339(t))))
     .collect()
 }
 

@@ -14,7 +14,7 @@ describe('node kind words', () => {
 
 describe('the run lifecycle table', () => {
   it('names each status by its own word, and pulses only running work', () => {
-    for (const status of ['queued', 'running', 'success', 'failed', 'cancelled', 'skipped'] as const) {
+    for (const status of ['pending', 'running', 'success', 'failed', 'cancelled', 'skipped'] as const) {
       expect(statusMeta(status).label).toBe(status)
       expect(statusMeta(status).live).toBe(status === 'running')
     }

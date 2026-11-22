@@ -63,7 +63,7 @@ export function dataSignalSets(states: readonly NodeState[], nowMs: number = Dat
     if (older) behind.set(s.id, signalLine(older))
     else if (s.health_reason === 'schedule_late') {
       // Late is the server's word, the one the Schedules page shows; this only says by how much.
-      const by = s.late_since === null ? '' : `: ${formatLate(s.late_since * 1000, nowMs)}`
+      const by = s.late_since === null ? '' : `: ${formatLate(Date.parse(s.late_since), nowMs)}`
       behind.set(s.id, `schedule missed its slot${by}`)
     }
   }

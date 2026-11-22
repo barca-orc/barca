@@ -348,7 +348,7 @@ async fn execute(
         }
         Ok(RunResult::Multi(m)) => Outcome::multi(&m, spec.command, &ctx),
         Err(BarcaError::Cancelled) if timed_out => Outcome::ended(
-            OutcomeStatus::Error,
+            OutcomeStatus::Failed,
             &ErrorEnvelope::from_prose(ErrorKind::Infra, {
                 let (limit, source) = timeout.clone().unwrap_or_default();
                 format!(
@@ -457,7 +457,7 @@ pub(super) async fn finish(
         r.status = match status {
             OutcomeStatus::Success => RunStatus::Complete,
             OutcomeStatus::Cancelled => RunStatus::Cancelled,
-            OutcomeStatus::Failed | OutcomeStatus::Error => RunStatus::Failed,
+            OutcomeStatus::Failed | OutcomeStatus::Interrupted => RunStatus::Failed,
         };
         // The outcome holds what the run returned; the result is kept for its pointer and
         // counts, not for every key of a partitioned target (#623).

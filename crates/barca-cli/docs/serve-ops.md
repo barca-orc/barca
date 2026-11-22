@@ -427,5 +427,27 @@ outcome: `run timed out after 240s (Schedule(timeout_seconds=) of sync)`, naming
 that applied. Before 0.31.0 every run under `barca serve` stopped at 600 seconds, a limit that was
 not configurable; `--run-timeout 600` restores it.
 
+
+### Run lifecycle contract (0.47)
+
+Run status is `pending`, `running`, `success`, `failed`, `cancelled` or `interrupted`.
+Failures outside a step, including timeouts, use `failed`; the error envelope retains its
+`kind` and exit code. Pending requests appear in history, including `--status pending`.
+Every terminal non-success has `reason`; older records without a cause say that no further
+reason was recorded. `failure` still identifies the first failed step, when there is one.
+
+All run and schedule timestamps use RFC 3339 UTC. `GET /runs` uses `run_id` and `failure`
+(with `node` and `error`), matching history. `GET /runs/{id}` and its `/status/{id}` alias
+return `{run, steps, steps_page, explanation}`, as history detail does. Read `run.status`,
+`run.reason`, `run.outcome` and `run.logs` from the nested run. The Python client's
+`Run.status()` and `Run.wait()` return this same envelope.
+
+Migration: replace run status `error` with `failed`, and the displayed `queued` with
+`pending`; replace list `id`/`first_failure` with `run_id`/`failure`, move flat detail
+fields under `run`, and parse schedule times as RFC 3339 instead of epoch seconds.
+Durations remain numeric seconds. Queue collections and step-wait counts named `queued`
+are counts or containers, not run statuses. Older databases and stored `error` outcomes
+remain readable; reads normalize them without rewriting history.
+
 See also: `barca docs scheduling`, `barca docs server-mode`, `barca docs telemetry`,
 `barca docs contract`.

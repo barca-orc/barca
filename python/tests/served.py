@@ -238,7 +238,13 @@ class Serve:
         return body
 
     def run(self, run_id: str) -> dict:
-        return self.request("GET", f"/runs/{run_id}")[1]
+        doc = self.request("GET", f"/runs/{run_id}")[1]
+        return {
+            **doc["run"],
+            "steps": doc["steps"],
+            "steps_page": doc["steps_page"],
+            "explanation": doc["explanation"],
+        }
 
     def wait(self, what: str, check, timeout: float = 60):
         """Poll `check` until it returns something truthy. A server that is not answering
@@ -279,7 +285,7 @@ class Serve:
         """`GET /runs/{id}` once the run has ended."""
         return self.wait(
             f"run {run_id} to end",
-            lambda: (r := self.get(f"/runs/{run_id}"))["status"] not in LIVE and r,
+            lambda: (r := self.run(run_id))["status"] not in LIVE and r,
         )
 
 

@@ -141,7 +141,14 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         live,
         ..
     } = req;
-    let record = db::get_run(read_path, id).await?;
+    let record = match crate::queries::pending_runs(read_path)
+        .await?
+        .into_iter()
+        .find(|r| r.run_id == id)
+    {
+        Some(record) => Some(record),
+        None => db::get_run(read_path, id).await?,
+    };
     let stored = match live {
         Some(LiveRun {
             outcome: Some(_), ..
@@ -155,6 +162,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         (Some(record), _) => RunView {
             run_id: record.run_id.clone(),
             status: record.status.clone(),
+            reason: record.reason.clone(),
             command: record.command.clone(),
             target: record.target.clone(),
             files: record.files.clone(),
@@ -191,6 +199,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         (None, Some(run)) => RunView {
             run_id: run.handle.clone(),
             status: run.status.as_str().into(),
+            reason: None,
             command: run.command.clone(),
             target: run.target.clone(),
             files: if run.files.is_empty() {
@@ -384,6 +393,12 @@ impl RunDraft {
         if view.error.is_none() {
             view.error = view.steps.iter().find_map(|step| step.error.clone());
         }
+        view.reason = db::runs::terminal_reason(
+            &view.status,
+            view.reason.as_deref().or(view.error.as_deref()),
+            view.failure.as_ref().map(|f| f.error.as_str()),
+            view.cancellation.as_ref(),
+        );
         view.explanation = crate::run_explanation::explain(
             crate::run_explanation::RunFacts {
                 steps_failed: record.as_ref().and_then(|r| r.steps_failed),
@@ -467,7 +482,6 @@ pub enum RunViewStatus {
     Success,
     Failed,
     Cancelled,
-    Error,
     Interrupted,
 }
 
@@ -531,8 +545,11 @@ pub struct RunLogs {
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunSummary {
+    pub reason: Option<String>,
+    #[serde(rename = "run_id")]
     pub id: String,
     pub handle: Option<String>,
+    #[serde(skip)]
     pub run_id: Option<String>,
     pub command: String,
     pub files: Vec<String>,
@@ -557,6 +574,7 @@ pub struct RunSummary {
     pub steps_failed: Option<i64>,
     pub error: Option<String>,
     /// The run's first failed step and its error; `null` when no step failed.
+    #[serde(rename = "failure")]
     pub first_failure: Option<FirstFailure>,
     /// Who asked for the run (`token:<name>`), when the server knows. Experimental.
     pub principal: Option<String>,
@@ -582,13 +600,19 @@ pub struct RunSummary {
 impl RunSummary {
     /// `line` from the row's own fields: set once the row is complete.
     fn worded(mut self) -> Self {
+        self.reason = db::runs::terminal_reason(
+            &self.status,
+            self.reason.as_deref().or(self.error.as_deref()),
+            self.first_failure.as_ref().map(|f| f.error.as_str()),
+            self.cancellation.as_ref(),
+        );
         self.line = crate::run_list::run_line(crate::run_list::RunLineFacts {
             status: &self.status,
             steps_total: self.steps_total,
             steps_executed: self.steps_executed,
             steps_cached: self.steps_cached,
             steps_failed: self.steps_failed,
-            error: self.error.as_deref(),
+            error: self.reason.as_deref(),
             first_failure: self
                 .first_failure
                 .as_ref()
@@ -601,6 +625,7 @@ impl RunSummary {
     /// The row of a recorded run, with what the server holding it (`live`) knows of it.
     fn recorded(record: db::RunRecord, live: Option<&LiveRun>) -> Self {
         RunSummary {
+            reason: record.reason.clone(),
             id: record.run_id.clone(),
             handle: live.map(|r| r.handle.clone()),
             run_id: Some(record.run_id),
@@ -646,6 +671,7 @@ impl RunSummary {
             files: files.to_vec(),
             target: run.target.clone(),
             status: run.status.as_str().into(),
+            reason: None,
             triggered_by: Some(run.trigger.triggered_by),
             scheduled_at: run.trigger.scheduled_at.clone(),
             schedule_id: run.trigger.schedule_id.clone(),
@@ -691,6 +717,7 @@ impl RunSummary {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct FirstFailure {
     /// The step's node id, with its partition key when it has one.
+    #[serde(rename = "node")]
     pub node_id: String,
     /// `ErrorType: message`, the message's first line only.
     pub error: String,
@@ -972,7 +999,7 @@ pub async fn in_flight_list(
         .into_iter()
         .filter(|run| {
             filter.keeps_unrecorded(
-                "running",
+                &run.status,
                 run.triggered_by,
                 &run.started_at,
                 &run.searched(),
