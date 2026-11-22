@@ -121,3 +121,37 @@ def test_read_only_server_warns_for_newer_writer_and_preserves_it(tmp_path, serv
         assert conn.execute(
             "SELECT value FROM metadata_info WHERE key='last_writer_version'"
         ).fetchone() == ("99.0.0",)
+
+
+@pytest.mark.parametrize(
+    "requirement,running,ok",
+    [
+        ("BaRcA[s3]>=1.0,!=1.5", "1.4", True),
+        ("barca>=1.0,!=1.5", "1.5", False),
+        ("barca~=1.4.5", "1.5", False),
+        ("barca==1.4.*", "1.4.9", True),
+        ("barca==1.4", "1.4+local", True),
+        ("barca>=1.4rc1", "1.4rc2", True),
+        ('barca>=99; python_version < "2" or (os_name == "not-an-os")', "1", True),
+        ('barca>=99; python_version >= "3" and extra == ""', "1", False),
+        ('barca>=99; extra == "s3"', "1", True),
+        ("barca @ https://example.org/barca.whl", "1", False),
+        ("not valid :::", "1", False),
+    ],
+)
+def test_doctor_helper_pep_controls(tmp_path, requirement, running, ok):
+    from barca import _doctor
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\ndependencies = " + json.dumps([requirement]) + "\n"
+    )
+    result = _doctor.project_version(tmp_path, running)
+    assert result["ok"] is ok, result
+
+
+def test_doctor_helper_checks_cli_version_not_python_package(tmp_path):
+    from barca import _doctor
+
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["barca==99"]\n')
+    assert _doctor.project_version(tmp_path, "99")["ok"]
+    assert not _doctor.project_version(tmp_path, __version__)["ok"]

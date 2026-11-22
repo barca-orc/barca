@@ -27,7 +27,6 @@ tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "proces
 # Optional: TypeScript binding generation (enable with --features ts). Kept out
 # of the production binary; used only to regenerate ui/src/lib/generated/.
 ts-rs = { workspace = true, optional = true }
-pep508_rs = "0.9.2"
 
 # libsql only in tests (fixtures that write rows no owner writes); the manifest check and the
 # repository sweep read manifests and Python sources.

@@ -16,7 +16,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Performance
 
-- Reduce allocation and repeated SQL preparation when installing metadata writer-version triggers.
+- Share transactional metadata writer-version trigger programs and move doctor requirement parsing into its finite Python helper, reducing coordinator memory without external Python dependencies.
 
 ## 0.46.3 (2026-11-22)
 

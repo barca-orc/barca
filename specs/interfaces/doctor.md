@@ -68,3 +68,11 @@ markers are supported; markers use the probed Python interpreter. A mismatch fai
 and exits 3. Unselected optional dependencies and dependency groups are not checked. A direct
 URL cannot establish a version match and fails with an explanation. An absent or inactive
 barca requirement passes. This check does not import the project or install packages.
+
+The finite helper receives `stores`, `project_root`, and the running `cli_version` in
+`BARCA_DOCTOR_REQUEST`. Its response includes `python`, `stores`, and a required
+`project_version` field: null when no pyproject exists, otherwise `{ok, detail}`. Missing or
+malformed result fields fail the Python check. The helper uses the bundled, unmodified PyPA
+packaging parser only when checking project requirements; no external Python package or
+pipeline import is needed. Conformance: [version controls](../../python/tests/test_version_warnings.py)
+and [wheel-only installation check](../../scripts/check-vendored-doctor.py).
