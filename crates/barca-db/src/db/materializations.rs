@@ -168,21 +168,6 @@ pub async fn cached_successes(
     Ok(out)
 }
 
-/// Latest successes for one bounded page of exact step ids. A seek per key avoids reading
-/// historical rows or unrelated partitions while a server traverses a large cached result.
-pub async fn cached_page(
-    cache: &CacheReader,
-    ids: &[String],
-) -> Result<std::collections::BTreeMap<String, LatestSuccess>, BarcaError> {
-    let mut found = std::collections::BTreeMap::new();
-    for id in ids {
-        if let Some(row) = latest_success(cache, id).await {
-            found.insert(id.clone(), row);
-        }
-    }
-    Ok(found)
-}
-
 /// The latest successful materialization of `node_id` (a display id) whose artifact this run may
 /// read; `None` when it never succeeded.
 pub async fn latest_success(cache: &CacheReader, node_id: &str) -> Option<LatestSuccess> {

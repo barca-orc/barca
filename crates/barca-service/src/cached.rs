@@ -56,6 +56,12 @@ impl Answer {
     }
 }
 
+/// The artifact identity selected by either latest-success or ordinary cache lookup.
+struct SelectedArtifact {
+    run_hash: String,
+    output: OutputRef,
+}
+
 /// Literal domains can include never-run keys. Unknown domains use recorded keys, unless
 /// the caller explicitly supplies their coordinates. No expression is evaluated here.
 fn keys(
@@ -279,7 +285,10 @@ async fn read(
                 id.clone(),
                 key,
                 fresh,
-                rows.get(&display).cloned(),
+                rows.get(&display).map(|r| SelectedArtifact {
+                    run_hash: r.run_hash.clone(),
+                    output: r.output.clone(),
+                }),
             ));
         }
     }
@@ -330,7 +339,35 @@ async fn read(
             let Some(cache) = &cache else {
                 return Ok(None);
             };
-            db::materializations::cached_page(cache, &ids).await?
+            let pairs: Vec<_> = ids
+                .iter()
+                .filter_map(|id| {
+                    expected_hashes
+                        .get(id)
+                        .map(|hash| (id.as_str(), hash.as_str()))
+                })
+                .collect();
+            if pairs.len() != ids.len() {
+                return Ok(None);
+            }
+            let Some(outputs) = cache.lookup_many(&pairs).await else {
+                return Ok(None);
+            };
+            pairs
+                .into_iter()
+                .zip(outputs)
+                .filter_map(|((id, hash), output)| {
+                    output.map(|output| {
+                        (
+                            id.to_owned(),
+                            SelectedArtifact {
+                                run_hash: hash.to_owned(),
+                                output,
+                            },
+                        )
+                    })
+                })
+                .collect::<BTreeMap<_, _>>()
         } else {
             BTreeMap::new()
         };

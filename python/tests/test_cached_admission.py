@@ -305,3 +305,30 @@ def keyed(key):
             assert result["outcome"]["steps_executed"] == 0
     finally:
         (project / "release").touch()
+
+
+def test_historical_matching_result_bypasses_admission(project, serve):
+    for source in [PIPELINE, PIPELINE.replace("return 42", "return 43")]:
+        (project / "pipeline.py").write_text(source)
+        seed = barca(project, "get", "ready", "pipeline.py", "--local")
+        assert seed.returncode == 0, seed.stderr
+    (project / "pipeline.py").write_text(PIPELINE)
+    server = serve("--no-schedule", "--max-runs", "1", "--capacity", "1", root=project)
+    server.request("POST", "/runs", {"command": "run", "targets": ["blocked"]})
+    server.wait("blocked pipeline", lambda: (project / "started").exists())
+    try:
+        status, read = server.request(
+            "POST", "/runs", {"command": "get", "targets": ["ready"], "values": True}
+        )
+        assert status == 202, read
+        _, result = server.request("GET", f"/runs/{read['run_id']}")
+        assert result["status"] == "success", result
+        assert result["outcome"]["final_output"] == 42
+        status, cached = server.request(
+            "POST", "/cached", {"targets": ["ready"], "tier": "local", "values": True}
+        )
+        assert status == 200, cached
+        assert cached["final_output"] == 43
+        assert cached["outcomes"][0]["fresh"] is False
+    finally:
+        (project / "release").touch()
