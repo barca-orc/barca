@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).
+
 ## 0.46.2 (2026-11-22)
 
 ### Bug Fixes
