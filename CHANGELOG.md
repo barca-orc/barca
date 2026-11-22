@@ -10,6 +10,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Prevent DuckDB 1.x from hanging while binding batched inputs that read multiple remote Parquet files.
 - Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
 
 - Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).
