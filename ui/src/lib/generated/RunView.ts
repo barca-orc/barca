@@ -3,6 +3,7 @@ import type { Cancellation } from "./Cancellation";
 import type { LogEntry } from "./LogEntry";
 import type { PlanReasons } from "./PlanReasons";
 import type { QueuePlace } from "./QueuePlace";
+import type { RunAttempt } from "./RunAttempt";
 import type { RunExplanation } from "./RunExplanation";
 import type { RunFailure } from "./RunFailure";
 import type { RunStep } from "./RunStep";
@@ -16,6 +17,14 @@ import type { WaitingFor } from "./WaitingFor";
  * after the server restarts.
  */
 export type RunView = {
+/**
+ * Stopped server executions, oldest first, with ids for their own logs and steps.
+ */
+previous_attempts?: Array<RunAttempt>,
+/**
+ * Original request id, on a retained stopped execution only.
+ */
+parent_run_id?: string | null, run_attempt?: number | null, stop_reason?: string | null,
 /**
  * The database run id, the one `barca history` shows.
  */

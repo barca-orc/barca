@@ -144,7 +144,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     let mut record = db::get_run(read_path, id).await?;
     if record.is_none()
         && live.is_none()
-        && crate::serve::run_queue::list(read_path)
+        && barca_store::run_queue::list(read_path)
             .await?
             .iter()
             .any(|r| r.run_id == id)
@@ -277,7 +277,9 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         view.queue = run.queue.shown();
     }
     if let Some(outcome) = &outcome {
-        view.status = outcome.status().as_str().into();
+        if view.stop_reason.is_none() {
+            view.status = outcome.status().as_str().into();
+        }
         view.error = outcome.envelope().map(|e| e.error);
     }
     view.outcome = outcome;
@@ -355,7 +357,10 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     steps_page.next_offset = (limit.is_some() && listed_to < steps_page.total).then_some(listed_to);
     // The steps streamed and not yet recorded get their trace ids as the recorded ones did.
     if record.is_some() && db::get_run_traced(read_path, &view.run_id).await? {
-        db::attach_trace_ids(&mut view.steps, &view.run_id);
+        db::attach_trace_ids(
+            &mut view.steps,
+            view.parent_run_id.as_deref().unwrap_or(&view.run_id),
+        );
     }
     Ok(Some(RunDraft {
         view,

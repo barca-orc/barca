@@ -262,6 +262,7 @@ mod tests {
     use super::*;
 
     const SHAPE: RunsShape = RunsShape {
+        parent: false,
         trigger: true,
         job: true,
         search_index: true,
@@ -291,6 +292,7 @@ mod tests {
         );
         // A database from before triggers were recorded: nothing to leave out.
         let old = RunsShape {
+            parent: false,
             trigger: false,
             job: true,
             search_index: false,

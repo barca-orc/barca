@@ -354,7 +354,19 @@ pub async fn get_run_steps_window(
     }
     drop(rows);
     if run_traced(&conn, run_id).await? {
-        attach_trace_ids(&mut steps, run_id);
+        let parent = if has_column(&conn, "runs", "parent_run_id").await? {
+            let mut rows = conn
+                .query("SELECT parent_run_id FROM runs WHERE run_id = ?1", [run_id])
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))?;
+            rows.next()
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))?
+                .and_then(|r| r.get::<String>(0).ok())
+        } else {
+            None
+        };
+        attach_trace_ids(&mut steps, parent.as_deref().unwrap_or(run_id));
     }
     // A failed step's last lines (#627). Failed steps are kept first in a page (#623), so every
     // failed step listed has its tail; only the listed failed steps' lines are read.

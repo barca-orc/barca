@@ -55,6 +55,20 @@ exact id. Unknown runs, unknown/unrecorded steps and ambiguous names exit 2, and
 `barca logs` without a run id when no run is recorded yet. A recorded execution that printed
 nothing returns `[]` (JSON) or empty stdout (text). `--env` reads that environment's history.
 
+## Server restarts and execution attempts
+
+A requeued request keeps its original run ID. `barca logs RUN_ID` includes the stopped
+executions in order, with `attempt N stopped: server restart (requeued)` boundaries before
+the next execution. `barca history RUN_ID` lists their IDs and stop reasons; use one of
+those IDs with `barca logs` to read just that execution. The UI's original run panel links
+each previous execution's logs and steps. These execution attempts are separate from a
+step's `retries=` attempts.
+
+A local `barca logs RUN_ID -f --local` stays attached while the request is queued again,
+prints `requeued; waiting for the server` on stderr, and continues with the next execution.
+It exits on the request's final result, not the stopped execution's result. Filters still
+apply to each line; attempt boundary notes are on stderr with no step ID.
+
 ## What is recorded
 
 - **stdout**: everything a step prints, attributed to the step, including what its module

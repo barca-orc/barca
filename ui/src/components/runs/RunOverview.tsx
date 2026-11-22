@@ -41,7 +41,7 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
   const overview = live && progress ? { progress, now: now ?? NOTHING_NOW, elapsed: elapsedLabel(run.started_at, nowMs) } : null
   return (
     <Section title="Run overview">
-      {run.stop_reason && <p role="status">Attempt {run.run_attempt ?? 1} stopped: {run.stop_reason}.
+      {run.stop_reason && <p role="status">Attempt {run.run_attempt ?? ((run.previous_attempts?.length ?? 0) + 1)} stopped: {run.stop_reason}.
         {run.parent_run_id && <> <Link to={runHref(run.parent_run_id)}>Open original run</Link></>}
       </p>}
       {run.previous_attempts && run.previous_attempts.length > 0 && <>

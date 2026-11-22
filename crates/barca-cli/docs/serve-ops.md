@@ -118,7 +118,16 @@ last server was killed during its drain (SIGKILL after SIGTERM: the stop grace p
 it is put back in the queue and starts again`, and starts it again first, under the same id, as
 if the drain timeout had passed. This happens once per run: a run that is in flight through two
 killed drains in a row is recorded as interrupted, so a run that keeps its server from stopping
-cannot loop.
+cannot loop. The predecessor's queue ownership is authoritative: recovery records an
+existing running row as interrupted even when its PID or host cannot be checked.
+
+Each requeue preserves the stopped execution, its logs, step evidence and stop reason under
+a linked attempt ID. `barca history RUN_ID --json` exposes `previous_attempts` (each with
+`run_id`, `attempt` and `stop_reason`); the UI links those executions from the original run.
+An archived execution exposes `parent_run_id`, `run_attempt` and `stop_reason`. Run lists,
+activity and schedule counts count the accepted request, not its archived executions.
+The original ID and acceptance time stay unchanged; each new execution has its own results.
+`barca logs RUN_ID` reads all execution attempts in order (`barca docs logs`).
 
 ### Runs share the steps they have in common
 

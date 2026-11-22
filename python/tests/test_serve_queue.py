@@ -538,13 +538,17 @@ def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(p
 
 def test_requeued_attempts_remain_readable_and_local_follower_waits(project, serve):
     """Two drains keep one request, three executions, and one uninterrupted local follower."""
-    pipeline = PIPELINE.replace('    hold("long")', '    print("attempt started", flush=True)\n    hold("long")')
+    pipeline = PIPELINE.replace(
+        '    hold("long")', '    print("attempt started", flush=True)\n    hold("long")'
+    )
     (project / "pipeline.py").write_text(pipeline)
     server = serve("--no-schedule", "--drain-timeout", "0")
     run_id = start_long(server, project)
+    accepted = server.request("GET", "/queue")[1]["running"][0]["queued_at"]
     follower = client(project, "logs", run_id, "--follow", "--local")
     wait_until(lambda: "attempt started" in client_output(project, follower)[0], "first log")
     for number in (1, 2):
+        assert server.request("POST", "/queue/pause")[0] == 200
         assert server.stop() == 0, server.stderr
         wait_until(
             lambda: "requeued; waiting for the server" in client_output(project, follower)[1],
@@ -560,6 +564,16 @@ def test_requeued_attempts_remain_readable_and_local_follower_waits(project, ser
         attempts = json.loads(detail.stdout)["run"]["previous_attempts"]
         assert len(attempts) == number
         server = serve("--no-schedule", "--drain-timeout", "0")
+        queued = server.request("GET", "/queue")[1]["queued"][0]
+        assert queued["queued_at"] == accepted
+        pending = server.request("GET", f"/runs/{run_id}")[1]
+        assert pending["status"] == "pending"
+        assert pending["steps"] == []
+        assert len(pending["previous_attempts"]) == number
+        status, recorded = server.request("GET", f"/runs/{run_id}/logs")
+        assert status == 200, recorded
+        assert sum(line["line"] == "attempt started" for line in recorded["logs"]) == number
+        assert server.request("POST", "/queue/resume")[0] == 200
         wait_until(lambda: started(project, "long") == number + 1, "next execution")
         view = server.request("GET", f"/runs/{run_id}")[1]
         assert len(view["previous_attempts"]) == number
@@ -582,7 +596,9 @@ def test_killed_predecessor_with_unknown_owner_is_recovered(project, serve, drai
     import sqlite3
 
     (project / "pipeline.py").write_text(
-        PIPELINE.replace('    hold("long")', '    print("before kill", flush=True)\n    hold("long")')
+        PIPELINE.replace(
+            '    hold("long")', '    print("before kill", flush=True)\n    hold("long")'
+        )
     )
     server = serve("--no-schedule", "--drain-timeout", "60")
     run_id = start_long(server, project)
@@ -611,4 +627,5 @@ def test_killed_predecessor_with_unknown_owner_is_recovered(project, serve, drai
     view = restarted.request("GET", f"/runs/{run_id}")[1]
     assert view["status"] == "interrupted", view
     assert view["finished_at"] is not None
+    assert any(line["line"] == "before kill" for line in view["logs"])
     assert restarted.request("GET", "/queue")[1]["running"] == []

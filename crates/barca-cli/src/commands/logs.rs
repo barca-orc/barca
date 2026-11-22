@@ -5,6 +5,7 @@
 use crate::print::{follow_ended, follow_exit_code, name_run};
 use crate::request::LogsArgs;
 use barca_service::BarcaError;
+use barca_service::db::LogEntry;
 use std::time::{Duration, Instant};
 
 /// How often `-f` looks for new lines and for the run's end.
@@ -48,6 +49,14 @@ async fn follow_local(
 ) -> Result<String, BarcaError> {
     let read = barca_service::db::read_metadata(cfg, true).await?;
     let mut seen = 0usize;
+    let mut generation = 1usize;
+    let mut offset = 0u64;
+    let spool = barca_service::run_logs::spool_path(&cfg.db_path, run_id);
+    let print = |entry: &LogEntry| {
+        if args.selects(&entry.node_id, entry.stream) {
+            args.print_one(entry);
+        }
+    };
     let mut ended_at: Option<Instant> = None;
     let mut waiting = false;
     loop {
@@ -72,19 +81,65 @@ async fn follow_local(
             barca_service::errln!("[barca] run {run_id} requeued; waiting for the server");
         }
         waiting = is_waiting;
-        // Archived streams followed by the current one form one append-only sequence,
-        // including attempt boundaries. A new spool's offsets never reuse the old cursor.
-        let lines =
-            barca_service::queries::logs_at(&cfg.db_path, read.path(), run_id, None, None).await?;
-        for entry in lines.iter().skip(seen) {
-            if args.selects(&entry.node_id, entry.stream) {
-                args.print_one(entry);
+        let previous = barca_service::db::previous_attempts(read.path(), run_id).await?;
+        for attempt in previous.iter().filter(|a| a.attempt as usize >= generation) {
+            for entry in barca_service::db::get_logs(read.path(), &attempt.run_id)
+                .await?
+                .iter()
+                .skip(seen)
+            {
+                print(entry);
             }
+            print(&LogEntry::at(
+                0,
+                barca_service::run_logs::RecordedLine::barca(format!(
+                    "attempt {} stopped: {} (logs: {})",
+                    attempt.attempt, attempt.stop_reason, attempt.run_id
+                )),
+            ));
+            print(&LogEntry::at(
+                0,
+                barca_service::run_logs::RecordedLine::barca(format!(
+                    "attempt {}",
+                    attempt.attempt + 1
+                )),
+            ));
+            seen = 0;
+            offset = 0;
         }
-        seen = seen.max(lines.len());
+        generation = previous.len() + 1;
+        if barca_service::db::get_run(read.path(), run_id)
+            .await?
+            .is_some()
+        {
+            let (lines, next_offset) = barca_service::run_logs::read_spool(&spool, offset)?;
+            let recorded = if spool.exists() {
+                Vec::new()
+            } else {
+                barca_service::db::get_logs(read.path(), run_id).await?
+            };
+            // If the archive committed during these reads, discard them: next poll drains
+            // that immutable archive before looking at the new spool with a fresh cursor.
+            if barca_service::db::previous_attempts(read.path(), run_id)
+                .await?
+                .len()
+                + 1
+                != generation
+            {
+                continue;
+            }
+            offset = next_offset;
+            for line in lines {
+                print(&LogEntry::at(seen, line));
+                seen += 1;
+            }
+            for entry in recorded.iter().skip(seen) {
+                print(entry);
+            }
+            seen = seen.max(recorded.len());
+        }
         if status != "running" {
             let since = *ended_at.get_or_insert_with(Instant::now);
-            let spool = barca_service::run_logs::spool_path(&cfg.db_path, run_id);
             if !spool.exists() || since.elapsed() >= WRAP_UP {
                 return Ok(status.to_string());
             }

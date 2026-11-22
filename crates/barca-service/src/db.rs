@@ -161,3 +161,6 @@ pub fn trace_lock_holds() {
         );
     }
 }
+
+// Linked server execution records, read by local log followers.
+pub use barca_db::db::runs::{RunAttempt, previous_attempts};

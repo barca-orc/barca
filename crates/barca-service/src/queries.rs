@@ -347,7 +347,7 @@ pub async fn logs_at(
     step: Option<&str>,
     stream: Option<crate::LogStream>,
 ) -> Result<Vec<db::LogEntry>, BarcaError> {
-    let queued = crate::serve::run_queue::list(read_path)
+    let queued = barca_store::run_queue::list(read_path)
         .await?
         .iter()
         .any(|r| r.run_id == run_id);
@@ -356,28 +356,41 @@ pub async fn logs_at(
             "run '{run_id}' was not found; use barca history --json to find a run id"
         )));
     }
-    let previous = db::runs::previous_attempts(read_path, run_id).await?;
-    let mut logs = Vec::new();
-    for attempt in &previous {
-        logs.extend(run_log_lines(db_path, read_path, &attempt.run_id).await?);
-        logs.push(db::LogEntry::at(
-            0,
-            crate::run_logs::RecordedLine::barca(format!(
-                "attempt {} stopped: {} (logs: {})",
-                attempt.attempt, attempt.stop_reason, attempt.run_id
-            )),
-        ));
-    }
-    if !previous.is_empty() {
-        logs.push(db::LogEntry::at(
-            0,
-            crate::run_logs::RecordedLine::barca(format!("attempt {}", previous.len() + 1)),
-        ));
-    }
-    // A queued request can still have the predecessor's spool; it is already archived.
-    if !queued || db::get_run(read_path, run_id).await?.is_some() {
-        logs.extend(run_log_lines(db_path, read_path, run_id).await?);
-    }
+    let (mut logs, previous) = loop {
+        let previous = db::runs::previous_attempts(read_path, run_id).await?;
+        let mut logs = Vec::new();
+        for (index, attempt) in previous.iter().enumerate() {
+            if index > 0 {
+                logs.push(db::LogEntry::at(
+                    0,
+                    crate::run_logs::RecordedLine::barca(format!("attempt {}", attempt.attempt)),
+                ));
+            }
+            logs.extend(run_log_lines(db_path, read_path, &attempt.run_id).await?);
+            logs.push(db::LogEntry::at(
+                0,
+                crate::run_logs::RecordedLine::barca(format!(
+                    "attempt {} stopped: {} (logs: {})",
+                    attempt.attempt, attempt.stop_reason, attempt.run_id
+                )),
+            ));
+        }
+        if !previous.is_empty() {
+            logs.push(db::LogEntry::at(
+                0,
+                crate::run_logs::RecordedLine::barca(format!("attempt {}", previous.len() + 1)),
+            ));
+        }
+        // A queued request can still have the predecessor's spool; it is already archived.
+        if db::get_run(read_path, run_id).await?.is_some() {
+            logs.extend(run_log_lines(db_path, read_path, run_id).await?);
+        }
+        // Separate WAL queries may straddle the archive transaction. Retry that read rather
+        // than concatenate an old attempt list with a new execution's spool.
+        if db::runs::previous_attempts(read_path, run_id).await?.len() == previous.len() {
+            break (logs, previous);
+        }
+    };
     for (seq, line) in logs.iter_mut().enumerate() {
         line.seq = seq as i64;
     }

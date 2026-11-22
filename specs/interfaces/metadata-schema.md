@@ -373,3 +373,23 @@ this release (these, or `bytes_changed`) gains them when it is opened for writin
 transaction, rolled back on error, with every row preserved and the version left at 1. A
 database that already has them is only read. Conformance: the schema tests in
 `crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.
+
+## Requeued execution evidence
+
+Format 1 adds nullable `runs.parent_run_id`, `runs.run_attempt` and `runs.stop_reason`,
+indexed by `(parent_run_id, run_attempt)`. On requeue, one transaction moves the stopped
+execution's existing run row, logs and materializations to a linked attempt ID and marks the
+original queue entry queued. Updating the existing row preserves every diagnostic column,
+including outcome, plan reasons, cancellation and worker diagnostics. Materialization
+hashes and creation times do not change. Complete spool lines are persisted before reuse.
+Repeated recovery without a new run row creates no extra attempt.
+
+The queue retains the original run ID, ordering and acceptance timestamp. Each subsequent
+execution records fresh results under that original ID. Archived executions are excluded
+from logical run lists, activity and schedule counts. History retention selects logical
+parents; deleting a parent removes its archived run rows and logs together. Ordinary cache
+retention still applies to materializations. Older snapshots without these columns read as
+having no archived attempts. Startup uses predecessor queue ownership to finish running
+records without depending on host/PID liveness, preserving the existing killed-drain retry
+limit. Conformance: run_queue tests, queue_routes tests, and `test_serve_queue.py` restart and
+local follower cases.

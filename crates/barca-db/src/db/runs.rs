@@ -22,6 +22,96 @@ pub async fn delete_logs(conn: &Connection, run_id: &str) -> Result<u64, libsql:
         .await
 }
 
+fn attempt_error(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
+    move |e| BarcaError::Db(format!("run attempt: {what}: {e}"))
+}
+
+/// Keep a stopped execution under an inspectable id. Updating the existing row preserves
+/// every diagnostic column (including columns introduced by later additive migrations).
+pub async fn archive_attempt(
+    conn: &Connection,
+    db_path: &str,
+    run_id: &str,
+) -> Result<(), BarcaError> {
+    let mut rows = conn
+        .query("SELECT 1 FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(attempt_error("reading stopped execution"))?;
+    if rows
+        .next()
+        .await
+        .map_err(attempt_error("reading stopped execution"))?
+        .is_none()
+    {
+        return Ok(()); // A repeated recovery, or an execution that never recorded itself.
+    }
+    drop(rows);
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(run_attempt), 0) + 1 FROM runs WHERE parent_run_id = ?1",
+            [run_id],
+        )
+        .await
+        .map_err(attempt_error("numbering attempt"))?;
+    let attempt: i64 = rows
+        .next()
+        .await
+        .map_err(attempt_error("numbering attempt"))?
+        .unwrap()
+        .get(0)
+        .unwrap();
+    drop(rows);
+    let archived = format!("{run_id}-attempt-{attempt}");
+    preserve_spool(conn, db_path, run_id).await?;
+    conn.execute("UPDATE runs SET run_id = ?1, parent_run_id = ?2, run_attempt = ?3, stop_reason = 'server restart (requeued)', status = 'interrupted', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?2",
+        libsql::params![archived.clone(), run_id, attempt]).await.map_err(attempt_error("archiving stopped execution"))?;
+    for table in ["logs", "materializations"] {
+        conn.execute(
+            &format!("UPDATE {table} SET run_id = ?1 WHERE run_id = ?2"),
+            [archived.as_str(), run_id],
+        )
+        .await
+        .map_err(attempt_error("archiving attempt evidence"))?;
+    }
+    Ok(())
+}
+
+async fn preserve_spool(conn: &Connection, db_path: &str, run_id: &str) -> Result<(), BarcaError> {
+    // A killed coordinator has only a spool. Commit its complete lines before the next
+    // execution can truncate that spool. Already-persisted logs are authoritative.
+    let mut rows = conn
+        .query("SELECT 1 FROM logs WHERE run_id = ?1 LIMIT 1", [run_id])
+        .await
+        .map_err(attempt_error("reading attempt logs"))?;
+    let recorded = rows
+        .next()
+        .await
+        .map_err(attempt_error("reading attempt logs"))?
+        .is_some();
+    drop(rows);
+    if !recorded {
+        let (lines, _) =
+            crate::run_logs::read_spool(&crate::run_logs::spool_path(db_path, run_id), 0)?;
+        for (seq, line) in lines.into_iter().enumerate() {
+            conn.execute("INSERT INTO logs (run_id, seq, node_id, line, stream, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                libsql::params![run_id, seq as i64, line.node_id, line.line, line.stream.as_str(), line.ts]).await.map_err(attempt_error("archiving spool"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Finish a queue-owned predecessor, independently of host/PID liveness.
+/// The caller owns the transaction that also removes its queue entry.
+pub async fn interrupt_predecessor(
+    conn: &Connection,
+    db_path: &str,
+    run_id: &str,
+) -> Result<(), BarcaError> {
+    preserve_spool(conn, db_path, run_id).await?;
+    conn.execute("UPDATE runs SET status = 'interrupted', stop_reason = 'server stopped before completion', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1 AND status = 'running'", [run_id]).await.map_err(attempt_error("interrupting predecessor"))?;
+    Ok(())
+}
+
 /// Clear `outcome_json` of up to `batch` of the oldest runs that have one, except the last
 /// `kept` runs. The number of runs changed.
 pub(crate) async fn clear_old_outcomes(

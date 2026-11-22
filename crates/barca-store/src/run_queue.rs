@@ -256,75 +256,10 @@ pub async fn requeue(db_path: &str, run_id: &str, spec: Option<&str>) -> Result<
                 .await
                 .map_err(failed("requeueing a run"))?;
         }
-        archive_attempt(&conn, db_path, run_id).await?;
+        db::runs::archive_attempt(&conn, db_path, run_id).await?;
         Ok(())
     })
     .await
-}
-
-/// Keep a stopped execution under an inspectable id. Updating the existing row preserves
-/// every diagnostic column (including columns introduced by later additive migrations).
-async fn archive_attempt(conn: &Connection, db_path: &str, run_id: &str) -> Result<(), BarcaError> {
-    let mut rows = conn
-        .query("SELECT 1 FROM runs WHERE run_id = ?1", [run_id])
-        .await
-        .map_err(failed("reading stopped execution"))?;
-    if rows
-        .next()
-        .await
-        .map_err(failed("reading stopped execution"))?
-        .is_none()
-    {
-        return Ok(()); // A repeated recovery, or an execution that never recorded itself.
-    }
-    drop(rows);
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(MAX(run_attempt), 0) + 1 FROM runs WHERE parent_run_id = ?1",
-            [run_id],
-        )
-        .await
-        .map_err(failed("numbering attempt"))?;
-    let attempt: i64 = rows
-        .next()
-        .await
-        .map_err(failed("numbering attempt"))?
-        .unwrap()
-        .get(0)
-        .unwrap();
-    drop(rows);
-    let archived = format!("{run_id}-attempt-{attempt}");
-    // A killed coordinator has only a spool. Commit its complete lines before the next
-    // execution can truncate that spool. Already-persisted logs are authoritative.
-    let mut rows = conn
-        .query("SELECT 1 FROM logs WHERE run_id = ?1 LIMIT 1", [run_id])
-        .await
-        .map_err(failed("reading attempt logs"))?;
-    let recorded = rows
-        .next()
-        .await
-        .map_err(failed("reading attempt logs"))?
-        .is_some();
-    drop(rows);
-    if !recorded {
-        let (lines, _) =
-            barca_db::run_logs::read_spool(&barca_db::run_logs::spool_path(db_path, run_id), 0)?;
-        for (seq, line) in lines.into_iter().enumerate() {
-            conn.execute("INSERT INTO logs (run_id, seq, node_id, line, stream, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                libsql::params![run_id, seq as i64, line.node_id, line.line, line.stream.as_str(), line.ts]).await.map_err(failed("archiving spool"))?;
-        }
-    }
-    conn.execute("UPDATE runs SET run_id = ?1, parent_run_id = ?2, run_attempt = ?3, stop_reason = 'server restart (requeued)', status = 'interrupted', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?2",
-        libsql::params![archived.clone(), run_id, attempt]).await.map_err(failed("archiving stopped execution"))?;
-    for table in ["logs", "materializations"] {
-        conn.execute(
-            &format!("UPDATE {table} SET run_id = ?1 WHERE run_id = ?2"),
-            [archived.as_str(), run_id],
-        )
-        .await
-        .map_err(failed("archiving attempt evidence"))?;
-    }
-    Ok(())
 }
 
 /// The predecessor's queue ownership is authoritative even when its host/PID cannot be
@@ -333,10 +268,13 @@ pub async fn interrupt_predecessor(db_path: &str, run_id: &str) -> Result<(), Ba
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     db::with_tx(&conn, "BEGIN IMMEDIATE", "interrupt predecessor", async {
-        conn.execute("UPDATE runs SET status = 'interrupted', stop_reason = 'server stopped before completion', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1 AND status = 'running'", [run_id]).await.map_err(failed("interrupting predecessor"))?;
-        db::run_queue::delete(&conn, run_id).await.map_err(failed("removing predecessor"))?;
+        db::runs::interrupt_predecessor(&conn, db_path, run_id).await?;
+        db::run_queue::delete(&conn, run_id)
+            .await
+            .map_err(failed("removing predecessor"))?;
         Ok(())
-    }).await
+    })
+    .await
 }
 
 /// When the queue was paused (unix seconds), if it is.
@@ -519,10 +457,13 @@ mod tests {
         .unwrap();
         {
             let (_db, conn) = db::open_conn(&path).await.unwrap();
-            conn.execute("ALTER TABLE runs ADD COLUMN worker_failures TEXT", ())
-                .await
-                .unwrap();
-            conn.execute(r#"UPDATE runs SET worker_failures = '[{"node":"bad"}]', plan_reasons = '{"test":1}', cancellation = '{"started":true}' WHERE run_id = 'first'"#, ()).await.unwrap();
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN future_attempt_diagnostics TEXT",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(r#"UPDATE runs SET future_attempt_diagnostics = '[{"node":"bad"}]', plan_reasons = '{"test":1}', cancellation = '{"started":true}' WHERE run_id = 'first'"#, ()).await.unwrap();
             conn.execute("INSERT INTO materializations (node_id, run_id, run_hash, status, created_at) VALUES ('p.py:done', 'first', 'hash', 'success', '2026-11-22T12:00:00.123Z')", ()).await.unwrap();
         }
         requeue(&path, "first", Some("{\"again\":1}"))
@@ -561,7 +502,7 @@ mod tests {
         assert_eq!(db::count_runs(&path).await.unwrap(), 0);
         {
             let (_db, conn) = db::open_conn(&path).await.unwrap();
-            let mut rows = conn.query("SELECT worker_failures, plan_reasons, cancellation FROM runs WHERE run_id = 'first-attempt-1'", ()).await.unwrap();
+            let mut rows = conn.query("SELECT future_attempt_diagnostics, plan_reasons, cancellation FROM runs WHERE run_id = 'first-attempt-1'", ()).await.unwrap();
             let row = rows.next().await.unwrap().unwrap();
             assert_eq!(row.get::<String>(0).unwrap(), r#"[{"node":"bad"}]"#);
             assert_eq!(row.get::<String>(1).unwrap(), r#"{"test":1}"#);
@@ -596,6 +537,39 @@ mod tests {
         assert_eq!(db::count_runs(&path).await.unwrap(), 1);
         assert_eq!(db::get_recent_runs(&path, 10).await.unwrap().len(), 1);
         assert!(db::get_run_steps(&path, "first").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_archive_rolls_back_the_queue_and_all_evidence() {
+        let (_dir, path) = fresh().await;
+        push(&path, "r", "{}", "accepted").await.unwrap();
+        mark_running(&path, "r").await.unwrap();
+        db::create_run(&path, "r", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            conn.execute(
+                "INSERT INTO logs (run_id, node_id, seq, line) VALUES ('r', 'n', 0, 'evidence')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute("CREATE TRIGGER reject_archive BEFORE UPDATE OF run_id ON logs BEGIN SELECT RAISE(ABORT, 'injected archive failure'); END", ()).await.unwrap();
+        }
+        assert!(requeue(&path, "r", Some("changed")).await.is_err());
+        let queue = list(&path).await.unwrap();
+        assert_eq!(queue[0].state, QueueState::Running);
+        assert_eq!(queue[0].spec, "{}");
+        assert_eq!(queue[0].queued_at, "accepted");
+        assert!(db::get_run(&path, "r").await.unwrap().is_some());
+        assert!(
+            db::runs::previous_attempts(&path, "r")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(db::get_logs(&path, "r").await.unwrap()[0].line, "evidence");
     }
 
     #[tokio::test]

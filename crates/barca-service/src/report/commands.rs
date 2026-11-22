@@ -1135,7 +1135,8 @@ pub fn render_run_detail(
         line!(
             rendered,
             "attempt {} stopped: {reason}",
-            r.run_attempt.unwrap_or(1)
+            r.run_attempt
+                .unwrap_or(r.previous_attempts.len() as i64 + 1)
         );
     }
     for attempt in &r.previous_attempts {
@@ -2431,6 +2432,10 @@ mod history_json_tests {
     #[test]
     fn history_json_is_the_same_bytes_as_the_record_through_values() {
         let full = RunRecord {
+            parent_run_id: None,
+            run_attempt: None,
+            stop_reason: None,
+            previous_attempts: Vec::new(),
             run_id: "run-1".into(),
             command: "run".into(),
             files: vec!["a.py".into(), "dir/b \"q\".py".into()],

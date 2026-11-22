@@ -446,7 +446,7 @@ A run recorded on another machine is \
         status = live_status(live).as_str().to_string();
     }
     let step = query.step.as_deref().filter(|s| !s.is_empty());
-    let lines = if record.is_some() {
+    let lines = if record.is_some() || live.is_some() {
         // Errors read as `barca logs` reports them here.
         barca_service::queries::logs_at(
             &state.config.resolved.db_path,
