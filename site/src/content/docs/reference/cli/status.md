@@ -409,6 +409,12 @@ barca history --search daily_report --since 7d
 
 ### Runs in progress and the last day's activity
 
+Cached counts update as phases are decided, before their remaining steps execute. History,
+server run lists/details, and the web UI include those counts while a run is still running.
+Progress counts steps (one key of a partitioned node), not nodes or worker calls. Dynamic
+keys can increase the total; recovery of a missing artifact removes that step from the cached
+count before computing it. Repeated phases and restarted attempts do not add old counts.
+
 When `--status` names `running`, each listed run that is in progress also says what it is
 working on now (experimental): a `now: executing 3: orders, clean, report · 12 waiting ·
 240/900 keys` line under its row, and in JSON `now`, the object the web UI's run panel shows:

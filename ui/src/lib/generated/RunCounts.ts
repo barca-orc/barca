@@ -22,7 +22,7 @@ nodes: number | null,
  */
 ran: number, ok: number, failed: number,
 /**
- * Steps served from cache. A run counts them when it ends: 0 while it is in progress.
+ * Steps served from cache, recorded as phases are decided.
  */
 cached: number,
 /**

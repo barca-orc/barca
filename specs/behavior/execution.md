@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 8. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -25,7 +25,9 @@ interface contracts.
 
 A run has its own request, progress and outcome. A partitioned step identifies a node and
 canonical partition key. A function call may execute several such steps in one batch.
-Neither a partition key nor a logical step implies a separate Python process.
+Neither a partition key nor a logical step implies a separate Python process. Progress totals
+count these steps/keys, not nodes. Cached decisions advance live progress under the
+[cache recording rules](cache-decisions.md#live-cached-progress).
 
 A scheduled downstream task can be up to date under tick rules; this is different from an
 explicit task invocation. A sensor is polled as required, not served as a cached action.

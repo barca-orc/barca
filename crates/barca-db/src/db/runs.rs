@@ -1044,6 +1044,26 @@ pub async fn raise_steps_total(
     Ok(())
 }
 
+/// Publish the current attempt's cache decisions before dispatch. This is an absolute
+/// count: replaying a phase cannot add it twice, and artifact recovery may lower it.
+/// Executed counts remain owned by the recorder's successful-row transaction.
+pub async fn set_cached_progress(
+    db_path: &str,
+    run_id: &str,
+    cached: usize,
+    total: usize,
+) -> Result<(), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "UPDATE runs SET steps_cached = ?1, steps_total = MAX(COALESCE(steps_total, 0), ?2, steps_executed + ?1) WHERE run_id = ?3 AND status = 'running'",
+        libsql::params![cached as i64, total as i64, run_id],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record cached progress: {e}")))?;
+    Ok(())
+}
+
 // ─── Recording (driven by `barca_service::persist`) ──────────────────────────────────
 
 /// Count `written` more executed steps of `run_id`, while it is running. Rows updated: 1, or 0
@@ -1146,6 +1166,30 @@ pub(crate) async fn insert_posted_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cached_progress_replaces_counts_and_never_changes_a_terminal_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        create_run(&path, "r", "run", "[]", None, Some(3))
+            .await
+            .unwrap();
+        for cached in [2, 2, 1] {
+            set_cached_progress(&path, "r", cached, 3).await.unwrap();
+            let run = get_run(&path, "r").await.unwrap().unwrap();
+            assert_eq!(run.steps_cached, cached as i64);
+            assert_eq!(run.steps_executed, 0);
+            assert_eq!(run.steps_total, Some(3));
+        }
+        finish_run(&path, "r", "success", 2, 1, 1.0).await.unwrap();
+        set_cached_progress(&path, "r", 99, 100).await.unwrap();
+        let run = get_run(&path, "r").await.unwrap().unwrap();
+        assert_eq!(
+            (run.steps_cached, run.steps_executed, run.steps_total),
+            (1, 2, Some(3))
+        );
+    }
 
     #[tokio::test]
     async fn a_run_records_its_trigger_and_a_served_run_its_outcome() {

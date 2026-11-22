@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 7. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 8. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -215,7 +215,7 @@ complete publication, invalid keys and missing siblings).
 - A completed local result is queued for recording after its artifact is completely written.
   With a remote artifact store it is queued only after its upload is confirmed; an unfinished
   upload is never recorded as reusable progress.
-- One recorder owns mid-run writes and commits queued rows at most twice a second. A batch
+- One recorder owns mid-run materialization writes and commits queued rows at most twice a second. A batch
   commits its successful step rows and the running run's progress count in one transaction;
   replaying a batch does not duplicate rows or count a step twice.
 - A failed batch is retained and retried at the same half-second interval, even when no further
@@ -226,6 +226,18 @@ complete publication, invalid keys and missing siblings).
   history and the previous run state (normally unfinished), and records no terminal outcome
   for a partially written ledger. Captured output is written separately, after the outcome
   transaction.
+
+### Live cached progress
+
+A run publishes its absolute cached-step count after each phase decision and before dispatch,
+including fresh keys represented by compact proofs. Expansion counts logical steps/keys,
+not decorated nodes. A later phase adds only its own decisions; seeding a proven key does not
+count it twice. A needed missing artifact retracts its cache hit before recomputation starts.
+The progress write preserves the recorder's executed count and cannot modify a terminal run.
+A restarted attempt starts with its own counts. Unreached phases are never inferred cached.
+CLI progress, history, server run lists/details and UI progress count decided cache reuse as
+completed work; no materialization is invented for it. Counts may decrease during artifact
+recovery, and totals may grow as dynamic keys become known.
 
 ### Explaining a run's executions
 
@@ -313,6 +325,7 @@ Conformance: cache decision tests in [cache.rs](../../crates/barca-decide/src/ca
 [unproven decorators](../../python/tests/test_decorator_names_not_barcas.py),
 [progress recording](../../python/tests/test_incremental_persist.py),
 [progress counts](../../python/tests/test_progress_counts.py),
+[live cached progress and recovery](../../python/tests/test_live_cached_progress.py),
 [terminal outcomes](../../python/tests/test_terminal_persist.py),
 early cutoff in [cache.rs](../../crates/barca-decide/src/cache.rs) (`cutoff_tests`),
 [cone.rs](../../crates/barca-python/src/cone.rs)

@@ -1255,6 +1255,11 @@ fn explanations() -> String {
             vec![],
         ),
         (
+            "mostly cached in flight",
+            serde_json::json!({"status": "running", "triggered_by": "client", "started_at": started(12), "steps_total": 365, "steps_executed": 0, "steps_cached": 364}),
+            vec![],
+        ),
+        (
             "full rebuild in flight",
             serde_json::json!({
                 "status": "running", "triggered_by": "api", "principal": "token:ci-bot", "started_at": started(360),

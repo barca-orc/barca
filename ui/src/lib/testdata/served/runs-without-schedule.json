@@ -690,7 +690,7 @@
       "line": {
         "failure": null,
         "failure_detail": null,
-        "steps": "0 ok · 7 left",
+        "steps": "0 ok · 0 cached · 7 left",
         "steps_detail": "A step is one node, or one key of a partitioned node · 7 steps planned",
         "target": "sales_report",
         "target_count": 1
