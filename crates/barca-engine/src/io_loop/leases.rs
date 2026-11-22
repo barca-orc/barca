@@ -242,7 +242,10 @@ impl WorkerPool {
             let Some(&id) = ready.peek() else {
                 break;
             };
-            if coord.item(id).spec.weight > 1 {
+            // A key of a call is sent with its call (a batched node's function takes a list
+            // of keys): never in a lease of other steps, which is sent without one, so its
+            // function would get a single key.
+            if coord.item(id).spec.weight > 1 || coord.call_id(id).is_some() {
                 break;
             }
             let est = cost.estimate(&coord.item(id).step_id.display());

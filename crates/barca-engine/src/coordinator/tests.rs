@@ -596,6 +596,88 @@ fn drain(c: &mut Coordinator) -> Vec<String> {
     out
 }
 
+/// The function of a batched node takes a list of keys, so a key loaded with no call
+/// assigned to it (the plan gave it none) gets a call of its own, and its node's other keys,
+/// which were assigned one, keep it.
+#[test]
+fn a_batched_key_loaded_without_a_call_gets_a_call_of_its_own() {
+    let ks = keys(3);
+    let mut phase = partition_stream(&ks, &[("f:a", None)]);
+    let mut b = partition_stream(&ks, &[("f:b", Some("f:a")), ("f:plain", None)]);
+    b.streams[0].stream_id = "w1".to_string();
+    phase.streams.push(b.streams.remove(0));
+    let mut c = Coordinator::new();
+    // The plan covered only the first key of `f:b`; `f:a` and `f:plain` are not batched.
+    c.assign_calls(vec![("b1".to_string(), vec!["f:b[k=00000]".to_string()])]);
+    c.require_calls(["f:b".to_string()].into_iter().collect(), 7);
+    c.load_phase(&phase, &HashMap::new());
+
+    let made: Vec<(&str, &str)> = c
+        .unassigned_calls()
+        .iter()
+        .map(|(call, key)| (call.as_str(), key.as_str()))
+        .collect();
+    assert_eq!(made, [("u7", "f:b[k=00001]"), ("u8", "f:b[k=00002]")]);
+    assert_eq!(c.call_id(id_of(&c, "f:b[k=00000]")), Some("b1"));
+    assert_eq!(c.call_id(id_of(&c, "f:b[k=00001]")), Some("u7"));
+    assert_eq!(c.call_id(id_of(&c, "f:b[k=00002]")), Some("u8"));
+    assert!(!c.same_call(id_of(&c, "f:b[k=00001]"), id_of(&c, "f:b[k=00002]")));
+    for key in &ks {
+        assert_eq!(c.call_id(id_of(&c, &format!("f:a[k={key}]"))), None);
+        assert_eq!(c.call_id(id_of(&c, &format!("f:plain[k={key}]"))), None);
+    }
+    assert!(c.takes_keys(id_of(&c, "f:b[k=00001]")));
+    assert!(!c.takes_keys(id_of(&c, "f:a[k=00001]")));
+
+    // Each is queued, with its call, once its own input is done.
+    let a = drain(&mut c);
+    assert_eq!(a.len(), 3);
+    for d in &a {
+        let id = id_of(&c, d);
+        c.on_item_completed(id);
+    }
+    let b: Vec<String> = drain(&mut c);
+    assert_eq!(b.len(), 3);
+    for d in &b {
+        assert!(c.call_id(id_of(&c, d)).is_some() || d.starts_with("f:plain"));
+    }
+}
+
+/// A key the plan gave no call that is skipped (its input failed) does not hold anything back,
+/// and one that fails is tried again as the call it is.
+#[test]
+fn an_unplanned_batched_key_fails_and_retries_as_a_one_key_call() {
+    let ks = keys(2);
+    let mut phase = partition_stream(&ks, &[("f:a", None)]);
+    let mut b = partition_stream(&ks, &[("f:b", Some("f:a"))]);
+    for st in &mut b.streams[0].steps {
+        st.retries = 2;
+    }
+    b.streams[0].stream_id = "w1".to_string();
+    phase.streams.push(b.streams.remove(0));
+    let mut c = Coordinator::new();
+    c.require_calls(["f:b".to_string()].into_iter().collect(), 0);
+    c.load_phase(&phase, &HashMap::new());
+    let a = drain(&mut c);
+    let first = id_of(&c, &a[0]);
+    assert_eq!(
+        c.on_item_failed(first, "boom".into(), std::time::Duration::ZERO),
+        FailureAction::Failed
+    );
+    c.on_item_completed(id_of(&c, &a[1]));
+    // The key whose input failed is skipped; the other runs as its call.
+    let b = drain(&mut c);
+    assert_eq!(b, ["f:b[k=00001]"]);
+    let id = id_of(&c, &b[0]);
+    assert_eq!(c.call_id(id), Some("u1"));
+    assert_eq!(
+        c.on_item_failed(id, "x".into(), std::time::Duration::ZERO),
+        FailureAction::RetryNow
+    );
+    assert_eq!(drain(&mut c), ["f:b[k=00001]"]);
+    assert_eq!(c.call_id(id), Some("u1"));
+}
+
 /// RFC-0013: the keys of a call are queued together, once every one of them can run.
 #[test]
 fn a_call_is_released_when_all_its_keys_are_ready() {

@@ -239,6 +239,10 @@ pub(super) struct DispatchPhase<'a> {
     pub(super) filtered_phase: &'a Phase,
     /// The batched calls of this phase (RFC-0013), as [`plan_calls`] made them.
     pub(super) calls: Vec<(String, Vec<String>)>,
+    /// The run's call counter and the batch of each key: calls made at load for keys the plan
+    /// gave none are numbered from it and added to it.
+    pub(super) next_call: &'a mut u64,
+    pub(super) batches: &'a mut HashMap<String, String>,
     pub(super) provided: &'a HashMap<String, dispatch::ProvidedInput>,
     pub(super) pool: &'a mut barca_engine::io_loop::WorkerPool,
     /// The run's Datadog exporter, when that integration is on.
@@ -262,6 +266,38 @@ pub(super) struct DispatchPhase<'a> {
     pub(super) cancel: &'a CancellationToken,
 }
 
+/// Keys of a batched node the plan put in no call: they were given one each, which the
+/// plan should have done. Say so, and record each call as the key's batch.
+fn warn_unplanned_calls(
+    coord: &barca_engine::coordinator::Coordinator,
+    next_call: &mut u64,
+    batches: &mut HashMap<String, String>,
+    pb: &Option<indicatif::ProgressBar>,
+) {
+    let made = coord.unassigned_calls();
+    if made.is_empty() {
+        return;
+    }
+    *next_call += made.len() as u64;
+    let mut per_node: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (call, key) in made {
+        *per_node
+            .entry(barca_model::StepId::parse(key).base_id().to_string())
+            .or_default() += 1;
+        batches.insert(key.clone(), call.clone());
+    }
+    for (node, keys) in per_node {
+        note(
+            pb,
+            &format!(
+                "[barca] warning: {keys} key{} of {node} were planned into no batched call; \
+                 each runs in a call of its own",
+                if keys == 1 { "" } else { "s" }
+            ),
+        );
+    }
+}
+
 pub(super) async fn dispatch_phase(
     ctx: DispatchPhase<'_>,
 ) -> (
@@ -275,6 +311,8 @@ pub(super) async fn dispatch_phase(
         filtered_phase,
         provided,
         calls,
+        next_call,
+        batches,
         pool,
         datadog,
         cost_model,
@@ -297,7 +335,20 @@ pub(super) async fn dispatch_phase(
     } = ctx;
     let mut coord = barca_engine::coordinator::Coordinator::new();
     coord.assign_calls(calls);
+    // A batched node's function takes a list of keys: every key of one that is loaded runs in
+    // a call, the plan's or, if it gave a key none, one of its own.
+    let batched: std::collections::HashSet<String> = filtered_phase
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .filter(|st| !st.partition_keys.is_empty())
+        .map(|st| st.step_id.base_id())
+        .filter(|base| dag.get_node(base).is_some_and(|n| n.decl.batch.is_some()))
+        .map(str::to_string)
+        .collect();
+    coord.require_calls(batched, *next_call);
     let loaded = coord.load_phase(filtered_phase, provided);
+    warn_unplanned_calls(&coord, next_call, batches, pb);
     coord.sensor_previous(&decide_state.sensor_previous);
     let expected: usize = filtered_phase
         .streams

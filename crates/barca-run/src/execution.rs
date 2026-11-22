@@ -924,6 +924,8 @@ async fn dispatch_ready(
             filtered_phase,
             provided,
             calls,
+            next_call: &mut session.state.next_call,
+            batches: &mut session.state.results.batches,
             pool: session.pool.as_mut().expect("workers started"),
             datadog: session.datadog.clone(),
             cost_model: &mut session.cost_model,
