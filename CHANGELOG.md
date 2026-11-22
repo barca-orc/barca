@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Preserve input types for remote-only and batched parquet reads: Dataset inputs are fetched locally, and batched DuckDB/Polars readers use Barca's filesystem and credentials. Optional annotations such as `list[ds.Dataset] | None`, `Optional[T]` and `Union[T, None]` retain the inner reader; `pa.Table` also selects Arrow rather than pandas (fixes #1103 and #814).
+
 ## 0.46.2 (2026-11-22)
 
 ### Bug Fixes

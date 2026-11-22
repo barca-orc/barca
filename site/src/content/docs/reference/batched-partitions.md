@@ -91,7 +91,7 @@ Each input reads by where it comes from:
 | Input | Annotation | The function receives |
 |---|---|---|
 | partitioned upstream, same dimension | `dict[str, T]` or none | key to that key's value |
-| partitioned upstream, same dimension | `duckdb.DuckDBPyRelation`, `polars.LazyFrame`, `pyarrow.dataset.Dataset` | one lazy table over the call's keys' artifacts, with the dimension as a column; nothing is read until it is queried |
+| partitioned upstream, same dimension | `duckdb.DuckDBPyRelation`, `polars.LazyFrame`, `pyarrow.dataset.Dataset` | one lazy table over the call's keys' artifacts, with the dimension as a column; Dataset files are fetched locally before the call, while DuckDB and Polars parquet readers use Barca’s filesystem for remote-only inputs |
 | keyed source (a dict-returning `partitions_from` source) | none, or a dict | key to that key's value |
 | unpartitioned upstream, `collect(...)` | as usual | the whole value, once per call |
 
