@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 4. Status: implemented in 0.36.0; the project socket rule approved
+Specification version: 5. Status: implemented in 0.36.0; the project socket rule approved
 2026-11-19 (#1056) and implemented.
 Scope: token storage, bootstrap, request authentication, administration and browser access.
 Stream cursor resume follows the implemented [event replay owner](server-event-replay.md).
@@ -19,6 +19,16 @@ Auth state lives in `.barca/auth/` under the project root, shared across environ
 separate from backed-up metadata. It has a version and owner-only directory/files.
 
 ## Rules and transitions
+
+- A loopback TCP listener validates Host before every route, with auth on or off. It
+  accepts `localhost` and loopback IP literals, optionally with a port, plus exact
+  case-insensitive DNS names in `[server] allowed_hosts`. A trailing DNS dot is normalized.
+  Foreign or malformed Host values receive the standard usage error envelope with HTTP 403.
+  Multiple Host headers are refused. HTTP/2 URI authority is checked when Host is absent;
+  header-less HTTP/1.0 requests remain accepted. The owner-only project socket is exempt.
+  A non-loopback bind retains the network-exposure warning and accepts any Host.
+  The setting accepts DNS names only, without scheme, port, path or wildcard.
+
 
 - The local `tokens bootstrap` command replaces the unconsumed 15-minute grant and prints
   its secret only to stdout. Redemption atomically consumes it and replaces the 12-hour
@@ -84,6 +94,12 @@ rejected. Failed mutations do not reveal a secret or intentionally overwrite cor
 Restoring only metadata does not restore access; preserve auth separately for migration.
 
 ## Acceptance and evidence
+
+[Host validation tests](../../python/tests/test_host_validation.py) exercise a real loopback
+server, refusal before read/write/UI routes, permitted local and proxy names, CLI and project
+socket access, and invalid configuration. Host parser unit tests cover spoofed suffixes and
+IP literals.
+
 
 [Store tests](../../crates/barca-server/src/auth.rs) cover digest-only persistence,
 permissions, one-use bootstrap/replacement, capacity recovery, expiry, concurrent independent

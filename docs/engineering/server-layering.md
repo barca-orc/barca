@@ -13,7 +13,7 @@ cycle. `lib.rs` wires the modules (`serve`, the drain) and is not one of them.
 | Row | Layer | Modules | Holds |
 |---|---|---|---|
 | 0 | leaf | `auth`, `config`, `error`, `progress`, `project_socket`, `resolve`, `respond`, `run_model`, `snapshot`, `ui`, `views` | the token store; `ServeConfig` and its zone; `ApiError` and the event cursor's errors; what a run's events say of its steps; the project socket; which node a name names; bodies built from the CLI's renderers; `RunSpec`, `RunState`, `RunStatus`; the metadata DB as a read reads it; the embedded UI; `NodeState`, `NodeRunning`, `JobStatus` |
-| 1 | part | `auth_http`, `queue`, `replay`, `sources` | `Access` and the auth routes; the `Queue` and what is recorded of a queued run; `ReplayHub` and a run's event channel; the loaded graph (`Sources`) |
+| 1 | part | `auth_http`, `host_guard`, `queue`, `replay`, `sources` | `Access` and the auth routes; loopback Host validation; the `Queue` and what is recorded of a queued run; `ReplayHub` and a run's event channel; the loaded graph (`Sources`) |
 | 2 | part | `read_cache` | `Reads`: the config, the sources and what the read routes keep between requests |
 | 3 | part | `sql_helper` | `QueryHelper`: the DuckDB helper process and its protocol |
 | 4 | state | `state` | `AppState`, which composes the parts, with `Runs`, `Scheduling` and `Lifecycle` |

@@ -8,6 +8,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- A loopback server refuses foreign HTTP Host names before dispatch, preventing DNS rebinding. Trusted reverse proxies can list exact DNS names in `[server] allowed_hosts`; loopback CLI/UI access and the owner-only project socket keep working (#998).
+- Pinning an asset no longer removes unrelated partitioned nodes from status prediction: their cache state and partition counts remain visible (#1069).
+
 ## 0.46.2 (2026-11-22)
 
 ### Bug Fixes
