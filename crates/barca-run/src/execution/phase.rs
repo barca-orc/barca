@@ -235,6 +235,25 @@ pub(crate) fn note(pb: &Option<indicatif::ProgressBar>, msg: &str) {
     barca_model::lines::Lines::current().note(pb.as_ref(), msg);
 }
 
+// A server starts new worker pools for successive polls. Deduplicate in the host,
+// not in a worker, so a node warns only once during this CLI/server process.
+fn sensor_warning(node_id: &str, artifact: &serde_json::Value) -> Option<String> {
+    static WARNED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(Default::default);
+    if artifact
+        .get("sensor_explicit_value")
+        .and_then(|v| v.as_bool())
+        != Some(true)
+        || !WARNED.lock().unwrap().insert(node_id.to_owned())
+    {
+        return None;
+    }
+    Some(format!(
+        "[barca] warning: sensor {node_id} returned (True, value): this always counts as changed; \
+         return the value alone to compare it, or (True, None) for an explicit change without data"
+    ))
+}
+
 pub(super) struct DispatchPhase<'a> {
     pub(super) filtered_phase: &'a Phase,
     /// The batched calls of this phase (RFC-0013), as [`plan_calls`] made them.
@@ -400,6 +419,9 @@ pub(super) async fn dispatch_phase(
                             node_id,
                         )),
                 );
+            }
+            if let Some(warning) = sensor_warning(node_id, artifact) {
+                note(pb, &warning);
             }
             // A sink that failed failed the step (the worker reports it as the step's error).
             // A dataset sink's size warning: a partition column with too many values.

@@ -60,3 +60,11 @@ Conformance: [CLI/no-execution controls](../../python/tests/test_doctor.py),
 [CLI JSON snapshots](../../python/tests/test_cli_contract.py),
 [server checks against a real `barca serve`](../../python/tests/test_debugging_problems.py), shared helper lifecycle tests
 in `helper_proc.rs`.
+
+
+When `pyproject.toml` declares barca in `project.dependencies`, `doctor` checks the running
+CLI version against that requirement (`project_version`). PEP 440 ranges, extras and PEP 508
+markers are supported; markers use the probed Python interpreter. A mismatch fails the check
+and exits 3. Unselected optional dependencies and dependency groups are not checked. A direct
+URL cannot establish a version match and fails with an explanation. An absent or inactive
+barca requirement passes. This check does not import the project or install packages.

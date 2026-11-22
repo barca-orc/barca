@@ -8,6 +8,7 @@ description = "Service layer — one operation per command, its typed result and
 # hosts name. What was barca-core is this crate and the layers below it (barca-store,
 # barca-decide, barca-run, barca-analysis).
 [dependencies]
+toml = { workspace = true }
 barca-model = { path = "../barca-model" }
 barca-compile = { path = "../barca-compile" }
 barca-python = { path = "../barca-python" }
@@ -26,12 +27,12 @@ tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "proces
 # Optional: TypeScript binding generation (enable with --features ts). Kept out
 # of the production binary; used only to regenerate ui/src/lib/generated/.
 ts-rs = { workspace = true, optional = true }
+pep508_rs = "0.9.2"
 
 # libsql only in tests (fixtures that write rows no owner writes); the manifest check and the
 # repository sweep read manifests and Python sources.
 [dev-dependencies]
 libsql = { version = "=0.10.0", default-features = false, features = ["core"] }
-toml = { workspace = true }
 ruff_python_parser = { workspace = true }
 ruff_python_ast = { workspace = true }
 

@@ -104,6 +104,17 @@ barca get --refresh-all
 
 `--env` overrides `BARCA_ENV` for an individual command.
 
+When `pyproject.toml` declares barca in `project.dependencies`, `doctor` checks the running
+CLI version against that requirement (`project_version`). PEP 440 ranges, extras and PEP 508
+markers are supported; markers use the probed Python interpreter. A mismatch fails the check
+and exits 3. Unselected optional dependencies and dependency groups are not checked. A direct
+URL cannot establish a version match and fails with an explanation. An absent or inactive
+barca requirement passes. This check does not import the project or install packages.
+
+Opening metadata written by a newer barca warns on stderr with both versions. This does not
+block compatible databases; use the project's matching barca version. Reading history does
+not overwrite the recorded writer version.
+
 See also: [Remote Storage](/reference/remote-storage/) (store configuration), [Discovery](/reference/discovery/) (project roots and
 source selection), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [Scripts and AI Agents: Debugging pipelines](/reference/agents/#debugging-pipelines).
 

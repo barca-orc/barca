@@ -1,6 +1,7 @@
 """Finite prerequisite probe. No pipeline imports, state synchronization or store writes."""
 
 import getpass
+import os
 import platform
 import sys
 
@@ -68,11 +69,28 @@ def main():
     request = _helper.env_request("BARCA_DOCTOR_REQUEST")
 
     def report():
+        implementation = sys.implementation.version
+        implementation_version = ".".join(str(part) for part in implementation[:3])
+        if implementation.releaselevel != "final":
+            implementation_version += implementation.releaselevel[0] + str(implementation.serial)
         return {
             "python": {
                 "executable": sys.executable,
                 "version": platform.python_version(),
                 "barca_version": __version__,
+            },
+            "markers": {
+                "implementation_name": sys.implementation.name,
+                "implementation_version": implementation_version,
+                "os_name": os.name,
+                "platform_machine": platform.machine(),
+                "platform_python_implementation": platform.python_implementation(),
+                "platform_release": platform.release(),
+                "platform_system": platform.system(),
+                "platform_version": platform.version(),
+                "python_full_version": platform.python_version(),
+                "python_version": ".".join(platform.python_version_tuple()[:2]),
+                "sys_platform": sys.platform,
             },
             "stores": [probe(store) for store in request["stores"]],
         }

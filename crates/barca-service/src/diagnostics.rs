@@ -35,6 +35,8 @@ impl DoctorReport {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProbeReport {
+    #[serde(default)]
+    markers: Option<pep508_rs::MarkerEnvironment>,
     python: PythonInfo,
     stores: Vec<StoreProbe>,
 }
@@ -335,6 +337,7 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
                 });
             match parsed {
                 Ok(result) => {
+                    project_version(&mut report, &root, result.markers.as_ref());
                     let compatible = result.python.barca_version == env!("CARGO_PKG_VERSION");
                     let detail = if compatible {
                         result.python.executable.clone()
@@ -452,4 +455,81 @@ async fn metadata(path: &str) -> Result<String, String> {
         Ok(_) => Ok("metadata snapshot integrity and format are valid".into()),
         Err(error) => Err(error.why),
     }
+}
+
+/// The project's base dependencies, with PEP 508 markers evaluated for the interpreter
+/// doctor actually probed. Optional extras and dependency groups are not selected here.
+fn project_version(
+    report: &mut DoctorReport,
+    root: &Path,
+    markers: Option<&pep508_rs::MarkerEnvironment>,
+) {
+    let path = root.join("pyproject.toml");
+    if !path.exists() {
+        return;
+    }
+    let check = || -> Result<String, String> {
+        let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let project: toml::Value = toml::from_str(&source).map_err(|e| e.to_string())?;
+        let Some(dependencies) = project.get("project").and_then(|p| p.get("dependencies")) else {
+            return Ok("no declared project.dependencies requirement for barca".into());
+        };
+        let dependencies = dependencies
+            .as_array()
+            .ok_or("project.dependencies must be an array")?;
+        let running = env!("CARGO_PKG_VERSION")
+            .parse()
+            .map_err(|e| format!("invalid running version: {e}"))?;
+        let mut matched = Vec::new();
+        for dependency in dependencies {
+            let text = dependency
+                .as_str()
+                .ok_or("project.dependencies entries must be strings")?;
+            let requirement: pep508_rs::Requirement = text.parse().map_err(|_| {
+                "invalid project.dependencies requirement; use PEP 508 syntax".to_string()
+            })?;
+            if requirement.name.as_ref() != "barca" {
+                continue;
+            }
+            let markers =
+                markers.ok_or("Python marker environment was not reported; reinstall barca")?;
+            if !requirement.evaluate_markers(markers, &[]) {
+                continue;
+            }
+            match &requirement.version_or_url {
+                Some(pep508_rs::VersionOrUrl::VersionSpecifier(spec))
+                    if !spec.contains(&running) =>
+                {
+                    return Err(format!(
+                        "running barca {} does not satisfy {text}; sync the project environment and run its barca",
+                        env!("CARGO_PKG_VERSION")
+                    ));
+                }
+                Some(pep508_rs::VersionOrUrl::Url(_)) => {
+                    return Err(format!(
+                        "cannot verify a direct URL barca requirement against running barca {}; declare a version requirement to check it",
+                        env!("CARGO_PKG_VERSION")
+                    ));
+                }
+                _ => matched.push(text.to_owned()),
+            }
+        }
+        Ok(if matched.is_empty() {
+            "no active project.dependencies requirement for barca".into()
+        } else {
+            format!(
+                "running barca {} satisfies {}",
+                env!("CARGO_PKG_VERSION"),
+                matched.join(", ")
+            )
+        })
+    };
+    let result = check();
+    let ok = result.is_ok();
+    report.add(
+        "project_version",
+        ok,
+        result.unwrap_or_else(|e| e),
+        Value::Null,
+    );
 }

@@ -8,6 +8,7 @@ use super::*;
 /// Tables, columns, indexes and the format version: what [`init_schema`] creates and
 /// the migrations add.
 pub mod ddl;
+pub(super) mod writer;
 
 pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     init_db_as(db_path, db_path).await.map(|_| ())
@@ -169,6 +170,11 @@ pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
 /// migration as a legacy database, in one transaction, and an older release still reads the
 /// result.
 pub async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
+    init_schema_inner(conn).await?;
+    writer::install(conn).await
+}
+
+async fn init_schema_inner(conn: &libsql::Connection) -> Result<(), BarcaError> {
     let version = crate::db::schema::ddl::check(conn).await?;
     if version == crate::db::schema::ddl::VERSION {
         // Read once and judged twice: this runs at the start of every run.
@@ -195,7 +201,7 @@ pub async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to record schema version: {e}")))?;
-        Ok(())
+        writer::record(conn).await
     })
     .await
 }
@@ -217,7 +223,7 @@ async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaErr
         crate::state_validate::usable_schema(conn)
             .await?
             .map_err(unusable)?;
-        Ok(())
+        writer::record(conn).await
     })
     .await
 }
