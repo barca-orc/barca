@@ -12,6 +12,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Warn when metadata was last written by a newer barca, and have `barca doctor` check the running version against `pyproject.toml`'s barca dependency (#672).
 - Warn once per sensor per CLI/server process when `(True, value)` supplies a non-`None` value: it always counts as changed. Return the value alone for comparison or `(True, None)` for a silent explicit change (#673).
+- Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).
+- Batched nodes split across worker streams no longer stall when the planner packs multiple chunks of the same node or chain into one stream (#1100). Stream adjacency no longer makes unrelated work depend on each other; declared input dependencies and batch boundaries are preserved. This fixes cold runs and explicit refreshes at larger pools, including small pools with several partitioned chains.
 
 ## 0.46.2 (2026-11-22)
 
