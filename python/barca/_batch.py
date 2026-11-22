@@ -160,8 +160,9 @@ _bound: list[str] = []
 def _duckdb_table(param: str, fmt: str, dimensions: dict, paths: list[str]):
     import pyarrow as pa
 
-    from barca import _duckdb
+    from barca import _artifacts, _duckdb, _storage
 
+    paths = [_artifacts.duckdb_remote_path(p) if _storage.is_remote(p) else p for p in paths]
     con = _duckdb.connection()
     mapping = f"__barca_keys_{param}"
     con.register(mapping, pa.table({"__barca_file": paths, **dimensions}))
@@ -189,8 +190,20 @@ def _duckdb_table(param: str, fmt: str, dimensions: dict, paths: list[str]):
 def _polars_table(fmt: str, dimensions: dict, paths: list[str]):
     import polars as pl
 
+    from barca import _artifacts, _storage
+
     mapping = pl.LazyFrame({"__barca_file": paths, **dimensions})
-    if fmt == "parquet":
+    if fmt == "parquet" and any(_storage.is_remote(p) for p in paths):
+        lf = pl.concat(
+            [
+                _artifacts.deserialize(p, fmt, frame_type="polars_lazy").with_columns(
+                    pl.lit(p).alias("__barca_file")
+                )
+                for p in paths
+            ],
+            how="diagonal_relaxed",
+        )
+    elif fmt == "parquet":
         lf = pl.scan_parquet(paths, include_file_paths="__barca_file")
     elif fmt == "csv":
         lf = pl.scan_csv(paths, include_file_paths="__barca_file")

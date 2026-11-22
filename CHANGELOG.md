@@ -12,6 +12,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).
 - Batched nodes split across worker streams no longer stall when the planner packs multiple chunks of the same node or chain into one stream (#1100). Stream adjacency no longer makes unrelated work depend on each other; declared input dependencies and batch boundaries are preserved. This fixes cold runs and explicit refreshes at larger pools, including small pools with several partitioned chains.
+- Preserve input types for remote-only and batched parquet reads: Dataset inputs are fetched locally, and batched DuckDB/Polars readers use Barca's filesystem and credentials. Optional annotations such as `list[ds.Dataset] | None`, `Optional[T]` and `Union[T, None]` retain the inner reader; `pa.Table` also selects Arrow rather than pandas (fixes #1103 and #814).
 
 ## 0.46.2 (2026-11-22)
 

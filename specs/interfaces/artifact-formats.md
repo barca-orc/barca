@@ -1,12 +1,13 @@
 # Artifact formats
 
-Status: implemented. Specification version: 5 (a file sink in its artifact's format holds the
+Status: implemented. Specification version: 6 (input readers retain their annotated type through optional wrappers
+and remote-only batched reads, #1103 and #814; version 5: a file sink in its artifact's format holds the
 artifact's bytes, and sink time is reported beside the step's, #1005 and #1004; version 4: the
 artifact file extension table pinned, #800; version 3: sinks republished by cache hits, #662;
 version 2: dataset sinks and failing sinks, 0.30.0).
-Scope: choosing CSV artifacts and sinks, dataset sinks, reading them and inspecting cached
+Scope: choosing artifact readers, CSV artifacts and sinks, dataset sinks, reading them and inspecting cached
 results.
-Conformance: `python/tests/test_artifact_extensions.py`, `crates/barca-model/src/artifact_format.rs`
+Conformance: `python/tests/test_input_type_correctness.py`, `python/tests/test_artifact_extensions.py`, `crates/barca-model/src/artifact_format.rs`
 (`format_of_agrees_with_the_spec_table`), `python/tests/test_csv_outputs.py`, `python/tests/test_dataset_sinks.py`,
 `python/tests/test_sink_republish.py`, `python/tests/test_sink_copies_artifact.py`,
 `crates/barca-db/src/sink_publications.rs`,
@@ -36,6 +37,19 @@ Status inspection counts CSV rows and reports columns and sampled cells as strin
 Remote inspection retains the existing whole-object size cap. SQL registers CSV
 results using DuckDB's CSV inference with headers. Cache hits preserve CSV format
 and downstream steps use the corresponding CSV reader.
+
+## Input reader selection
+
+Optional annotations (`T | None`, `None | T`, `Optional[T]`, `Union[T, None]`, including
+qualified `typing` forms and quoted annotations) retain the reader of `T`, including inside
+collect lists and batched dictionaries. A union with more than one non-None type does not
+select a reader. `pa.Table` and `pyarrow.Table` both select Arrow Table.
+
+Remote-only parquet inputs use in-place range reads only for DuckDB relations and Polars
+LazyFrames, including batched calls. Those readers use Barca's filesystem and configured
+credentials. Dataset inputs are fetched into the local artifact directory first, and the
+consumer receives a Dataset over local files. Laziness on local files does not imply support
+for in-place remote reads. No remote path may substitute a different annotated type.
 
 ## Artifact file extensions
 
