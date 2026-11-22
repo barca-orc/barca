@@ -41,6 +41,12 @@ pub struct Answer {
     /// Ordinary-get presentation counts; never part of the cached-only wire contract.
     #[serde(skip)]
     pub summaries: BTreeMap<String, usize>,
+    #[serde(skip)]
+    pub phases: usize,
+    #[serde(skip)]
+    pub lines: Vec<(crate::lines::LineWhen, String)>,
+    #[serde(skip)]
+    pub cache: Option<crate::results::CacheReport>,
     pub final_output: Option<Value>,
     pub path_scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,6 +202,7 @@ async fn read(
     let read = crate::db::read_metadata(&cfg, false).await?;
     // Prediction is static and has no ledger attached. Sensors' live values are unknown.
     let mut expected_hashes = HashMap::new();
+    let mut phases = 0;
     let (predicted, members, will_run, _) = barca_decide::predict::explain_dag_with_hashes(
         &dag,
         read.cfg(),
@@ -210,6 +217,7 @@ async fn read(
         },
         &req.files,
         Some(&mut expected_hashes),
+        Some(&mut phases),
     )
     .await?;
     if fresh_only
@@ -317,6 +325,31 @@ async fn read(
     let mut answer = Answer {
         outcomes: vec![],
         summaries,
+        phases,
+        lines: {
+            use crate::lines::LineWhen::{Agent, Always};
+            let skipped = req
+                .targets
+                .is_empty()
+                .then(|| crate::targets::skipped_tasks_note(&dag, &req.files))
+                .flatten();
+            skipped
+                .into_iter()
+                .map(|line| (Always, line))
+                .chain(
+                    barca_compile::warnings::messages(&predicted.warnings)
+                        .into_iter()
+                        .map(|line| (Always, format!("[barca] warning: {line}"))),
+                )
+                .chain(
+                    predicted
+                        .steps
+                        .iter()
+                        .map(|s| (Agent, crate::execution::cached_step_line(&dag, &s.id))),
+                )
+                .collect()
+        },
+        cache: None,
         final_output: None,
         path_scope: "local".into(),
         error: None,
@@ -636,6 +669,20 @@ async fn read(
     }
     if fresh_only && answer.error.is_some() {
         return Ok(None);
+    }
+    if fresh_only {
+        let own = barca_store::gc::Own {
+            nodes: predicted.steps.iter().map(|s| s.id.clone()).collect(),
+            run_hashes: expected_hashes.into_values().collect(),
+            recorded: answer
+                .outcomes
+                .iter()
+                .filter_map(|o| o["path"].as_str().map(str::to_owned))
+                .collect(),
+            wrote_nothing: false,
+            ..Default::default()
+        };
+        answer.cache = barca_store::gc::after_command(&cfg, &own, Some(&protection)).await;
     }
     Ok(Some((answer, predicted)))
 }

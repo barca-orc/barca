@@ -235,9 +235,9 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     server.send(sig)
     wait_until(lambda: draining(server), "/health to report draining")
 
-    # New runs are accepted into the queue for the next start, whatever the route, and none
-    # starts; reads and the run in flight go on.
-    for path in ("/run", "/get/quick", "/run/nightly"):
+    # Work needing execution is queued for the next start, whatever the route. The slow
+    # asset is still a cache miss; valid cached reads may finish while draining.
+    for path in ("/run", "/get/slow", "/run/nightly"):
         status, body = server.request("POST", path)
         assert status == 200, (path, body)
         assert server.request("GET", f"/status/{body['run_id']}")[1]["status"] == "pending"

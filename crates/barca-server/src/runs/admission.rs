@@ -51,16 +51,48 @@ pub async fn admit_as(
 ) -> Result<Admitted, ApiError> {
     let channel = state.runs.replay.channel()?;
     let accepted_at = now_ts();
-    if let Some((result, outcome)) = fresh_read(state, &spec, &run_id).await {
+    if let Some((result, outcome, lines)) = fresh_read(state, &spec, &run_id).await {
         ensure_db(state).await?;
         // A cache read has no durable queue entry to recover. Refuse it if its terminal
         // record cannot be written, rather than acknowledge an identity that can be lost.
-        super::lifecycle::persist_outcome(state, &run_id, &spec, &outcome, false, false).await?;
+        let body: serde_json::Value = serde_json::from_str(outcome.text()).expect("typed outcome");
+        let cached = body["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|s| s["partitions"]["cached"].as_u64().unwrap_or(1) as usize)
+            .sum();
+        let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
+        let mut nodes = spec.nodes.clone();
+        nodes.sort();
+        let job = if nodes.is_empty() {
+            "all".into()
+        } else {
+            nodes.join(",")
+        };
+        barca_service::serve::record_cached_run(
+            &state.config.resolved.db_path,
+            barca_service::serve::UnstartedRun {
+                run_id: &run_id,
+                command: spec.command.as_str(),
+                files: super::run_files(state, &spec.files),
+                target: target.as_deref(),
+                trigger: &spec.trigger,
+            },
+            &job,
+            cached,
+            body["elapsed_seconds"].as_f64().unwrap_or_default(),
+            outcome.text(),
+        )
+        .await?;
         track(state, &run_id, &spec, accepted_at, channel.clone());
+        state.runs.registry.get_mut(&run_id).unwrap().db_run_id = Some(run_id.clone());
         channel.emit(barca_service::RunEvent::RunStarted {
             run_id: run_id.clone(),
         });
-        let body: serde_json::Value = serde_json::from_str(outcome.text()).expect("typed outcome");
+        for (when, line) in lines {
+            channel.emit(barca_service::RunEvent::Line { line, when });
+        }
         for step in body["steps"].as_array().into_iter().flatten() {
             channel.emit(barca_service::RunEvent::StepFinished {
                 node_id: step["id"].as_str().unwrap_or_default().into(),
@@ -361,6 +393,7 @@ async fn fresh_read(
 ) -> Option<(
     Option<barca_service::results::GetResult>,
     barca_service::outcome::Outcome,
+    Vec<(barca_service::lines::LineWhen, String)>,
 )> {
     use barca_service::{
         cached,
@@ -405,9 +438,6 @@ async fn fresh_read(
         .ok()?;
     for step in &mut prediction.steps {
         step.status = step.action.take();
-        if let Some(o) = answer.outcomes.iter().find(|o| o["node"] == step.id) {
-            step.artifact = o["path"].as_str().map(str::to_owned);
-        }
     }
     let partitions = answer
         .outcomes
@@ -425,7 +455,7 @@ async fn fresh_read(
         run_id: run_id.into(),
         elapsed_seconds: started.elapsed().as_secs_f64(),
         steps_executed: 0,
-        phases: 0,
+        phases: answer.phases,
         final_output: outputs.first().cloned(),
         steps: prediction.steps,
         warnings: prediction.warnings,
@@ -437,14 +467,14 @@ async fn fresh_read(
                 listed: vec![],
             }
         }),
-        cache: None,
+        cache: answer.cache.clone(),
         uploads: prediction.uploads,
         metadata_seconds: None,
         partition_selection: prediction.partition_selection,
     };
     if spec.targets.len() <= 1 {
         let outcome = Outcome::success_with(&result, answer.final_output);
-        return Some((Some(result), outcome));
+        return Some((Some(result), outcome, answer.lines));
     }
     let mut targets = Vec::new();
     let mut values = Vec::new();
@@ -499,11 +529,11 @@ async fn fresh_read(
         run_id: result.run_id,
         elapsed_seconds: result.elapsed_seconds,
         steps_executed: 0,
-        phases: 0,
+        phases: answer.phases,
         steps: result.steps,
         warnings: result.warnings,
         targets,
-        cache: None,
+        cache: answer.cache.clone(),
         uploads: result.uploads,
         metadata_seconds: None,
         partition_selection: result.partition_selection,
@@ -511,5 +541,6 @@ async fn fresh_read(
     Some((
         None,
         Outcome::multi_with(&multi, &values, &super::context(spec.command, &spec.files)),
+        answer.lines,
     ))
 }

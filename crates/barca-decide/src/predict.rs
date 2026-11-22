@@ -115,11 +115,13 @@ pub async fn explain_dag_with_keys(
         rules,
         file_args,
         None,
+        None,
     )
     .await
 }
 
-/// The same prediction, optionally retaining the expected hash of every selected step.
+/// The same prediction, optionally retaining each selected step's expected hash and the
+/// planned phase count for an ordinary cache-hit result.
 /// A latest-success reader compares its row with this evidence: an older matching result
 /// can make ordinary get fresh even while the latest success is stale after a code revert.
 #[allow(clippy::too_many_arguments)]
@@ -133,6 +135,7 @@ pub async fn explain_dag_with_hashes(
     rules: &crate::freshness::RunRules,
     file_args: &[String],
     hashes: Option<&mut HashMap<String, String>>,
+    phases: Option<&mut usize>,
 ) -> Result<
     (
         ExplainResult,
@@ -164,6 +167,9 @@ pub async fn explain_dag_with_hashes(
         Some(selection) => Some(selection.apply(dag, &mut exec_plan, &target_ids)?),
         None => None,
     };
+    if let Some(phases) = phases {
+        *phases = exec_plan.phases.len();
+    }
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(
             dag,

@@ -9,8 +9,10 @@ The planning-pipeline fixture (#250) runs a shorter table the same way.
 Normalized, because they differ by design (the declared differences, listed in
 `barca docs server-mode`):
 
-- Cached-only `path_scope` identifies local versus server ownership; retained reference
-  directory names are unique per read and are normalized after validating the scope.
+- Cached-only `path_scope` identifies local versus server ownership. Artifact locators
+  compare their hash/format filename, whether original or retained for a concurrent read.
+- Step reports and contiguous agent step lines compare by node; independent streams can
+  finish in different orders, including when one fails beside cached steps.
 - `root`, artifact paths and tracebacks name the server's project directory: both roots read
   `<root>`.
 - `triggered_by` is `manual` for a run typed here and `api` for a run started over HTTP.
@@ -168,7 +170,13 @@ TRIGGER = re.compile(r"\btriggered by (manual|api)\b")
 def _text(s: str, roots: list[str]) -> str:
     for root in roots:
         s = s.replace(root, "<root>")
-    s = re.sub(r"/sql-cache/cached-[^/]+/", "/sql-cache/<read>/", s)
+    # Concurrent cache reads retain an inode under sql-cache; ordinary execution returns
+    # the original artifact. Compare the same hash/format, independent of its host locator.
+    s = re.sub(
+        r"(?:<root>/)?\.barca/(?:sql-cache/cached-[^/]+|artifacts/[^/]+)/([0-9a-f]{64}\.[a-z0-9]+)",
+        r"<artifact>/\1",
+        s,
+    )
     s = TRIGGER.sub("triggered by <trigger>", s)
     s = TIMESTAMP.sub("<t>", s)
     s = RUN_ID.sub("<run_id>", s)
@@ -211,6 +219,8 @@ def _value(v, roots: list[str], key: str = ""):
     if isinstance(v, dict):
         return {k: _value(x, roots, k) for k, x in v.items() if k != "import_seconds"}
     if isinstance(v, list):
+        if key == "steps" and all(isinstance(x, dict) and "id" in x for x in v):
+            v = sorted(v, key=lambda x: x["id"])
         return [_value(x, roots) for x in v]
     if key == "triggered_by" and v in ("manual", "api"):
         return "<trigger>"
@@ -249,6 +259,15 @@ def _normalize(text: str, roots: list[str]):
             out.append(_value(json.loads(line), roots))
         except json.JSONDecodeError:
             out.append(_text(line, roots))
+    # Only reorder contiguous per-step progress: retain warnings, summaries, errors and
+    # their boundaries, while independent streams may finish on either side of a cache hit.
+    start = 0
+    while start < len(out):
+        end = start
+        while end < len(out) and isinstance(out[end], str) and out[end].startswith("[barca] step:"):
+            end += 1
+        out[start:end] = sorted(out[start:end])
+        start = max(start + 1, end)
     return out
 
 
