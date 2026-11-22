@@ -49,6 +49,7 @@ import argparse
 import calendar
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import random
@@ -123,7 +124,7 @@ def tock() -> None:
     time.sleep(0.3)
 """
 
-# A run that stays in flight for as long as `hold.secs` says: what a stop or a kill catches.
+# A run held behind a gate: stop/kill only after the worker acknowledges step startup.
 # In a file of its own, which only the server runs.
 HOLD = """\
 import time
@@ -134,11 +135,14 @@ from barca import asset
 
 @asset()
 def hold() -> dict:
-    flag = Path(__file__).with_name("hold.secs")
-    secs = float(flag.read_text()) if flag.exists() else 0.0
-    print("holding", secs, flush=True)
-    time.sleep(secs)
-    return {"held": secs}
+    flag = Path(__file__).with_name("hold")
+    flag.with_suffix(".started").write_text("started")
+    deadline = time.monotonic() + 120
+    while not flag.with_suffix(".release").exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("the harness did not release the held step within 120s")
+        time.sleep(0.05)
+    return {"held": True}
 """
 
 # Words no command, route or server log may ever say, and what each means.
@@ -353,7 +357,7 @@ class Harness:
                 status, raw = r.status, r.read()
         except urllib.error.HTTPError as e:
             status, raw = e.code, e.read()
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, http.client.HTTPException) as e:
             self.problem(kind, "no answer", repr(e), began)
             return 0, None
         finally:
@@ -426,7 +430,7 @@ class Harness:
                 try:
                     body(rng)
                 except Exception as e:  # noqa: BLE001 - a loop that dies would hide its traffic
-                    self.problem(name, "the harness loop raised", repr(e), self.now())
+                    self.problem(name, f"the harness loop raised {e!r}", repr(e), self.now())
                 self.stop.wait(rng.uniform(*pause))
 
         thread = threading.Thread(target=run, name=name, daemon=True)
@@ -493,7 +497,7 @@ class Harness:
                 with urllib.request.urlopen(f"{self.url}/runs/{run_id}/events", timeout=60) as r:
                     r.read()
                 self.commands["http GET /runs/{id}/events"] += 1
-            except (OSError, ValueError) as e:
+            except (OSError, ValueError, http.client.HTTPException) as e:
                 self.problem("http GET /runs/{id}/events", "stream broke", repr(e), began)
             self.follow(run_id, LAST_STEPS)
 
@@ -829,9 +833,10 @@ class Harness:
 
     # ─── stops and crashes ────────────────────────────────────────────────────
 
-    def hold(self, secs: float) -> str:
-        """Start a run that stays in flight for `secs`; its id, once its step is going."""
-        (self.dir / "hold.secs").write_text(str(secs))
+    def hold(self) -> str:
+        """Start a gated step; return only after the worker acknowledges it started."""
+        (self.dir / "hold.started").unlink(missing_ok=True)
+        (self.dir / "hold.release").unlink(missing_ok=True)
         run_id = None
         for _ in range(50):
             run_id = self.submit("hold", 1, wait=False)
@@ -842,14 +847,13 @@ class Harness:
             raise Failed("the server accepted no run to hold")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if f"holding {secs}" in self.log_text().split(run_id[:8])[-1]:
-                break
+            if (self.dir / "hold.started").exists():
+                return run_id
             status, body = self.http("http GET /runs/{id}", "GET", f"/runs/{run_id}")
-            if status == 200 and body and body.get("status") == "running":
-                time.sleep(1.0)
-                break
+            if status == 200 and body and body.get("status") in TERMINAL:
+                raise Failed(f"held run ended before its step started: {body}")
             time.sleep(0.05)
-        return run_id
+        raise Failed(f"held step {run_id} did not start within 60s")
 
     def after_stop(self, what: str, record: dict) -> None:
         """What every stop must leave: a sound database, and a next server that needs no help."""
@@ -860,9 +864,12 @@ class Harness:
 
     def drain(self) -> None:
         self.say("SIGTERM with a run in flight: the drain")
-        run_id = self.hold(3)
+        run_id = self.hold()
         began = self.enter("drain")
+        marker = len(self.log_text())
         self.proc.send_signal(signal.SIGTERM)
+        self.wait_for_drain(marker)
+        (self.dir / "hold.release").touch()
         code = self.wait_exit(60)
         record = {"what": "SIGTERM during a run", "exit": code, "run": run_id}
         log = self.log_text()
@@ -878,22 +885,16 @@ class Harness:
 
     def forced(self) -> None:
         self.say("a second SIGTERM during the drain")
-        run_id = self.hold(60)
+        run_id = self.hold()
         began = self.enter("forced stop")
-        self.proc.send_signal(signal.SIGTERM)
-        deadline = time.monotonic() + 30
         marker = len(self.log_text())
-        while "SIGTERM received" not in self.log_text()[marker - 4000 :]:
-            if time.monotonic() > deadline:
-                raise Failed("no drain began within 30s of SIGTERM")
-            time.sleep(0.05)
-        time.sleep(0.5)
+        self.proc.send_signal(signal.SIGTERM)
+        self.wait_for_drain(marker)
         self.proc.send_signal(signal.SIGTERM)
         code = self.wait_exit(60)
         record = {"what": "second SIGTERM", "exit": code, "run": run_id}
         if code != 1:
             raise Failed(f"a forced stop exited {code}, not 1: {self.log_text()[-1500:]}")
-        (self.dir / "hold.secs").write_text("0")
         self.after_stop("a forced stop", record)
         self.leave(began, grace=2)
         status, body = self.http("http GET /runs/{id}", "GET", f"/runs/{run_id}")
@@ -905,7 +906,7 @@ class Harness:
     def kill(self, n: int, rng: random.Random) -> None:
         self.say(f"SIGKILL {n}")
         with_hold = n % 2 == 1
-        run_id = self.hold(60) if with_hold else None
+        run_id = self.hold() if with_hold else None
         time.sleep(rng.uniform(0.2, 1.5))
         status, listing = self.http("http GET /runs", "GET", "/runs?limit=50")
         live = [
@@ -919,7 +920,6 @@ class Harness:
         self.proc.kill()
         self.proc.wait()
         self.reap_group()
-        (self.dir / "hold.secs").write_text("0")
         record = {
             "what": "SIGKILL",
             "exit": -9,
@@ -961,6 +961,13 @@ class Harness:
             raise Failed(f"the run a SIGKILL caught mid-step reads {record.get('run status')}")
         if run_id:
             self.accepted[run_id]["ended"] = record["run status"]
+
+    def wait_for_drain(self, marker: int) -> None:
+        deadline = time.monotonic() + 30
+        while "SIGTERM received" not in self.log_text()[marker:]:
+            if self.proc.poll() is not None or time.monotonic() >= deadline:
+                raise Failed("no drain began within 30s of SIGTERM")
+            time.sleep(0.05)
 
     def wait_exit(self, timeout: float) -> int:
         try:
@@ -1219,10 +1226,30 @@ class Harness:
         self.start_loops()
         self.say(f"sustained: {self.args.seconds}s")
         end = time.monotonic() + self.args.seconds
-        while time.monotonic() < end:
+        deadline = end + 60
+        coverage = {}
+        while True:
             if self.proc.poll() is not None:
                 raise Failed(f"the server died with exit {self.proc.returncode}")
+            if time.monotonic() >= end:
+                log = self.log_text()
+                coverage = {
+                    "completed steps": len(re.findall(r"step:.* completed ", log)),
+                    "backups": len(self.backups),
+                    "trims": log.count("share of the limit: now"),
+                }
+                if not self.args.wait_for_coverage or (
+                    coverage["completed steps"] >= 200
+                    and coverage["backups"] >= 3
+                    and coverage["trims"] >= 1
+                ):
+                    break
+                if time.monotonic() >= deadline:
+                    raise Failed(
+                        f"sustained coverage did not arrive within 60 extra seconds: {coverage}"
+                    )
             time.sleep(0.5)
+        report["coverage"] = coverage
         sustained = list(self.samples)
         report["sustained"] = self.sizes_report(sustained)
         report["sustained"]["one server process"] = self.proc.pid == server_pid
@@ -1395,6 +1422,11 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--seed", type=int, default=1, help="fixes each loop's choices")
     p.add_argument("--seconds", type=float, default=600, help="how long the server is held up")
+    p.add_argument(
+        "--wait-for-coverage",
+        action="store_true",
+        help="after --seconds, allow up to 60s for 200 steps, 3 backups and a trim (CI)",
+    )
     p.add_argument("--kills", type=int, default=3, help="SIGKILLs with a restart, after that")
     p.add_argument("--backup-secs", type=int, default=2, help="the server's backup interval")
     p.add_argument("--limit-mb", type=int, default=20, help="[cache] max_size, in MB")
