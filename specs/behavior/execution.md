@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 7. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 8. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -66,7 +66,10 @@ dimensions receive their projection; unrelated dimensions remain unrestricted. R
 [`test_partition_selection.py`](../../python/tests/test_partition_selection.py),
 `queue::tests::queued_exact_keys_do_not_widen_after_reload`, and the key-explorer browser tests.
  Group order and explicit `batches(...)`
-boundaries must not depend on how a worker pool happens to divide streams.
+boundaries must not depend on how a worker pool happens to divide streams. Packing chunks
+into the same stream must not introduce dependencies between unrelated nodes or between
+chunks of the same node: a call can span those chunks and waits for all its keys to be ready.
+Declared input dependencies still govern readiness (#1100).
 
 A table result (DuckDB, Arrow or polars) is split into one artifact per key whose rows are
 sorted by every column. The artifact bytes of a key depend only on its rows and schema: not
