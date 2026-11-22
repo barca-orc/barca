@@ -1141,22 +1141,20 @@ def job(retailer: list[str]):
 
 # ─── A batched function is never called with a single key ────────────────────
 
-# `plain` (not batched) and `scored` (batched) read the same key of `cleaned`, so both are ready
-# in one wave: a lease that starts with a `plain` key must not carry keys of a call away from it.
+# `plain` and `lone` (not batched) and `scored` (batched) are all inputs of `both`. When `both`
+# is due and their artifacts are gone, they are computed again in one phase, with the plain
+# steps ahead of the batched call in the queue: a lease that starts with a plain step must not
+# carry the first keys of the call away from it.
 GUARDED = """
 import os
 
 TYPES = HERE / "types.txt"
 STATE = HERE / "state.json"
+N = 300
 
 
 def _state():
     return json.loads(STATE.read_text()) if STATE.exists() else {}
-
-
-def _count(retailer):
-    with TYPES.open("a") as f:
-        f.write(type(retailer).__name__ + "\\n")
 
 
 @asset(partitions={"retailer": partitions_from(cleaned)})
@@ -1164,64 +1162,76 @@ def plain(retailer: str, cleaned: dict) -> dict:
     return {"retailer": retailer}
 
 
+@asset()
+def lone() -> int:
+    return 1
+
+
 @asset(partitions={"retailer": partitions_from(cleaned)}, batch=2, retries=3)
 def scored(retailer: list[str], cleaned: dict[str, dict]) -> dict:
-    _count(retailer)
+    with TYPES.open("a") as f:
+        f.write(type(retailer).__name__ + "\\n")
     state = _state()
     if state.get("die") and not (HERE / "died").exists():
         (HERE / "died").touch()
         os._exit(9)
     if state.get("fail_once") and not (HERE / "failed").exists():
         (HERE / "failed").touch()
-        return {r: Failed("once") if r == retailer[0] else {"r": r} for r in retailer}
-    return {r: {"r": r, "n": cleaned[r]["amount"]} for r in retailer}
+        return {r: Failed("once") if r == retailer[0] else rows(r) for r in retailer}
+    return {r: rows(r) for r in retailer}
 
 
-@asset(inputs={"p": collect(plain), "s": collect(scored)})
-def both(p: list, s: list) -> int:
-    return len(p) + len(s)
+def rows(r):
+    return [{"retailer": r, "row": i} for i in range(3)]
+
+
+@asset(inputs={"p": collect(plain), "s": collect(scored), "l": lone})
+def both(p: list, s: list, l: int) -> int:
+    return len(p) + len(s) + VERSION
 """
 
-
-def types_seen(project: Path) -> list[str]:
-    path = project / "types.txt"
-    return path.read_text().split() if path.exists() else []
+KEYS = 300
 
 
-def guarded(project: Path, state: dict) -> None:
-    write(project, GUARDED)
+def guarded(project: Path, version: int, state: dict) -> None:
+    write(project, GUARDED.replace("VERSION", str(version)))
     (project / "state.json").write_text(json.dumps(state))
+    for stale in ("died", "failed"):
+        (project / stale).unlink(missing_ok=True)
 
 
-def test_a_batched_function_never_gets_a_single_key_across_retry_kill_and_eviction(keys5):
-    guarded(keys5, {})
-    # Many keys, cheap steps: the leases are sized to take several of the ready items, and a
-    # warm second run knows how cheap they are.
-    set_versions(keys5, {f"r{i}": "a" for i in range(1, 301)})
-    get(keys5, "both")
-    set_versions(keys5, {f"r{i}": "b" for i in range(1, 301)})
-    res = get(keys5, "both")
-    assert step(res, "scored")["partitions"]["will_run"] == 300
+def evict(project: Path, *targets: str) -> None:
+    """Delete the artifacts of `targets`, as the cache size limit does."""
+    paths = []
+    for target in targets:
+        out = get(project, target)["final_output"]
+        for pointer in [out] if "_barca_artifact" in out else out.values():
+            paths.append(project / pointer["_barca_artifact"]["path"])
+    for path in paths:
+        path.unlink()
+    (project / "types.txt").write_text("")
 
-    # A retry of failed keys.
-    guarded(keys5, {"fail_once": True})
-    set_versions(keys5, {f"r{i}": "c" for i in range(1, 301)})
-    assert get(keys5, "both")["final_output"]
 
-    # A worker killed in the middle of a call.
-    guarded(keys5, {"die": True})
-    set_versions(keys5, {f"r{i}": "d" for i in range(1, 301)})
-    assert get(keys5, "both")["final_output"]
-
-    # An input evicted from disk: its node is computed again, then the batched node runs.
-    guarded(keys5, {})
-    cleaned_out = get(keys5, "cleaned")
-    for pointer in cleaned_out["final_output"].values():
-        (keys5 / pointer["_barca_artifact"]["path"]).unlink()
-    set_versions(keys5, {f"r{i}": "e" for i in range(1, 301)})
-    res = get(keys5, "both")
-    assert step(res, "scored")["partitions"]["will_run"] == 300
-
-    seen = types_seen(keys5)
+def check_scored(project: Path) -> None:
+    """Every key has its rows, and the function only ever got lists of keys."""
+    result = value(project, "scored")
+    assert sorted(result) == sorted(f"retailer=r{i}" for i in range(1, KEYS + 1))
+    for key, rows in result.items():
+        r = key.split("=", 1)[1]
+        assert rows == [{"retailer": r, "row": i} for i in range(3)], key
+    seen = (project / "types.txt").read_text().split()
     assert seen, "the batched function never ran"
-    assert set(seen) == {"list"}, f"called with a single key: {seen}"
+    assert set(seen) == {"list"}, f"called with a single key: {set(seen) - {'list'}}"
+
+
+def test_a_batched_function_never_gets_a_single_key_when_its_artifacts_are_recovered(keys5):
+    set_versions(keys5, {f"r{i}": "a" for i in range(1, KEYS + 1)})
+    guarded(keys5, 0, {})
+    get(keys5, "both")
+    for version, state in enumerate(({}, {"fail_once": True}, {"die": True}), start=1):
+        # Unchanged inputs and run hashes; `both` is due, and the files it reads are gone.
+        guarded(keys5, version, state)
+        evict(keys5, "scored", "plain", "lone")
+        res = get(keys5, "both")
+        assert res["final_output"]
+        check_scored(keys5)

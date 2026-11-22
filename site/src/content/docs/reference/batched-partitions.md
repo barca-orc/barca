@@ -85,7 +85,8 @@ pipeline.py:scored[3 keys]          success  1         0.2s  189 MB    -        
 
 ## Writing a batch function
 
-The partition parameter is the list of the call's keys. Each input reads by where it comes from:
+The partition parameter is always the list of the call's keys, even for a call of one key (a retry, `--batch none`). A batched function is never called with a single key.
+Each input reads by where it comes from:
 
 | Input | Annotation | The function receives |
 |---|---|---|
