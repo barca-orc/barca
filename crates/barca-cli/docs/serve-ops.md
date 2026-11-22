@@ -270,7 +270,15 @@ and 75 or more with one (73 plus a margin); the table gives the no-store numbers
 | Docker | `docker stop -t`, `stop_grace_period` in Compose | 10 s | `stop_grace_period: 45s` |
 | Kubernetes | `terminationGracePeriodSeconds` | 30 s | `45` |
 
-This also holds when barca is process 1 of a container, so a plain `docker stop` drains. Keep
+For systemd, set `KillMode=mixed` in `[Service]`. It sends the initial SIGTERM only to the
+main server, so Barca can drain its workers and transfer helper. The default `control-group`
+signals every child immediately, interrupting their work before the drain can finish. With
+`mixed`, systemd still sends SIGKILL to remaining children when the main process exits or
+`TimeoutStopSec` expires; keep that timeout above the printed stop grace.
+
+Docker sends the initial stop signal to the container’s main process. The documented exec-form
+`CMD ["barca", "serve", ...]` makes Barca that process, so `docker stop` starts its drain. A shell
+wrapper must use `exec barca serve ...` to forward that responsibility. Keep
 `.barca/` on persistent storage: the queue is in its metadata DB.
 
 ### Clients ride through a restart

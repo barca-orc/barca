@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Documentation
+
+- Set `KillMode=mixed` and an explicit stop timeout in the systemd recipe so stopping the service lets Barca drain its workers; clarify container signal delivery (#927).
+
 ### Bug Fixes
 
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).
