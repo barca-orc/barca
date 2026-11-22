@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- A server refresh resumed after a drain/restart reuses completed assets and partition keys whose current-hash success was recorded since the original request was accepted. Tasks can still repeat, including side effects (#928).
+
 - Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
 
 - Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).

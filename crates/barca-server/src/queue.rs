@@ -11,8 +11,9 @@
 //! A run leaves the queue when it has recorded how it ended. A server that starts resumes the runs
 //! it finds queued, in order (`runs::resume_at_startup`). A run the stopping server stopped at its
 //! drain deadline goes back to its place ([`crate::runs`], `requeue`) and starts again from the
-//! beginning after the restart: steps that finished are cache hits then, so a run is executed
-//! at least once, and a step that was interrupted runs again.
+//! beginning after the restart: completed assets with matching hashes satisfy a refresh when
+//! recorded at/after its original acceptance. Interrupted work runs again. Tasks outside a
+//! tick can repeat even after completion, including their side effects.
 
 use crate::run_model::RunSpec;
 use barca_service::cache::CachePolicy;
@@ -179,8 +180,8 @@ pub(crate) fn store(spec: &RunSpec, accepted_at: f64) -> String {
         files: spec.files.clone(),
         policy: match &spec.policy {
             CachePolicy::CacheAware => StoredPolicy::CacheAware,
-            CachePolicy::RefreshAll => StoredPolicy::RefreshAll,
-            CachePolicy::RefreshSelective { names, cascade } => StoredPolicy::Refresh {
+            CachePolicy::RefreshAll { .. } => StoredPolicy::RefreshAll,
+            CachePolicy::RefreshSelective { names, cascade, .. } => StoredPolicy::Refresh {
                 names: names.clone(),
                 cascade: *cascade,
             },
@@ -208,10 +209,14 @@ pub(crate) fn load(text: &str) -> Result<(RunSpec, f64), String> {
         files: stored.files,
         policy: match stored.policy {
             StoredPolicy::CacheAware => CachePolicy::CacheAware,
-            StoredPolicy::RefreshAll => CachePolicy::RefreshAll,
-            StoredPolicy::Refresh { names, cascade } => {
-                CachePolicy::RefreshSelective { names, cascade }
-            }
+            StoredPolicy::RefreshAll => CachePolicy::RefreshAll {
+                since: stored.accepted_at,
+            },
+            StoredPolicy::Refresh { names, cascade } => CachePolicy::RefreshSelective {
+                names,
+                cascade,
+                since: stored.accepted_at,
+            },
         },
         trigger: stored.trigger,
         values: stored.values,

@@ -637,9 +637,9 @@ impl StepInsert {
     // Turso otherwise intersects the node and run indexes, scanning this run
     // for each partition. Bound deduplication to the node's own history.
     const SQL: &'static str = concat!(
-        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash, rows, sink_seconds) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations ",
+        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash, rows, sink_seconds, created_at) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations ",
         by_node_run!(),
-        " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''), NULLIF(?17, '') WHERE NOT EXISTS (SELECT 1 FROM materializations ",
+        " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''), NULLIF(?17, ''), ?18 WHERE NOT EXISTS (SELECT 1 FROM materializations ",
         by_node_run!(),
         " WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12)"
     );
@@ -674,6 +674,7 @@ impl StepInsert {
                 opt(row.observation_hash.clone()),
                 opt(row.rows.map(|r| r.to_string())),
                 opt(row.sink_seconds.map(|s| s.to_string())),
+                barca_model::time::db_timestamp(barca_model::time::now_secs_f64()),
             ])
             .await
     }

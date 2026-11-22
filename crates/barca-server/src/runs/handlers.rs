@@ -226,7 +226,9 @@ pub async fn run_target(
     refuse_if_read_only(&state.config)?;
     let node = check_target_as(&state, &target, "run", Wording::Route).await?;
     let mut spec = RunSpec::api(RunCommand::Run, vec![target], vec![node]);
-    spec.policy = CachePolicy::RefreshAll;
+    spec.policy = CachePolicy::RefreshAll {
+        since: barca_service::time::now_secs_f64(),
+    };
     spec.trigger = api_trigger(principal.map(|p| p.0.0), None);
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }

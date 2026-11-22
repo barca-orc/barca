@@ -262,7 +262,7 @@ pub(crate) fn pins_itself(dag: &Dag, id: &str) -> bool {
 fn refreshed(policy: &CachePolicy, id: &str) -> bool {
     match policy {
         CachePolicy::CacheAware => false,
-        CachePolicy::RefreshAll => true,
+        CachePolicy::RefreshAll { .. } => true,
         CachePolicy::RefreshSelective { names, .. } => {
             names.iter().any(|name| refresh_name_matches(id, name))
         }
@@ -890,7 +890,12 @@ mod tests {
         ]);
         let (raw, scored) = (id(&d, "raw"), id(&d, "scored"));
         let user: HashSet<String> = [raw.clone()].into();
-        for policy in [CachePolicy::CacheAware, CachePolicy::RefreshAll] {
+        for policy in [
+            CachePolicy::CacheAware,
+            CachePolicy::RefreshAll {
+                since: barca_model::time::now_secs_f64(),
+            },
+        ] {
             // Without `pin_manual`, only the pin stops the walk.
             let w = walk_with(&d, &[&scored], &policy, &user, false, &HashSet::new());
             assert_eq!(names(&w.stops), ["raw"]);
@@ -900,6 +905,7 @@ mod tests {
             assert_eq!(names(&w.stops), ["raw"]);
         }
         let named = CachePolicy::RefreshSelective {
+            since: barca_model::time::now_secs_f64(),
             names: vec!["raw".into()],
             cascade: true,
         };
@@ -939,6 +945,7 @@ mod tests {
         assert_eq!(names(&w.stops), ["model"]);
         assert_eq!(w.cone.len(), 1);
         let named = CachePolicy::RefreshSelective {
+            since: barca_model::time::now_secs_f64(),
             names: vec!["model".into()],
             cascade: true,
         };
@@ -968,8 +975,11 @@ mod tests {
         ]);
         let scored = id(&d, "scored");
         for policy in [
-            CachePolicy::RefreshAll,
+            CachePolicy::RefreshAll {
+                since: barca_model::time::now_secs_f64(),
+            },
             CachePolicy::RefreshSelective {
+                since: barca_model::time::now_secs_f64(),
                 names: vec!["model".into()],
                 cascade: true,
             },

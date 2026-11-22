@@ -373,3 +373,7 @@ this release (these, or `bytes_changed`) gains them when it is opened for writin
 transaction, rolled back on error, with every row preserved and the version left at 1. A
 database that already has them is only read. Conformance: the schema tests in
 `crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.
+
+Successful materialization `created_at` values written by step persistence include fractional
+seconds (`YYYY-MM-DD HH:MM:SS.nnnnnnnnn`, UTC) to distinguish refresh acceptance within a
+second. Readers accept legacy whole-second values too. No column or schema migration is needed.

@@ -190,10 +190,21 @@ flight that takes well under a second.
 
 When the drain timeout passes before the runs in flight have finished, they are stopped and put
 back at the head of the queue: `[barca] the drain timeout (30s) passed: stopping 1 run and
-putting it back in the queue`. Their workers are stopped, the steps that finished are kept (and
-are cache hits on the next attempt), and the stopped attempt is not recorded as a run that ended:
+putting it back in the queue`. Their workers are stopped, completed asset results are kept (and
+reused when their code and inputs still match), and the stopped attempt is not recorded as a run that ended:
 its row and lines are replaced by the next attempt's. The server exits 0, and the next server
 starts them again from the beginning, first, under the same run ids.
+
+A refresh-all or selective refresh keeps its original acceptance time across attempts. A
+successful asset result with the current run hash recorded at or after that time satisfies
+the refresh, including an individual partition key or a result another run produced while
+this request waited. Older results and changed hashes still run; selective cascade and cutoff
+rules still apply. Fully cached steps satisfied this way report `refreshed_by_this_run`.
+
+This is not exactly-once task execution. Outside a scheduled tick, completed tasks can run
+again after a restart, including their side effects. Make retried task effects idempotent;
+interrupted tasks and sensors can also execute again.
+
 
 With a store, a step that finished counts as kept even when its upload was still in flight at the
 drain timeout: the upload is stopped and kept pending, as a failed one is ([Remote Storage](/reference/remote-storage/),
@@ -427,7 +438,7 @@ def sync() -> dict:
 ```
 
 A run that times out is stopped like a cancelled one (its workers are terminated; steps that
-finished stay cached) and is recorded as `error` in `barca history`, with the reason in its
+finished assets can be reused when their hashes match; tasks may repeat) and is recorded as `error` in `barca history`, with the reason in its
 outcome: `run timed out after 240s (Schedule(timeout_seconds=) of sync)`, naming the setting
 that applied. Before 0.31.0 every run under `barca serve` stopped at 600 seconds, a limit that was
 not configurable; `--run-timeout 600` restores it.

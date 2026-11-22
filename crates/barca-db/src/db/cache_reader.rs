@@ -82,6 +82,28 @@ impl CacheReader {
             .is_none_or(|root| barca_model::config::local_artifact(path, root))
     }
 
+    /// A successful materialization for this exact computation, recorded at/after acceptance.
+    /// Legacy whole-second rows are compared without rounding the acceptance time down.
+    pub async fn refreshed_since(
+        &self,
+        node: &str,
+        hash: &str,
+        artifact: &str,
+        since: f64,
+    ) -> bool {
+        let Ok(mut rows) = self.conn.query(
+            concat!("SELECT created_at FROM materializations ", by_node_run!(), " WHERE node_id = ?1 AND run_hash = ?2 AND artifact_path = ?3 AND status = 'success' ORDER BY id DESC LIMIT 1"),
+            [node, hash, artifact],
+        ).await else { return false; };
+        let Ok(Some(row)) = rows.next().await else {
+            return false;
+        };
+        row.get::<String>(0)
+            .ok()
+            .and_then(|at| barca_model::time::parse_db_timestamp(&at))
+            .is_some_and(|at| at >= since)
+    }
+
     pub fn conn(&self) -> &libsql::Connection {
         &self.conn
     }
@@ -441,6 +463,43 @@ impl CacheReader {
 
 #[cfg(test)]
 mod observation_tests {
+    #[tokio::test]
+    async fn refresh_acceptance_is_precise_and_requires_matching_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        crate::db::init_db(&path).await.unwrap();
+        let cache = crate::db::CacheReader::open(&path).await.unwrap();
+        let accepted: f64 = 1_791_547_200.5;
+        for (hash, status, at) in [
+            ("before", "success", accepted - 0.1),
+            ("equal", "success", accepted),
+            ("after", "success", accepted + 0.1),
+            ("failed", "failed", accepted + 0.1),
+            ("legacy", "success", accepted.floor()),
+        ] {
+            cache.conn().execute(
+                "INSERT INTO materializations (node_id, run_hash, status, created_at, artifact_path) VALUES ('p.py:a', ?1, ?2, ?3, 'artifact')",
+                [hash.to_string(), status.to_string(), if hash == "legacy" { barca_model::time::db_timestamp(at)[..19].to_string() } else { barca_model::time::db_timestamp(at) }],
+            ).await.unwrap();
+        }
+        for (hash, expected) in [
+            ("before", false),
+            ("equal", true),
+            ("after", true),
+            ("failed", false),
+            ("legacy", false),
+            ("absent", false),
+        ] {
+            assert_eq!(
+                cache
+                    .refreshed_since("p.py:a", hash, "artifact", accepted)
+                    .await,
+                expected,
+                "{hash}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn the_latest_sensor_observation_does_not_sort_its_history() {
         let dir = tempfile::tempdir().unwrap();

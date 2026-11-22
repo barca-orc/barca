@@ -202,6 +202,8 @@ pub enum Held {
     CutoffUnchanged,
     /// Pinned with `barca pin`: its pinned materialization, until `barca unpin`.
     Pinned,
+    /// This refresh already has a matching result produced after acceptance.
+    RefreshedByThisRun,
 }
 
 impl Held {
@@ -214,6 +216,7 @@ impl Held {
             }
             Held::CutoffUnchanged => "unchanged cutoff bytes: refresh propagation stopped",
             Held::UpToDate => "up to date: its last successful run used these inputs",
+            Held::RefreshedByThisRun => "matching output computed since this refresh was accepted",
             Held::Pinned => {
                 "pinned: its pinned materialization is read as it is and never recomputed; \
                  `barca unpin` it to compute it again"
@@ -285,6 +288,8 @@ pub enum Decision {
         held: Option<Held>,
     },
     Partitioned {
+        /// At least one key satisfied this refresh using an accepted-time success.
+        refreshed: bool,
         cached: Vec<(String, OutputRef)>,
         missing: Vec<barca_model::model::PartitionKey>,
         refresh: Option<RunReason>,
@@ -844,6 +849,7 @@ pub async fn decide_step(
                 missing: Vec::new(),
                 refresh: None,
                 cutoff_stopped: false,
+                refreshed: false,
             },
         ));
     }
@@ -919,6 +925,20 @@ pub async fn decide_step(
     };
     if let Some(reason) = refresh {
         remember_refresh(state, &display_id, base_id, &reason);
+        let hash = &step.run_hashes[&display_id];
+        if let Some(oref) = lookup_in(cache, &display_id, hash).await
+            && refresh_satisfied(cache, policy, &display_id, hash, &oref.path).await
+        {
+            record_output(dag, state, &display_id, oref.content_hash.as_ref());
+            return Ok((
+                step,
+                Decision::Cached {
+                    oref,
+                    stale_root: None,
+                    held: Some(Held::RefreshedByThisRun),
+                },
+            ));
+        }
         return Ok((step, Decision::Run(reason)));
     }
 
@@ -938,6 +958,7 @@ pub async fn decide_step(
         let mut cached = Vec::new();
         let mut missing = Vec::new();
         let mut refresh = None;
+        let mut refreshed = false;
         // Many keys: their rows in one pass, when that is cheaper than a lookup per key.
         let rows = match cache {
             Some(cache) if step.partition_keys.len() >= KEYS_READ_TOGETHER => {
@@ -1004,9 +1025,18 @@ pub async fn decide_step(
             let forced = refresh_reason(dag, policy, state, &step, &pdisplay, is_asset);
             if let Some(reason) = forced {
                 remember_refresh(state, &pdisplay, base_id, &reason);
-                refresh.get_or_insert(reason);
-                missing.push(pk.clone());
-                continue;
+                let satisfied = match &hit {
+                    Some(oref) => {
+                        refresh_satisfied(cache, policy, &pdisplay, &run_h, &oref.path).await
+                    }
+                    None => false,
+                };
+                if !satisfied {
+                    refresh.get_or_insert(reason);
+                    missing.push(pk.clone());
+                    continue;
+                }
+                refreshed = true;
             }
             match hit {
                 Some(oref) => {
@@ -1024,6 +1054,7 @@ pub async fn decide_step(
                 missing,
                 refresh,
                 cutoff_stopped,
+                refreshed,
             },
         ));
     }
@@ -1103,8 +1134,8 @@ fn refresh_reason(
     let base = step.step_id.base_id();
     match policy {
         CachePolicy::CacheAware => None,
-        CachePolicy::RefreshAll => Some(RunReason::RefreshAll),
-        CachePolicy::RefreshSelective { names, cascade } => {
+        CachePolicy::RefreshAll { .. } => Some(RunReason::RefreshAll),
+        CachePolicy::RefreshSelective { names, cascade, .. } => {
             let (_, key) = barca_model::model::PartitionKey::parse_from_id(display);
             let selected = names.iter().any(|name| {
                 if !refresh_name_matches(base, name) {
@@ -1274,6 +1305,7 @@ pub fn localize_decision(
             missing,
             refresh,
             cutoff_stopped,
+            refreshed,
         } => Decision::Partitioned {
             cached: cached
                 .into_iter()
@@ -1285,6 +1317,7 @@ pub fn localize_decision(
             missing,
             refresh,
             cutoff_stopped,
+            refreshed,
         },
         run => run,
     }
@@ -1295,13 +1328,18 @@ pub fn localize_decision(
 pub enum CachePolicy {
     /// Normal cache-aware behavior — reuse fresh asset artifacts.
     CacheAware,
-    /// Force-rerun every asset in the target's cone (`barca get|run ... --refresh-all`).
-    RefreshAll,
-    /// Force-rerun named assets or coordinates (`--refresh a[k=v],a[k=w]` selects a set).
+    /// Refresh every asset in the target's cone unless its matching success is at/after `since`.
+    RefreshAll { since: f64 },
+    /// Refresh named assets or coordinates unless their matching success is at/after `since`.
+    /// `--refresh a[k=v],a[k=w]` selects a set.
     /// A bare asset name matches the node's base id or its trailing `:name` segment. With
     /// `cascade` (the default) every asset downstream of a named one in the target's cone
     /// re-runs too; without it (`--no-cascade`) all other assets stay cache-aware.
-    RefreshSelective { names: Vec<String>, cascade: bool },
+    RefreshSelective {
+        names: Vec<String>,
+        cascade: bool,
+        since: f64,
+    },
 }
 
 pub use barca_store::store_sync::BLOCKED_ARTIFACT_PATH;
@@ -1310,6 +1348,39 @@ mod step_report;
 pub use step_report::{
     computed_by_another_run, env_report, merge_partition_reports, report_for, stale_warning,
 };
+
+impl CachePolicy {
+    /// Bind the refresh to the original durable request, never to an attempt's start.
+    pub fn accepted_at(&mut self, accepted_at: f64) {
+        match self {
+            Self::CacheAware => {}
+            Self::RefreshAll { since } | Self::RefreshSelective { since, .. } => {
+                *since = accepted_at
+            }
+        }
+    }
+
+    fn since(&self) -> Option<f64> {
+        match self {
+            Self::CacheAware => None,
+            Self::RefreshAll { since } | Self::RefreshSelective { since, .. } => Some(*since),
+        }
+    }
+}
+
+async fn refresh_satisfied(
+    cache: Option<&CacheReader>,
+    policy: &CachePolicy,
+    node: &str,
+    hash: &str,
+    artifact: &str,
+) -> bool {
+    let (Some(cache), Some(since)) = (cache, policy.since()) else {
+        return false;
+    };
+    // Remote ledger answers do not carry success times; never use unrelated local evidence.
+    cache.ledger().is_none() && cache.refreshed_since(node, hash, artifact, since).await
+}
 
 #[cfg(test)]
 mod lookup_tests;
@@ -2118,7 +2189,9 @@ def report(values: list) -> int:
             let consumer = step(&phases, "t.py:aligned");
             let error = match decide_step(
                 &dag,
-                &CachePolicy::RefreshAll,
+                &CachePolicy::RefreshAll {
+                    since: barca_model::time::now_secs_f64(),
+                },
                 None,
                 &mut state,
                 &consumer,
@@ -2601,6 +2674,7 @@ def below_plain(p: int) -> int:
             state.register_phase(phase);
         }
         let policy = CachePolicy::RefreshSelective {
+            since: barca_model::time::now_secs_f64(),
             names: vec!["dims".to_string()],
             cascade: true,
         };
