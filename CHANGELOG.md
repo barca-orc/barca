@@ -12,7 +12,11 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - A batched node (`batch=`) is never called with a single key (fixes #1099; affects 0.32.0 to 0.46.1). A worker lease that started with a step of another node could take the first keys of a batched call into it: the lease was sent without the call, so the function got a bare key where it takes a list, and those keys were written empty (or wrong) with no batch id while the rest of the call ran normally. A lease now never mixes keys of a call with other steps. As further guards, every key of a batched node that is loaded without a planned call gets a call of its own (and the run warns that the plan gave it none), and a worker that is handed a step of a batched node with no call runs it as a call of its one key. On 0.32.0 to 0.46.1, `weight=2` on a batched node avoids the problem (a step with a weight above 1 is leased alone).
 
-  **Upgrading does not repair results already written.** A key written empty under an unchanged run hash stays a cache hit, so it is not computed again. To find the affected keys of a project's metadata database:
+  It can happen on a cold first run, with no cache eviction and no warm cost estimates.
+
+  **Upgrading does not repair results already written.** A key written empty under an unchanged run hash stays a cache hit, and so do the consumers that read it.
+
+  To find affected keys, query the project's metadata database:
 
   ```sql
   select run_id, node_id, batch_id from materializations m
@@ -22,7 +26,17 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
                   and p.id < m.id and p.status = 'success' and p.rows > 0)
   ```
 
-  This misses a key whose only run was empty, and a wrong result that is not empty. Then refresh the node, naming it as the only target: `barca get <node> --refresh <node> --batch <node>=all`.
+  This misses a key whose first run was empty (no earlier non-empty row) and a wrong result that is not empty. Also check `rows = 0` on any node that must never be empty, downstream nodes included, and `batch_id is null` on batched nodes.
+
+  To repair, refreshing only the batched node is not enough: its consumers stay cached on the empty results. Refresh the batched node and run every final target that reads it:
+
+  ```
+  BARCA_POOL_SIZE=1 barca get <final target> --refresh <node> --batch <node>=all
+  ```
+
+  Keep the pool at 1 (on a server, capacity 1, which is one worker) because of the known issue below.
+
+  Known issue, not fixed in this release: a run that contains a batched node split across two streams can stall on a pool of 14 or more workers (pool size 2 in one pipeline). A pool of 1, and a server at capacity 1, do not stall. See the open issue for the stall.
 
 ## 0.46.1 (2026-11-21)
 
