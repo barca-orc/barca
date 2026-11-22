@@ -63,42 +63,9 @@ pub async fn lookup_cached(
     if let Some(ledger) = cache.ledger() {
         return ledger.answer(node_id, run_hash).flatten();
     }
-    // Prepared once per reader: a dry run of a 200k-key node asks 200k times, and compiling
-    // the statement each time cost more than the lookup.
-    const WITH_OUTPUT_HASH: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes, \
-         output_hash FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
-         AND status = 'success' ORDER BY id DESC";
-    // A database from before barca recorded output hashes has no such column.
-    const WITHOUT: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes \
-         FROM materializations WHERE node_id = ?1 AND run_hash = ?2 \
-         AND status = 'success' ORDER BY id DESC";
-    let statement = cache.lookup_statement(&[WITH_OUTPUT_HASH, WITHOUT]).await;
-    let mut rows = match statement
-        .query([node_id.to_string(), run_hash.to_string()])
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => return lookup_failed(node_id, e),
-    };
-    loop {
-        let row = match rows.next().await {
-            Ok(Some(row)) => row,
-            Ok(None) => return None,
-            Err(e) => return lookup_failed(node_id, e),
-        };
-        let Some(path) = row.get::<String>(0).ok() else {
-            continue;
-        };
-        if !cache.allows_artifact(&path) {
-            continue;
-        }
-        return Some(OutputRef {
-            path,
-            format: row.get::<String>(1).ok()?,
-            size_bytes: row.get::<i64>(2).ok()? as u64,
-            elapsed_seconds: None,
-            content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
-        });
+    match cache.lookup_output(node_id, run_hash).await {
+        Ok(output) => output,
+        Err(error) => lookup_failed(node_id, error),
     }
 }
 

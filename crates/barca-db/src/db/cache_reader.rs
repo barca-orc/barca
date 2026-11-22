@@ -4,6 +4,15 @@
 use super::*;
 use barca_model::step_result::OutputRef;
 
+// Ordinary cache reads share this predicate; explicit historical pins remain separate.
+macro_rules! eligible_success {
+    () => {
+        "m.status = 'success' AND NOT EXISTS (SELECT 1 FROM materializations newer \
+         INDEXED BY idx_mat_node_run WHERE newer.node_id = m.node_id \
+         AND newer.run_hash = m.run_hash AND newer.id > m.id AND newer.status = 'failed')"
+    };
+}
+
 /// How old a result's `last_read_at` may be before a read of it is stamped again, for the
 /// results of a node with many partition keys. The cache size limit evicts the least recently
 /// read results; an hour does not change that order in any way that matters, and a tick that
@@ -86,6 +95,48 @@ impl CacheReader {
         &self.conn
     }
 
+    /// The newest eligible local success. A later failed attempt with the same identity
+    /// invalidates earlier successes without removing their history or pinned references.
+    pub async fn lookup_output(
+        &self,
+        node_id: &str,
+        run_hash: &str,
+    ) -> Result<Option<OutputRef>, libsql::Error> {
+        const WITH_HASH: &str = concat!(
+            "SELECT m.artifact_path, m.artifact_format, m.artifact_size_bytes, m.output_hash \
+             FROM materializations m WHERE m.node_id = ?1 AND m.run_hash = ?2 AND ",
+            eligible_success!(),
+            " ORDER BY m.id DESC"
+        );
+        const WITHOUT_HASH: &str = concat!(
+            "SELECT m.artifact_path, m.artifact_format, m.artifact_size_bytes \
+             FROM materializations m WHERE m.node_id = ?1 AND m.run_hash = ?2 AND ",
+            eligible_success!(),
+            " ORDER BY m.id DESC"
+        );
+        let statement = self.lookup_statement(&[WITH_HASH, WITHOUT_HASH]).await;
+        let mut rows = statement.query([node_id, run_hash]).await?;
+        while let Some(row) = rows.next().await? {
+            let Ok(path) = row.get::<String>(0) else {
+                continue;
+            };
+            if !self.allows_artifact(&path) {
+                continue;
+            }
+            let (Ok(format), Ok(size)) = (row.get::<String>(1), row.get::<i64>(2)) else {
+                return Ok(None);
+            };
+            return Ok(Some(OutputRef {
+                path,
+                format,
+                size_bytes: size as u64,
+                elapsed_seconds: None,
+                content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
+            }));
+        }
+        Ok(None)
+    }
+
     /// The one-key lookup statement, compiled from the first of `sql` this database accepts
     /// on first use and reset for the next query.
     pub async fn lookup_statement(
@@ -135,7 +186,9 @@ impl CacheReader {
             by_node_run!(),
             " ON m.node_id = json_extract(k.value, '$[0]') \
              AND m.run_hash = json_extract(k.value, '$[1]') \
-             WHERE m.status = 'success' ORDER BY k.key, m.id DESC"
+             WHERE ",
+            eligible_success!(),
+            " ORDER BY k.key, m.id DESC"
         );
         let mut out: Vec<Option<OutputRef>> = Vec::with_capacity(keys.len());
         for chunk in keys.chunks(CHUNK) {
@@ -220,12 +273,13 @@ impl CacheReader {
             .conn
             .query(
                 &format!(
-                    "SELECT id, node_id, run_hash, artifact_path, artifact_format, \
+                    "SELECT m.id, m.node_id, m.run_hash, m.artifact_path, m.artifact_format, \
                      artifact_size_bytes, output_hash, evicted_at IS NULL AND \
-                     last_read_at >= datetime('now', '{}') FROM materializations NOT INDEXED \
-                     WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
-                     AND artifact_path IS NOT NULL",
-                    READ_STAMP_REFRESH
+                     last_read_at >= datetime('now', '{}') FROM materializations m NOT INDEXED \
+                     WHERE m.node_id >= ?1 AND m.node_id < ?2 AND {} \
+                     AND m.artifact_path IS NOT NULL",
+                    READ_STAMP_REFRESH,
+                    eligible_success!()
                 ),
                 [lo, hi],
             )
@@ -441,6 +495,46 @@ impl CacheReader {
 
 #[cfg(test)]
 mod observation_tests {
+    #[tokio::test]
+    async fn failed_attempts_invalidate_all_ordinary_cache_read_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        crate::db::init_db(&path).await.unwrap();
+        for (status, expected) in [("success", true), ("failed", false), ("success", true)] {
+            let cache = crate::db::CacheReader::open(&path).await.unwrap();
+            cache.conn().execute(
+                "INSERT INTO materializations (node_id,run_hash,status,artifact_path,artifact_format,artifact_size_bytes) VALUES ('p.py:a[k=x]','h',?1,'result.json','json',1)",
+                [status],
+            ).await.unwrap();
+            // A failure of another hash cannot invalidate the current definition.
+            cache.conn().execute(
+                "INSERT INTO materializations (node_id,run_hash,status) VALUES ('p.py:a[k=x]','other','failed')",
+                (),
+            ).await.unwrap();
+            assert_eq!(
+                cache
+                    .lookup_output("p.py:a[k=x]", "h")
+                    .await
+                    .unwrap()
+                    .is_some(),
+                expected
+            );
+            assert_eq!(
+                cache.lookup_many(&[("p.py:a[k=x]", "h")]).await.unwrap()[0].is_some(),
+                expected
+            );
+            assert_eq!(
+                cache
+                    .key_rows("p.py:a", 256)
+                    .await
+                    .unwrap()
+                    .get("p.py:a[k=x]", "h")
+                    .is_some(),
+                expected
+            );
+        }
+    }
+
     #[tokio::test]
     async fn the_latest_sensor_observation_does_not_sort_its_history() {
         let dir = tempfile::tempdir().unwrap();
