@@ -2295,3 +2295,54 @@ async fn edited_cron_discards_its_old_slot_and_admission_error() {
     assert_eq!(book.last_fired[id], 101);
     assert_eq!(state.runs.registry.len(), 1);
 }
+
+#[tokio::test]
+async fn json_compression_preserves_conditional_gets() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt;
+    let router = crate::routes::router(app_state());
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/health")
+                .header(header::ACCEPT_ENCODING, "gzip")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    assert!(
+        response.headers()[header::VARY]
+            .to_str()
+            .unwrap()
+            .contains("accept-encoding")
+    );
+    let tag = response.headers()[header::ETAG].clone();
+    assert!(tag.to_str().unwrap().starts_with("W/"));
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..2], &[0x1f, 0x8b]);
+    let response = router
+        .oneshot(
+            Request::get("/health")
+                .header(header::IF_NONE_MATCH, tag)
+                .header(header::ACCEPT_ENCODING, "gzip")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

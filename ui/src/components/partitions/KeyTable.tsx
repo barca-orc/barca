@@ -75,7 +75,7 @@ export function KeyTable({ dimensions, rows, total, selected, onSelect, onNeedMo
   useEffect(() => {
     if (more && !stale && !loadingMore && lastShown >= rows.length - AHEAD) onNeedMore()
   }, [more, stale, loadingMore, lastShown, rows.length, onNeedMore])
-  const columns = `${dimensions.map(() => 'minmax(90px, 1fr)').join(' ')} 104px 96px 64px 64px minmax(160px, 2fr)`
+  const columns = `${dimensions.map(() => 'minmax(90px, 1fr)').join(' ')} 104px 96px 64px 64px 64px minmax(160px, 2fr)`
   return (
     <div className="barca-keytable" role="table" aria-label="Keys" aria-rowcount={total + 1}>
       <div className="barca-keytable-head" role="row" style={{ gridTemplateColumns: columns }}>
@@ -84,6 +84,7 @@ export function KeyTable({ dimensions, rows, total, selected, onSelect, onNeedMo
         <SortHeader label="Last attempt" order="attempted" sort={sort} onSort={onSort} />
         <SortHeader label="Took" order="elapsed" sort={sort} onSort={onSort} num />
         <SortHeader label="Size" order="size" sort={sort} onSort={onSort} num />
+        <SortHeader label="Rows" order="rows" sort={sort} onSort={onSort} num />
         <span role="columnheader">Error</span>
       </div>
       <div className="barca-keytable-body" ref={scroll}>
@@ -119,6 +120,7 @@ export function KeyTable({ dimensions, rows, total, selected, onSelect, onNeedMo
                 <span role="cell" className="barca-cell-sub">{row.attempted_at ? formatAgo(row.attempted_at, nowMs) : '–'}</span>
                 <span role="cell" className="barca-cell-sub is-num">{row.elapsed_seconds != null ? formatSeconds(row.elapsed_seconds) : '–'}</span>
                 <span role="cell" className="barca-cell-sub is-num">{row.size_bytes != null ? formatBytes(row.size_bytes) : '–'}</span>
+                <span role="cell" className="barca-cell-sub is-num">{row.rows == null ? '–' : row.rows.toLocaleString()}</span>
                 <span role="cell" className="barca-keytable-error" title={row.error ?? undefined}>{row.error ?? ''}</span>
               </div>
             )

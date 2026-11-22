@@ -102,7 +102,7 @@ function startRun(body: RunRequest): Promise<RunHandle> {
 export type { TokenMetadata, IssuedToken } from './types'
 
 /** What a `GET /state` covers: one group (and its nested groups), or one source file. */
-export type StateScope = { group: string } | { file: string }
+export type StateScope = { group: string } | { file: string } | { targets: string[] }
 
 /** First rows asked for with an output's schema (the panel's Preview). */
 const PREVIEW_ROWS = 5
@@ -143,7 +143,7 @@ export const api = {
     request<NodeState[]>(
       scope === null
         ? '/state'
-        : `/state?${new URLSearchParams('group' in scope ? { targets: scope.group } : { files: scope.file })}`,
+        : `/state?${new URLSearchParams('group' in scope ? { targets: scope.group } : 'targets' in scope ? { targets: scope.targets.join(',') } : { files: scope.file })}`,
       { signal },
     ),
   /** `GET /state/rollup`: the rows of `GET /state` summed into one tree, for the same scope. */
@@ -151,7 +151,7 @@ export const api = {
     request<Rollup>(
       scope === null
         ? '/state/rollup'
-        : `/state/rollup?${new URLSearchParams('group' in scope ? { targets: scope.group } : { files: scope.file })}`,
+        : `/state/rollup?${new URLSearchParams('group' in scope ? { targets: scope.group } : 'targets' in scope ? { targets: scope.targets.join(',') } : { files: scope.file })}`,
       { signal },
     ),
   /**

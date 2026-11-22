@@ -1,0 +1,39 @@
+Issue #1044 validation, 2026-11-22
+
+Environment: private target-local, CARGO_BUILD_JOBS=4, RUST_TEST_THREADS=2,
+BARCA_POOL_SIZE=2. Embedded production UI built with pnpm build and maturin fast.
+
+Browser acceptance (Chromium 1440x900, all HTTP encoded transfer bytes):
+- equivalent 616-node fixture; original audit project was unavailable
+- first load: 530292 bytes, including 62065 API bytes (separate from idle)
+- grouped Assets idle 30s: 13631 bytes < 500000
+- flat Assets idle 30s: 2205 bytes < 500000
+- no unscoped /state polls during either idle window
+- complete health/group/duration/cron text, nonblank Fresh by, root in canvas
+- Rows/empty filter: 51 recorded zero-row keys out of 2562
+- OS theme changes and explicit preference persistence pass
+
+Reproduce: run ui/scripts/audit1044-fixture.py into a fresh directory; install
+pyarrow and seed with barca get pipeline.py --local (exit 1 is expected because
+six roots deliberately fail). Serve with --no-schedule and run
+node ui/scripts/audit1044-measure.mjs ORIGIN EVIDENCE_DIRECTORY.
+The --plain generator option preserves the independent-node baseline shape.
+Neither fixture is claimed to be the original lost audit project. Scheduling
+is disabled, so computed aggregate failure/no-refresh counts differ from it.
+
+UI validation: 592 unit tests; full standard Playwright 70 tests; new audit
+Playwright 3 tests; grouped/graph Playwright 25 tests. Typecheck, lint and
+production build pass. OpenAPI conformance 21 tests passed.
+
+Failure trail retained alongside this file:
+unit-before.txt, transfer-before.json, initial-acceptance-failure.json,
+check-fast-first.txt, check-fast-second.txt, queued-tick-race.txt,
+check-fast-rebuild-race.txt, duration-before.txt and duration-before.png.
+The queued-tick test race is fixed only in its synchronization handshake;
+production scheduler and later cross-surface parity assertions are unchanged.
+The rebuild-race Python failure was a missing .venv/bin/barca during a
+concurrent maturin replacement. The final check runs without concurrent installs.
+
+Final full scripts/check-fast.sh: all passed.
+Changelog, specs, hooks, clippy, workspace Rust (1679 passed, 2 ignored),
+fast build, Python (675 passed). No acceptance targets were relaxed.

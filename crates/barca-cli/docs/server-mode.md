@@ -404,6 +404,9 @@ The parity suite (`python/tests/test_server_mode_parity.py`) runs the contract's
 once locally and once through `barca serve` on a copy of the same project and compares the
 normalized output with exactly these differences.
 
+The key explorer also accepts `empty=1` on this HTTP route: only keys whose latest attempt
+succeeded with zero recorded rows match. Unknown row counts are excluded.
+
 `barca status NODE --keys --server` sends its filters, order and page to the server
 (`GET /assets/{name}/partitions/keys?state=failed,blocked&needs_run=1&value=region=apac,emea&range=day=2026-01-01..2026-01-31&error=0&q=text&sort=attempted&limit=200&offset=0`;
 `value` repeats, one per dimension), which filters, orders and counts the keys with the

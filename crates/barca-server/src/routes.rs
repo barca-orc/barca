@@ -127,6 +127,7 @@ pub fn router(state: AppState) -> Router {
             state.reads.config.clone(),
             crate::host_guard::validate,
         ))
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state)
 }
 
@@ -146,8 +147,9 @@ async fn etag(request: axum::extract::Request, next: axum::middleware::Next) -> 
     let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    // The first 12 bytes of the body's digest, as hex.
-    let tag = format!("\"{}\"", &barca_service::hash::sha256_hex(&bytes)[..24]);
+    // The first 12 bytes of the body's digest, as hex. Weak because compression may
+    // encode the same JSON differently; either encoding represents the same state.
+    let tag = format!("W/\"{}\"", &barca_service::hash::sha256_hex(&bytes)[..24]);
     let value = HeaderValue::from_str(&tag).expect("hex is a valid header value");
     parts.headers.insert(header::ETAG, value.clone());
     parts
@@ -159,7 +161,7 @@ async fn etag(request: axum::extract::Request, next: axum::middleware::Next) -> 
         .is_some_and(|v| {
             v.split(',')
                 .map(|t| t.trim().trim_start_matches("W/"))
-                .any(|t| t == tag || t == "*")
+                .any(|t| t == tag.trim_start_matches("W/") || t == "*")
         });
     if matches {
         let mut not_modified = StatusCode::NOT_MODIFIED.into_response();

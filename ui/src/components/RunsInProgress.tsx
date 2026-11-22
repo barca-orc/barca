@@ -1,7 +1,6 @@
-import { useAssetStates } from '@/hooks/useAssetStates'
 import { useHealth } from '@/hooks/useHealth'
 import { healthQueueLabel } from '@/lib/queue'
-import { runsInProgress, runsInProgressLabel } from '@/lib/running'
+import { runsInProgressLabel } from '@/lib/running'
 import { StatusGlyph } from './StatusGlyph'
 
 /**
@@ -11,9 +10,8 @@ import { StatusGlyph } from './StatusGlyph'
  * Hidden while nothing runs or waits.
  */
 export function RunsInProgress() {
-  const { data } = useAssetStates()
   const health = useHealth()
-  const count = runsInProgress(data ?? []).length
+  const count = health.data?.queue?.running ?? 0
   const queue = healthQueueLabel(health.data?.queue)
   if (count === 0 && queue === null) return null
   const label = [count > 0 ? runsInProgressLabel(count) : null, queue].filter(Boolean).join(' · ')

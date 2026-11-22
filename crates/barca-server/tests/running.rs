@@ -355,11 +355,16 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
             .cloned()
             .unwrap_or(Value::Null)
     };
-    // Its tick fires, and its run waits behind the blocker. Then several slots pass.
+    // Its tick fires, and a later slot is explicitly skipped while that run waits.
+    // Do not wait for lateness while the scheduler is still deciding every slot: that
+    // only occurs if this reader happens to catch the scheduler lagging.
     let t0 = Instant::now();
     loop {
         let (_, schedule) = send(&app, "GET", "/schedule", None).await;
-        if job(&schedule)["last_status"] == "pending" && !job(&schedule)["late_since"].is_null() {
+        if job(&schedule)["last_status"] == "pending"
+            && !job(&schedule)["last_skipped"].is_null()
+            && job(&schedule)["skip_reason"] == "in_flight"
+        {
             break;
         }
         assert!(
@@ -370,7 +375,19 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
     }
     scheduler.abort();
     let _ = scheduler.await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // With the scheduler stopped, the first undecided slot must eventually pass.
+    let t0 = Instant::now();
+    loop {
+        let (_, schedule) = send(&app, "GET", "/schedule", None).await;
+        if !job(&schedule)["late_since"].is_null() {
+            break;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(60),
+            "no undecided slot after stopping scheduler: {schedule}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     let (_, schedule) = send(&app, "GET", "/schedule", None).await;
     let (_, state) = send(&app, "GET", "/state", None).await;

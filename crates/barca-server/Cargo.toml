@@ -26,6 +26,8 @@ tempfile = { workspace = true }
 rust-embed = "8"
 ts-rs = { workspace = true, optional = true }
 
+tower-http = { version = "0.6", features = ["compression-gzip"] }
+
 [features]
 # Generate TS type bindings for the frontend (also enables barca-service's).
 ts = ["dep:ts-rs", "barca-service/ts"]
