@@ -299,7 +299,18 @@ def test_branch_results_are_gone_after_a_run_is_cancelled_under_barca_serve(root
 
 def test_branch_results_of_a_killed_run_are_swept_by_the_next_run(root):
     proc = held_group(root)
-    os.killpg(proc.pid, signal.SIGKILL)  # barca and every worker, the frozen caller included
+    # Workers now own private groups. Kill them explicitly to model the whole run
+    # disappearing at once (a killed coordinator cannot perform orderly group cleanup).
+    os.kill(proc.pid, signal.SIGSTOP)
+    children = subprocess.run(
+        ["pgrep", "-P", str(proc.pid)], capture_output=True, text=True, check=False
+    ).stdout.split()
+    for pid in map(int, children):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    os.killpg(proc.pid, signal.SIGKILL)
     proc.communicate()
     left = branch_files(root)
     assert len(left) >= 20, left  # nobody was there to remove them

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 8. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -90,6 +90,18 @@ and [upload receipts](../interfaces/artifact-upload-receipts.md). Completion rec
 least once;
 replay must not duplicate the same run/key result. This is not an exactly-once promise for
 user side effects or external sinks.
+
+Workers retain private process groups from spawn to shutdown. Cancellation, drain timeout,
+forced stop and normal pool teardown resume each group (including stopped `parallel()`
+callers), send TERM, allow one shared 200 ms grace window, then KILL remaining group members.
+Leader exit does not end descendant ownership. Retirement and replacement cleanup is awaited
+before pool shutdown completes. Local terminal SIGINT and coordinator SIGTERM still cancel
+with exit 130; workers do not receive terminal SIGINT directly. Deliberately daemonized,
+re-sessioned or re-grouped children are outside this boundary and require launcher cleanup.
+Conformance: [worker descendants](../../python/tests/test_worker_descendants.py)
+(`test_shutdown_leaves_no_worker_descendants`) exercises real PIDs, TERM-ignoring children,
+stopped parallel callers, unrelated processes and a subsequent server run; the existing
+[Ctrl-C tests](../../python/tests/test_ctrl_c_worker.py) cover startup and idle workers.
 
 An explicit cancellation stops that run's work and reaps its owned helpers. A step that
 finished before the cancellation stays recorded even when its upload to a store was abandoned;
