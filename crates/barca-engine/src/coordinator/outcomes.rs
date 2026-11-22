@@ -4,6 +4,18 @@
 use super::*;
 
 impl Coordinator {
+    pub(crate) fn on_item_skipped(&mut self, id: ItemId, reason: String, elapsed: f64) {
+        self.executing.remove(&id);
+        self.skipped.insert(id);
+        self.explicit_skips.insert(id, (reason, elapsed));
+        self.call_reported(id);
+        self.cascade_failure(id);
+    }
+
+    pub fn explicit_skips(&self) -> &HashMap<ItemId, (String, f64)> {
+        &self.explicit_skips
+    }
+
     /// Mark an item as completed. Unblocks dependents into the ready queue.
     pub(crate) fn on_item_completed(&mut self, item_id: ItemId) {
         self.executing.remove(&item_id);

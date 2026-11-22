@@ -4729,4 +4729,15 @@ of refresh coordinates independently of the target domain. Each selector has one
 The existing refresh list in CLI, Python and server requests shares these semantics;
 `--partition` continues to narrow execution and skip affected fan-ins.
 
+
+### Explicit task skips (#811)
+
+`barca.Skip(reason)` raised by task code yields `steps[].status: skipped` with `skip_reason`.
+The persisted run step carries the same fields and no output/artifact. A downstream blocked
+step instead has reason `upstream_skipped` without `skip_reason`. An all-skipped run has
+`status: skipped`, exit 0, and no final output; mixed successful work keeps `success`, and
+failures dominate. Counts include `skipped`, with `ran = ok + failed + skipped`.
+`GET /schedule` adds optional `last_task_skip_reason` alongside `last_status`; existing
+scheduler `skip_reason` retains its enum vocabulary. Recorded tick outcomes include `skipped`.
+
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

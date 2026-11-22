@@ -87,6 +87,7 @@ function StepRow({ step, name, root, summarized }: { step: RunStep; name: string
       <StepTimes step={step} />
       <StepButtons stepId={step.node_id} failed={isFailure(step.status)} step={step} />
     </div>
+    {step.skip_reason && <p>{step.skip_reason}</p>}
     <StepError step={step} root={root} summarized={summarized} />
   </div>
 }
@@ -112,6 +113,7 @@ function StepListRow({ row, root, summarized, toggle }: { row: RunStepRow; root?
           {time && <span className="barca-run-node-time" title={time.title}>{time.text}</span>}
           <StepButtons stepId={step.node_id} failed={isFailure(step.status)} step={step} />
         </div>
+        {step.skip_reason && <p>{step.skip_reason}</p>}
         <StepError step={step} root={root} summarized={summarized} />
       </div>
     })

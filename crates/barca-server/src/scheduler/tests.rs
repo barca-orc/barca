@@ -2295,3 +2295,44 @@ async fn edited_cron_discards_its_old_slot_and_admission_error() {
     assert_eq!(book.last_fired[id], 101);
     assert_eq!(state.runs.registry.len(), 1);
 }
+
+#[tokio::test]
+async fn explicit_task_skips_preserve_failure_streak_and_next_tick_runs() {
+    let st = app_state();
+    let jobs = vec![job("f.py:copy", NodeKind::Task, "* * * * *")];
+    let mut book = Bookkeeping::default();
+    finished(&st, "failed-before", RunStatus::Failed, &["f.py:copy"]);
+    book.last_handle
+        .insert(jobs[0].id.clone(), "failed-before".into());
+    assert!(count_outcomes(&st, &jobs, &mut book, None).await);
+    assert_eq!(book.failures(&jobs[0]), 1);
+    for n in 0..5 {
+        let handle = format!("skip-{n}");
+        finished(&st, &handle, RunStatus::Skipped, &[]);
+        book.last_handle.insert(jobs[0].id.clone(), handle);
+        assert!(!count_outcomes(&st, &jobs, &mut book, None).await);
+        assert_eq!(book.failures(&jobs[0]), 1);
+    }
+    finished(&st, "mixed", RunStatus::Complete, &[]);
+    st.runs.registry.get_mut("mixed").unwrap().outcome = Some(
+        barca_service::outcome::Outcome::from_text(
+            r#"{"status":"success","steps":[{"id":"f.py:copy[key=a]","status":"skipped","skip_reason":"locked"},{"id":"f.py:other","status":"ran"}]}"#
+        ).unwrap()
+    );
+    assert_eq!(
+        tick_outcome(&st.runs.registry.get("mixed").unwrap(), &jobs[0]),
+        None
+    );
+    st.runs.registry.get_mut("mixed").unwrap().status = RunStatus::Failed;
+    assert!(
+        tick_outcome(&st.runs.registry.get("mixed").unwrap(), &jobs[0])
+            .is_some_and(|failed| !failed.is_empty())
+    );
+    let plan = plan_tick(&at(5, 0), &jobs, |_| false, |_| None, |j| book.failures(j));
+    assert_eq!(fired_ids(&plan), vec!["f.py:copy"]);
+    finished(&st, "next-success", RunStatus::Complete, &[]);
+    book.last_handle
+        .insert(jobs[0].id.clone(), "next-success".into());
+    assert!(count_outcomes(&st, &jobs, &mut book, None).await);
+    assert_eq!(book.failures(&jobs[0]), 0);
+}

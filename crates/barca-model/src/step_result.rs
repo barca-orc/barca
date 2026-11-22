@@ -21,6 +21,15 @@ pub struct OutputRef {
     pub content_hash: Option<String>,
 }
 
+/// An explicit task skip: an executed attempt without a produced result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskSkip {
+    pub node_id: String,
+    pub reason: String,
+    pub elapsed_seconds: f64,
+    pub attempts: u32,
+}
+
 /// A provided input — either a single artifact or a collected list of partition artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

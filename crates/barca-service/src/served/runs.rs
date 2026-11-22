@@ -26,6 +26,7 @@ pub enum LiveStatus {
     Pending,
     Running,
     Complete,
+    Skipped,
     Failed,
     Cancelled,
 }
@@ -36,6 +37,7 @@ impl LiveStatus {
             LiveStatus::Pending => "pending",
             LiveStatus::Running => "running",
             LiveStatus::Complete => "success",
+            LiveStatus::Skipped => "skipped",
             LiveStatus::Failed => "failed",
             LiveStatus::Cancelled => "cancelled",
         }
@@ -155,6 +157,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         (Some(record), _) => RunView {
             run_id: record.run_id.clone(),
             status: record.status.clone(),
+            skip_reason: record.skip_reason.clone(),
             command: record.command.clone(),
             target: record.target.clone(),
             files: record.files.clone(),
@@ -191,6 +194,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         (None, Some(run)) => RunView {
             run_id: run.handle.clone(),
             status: run.status.as_str().into(),
+            skip_reason: None,
             command: run.command.clone(),
             target: run.target.clone(),
             files: if run.files.is_empty() {
@@ -280,6 +284,23 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
                     stream,
                     ts,
                 }),
+                RunEvent::StepSkipped {
+                    node_id,
+                    skip_reason,
+                    elapsed_seconds,
+                } if recorded.insert(node_id.clone()) => {
+                    steps_page.total += 1;
+                    if offset > 0 || limit.is_some_and(|n| view.steps.len() >= n) {
+                        continue;
+                    }
+                    view.steps.push(db::RunStep {
+                        node_id,
+                        status: "skipped".into(),
+                        skip_reason: Some(skip_reason),
+                        elapsed_seconds: Some(elapsed_seconds),
+                        ..Default::default()
+                    });
+                }
                 RunEvent::StepFinished {
                     node_id,
                     ok,
@@ -387,6 +408,7 @@ impl RunDraft {
         view.explanation = crate::run_explanation::explain(
             crate::run_explanation::RunFacts {
                 steps_failed: record.as_ref().and_then(|r| r.steps_failed),
+                steps_skipped: record.as_ref().and_then(|r| r.steps_skipped),
                 ..(&view).into()
             },
             &view.steps_page.nodes,
@@ -462,6 +484,7 @@ pub async fn run_detail(
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum RunViewStatus {
+    Skipped,
     Pending,
     Running,
     Success,
@@ -555,6 +578,9 @@ pub struct RunSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(type = "number | null", optional))]
     pub steps_failed: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null", optional))]
+    pub steps_skipped: Option<i64>,
     pub error: Option<String>,
     /// The run's first failed step and its error; `null` when no step failed.
     pub first_failure: Option<FirstFailure>,
@@ -588,6 +614,7 @@ impl RunSummary {
             steps_executed: self.steps_executed,
             steps_cached: self.steps_cached,
             steps_failed: self.steps_failed,
+            steps_skipped: self.steps_skipped,
             error: self.error.as_deref(),
             first_failure: self
                 .first_failure
@@ -618,6 +645,7 @@ impl RunSummary {
             steps_executed: record.steps_executed,
             steps_cached: record.steps_cached,
             steps_failed: record.steps_failed,
+            steps_skipped: record.steps_skipped,
             error: live.and_then(|r| r.error.clone()),
             first_failure: record.failure.map(|f| FirstFailure {
                 node_id: f.node,
@@ -656,6 +684,7 @@ impl RunSummary {
             steps_executed: steps.map_or(0, |s| s.executed),
             steps_cached: steps.map_or(0, |s| s.cached),
             steps_failed: None,
+            steps_skipped: None,
             error: run.error.clone(),
             // Not in the database yet: nothing has recorded a failed step.
             first_failure: None,

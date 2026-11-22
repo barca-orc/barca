@@ -1141,7 +1141,20 @@ async fn collect_failures(
         if item.group.is_some() {
             continue;
         }
-        session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        if let Some((reason, elapsed)) = coord.explicit_skips().get(&item_id) {
+            session
+                .state
+                .results
+                .task_skips
+                .push(barca_model::step_result::TaskSkip {
+                    node_id: item.step_id.display(),
+                    reason: reason.clone(),
+                    elapsed_seconds: *elapsed,
+                    attempts: item.attempts,
+                });
+        } else {
+            session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        }
         let base = item.step_id.base_id().to_string();
         if item.step_id.partition.is_empty() {
             session.state.skipped_bases.insert(base);
@@ -1522,6 +1535,39 @@ async fn return_outputs(
     }
 
     session.state.results.annotate_reports(&mut step_reports);
+    for report in &mut step_reports {
+        if report.reason.as_deref() == Some("upstream_failed")
+            && blocking_failure(
+                &session.prepared.dag,
+                &report.id,
+                &session.state.failed_bases,
+            )
+            .is_none()
+        {
+            report.reason = Some("upstream_skipped".into());
+            report.detail = Some("a task it depends on skipped".into());
+        }
+    }
+    for skip in &session.state.results.task_skips {
+        if let Some(report) = step_reports.iter_mut().find(|r| r.id == skip.node_id) {
+            report.status = Some("skipped".into());
+            report.skip_reason = Some(skip.reason.clone());
+            report.reason = Some("task_skipped".into());
+            report.detail = Some(skip.reason.clone());
+            report.attempts = Some(skip.attempts);
+            report.elapsed_seconds = Some(skip.elapsed_seconds);
+        }
+    }
+    for ((_, id), (_, outcome)) in session.prepared.targets.iter().zip(outcomes.iter_mut()) {
+        if session.state.skipped_bases.contains(id)
+            && !session.state.failed_bases.contains(id)
+            && blocking_failure(&session.prepared.dag, id, &session.state.failed_bases).is_none()
+        {
+            outcome.status = "skipped".into();
+            outcome.error = None;
+            outcome.failed_node = None;
+        }
+    }
 
     // Only a step that ran can record changed bytes: a run that executed none (every step
     // cached) is not looked up.

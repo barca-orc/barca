@@ -59,6 +59,7 @@ pub struct RunLedger<'a> {
     /// Why the run executed what it did (`barca_model::run_explain::PlanReasons` as JSON, #925),
     /// `None` when it executed nothing.
     pub plan_reasons: Option<String>,
+    pub task_skips: &'a [barca_model::step_result::TaskSkip],
 }
 
 /// The steps of `run_id` already recorded, by node id and run hash: an earlier attempt of a
@@ -160,6 +161,11 @@ pub async fn write_terminal_ledger(
             .map_err(failed)?;
     }
     drop(insert_failed);
+    for skipped in l.task_skips {
+        db::materializations::insert_task_skip(conn, l.run_id, skipped)
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record task skip: {e}")))?;
+    }
     crate::sink_publications::write_in(conn, l.run_id, l.sink_publications).await?;
     let updated = db::runs::finish_run_in(
         conn,

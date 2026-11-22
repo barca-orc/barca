@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 8. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -184,6 +184,41 @@ or inspected while off. A matching recorded local result may be reused; otherwis
 computed locally. Empty/unset values retain configuration and other values are usage errors.
 The selected local environment is unchanged. This does not block network I/O in user code.
 The removed `BARCA_STATE=off` spelling and shared-history pull are not current alternatives.
+
+### Explicit task skips
+
+Raise `barca.Skip(reason)` in a task body when it has no work to perform, for example when
+another process holds its advisory lock:
+
+```python
+from barca import Skip, task
+
+@task
+def copy_data():
+    if another_copy_is_running():
+        raise Skip("another copy holds the lock")
+    copy_rows()
+```
+
+The attempt is recorded as `skipped` with `skip_reason`, with no result, artifact, cache
+entry, upload or ledger publication. It does not refresh the node. The existing history
+table stores the attempt; that row is not a successful materialization. `Skip` is task-only:
+raising it from an asset, sensor, import, or parallel branch is an ordinary exception.
+Returning a `Skip` instance does not skip. A skip is never retried, even with `retries=`.
+
+Scheduled skips neither increment nor reset the failure streak. Five skipped ticks do not
+hold the schedule; the next tick may run normally. There is no `max_skips` setting.
+`GET /schedule` reports `last_status: skipped` and `last_task_skip_reason` for the latest
+fired task run. The task reason is omitted after a success, failure, or newer scheduler-only
+decision. Its existing `skip_reason` describes scheduler decisions such as `in_flight`
+and `paused`, separately from the task's reason.
+
+A run is `skipped` only when it contains explicit skips and no successful executed work.
+Cached inputs do not change that outcome. Successful work plus skips is `success`; any
+failure makes the run `failed`. Explicit skipped steps carry `skip_reason`; downstream
+steps blocked by them have reason `upstream_skipped` and do not copy that reason. Skipped
+runs exit zero. History counts executed skips separately from `ok` and `not_reached`.
+
 
 ## Invariants
 

@@ -1,6 +1,6 @@
 # Worker and transfer protocol
 
-Specification 5; protocol version 5. Batched calls are implemented for 0.32.0.
+Specification 6; protocol version 6. Batched calls are implemented for 0.32.0.
 
 ## Framing and negotiation
 
@@ -24,9 +24,9 @@ the other forever (#1001). A worker is sent a command only while it waits for on
 (`execute_batch` when idle, `parallel_response` while it blocks for it, `done`), so the
 worker loop writes each command whole.
 
-The helper first sends `{"type":"hello","role":"worker","protocol_version":5}`
+The helper first sends `{"type":"hello","role":"worker","protocol_version":6}`
 (or role `transfer`). The coordinator validates the role and integer version and
-acknowledges `{"type":"hello","role":"coordinator","protocol_version":5}`.
+acknowledges `{"type":"hello","role":"coordinator","protocol_version":6}`.
 A missing/mismatched version or role gets `protocol_error` with `message` and the
 expected version, then connection refusal. The error says to reinstall matching
 Barca packages. Connection and negotiation share the ten-second startup deadline.
@@ -314,3 +314,8 @@ counts and digests. Missing or malformed observations never establish freshness.
 Producer source deltas are optional evidence capped at 256 KiB of conservative JSON size.
 Oversized changed values or removed-key lists send only the compact summary; the engine
 then uses normal artifact validation. Artifact payload size never expands the protocol frame.
+
+Task execution may complete with `step_skipped` (`node_id`, `reason`, `elapsed` seconds).
+It completes one leased step without retry, result serialization or artifact publication.
+Batched calls emit it for each unfinished key when task code raises `Skip`. The result
+journal persists and replays this terminal message just like step results and errors.

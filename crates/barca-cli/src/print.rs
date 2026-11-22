@@ -368,7 +368,7 @@ fn entry_json(entry: &LogEntry) -> String {
 /// The exit code `-f` ends with, from the run's status: 0 succeeded, 130 cancelled, 1 otherwise.
 pub(crate) fn follow_exit_code(status: &str) -> i32 {
     match status {
-        "success" => 0,
+        "success" | "skipped" => 0,
         "cancelled" => 130,
         _ => 1,
     }

@@ -9,4 +9,4 @@ export type RunEvent = { "type": "run_started", run_id: string, } | { "type": "l
 /**
  * The step's result was reused from cache; its function did not run.
  */
-cached?: boolean, elapsed_seconds?: number, error?: string, import_seconds?: number, } | { "type": "run_finished", run_id: string, ok: boolean, outcome?: Record<string, unknown>, };
+cached?: boolean, elapsed_seconds?: number, error?: string, import_seconds?: number, } | { "type": "step_skipped", node_id: string, skip_reason: string, elapsed_seconds: number, } | { "type": "run_finished", run_id: string, ok: boolean, outcome?: Record<string, unknown>, };

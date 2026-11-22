@@ -25,6 +25,7 @@ pub(super) struct RunResults {
     pub(super) observations: HashMap<String, serde_json::Value>,
     pub(super) clocks: HashMap<String, (f64, f64)>,
     pub(super) failures: Vec<StepFailure>,
+    pub(super) task_skips: Vec<barca_model::step_result::TaskSkip>,
     /// Attempts belong to the exact step identity, including its partition key.
     pub(super) attempts: HashMap<String, u32>,
     /// Worker-reported active duration and slow import duration, including failed attempts.
@@ -304,6 +305,7 @@ impl RunResults {
             cost_snapshot: &evidence.cost_snapshot,
             touched: run.touched,
             plan_reasons: run.decisions.plan_tally.json(),
+            task_skips: &self.task_skips,
         }
     }
 }

@@ -124,9 +124,9 @@ def decode_results(message):
             if seconds is not None:
                 detail["elapsed_seconds"] = seconds
             result.append({"type": status, "node_id": node_id, "artifact": detail})
-        elif status in ("step_error", "blocked"):
+        elif status in ("step_error", "step_skipped", "blocked"):
             item = {"type": status, "node_id": node_id, **detail}
-            if status == "step_error":
+            if status in ("step_error", "step_skipped"):
                 item["elapsed"] = seconds
             result.append(item)
         else:
@@ -143,7 +143,7 @@ def result_record(message):
         detail = {key: value for key, value in detail.items() if value is not None and value != []}
         if "json" in detail or not isinstance(detail.get("path"), str) or not detail["path"]:
             raise ValueError("artifact data must travel by file reference")
-    elif status in ("step_error", "blocked"):
+    elif status in ("step_error", "step_skipped", "blocked"):
         detail = {
             key: value
             for key, value in message.items()

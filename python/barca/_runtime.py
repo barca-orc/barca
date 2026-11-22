@@ -23,7 +23,7 @@ except ImportError:
 
 # ─── Socket connection ────────────────────────────────────────────────────────
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 _socket: socket.socket | None = None
 # Separate locks: whole frames never interleave on either direction, and a
@@ -244,6 +244,12 @@ def emit_step_completed(node_id: str, artifact: dict) -> None:
             "artifact": artifact,
         }
     )
+
+
+def emit_step_skipped(node_id: str, reason: str, elapsed: float) -> None:
+    """Report an explicit task skip, without an artifact or failure."""
+    _report_repeated_warnings()
+    _emit_result({"type": "step_skipped", "node_id": node_id, "reason": reason, "elapsed": elapsed})
 
 
 def emit_step_error(

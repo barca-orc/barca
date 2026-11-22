@@ -15,7 +15,7 @@ import type { WaitingFor } from "./WaitingFor";
  * finished, its [`Outcome`]. A finished run is read from the metadata DB, so it is the same
  * after the server restarts.
  */
-export type RunView = {
+export type RunView = { skip_reason?: string,
 /**
  * The database run id, the one `barca history` shows.
  */

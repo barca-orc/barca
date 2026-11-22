@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from barca._batch import Failed
 from barca._branches import BranchResultError, ParallelError, parallel, parallel_map
+from barca._skip import Skip
 
 if TYPE_CHECKING:
     from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats
@@ -35,6 +36,7 @@ __all__ = [
     "batches",
     "batches_by",
     "Failed",
+    "Skip",
     "collect",
     "asset_ref",
     "parallel",
@@ -308,6 +310,9 @@ def task[F: Callable[..., Any]](
     cache warming — that *do* something rather than produce cacheable data. They
     may appear anywhere in the graph and may depend on assets, sensors, or other
     tasks, but must not be an input to an asset or sensor.
+
+    Raise `Skip(reason)` from the task body to record a skipped attempt without a result
+    or retry. Scheduled skips neither increment nor reset the failure streak.
 
     A `@task(freshness=Schedule("<cron>"))` is the simplest way to run something
     on a timer: leave `barca serve` running and it fires on each cron tick (see

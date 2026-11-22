@@ -66,6 +66,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
 
 /// Every column of `materializations` except its row id.
 pub(crate) const STEP_COLUMNS: &[&str] = &[
+    "skip_reason",
     "node_id",
     "run_hash",
     "output_json",
@@ -173,6 +174,7 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
             "failed",
             "not_reached",
             "targets",
+            "skipped",
         ],
     ),
     (

@@ -456,6 +456,7 @@ pub(super) async fn finish(
         r.finished_at = Some(now_ts());
         r.status = match status {
             OutcomeStatus::Success => RunStatus::Complete,
+            OutcomeStatus::Skipped => RunStatus::Skipped,
             OutcomeStatus::Cancelled => RunStatus::Cancelled,
             OutcomeStatus::Failed | OutcomeStatus::Error => RunStatus::Failed,
         };
@@ -471,7 +472,7 @@ pub(super) async fn finish(
     }
     channel.emit(RunEvent::RunFinished {
         run_id: run_id.to_string(),
-        ok: status == OutcomeStatus::Success,
+        ok: matches!(status, OutcomeStatus::Success | OutcomeStatus::Skipped),
         outcome: Some(outcome.into_raw()),
     });
     evict_over_budget(state, FINISHED_RUNS_BUDGET);
@@ -522,7 +523,7 @@ pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
         .filter(|r| {
             matches!(
                 r.status,
-                RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled
+                RunStatus::Complete | RunStatus::Skipped | RunStatus::Failed | RunStatus::Cancelled
             )
         })
         .map(|r| {
@@ -591,9 +592,10 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
         let cutoff = now_ts() - max_age.as_secs_f64();
         state.runs.registry.retain(|handle, run| {
             let keep = match run.status {
-                RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled => {
-                    run.finished_at.is_none_or(|t| t > cutoff)
-                }
+                RunStatus::Complete
+                | RunStatus::Skipped
+                | RunStatus::Failed
+                | RunStatus::Cancelled => run.finished_at.is_none_or(|t| t > cutoff),
                 _ => true,
             };
             if !keep {

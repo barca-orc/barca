@@ -688,6 +688,7 @@ class _Run:
         "retry_fresh",
         "rss_window",
         "survives",
+        "skip_allowed",
         "t0",
         "tracing",
     )
@@ -720,6 +721,7 @@ class _Run:
         # The failure was this process's, not the step's (`_duckdb.invalidated`): the worker
         # stops and the coordinator tries the step once more in a fresh one.
         self.retry_fresh = False
+        self.skip_allowed = step.get("kind") == "task" and not step.get("branch")
 
     def begin(self, step: Step, modules: Modules, log_id: str) -> _Begun:
         """Import the step's module and find its function (`_begin`). From here until the
@@ -747,6 +749,16 @@ class _Run:
             "retry_fresh": self.retry_fresh,
         }
 
+    def skipped(self, exc: BaseException) -> bool:
+        from barca._skip import Skip
+
+        return (
+            isinstance(exc, Skip)
+            and self.skip_allowed
+            and self.imported
+            and self.phase == USER_CODE
+        )
+
     def __enter__(self) -> _Run:
         return self
 
@@ -760,7 +772,7 @@ class _Run:
             if exc is None or isinstance(exc, self.propagates):
                 return False
             wall = self.wall()
-            self.tracing.finish(exc)
+            self.tracing.finish(None if self.skipped(exc) else exc)
             self.retry_fresh = _duckdb.invalidated(exc)
             self.survives = _worker_survives(exc, self.imported) and not self.retry_fresh
             self.report(exc, wall)
@@ -803,6 +815,9 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
     def report(exc: BaseException, wall: float) -> None:
         from barca import _branches
 
+        if run.skipped(exc):
+            _runtime.emit_step_skipped(node_id, str(exc), wall)
+            return
         _runtime.emit_step_error(
             node_id=node_id,
             # Only this branch's own return value that could not be written is reported as
@@ -932,6 +947,9 @@ def _run_daemon_call(
         left = [st for st in steps if st["node_id"] not in reported]
         for i, st in enumerate(left):
             reported.add(st["node_id"])
+            if run.skipped(exc):
+                _runtime.emit_step_skipped(st["node_id"], str(exc), wall / max(n, 1))
+                continue
             _runtime.emit_step_error(
                 node_id=st["node_id"],
                 error_type=type(exc).__name__,

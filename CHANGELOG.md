@@ -2,7 +2,11 @@
 
 Release notes for barca, newest first: each `## <version> (<date>)` section is published as that
 version's [GitHub release](https://github.com/barca-orc/barca/releases) body, and changes not
-released yet collect under `## Pending`. Releases 0.1.2 to 0.23.x have their notes only on
+released yet collect under `## Pending
+
+- **Breaking:** worker protocol version 6 adds explicit task-skip completions; worker helpers and coordinator must come from the same release (#811).
+
+- Tasks can raise `barca.Skip(reason)` to record skipped work without retrying or producing a result. Scheduled skips preserve the failure streak; history, run outcomes and schedule inspection distinguish them from success and failure (#811).`. Releases 0.1.2 to 0.23.x have their notes only on
 GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; the "0.1.2 to
 0.8.0" summary below lists what the earlier of them shipped.
 

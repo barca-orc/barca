@@ -315,6 +315,24 @@ impl WorkerPool {
                         self.resume_frozen(coord).await;
                         self.assign_ready(coord, cost, cancel).await;
                     }
+                    WorkerMessage::StepSkipped {
+                        ref node_id,
+                        reason,
+                        elapsed,
+                    } => {
+                        let Some(item_id) = self.take_lease(worker_id, node_id, coord) else {
+                            continue;
+                        };
+                        coord.on_item_skipped(item_id, reason.clone(), elapsed);
+                        if let Some(ref mut ev) = on_event {
+                            ev(RunEvent::StepSkipped {
+                                node_id: node_id.clone(),
+                                skip_reason: reason,
+                                elapsed_seconds: elapsed,
+                            });
+                        }
+                        self.assign_ready(coord, cost, cancel).await;
+                    }
                     WorkerMessage::Blocked {
                         ref node_id,
                         reason,

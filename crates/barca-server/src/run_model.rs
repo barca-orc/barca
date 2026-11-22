@@ -18,6 +18,7 @@ pub enum RunStatus {
     Running,
     /// Finished successfully.
     Complete,
+    Skipped,
     /// Finished with an error.
     Failed,
     /// Stopped mid-flight via `DELETE /runs/{id}` or server shutdown.

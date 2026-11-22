@@ -504,6 +504,7 @@ impl LastCheck {
             TickTargetOutcome::Rebuilt => "rebuilt",
             TickTargetOutcome::UpToDate => "up to date",
             TickTargetOutcome::Failed => "failed",
+            TickTargetOutcome::Skipped => "skipped",
             TickTargetOutcome::NotReached => "not reached",
         }
     }
@@ -554,6 +555,8 @@ pub struct Checks {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum LastAttempt {
+    /// The latest task invocation explicitly skipped without a result.
+    Skipped,
     /// No execution is recorded for it (`last_materialization` is `null`).
     #[default]
     NeverRun,
@@ -569,6 +572,12 @@ impl LastAttempt {
     pub fn of(node: &NodeStatus) -> Self {
         if last_attempt_failed(node) {
             LastAttempt::Failed
+        } else if node
+            .last_materialization
+            .as_ref()
+            .is_some_and(|m| m.status == "skipped")
+        {
+            LastAttempt::Skipped
         } else if node.last_materialization.is_none() {
             LastAttempt::NeverRun
         } else {

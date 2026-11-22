@@ -679,6 +679,16 @@ impl StepInsert {
     }
 }
 
+/// Record the attempt, with no cache identity, artifact, observation or successful result.
+pub(crate) async fn insert_task_skip(
+    conn: &Connection,
+    run_id: &str,
+    skip: &barca_model::step_result::TaskSkip,
+) -> Result<u64, libsql::Error> {
+    conn.execute("INSERT INTO materializations (run_id, node_id, status, skip_reason, elapsed_seconds, attempts) SELECT ?1, ?2, 'skipped', ?3, ?4, ?5 WHERE NOT EXISTS (SELECT 1 FROM materializations WHERE run_id = ?1 AND node_id = ?2 AND status = 'skipped')",
+        libsql::params![run_id, skip.node_id.clone(), skip.reason.clone(), skip.elapsed_seconds, skip.attempts]).await
+}
+
 /// Appends a permanently failed step as a `status = 'failed'` row (artifact columns NULL);
 /// failed rows are never served as cache hits. Prepared once per transaction.
 pub(crate) struct FailedStepInsert(Prepared);

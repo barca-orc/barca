@@ -105,6 +105,7 @@ pub use run_steps::worker_exit;
 pub use run_steps::{
     RUN_STEPS_LIMIT, RunNodeSummary, RunStep, StepRow, StepsPage, attach_trace_ids,
     get_run_steps_page, get_run_steps_window, get_run_traced, read_step_rows, run_node_summaries,
+    task_skip_reason,
 };
 #[cfg(test)]
 pub(crate) use runs::create_run_with;

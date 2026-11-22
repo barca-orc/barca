@@ -61,7 +61,7 @@ fn metadata_field(out: &mut Value, seconds: Option<f64>) {
 /// before `--fields`. A served run's `outcome` is this body.
 pub(crate) fn run_body(result: &GetResult, final_output: Option<Value>) -> Value {
     let mut out = serde_json::json!({
-        "status": "success",
+        "status": if crate::results::all_work_skipped(&result.steps) { "skipped" } else { "success" },
         "run_id": result.run_id,
         "elapsed_seconds": result.elapsed_seconds,
         "steps_executed": result.steps_executed,
@@ -70,6 +70,16 @@ pub(crate) fn run_body(result: &GetResult, final_output: Option<Value>) -> Value
         "steps": &result.steps,
         "warnings": &result.warnings,
     });
+    if out["status"] == "skipped" {
+        let reasons: std::collections::BTreeSet<&str> = result
+            .steps
+            .iter()
+            .filter_map(|s| s.skip_reason.as_deref())
+            .collect();
+        if reasons.len() == 1 {
+            out["skip_reason"] = (*reasons.first().unwrap()).into();
+        }
+    }
     if let (Value::Object(obj), Some(cache)) = (&mut out, &result.cache) {
         obj.insert("cache".into(), serde_json::json!(cache));
     }
@@ -411,7 +421,7 @@ pub(crate) fn render_get_multi_parts(
         GetShape::Pretty => {
             let failed = per_target
                 .iter()
-                .filter(|(_, t)| t["status"].as_str() != Some("success"));
+                .filter(|(_, t)| !matches!(t["status"].as_str(), Some("success" | "skipped")));
             let count = |key: &str| run[key].as_u64().unwrap_or(0);
             let (steps, phases) = (count("steps_executed"), count("phases"));
             line!(
@@ -584,6 +594,8 @@ pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
 /// 17k runs spend most of its 330 ms in the allocator.
 #[derive(serde::Serialize)]
 struct HistoryItem<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skip_reason: &'a Option<String>,
     attempts: &'a Option<i64>,
     cancellation: &'a Option<crate::run_explain::Cancellation>,
     client_run_id: &'a Option<String>,
@@ -635,7 +647,9 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             steps_total,
             steps_executed,
             steps_cached,
+            skip_reason,
             steps_failed: _,
+            steps_skipped: _,
             attempts,
             started_at,
             finished_at,
@@ -656,6 +670,7 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             node: &f.node,
         });
         HistoryItem {
+            skip_reason,
             attempts,
             cancellation,
             client_run_id,
@@ -1887,7 +1902,7 @@ pub fn render_explain(
 /// The run's own keys of a multi-target run's JSON (everything but `targets`).
 fn multi_run(result: &MultiResult) -> Value {
     let mut run = serde_json::json!({
-        "status": if result.any_failed() { "failed" } else { "success" },
+        "status": if result.any_failed() { "failed" } else if crate::results::all_work_skipped(&result.steps) { "skipped" } else { "success" },
         "run_id": result.run_id,
         "elapsed_seconds": result.elapsed_seconds,
         "steps_executed": result.steps_executed,
@@ -1996,7 +2011,7 @@ pub(crate) fn render_multi_parts(
         ResultFormat::Pretty => {
             let failed = per_target
                 .iter()
-                .filter(|(_, t)| t["status"].as_str() != Some("success"));
+                .filter(|(_, t)| !matches!(t["status"].as_str(), Some("success" | "skipped")));
             let count = |key: &str| run[key].as_u64().unwrap_or(0);
             let (steps, phases) = (count("steps_executed"), count("phases"));
             line!(
@@ -2083,6 +2098,7 @@ mod history_target_tests {
             steps_executed: 0,
             steps_cached: 0,
             steps_failed: None,
+            steps_skipped: None,
             attempts: None,
             started_at: String::new(),
             finished_at: None,
@@ -2357,6 +2373,7 @@ fn history_target_tests_run() -> crate::db::RunRecord {
         steps_executed: 0,
         steps_cached: 0,
         steps_failed: None,
+        steps_skipped: None,
         attempts: None,
         started_at: String::new(),
         finished_at: None,
@@ -2399,6 +2416,7 @@ mod history_json_tests {
     #[test]
     fn history_json_is_the_same_bytes_as_the_record_through_values() {
         let full = RunRecord {
+            skip_reason: None,
             run_id: "run-1".into(),
             command: "run".into(),
             files: vec!["a.py".into(), "dir/b \"q\".py".into()],
@@ -2409,6 +2427,7 @@ mod history_json_tests {
             steps_executed: 3,
             steps_cached: 2,
             steps_failed: Some(1),
+            steps_skipped: None,
             attempts: Some(4),
             started_at: "2026-11-13T10:00:00Z".into(),
             finished_at: Some("2026-11-13T10:01:00Z".into()),
@@ -2438,6 +2457,7 @@ mod history_json_tests {
             steps_executed: 0,
             steps_cached: 0,
             steps_failed: None,
+            steps_skipped: None,
             attempts: None,
             started_at: String::new(),
             finished_at: None,
