@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
+
 - Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).
 
 - A loopback server refuses foreign HTTP Host names before dispatch, preventing DNS rebinding. Trusted reverse proxies can list exact DNS names in `[server] allowed_hosts`; loopback CLI/UI access and the owner-only project socket keep working (#998).
