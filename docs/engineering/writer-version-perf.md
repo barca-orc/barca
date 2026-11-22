@@ -1,7 +1,9 @@
 # Writer-version trigger performance investigation (PR #1113)
 
-Status: a measured allocation improvement, **not proof that the merge-queue performance
-failure is resolved**. No performance limit, gate, retry policy or cache treatment changed.
+Status: **resolved by matched Depot fast-profile acceptance** at
+`a33c11955d81f4fae18d6e9e3760c268b6b0a5ab`; see the CI resolution below. The earlier local
+investigation is retained as historical evidence. No performance limit, gate, retry policy
+or cache treatment changed.
 
 ## Failure and comparable builds
 
@@ -162,3 +164,95 @@ the whole Rust workspace, the fast rebuild and 1,076 Python tests (five expected
 Separate doctor and metadata-compatibility coverage passed 27 tests. These include the
 original PR's project-requirement, read-only writer preservation and sensor-deduplication
 checks; the final binary hash remained the one recorded above.
+
+
+## CI resolution (2026-11-22)
+
+The actual Depot comparison reproduced the remaining regression at `ec7572f`: baseline
+`63a5ed347d3bbdcbcab634b2736f7800823a37c5` passed both surrounding gates, while the PR failed
+both gates and their built-in retries at 19,588–19,676 KiB. This ruled out accepting the
+problem as merely a difference between the local host and CI.
+
+All CI work used submitted local workflows (`depot ci run`), not a queue retry or a change to
+CI's tier selection. The builds extracted immutable source revisions, used stable Rust
+1.100.0, Python 3.14.10, `maturin build --profile fast`, four build jobs and private target
+folders on `depot-ubuntu-24.04-16`. Wheel artifacts were uploaded and downloaded to a separate
+`depot-ubuntu-24.04-4` runner, then installed identically into separate venvs. Measurement
+runners used kernel 6.12.115 and AMD EPYC processors. Tests used two threads/workers and
+`BARCA_POOL_SIZE=2`. The fixed gate order was baseline/current/current/baseline; every attempt
+was retained. No executable eviction, pre-reading, warmed-copy trick, custom Rust flags or
+budget override was used.
+
+### Attribution and correction
+
+1. A same-binary control shared the marker upsert through a TEMP view's INSTEAD OF trigger.
+   The table/event triggers insert into that view, whose trigger performs the unchanged
+   conditional marker upsert in the caller's transaction. Median anonymous memory fell from
+   3,642 to 3,500 KiB. Transaction rollback, read preservation, missing-marker recovery and
+   no redundant marker writes passed. This optimization alone was insufficient: the
+   production candidate `c59cbeda` passed one gate but failed another at 19,600 KiB twice.
+   Its simplified catalog reads avoid compiling the correlated event-union query, but do
+   not by themselves establish acceptance.
+2. Isolating doctor parsing behind cold, non-inlined functions did not materially reduce the
+   remaining footprint. A diagnostic build omitting only the native PEP 508 parser reduced
+   the one-key median from 19,562 to 18,572 KiB: anonymous memory from 3,500 to 3,260 KiB,
+   sampled file PSS from 13,938.5 to 13,212 KiB. All 30 omitted-parser samples were below
+   budget, versus 17/30 failures for the candidate. This attributes the remaining cost to
+   native code/data footprint; it does not make parser omission an acceptable product fix.
+3. The production correction moves requirement validation to the existing finite Python
+   doctor helper using the complete, unmodified PyPA packaging 26.3 package. It is bundled
+   under `barca._vendor`, imported only when doctor checks a pyproject, and carries upstream
+   licenses and [version/artifact provenance](../../python/barca/_vendor/README.md). Barca
+   still has **zero base external Python dependencies**. No worker imports the parser, and
+   no ad hoc replacement grammar is introduced. The helper receives the running CLI version
+   and project root; missing/null results for an existing project fail closed. Writer
+   triggers, semver warnings, sensor warnings and their deduplication retain their contracts.
+
+### Final acceptance
+
+[Depot run n3tmpn6hgs](https://depot.dev/orgs/h8vkw2zpsq/workflows/15xn5zjnws), exact source
+`a33c11955d81f4fae18d6e9e3760c268b6b0a5ab`, passed every unchanged gate on its first attempt:
+
+| Invocation | Trivial peak KiB | Incremental peak KiB | Incremental max CPU ms | History median ms |
+|---|---:|---:|---:|---:|
+| Baseline 1 | 17,804 | 18,404 | 6.936 | 1.4 |
+| Final 1 | 18,100 | 19,120 | 9.778 | 1.4 |
+| Final 2 | 18,072 | 18,920 | 9.950 | 1.4 |
+| Baseline 2 | 17,760 | 18,444 | 8.542 | 1.5 |
+
+Limits remain 19,531 KiB, 40 ms incremental CPU, 150 ms trivial median wall time and 25 ms
+history median. The preceding production candidate `c52dc7c1` also passed both matched gates
+without retries (19,228 and 18,688 KiB); the final revision adds the fail-closed helper-result
+check and its regression test, so acceptance was repeated for that exact source revision.
+
+Final native SHA-256:
+
+- Baseline: `d6bd2c82d0b28b3d62a21d37829cb5d3a01fdb908701f75343668aa58c51d7ad`
+- Final: `a5c8a6a2f0d77b5508b7625f8762140d99ac4ab6dd57f1b1a644ffe3ee47326c`
+
+[Complete CI evidence](../../benchmarks/incremental_dag/writer-version-ci-evidence.json)
+contains submitted workflows, source revisions, toolchain/runner manifests, wheel and binary
+hashes, all gate output, both diagnostic sample cohorts and their instrumentation, and the
+one setup failure (an untracked script absent from a patch; it produced no measurements).
+The original 1,258 local samples remain unchanged in `writer-version-evidence.json`.
+
+### Behavioral and distribution checks
+
+- The vendored-parser candidate passed the whole Rust workspace: 1,680 tests, two ignored;
+  workspace clippy and 731 selected Python/CLI/doctor/metadata tests passed.
+- Final revision: 188 service tests passed (one ignored), workspace clippy passed, and 732
+  Python tests passed, including the new missing/null helper-result regression. That test
+  failed against `c52dc7c1` before the correction.
+- `python -I scripts/check-vendored-doctor.py` passed in a fresh venv containing only the
+  final wheel, before installing any optional/test packages. Eight requirement controls
+  passed; no external `packaging` distribution was installed, licenses/provenance were
+  present, worker imports did not load packaging, and doctor neither imported the pipeline
+  nor created metadata.
+- 61,192 upstream requirement, marker, specifier and version tests passed against the
+  vendored sources. The import location was verified; every vendored Python file matches
+  the published upstream source byte-for-byte. The source archive hash is retained with the
+  evidence. Repository formatting, lint/type checks, version sync and lock checks passed.
+
+All diagnostic modes and submitted workflows are excluded from product code. The remaining
+queue/release decision belongs to the parent task; no merge, release or blind queue retry
+was performed here.
