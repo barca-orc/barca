@@ -41,6 +41,20 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
   const overview = live && progress ? { progress, now: now ?? NOTHING_NOW, elapsed: elapsedLabel(run.started_at, nowMs) } : null
   return (
     <Section title="Run overview">
+      {run.stop_reason && <p role="status">Attempt {run.run_attempt ?? 1} stopped: {run.stop_reason}.
+        {run.parent_run_id && <> <Link to={runHref(run.parent_run_id)}>Open original run</Link></>}
+      </p>}
+      {run.previous_attempts && run.previous_attempts.length > 0 && <>
+        <span className="barca-run-reason-label">Previous executions</span>
+        <ul className="barca-run-groups">
+          {run.previous_attempts.map((attempt) => <li key={attempt.run_id}>
+            <Link to={runHref(attempt.run_id)}>Attempt {attempt.attempt}: logs and steps</Link>
+            <span className="barca-cell-sub">Stopped: {attempt.stop_reason}</span>
+          </li>)}
+        </ul>
+        <p className="barca-note">Current execution: attempt {run.previous_attempts.length + 1}</p>
+      </>}
+
       {cancel && (
         <div className="barca-run-cancel" role="status">
           <strong>{cancel.headline}</strong>

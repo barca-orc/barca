@@ -5,7 +5,6 @@
 use crate::print::{follow_ended, follow_exit_code, name_run};
 use crate::request::LogsArgs;
 use barca_service::BarcaError;
-use barca_service::db::LogEntry;
 use std::time::{Duration, Instant};
 
 /// How often `-f` looks for new lines and for the run's end.
@@ -47,54 +46,50 @@ async fn follow_local(
     run_id: &str,
     args: LogsArgs<'_>,
 ) -> Result<String, BarcaError> {
-    let Some(run) = barca_service::queries::run_record(cfg, run_id).await? else {
-        return Err(BarcaError::Usage(format!(
-            "run '{run_id}' was not found; use barca history --json to find a run id"
-        )));
-    };
-    if run.status != "running" {
-        // Ended already: print what it recorded, checked as without -f.
-        let lines = barca_service::queries::logs(cfg, run_id, args.step, args.stream).await?;
-        args.print_all(&lines)?;
-        return Ok(run.status);
-    }
-    let spool = barca_service::run_logs::spool_path(&cfg.db_path, run_id);
-    // Every poll reads the run's row: in place, so following a run never makes it wait.
     let read = barca_service::db::read_metadata(cfg, true).await?;
-    // Lines seen so far (printed or not), which is the seq of the next one.
     let mut seen = 0usize;
-    let mut offset = 0u64;
     let mut ended_at: Option<Instant> = None;
+    let mut waiting = false;
     loop {
-        let status = barca_service::db::get_run(read.path(), run_id)
-            .await?
-            .map_or_else(|| "interrupted".to_string(), |r| r.status);
-        let (lines, at) = barca_service::run_logs::read_spool(&spool, offset)?;
-        offset = at;
-        for line in lines {
-            let entry = LogEntry::at(seen, line);
-            seen += 1;
+        // Queue ownership lasts through recording the stopped outcome and requeueing it.
+        // A cancelled/interrupted attempt is not the accepted request's final outcome.
+        let queue = barca_service::serve::run_queue::list(read.path()).await?;
+        let queued = queue.iter().find(|r| r.run_id == run_id);
+        let run = barca_service::db::get_run(read.path(), run_id).await?;
+        if queued.is_none() && run.is_none() {
+            return Err(BarcaError::Usage(format!(
+                "run '{run_id}' was not found; use barca history --json to find a run id"
+            )));
+        }
+        let status = if queued.is_some() {
+            "running"
+        } else {
+            run.as_ref().unwrap().status.as_str()
+        };
+        let is_waiting =
+            queued.is_some_and(|r| r.state == barca_service::serve::run_queue::QueueState::Queued);
+        if is_waiting && !waiting {
+            barca_service::errln!("[barca] run {run_id} requeued; waiting for the server");
+        }
+        waiting = is_waiting;
+        // Archived streams followed by the current one form one append-only sequence,
+        // including attempt boundaries. A new spool's offsets never reuse the old cursor.
+        let lines =
+            barca_service::queries::logs_at(&cfg.db_path, read.path(), run_id, None, None).await?;
+        for entry in lines.iter().skip(seen) {
             if args.selects(&entry.node_id, entry.stream) {
-                args.print_one(&entry);
+                args.print_one(entry);
             }
         }
+        seen = seen.max(lines.len());
         if status != "running" {
             let since = *ended_at.get_or_insert_with(Instant::now);
-            // The run deletes its spool once its lines are in the database. One whose process
-            // died leaves it, and everything it holds has been printed.
-            if spool.exists() && since.elapsed() < WRAP_UP {
-                tokio::time::sleep(POLL).await;
-                continue;
+            let spool = barca_service::run_logs::spool_path(&cfg.db_path, run_id);
+            if !spool.exists() || since.elapsed() >= WRAP_UP {
+                return Ok(status.to_string());
             }
-            for entry in barca_service::db::get_logs(read.path(), run_id).await? {
-                if entry.seq as usize >= seen {
-                    seen = entry.seq as usize + 1;
-                    if args.selects(&entry.node_id, entry.stream) {
-                        args.print_one(&entry);
-                    }
-                }
-            }
-            return Ok(status);
+        } else {
+            ended_at = None;
         }
         tokio::time::sleep(POLL).await;
     }

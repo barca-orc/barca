@@ -347,14 +347,45 @@ pub async fn logs_at(
     step: Option<&str>,
     stream: Option<crate::LogStream>,
 ) -> Result<Vec<db::LogEntry>, BarcaError> {
-    if db::get_run(read_path, run_id).await?.is_none() {
+    let queued = crate::serve::run_queue::list(read_path)
+        .await?
+        .iter()
+        .any(|r| r.run_id == run_id);
+    if db::get_run(read_path, run_id).await?.is_none() && !queued {
         return Err(BarcaError::Usage(format!(
             "run '{run_id}' was not found; use barca history --json to find a run id"
         )));
     }
-    let mut logs = run_log_lines(db_path, read_path, run_id).await?;
+    let previous = db::runs::previous_attempts(read_path, run_id).await?;
+    let mut logs = Vec::new();
+    for attempt in &previous {
+        logs.extend(run_log_lines(db_path, read_path, &attempt.run_id).await?);
+        logs.push(db::LogEntry::at(
+            0,
+            crate::run_logs::RecordedLine::barca(format!(
+                "attempt {} stopped: {} (logs: {})",
+                attempt.attempt, attempt.stop_reason, attempt.run_id
+            )),
+        ));
+    }
+    if !previous.is_empty() {
+        logs.push(db::LogEntry::at(
+            0,
+            crate::run_logs::RecordedLine::barca(format!("attempt {}", previous.len() + 1)),
+        ));
+    }
+    // A queued request can still have the predecessor's spool; it is already archived.
+    if !queued || db::get_run(read_path, run_id).await?.is_some() {
+        logs.extend(run_log_lines(db_path, read_path, run_id).await?);
+    }
+    for (seq, line) in logs.iter_mut().enumerate() {
+        line.seq = seq as i64;
+    }
     if let Some(step) = step {
-        let recorded = db::get_run_steps(read_path, run_id).await?;
+        let mut recorded = db::get_run_steps(read_path, run_id).await?;
+        for attempt in &previous {
+            recorded.extend(db::get_run_steps(read_path, &attempt.run_id).await?);
+        }
         let mut matches = select_step(&logs, &recorded, run_id, step)?;
         // A key of a batched call (RFC-0013): its call's output, recorded once for the call.
         for row in &recorded {

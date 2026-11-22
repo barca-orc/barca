@@ -10,12 +10,15 @@ use libsql::Connection;
 use serde::{Deserialize, Serialize};
 
 pub async fn delete_run(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
-    conn.execute("DELETE FROM runs WHERE run_id = ?1", [run_id])
-        .await
+    conn.execute(
+        "DELETE FROM runs WHERE run_id = ?1 OR parent_run_id = ?1",
+        [run_id],
+    )
+    .await
 }
 
 pub async fn delete_logs(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
-    conn.execute("DELETE FROM logs WHERE run_id = ?1", [run_id])
+    conn.execute("DELETE FROM logs WHERE run_id = ?1 OR run_id IN (SELECT run_id FROM runs WHERE parent_run_id = ?1)", [run_id])
         .await
 }
 
@@ -29,8 +32,8 @@ pub(crate) async fn clear_old_outcomes(
     conn.execute(
         &format!(
             "UPDATE runs SET outcome_json = NULL WHERE id IN (SELECT id FROM runs \
-             WHERE outcome_json IS NOT NULL AND id < (SELECT id FROM runs ORDER BY \
-             id DESC LIMIT 1 OFFSET {}) ORDER BY id LIMIT {batch})",
+             WHERE outcome_json IS NOT NULL AND COALESCE((SELECT p.id FROM runs p WHERE p.run_id = runs.parent_run_id), id) < (SELECT id FROM runs WHERE parent_run_id IS NULL ORDER BY \
+             id DESC LIMIT 1 OFFSET {}) AND COALESCE(parent_run_id, run_id) NOT IN (SELECT run_id FROM run_queue) ORDER BY id LIMIT {batch})",
             kept - 1
         ),
         (),
@@ -58,6 +61,15 @@ pub(crate) fn decode_files(raw: &str) -> Vec<String> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: String,
+    /// Original request id for a stopped execution retained after requeue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_attempt: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempts: Vec<RunAttempt>,
     pub command: String,
     /// The `.py` files the run was given.
     pub files: Vec<String>,
@@ -115,6 +127,40 @@ pub struct RunRecord {
     /// and for a run that executed nothing. Experimental.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_reasons: Option<barca_model::run_explain::PlanReasons>,
+}
+
+/// A stopped execution of the same accepted request. Its id reads its own logs and steps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunAttempt {
+    pub run_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub attempt: i64,
+    pub stop_reason: String,
+}
+
+/// Stopped executions, oldest first. Legacy databases have none.
+pub async fn previous_attempts(db_path: &str, run_id: &str) -> Result<Vec<RunAttempt>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "parent_run_id").await? {
+        return Ok(Vec::new());
+    }
+    let mut rows = conn.query("SELECT run_id, run_attempt, stop_reason FROM runs WHERE parent_run_id = ?1 ORDER BY run_attempt", [run_id])
+        .await.map_err(|e| BarcaError::Db(e.to_string()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(e.to_string()))?
+    {
+        out.push(RunAttempt {
+            run_id: row.get(0).unwrap_or_default(),
+            attempt: row.get(1).unwrap_or_default(),
+            stop_reason: row.get(2).unwrap_or_default(),
+        });
+    }
+    Ok(out)
 }
 
 /// A recorded step error as (type, message, traceback). A worker reports a Python exception as
@@ -592,10 +638,14 @@ pub async fn reconcile_run(db_path: &str, run_id: &str) -> Result<RunRecord, Bar
 
 /// Read a durable run by id, including the same interrupted-owner diagnosis as history.
 pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, BarcaError> {
-    Ok(read_runs(db_path, Some(run_id), 1, &RunFilter::default())
+    let mut record = read_runs(db_path, Some(run_id), 1, &RunFilter::default())
         .await?
         .into_iter()
-        .next())
+        .next();
+    if let Some(record) = &mut record {
+        record.previous_attempts = previous_attempts(db_path, run_id).await?;
+    }
+    Ok(record)
 }
 
 /// A run's first failed step and its error, read from `idx_mat_failed` ([`read_runs`]).
@@ -684,6 +734,11 @@ async fn read_runs(
     } else {
         "NULL, NULL, NULL, NULL"
     };
+    let attempt_metadata = if has_column(&conn, "runs", "parent_run_id").await? {
+        "parent_run_id, run_attempt, stop_reason"
+    } else {
+        "NULL, NULL, NULL"
+    };
     let retries = if run_id.is_none() || !(names.contains("run_id") && names.contains("attempts")) {
         "NULL"
     } else if has_index(&conn, "idx_mat_attempts").await? {
@@ -708,7 +763,11 @@ async fn read_runs(
     };
     // The runs the filter keeps: their newest ids, from an index ([`RunFilter`]).
     let shape = super::run_filter::RunsShape::of(&conn).await?;
-    let only = match filter.sql(&shape, &interrupted) {
+    let only = match if run_id.is_some() {
+        None
+    } else {
+        filter.sql(&shape, &interrupted)
+    } {
         Some(w) => format!(
             " AND id IN (SELECT id FROM runs{} WHERE {} ORDER BY id DESC LIMIT ?2)",
             w.index, w.condition
@@ -717,7 +776,7 @@ async fn read_runs(
     };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries}, {attempt_metadata} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -774,6 +833,10 @@ async fn read_runs(
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok()),
             retries: row.get::<i64>(23).ok(),
+            parent_run_id: row.get::<String>(24).ok(),
+            run_attempt: row.get::<i64>(25).ok(),
+            stop_reason: row.get::<String>(26).ok(),
+            previous_attempts: Vec::new(),
         });
     }
     Ok(records)
@@ -1012,8 +1075,13 @@ pub async fn run_activity(
 pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
+    let query = if has_column(&conn, "runs", "parent_run_id").await? {
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id IS NULL"
+    } else {
+        "SELECT COUNT(*) FROM runs"
+    };
     let mut rows = conn
-        .query("SELECT COUNT(*) FROM runs", ())
+        .query(query, ())
         .await
         .map_err(|e| BarcaError::Db(format!("failed to count runs: {e}")))?;
     let n = rows

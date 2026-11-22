@@ -584,6 +584,14 @@ pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
 /// 17k runs spend most of its 330 ms in the allocator.
 #[derive(serde::Serialize)]
 struct HistoryItem<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_run_id: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_attempt: &'a Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_reason: &'a Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    previous_attempts: &'a Vec<crate::db::runs::RunAttempt>,
     attempts: &'a Option<i64>,
     cancellation: &'a Option<crate::run_explain::Cancellation>,
     client_run_id: &'a Option<String>,
@@ -650,12 +658,20 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             cancellation,
             retries,
             plan_reasons,
+            parent_run_id,
+            run_attempt,
+            stop_reason,
+            previous_attempts,
         } = run;
         let failure = failure.as_ref().map(|f| HistoryFailure {
             error: &f.error,
             node: &f.node,
         });
         HistoryItem {
+            parent_run_id,
+            run_attempt,
+            stop_reason,
+            previous_attempts,
             attempts,
             cancellation,
             client_run_id,
@@ -1115,6 +1131,22 @@ pub fn render_run_detail(
         head.push_str(&format!("  {attempts}"));
     }
     line!(rendered, "{head}");
+    if let Some(reason) = &r.stop_reason {
+        line!(
+            rendered,
+            "attempt {} stopped: {reason}",
+            r.run_attempt.unwrap_or(1)
+        );
+    }
+    for attempt in &r.previous_attempts {
+        line!(
+            rendered,
+            "attempt {} stopped: {} — barca logs {}",
+            attempt.attempt,
+            attempt.stop_reason,
+            attempt.run_id
+        );
+    }
     let mut when = format!("started {}", crate::report::utc_cell(&r.started_at));
     if let Some(finished) = &r.finished_at {
         when.push_str(&format!("  finished {}", crate::report::utc_cell(finished)));

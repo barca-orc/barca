@@ -534,3 +534,81 @@ def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(p
     assert nodes["pipeline.py:b"]["state"] == "cached", nodes
     assert json.loads((project / nodes["pipeline.py:b"]["artifact"]).read_text()) == 200
     assert started(project, "b") == 2, "the stopped attempt and the resumed one"
+
+
+def test_requeued_attempts_remain_readable_and_local_follower_waits(project, serve):
+    """Two drains keep one request, three executions, and one uninterrupted local follower."""
+    pipeline = PIPELINE.replace('    hold("long")', '    print("attempt started", flush=True)\n    hold("long")')
+    (project / "pipeline.py").write_text(pipeline)
+    server = serve("--no-schedule", "--drain-timeout", "0")
+    run_id = start_long(server, project)
+    follower = client(project, "logs", run_id, "--follow", "--local")
+    wait_until(lambda: "attempt started" in client_output(project, follower)[0], "first log")
+    for number in (1, 2):
+        assert server.stop() == 0, server.stderr
+        wait_until(
+            lambda: "requeued; waiting for the server" in client_output(project, follower)[1],
+            "local follower to wait for restart",
+        )
+        assert follower.poll() is None, client_output(project, follower)
+        logs = barca(project, "logs", run_id)
+        assert logs.returncode == 0, logs.stderr
+        assert logs.stdout.count("attempt started") == number
+        assert f"attempt {number} stopped: server restart (requeued)" in logs.stdout
+        detail = barca(project, "history", run_id, "--json")
+        assert detail.returncode == 0, detail.stderr
+        attempts = json.loads(detail.stdout)["run"]["previous_attempts"]
+        assert len(attempts) == number
+        server = serve("--no-schedule", "--drain-timeout", "0")
+        wait_until(lambda: started(project, "long") == number + 1, "next execution")
+        view = server.request("GET", f"/runs/{run_id}")[1]
+        assert len(view["previous_attempts"]) == number
+        archived = server.request("GET", f"/runs/{attempts[-1]['run_id']}")[1]
+        assert archived["stop_reason"] == "server restart (requeued)"
+        assert any(line["line"] == "attempt started" for line in archived["logs"])
+        listing = server.request("GET", "/runs")[1]
+        assert listing["total"] == 1, listing
+    (project / "release-long").touch()
+    assert server.finished(run_id)["status"] == "success"
+    assert follower.wait(timeout=RUN) == 0, client_output(project, follower)
+    out, err = client_output(project, follower)
+    assert out.count("attempt started") == 3, out
+    assert "attempt 1 stopped" in out and "attempt 2 stopped" in out
+    assert "interrupted" not in err, err
+
+
+@pytest.mark.parametrize("drain", [False, True])
+def test_killed_predecessor_with_unknown_owner_is_recovered(project, serve, drain):
+    import sqlite3
+
+    (project / "pipeline.py").write_text(
+        PIPELINE.replace('    hold("long")', '    print("before kill", flush=True)\n    hold("long")')
+    )
+    server = serve("--no-schedule", "--drain-timeout", "60")
+    run_id = start_long(server, project)
+    if drain:
+        server.send(signal.SIGTERM)
+        wait_until(lambda: draining(server), "server to drain")
+    server.stop(signal.SIGKILL)
+    # Server is stopped: emulate a moved volume whose recorded owner cannot be checked.
+    with sqlite3.connect(project / ".barca" / "metadata.db") as db:
+        db.execute("UPDATE runs SET owner = NULL, pid = NULL, host = 'different-host'")
+    restarted = serve("--no-schedule", "--drain-timeout", "60")
+    if drain:
+        wait_until(lambda: started(project, "long") == 2, "killed drain to requeue once")
+        view = restarted.request("GET", f"/runs/{run_id}")[1]
+        attempt = view["previous_attempts"][0]
+        archived = restarted.request("GET", f"/runs/{attempt['run_id']}")[1]
+        assert archived["status"] == "interrupted"
+        assert any(line["line"] == "before kill" for line in archived["logs"])
+        # The existing one-killed-drain retry rule remains bounded.
+        restarted.send(signal.SIGTERM)
+        wait_until(lambda: draining(restarted), "second drain")
+        restarted.stop(signal.SIGKILL)
+        with sqlite3.connect(project / ".barca" / "metadata.db") as db:
+            db.execute("UPDATE runs SET owner = NULL, pid = NULL, host = 'different-host'")
+        restarted = serve("--no-schedule")
+    view = restarted.request("GET", f"/runs/{run_id}")[1]
+    assert view["status"] == "interrupted", view
+    assert view["finished_at"] is not None
+    assert restarted.request("GET", "/queue")[1]["running"] == []

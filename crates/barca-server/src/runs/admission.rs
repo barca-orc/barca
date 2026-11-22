@@ -272,7 +272,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_service::Ba
 
 /// A run the last server started and never finished recording: it was killed (SIGKILL, a
 /// crash, a supervisor's grace period that ran out). It is not started again; its row, when it
-/// wrote one, is recorded `interrupted` by the usual recovery, and one that never wrote a row
+/// wrote one, is recorded `interrupted` by queue ownership, and one that never wrote a row
 /// gets one with an `error` outcome, so its id is not lost.
 async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
     let cfg = &state.config.resolved;
@@ -316,7 +316,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         )
         .await;
     }
-    if let Err(e) = run_queue::remove(&cfg.db_path, run_id).await {
+    if let Err(e) = run_queue::interrupt_predecessor(&cfg.db_path, run_id).await {
         barca_service::errln!("[barca] warning: {e}");
     }
 }

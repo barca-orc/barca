@@ -10,6 +10,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Recover queue-owned predecessor runs even when their host or PID cannot be checked. Retain stopped executions and their logs across server requeues, link them from run detail, and keep local log followers waiting for the next execution.
+
+### Bug Fixes
+
 - Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
 
 - Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).

@@ -37,6 +37,9 @@ use std::fs;
 
 /// Every column of `runs` except its row id.
 pub(crate) const RUN_COLUMNS: &[&str] = &[
+    "parent_run_id",
+    "run_attempt",
+    "stop_reason",
     "run_id",
     "command",
     "files",

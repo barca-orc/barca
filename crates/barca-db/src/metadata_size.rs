@@ -239,7 +239,7 @@ async fn row_batch(conn: &Connection, step: u8, from: i64) -> Result<u64, BarcaE
 /// One batch of step 4: the oldest runs that may go, logs first.
 async fn run_batch(conn: &Connection) -> Result<u64, BarcaError> {
     let sql = format!(
-        "SELECT run_id FROM runs WHERE id < (SELECT id FROM runs ORDER BY id DESC LIMIT 1 \
+        "SELECT run_id FROM runs WHERE parent_run_id IS NULL AND id < (SELECT id FROM runs WHERE parent_run_id IS NULL ORDER BY id DESC LIMIT 1 \
          OFFSET {}) AND status != 'running' AND run_id NOT IN (SELECT run_id FROM run_queue) \
          ORDER BY id LIMIT {RUN_BATCH}",
         KEPT_RUNS - 1

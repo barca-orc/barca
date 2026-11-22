@@ -54,6 +54,7 @@ fn in_list<'a>(values: impl Iterator<Item = &'a str>) -> String {
 /// What of `runs` and its indexes a database has: a snapshot an older barca wrote may lack
 /// the newer columns, and is read without migrating it.
 pub(super) struct RunsShape {
+    pub parent: bool,
     pub trigger: bool,
     pub job: bool,
     pub search_index: bool,
@@ -62,6 +63,7 @@ pub(super) struct RunsShape {
 impl RunsShape {
     pub(super) async fn of(conn: &libsql::Connection) -> Result<Self, BarcaError> {
         Ok(RunsShape {
+            parent: has_column(conn, "runs", "parent_run_id").await?,
             trigger: has_column(conn, "runs", "triggered_by").await?,
             job: has_column(conn, "runs", "job").await?,
             search_index: has_index(conn, "idx_runs_search").await?,
@@ -173,6 +175,9 @@ impl RunFilter {
     /// it can use one. `None`: every run.
     pub(super) fn sql(&self, shape: &RunsShape, interrupted: &[String]) -> Option<RunsWhere> {
         let mut all = Vec::new();
+        if shape.parent {
+            all.push("id NOT IN (SELECT id FROM runs WHERE parent_run_id IS NOT NULL)".to_string());
+        }
         let mut indexed = false;
         if let Some(window) = self.window_sql() {
             all.push(window);
@@ -234,7 +239,10 @@ impl RunFilter {
         }
         Some(RunsWhere {
             condition: all.join(" AND "),
-            index: if !indexed && shape.search_index {
+            index: if !indexed
+                && shape.search_index
+                && (self.search.is_some() || self.names.is_some())
+            {
                 " INDEXED BY idx_runs_search"
             } else {
                 ""
