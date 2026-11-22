@@ -46,7 +46,7 @@ from approved decisions.
 | [Performance](behavior/performance.md) | Workload-specific resource budgets and measurement scope | Measured warm budgets; cold/inspection bounds remain targets |
 | [Python runtime](behavior/python-runtime.md) | Cached modules, process-local DuckDB state and temporary input views | Implemented; real worker connection controls |
 | [Server event replay](behavior/server-event-replay.md) | Attempt-scoped cursors and bounded serialized retention | Implemented in 0.36.0: server, CLI and browser resume; cost probes are local loopback measurements, real proxy/cloud latency not established |
-| [Server authentication](behavior/server-authentication.md) | Project token storage, local bootstrap and request protection; the project socket's access rule (file permission, no token) | Implemented in 0.36.0, including browser access; the socket rule with [project socket tests](../python/tests/test_project_socket.py); cloud deployment cost not established; replay has a separate owner |
+| [Server authentication](behavior/server-authentication.md) | Project token storage, local bootstrap, loopback Host validation and request protection; the project socket's access rule (file permission, no token) | Implemented in 0.36.0, including browser access; the socket rule with [project socket tests](../python/tests/test_project_socket.py); cloud deployment cost not established; replay has a separate owner |
 | [Cache decisions](behavior/cache-decisions.md) | Reuse, provenance, early cutoff and durable run records | Implemented; selection deviation remains explicit |
 
 Each owner links its exact conformance sources and records known limitations. Existing wire
