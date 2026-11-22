@@ -1,0 +1,13 @@
+{
+  "base": "a8bf85e7379cc278ef002bb4f7bca3bce7aa27c3",
+  "binary_sha256": "f16c42e700673b6a311b2ff14ec747627576c668bb4bcae110cf6e99653fca78",
+  "profile": "fast",
+  "pool": 2,
+  "machine": "Linux-7.2.8-200.fc44.x86_64-x86_64-with-glibc2.44",
+  "load": [
+    14.19091796875,
+    14.7666015625,
+    17.41552734375
+  ],
+  "scope": "Final post-run nodes probe, existing 200k chain; no reseed. Local loaded machine, not production or a leak test."
+}

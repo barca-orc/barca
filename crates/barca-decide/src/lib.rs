@@ -27,3 +27,7 @@ pub mod recover;
 pub mod schedule;
 #[doc(hidden)]
 pub mod sizing;
+
+pub mod evidence;
+
+pub mod inspection;

@@ -1,0 +1,9 @@
+{"case": "cold", "route": "/state", "seconds": 0.105562, "response_bytes": 4359, "rss_kib": 56164, "peak_kib": 57184, "health_samples_during_request": 5}
+{"case": "immediate_repeat", "route": "/state", "seconds": 0.076831, "response_bytes": 4359, "rss_kib": 56764, "peak_kib": 67356, "health_samples_during_request": 4}
+{"case": "legacy_cold", "route": "/nodes?sample=0", "seconds": 0.171006, "response_bytes": 8449, "rss_kib": 74984, "peak_kib": 84628, "health_samples_during_request": 8}
+{"case": "legacy_immediate_repeat", "route": "/nodes?sample=0", "seconds": 0.158937, "response_bytes": 8449, "rss_kib": 73084, "peak_kib": 85472, "health_samples_during_request": 8}
+{"case": "invalidated_1", "route": "/state", "seconds": 0.080362, "response_bytes": 4361, "rss_kib": 61596, "peak_kib": 85472, "health_samples_during_request": 4}
+{"case": "immediate_repeat_1", "route": "/state", "seconds": 0.07088, "response_bytes": 4361, "rss_kib": 61932, "peak_kib": 85472, "health_samples_during_request": 4}
+{"case": "after_5s_pause", "route": "/state", "seconds": 0.001365, "response_bytes": 4361, "rss_kib": 62524, "peak_kib": 85472, "health_samples_during_request": 0}
+{"case": "pause_immediate_repeat", "route": "/state", "seconds": 0.000829, "response_bytes": 4361, "rss_kib": 62524, "peak_kib": 85472, "health_samples_during_request": 0}
+{"health_samples": 273, "health_max_seconds": 0.00618, "health_errors": []}

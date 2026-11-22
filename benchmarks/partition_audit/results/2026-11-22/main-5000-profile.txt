@@ -1,0 +1,9 @@
+[timing] dry run: plan: 0.2 ms
+[timing] dry run: sensor outputs and evictions: 1.4 ms
+[timing] dry run: phase 1: 0.1 ms
+[timing] dry run: phase 2: 185.1 ms
+[timing] dry run: decided: 187.1 ms
+[timing] status: cache decisions: 206.3 ms
+[timing] status: histories: 8.2 ms
+[timing] status: store check: 1.5 ms
+[timing] status: shapes: 63.5 ms

@@ -1,0 +1,7 @@
+{"case": "cold", "route": "/state", "seconds": 2.579088, "response_bytes": 4369, "rss_kib": 56912, "peak_kib": 85284, "health_samples_during_request": 120}
+{"case": "immediate_repeat", "route": "/state", "seconds": 0.002168, "response_bytes": 4369, "rss_kib": 56892, "peak_kib": 85284, "health_samples_during_request": 0}
+{"case": "legacy_cold", "route": "/nodes?sample=0", "seconds": 0.21384, "response_bytes": 8448, "rss_kib": 57880, "peak_kib": 85284, "health_samples_during_request": 9}
+{"case": "legacy_immediate_repeat", "route": "/nodes?sample=0", "seconds": 0.008445, "response_bytes": 8448, "rss_kib": 57912, "peak_kib": 85284, "health_samples_during_request": 1}
+{"case": "after_5s_pause", "route": "/state", "seconds": 0.002264, "response_bytes": 4369, "rss_kib": 57932, "peak_kib": 85284, "health_samples_during_request": 0}
+{"case": "pause_immediate_repeat", "route": "/state", "seconds": 0.00156, "response_bytes": 4369, "rss_kib": 57932, "peak_kib": 85284, "health_samples_during_request": 0}
+{"health_samples": 365, "health_max_seconds": 0.007694, "health_errors": []}

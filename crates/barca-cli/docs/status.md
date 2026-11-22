@@ -515,4 +515,14 @@ whose remediation is `barca history RUN_ID --local`.
 Each node's fields (health, what the last tick found, data signals and coverage, last materialization, artifact shape,
 run timing, what started a run), the rollup's keys, the JSON document, output limits and what status asks an artifact store are in `barca docs status-fields`.
 
+### Partition inspection cost
+
+Local aligned partition chains can reuse validated execution evidence for current counts.
+The first availability check visits every selected artifact in bounded pages; unchanged
+observations can reuse that check for five seconds. Server status refreshes within the
+existing 30-second polling window, plus recomputation time, even without a database write.
+Remote stores, explicit key listings and invalid or unsupported evidence keep the full
+prediction path. Code, membership and failure changes still require matching current evidence.
+This reduces retained memory on proven chains; it is not a bound for all cold/refresh workloads.
+
 See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.

@@ -134,9 +134,6 @@ struct Success {
 struct KeySuccesses {
     latest: Option<Success>,
     previous: Option<Success>,
-    /// The newest successful row whose content was read ([`AgeRow::content`]): its id and
-    /// content.
-    content: Option<(i64, u64)>,
 }
 
 impl KeySuccesses {
@@ -288,6 +285,8 @@ pub struct NodeAgesIndex {
     last_run: HashMap<String, RunTotals>,
     /// base id -> each of its steps (the node itself, or its keys) -> its two newest successes.
     successes: HashMap<String, HashMap<String, KeySuccesses>>,
+    /// One latest uncounted success per logical node; uncounted keys need no retained rows.
+    uncounted: HashMap<String, (String, KeySuccesses)>,
     /// base id -> [`RowFacts`], computed again for the bases a read touched.
     rows: HashMap<String, RowFacts>,
     /// Latest failure row and the first clean success after it.
@@ -304,33 +303,36 @@ struct AgeRow {
     created_at: String,
     /// The `rows` column (#925); always `None` for a failed row.
     rows: Option<i64>,
-    /// What a successful row holds, as one number: its run hash and observation hash. Two rows
-    /// of a step with the same content are the same result. `None` for a failed row.
-    content: Option<u64>,
-    bytes_changed: bool,
+    /// Compared to the preceding success of this exact key in SQL, not a retained key map.
+    changed: bool,
 }
 
 impl AgeRow {
-    /// Columns `id, node_id, run_id, created_at, rows`, then `run_hash, observation_hash, bytes_changed` when
-    /// `content` (a successful row).
     fn of(row: &libsql::Row, content: bool) -> Self {
-        use std::hash::{Hash, Hasher};
         Self {
             id: row.get::<i64>(0).unwrap_or_default(),
             node: row.get::<String>(1).unwrap_or_default(),
             run: row.get::<String>(2).ok().filter(|r| !r.is_empty()),
             created_at: row.get::<String>(3).unwrap_or_default(),
             rows: row.get::<i64>(4).ok(),
-            bytes_changed: content && row.get::<i64>(7).unwrap_or(0) != 0,
-            content: content.then(|| {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                row.get::<String>(5).ok().hash(&mut hasher);
-                row.get::<String>(6).ok().hash(&mut hasher);
-                hasher.finish()
-            }),
+            changed: content && row.get::<i64>(8).unwrap_or(0) != 0,
         }
     }
 }
+
+// Indexed predecessor lookup preserves observation/byte-change semantics without retaining
+// every key merely to compare its next success. Two seeks cover successes with and without
+// artifact paths, so long per-key history is not sorted per row. Counted keys still retain rows.
+const AGE_ROWS: &str = "SELECT m.id, m.node_id, m.run_id, m.created_at, m.rows,
+    m.run_hash, m.observation_hash, m.bytes_changed,
+    (p.id IS NULL OR m.bytes_changed = 1 OR m.run_hash IS NOT p.run_hash OR m.observation_hash IS NOT p.observation_hash), m.status = 'failed'
+    FROM materializations m LEFT JOIN materializations p ON p.id =
+    (SELECT MAX(id) FROM (
+        SELECT MAX(id) AS id FROM materializations INDEXED BY idx_mat_node_latest
+        WHERE node_id = m.node_id AND status = 'success' AND artifact_path IS NOT NULL AND id < m.id
+        UNION ALL
+        SELECT MAX(id) AS id FROM materializations INDEXED BY idx_mat_node_rest
+        WHERE node_id = m.node_id AND status = 'success' AND artifact_path IS NULL AND id < m.id))";
 
 impl NodeAgesIndex {
     /// Every node's age in the database at `db_path` now, folding in what was added since the
@@ -375,11 +377,13 @@ impl NodeAgesIndex {
         self.mark = Some(now);
         self.read_last_runs(conn, &touched).await?;
         for base in &touched {
-            match self
+            let counted = self
                 .successes
                 .get(base)
-                .and_then(|steps| RowFacts::of(base, steps.iter()))
-            {
+                .into_iter()
+                .flat_map(|steps| steps.iter());
+            let uncounted = self.uncounted.get(base).map(|(id, step)| (id, step));
+            match RowFacts::of(base, counted.chain(uncounted)) {
                 Some(facts) => self.rows.insert(base.clone(), facts),
                 None => self.rows.remove(base),
             };
@@ -413,9 +417,7 @@ impl NodeAgesIndex {
         drop(rows);
         let mut rows = conn
             .query(
-                // In row order: a change is a row against the one before it.
-                "SELECT id, node_id, run_id, created_at, rows, run_hash, observation_hash, bytes_changed \
-                 FROM materializations WHERE status = 'success' AND id <= ?1 ORDER BY id",
+                &format!("{AGE_ROWS} WHERE m.status = 'success' AND m.id <= ?1 ORDER BY m.id"),
                 [max_id],
             )
             .await
@@ -498,22 +500,29 @@ impl NodeAgesIndex {
             None => steps.entry(row.node.clone()).or_default(),
         };
         step.add(success);
-        // Rows are folded in row order; one out of order is not compared.
-        if let Some(content) = row.content
-            && step.content.is_none_or(|(id, _)| id < row.id)
+        if step.latest.as_ref().is_none_or(|s| s.rows.is_none())
+            && step.previous.as_ref().is_none_or(|s| s.rows.is_none())
         {
-            let changed =
-                row.bytes_changed || step.content.is_none_or(|(_, before)| before != content);
-            step.content = Some((row.id, content));
-            if changed {
-                let changes = match self.changes.get_mut(base) {
-                    Some(changes) => changes,
-                    None => self.changes.entry(base.to_string()).or_default(),
-                };
-                if changes.last() != Some(&row.created_at) {
-                    let changes = std::sync::Arc::make_mut(changes);
-                    changes.push(row.created_at.clone());
-                }
+            let step = steps.remove(&row.node).unwrap();
+            if self
+                .uncounted
+                .get(base)
+                .is_none_or(|(_, old)| old.latest.as_ref().map_or(0, |s| s.id) < row.id)
+            {
+                self.uncounted
+                    .insert(base.to_owned(), (row.node.clone(), step));
+            }
+        } else if self
+            .uncounted
+            .get(base)
+            .is_some_and(|(id, _)| id == &row.node)
+        {
+            self.uncounted.remove(base);
+        }
+        if row.changed {
+            let changes = self.changes.entry(base.to_owned()).or_default();
+            if changes.last() != Some(&row.created_at) {
+                std::sync::Arc::make_mut(changes).push(row.created_at.clone());
             }
         }
         let clean = self
@@ -662,16 +671,14 @@ async fn rows_between(
     let failure = |e| BarcaError::Db(format!("failed to read node ages: {e}"));
     let mut rows = conn
         .query(
-            "SELECT id, node_id, run_id, created_at, rows, run_hash, observation_hash, bytes_changed, \
-             status = 'failed' FROM materializations \
-             WHERE id > ?1 AND id <= ?2 AND status IN ('success', 'failed') ORDER BY id",
+            &format!("{AGE_ROWS} WHERE m.id > ?1 AND m.id <= ?2 AND m.status IN ('success', 'failed') ORDER BY m.id"),
             [after, upto],
         )
         .await
         .map_err(failure)?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().await.map_err(failure)? {
-        let failed = row.get::<i64>(8).unwrap_or(0) != 0;
+        let failed = row.get::<i64>(9).unwrap_or(0) != 0;
         out.push((AgeRow::of(&row, !failed), failed));
     }
     Ok(out)
@@ -1278,6 +1285,21 @@ mod tests {
         pretend(99);
         sql("DELETE FROM materializations WHERE id = 3;").await;
         assert_eq!(mark().await, Mark { max_id: 4, rows: 2 });
+    }
+
+    #[tokio::test]
+    async fn uncounted_partition_history_retains_only_logical_summaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        super::init_db(&path).await.unwrap();
+        {
+            let (_db, conn) = super::open_conn(&path).await.unwrap();
+            conn.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 1000) INSERT INTO materializations(node_id, run_hash, status) SELECT 'p.py:a[k=' || i || ']', 'h', 'success' FROM n", ()).await.unwrap();
+        }
+        let mut index = NodeAgesIndex::default();
+        let ages = index.read(&path).await.unwrap();
+        assert_eq!(ages["p.py:a"].rows.as_ref().unwrap().counted, 0);
+        assert!(index.successes.values().map(HashMap::len).sum::<usize>() <= 1);
     }
 
     /// Kept histories, ages and durations answer what reading every row answers, after each of

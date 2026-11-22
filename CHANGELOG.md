@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Performance
+
+- Partition inspection reuses generation-validated execution proofs for local aligned chains, with bounded selected-artifact checks and fixed-expiry availability evidence. Unchanged observations avoid per-key prediction, and uncounted history retains logical summaries instead of every key. Unsupported or invalid proofs still use the full predictor; the original memory acceptance remains unmet (#656).
+
 ### Bug Fixes
 
 - Batched nodes split across worker streams no longer stall when the planner packs multiple chunks of the same node or chain into one stream (#1100). Stream adjacency no longer makes unrelated work depend on each other; declared input dependencies and batch boundaries are preserved. This fixes cold runs and explicit refreshes at larger pools, including small pools with several partitioned chains.

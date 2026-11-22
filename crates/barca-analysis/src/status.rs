@@ -320,7 +320,7 @@ pub async fn status_from_dag(
     shape: bool,
 ) -> Result<StatusResult, BarcaError> {
     Ok(
-        status_from_dag_with_membership(cfg, target_names, dag, python, sample, shape)
+        status_impl(cfg, target_names, dag, python, sample, shape, false)
             .await?
             .0,
     )
@@ -386,22 +386,49 @@ pub async fn status_from_dag_with_membership(
     sample: usize,
     shape: bool,
 ) -> Result<(StatusResult, barca_decide::cache::ExpandedMembership), BarcaError> {
+    status_impl(cfg, target_names, dag, python, sample, shape, true).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn status_impl(
+    cfg: &barca_model::config::ResolvedConfig,
+    target_names: &[String],
+    dag: &barca_model::dag::Dag,
+    python: &std::path::Path,
+    sample: usize,
+    shape: bool,
+    membership_required: bool,
+) -> Result<(StatusResult, barca_decide::cache::ExpandedMembership), BarcaError> {
     let t0 = std::time::Instant::now();
     let target_names = group_targets(dag, target_names)?;
     // The rules a run follows (#985): each node is decided on its own, and what reads a
     // `Manual` or pinned node is decided against the result a run reads, not against a
     // recompute of it.
-    let (explained, membership, _, held) = barca_decide::predict::explain_dag_with_keys(
-        dag,
-        cfg,
-        &target_names,
-        CachePolicy::CacheAware,
-        "status",
-        None,
-        &barca_decide::freshness::RunRules::status(),
-        &[],
-    )
-    .await?;
+    let compact = if membership_required {
+        None
+    } else {
+        barca_decide::inspection::explain(dag, cfg, &target_names).await?
+    };
+    let (explained, membership, _, held) = if let Some(explained) = compact {
+        (
+            explained,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
+    } else {
+        barca_decide::predict::explain_dag_with_keys(
+            dag,
+            cfg,
+            &target_names,
+            CachePolicy::CacheAware,
+            "status",
+            None,
+            &barca_decide::freshness::RunRules::status(),
+            &[],
+        )
+        .await?
+    };
     trace_since("status: cache decisions", t0);
     let t0 = std::time::Instant::now();
     let reports: HashMap<&str, &StepReport> =

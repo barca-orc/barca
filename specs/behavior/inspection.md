@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 5. Status: implemented behavior and explicit limits.
+Specification version: 6. Status: implemented behavior and explicit limits.
 Scope: what inspection says about computation validity, execution and stored bytes.
 Terms: [glossary](../../GLOSSARY.md). Exact JSON keys, status enums and response bodies remain
 owned by [OpenAPI](../interfaces/server-api.openapi.yaml) and the [CLI
@@ -125,10 +125,37 @@ durable run. Ungrouped node panels use the same action. Evidence:
 [`e2e-groups/groups.spec.ts`](../../ui/e2e-groups/groups.spec.ts), against a project declared in groups, including real run admission,
 completion, history/logs, read-only controls, held-first-event activity and admission errors.
 
-A database change can invalidate cached inspection even after an unchanged sensor run.
-Cold and post-run inspection can rebuild per-key state:
-[#656](https://github.com/barca-orc/barca/issues/656). Millisecond cached responses are not a
-cold-latency or memory guarantee. The [performance contract](performance.md) distinguishes them.
+### Compact partition inspection
+
+For local aligned chains with a current execution proof, status validates the shared proof
+namespace, structural signatures and metadata generation before using its partition counts.
+Sensor source bytes are digest-checked with a fixed-size buffer. Every selected successful
+artifact is checked for local availability using SQL pages of at most 256 identities; this
+is not sampling. Historical selection exceptions select their recorded run hash. The proof
+is rechecked after availability validation, including same-generation selection changes.
+
+Availability evidence retains at most 128 digests and monotonic timestamps, with a fixed
+five-second lifetime that hits never extend. An unchanged observation can update history
+without repeating full-key prediction or a still-valid availability scan. The server keeps
+status for at most 25 seconds, so these two lifetimes preserve the previous 30-second
+external-deletion observation window under polling (plus the duration of recomputation).
+GC and external file deletion are checked when availability expires; required execution
+reads never use this evidence. Source deletion or changed source bytes reject the proof.
+
+A code/environment edit, membership change, failed attempt or concurrent materialization
+must have matching current proof evidence or use ordinary prediction. Explicit SQL membership,
+remote stores/ledgers, held/Manual/cutoff nodes, unsupported chains and absent/malformed proofs
+use the existing predictor. Historical keys beyond the proven count also fall back, rather
+than counting removed membership. These fallbacks can still expand full per-key state.
+History summaries no longer retain one entry per uncounted partition solely to compare its
+next observation; they compare the indexed preceding success. Counted-key row histories
+retain their existing behavior. Cold availability work remains proportional to selected keys, with bounded native retention;
+source digest checks remain proportional to source bytes. This is not a universal bound on
+cold inspection or active refresh, and does not complete every obligation in #656.
+
+Conformance: [compact inspection controls](../../python/tests/test_compact_inspection.py),
+[scaling/active-run harness](../../benchmarks/partition_audit/compact_inspection.py).
+The [performance contract](performance.md) separates cold, cached and post-run evidence.
 
 ### Row counts and data-health signals
 
@@ -180,7 +207,8 @@ rebuilding state; a cached response or HTTP 304 does not mean external sources w
 
 Exercise pre-poll predictions, current membership after removal, historical success versus
 current reuse, stale Manual pins, remote mismatch/availability and read-route revalidation.
-Cold/post-run inspection still needs the #656 scaling evidence.
+Compact local-chain cold/post-run evidence is recorded by the linked harness; the combined
+100 MB budget, broader domains and long-run retention remain open under #656.
 
 Conformance: [status](../../crates/barca-analysis/src/status.rs),
 [cache/execution predictions](../../python/tests/test_sensor_freshness.py),

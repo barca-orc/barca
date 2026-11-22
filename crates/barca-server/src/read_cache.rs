@@ -36,8 +36,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-/// How long a kept status result is used at most.
-pub(crate) const STATUS_MAX_AGE: Duration = Duration::from_secs(30);
+/// At most 25 seconds here plus five seconds of compact local availability evidence:
+/// an external deletion is still re-observed within the original 30-second budget.
+pub(crate) const STATUS_MAX_AGE: Duration = Duration::from_secs(25);
 
 /// How long a graph with dynamic partition keys is used at most before they are evaluated
 /// again.

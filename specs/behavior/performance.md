@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 2. Status: measured regression budgets and approved targets, separated below.
+Specification version: 3. Status: measured regression budgets and approved targets, separated below.
 Scope: orchestration resource cost, excluding application computation and Python interpreter cost.
 [Results and methodology](../../benchmarks/RESULTS.md) own recorded measurements; this document
 states what a measurement can establish. These are controlled workload budgets, not a
@@ -76,6 +76,30 @@ budgets above are measured, not gated. The long-lived database check stands for 
 has run for weeks: its history is seeded with sqlite3 after one run, and a lookup that reads a
 node's history again (#1009) takes three to six times the limit. A check over its limit is
 measured again from scratch, and fails the job only if it fails twice.
+
+### Compact local inspection probe
+
+`benchmarks/partition_audit/compact_inspection.py` seeds real files for an aligned sensor plus
+two partitioned assets, then measures cold `/state`, `/nodes?sample=0`, immediate repeats,
+five unchanged observations and status during a real delayed sensor poll. Run each of
+5,000, 50,000 and 200,000 keys separately in an owned worktree. It asserts counts/work and
+health responsiveness alongside Linux native RSS/VmHWM. Default executable acceptance budgets are
+<97,656 KiB cold peak, per-request retained RSS and combined server/served-run peak,
+<10 seconds per inspection request and <1 second per health request. Environment variables
+in the harness can select other investigative limits; doing so does not change acceptance.
+Seed memory is excluded and remains a #655 gap.
+
+The approved demanding-coordination 100 MB target remains unmet: a 200k sample reached
+102,752 KiB while serving unchanged runs; a later post-run `/nodes` probe reached
+135,024 KiB and also recorded an 11.27-second cold request. Both failed records are retained,
+including the latter's failure of an investigative 128 MiB limit. A subsequent cold-only
+profile took 2.58 seconds with 85,284 KiB peak, demonstrating variability, not erasing the
+failed sample. Cached millisecond responses and the one-second background wait are not
+completed-validation latencies; expired availability still scans every selected file.
+Native history retention for uncounted results is per logical node; counted-key histories,
+failure history, source bytes and unsupported-proof fallback retain their existing scaling
+limits. The harness is an acceptance probe with known failures, not a passed regression gate,
+closure of #656 or an enforced whole-project quota.
 
 ## Invariants
 
