@@ -1,6 +1,6 @@
 [package]
 name = "barca-proc"
-version = "0.46.1"
+version = "0.46.2"
 edition = "2024"
 description = "Process layer — starting and stopping barca's child processes, and the framed socket protocol they speak"
 
