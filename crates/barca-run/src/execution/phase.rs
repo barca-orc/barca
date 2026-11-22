@@ -62,6 +62,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
     let mut due_costs = Vec::new();
     // The steps that run because they had no cache hit: their history says why (#925).
     let mut missed = barca_decide::plan_reasons::Missed::default();
+    let mut warned_cached = std::collections::HashSet::new();
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
         if step.kind == barca_model::NodeKind::Sensor {
@@ -176,8 +177,22 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                 }
             }
             Decision::Partitioned {
-                cached, missing, ..
+                cached,
+                missing,
+                stale_root,
+                ..
             } => {
+                if let Some(root) = stale_root
+                    && warned_cached.insert(step.step_id.base_id().to_string())
+                {
+                    note(
+                        pb,
+                        &format!(
+                            "[barca] warning: {}",
+                            stale_warning(step.step_id.base_id(), &root, false)
+                        ),
+                    );
+                }
                 let any_cached = !cached.is_empty();
                 for (pdisplay, oref) in cached {
                     all_outputs.insert(pdisplay.clone(), oref);

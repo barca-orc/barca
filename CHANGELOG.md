@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Warn once per partitioned node when `--refresh --no-cascade` serves cached keys downstream of refreshed assets, including downstream fan-ins and dry-run reports (#940).
+
 - Refresh locked OAuthLib, OpenTelemetry API and Astro dependencies to their patched versions (#1112).
 
 ## 0.46.3 (2026-11-22)

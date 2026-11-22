@@ -51,6 +51,9 @@ pub fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepReport> {
                     // What changed in the first key that ran before, whichever chunk it is in.
                     m.detail = r.detail;
                 }
+                if m.warning.is_none() {
+                    m.warning = r.warning;
+                }
                 if m.changed.is_none() {
                     m.changed = r.changed;
                 }
@@ -173,7 +176,11 @@ pub fn report_for(
             missing,
             refresh,
             cutoff_stopped,
+            stale_root,
         } => {
+            if let Some(root) = stale_root {
+                r.warning = Some(stale_warning(base_id, root, dry));
+            }
             if *cutoff_stopped {
                 r.detail = Some("unchanged cutoff bytes: refresh propagation stopped".to_string());
             }
