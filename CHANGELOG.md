@@ -8,14 +8,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.46.3 (2026-11-22)
+
 ### Bug Fixes
 
 - Prevent DuckDB 1.x from hanging while binding batched inputs that read multiple remote Parquet files.
 - Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
-
 - Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).
 - Make the overlapping-refresh release check respect the five-minute store-check window before requiring repair, and cover the deferred repair and changed-bytes warning against real object stores.
-
 - A loopback server refuses foreign HTTP Host names before dispatch, preventing DNS rebinding. Trusted reverse proxies can list exact DNS names in `[server] allowed_hosts`; loopback CLI/UI access and the owner-only project socket keep working (#998).
 - Pinning an asset no longer removes unrelated partitioned nodes from status prediction: their cache state and partition counts remain visible (#1069).
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).
