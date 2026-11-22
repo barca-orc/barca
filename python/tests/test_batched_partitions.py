@@ -1235,3 +1235,69 @@ def test_a_batched_function_never_gets_a_single_key_when_its_artifacts_are_recov
         res = get(keys5, "both")
         assert res["final_output"]
         check_scored(keys5)
+
+
+@pytest.mark.parametrize("pool,count", [(1, 3), (2, 3), (3, 5), (14, 200), (16, 200), (24, 200)])
+@pytest.mark.parametrize("batch", ['"all"', "2", "7", "batches([KEYS[::2], KEYS[1::2]])"])
+@pytest.mark.parametrize("chained", [False, True])
+def test_bin_packed_batch_chunks_finish(tmp_path, pool, count, batch, chained):
+    """#1100: unequal chunks of a node/chain can land in the same stream twice."""
+    keys = [str(i) for i in range(count)]
+    source = f"""
+import json
+from pathlib import Path
+from barca import asset, batches, collect, partitions
+KEYS = {keys!r}
+
+@asset(partitions={{"key": partitions({keys!r})}}, batch={batch})
+def rows(key):
+    with Path("calls.txt").open("a") as f:
+        f.write(json.dumps(["rows", key]) + "\\n")
+    return {{k: int(k) for k in key}}
+
+@asset(partitions={{"key": partitions({keys!r})}})
+def other(key):
+    return int(key)
+"""
+    if chained:
+        source += f"""
+@asset(partitions={{"key": partitions({keys!r})}}, inputs={{"rows": rows}}, batch={batch})
+def scaled(key, rows):
+    return {{k: rows[k] * 2 for k in key}}
+
+@asset(partitions={{"key": partitions({keys!r})}}, inputs={{"other": other}}, batch={batch})
+def shifted(key, other):
+    return {{k: other[k] + 1 for k in key}}
+"""
+    left, right = ("scaled", "shifted") if chained else ("rows", "other")
+    source += f"""
+@asset(inputs={{"left": collect({left}), "right": collect({right})}})
+def top(left, right):
+    return [sorted(left), sorted(right)]
+"""
+    (tmp_path / "pipeline.py").write_text(source)
+    expected = [list(range(count)), list(range(count))]
+    if chained:
+        expected = [[i * 2 for i in range(count)], [i + 1 for i in range(count)]]
+    if batch == '"all"':
+        groups = [keys]
+    elif batch.isdigit():
+        size = int(batch)
+        groups = [keys[i : i + size] for i in range(0, count, size)]
+    else:
+        groups = [keys[::2], keys[1::2]]
+    for flags in [(), ("--refresh", "rows")]:
+        proc = barca(
+            tmp_path,
+            "get",
+            "top",
+            "pipeline.py",
+            "-o",
+            "value",
+            *flags,
+            env=clean_env(BARCA_POOL_SIZE=str(pool)),
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == expected
+        assert sorted(group for name, group in calls(tmp_path) if name == "rows") == sorted(groups)
