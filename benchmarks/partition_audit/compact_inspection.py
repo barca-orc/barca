@@ -66,7 +66,9 @@ def main():
         document = json.loads(result.stdout)
         assert document["steps_executed"] == (1 + 2 * count if case == "seed" else 1)
         print(json.dumps({"case": case, "steps": document["steps_executed"]}), flush=True)
-    os.environ.update(BARCA_BIN=binary, EXPECT_KEYS=str(count), ACTIVE_CHECK="1", POST_RUN_NODES="1")
+    os.environ.update(
+        BARCA_BIN=binary, EXPECT_KEYS=str(count), ACTIVE_CHECK="1", POST_RUN_NODES="1"
+    )
     for key, value in {
         "INSPECTION_MAX_KIB": "97656",
         "INSPECTION_RETAINED_MAX_KIB": "97656",
