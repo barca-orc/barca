@@ -11,8 +11,9 @@ shared history, so each scenario is one machine with a store.
 - `BARCA_STATE=off` is gone (a usage error since 0.26.0); what is left of that scenario is a
   machine whose local copy was deleted, which fetches the store's.
 
-After each, the next `barca get` succeeds and the result is `cached` with this machine's copy,
-the store's object and the recorded digest in agreement, without a `--refresh` (#576).
+After each, the next `barca get` outside the store-check window succeeds and the result is
+`cached` with this machine's copy, the store's object and the recorded digest in agreement,
+without a `--refresh` (#576).
 
 #243 was a shared-history blob corrupted part-way; the blob is gone (0.26.0). Its successor is a
 backup, and a corrupt backup is refused by `barca state restore`, which names an older one.
@@ -31,6 +32,7 @@ from barca.api import _find_binary
 
 from .helpers import RUN, SERVE, wait_until
 from .planning_pipeline_store import Bucket, Machine, new_machine
+from .store_window import age_store_checks
 
 pytest.importorskip("pandas")
 
@@ -122,7 +124,7 @@ MISMATCH = "is not the one this result was recorded with"
 
 
 def settle(machine: Machine) -> None:
-    """The next `get` brings the registry back to `cached`, without a `--refresh` (#576).
+    """Outside the store-check window, `get` repairs the registry without a `--refresh` (#576).
 
     When the store holds bytes the record does not name (a run's upload landed after another
     run's row, or a run was killed between its upload and its row), the store's copy wins:
@@ -138,6 +140,9 @@ def settle(machine: Machine) -> None:
     local = machine.local_copy(node).read_bytes()
     stored = machine.bucket.cat(node["cache"]["artifact"])
     recorded = node["last_materialization"]["content_hash"]
+    # A cached get inside the five-minute window transfers nothing and skips store repair
+    # (#593). Test reconciliation after the window, regardless of the refresh ordering.
+    age_store_checks(machine.root)
     proc = machine.cli("get", REGISTRY, "assets.py", "--json")
     assert proc.returncode == 0, proc.stderr
     if recorded == sha(local):
@@ -185,6 +190,28 @@ def test_overlapping_refreshes_leave_one_consistent_result(machine):
     assert out["steps_executed"] == 0
     assert assert_consistent(machine, REGISTRY) == after
     assert_consistent(machine, DRIVER)
+
+
+def test_recorded_local_copy_wins_when_an_older_upload_lands_last(machine):
+    """Force the overlap ordering whose local copy matches the row but not the store."""
+    from barca import _inspection_cache
+
+    older = assert_consistent(machine, REGISTRY)
+    run = refresh(machine, 6)
+    _, err = run.communicate(timeout=SERVE)
+    assert run.returncode == 0, err
+    newer = assert_consistent(machine, REGISTRY)
+    assert newer != older
+    node = machine.status()[REGISTRY]
+    artifact = node["cache"]["artifact"]
+    machine.bucket.fs.pipe_file(artifact, older)
+    # The out-of-band write bypasses Barca's normal inspection invalidation.
+    _inspection_cache.Cache(
+        str(machine.root / ".barca/inspection-cache/default.json")
+    ).invalidate_remote(artifact)
+    assert machine.status()[REGISTRY]["cache"]["reason"] == "mismatch"
+    settle(machine)
+    assert assert_consistent(machine, REGISTRY) == newer
 
 
 def test_a_refresh_killed_once_its_upload_lands_is_recoverable(machine):

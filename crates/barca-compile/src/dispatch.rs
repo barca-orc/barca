@@ -3,6 +3,7 @@
 //! Execution (worker spawning, protocol parsing) lives in `io_loop`.
 
 use crate::planner::{Phase, StreamStep, WorkerStream, expand_partition_combos};
+use barca_model::model::ValueType;
 use std::collections::{HashMap, HashSet};
 
 pub use barca_model::step_result::{ErrorPhase, OutputRef, ProvidedInput};
@@ -463,7 +464,8 @@ pub fn build_provided_inputs(
 
 /// Upstream ids that every consumer in this phase reads through a lazy type
 /// (`duckdb.DuckDBPyRelation`, `pl.LazyFrame`). One eager consumer needs the
-/// whole artifact, so its upstream is left out.
+/// whole artifact, so its upstream is left out. Dataset is lazy on local files,
+/// but has no remote reader: it must also be fetched first.
 ///
 /// The ids are node ids, as in [`StreamStep::inputs`]: a reader names a partitioned upstream
 /// by its base id (`f:up`), never by one partition (`f:up[k=a]`), whether it reads one
@@ -474,7 +476,11 @@ pub fn lazily_read_inputs(phase: &Phase) -> HashSet<String> {
     let mut eager = HashSet::new();
     for step in phase.streams.iter().flat_map(|s| &s.steps) {
         for (param, upstream_id) in &step.inputs {
-            if step.param_types.get(param).is_some_and(|t| t.is_lazy()) {
+            if step
+                .param_types
+                .get(param)
+                .is_some_and(|t| matches!(t, ValueType::DuckDB | ValueType::PolarsLazy))
+            {
                 lazy.insert(upstream_id.clone());
             } else {
                 eager.insert(upstream_id.clone());
@@ -544,6 +550,7 @@ mod tests {
                     reader_step("f:d", "x", "f:mixed", Some(ValueType::DuckDB)),
                     reader_step("f:e", "x", "f:mixed", Some(ValueType::Pandas)),
                     reader_step("f:g", "x", "f:untyped", None),
+                    reader_step("f:h", "x", "f:dataset", Some(ValueType::PyArrowDataset)),
                 ],
             }],
         };

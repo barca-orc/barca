@@ -160,15 +160,24 @@ _bound: list[str] = []
 def _duckdb_table(param: str, fmt: str, dimensions: dict, paths: list[str]):
     import pyarrow as pa
 
-    from barca import _duckdb
+    from barca import _artifacts, _duckdb, _storage
 
+    paths = [_artifacts.duckdb_remote_path(p) if _storage.is_remote(p) else p for p in paths]
     con = _duckdb.connection()
     mapping = f"__barca_keys_{param}"
     con.register(mapping, pa.table({"__barca_file": paths, **dimensions}))
     _bound.append(mapping)
     q = _duckdb._quote
     if fmt == "parquet":
-        reader = con.read_parquet(paths, filename=True, union_by_name=True)
+        if len(paths) > 1 and any(_storage.is_remote(p) for p in paths):
+            # DuckDB 1.x binds union_by_name files in parallel while create_view
+            # holds the GIL. Python filesystem callbacks then deadlock, including
+            # when this input is rebound by name or returned as a batch result.
+            # Bind each file separately and let SQL align the schemas instead.
+            scans = [con.read_parquet(p, filename=True).sql_query() for p in paths]
+            reader = con.sql(" UNION ALL BY NAME ".join(f"({sql})" for sql in scans))
+        else:
+            reader = con.read_parquet(paths, filename=True, union_by_name=True)
     elif fmt == "csv":
         reader = con.read_csv(paths, filename=True, union_by_name=True, header=True)
     else:
@@ -189,8 +198,20 @@ def _duckdb_table(param: str, fmt: str, dimensions: dict, paths: list[str]):
 def _polars_table(fmt: str, dimensions: dict, paths: list[str]):
     import polars as pl
 
+    from barca import _artifacts, _storage
+
     mapping = pl.LazyFrame({"__barca_file": paths, **dimensions})
-    if fmt == "parquet":
+    if fmt == "parquet" and any(_storage.is_remote(p) for p in paths):
+        lf = pl.concat(
+            [
+                _artifacts.deserialize(p, fmt, frame_type="polars_lazy").with_columns(
+                    pl.lit(p).alias("__barca_file")
+                )
+                for p in paths
+            ],
+            how="diagonal_relaxed",
+        )
+    elif fmt == "parquet":
         lf = pl.scan_parquet(paths, include_file_paths="__barca_file")
     elif fmt == "csv":
         lf = pl.scan_csv(paths, include_file_paths="__barca_file")

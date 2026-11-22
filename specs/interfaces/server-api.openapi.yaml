@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '28'
-  description: 'Normative current wire contract; specification version 28 is independent of package versions.
+  version: '29'
+  description: 'Normative current wire contract; specification version 29 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -20,6 +20,7 @@ servers:
 security:
 - {}
 - projectToken: []
+x-host-validation: 'On loopback TCP binds every route first validates Host (or HTTP/2 URI authority): localhost, loopback IP literals, and exact DNS names configured in [server] allowed_hosts are accepted. Ports are optional; foreign or malformed hosts receive HTTP 403 with the Error schema. Duplicate Host headers are refused. Host-less HTTP/1.0 and owner-only project socket requests are exempt. Non-loopback binds retain their exposure warning. Conformance: python/tests/test_host_validation.py and crates/barca-server/src/host_guard.rs.'
 x-authentication: Bearer authentication is mandatory when [server] auth is token; off preserves unauthenticated and proxy deployments.
 x-project-socket: 'A server that holds its environment (serve.lock) also listens on a Unix socket beside
   its metadata database: .barca/serve.sock, or .barca/envs/<env>/serve.sock for a named environment
