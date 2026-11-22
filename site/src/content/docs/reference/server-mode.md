@@ -508,6 +508,27 @@ Redirects must stay within the configured origin and proxy path. Known credentia
 in HTTP errors are redacted. The reserved `BARCA_SERVER_TOKEN` variable is removed from
 Python worker and transfer-helper environments.
 
+### Loopback Host protection
+
+A server bound to a loopback IP accepts HTTP Host names `localhost`, loopback IPs
+(`127.0.0.1`, `[::1]`, with an optional port), and explicitly listed proxy names.
+A foreign Host is refused with HTTP 403 before any route, including the UI and health.
+This prevents a foreign website from using DNS rebinding to reach an unauthenticated
+local server. The check applies with token authentication on or off.
+
+For a reverse proxy that preserves its public Host header, list that exact DNS name:
+
+```toml
+[server]
+allowed_hosts = ["barca.example.com"]
+```
+
+Names are case-insensitive; omit the scheme, port and path. Wildcards are not accepted.
+Alternatively, configure the proxy to send `Host: localhost` to its loopback upstream.
+The owner-only project socket is exempt. A non-loopback bind accepts any Host and keeps
+its startup warning; restrict network access or enable tokens for that deployment.
+HTTP/2 authority is checked too; a header-less HTTP/1.0 request has no Host to check.
+
 ### Opt-in project tokens
 
 Set `[server] auth = "token"` in `barca.toml`, `BARCA_SERVER_AUTH=token`, or

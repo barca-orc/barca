@@ -123,6 +123,10 @@ pub fn router(state: AppState) -> Router {
             state.auth.clone(),
             crate::auth_http::authorize,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.reads.config.clone(),
+            crate::host_guard::validate,
+        ))
         .with_state(state)
 }
 

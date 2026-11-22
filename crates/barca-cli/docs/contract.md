@@ -777,6 +777,11 @@ value of its first key only.
 | `DD_SITE` | the Datadog site (`datadoghq.com`, `us3.datadoghq.com`) whose web app the UI's trace links open (beats `[telemetry] datadog_site` in `barca.toml`); one that is not a host name stops `barca serve` with exit 2 (`barca docs telemetry`) | experimental |
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
 
+On a loopback TCP listener, every HTTP route first checks Host (or HTTP/2 authority).
+Foreign hosts receive HTTP 403 in the standard error envelope (`kind: usage`, `code: 2`).
+Loopback names and exact DNS names in `[server] allowed_hosts` are accepted; the project
+socket is exempt. See `barca docs server-mode`, "Loopback Host protection".
+
 The experimental HTTP query `GET /state?targets=a,b` computes only the named nodes and their
 upstream dependencies, including durations. A target may be a group id (`group:FILE:NAME`, as
 `GET /groups` lists it), which stands for every node in the group and its nested groups, and

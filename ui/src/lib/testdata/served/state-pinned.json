@@ -441,9 +441,9 @@
   },
   {
     "cache": {
-      "detail": "not part of the execution plan",
-      "reason": "not_planned",
-      "state": "unknown"
+      "detail": "3 of 5 partition keys cached",
+      "reason": "partitions_missing",
+      "state": "partial"
     },
     "cause": "failing",
     "consecutive_failures": 1,
@@ -489,6 +489,20 @@
     "next_run": null,
     "no_estimate": "failing",
     "partitioned": true,
+    "partitions": {
+      "behind": 1,
+      "cached": 3,
+      "failed": 1,
+      "failed_keys": [
+        "day=2026-11-16"
+      ],
+      "missing": 2,
+      "missing_keys": [
+        "day=2026-11-16",
+        "day=2026-11-17"
+      ],
+      "total": 5
+    },
     "prev_run": null,
     "recheck_at": null,
     "refresh_path": null,
@@ -501,13 +515,13 @@
     "shape": null,
     "signals": [],
     "stale_since": "2026-11-17T02:00:01Z",
-    "typical_run_seconds": 2.5
+    "typical_run_seconds": 12.5
   },
   {
     "cache": {
-      "detail": "not part of the execution plan",
-      "reason": "not_planned",
-      "state": "unknown"
+      "detail": "1 of 5 missing keys wait on 'sales_by_day': the same keys of it failed",
+      "reason": "upstream_failed",
+      "state": "blocked"
     },
     "cause": "failing",
     "consecutive_failures": 0,
@@ -533,6 +547,21 @@
     "next_run": null,
     "no_estimate": "failing",
     "partitioned": true,
+    "partitions": {
+      "behind": 4,
+      "blocked": 1,
+      "blocked_on": "orders.py:sales_by_day",
+      "cached": 0,
+      "missing": 5,
+      "missing_keys": [
+        "day=2026-11-13",
+        "day=2026-11-14",
+        "day=2026-11-15",
+        "day=2026-11-16",
+        "day=2026-11-17"
+      ],
+      "total": 5
+    },
     "prev_run": null,
     "recheck_at": null,
     "refresh_path": null,
