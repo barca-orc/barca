@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '28'
-  description: 'Normative current wire contract; specification version 28 is independent of package versions.
+  version: '29'
+  description: 'Normative current wire contract; specification version 29 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -7544,6 +7544,7 @@ components:
       - stdout
       - stderr
     Log:
+      description: A recorded entry. Multiline stderr writes and failed-attempt tracebacks retain embedded newlines in line; stdout remains line-oriented.
       type: object
       additionalProperties: false
       required:
@@ -8602,6 +8603,20 @@ components:
         counters and steps_page.nodes) by the code that prints barca history RUN_ID, whose --json has
         the same object. The wording may change; parse the recorded fields. Experimental.
       properties:
+        worker_failures:
+          type: array
+          description: Original worker-fatal errors and their retry outcome, at most 64 affected steps and 8 KiB per error. Shortened errors carry a diagnostic truncated marker. Not exhaustive at the limit; independent failures remain in ordinary step outcomes. Absent when none were recorded.
+          maxItems: 64
+          items:
+            type: object
+            additionalProperties: false
+            required: [node_id, first_error, retry_error, recovered]
+            properties:
+              node_id: {type: string}
+              first_error: {type: string}
+              retry_error: {type: [string, 'null']}
+              recovered: {type: boolean}
+
         target_line: {type: string}
         counts:
           type: object

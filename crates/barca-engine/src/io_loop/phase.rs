@@ -261,13 +261,11 @@ impl WorkerPool {
                             // The attempt's traceback is part of the step's stderr, as Python
                             // would have printed it. Recorded, not echoed: the failure line
                             // says it already.
-                            for line in traceback_lines(&error_type, &message, &traceback) {
-                                ev(RunEvent::log(
-                                    node_id.clone(),
-                                    line,
-                                    barca_model::LogStream::Stderr,
-                                ));
-                            }
+                            ev(RunEvent::log(
+                                node_id.clone(),
+                                traceback_lines(&error_type, &message, &traceback).join("\n"),
+                                barca_model::LogStream::Stderr,
+                            ));
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: false,
@@ -276,6 +274,9 @@ impl WorkerPool {
                                 error: Some(error.clone()),
                                 import_seconds,
                             });
+                        }
+                        if retry_fresh {
+                            coord.record_worker_failure(item_id, &error);
                         }
                         if retry_fresh && coord.grant_fresh_retry(item_id) {
                             barca_model::errln!(

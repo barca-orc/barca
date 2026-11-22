@@ -1047,6 +1047,30 @@ async fn collect_failures(
         let grace = std::time::Duration::from_millis(250);
         let _ = tokio::time::timeout(grace, session.started.cancel.cancelled()).await;
     }
+    let terminal_failures: std::collections::HashMap<_, _> =
+        coord.failed_items().into_iter().collect();
+    let remaining = barca_model::run_explain::WORKER_FAILURE_LIMIT
+        .saturating_sub(session.state.results.worker_failures.len());
+    for (id, first_error) in coord.worker_failures().iter().take(remaining) {
+        let retry_error = terminal_failures
+            .get(id)
+            .map(|error| barca_model::run_explain::bounded_worker_error(error));
+        session
+            .state
+            .results
+            .worker_failures
+            .push(barca_model::run_explain::WorkerFailure {
+                node_id: coord.item(*id).step_id.display(),
+                first_error: first_error.clone(),
+                retry_error,
+                recovered: coord.outputs().contains_key(id),
+            });
+    }
+    session
+        .state
+        .results
+        .worker_failures
+        .sort_by(|a, b| a.node_id.cmp(&b.node_id));
     let cancelled = session.started.cancel.is_cancelled();
     let mut first_non_group_failure: Option<(String, String)> = None;
     let mut first_failure_phase = None;

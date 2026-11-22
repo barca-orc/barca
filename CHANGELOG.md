@@ -8,6 +8,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- `barca logs` and server logs now keep each multiline stderr write and failed-attempt traceback in one entry, with newlines in `line`, instead of one entry per physical line (#671). Stdout and old recorded logs keep their boundaries. Use `--pretty` when piping to a pager.
+
+### Features
+
+- Run history and the run page retain the original worker-fatal cause and distinguish recovery after worker replacement from terminal retry failure, without hiding independent failures (#1106).
+
 ## 0.46.2 (2026-11-22)
 
 ### Bug Fixes

@@ -373,3 +373,16 @@ this release (these, or `bytes_changed`) gains them when it is opened for writin
 transaction, rolled back on error, with every row preserved and the version left at 1. A
 database that already has them is only read. Conformance: the schema tests in
 `crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.
+
+## Worker-fatal diagnostics
+
+Format 1 adds nullable `runs.worker_failures` JSON through the additive column migration.
+It records each affected step's original error, its terminal retry error if any, and whether
+it recovered. The terminal ledger writes it in the same transaction as the run outcome.
+It is independent of successful materializations; no failure is fabricated for a recovered
+step. Old databases and runs read as no recorded diagnostic. Run-history deletion removes it
+with the run, and backup/restore includes it as ordinary metadata.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.

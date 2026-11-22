@@ -266,6 +266,7 @@ pub struct Coordinator {
     failure_phases: HashMap<ItemId, barca_compile::dispatch::ErrorPhase>,
     /// Skipped items (upstream data dep failed).
     skipped: HashSet<ItemId>,
+    worker_failures: HashMap<ItemId, String>,
     /// Items parked for retry backoff — not ready until requeue() is called.
     waiting_retry: HashSet<ItemId>,
     /// Output artifacts from completed items.
@@ -345,6 +346,7 @@ impl Coordinator {
             failure_clocks: HashMap::new(),
             failure_phases: HashMap::new(),
             skipped: HashSet::new(),
+            worker_failures: HashMap::new(),
             waiting_retry: HashSet::new(),
             outputs: HashMap::new(),
             groups: HashMap::new(),

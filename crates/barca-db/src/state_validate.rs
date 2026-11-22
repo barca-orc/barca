@@ -61,6 +61,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "principal",
     "trigger_reason",
     "plan_reasons",
+    "worker_failures",
     "cancellation",
 ];
 

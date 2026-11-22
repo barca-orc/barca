@@ -483,7 +483,7 @@ fn output_tail(lines: &[(String, String)], node_id: &str) -> Vec<String> {
     let mut own: Vec<&str> = lines
         .iter()
         .filter(|(node, _)| node == node_id)
-        .map(|(_, line)| line.as_str())
+        .flat_map(|(_, line)| line.split('\n'))
         .collect();
     if let Some(at) = own
         .iter()
@@ -726,6 +726,15 @@ mod output_tail_tests {
         assert_eq!(tail.first().unwrap(), "line 10");
         assert_eq!(tail.last().unwrap(), "line 29");
         assert!(output_tail(&lines, "p.py:c").is_empty());
+        // New records group the traceback; old line-at-a-time records stay readable.
+        lines.truncate(lines.len() - 3);
+        lines.push((
+            "p.py:a".into(),
+            "Traceback (most recent call last):\n  File \"p.py\", line 3, in a\nValueError: no"
+                .into(),
+        ));
+        assert_eq!(output_tail(&lines, "p.py:a"), tail);
+        assert_eq!(output_tail(&[("blank".into(), "".into())], "blank"), [""]);
     }
 }
 
