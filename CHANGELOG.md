@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.46.4 (2026-11-22)
+
 ### Bug Fixes
 
 - Warn when metadata was last written by a newer barca, and have `barca doctor` check the running version against `pyproject.toml`'s barca dependency (#672).
