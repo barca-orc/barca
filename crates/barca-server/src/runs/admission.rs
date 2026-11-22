@@ -53,6 +53,9 @@ pub async fn admit_as(
     let accepted_at = now_ts();
     if let Some((result, outcome)) = fresh_read(state, &spec, &run_id).await {
         ensure_db(state).await?;
+        // A cache read has no durable queue entry to recover. Refuse it if its terminal
+        // record cannot be written, rather than acknowledge an identity that can be lost.
+        super::lifecycle::persist_outcome(state, &run_id, &spec, &outcome, false, false).await?;
         track(state, &run_id, &spec, accepted_at, channel.clone());
         channel.emit(barca_service::RunEvent::RunStarted {
             run_id: run_id.clone(),
@@ -69,7 +72,7 @@ pub async fn admit_as(
             });
         }
         super::lifecycle::finish(
-            state, &run_id, &spec, &channel, result, outcome, false, false,
+            state, &run_id, &spec, &channel, result, outcome, true, false,
         )
         .await;
         return Ok(Admitted {
