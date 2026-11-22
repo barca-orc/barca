@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Batched nodes split across worker streams no longer stall when the planner packs multiple chunks of the same node or chain into one stream (#1100). Stream adjacency no longer makes unrelated work depend on each other; declared input dependencies and batch boundaries are preserved. This fixes cold runs and explicit refreshes at larger pools, including small pools with several partitioned chains.
+
 ## 0.46.2 (2026-11-22)
 
 ### Bug Fixes
