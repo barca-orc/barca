@@ -372,6 +372,7 @@ pub(crate) fn get_run_mode(
 /// What `barca get` prints: its shape on stdout and whether it returns paths or values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GetMode {
+    pub cached_only: Option<barca_service::cached::Tier>,
     pub shape: barca_service::report::GetShape,
     pub values: bool,
     /// `-o url`: sign each returned artifact for this many seconds.
@@ -489,6 +490,7 @@ pub(crate) fn get_mode(
         );
     }
     Ok(GetMode {
+        cached_only: None,
         shape,
         values,
         url_expires,

@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Features
+
+- Read latest completed results without execution using `barca get --cached-only` and `barca.get(cached_only=True)`, locally or on a server. Disk then store lookup, strict `--cached-only=local`, typed `CacheMiss` (exit 1), and per-key outcomes preserve explicit selection.
+
 ### Bug Fixes
 
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).

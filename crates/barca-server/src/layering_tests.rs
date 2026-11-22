@@ -91,6 +91,7 @@ const LAYERS: &[(Layer, &[&str])] = &[
             "inspect",
             "ledger",
             "pins",
+            "cached",
             "queue_routes",
             "reset",
             "schedule_routes",

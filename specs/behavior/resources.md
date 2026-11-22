@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 3. Status: approved requirements; implementation remains incomplete.
+Specification version: 4. Status: approved requirements; implementation remains incomplete.
 Version 3 replaces first come, first served admission with requested runs first and a bounded
 wait for scheduled runs, implemented for the capacity a server's runs share (#1003).
 Requirements are still being elicited. This is not a new supported TOML section or a claim
@@ -154,3 +154,14 @@ workloads. These are outstanding acceptance obligations, not passing quota confo
 
 Best-effort fallback must be visible; it must not claim an unenforced hard limit or introduce
 undocumented priorities.
+
+### Cached-result reads
+
+Cached-only disk hits and store fetches count as artifact reads for GC. A completed inode is
+retained in process-owned staging (protected for the process lifetime, not a timed grace)
+before hash validation or deserialization so atomic replacement cannot substitute
+bytes during a read. GC racing acquisition yields a miss; access/hash failures yield errors.
+Across filesystems the read copies from one opened source handle into private staging before
+validation. Path output is a GC-managed reference with the SQL-cache five-minute grace, not a permanent
+lease. Copies and fetched files count against the cache budget. Conformance:
+`python/tests/test_cached_only.py`.

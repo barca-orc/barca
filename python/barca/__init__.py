@@ -14,7 +14,7 @@ from barca._batch import Failed
 from barca._branches import BranchResultError, ParallelError, parallel, parallel_map
 
 if TYPE_CHECKING:
-    from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats
+    from barca.api import BarcaError, CacheMiss, get, history, plan, run, signed_url, sql, stats
     from barca.client import Client, Run
 
 __version__ = "0.46.2"
@@ -50,6 +50,7 @@ __all__ = [
     "sql",
     "signed_url",
     "BarcaError",
+    "CacheMiss",
     "Client",
     "Run",
 ]
@@ -432,6 +433,7 @@ def duckdb_connection() -> Any:
 # `barca.client` bring in urllib, http.client and ssl, about half of a worker's start-up (#560).
 _LAZY = {
     "BarcaError": "barca.api",
+    "CacheMiss": "barca.api",
     "get": "barca.api",
     "history": "barca.api",
     "plan": "barca.api",

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 8. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -298,3 +298,19 @@ Full bootstrap and validation still retain work proportional to partition count:
 [#655](https://github.com/barca-orc/barca/issues/655). Bounded scheduling is an accepted target,
 not a current whole-engine memory guarantee. Performance workload scope and budgets are
 owned by [the performance contract](performance.md).
+
+### Cached-only reads (#1085)
+
+Implemented experimental in 0.47: a cached-only get is a read, never a run. It statically
+loads source, selects exact node/key identities, and reads each latest successful row in the
+chosen environment. Failed and in-progress rows do not supersede success. It executes no
+sensor, asset, task or partition expression, records/enqueues no run and publishes nothing.
+Disk precedes the store; local-only excludes every store call. Stale hits explicitly expose
+freshness and source. Every selected key has an outcome; any missing key fails the call with
+CacheMiss/exit 1. Missing objects differ from authorization, corruption and transport failures.
+Literal or recorded keys supply discovery; explicit coordinates cover unknown dynamic keys.
+Conformance: `python/tests/test_cached_only.py`; wire ownership: CLI contract and `/cached`
+in OpenAPI. Deferred: exposed content digest, bounded remote binary access and other-machine
+results absent from this environment's metadata. Cached value reads reject executable pickle
+reconstruction with typed infra reason `cached_value_unsupported`; verified artifact path
+access remains available, without importing project source or invoking pickle reducers.

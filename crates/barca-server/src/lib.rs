@@ -18,6 +18,7 @@ mod asset_pauses;
 mod assets;
 pub mod auth;
 mod auth_http;
+mod cached;
 mod config;
 mod error;
 mod fallback;
