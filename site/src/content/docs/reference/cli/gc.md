@@ -3,7 +3,7 @@ title: "barca gc"
 description: "Evict cached results to keep .barca/ under its size limit (experimental)."
 ---
 
-Evict cached results so `.barca/` stays under its size limit (`[cache].max_size` or
+Evict eligible cached results toward `.barca/`'s size target (`[cache].max_size` or
 `BARCA_CACHE_MAX_SIZE`, default 10% of the filesystem; see
 [Cache size](/reference/config/#cache-size)). barca already does this after every `get` and
 `run` once the limit is passed; `barca gc` does it now. Experimental.
@@ -34,10 +34,13 @@ the same way. Under the limit it prints one line, such as `nothing to evict: 284
 
 The order is leftovers, superseded results, local copies the artifact store holds, then the
 least recently read current results. `--dry-run` lists exactly what `barca gc` then deletes.
-While another run is in progress on this `.barca/`, only leftovers and superseded results are
-considered (`restricted` says why). `--env NAME` evicts only that environment's results. A file
+While another process has a run in progress on this `.barca/`, only leftovers and superseded
+results are considered (`restricted` says why). In the server, active runs protect their inputs
+and outputs; other current results may be evicted while the queue stays busy. `--env NAME` evicts only that environment's results. A file
 that cannot be deleted is skipped with a warning; exit 3 only when a metadata database cannot be
-read. The remote store is never touched.
+read. The remote store is never touched. `pressure` reports protected bytes by reason, overshoot
+and progress; `max_size` is an eviction target and never delays run admission. See
+[busy-server sizing](/reference/disk/#busy-servers-overshoot-and-sizing).
 
 ---
 

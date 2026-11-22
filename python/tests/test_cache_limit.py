@@ -435,3 +435,116 @@ def test_serve_evicts_after_runs_reports_health_and_warns_about_the_working_set_
     server.kill()
     text = server.stderr
     assert text.count("cache working set") == 1, text
+
+
+BUSY_GENERATIONS = """
+import os
+import time
+from pathlib import Path
+from barca import asset, sensor, task
+
+@sensor()
+def generation() -> str:
+    return Path("generation").read_text()
+
+@asset(inputs={"generation": generation})
+def payload(generation: str) -> str:
+    return generation + "x" * (2 * 1024 * 1024)
+
+@task(inputs={"payload": payload})
+def consume(payload: str) -> None:
+    generation = payload[0]
+    staging = Path(".barca/staging") / str(os.getpid())
+    staging.mkdir(parents=True, exist_ok=True)
+    writing = staging / ("in-progress-" + generation)
+    writing.write_text("still writing")
+    Path("started-" + generation).touch()
+    deadline = time.time() + 60
+    while not Path("release-" + generation).exists():
+        if time.time() > deadline:
+            raise RuntimeError("test release timed out")
+        time.sleep(0.02)
+    assert writing.read_text() == "still writing"
+    writing.unlink()
+    assert len(payload) == 2 * 1024 * 1024 + 1
+"""
+
+
+def test_periodic_gc_revisits_released_generations_with_a_busy_queue(tmp_path, serve):
+    """Two generations overlap; freeing the older reader must unblock periodic GC (#1054)."""
+    (tmp_path / "pipeline.py").write_text(BUSY_GENERATIONS)
+    (tmp_path / "barca.toml").write_text(
+        '[cache]\nmax_size = "1MiB"\n[server]\nmax_runs = 2\ncapacity = 2\n'
+        "[execution]\ncapacity = 1\n"
+    )
+    (tmp_path / "generation").write_text("1")
+    server = serve("--no-schedule", env=env(BARCA_TEST_CACHE_CHECKPOINT_SECS="1"))
+    try:
+        first = server.request("POST", "/run/consume")[1]["run_id"]
+        server.wait("first reader", lambda: (tmp_path / "started-1").exists())
+        old = server.wait(
+            "first payload file",
+            lambda: next((tmp_path / ".barca").glob("**/artifacts/*payload/*"), None),
+        )
+        (tmp_path / "generation").write_text("2")
+        second = server.request("POST", "/run/consume")[1]["run_id"]
+        server.wait("second reader", lambda: (tmp_path / "started-2").exists())
+        newer = server.wait(
+            "second payload file",
+            lambda: next(
+                (p for p in (tmp_path / ".barca").glob("**/artifacts/*payload/*") if p != old), None
+            ),
+        )
+        assert old != newer and old.exists() and newer.exists()
+        server.wait(
+            "protected overshoot measured",
+            lambda: (tmp_path / ".barca/gc-state.json").exists()
+            and json.loads((tmp_path / ".barca/gc-state.json").read_text()).get("short_size", 0)
+            >= 4 * 1024 * 1024,
+        )
+        # Keep accepted work queued throughout the release of the first reader.
+        third = server.request("POST", "/run/consume")[1]["run_id"]
+        assert server.get("/health")["queue"]["queued"] >= 1
+        (tmp_path / "release-1").touch()
+        server.wait(
+            "first completes", lambda: server.get(f"/status/{first}")["status"] == "complete"
+        )
+        server.wait("old generation evicted by periodic GC", lambda: not old.exists(), timeout=8)
+        assert newer.exists(), "active reader's generation was evicted"
+        assert server.get(f"/status/{second}")["status"] not in ("complete", "failed")
+        predicted = gc(tmp_path, "--dry-run")
+        assert predicted["evicted_files"] == 0, predicted
+        pressure = predicted["pressure"]
+        assert pressure["budget_bytes"] == predicted["budget_after_bytes"]
+        assert pressure["overshoot_bytes"] == max(0, predicted["budget_after_bytes"] - 1024 * 1024)
+        assert pressure["protected_bytes"] >= newer.stat().st_size
+        assert sum(pressure["protected_by_reason"].values()) == pressure["protected_bytes"]
+        health = server.get("/health")["cache"]["pressure"]
+        assert health["overshoot_bytes"] > 0 and health["protected_bytes"] > 0
+        assert "cache remains" in server.stderr
+        (tmp_path / "release-2").touch()
+        for run_id in (second, third):
+            server.wait(
+                "reader completes", lambda: server.get(f"/status/{run_id}")["status"] == "complete"
+            )
+    finally:
+        (tmp_path / "release-1").touch()
+        (tmp_path / "release-2").touch()
+
+
+def test_periodic_gc_collects_generations_from_previous_deploys(tmp_path, serve):
+    (tmp_path / "pipeline.py").write_text(BUSY_GENERATIONS)
+    (tmp_path / "barca.toml").write_text("")
+    old = []
+    for generation in range(4):
+        (tmp_path / "generation").write_text(str(generation))
+        barca(tmp_path, "get", "payload", "pipeline.py", BARCA_CACHE_MAX_SIZE="off")
+        old.append(tmp_path / current(tmp_path, "payload"))
+    assert len(set(old)) == 4 and all(path.exists() for path in old)
+    server = serve(
+        "--no-schedule", env=env(BARCA_CACHE_MAX_SIZE="1MiB", BARCA_TEST_CACHE_CHECKPOINT_SECS="1")
+    )
+    server.wait("predeploy generations collected", lambda: all(not p.exists() for p in old[:-1]))
+    manual = gc(tmp_path, "--dry-run")
+    assert not any(e["tier"] == "superseded" for e in manual["evicted"]), manual
+    assert server.get("/health")["status"] == "ok"

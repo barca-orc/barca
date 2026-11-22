@@ -17,7 +17,7 @@
 //!    confirmed. It is fetched again when read. Least recently read first.
 //! 4. **Current results**: recomputed when read. Least recently read first.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 /// The eviction tiers, in the order they are evicted.
@@ -200,6 +200,10 @@ pub struct Plan {
     pub after: u64,
     /// The goal was not reached: what may be evicted was not enough.
     pub short: bool,
+    /// All eligible bytes, including candidates beyond this pass's target.
+    pub eligible_bytes: u64,
+    /// Disjoint reasons bytes cannot be evicted by this plan (backups excluded by caller).
+    pub protected: BTreeMap<String, u64>,
 }
 
 impl Plan {
@@ -244,6 +248,7 @@ pub fn plan(
             by_file.entry(file).or_default().push(row);
         }
     }
+    let mut protected_bytes = BTreeMap::<String, u64>::new();
     let mut candidates: Vec<Candidate<'_>> = by_file
         .into_iter()
         .filter_map(|(file, rows)| {
@@ -253,9 +258,16 @@ pub fn plan(
                 true if rows.iter().any(|r| is_newest(r) && r.store_held) => Tier::StoreHeld,
                 true => Tier::Current,
             };
-            (!protected(protect, tier, file, &rows)).then_some(Candidate { tier, file, rows })
+            let reason = protection_reason(protect, tier, file, &rows)
+                .or_else(|| (!protect.allows(tier)).then_some("restricted"));
+            if let Some(reason) = reason {
+                *protected_bytes.entry(reason.into()).or_default() +=
+                    rows.iter().map(|r| r.bytes).max().unwrap_or(0);
+                None
+            } else {
+                Some(Candidate { tier, file, rows })
+            }
         })
-        .filter(|c| protect.allows(c.tier))
         .collect();
     // Superseded: oldest first. Current results: least recently used first. Ties by path, so
     // the order never depends on hashing.
@@ -281,10 +293,37 @@ pub fn plan(
 
     let mut left: Vec<&Leftover> = leftovers
         .iter()
-        .filter(|l| protect.allows(Tier::Leftovers) && !protect.paths.contains(&l.path))
-        .filter(|l| !(protect.keep_staging && l.kind == LeftoverKind::Staging))
-        .filter(|l| !(protect.keep_unreferenced && l.kind == LeftoverKind::Unreferenced))
+        .filter(|l| {
+            let reason = if protect.paths.contains(&l.path) {
+                Some("read_write_or_pin")
+            } else if !protect.allows(Tier::Leftovers) {
+                Some("restricted")
+            } else if protect.keep_staging && l.kind == LeftoverKind::Staging {
+                Some("active_staging")
+            } else if protect.keep_unreferenced && l.kind == LeftoverKind::Unreferenced {
+                Some("active_unreferenced")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                *protected_bytes.entry(reason.into()).or_default() += l.bytes;
+                false
+            } else {
+                true
+            }
+        })
         .collect();
+    let eligible_bytes: u64 = left.iter().map(|l| l.bytes).sum::<u64>()
+        + candidates
+            .iter()
+            .map(|c| c.rows.iter().map(|r| r.bytes).max().unwrap_or(0))
+            .sum::<u64>();
+    let other = total
+        .saturating_sub(eligible_bytes)
+        .saturating_sub(protected_bytes.values().sum());
+    if other > 0 {
+        protected_bytes.insert("metadata_unowned_or_grace".into(), other);
+    }
     left.sort_by(|a, b| (a.kind, a.modified, &a.path).cmp(&(b.kind, b.modified, &b.path)));
 
     let ordered = left
@@ -333,6 +372,8 @@ pub fn plan(
         evictions: Vec::new(),
         after: total,
         short: false,
+        eligible_bytes,
+        protected: protected_bytes,
     };
     for eviction in ordered {
         if let Goal::DownTo { target } = goal
@@ -354,35 +395,43 @@ fn base_of(id: &str) -> &str {
 }
 
 /// Whether a file of `tier` with these rows must stay.
-fn protected(protect: &Protections, tier: Tier, file: &PathBuf, rows: &[&Row]) -> bool {
-    if protect.paths.contains(file) {
-        return true;
-    }
-    let pinned = rows.iter().any(|r| {
-        protect.recorded.contains(&r.recorded)
-            || r.run_hash
-                .as_ref()
-                .is_some_and(|h| protect.run_hashes.contains(h))
-    });
-    if pinned {
-        return true;
+fn protection_reason(
+    protect: &Protections,
+    tier: Tier,
+    file: &PathBuf,
+    rows: &[&Row],
+) -> Option<&'static str> {
+    if protect.paths.contains(file)
+        || rows.iter().any(|r| {
+            protect.recorded.contains(&r.recorded)
+                || r.run_hash
+                    .as_ref()
+                    .is_some_and(|h| protect.run_hashes.contains(h))
+        })
+    {
+        return Some("read_write_or_pin");
     }
     if tier < Tier::StoreHeld {
-        return false;
+        return None;
     }
     if rows
         .iter()
         .any(|r| protect.nodes.contains(base_of(&r.node_id)))
     {
-        return true;
+        return Some("active_nodes");
     }
-    // A current result with no store copy is recomputed when needed, which nothing does for a
-    // `Manual` node except a person.
-    tier == Tier::Current
-        && (!protect.manual_known
-            || rows
-                .iter()
-                .any(|r| protect.manual.contains(base_of(&r.node_id))))
+    if tier == Tier::Current {
+        if !protect.manual_known {
+            return Some("unknown_manual_policy");
+        }
+        if rows
+            .iter()
+            .any(|r| protect.manual.contains(base_of(&r.node_id)))
+        {
+            return Some("manual_without_store");
+        }
+    }
+    None
 }
 
 #[cfg(test)]

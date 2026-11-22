@@ -6019,7 +6019,13 @@ components:
       required:
       - size_bytes
       - limit_bytes
+      - pressure
       properties:
+        pressure:
+          description: Last completed eviction pass, null before eviction was needed; not a live measurement.
+          anyOf:
+          - $ref: '#/components/schemas/GcPressure'
+          - type: 'null'
         size_bytes: *cache_bytes
         limit_bytes: *cache_bytes
     Uploads:
@@ -8190,13 +8196,36 @@ components:
           anyOf:
           - type: string
           - type: 'null'
+    GcPressure:
+      description: Planning observation less deletions; max_size is an eviction target, not a hard cap or admission limit.
+      type: object
+      additionalProperties: false
+      required: [measured_at, budget_bytes, protected_bytes, protected_by_reason, evictable_bytes,
+        pending_bytes, overshoot_bytes, target_shortfall_bytes, evicted_files, evicted_bytes, restricted]
+      properties:
+        measured_at: {type: integer, minimum: 0, description: Unix seconds at planning}
+        budget_bytes: {type: integer, minimum: 0}
+        protected_bytes: {type: integer, minimum: 0}
+        protected_by_reason:
+          type: object
+          description: Disjoint reasons bytes were not eligible in this plan.
+          additionalProperties: {type: integer, minimum: 0}
+        evictable_bytes: {type: integer, minimum: 0}
+        pending_bytes: {type: integer, minimum: 0}
+        overshoot_bytes: {type: integer, minimum: 0}
+        target_shortfall_bytes: {type: integer, minimum: 0}
+        evicted_files: {type: integer, minimum: 0}
+        evicted_bytes: {type: integer, minimum: 0}
+        restricted:
+          anyOf: [{type: string}, {type: 'null'}]
     GcResult:
       description: The result of barca gc (barca gc --json)
       type: object
       additionalProperties: false
       required: [dry_run, size_bytes, budget_before_bytes, budget_after_bytes, backup_bytes, limit_bytes,
-        target_bytes, after_bytes, evicted_files, evicted_bytes, tiers, restricted, evicted, failed, held]
+        target_bytes, after_bytes, evicted_files, evicted_bytes, tiers, restricted, evicted, failed, held, pressure]
       properties:
+        pressure: {$ref: '#/components/schemas/GcPressure'}
         dry_run: {type: boolean}
         size_bytes: {type: integer, minimum: 0, description: Bytes under .barca/ before}
         budget_before_bytes: {type: integer, minimum: 0, description: Bytes subject to the cache limit before (metadata backups excluded)}

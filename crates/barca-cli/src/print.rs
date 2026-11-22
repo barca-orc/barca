@@ -113,6 +113,16 @@ fn gc_text(r: &GcResult) {
             );
         }
     }
+    if r.pressure.target_shortfall_bytes > 0 {
+        barca_service::outln!(
+            "{} above target ({} over max_size); {} protected, {} eligible, {} pending this pass",
+            human(r.pressure.target_shortfall_bytes),
+            human(r.pressure.overshoot_bytes),
+            human(r.pressure.protected_bytes),
+            human(r.pressure.evictable_bytes),
+            human(r.pressure.pending_bytes)
+        );
+    }
     // Over the target after evicting what could go: say what holds the rest.
     barca_service::outln!(
         "{} metadata backups outside the budget; {} physical total",

@@ -288,6 +288,11 @@ async fn metadata_backups_are_counted_and_never_evicted() {
     assert_eq!(f.total().await, before + 2000);
     let result = f.gc(MaxSize::Bytes(1), false).await;
     assert_eq!(result.backup_bytes, 2000);
+    assert_eq!(result.pressure.budget_bytes, result.budget_after_bytes);
+    assert_eq!(
+        result.pressure.protected_bytes + result.pressure.evictable_bytes,
+        result.budget_after_bytes
+    );
     assert_eq!(
         result.budget_before_bytes + result.backup_bytes,
         result.size_bytes
@@ -676,7 +681,7 @@ async fn under_the_limit_the_check_after_a_command_does_not_walk() {
 }
 
 #[tokio::test]
-async fn a_working_set_larger_than_the_limit_is_not_planned_again_until_it_grows() {
+async fn a_protected_working_set_is_rechecked_without_waiting_for_growth() {
     let (f, files) = project().await;
     let own = Own {
         recorded: files.iter().cloned().collect(),
@@ -686,17 +691,16 @@ async fn a_working_set_larger_than_the_limit_is_not_planned_again_until_it_grows
         .await
         .unwrap();
     assert_eq!(first.unwrap().evicted_files, 1);
-    let state = read_state(&f.project).unwrap();
+    let mut state = read_state(&f.project).unwrap();
     assert!(state.short_at > 0);
-    // Nothing more could go: the next check does not plan (nothing walked, nothing evicted).
+    state.surveyed_at -= 60;
+    write_state(&f.project, &state);
+    // Nothing more can go yet, but protection evidence must be recomputed each pass.
     let again = check_in(&f.project, MaxSize::Bytes(1), &own, None)
         .await
         .unwrap();
     assert_eq!(again.unwrap().evicted_files, 0);
-    assert_eq!(
-        read_state(&f.project).unwrap().surveyed_at,
-        state.surveyed_at
-    );
+    assert!(read_state(&f.project).unwrap().surveyed_at > state.surveyed_at);
 }
 
 #[tokio::test]
@@ -1311,4 +1315,140 @@ async fn a_budgeted_pass_never_runs_vacuum_and_backs_off_until_gc() {
     );
     assert_eq!(after_gc.streak, 2);
     assert!(after_gc.retry_at > now_secs());
+}
+
+/// A deploy's older generations must not be forgotten when an active reader releases them.
+#[tokio::test]
+async fn checkpoint_revisits_old_generations_when_busy_run_protections_change() {
+    let f = Fixture::new().await;
+    std::fs::write(
+        f.root().join("p.py"),
+        "from barca import asset\n@asset()\ndef a(): return 1\n",
+    )
+    .unwrap();
+    let old = f
+        .result("p.py:a", "old-deploy", 4096, "2026-01-01 00:00:00")
+        .await;
+    let current = f
+        .result("p.py:a", "new-deploy", 4096, "2026-02-01 00:00:00")
+        .await;
+    let reader = pin_at("old-reader", f.root());
+    reader.nodes(["p.py:a".to_string()]);
+    reader.run_hashes([&"old-deploy".to_string()]);
+    let busy = pin_at("continuous-backlog", f.root());
+    busy.nodes(["p.py:a".to_string()]);
+    let first = check_in(&f.project, MaxSize::Bytes(1), &Own::default(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.evicted_files, 0);
+    assert!(f.exists(&old) && f.exists(&current));
+    let stuck = read_state(&f.project).unwrap();
+    drop(reader);
+    let manual = f.gc(MaxSize::Bytes(1), true).await;
+    assert!(manual.evicted.iter().any(|e| e.path == old));
+    // Restore a checkpoint's stuck evidence: a CLI dry-run must not hide the repro by surveying.
+    write_state(&f.project, &stuck);
+    let periodic = check_in(&f.project, MaxSize::Bytes(1), &Own::default(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        periodic.evicted_files, 1,
+        "periodic must revisit the old backlog while another run stays busy"
+    );
+    assert!(!f.exists(&old) && f.exists(&current));
+}
+
+#[tokio::test]
+async fn pressure_accounts_for_protections_and_unfinished_backlog() {
+    let (f, _) = project().await;
+    let envs = envs(&f.project);
+    let surveyed = survey(&f.project, &envs).await.unwrap();
+    let protect = Protections {
+        manual_known: true,
+        ..Default::default()
+    };
+    let plan = plan::plan(
+        surveyed.total,
+        &surveyed.rows,
+        &surveyed.leftovers,
+        &protect,
+        Goal::DownTo { target: 0 },
+    );
+    let mut pressure = GcPressure::planned(&plan, surveyed.total, None);
+    let expected = plan.bytes();
+    let done = delete(plan, &envs, Some(Instant::now()), |_| false).await;
+    pressure.finish(done.evicted.len(), 0, Some(1));
+    assert_eq!(pressure.pending_bytes, expected);
+    assert_eq!(pressure.evicted_files, 0);
+    assert_eq!(
+        pressure.protected_bytes + pressure.evictable_bytes,
+        pressure.budget_bytes
+    );
+    assert_eq!(
+        pressure.protected_by_reason.values().sum::<u64>(),
+        pressure.protected_bytes
+    );
+    // A budget-exhausted pass never hides the older backlog from the next checkpoint.
+    let periodic = check_in(&f.project, MaxSize::Bytes(1), &Own::default(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(periodic.evicted_files > 0);
+    let result = f.gc(MaxSize::Bytes(1), true).await;
+    assert_eq!(result.pressure.budget_bytes, result.budget_after_bytes);
+    assert_eq!(
+        result.pressure.overshoot_bytes,
+        result.budget_after_bytes.saturating_sub(1)
+    );
+    assert_eq!(
+        result.pressure.protected_bytes + result.pressure.evictable_bytes,
+        result.budget_after_bytes
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_sweeps_predeploy_backlog_and_unrelated_current_results_while_busy() {
+    let f = Fixture::new().await;
+    std::fs::write(
+        f.root().join("p.py"),
+        "from barca import asset\n@asset()\ndef a(): return 1\n@asset()\ndef b(): return 2\n",
+    )
+    .unwrap();
+    let mut older = Vec::new();
+    for generation in 0..16 {
+        older.push(
+            f.result(
+                "p.py:a",
+                &format!("deploy-{generation}"),
+                4096,
+                "2026-01-01 00:00:00",
+            )
+            .await,
+        );
+    }
+    let current = f
+        .result("p.py:a", "active-generation", 4096, "2026-02-01 00:00:00")
+        .await;
+    let unrelated = f
+        .result("p.py:b", "unrelated", 4096, "2026-02-01 00:00:00")
+        .await;
+    let busy = pin_at("always-active", f.root());
+    busy.nodes(["p.py:a".into()]);
+    busy.run_hashes([&"active-generation".to_string()]);
+    let predicted = f.gc(MaxSize::Bytes(1), true).await;
+    assert_eq!(predicted.evicted_files, 17);
+    assert_eq!(
+        predicted.pressure.protected_by_reason["read_write_or_pin"],
+        4096
+    );
+    let periodic = check_in(&f.project, MaxSize::Bytes(1), &Own::default(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(periodic.evicted_files, predicted.evicted_files);
+    assert!(older.iter().all(|path| !f.exists(path)));
+    assert!(!f.exists(&unrelated));
+    assert!(f.exists(&current));
 }

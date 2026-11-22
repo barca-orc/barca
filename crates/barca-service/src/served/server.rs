@@ -24,11 +24,14 @@ pub struct Capabilities {
 }
 
 /// `cache` of `GET /health`: `.barca/` against its size limit, as last measured.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CacheSize {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub limit_bytes: u64,
+    /// Most recent eviction pass; null before eviction has been necessary.
+    #[serde(default)]
+    pub pressure: Option<barca_store::gc::GcPressure>,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub size_bytes: u64,
 }

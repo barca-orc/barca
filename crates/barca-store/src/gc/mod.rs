@@ -561,9 +561,8 @@ struct State {
     surveyed_at: u64,
     /// Bytes in the artifact directories minus what the DBs say is there, at that walk.
     artifact_adjust: i64,
-    /// When eviction last could not get under the limit with nothing else holding it back
-    /// (the working set is larger than the limit), and the size it left. Until the size grows
-    /// or [`STUCK_FOR`] passes, the check after a command does not plan again.
+    /// When a completed plan could not get under the target, and the size it left.
+    /// Diagnostic evidence only: protection changes can make files eligible without growth.
     #[serde(default)]
     short_at: u64,
     #[serde(default)]
@@ -677,11 +676,6 @@ fn update_store_checks(project: &Project, check: StoreCheck, keep: bool) {
         write_state(project, &state);
     }
 }
-
-/// How long a check that could not get under the limit is not repeated (unless the size grows
-/// by more than 1% of the limit, or [`STUCK_SLACK`], whichever is more).
-const STUCK_FOR: Duration = Duration::from_secs(600);
-const STUCK_SLACK: u64 = 1 << 20;
 
 use barca_model::time::now_secs;
 
@@ -2097,22 +2091,9 @@ async fn check_in(
             checked(project, size, limit);
             return Ok(None);
         }
-        // Eviction could not get under the limit a moment ago and nothing has grown since:
-        // planning again would find the same.
-        let stuck = state.accounting_version == 1
-            && now_secs().saturating_sub(state.short_at) < STUCK_FOR.as_secs()
-            && size
-                <= state
-                    .short_size
-                    .saturating_add((limit / 100).max(STUCK_SLACK));
-        if stuck {
-            return Ok(Some(CacheReport {
-                size_bytes: measured.size_bytes,
-                limit_bytes: limit,
-                evicted_files: 0,
-                evicted_bytes: 0,
-            }));
-        }
+        // Size alone cannot prove eviction is still blocked: an older reader may have
+        // finished, a pin may have been removed, or an upload completed (#1054).
+        // Revisit the entire backlog on every over-target checkpoint.
     }
     // One survey at a time in this process: a run that ends while `serve` surveys would walk
     // the same files again, and wait for it before it returns. The survey under way records
@@ -2142,6 +2123,11 @@ async fn check_in(
             target: target_of(limit),
         },
     );
+    let mut pressure = GcPressure::planned(
+        &plan,
+        survey.total.saturating_sub(backup_bytes),
+        restricted.clone(),
+    );
     let short = plan.short;
     let evictable = plan.evictions.len();
     let own_pin = pin.map(|p| p.id);
@@ -2155,6 +2141,8 @@ async fn check_in(
     warn_failed(&done.failed);
     let evicted_bytes: u64 = done.evicted.iter().map(|e| e.bytes).sum();
     let size_after = survey.total.saturating_sub(evicted_bytes);
+    pressure.finish(done.evicted.len(), evicted_bytes, Some(limit));
+    report_pressure(&pressure);
     remember(size_after, limit);
     if !done.evicted.is_empty() {
         barca_model::errln!(
@@ -2194,6 +2182,98 @@ async fn check_in(
         evicted_files: done.evicted.len(),
         evicted_bytes,
     }))
+}
+
+/// One GC pass's measured pressure. These are observations, not reservations or a disk cap.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct GcPressure {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub measured_at: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub budget_bytes: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub protected_bytes: u64,
+    /// Disjoint protection categories; includes metadata, unowned files and grace periods.
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, number>"))]
+    pub protected_by_reason: BTreeMap<String, u64>,
+    /// Eligible at planning time, less bytes removed. Rechecked before a later deletion.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub evictable_bytes: u64,
+    /// Selected but not removed (time budget, a new reader, or a deletion failure).
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub pending_bytes: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub overshoot_bytes: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub target_shortfall_bytes: u64,
+    pub evicted_files: usize,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub evicted_bytes: u64,
+    pub restricted: Option<String>,
+}
+
+impl GcPressure {
+    fn planned(plan: &Plan, budget: u64, restricted: Option<String>) -> Self {
+        let protected_bytes = budget.saturating_sub(plan.eligible_bytes);
+        let mut protected_by_reason = plan.protected.clone();
+        let extra = protected_bytes.saturating_sub(protected_by_reason.values().sum());
+        if extra > 0 {
+            *protected_by_reason
+                .entry("metadata_unowned_or_grace".into())
+                .or_default() += extra;
+        }
+        Self {
+            measured_at: now_secs(),
+            budget_bytes: budget,
+            protected_bytes,
+            protected_by_reason,
+            evictable_bytes: plan.eligible_bytes,
+            pending_bytes: plan.bytes(),
+            restricted,
+            ..Default::default()
+        }
+    }
+
+    fn finish(&mut self, files: usize, bytes: u64, limit: Option<u64>) {
+        self.evicted_files = files;
+        self.evicted_bytes = bytes;
+        self.budget_bytes = self.budget_bytes.saturating_sub(bytes);
+        self.evictable_bytes = self.evictable_bytes.saturating_sub(bytes);
+        self.pending_bytes = self.pending_bytes.saturating_sub(bytes);
+        self.overshoot_bytes = limit.map_or(0, |l| self.budget_bytes.saturating_sub(l));
+        self.target_shortfall_bytes =
+            limit.map_or(0, |l| self.budget_bytes.saturating_sub(target_of(l)));
+    }
+}
+
+static LAST_PRESSURE: Mutex<Option<GcPressure>> = Mutex::new(None);
+
+/// Last completed eviction pass, for monitoring through `GET /health`.
+pub fn last_pressure() -> Option<GcPressure> {
+    LAST_PRESSURE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+fn report_pressure(pressure: &GcPressure) {
+    *LAST_PRESSURE.lock().unwrap_or_else(|p| p.into_inner()) = Some(pressure.clone());
+    if pressure.overshoot_bytes > 0 {
+        barca_model::errln!(
+            "[barca] warning: cache remains {} over max_size: {} protected, {} eligible, {} pending this pass; protected bytes by reason: {}; max_size is an eviction target, not a disk cap",
+            size::human(pressure.overshoot_bytes),
+            size::human(pressure.protected_bytes),
+            size::human(pressure.evictable_bytes),
+            size::human(pressure.pending_bytes),
+            pressure
+                .protected_by_reason
+                .iter()
+                .map(|(reason, bytes)| format!("{reason}={}", size::human(*bytes)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
 }
 
 /// What `barca gc` was asked to do.
@@ -2297,6 +2377,9 @@ pub struct GcResult {
     pub failed: Vec<GcFailure>,
     /// What holds the space left (`after_bytes`), largest first.
     pub held: Vec<GcHeld>,
+    /// Protected bytes, overshoot and progress of this pass (predicted for a dry run).
+    #[serde(default)]
+    pub pressure: GcPressure,
 }
 
 /// `barca gc`: evict now, to [`LOW_WATERMARK_PERCENT`] of the limit, or with the limit off
@@ -2358,6 +2441,7 @@ async fn gc_in(
         &protect,
         goal,
     );
+    let mut pressure = GcPressure::planned(&plan, budget_before_bytes, restricted.clone());
     let (evicted, failed) = if opts.dry_run {
         (plan.evictions, Vec::new())
     } else {
@@ -2368,6 +2452,10 @@ async fn gc_in(
         (done.evicted, done.failed)
     };
     let evicted_bytes: u64 = evicted.iter().map(|e| e.bytes).sum();
+    pressure.finish(evicted.len(), evicted_bytes, limit);
+    if !opts.dry_run {
+        report_pressure(&pressure);
+    }
     let held = held_after(survey.held, &evicted);
     if let Some(limit) = limit {
         remember(survey.total.saturating_sub(evicted_bytes), limit);
@@ -2418,6 +2506,7 @@ async fn gc_in(
             })
             .collect(),
         held,
+        pressure,
     })
 }
 

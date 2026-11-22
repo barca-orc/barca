@@ -55,6 +55,7 @@ pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
         cache: barca_service::gc::last_measured()
             .filter(|_| !state.config.read_only)
             .map(|(size_bytes, limit_bytes)| CacheSize {
+                pressure: barca_service::gc::last_pressure(),
                 size_bytes,
                 limit_bytes,
             }),
