@@ -36,7 +36,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
   Keep the pool at 1 (on a server, capacity 1, which is one worker) because of the known issue below.
 
-  Known issue, not fixed in this release: a run that contains a batched node split across two streams can stall on a pool of 14 or more workers (pool size 2 in one pipeline). A pool of 1, and a server at capacity 1, do not stall. See the open issue for the stall.
+  Known issue, not fixed in this release: a run that contains a batched node split across two streams can stall on a pool of 14 or more workers (pool size 2 in one pipeline). A pool of 1, and a server at capacity 1, do not stall. See #1100.
 
 ## 0.46.1 (2026-11-21)
 
