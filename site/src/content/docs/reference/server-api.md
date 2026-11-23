@@ -432,3 +432,13 @@ acceptance before computing. Invalid requests return 400, read-only servers 403,
 servers 503. Retrying with the original acceptance time preserves later successes. Explicit
 pins and history remain readable. Verified ledger posts can replace invalidated successes;
 ordinary conflicting posts retain the existing digest checks.
+
+### Replay a run
+
+`POST /runs/{run_id}/replay` accepts `cache` (`original`, the default; `cached`; or
+`refresh_all`) and optional `step` (an exact recorded step id). It preserves the recorded
+partition scope, batch overrides, Manual/pause rules and tick semantics, with a new run id,
+caller identity and refresh cutoff. Selecting one step makes it the replay root, so an
+explicitly retried task executes while upstream tasks retain tick freshness. Run detail
+exposes `scope`; older history without it returns 409 instead of guessing missing options.
+The response is the same 202 run handle as `POST /runs`.

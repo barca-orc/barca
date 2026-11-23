@@ -141,7 +141,7 @@ Its actions:
 
 - **Re-run failed**: the failed steps and everything downstream of them, the same target
   again, so the steps that succeeded are served from cache.
-- **Re-run all**: the same target with every step recomputed (`--refresh-all`).
+- **Re-run all**: the original scope with every step recomputed (`--refresh-all`), retaining its partition selection, batch settings, Manual/pause overrides and tick rules.
 - **Retry** on one failed step or partition key.
 - **Copy incident summary**: markdown with the run's link, target, trigger, timing and failed
   steps.
@@ -173,3 +173,5 @@ An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **H
 When the server runs with `--auth token`, the UI asks for a bootstrap code or an API token on its
 Connect screen, and **API tokens** in the sidebar creates and revokes named tokens. The steps are
 in [Authentication and Tokens](/auth/).
+
+Older runs without a recorded request scope show an explanation instead of enabling replay. Start a new run with explicit targets and options for those records. Step retries use the recorded key and the node’s current kind, including task followers of scheduled sensors.

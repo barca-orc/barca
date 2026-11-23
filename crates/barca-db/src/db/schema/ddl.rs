@@ -29,6 +29,8 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // A run `barca serve` started: its full result, so `GET /runs/{id}` answers after a
     // restart (#393). NULL for every other run.
     "outcome_json TEXT",
+    // The original request scope, retained after the durable queue entry is removed.
+    "scope_json TEXT",
     // On a server: the run id a laptop gave the run it posted to the ledger
     // (`triggered_by: client`, RFC-0007 section 4.1). A repeated post of the same run is
     // recognised by it. NULL for every other run.

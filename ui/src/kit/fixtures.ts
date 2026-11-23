@@ -271,6 +271,7 @@ function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunVi
     step('pipeline.py:orders_clean', 'success'),
   ]
   return {
+    scope: null,
     control: { cancellable: live, owner: live ? 'this server' : 'not running', reason: live ? null : `The run already finished (${run.status}).` },
     run_id: '127',
     command: 'get',

@@ -220,6 +220,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     let outcome = live.and_then(|r| r.outcome.clone()).or(stored);
     let mut view = match (&record, live) {
         (Some(record), _) => RunView {
+            scope: db::get_run_scope(read_path, id).await?,
             control: RunControl::default(),
             previous_attempts: record.previous_attempts.clone(),
             parent_run_id: record.parent_run_id.clone(),
@@ -262,6 +263,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
             logs: Vec::new(),
         },
         (None, Some(run)) => RunView {
+            scope: db::get_run_scope(read_path, id).await?,
             control: RunControl::default(),
             previous_attempts: db::runs::previous_attempts(read_path, id).await?,
             parent_run_id: None,

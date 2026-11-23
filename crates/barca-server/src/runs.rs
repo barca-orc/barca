@@ -29,8 +29,8 @@ mod tests;
 
 pub(crate) use admission::{admit, admit_as, dispatch, ensure_db, resume_at_startup};
 pub(crate) use handlers::{
-    cancel, create, detail, events, get_target, in_flight_now, list, logs, output, run_all,
-    run_target, status,
+    cancel, create, detail, events, get_target, in_flight_now, list, logs, output, replay_run,
+    run_all, run_target, status,
 };
 #[cfg(test)]
 pub(crate) use lifecycle::start;

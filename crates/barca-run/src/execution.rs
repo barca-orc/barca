@@ -153,6 +153,38 @@ pub(crate) struct ExecuteRequest<'a> {
     pub(crate) rules: barca_decide::freshness::RunRules,
 }
 
+impl ExecuteRequest<'_> {
+    fn scope(&self) -> barca_model::run_scope::RunScope {
+        if let Some(scope) = &self.options.scope {
+            return scope.clone();
+        }
+        let (refresh, refresh_all, cascade) = match &self.policy {
+            CachePolicy::CacheAware => (Vec::new(), false, false),
+            CachePolicy::RefreshAll { .. } => (Vec::new(), true, false),
+            CachePolicy::RefreshSelective { names, cascade, .. } => {
+                (names.clone(), false, *cascade)
+            }
+        };
+        barca_model::run_scope::RunScope {
+            command: self.command_label.to_owned(),
+            targets: self.target_names.to_vec(),
+            files: self.file_args.to_vec(),
+            refresh,
+            refresh_all,
+            cascade,
+            partition: self.partition.as_ref().map(|p| p.to_json().to_string()),
+            batch: self.options.batch.to_flags(),
+            pin_manual: self.rules.pin_manual,
+            hold_paused: self.rules.hold_paused,
+            allow_paused_targets: self.rules.allow_paused_targets,
+            tick: self.rules.tick.clone(),
+            values: false,
+            timeout: None,
+            queue: "next".to_owned(),
+        }
+    }
+}
+
 struct Trace {
     start: Instant,
     enabled: bool,
@@ -708,6 +740,7 @@ async fn open_state(
             // The run's steps are traced with the integration `execution::workers` starts for
             // the same `BARCA_TELEMETRY`.
             traced: crate::telemetry::is_on("datadog"),
+            scope: Some(&request.scope()),
         },
         &node_ids,
         &base_ids,
@@ -1789,6 +1822,8 @@ impl RunCommand {
 pub struct RunOptions {
     /// The run id to use; a new one when `None`.
     pub run_id: Option<String>,
+    /// Exact server request, including host-only options. Local runs derive their scope.
+    pub scope: Option<barca_model::run_scope::RunScope>,
     pub trigger: barca_model::trigger::Trigger,
     /// What hosts the run: [`barca_engine::run_host::LocalHost`] for a run on its own, a
     /// [`barca_model::serve::ServeHost`] for a run of `barca serve`, whose runs share a capacity
@@ -1803,6 +1838,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         Self {
             run_id: None,
+            scope: None,
             trigger: barca_model::trigger::Trigger::default(),
             host: barca_engine::run_host::LocalHost::shared(),
             batch: barca_engine::batch::BatchOverride::default(),

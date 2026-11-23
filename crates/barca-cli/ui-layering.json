@@ -53,6 +53,11 @@
     },
     {
       "method": "POST",
+      "path": "/runs/{}/replay",
+      "exempt": { "reason": "Write command: replay the durable request scope, optionally narrowed to a recorded step." }
+    },
+    {
+      "method": "POST",
       "path": "/runs",
       "cli": "barca get NODE --server --json"
     },

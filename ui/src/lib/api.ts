@@ -22,6 +22,7 @@ import type {
   NodeStatus,
   RunHandle,
   RunRequest,
+  ReplayRequest,
   ServerHealth,
   RunList,
   RunView,
@@ -177,6 +178,7 @@ export const api = {
   /** The runs in flight, each with the nodes it is working on now (`active_steps`). */
   runsInFlight: () => request<RunList>('/runs?status=running'),
   startRun,
+  replayRun: (id: string, body: ReplayRequest) => request<RunHandle>(`/runs/${encodeURIComponent(id)}/replay`, { method: 'POST', body: JSON.stringify(body) }),
   /** `barca get` for every asset and sensor. */
   getAll: (options: RunSettings = {}) => startRun({ command: 'get', targets: [], ...options }),
   /** `barca get` for every asset and sensor of one deployed file. */

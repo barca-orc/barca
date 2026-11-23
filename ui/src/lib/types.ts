@@ -167,3 +167,5 @@ export type StatusKind =
 
 export type { TokenMetadata } from './generated/TokenMetadata'
 export type { IssuedToken } from './generated/IssuedToken'
+
+export type { ReplayRequest } from './generated/ReplayRequest'

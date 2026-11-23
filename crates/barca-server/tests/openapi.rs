@@ -585,6 +585,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("POST", "/get/first", "/get/{target}"),
         ("DELETE", "/run/missing", "/run/{target}"),
         ("DELETE", "/runs/missing", "/runs/{run_id}"),
+        ("POST", "/runs/missing/replay", "/runs/{run_id}/replay"),
         ("POST", "/schedule/missing/pause", "/schedule/{id}/pause"),
         ("POST", "/schedule/missing/resume", "/schedule/{id}/resume"),
         ("POST", "/state/reset", "/state/reset"),
@@ -2584,4 +2585,36 @@ def plain() -> dict:
         404,
     )
     .await;
+}
+
+#[tokio::test]
+async fn replay_request_and_recorded_scope_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    let handle = checked(&router, "POST", "/get/second", "/get/{target}", 200).await["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    wait(&router, &handle).await;
+    let body = json!({"cache": "cached"});
+    validate(&contract()["components"]["schemas"]["ReplayRequest"], &body);
+    let (status, accepted) =
+        request_json(&router, "POST", &format!("/runs/{handle}/replay"), body).await;
+    assert_eq!(status, 202, "{accepted}");
+    validate(
+        &contract()["components"]["schemas"]["RunAccepted"],
+        &accepted,
+    );
+    let replay = accepted["run_id"].as_str().unwrap();
+    wait(&router, replay).await;
+    let view = checked(
+        &router,
+        "GET",
+        &format!("/runs/{replay}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert!(!view["scope"]["files"].as_array().unwrap().is_empty());
+    assert_eq!(view["scope"]["refresh_all"], false);
 }

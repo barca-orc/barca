@@ -68,6 +68,7 @@ pub use barca_model::model;
 pub use barca_model::model::{CronExpr, Freshness, NodeKind, StepId};
 pub use barca_model::process;
 pub use barca_model::run_explain;
+pub use barca_model::run_scope;
 #[cfg(test)]
 use barca_model::source_scan;
 pub use barca_model::step_status;

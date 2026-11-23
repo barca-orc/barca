@@ -801,4 +801,15 @@ cases. A paused input without a readable result fails the run. `allow_paused: tr
 paused targets only; it does not resume or recompute their paused inputs. Whole-file/project
 requests skip paused targets unless overridden. Prediction and queue recovery preserve these rules.
 
+
+### Replaying a recorded request
+
+`POST /runs/{run_id}/replay` accepts `{"cache":"original"}` to replay the recorded
+request, `{"cache":"cached"}` to reuse successful work, or `{"cache":"refresh_all"}`
+to recompute the selected cone. All three preserve the original partition selection, batch
+settings, Manual/pause overrides and tick rules. Add `"step":"pipeline.py:node[region=emea]"`
+to narrow to one recorded step. A task follower is retried as a task. The new request uses
+the current caller's identity and a new refresh cutoff. Older runs with no recorded scope
+return 409; start a new request with explicit targets and options instead.
+
 See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.

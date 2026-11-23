@@ -1170,6 +1170,7 @@ impl Project {
             }
         }
         let mut view = crate::outcome::RunView {
+            scope: None,
             control: crate::outcome::RunControl::server(&record.status),
             skip_reason: None,
             previous_attempts: Vec::new(),

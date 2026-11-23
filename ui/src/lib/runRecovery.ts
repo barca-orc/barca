@@ -2,7 +2,7 @@
  * The Runs page's recovery and hand-off logic, pure: the run requests behind "Re-run" and
  * "Retry", the log filters of the run panel, and the incident summary a failed run copies.
  */
-import type { LogLine, RunRequest, RunStep, RunView } from './types'
+import type { LogLine, ReplayRequest, RunStep, RunView } from './types'
 import { isFailure, triggeredByLabel } from './runs'
 
 // ─── re-running ─────────────────────────────────────────────────────────────
@@ -14,26 +14,19 @@ export function splitStepId(id: string): { node: string; key: string | null } {
   return { node: id.slice(0, open), key: id.slice(open + 1, -1) }
 }
 
-/** The run's targets as given (`target` is comma-separated; `null` is every asset). */
-function runTargets(run: Pick<RunView, 'target'>): string[] {
-  return run.target ? run.target.split(',').map((t) => t.trim()).filter(Boolean) : []
+export interface RecoveryRequest {
+  runId: string
+  body: ReplayRequest
 }
 
-function command(run: Pick<RunView, 'command'>): RunRequest['command'] {
-  return run.command === 'run' ? 'run' : 'get'
+/** Replay the recorded scope with cache reuse, without reconstructing display strings. */
+export function rerunFailedRequest(run: Pick<RunView, 'run_id'>): RecoveryRequest {
+  return { runId: run.run_id, body: { cache: 'cached', step: null } }
 }
 
-/**
- * The run again, cache-aware: the steps that succeeded are cached, so this executes the failed
- * steps and what they stopped downstream, and nothing else.
- */
-export function rerunFailedRequest(run: Pick<RunView, 'command' | 'target' | 'files'>): RunRequest {
-  return { command: command(run), targets: runTargets(run), files: run.files }
-}
-
-/** The run again with every step recomputed (`--refresh-all`). */
-export function rerunAllRequest(run: Pick<RunView, 'command' | 'target' | 'files'>): RunRequest {
-  return { ...rerunFailedRequest(run), refresh_all: true }
+/** Recompute the original scope, including its partition selection. */
+export function rerunAllRequest(run: Pick<RunView, 'run_id'>): RecoveryRequest {
+  return { runId: run.run_id, body: { cache: 'refresh_all', step: null } }
 }
 
 /**
@@ -52,16 +45,9 @@ export function partitionArg(key: string): string {
   return JSON.stringify(object)
 }
 
-/**
- * One step again: a cache-aware `get` of its node (a `run` when the run ran that task), only its
- * own key when it is one key of a partitioned node. Its cached upstream is not recomputed.
- */
-export function retryStepRequest(run: Pick<RunView, 'command' | 'target' | 'files'>, stepId: string): RunRequest {
-  const { node, key } = splitStepId(stepId)
-  const ranTask = run.command === 'run' && runTargets(run).some((t) => t === node || node.endsWith(`:${t}`))
-  const request: RunRequest = { command: ranTask ? 'run' : 'get', targets: [node], files: run.files }
-  if (key) request.partition = partitionArg(key)
-  return request
+/** The server resolves the recorded step's key and current node kind, including task followers. */
+export function retryStepRequest(run: Pick<RunView, 'run_id'>, stepId: string): RecoveryRequest {
+  return { runId: run.run_id, body: { cache: 'cached', step: stepId } }
 }
 
 // ─── logs ───────────────────────────────────────────────────────────────────

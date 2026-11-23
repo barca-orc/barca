@@ -1,6 +1,6 @@
 # Materialization digests
 
-Status: implemented for producer serialization and recompute detection. Specification version: 3.
+Status: implemented for producer serialization and recompute detection. Specification version: 4.
 Scope: local and confirmed-upload materializations, store mismatch repair (RFC-0009),
 and implemented server ledger acceptance (RFC-0007). Upload ownership and concurrent read
 limits are specified separately in [artifact-upload-receipts.md](artifact-upload-receipts.md).
@@ -61,3 +61,12 @@ posting machine prints the warning above once and sets `bytes_changed: true` on 
 report only when that node is eligible for deterministic-byte checking. Its local
 `bytes_unchecked` list suppresses those client diagnostics for Manual and
 `deterministic=False` assets without changing the ledger's mismatch response.
+
+An explicit refresh accepted by the server invalidates pre-acceptance rows in its planned
+scope before computation. A verified post can replace an invalidated row under the same run
+hash. The old digest still participates in `bytes_changed` diagnostics, including when uploads
+delay the post; a Manual or `deterministic=False` asset remains exempt from the client warning.
+This exception does not permit ordinary posts to overwrite eligible ledger results.
+Conformance: `test_the_same_run_hash_with_other_bytes_warns_once`,
+`test_a_held_manual_refresh_is_posted_without_the_nondeterminism_warning`, and
+`python/tests/test_refresh_failure_retry.py`.
