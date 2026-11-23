@@ -222,7 +222,9 @@ open after that get 2 more (shorter with a drain timeout under 10 seconds: below
 
 A run the drain timeout requeued runs again from its start, planned on the code the restarted
 server has. Assets that finished are cache hits then while their code and inputs are unchanged; one
-a deploy changed runs again under its new run hash, as in a new run. A step that was interrupted
+a deploy changed runs again under its new run hash, as in a new run. If a previously failed
+key succeeds after requeue, its success is recorded under the same run id and run hash and is
+cached normally; the earlier failure remains in history. A step that was interrupted
 runs again, and a task runs again from its beginning
 (including what it did before it was stopped, such as an email or an insert). So a run the server
 accepted is executed at least once, not exactly once. A task with side effects should be safe to

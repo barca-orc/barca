@@ -88,7 +88,13 @@ writes preserve successful work across interruption according to [cache
 decisions](cache-decisions.md)
 and [upload receipts](../interfaces/artifact-upload-receipts.md). Completion recording is at
 least once;
-replay must not duplicate the same run/key result. This is not an exactly-once promise for
+replay must not duplicate the same run/key result. A failed outcome from an earlier requeued
+attempt does not suppress a later success under the same run hash; each distinct outcome is
+retained, and replay of that success does not append another row (#929). Conformance:
+`test_requeued_failed_key_records_success_under_the_same_hash` in
+[server queue tests](../../python/tests/test_serve_queue.py) and
+`terminal_retry_records_success_after_failure_and_remains_idempotent` in
+[terminal persistence tests](../../crates/barca-run/src/persist.rs). This is not an exactly-once promise for
 user side effects or external sinks.
 
 An explicit cancellation stops that run's work and reaps its owned helpers. A step that

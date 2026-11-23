@@ -627,7 +627,7 @@ impl NewMaterialization {
     }
 }
 
-/// Appends successful steps' rows, unless the run already has a row for the node under the same
+/// Appends successful steps' rows, unless the run already has a successful row for the node under the same
 /// run hash. A run requeued and resumed on new code keeps its run id, so a step it re-executes
 /// under a new run hash gets a new row rather than leaving the earlier attempt's (#794).
 /// Prepared once per transaction and rebound for each row (#460).
@@ -641,7 +641,7 @@ impl StepInsert {
         by_node_run!(),
         " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''), NULLIF(?17, ''), ?18 WHERE NOT EXISTS (SELECT 1 FROM materializations ",
         by_node_run!(),
-        " WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12)"
+        " WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12 AND status = 'success')"
     );
 
     pub async fn prepare(conn: &Connection) -> Result<Self, libsql::Error> {

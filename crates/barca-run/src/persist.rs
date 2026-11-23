@@ -547,8 +547,8 @@ pub(crate) fn telemetry_report(
 
 /// Write a run's ledger with a short-lived connection. Idempotent, so it is safe after the
 /// [`StepRecorder`] has written some of the steps: the run row is INSERT OR
-/// IGNORE + terminal UPDATE, and a step is appended only if this run has no row for it yet
-/// (a step has one outcome per run).
+/// IGNORE + terminal UPDATE. Duplicate outcomes under the same run hash are skipped; a
+/// successful retry after requeue is appended even when the stopped attempt failed.
 pub(crate) async fn persist_run(db_path: &str, l: &RunLedger<'_>) -> Result<(), BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
@@ -1548,6 +1548,29 @@ sys.exit(_state.main())
         }
         recorder.finish().await.unwrap();
         assert_eq!(rows(&db_path).await.len(), 2); // unrelated blocker remains intact
+    }
+
+    #[tokio::test]
+    async fn terminal_retry_records_success_after_failure_and_remains_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = fresh_db(&dir, "m.db").await;
+        let mut fx = Fixture::new();
+        persist_run(&db_path, &fx.ledger("r1")).await.unwrap();
+        fx.failures.clear();
+        fx.outputs.insert("f.py:bad".to_string(), oref("f.py:bad"));
+        let mut ledger = fx.ledger("r1");
+        ledger.status = "success";
+        persist_run(&db_path, &ledger).await.unwrap();
+        persist_run(&db_path, &ledger).await.unwrap();
+        let recorded = rows(&db_path).await;
+        let outcomes: Vec<_> = recorded
+            .iter()
+            .filter(|(_, node, _)| node == "f.py:bad")
+            .map(|(_, _, status)| status.as_str())
+            .collect();
+        assert_eq!(outcomes, ["failed", "success"]);
+        assert_eq!(recorded.len(), complete("r1").len() + 1);
+        assert_eq!(run_record(&db_path, "r1").await.status, "success");
     }
 
     #[tokio::test]
