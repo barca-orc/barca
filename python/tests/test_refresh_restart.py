@@ -29,8 +29,7 @@ def test_refresh_keeps_completed_asset_after_drain(project, serve, refresh, chan
         assert quick["reason"] == "refreshed_by_this_run"
 
 
-
-PARTITIONED = '''
+PARTITIONED = """
 import time
 from pathlib import Path
 from barca import asset, collect, partitions
@@ -48,7 +47,7 @@ def quick(key: str) -> str:
 @asset(inputs={"parts": collect(quick)})
 def slow(parts: list) -> list:
     return parts
-'''
+"""
 
 
 @pytest.mark.parametrize("refresh", [{"refresh_all": True}, {"refresh": ["quick"]}])
@@ -71,14 +70,23 @@ def test_new_cli_refresh_recomputes_an_earlier_success(project):
 
     (project / "release").touch()
     for refresh in ["--refresh-all", "--refresh=quick", "--refresh-all"]:
-        result = barca(project, "get", "slow", "pipeline.py", refresh, "--local", "--json", env=clean_env(BARCA_POOL_SIZE="2"))
+        result = barca(
+            project,
+            "get",
+            "slow",
+            "pipeline.py",
+            refresh,
+            "--local",
+            "--json",
+            env=clean_env(BARCA_POOL_SIZE="2"),
+        )
         assert result.returncode == 0, result.stderr
     assert (project / "quick.runs").read_text() == "xxx"
     assert (project / "slow.runs").read_text() == "xxx"
 
 
 def test_queued_refresh_accepts_another_runs_success(tmp_path, serve):
-    (tmp_path / "pipeline.py").write_text('''
+    (tmp_path / "pipeline.py").write_text("""
 import time
 from pathlib import Path
 from barca import asset, task
@@ -94,7 +102,7 @@ def quick() -> int:
     with Path("quick.runs").open("a") as log:
         log.write("x")
     return 1
-''')
+""")
     server = serve("--no-schedule", "--max-runs", "1", env=clean_env(BARCA_POOL_SIZE="2"))
     held = server.post("/runs", {"command": "run", "targets": ["hold"], "queue": "last"})
     wait_until((tmp_path / "holding").exists, "the scheduled slot to be occupied")
