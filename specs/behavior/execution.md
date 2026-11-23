@@ -357,6 +357,10 @@ Full bootstrap and validation still retain work proportional to partition count:
 not a current whole-engine memory guarantee. Performance workload scope and budgets are
 owned by [the performance contract](performance.md).
 
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
+
 ### Cached-only reads (#1085)
 
 Implemented experimental in 0.47: a cached-only get is a read, never a run. It statically
@@ -372,6 +376,3 @@ in OpenAPI. Deferred: exposed content digest, bounded remote binary access and o
 results absent from this environment's metadata. Cached value reads reject executable pickle
 reconstruction with typed infra reason `cached_value_unsupported`; verified artifact path
 access remains available, without importing project source or invoking pickle reducers.
-Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
-with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
-not exhaustive at its limit; ordinary step outcomes still report independent failures.

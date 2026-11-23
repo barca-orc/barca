@@ -189,6 +189,10 @@ run hash (`cutoff` does not count in its definition):
   and everything below it, `unknown` (`cutoff_pending`); it never predicts a hit or a miss for it.
 - A `--refresh` cascade does not pass a cutoff asset, and a consumer cached through one carries
   no `--no-cascade` warning: its hash already holds the bytes the refresh wrote.
+- Without cascade, a cached partitioned consumer carries the refreshed upstream's warning
+  just as an unpartitioned consumer does. Report once per node, not per key or worker chunk,
+  and propagate the warning through cached consumers to downstream fan-ins. A dry run
+  preserves the warning in its node report; a cutoff boundary still stops propagation.
 - A dict `partitions_from` source with `cutoff` contributes each key's value hash with the
   constant `cutoff` in place of its run hash.
 - In the dependency cone, a cutoff asset reached by name (a consumer's parameter named after
@@ -208,7 +212,9 @@ cutoff bytes preserve downstream cache hits. Complete fan-ins read every domain 
 validation/recovery computes missing or stale siblings or blocks publication on failure.
 Batching operates on the due keys. `--partition` retains its existing narrowing semantics.
 Conformance: `python/tests/test_keyed_refresh.py` (CLI and server, warm sets, cutoffs, batching,
-complete publication, invalid keys and missing siblings).
+complete publication, invalid keys and missing siblings), and
+`python/tests/test_refresh_clarity.py` (partitioned no-cascade warnings, downstream fan-ins,
+dry-run parity and warning deduplication across worker chunks).
 
 ### Recording progress
 
