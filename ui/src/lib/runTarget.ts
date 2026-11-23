@@ -55,11 +55,11 @@ const count = (n: number, noun: string) => `${n.toLocaleString()} ${noun}${n ===
 /** `506 assets`, `505 assets, 1 sensor`: what a get runs, never tasks. */
 const size = (assets: number, sensors: number) =>
   [assets && count(assets, 'asset'), sensors && count(sensors, 'sensor')].filter(Boolean).join(', ')
-const WHAT_RUNS = 'Assets and sensors whose cached result is current are skipped; tasks run only by name.'
+const WHAT_RUNS = 'A plain run brings the asset DAG up to date. Assets and sensors whose cached result is current are skipped; tasks run only by name.'
 
 export function runButton(target: RunTarget): RunButton {
   return match(target)
-    .with({ kind: 'node' }, ({ name }) => ({ label: `Run ${name}`, short: `Run ${name}`, title: `Run ${name}`, confirm: null }))
+    .with({ kind: 'node' }, ({ name }) => ({ label: `Run ${name}`, short: `Run ${name}`, title: `Run ${name}: bring its inputs up to date using cached results; Manual upstreams are read as they are`, confirm: null }))
     .with({ kind: 'pipeline' }, ({ file, assets, sensors }) => {
       const short = `Run ${pipelineName(file)}`
       const label = `${short} (${size(assets, sensors)})`

@@ -108,6 +108,12 @@ A pinned asset shows `pinned` beside its version ([Pinning and Rollback](/refere
 
 ## Runs: why they ran, what failed, and running it again
 
+**Run** brings the asset DAG up to date: it computes stale inputs and reads current results
+from cache. A named task executes each time; that does not force its upstream assets to
+recompute. `Manual` upstreams are read as they are. Hard refresh (`--refresh-all` in the CLI,
+`refresh_all: true` in the API) explicitly recomputes everything in the cone, including
+`Manual` nodes; it is not needed to make a plain run fresh.
+
 The Runs page lists the queue (running runs first, then the waiting ones with how long they have
 waited; it folds to one line) above the run history. While runs wait, the sidebar shows the queue
 on every page: how many run and wait, and the oldest wait.
