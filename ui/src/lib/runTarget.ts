@@ -59,7 +59,7 @@ const WHAT_RUNS = 'A plain run brings the asset DAG up to date. Assets and senso
 
 export function runButton(target: RunTarget): RunButton {
   return match(target)
-    .with({ kind: 'node' }, ({ name }) => ({ label: `Run ${name}`, short: `Run ${name}`, title: `Run ${name}: bring its inputs up to date using cached results; Manual upstreams are read as they are`, confirm: null }))
+    .with({ kind: 'node' }, ({ name }) => ({ label: `Run ${name}`, short: `Run ${name}`, title: runNodeTitle(name), confirm: null }))
     .with({ kind: 'pipeline' }, ({ file, assets, sensors }) => {
       const short = `Run ${pipelineName(file)}`
       const label = `${short} (${size(assets, sensors)})`
@@ -76,4 +76,22 @@ export function runButton(target: RunTarget): RunButton {
     })
     .with({ kind: 'none' }, ({ hint }) => ({ label: 'Run', short: 'Run', title: hint, confirm: null }))
     .exhaustive()
+}
+
+/** Manual definitions in the selected dependency cone, including a Manual target itself. */
+export function manualInScope(nodes: readonly ListNode[], target: string | null, file: string | null = null): string[] {
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  const seen = new Set<string>()
+  const pending = target ? [target] : nodes.filter(node => !file || node.file === file).map(node => node.id)
+  while (pending.length) {
+    const id = pending.pop()!
+    if (seen.has(id)) continue
+    seen.add(id)
+    pending.push(...(byId.get(id)?.inputs ?? []))
+  }
+  return nodes.filter(node => seen.has(node.id) && node.freshness === 'manual').map(node => node.id)
+}
+
+export function runNodeTitle(name: string, includeManual = false): string {
+  return `Run ${name}: bring its inputs up to date using cached results; ${includeManual ? 'including Manual assets and upstream tasks' : 'Manual upstreams are read as they are'}`
 }

@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '34'
-  description: 'Normative current wire contract; specification version 34 is independent of package versions.
+  version: '35'
+  description: 'Normative current wire contract; specification version 35 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -8485,9 +8485,13 @@ components:
           type: array
           items: *id005
           description: "--refresh; asset names or keyed selectors such as source[account=A]. Array entries select a set without narrowing the target domain."
+        include_manual:
+          type: boolean
+          default: false
+          description: Bring Manual assets up to date and run Manual upstream tasks too, retaining current cached results. Paused inputs stay held.
         refresh_all:
           type: boolean
-          description: --refresh-all
+          description: --refresh-all; recompute the whole cone regardless of the cache, including Manual nodes. Paused inputs and pinned assets stay held.
         cascade:
           type: boolean
           default: true

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 13. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 14. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -48,6 +48,8 @@ behavior follows the coordinator dependency rules, not ordinary data-failure pro
 | Work succeeds | Commit completed results and progress; a final successful outcome does not invent computations for cache hits |
 | A key fails | Preserve completed peers; skip data dependents that cannot proceed: only the same key of a dependent that reads it key for key (reported `upstream_key_failed`), the whole of one that reads every key (`upstream_failed`); the run goes on to later phases; finish the run with its real failures |
 | A scheduled tick meets a paused node (`asset_pauses`, `barca pause`) | Do not compute it: a paused target is reported `skipped` with reason `paused`; a paused node upstream of a target is read as its latest result, and a target reading a paused node that has never been computed is `skipped`, reason `paused`. A request naming a paused node is refused (usage) unless it allows paused targets |
+| Server request includes Manual nodes | `include_manual: true` removes the implicit Manual hold; current cached results remain reusable. `refresh_all: true` retains hard-refresh semantics regardless of this option |
+| Server request meets a paused input | Hold its last readable result even for hard refresh or Including Manual; without a readable result, fail without computing it. `allow_paused: true` overrides only explicitly targeted paused nodes, not paused upstreams. Untargeted paused nodes in a whole-file/project request stay skipped. These rules persist in the queue across restart and are used by dry-run prediction |
 | Caller cancels | Stop owned work, persist truthful progress/outcome and reap owned helpers |
 | Server drains/restarts | Apply queue requeue/interruption rules and reuse already committed successes |
 

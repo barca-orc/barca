@@ -171,6 +171,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                     Some(
                         barca_decide::cache::Held::Manual { .. }
                             | barca_decide::cache::Held::Pinned
+                            | barca_decide::cache::Held::Paused
                     )
                 ) {
                     cached_steps.remember(step);

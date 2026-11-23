@@ -411,3 +411,13 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 Every route, with health, state, the run queue and scheduling, is on
 [Server API Endpoints](/reference/server-api-endpoints/).
+
+
+### Manual and paused inputs
+
+`POST /runs` accepts `include_manual` (boolean, default false). It brings Manual assets and
+upstream tasks up to date without forcing current cached results to recompute. `refresh_all`
+still hard-refreshes the cone including Manual nodes. Paused inputs stay held under both
+options; no readable result means failure instead of computing a paused input. `allow_paused`
+permits named paused targets only. Whole-file/project runs skip paused targets. Dry runs and
+queue recovery preserve the same rules.

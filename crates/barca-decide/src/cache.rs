@@ -196,6 +196,8 @@ pub enum Held {
     /// A `Manual` node read as it is (RFC-0008): its latest result, `stale` when its inputs'
     /// latest results or its code differ from the ones it was computed with.
     Manual { stale: bool },
+    /// A paused input is read as its latest result without recomputing it.
+    Paused,
     /// Under a tick, a task whose last successful run used the current versions of its inputs.
     UpToDate,
     /// A matching cache hit after a refreshed cutoff wrote unchanged bytes.
@@ -214,6 +216,7 @@ impl Held {
                 "Manual and stale: its last result is read as it is; name it in --refresh to \
                  recompute it"
             }
+            Held::Paused => "paused: its last result is read as it is; resume it to recompute",
             Held::CutoffUnchanged => "unchanged cutoff bytes: refresh propagation stopped",
             Held::UpToDate => "up to date: its last successful run used these inputs",
             Held::RefreshedByThisRun => "matching output computed since this refresh was accepted",
@@ -834,6 +837,7 @@ pub async fn decide_step(
                         run_hash: pin.run_hash.clone(),
                         output,
                         stale: false,
+                        paused: false,
                         user: Some(pin.clone()),
                     },
                 );
@@ -864,6 +868,7 @@ pub async fn decide_step(
             stale_root: None,
             held: Some(match pin.user {
                 Some(_) => Held::Pinned,
+                None if pin.paused => Held::Paused,
                 None => Held::Manual { stale: pin.stale },
             }),
         };

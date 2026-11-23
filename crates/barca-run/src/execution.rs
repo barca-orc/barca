@@ -623,7 +623,7 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
         let Some(pin) = session.prepared.pinned.get(id) else {
             continue;
         };
-        if pin.user.is_some() {
+        if pin.user.is_some() || session.prepared.paused.contains(id) {
             continue;
         }
         let stale = barca_decide::freshness::is_stale(

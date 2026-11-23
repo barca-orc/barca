@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOutletContext, useSearchParams } from 'react-router'
 import { useAssets } from './useAssets'
 import { useWriteControl } from './useWriteControl'
 import { useStateScope } from './useAssetStates'
-import { api } from '@/lib/api'
+import { api, type RunSettings } from '@/lib/api'
 import { shortName } from '@/lib/graph'
 import { pipelineName } from '@/lib/pipeline'
-import { runButton, runTarget } from '@/lib/runTarget'
+import { runButton, runTarget, manualInScope } from '@/lib/runTarget'
 import type { AppShellContext, TopbarRun } from '@/layouts/shellContext'
 import type { ListNode } from '@/lib/types'
 
@@ -42,8 +42,10 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
   const { scope } = useStateScope()
   const group = scope && 'group' in scope ? scope.group : null
   const client = useQueryClient()
+  const [includeManual, setIncludeManual] = useState(false)
+  const settings = useMemo(() => includeManual ? { include_manual: true } : {}, [includeManual])
   const start = useMutation({
-    mutationFn: (file: string | null) => (file ? api.getFile(file) : api.getAll()),
+    mutationFn: ({ file, options }: { file: string | null; options: RunSettings }) => (file ? api.getFile(file, options) : api.getAll(options)),
     onSuccess: (data) => {
       onStarted(data.run_id)
       void client.invalidateQueries({ queryKey: ['runs'] })
@@ -64,9 +66,9 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
   const title = unknown ? 'Checking the server…' : button.title
   const onRun = useCallback(() => {
     if (target.kind === 'node') fireNode()
-    else if (target.kind === 'pipeline') mutate(target.file)
-    else if (target.kind === 'all') mutate(null)
-  }, [target, fireNode, mutate])
+    else if (target.kind === 'pipeline') mutate({ file: target.file, options: settings })
+    else if (target.kind === 'all') mutate({ file: null, options: settings })
+  }, [target, fireNode, mutate, settings])
   const loading = busy || start.isPending
 
   useEffect(() => {
@@ -79,9 +81,9 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
 
   const scopeButton = runButton(scopeTarget)
   const onRunScope = useCallback(() => {
-    if (scopeTarget.kind === 'pipeline') mutate(scopeTarget.file)
-    else if (scopeTarget.kind === 'all') mutate(null)
-  }, [scopeTarget, mutate])
+    if (scopeTarget.kind === 'pipeline') mutate({ file: scopeTarget.file, options: settings })
+    else if (scopeTarget.kind === 'all') mutate({ file: null, options: settings })
+  }, [scopeTarget, mutate, settings])
   // A group open, or a read-only server: the toolbar has no Run (the panel runs a node). Before
   // the nodes load, or with nothing to get, the button is there, disabled, with the same words:
   // the toolbar never moves when the data arrives (its words come from the URL; the size is in
@@ -96,6 +98,11 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
     confirm: null,
   } : {
     onRun: onRunScope,
+    options: {
+      includeManual, onIncludeManual: setIncludeManual,
+      onRefresh: () => mutate({ file: pipeline, options: { refresh_all: true } }),
+      manualNames: manualInScope(assets ?? [], null, pipeline),
+    },
     label: scopeButton.label,
     short: scopeButton.short,
     disabled: unknown,

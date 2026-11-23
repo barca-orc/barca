@@ -22,7 +22,10 @@ def blocked():
 
 
 @pytest.mark.parametrize("store_only", [False, True])
-def test_cached_get_bypasses_saturated_execution(project, serve, tmp_path, store_only):
+@pytest.mark.parametrize("unrelated_pause", [False, True])
+def test_cached_get_bypasses_saturated_execution(
+    project, serve, tmp_path, store_only, unrelated_pause
+):
     import json
     from .helpers import clean_env
 
@@ -39,6 +42,8 @@ def test_cached_get_bypasses_saturated_execution(project, serve, tmp_path, store
     status, running = server.request("POST", "/runs", {"command": "run", "targets": ["blocked"]})
     assert status == 202, running
     server.wait("blocked pipeline", lambda: (project / "started").exists())
+    if unrelated_pause:
+        server.post("/pauses", {"target": "blocked"})
     try:
         status, read = server.request(
             "POST", "/runs", {"command": "get", "targets": ["ready"], "values": True}

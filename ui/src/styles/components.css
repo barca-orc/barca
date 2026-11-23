@@ -489,3 +489,7 @@ a.barca-btn { text-decoration: none; }
 
 /* A live run's link and cancellation action stay separate keyboard targets. */
 .barca-running-controls, .barca-cancel-run { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Run preferences sit below a node heading and wrap in narrow page toolbars. */
+.barca-run-options { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.barca-run-options > label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
