@@ -243,7 +243,7 @@ and an unknown run are `404`; a run still going is `409`. It reads the server's 
 DELETE /runs/{run_id}
 ```
 
-Cancels a pending or running run. Its Python workers are terminated, the results of steps
+Cancels a pending or running run owned by this server. Its Python workers are terminated, the results of steps
 that had already finished are kept, and the run ends `cancelled` (in its events, in
 `GET /runs/{run_id}` and in `barca history`). The response is
 `{ "run_id": "...", "status": "cancelling" }` while execution stops. A queued run,
@@ -251,7 +251,10 @@ including one just requeued by drain, is durably removed and returns `"status": 
 a restart cannot resume it. Partition-key and `batches_by` resolvers also stop on cancellation:
 after one second without responding to SIGTERM they are killed and reaped.
 Cancelling a run that already finished returns
-`409`, and an unknown id `404`.
+`409`, and an unknown id `404`. Run detail's `control` contains `cancellable`, a human-readable
+`owner`, and a nullable refusal `reason`. CLI-owned live runs return 409 explaining where to
+stop them; interrupted runs point to `barca history --reconcile`. A recorded process ID never
+grants the server cancellation authority. Write permissions are checked independently.
 
 The run records why it was cancelled as `cancellation` (experimental): `by` is `request` (this
 route: the web UI's Cancel, or the first Ctrl-C of a `--server` client) or `shutdown`,

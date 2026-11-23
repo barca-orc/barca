@@ -147,6 +147,29 @@ pub(crate) fn decode_files(raw: &str) -> Vec<String> {
     raw.split_whitespace().map(str::to_string).collect()
 }
 
+/// Recorded process identity for display only; it never grants cancellation authority.
+pub async fn run_process(
+    db_path: &str,
+    run_id: &str,
+) -> Result<(Option<i64>, Option<String>), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query("SELECT pid, host FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run process: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(e.to_string()))?;
+    Ok(row.map_or((None, None), |row| {
+        (
+            row.get::<i64>(0).ok().filter(|pid| *pid > 0),
+            row.get::<String>(1).ok().filter(|host| !host.is_empty()),
+        )
+    }))
+}
+
 /// Record of a single run.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunRecord {

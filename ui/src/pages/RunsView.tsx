@@ -16,7 +16,7 @@ import { plural } from '@/lib/plural'
 import type { Dispatch } from '@/lib/program'
 import type { Remote } from '@/lib/remote'
 import { shortName } from '@/lib/graph'
-import { isFailure, outcomeEnvelope, outcomeResult, parseOutcome, runGlyph, runIsLive, runIsWaiting, runLabel, runNodeOutcome, stepGlyph, triggeredByLabel } from '@/lib/runs'
+import { isFailure, outcomeEnvelope, outcomeResult, parseOutcome, runGlyph, runIsLive, runIsWaiting, runLabel, runNodeOutcome, showRunControl, stepGlyph, triggeredByLabel } from '@/lib/runs'
 import { statusGlyph } from '@/lib/status'
 import { NO_STEPS_OPEN, activityBarLabel, activityTicks, canLoadMore, rerunLabel, runNodeTime, runStepRows, runsCommand, runsNarrowed, stepName, toggleStepsOpen, windowLabel, type RunFilter, type RunStepRow, type RunStepsOpen, type RunsModel, type RunsMsg } from '@/lib/runsPage'
 import type { ActivityHour, RunActivity, RunList, RunNodeSummary, RunStep, RunView } from '@/lib/types'
@@ -204,7 +204,7 @@ export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = nul
   return (
     <SidePanel label="Run details" title="Run details" subtitleMono subtitle={run.kind === 'ready' ? run.data.run_id : id} subtitleText={run.kind === 'ready' ? run.data.run_id : id}
       actions={<>
-        {run.kind === 'ready' && runIsLive(run.data.status) && <CancelRun key={run.data.run_id} id={run.data.run_id} queued={runIsWaiting(run.data.status)} />}
+        {run.kind === 'ready' && showRunControl(run.data.status) && <CancelRun key={run.data.run_id} id={run.data.run_id} queued={runIsWaiting(run.data.status)} control={run.data.control} />}
         <IconButton label="Close run details" size="sm" onClick={() => dispatch({ type: 'panel_closed' })}><X size={14} /></IconButton>
       </>}>
       {match(run)

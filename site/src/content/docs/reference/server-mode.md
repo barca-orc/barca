@@ -774,6 +774,17 @@ results even when stale.
 Ordinary reads retain the run ID, event, history and output contracts; a cache hit can already
 be complete when its accepted run handle is returned.
 
+
+### Cancellation ownership
+
+`GET /runs/{run_id}` includes `control`: `cancellable` is true only while the answering
+server owns the pending or running run; `owner` describes who holds it and `reason` explains
+why cancellation is unavailable. This is independent of authentication and read-only mode.
+A CLI run on the same project is visible but must be stopped in its owning process. The server
+never signals a PID read from history. DELETE of an unowned live run returns 409 with that
+owner; an interrupted run points to `barca history --reconcile` instead. The UI displays the
+reason instead of offering Cancel for these runs.
+
 See also: [Scheduling With Cron](/scheduling/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 
 ---

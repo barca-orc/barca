@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 12. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 13. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -22,6 +22,11 @@ interface contracts.
 ## Rules and transitions
 
 ### Requests and computations
+
+Cancellation authority belongs to the server's live registry, never to a PID read from
+history. Run detail exposes `control.cancellable`, a descriptive owner, and a reason when
+unavailable. Unowned live runs and interrupted rows return distinct 409 explanations on
+DELETE; interrupted rows point to history reconciliation. Read-only/auth checks still apply.
 
 A run has its own request, progress and outcome. A partitioned step identifies a node and
 canonical partition key. A function call may execute several such steps in one batch.
