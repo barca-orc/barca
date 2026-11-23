@@ -54,6 +54,9 @@ pub struct LedgerKey {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LookupRequest {
     pub hashes: Vec<LedgerKey>,
+    /// Historical partition identities needed to prepare a refresh before execution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<String>,
 }
 
 /// What the ledger holds for one pair: the latest successful result, or `exists: false`.
@@ -78,6 +81,21 @@ pub struct LookupEntry {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LookupResponse {
     pub results: Vec<LookupEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identities: Option<Vec<String>>,
+}
+
+/// Supersede old successes before a remote computation can change their inputs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RefreshRequest {
+    pub run_id: String,
+    pub accepted_at: f64,
+    pub nodes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RefreshAccepted {
+    pub run_id: String,
 }
 
 pub use barca_model::ledger_post::{LedgerPost, LedgerRun, LedgerStep, PostAccepted};
@@ -136,6 +154,11 @@ pub trait LedgerTransport: Send + Sync {
         &'a self,
         request: &'a LookupRequest,
     ) -> BoxFuture<'a, Result<LookupResponse, LedgerError>>;
+    /// `POST /ledger/refresh`. Must succeed before a refresh starts computing.
+    fn refresh<'a>(
+        &'a self,
+        request: &'a RefreshRequest,
+    ) -> BoxFuture<'a, Result<RefreshAccepted, LedgerError>>;
     /// `POST /ledger/runs`.
     fn post_run<'a>(
         &'a self,
@@ -308,7 +331,10 @@ impl Ledger {
         if ask.is_empty() {
             return Ok(());
         }
-        let request = LookupRequest { hashes: ask };
+        let request = LookupRequest {
+            hashes: ask,
+            ..Default::default()
+        };
         let response = self
             .transport()
             .lookup(&request)
@@ -331,6 +357,37 @@ impl Ledger {
             };
             answers.insert((entry.node_id, entry.run_hash), hit);
         }
+        Ok(())
+    }
+
+    pub async fn recorded_step_ids(&self, base: &str) -> Result<Vec<String>, BarcaError> {
+        let request = LookupRequest {
+            nodes: vec![base.to_string()],
+            ..Default::default()
+        };
+        let response = self
+            .transport()
+            .lookup(&request)
+            .await
+            .map_err(|e| unreachable_error(self.url(), "POST /ledger/lookup", &e))?;
+        response.identities.ok_or_else(|| BarcaError::Other(
+            "the server does not support refresh invalidation; upgrade the server before refreshing against its ledger".to_string()))
+    }
+
+    pub async fn invalidate_refresh(&self, request: &RefreshRequest) -> Result<(), BarcaError> {
+        let accepted = self
+            .transport()
+            .refresh(request)
+            .await
+            .map_err(|e| unreachable_error(self.url(), "POST /ledger/refresh", &e))?;
+        if accepted.run_id != request.run_id {
+            return Err(BarcaError::Other(
+                "the server acknowledged a different refresh run".to_string(),
+            ));
+        }
+        // Existing prefetch answers were taken before invalidation. The caller reloads
+        // the cone so unaffected results remain reusable.
+        self.inner.answers.lock().unwrap().clear();
         Ok(())
     }
 
@@ -426,7 +483,13 @@ impl Ledger {
     fn remember(&self, post: &LedgerPost, bytes_changed: &[String]) {
         let mut answers = self.inner.answers.lock().unwrap();
         for step in &post.steps {
-            if step.status != "success" || bytes_changed.contains(&step.node_id) {
+            if step.status != "success" {
+                continue;
+            }
+            if bytes_changed.contains(&step.node_id) {
+                // A changed digest can now be either a refused ordinary overwrite or an
+                // accepted refresh replacement. Re-ask the authority before reusing it.
+                answers.remove(&(step.node_id.clone(), step.run_hash.clone()));
                 continue;
             }
             let (Some(path), Some(format)) = (&step.path, &step.format) else {
@@ -985,13 +1048,14 @@ pub async fn lookup(
     cfg: &barca_model::config::ResolvedConfig,
     request: &LookupRequest,
 ) -> Result<LookupResponse, BarcaError> {
-    if request.hashes.is_empty() || !std::path::Path::new(&cfg.db_path).exists() {
+    if !std::path::Path::new(&cfg.db_path).exists() {
         return Ok(LookupResponse {
             results: request
                 .hashes
                 .iter()
                 .map(|k| miss(&k.node_id, &k.run_hash))
                 .collect(),
+            identities: (!request.nodes.is_empty()).then(Vec::new),
         });
     }
     let cache = CacheReader::for_config(cfg).await?;
@@ -1012,7 +1076,45 @@ pub async fn lookup(
             },
         );
     }
-    Ok(LookupResponse { results })
+    let identities = if request.nodes.is_empty() {
+        None
+    } else {
+        let mut ids = Vec::new();
+        for base in &request.nodes {
+            ids.extend(cache.recorded_step_ids(base).await?);
+        }
+        Some(ids)
+    };
+    Ok(LookupResponse {
+        results,
+        identities,
+    })
+}
+
+/// Server-side refresh acceptance, durable before the caller starts its workers.
+pub async fn invalidate_refresh(
+    cfg: &barca_model::config::ResolvedConfig,
+    request: &RefreshRequest,
+) -> Result<RefreshAccepted, BarcaError> {
+    if request.run_id.trim().is_empty()
+        || !request.accepted_at.is_finite()
+        || request.accepted_at < 0.0
+    {
+        return Err(BarcaError::Usage(
+            "refresh needs a run_id and a finite acceptance timestamp".to_string(),
+        ));
+    }
+    db::init_db(&cfg.db_path).await?;
+    db::materializations::invalidate_refresh_scope(
+        &cfg.db_path,
+        &request.run_id,
+        request.accepted_at,
+        &request.nodes,
+    )
+    .await?;
+    Ok(RefreshAccepted {
+        run_id: request.run_id.clone(),
+    })
 }
 
 fn miss(node_id: &str, run_hash: &str) -> LookupEntry {

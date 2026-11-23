@@ -249,8 +249,8 @@ def test_b_edits_one_node_and_misses_exactly_one(team):
 
 def test_the_same_run_hash_with_other_bytes_warns_once(team):
     get(team.a, "noisy")
-    # B computes the same run hash again and gets other bytes: the server keeps A's row and
-    # says so, and B prints the non-determinism warning (#392) once.
+    # B explicitly refreshes the same run hash: the server accepts its replacement but
+    # still reports changed bytes, and B prints the non-determinism warning (#392) once.
     result_b, err_b = get(team.b, "noisy", "--refresh", "noisy")
     assert computed(result_b) == {"pipeline.py:noisy"}
     warning = (
@@ -261,6 +261,9 @@ def test_the_same_run_hash_with_other_bytes_warns_once(team):
     step = next(s for s in result_b["steps"] if s["id"] == "pipeline.py:noisy")
     assert step.get("bytes_changed") is True, step
     assert len(team.server.history()) == 2
+    result_a, _ = get(team.a, "noisy")
+    assert computed(result_a) == set()
+    assert result_a["final_output"] == result_b["final_output"]
 
 
 def test_tasks_and_sensors_run_here_and_only_assets_are_recorded(team):

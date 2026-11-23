@@ -63,6 +63,8 @@ pub(crate) const SCHEDULE_STATE_COLUMNS: &[&str] = &["paused_at INTEGER", "pause
 pub(crate) const LOG_COLUMNS: &[&str] = &["stream TEXT", "ts TEXT"];
 
 pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
+    // A refresh superseded this cache result; explicit history and pins still retain it.
+    "refresh_invalidated_by TEXT",
     "skip_reason TEXT",
     "artifact_path TEXT",
     "artifact_format TEXT",

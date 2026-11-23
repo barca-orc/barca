@@ -38,6 +38,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Accepted queued runs appear as `pending` in API and local CLI history before execution, survive restart, and retain one request identity through cancellation or requeue. Queue admission and history commit atomically (#943).
 
+- Cache-aware retries after a failed refresh no longer revive pre-refresh downstream results. Invalidation survives restart and repeated failure, respects partition/cutoff/pin scope, and is acknowledged before computation against a remote ledger; remote refresh requires a server with this support (#939).
+
 - Preserve the original partition, refresh, batch, pause and tick scope when replaying a run; retry task followers using their task kind (#938).
 
 - The UI’s Run button for tasks now brings upstream assets up to date using the cache, like `barca run`, instead of implicitly forcing `--refresh-all` and recomputing Manual upstreams (#937).

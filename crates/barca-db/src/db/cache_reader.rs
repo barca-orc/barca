@@ -108,6 +108,58 @@ impl CacheReader {
         &self.conn
     }
 
+    /// Historical identities of a dynamically expanded node. New identities have no old
+    /// success to invalidate; these let a failed producer still invalidate its old consumers.
+    pub async fn recorded_step_ids(&self, base: &str) -> Result<Vec<String>, BarcaError> {
+        let (lo, hi) = key_range(base);
+        let mut rows = self.conn.query("SELECT DISTINCT node_id FROM materializations WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success'", [lo, hi])
+            .await.map_err(|e| BarcaError::Db(e.to_string()))?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| BarcaError::Db(e.to_string()))?
+        {
+            ids.push(
+                row.get::<String>(0)
+                    .map_err(|e| BarcaError::Db(e.to_string()))?,
+            );
+        }
+        Ok(ids)
+    }
+
+    /// Ordinary cache eligibility. Old schemas have no refresh invalidations yet.
+    pub async fn lookup_output(
+        &self,
+        node: &str,
+        hash: &str,
+    ) -> Result<Option<OutputRef>, libsql::Error> {
+        const CURRENT: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes, output_hash FROM materializations WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND refresh_invalidated_by IS NULL ORDER BY id DESC";
+        const LEGACY: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes, output_hash FROM materializations WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' ORDER BY id DESC";
+        const OLDEST: &str = "SELECT artifact_path, artifact_format, artifact_size_bytes FROM materializations WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' ORDER BY id DESC";
+        let statement = self.lookup_statement(&[CURRENT, LEGACY, OLDEST]).await;
+        let mut rows = statement.query([node, hash]).await?;
+        while let Some(row) = rows.next().await? {
+            let Ok(path) = row.get::<String>(0) else {
+                continue;
+            };
+            if !self.allows_artifact(&path) {
+                continue;
+            }
+            let (Ok(format), Ok(size)) = (row.get::<String>(1), row.get::<i64>(2)) else {
+                return Ok(None);
+            };
+            return Ok(Some(OutputRef {
+                path,
+                format,
+                size_bytes: size as u64,
+                elapsed_seconds: None,
+                content_hash: row.get::<String>(3).ok().filter(|h| !h.is_empty()),
+            }));
+        }
+        Ok(None)
+    }
+
     /// The one-key lookup statement, compiled from the first of `sql` this database accepts
     /// on first use and reset for the next query.
     pub async fn lookup_statement(
@@ -157,7 +209,7 @@ impl CacheReader {
             by_node_run!(),
             " ON m.node_id = json_extract(k.value, '$[0]') \
              AND m.run_hash = json_extract(k.value, '$[1]') \
-             WHERE m.status = 'success' ORDER BY k.key, m.id DESC"
+             WHERE m.status = 'success' AND m.refresh_invalidated_by IS NULL ORDER BY k.key, m.id DESC"
         );
         let mut out: Vec<Option<OutputRef>> = Vec::with_capacity(keys.len());
         for chunk in keys.chunks(CHUNK) {
@@ -245,7 +297,7 @@ impl CacheReader {
                     "SELECT id, node_id, run_hash, artifact_path, artifact_format, \
                      artifact_size_bytes, output_hash, evicted_at IS NULL AND \
                      last_read_at >= datetime('now', '{}') FROM materializations NOT INDEXED \
-                     WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' \
+                     WHERE node_id >= ?1 AND node_id < ?2 AND status = 'success' AND refresh_invalidated_by IS NULL \
                      AND artifact_path IS NOT NULL",
                     READ_STAMP_REFRESH
                 ),
@@ -463,6 +515,63 @@ impl CacheReader {
 
 #[cfg(test)]
 mod observation_tests {
+    #[tokio::test]
+    async fn refresh_invalidations_survive_reopen_and_agree_across_lookup_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        crate::db::init_db(&path).await.unwrap();
+        let accepted: f64 = 1_791_547_200.5;
+        let cache = crate::db::CacheReader::open(&path).await.unwrap();
+        for (key, at) in [
+            ("old", accepted - 0.1),
+            ("equal", accepted),
+            ("new", accepted + 0.1),
+            ("legacy", accepted.floor()),
+            ("outside", accepted - 0.1),
+        ] {
+            cache.conn().execute(
+                "INSERT INTO materializations (node_id, run_hash, status, created_at, artifact_path, artifact_format, artifact_size_bytes) VALUES (?1, 'hash', 'success', ?2, ?3, 'json', 1)",
+                [format!("p.py:a[key={key}]"), if key == "legacy" {barca_model::time::db_timestamp(at)[..19].to_string()} else {barca_model::time::db_timestamp(at)}, format!("artifact-{key}")],
+            ).await.unwrap();
+        }
+        drop(cache);
+        let scope: Vec<_> = ["old", "equal", "new", "legacy"]
+            .iter()
+            .map(|key| format!("p.py:a[key={key}]"))
+            .collect();
+        for run in ["refresh", "resumed-refresh"] {
+            crate::db::materializations::invalidate_refresh_scope(&path, run, accepted, &scope)
+                .await
+                .unwrap();
+        }
+        let cache = crate::db::CacheReader::open(&path).await.unwrap();
+        let rows = cache.key_rows("p.py:a", 5).await.unwrap();
+        for (key, eligible) in [
+            ("old", false),
+            ("equal", true),
+            ("new", true),
+            ("legacy", false),
+            ("outside", true),
+        ] {
+            let node = format!("p.py:a[key={key}]");
+            assert_eq!(
+                cache.lookup_output(&node, "hash").await.unwrap().is_some(),
+                eligible,
+                "single {key}"
+            );
+            assert_eq!(
+                cache.lookup_many(&[(&node, "hash")]).await.unwrap()[0].is_some(),
+                eligible,
+                "many {key}"
+            );
+            assert_eq!(rows.get(&node, "hash").is_some(), eligible, "rows {key}");
+            assert!(
+                crate::db::success_at(&cache, &node, "hash").await.is_some(),
+                "explicit pin remains readable: {key}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn refresh_acceptance_is_precise_and_requires_matching_success() {
         let dir = tempfile::tempdir().unwrap();
