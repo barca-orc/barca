@@ -538,20 +538,28 @@ pub struct RunHandle {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunCancelling {
     pub run_id: String,
-    /// Always `cancelling`.
+    /// `cancelled` after a queued cancellation completes; `cancelling` while a run stops.
     pub status: Cancelling,
 }
 
-/// The one word of [`RunCancelling::status`].
+/// The status of a cancellation request.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Cancelling {
     #[default]
     Cancelling,
+    Cancelled,
 }
 
 impl RunCancelling {
+    pub fn cancelled(run_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            status: Cancelling::Cancelled,
+        }
+    }
+
     pub fn of(run_id: impl Into<String>) -> Self {
         RunCancelling {
             run_id: run_id.into(),

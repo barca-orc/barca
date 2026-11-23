@@ -1,4 +1,6 @@
 # Configuration for prek (pre-commit in Rust)
+# Vendored upstream sources and licenses are retained byte-for-byte.
+exclude = "^python/barca/_vendor/packaging/"
 
 [[repos]]
 repo = "builtin"

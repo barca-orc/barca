@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 8. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -88,8 +88,26 @@ writes preserve successful work across interruption according to [cache
 decisions](cache-decisions.md)
 and [upload receipts](../interfaces/artifact-upload-receipts.md). Completion recording is at
 least once;
-replay must not duplicate the same run/key result. This is not an exactly-once promise for
+replay must not duplicate the same run/key result. A failed outcome from an earlier requeued
+attempt does not suppress a later success under the same run hash; each distinct outcome is
+retained, and replay of that success does not append another row (#929). Conformance:
+`test_requeued_failed_key_records_success_under_the_same_hash` in
+[server queue tests](../../python/tests/test_serve_queue.py) and
+`terminal_retry_records_success_after_failure_and_remains_idempotent` in
+[terminal persistence tests](../../crates/barca-run/src/persist.rs). This is not an exactly-once promise for
 user side effects or external sinks.
+
+Workers retain private process groups from spawn to shutdown. Cancellation, drain timeout,
+forced stop and normal pool teardown resume each group (including stopped `parallel()`
+callers), send TERM, allow one shared 200 ms grace window, then KILL remaining group members.
+Leader exit does not end descendant ownership. Retirement and replacement cleanup is awaited
+before pool shutdown completes. Local terminal SIGINT and coordinator SIGTERM still cancel
+with exit 130; workers do not receive terminal SIGINT directly. Deliberately daemonized,
+re-sessioned or re-grouped children are outside this boundary and require launcher cleanup.
+Conformance: [worker descendants](../../python/tests/test_worker_descendants.py)
+(`test_shutdown_leaves_no_worker_descendants`) exercises real PIDs, TERM-ignoring children,
+stopped parallel callers, unrelated processes and a subsequent server run; the existing
+[Ctrl-C tests](../../python/tests/test_ctrl_c_worker.py) cover startup and idle workers.
 
 An explicit cancellation stops that run's work and reaps its owned helpers. A step that
 finished before the cancellation stays recorded even when its upload to a store was abandoned;
@@ -100,6 +118,14 @@ nothing and names the runs it waited behind, among them one doing the same work.
 not deduplicate identical requests: each is a run, and the later one waits in the queue or
 shares the earlier one's in-flight asset steps. A server drain
 stops admission and waits; its configured deadline/requeue rules determine interrupted work.
+A terminal SIGINT reaches the server but not its workers: server-owned workers remain outside
+the terminal process group so the first Ctrl-C drains, and the second cancels through the
+server. Local `get`/`run` workers retain their terminal interruption behavior (#926).
+Conformance: `test_a_stop_signal_drains_the_runs_in_flight_and_exits_0`,
+`test_the_drain_timeout_requeues_the_runs_left_and_exits_0`, and
+`test_a_second_signal_stops_the_drain_at_once` in
+[server robustness](../../python/tests/test_serve_robustness.py), plus
+[local Ctrl-C](../../python/tests/test_ctrl_c_worker.py).
 Retry after a user exception may use the same worker. Crash, timeout, `sys.exit()` and failed
 import retries use a replacement worker. Backoff is enforced, not merely declared.
 These are physical step retries under the declared budget, not new invocation attempts.

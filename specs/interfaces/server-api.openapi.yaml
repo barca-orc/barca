@@ -3630,7 +3630,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
-          description: Cancelling; the stream ends with a cancelled outcome
+          description: Cancelled when removed from the queue; cancelling while execution stops. The stream ends with a cancelled outcome.
           content:
             application/json:
               schema:
@@ -5151,7 +5151,8 @@ components:
       properties:
         run_id: *id003
         status:
-          const: cancelling
+          type: string
+          enum: [cancelling, cancelled]
     RunStatus:
       type: string
       enum:

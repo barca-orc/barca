@@ -45,8 +45,11 @@ pub(crate) fn cache_policy(
 ) -> barca_service::cache::CachePolicy {
     use barca_service::cache::CachePolicy;
     match (refresh_all, refresh) {
-        (true, _) => CachePolicy::RefreshAll,
+        (true, _) => CachePolicy::RefreshAll {
+            since: barca_service::time::now_secs_f64(),
+        },
         (false, Some(names)) => CachePolicy::RefreshSelective {
+            since: barca_service::time::now_secs_f64(),
             names,
             cascade: !no_cascade,
         },

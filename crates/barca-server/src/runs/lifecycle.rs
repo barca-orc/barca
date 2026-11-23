@@ -190,10 +190,19 @@ async fn execute(
             // A request that names files reads only those, as `barca get x a.py` does.
             let files = run_files(&state, &spec.files);
             let dag = if spec.files.is_empty() {
-                state.reads.sources.current_dag().await?
+                state
+                    .reads
+                    .sources
+                    .current_dag_until(barca_service::process::Until::cancelled(&cancel))
+                    .await?
             } else {
                 std::sync::Arc::new(
-                    barca_service::load::build_dag(files, &state.config.python).await?,
+                    barca_service::load::build_dag_until(
+                        files,
+                        &state.config.python,
+                        barca_service::process::Until::cancelled(&cancel),
+                    )
+                    .await?,
                 )
             };
             serve_run(ServedRun {
@@ -276,13 +285,8 @@ async fn execute(
             .queue
             .requeue
             .load(std::sync::atomic::Ordering::SeqCst)
-        && state
-            .runs
-            .registry
-            .get(&run_id)
-            .is_some_and(|r| !r.cancel_requested)
+        && requeue(&state, &run_id, &spec).await
     {
-        requeue(&state, &run_id).await;
         return;
     }
 
@@ -353,7 +357,7 @@ async fn execute(
                 let (limit, source) = timeout.clone().unwrap_or_default();
                 format!(
                     "run timed out after {}s ({source})\nThe server stops a run that takes \
-                         longer than its run timeout; steps that finished are cached. Raise it \
+                         longer than its run timeout; matching completed assets can be reused; tasks may repeat. Raise it \
                          with --run-timeout, [server] run_timeout_seconds or \
                          Schedule(..., timeout_seconds=N); 0 means no limit.",
                     limit.as_secs(),
@@ -390,7 +394,18 @@ async fn execute(
 /// Put a run the stopping server stopped back in the queue ([`barca_service::serve::run_queue::requeue`]):
 /// the next server starts it again, under the same id. Its event stream ends without
 /// `run_finished` when the server stops; a client following it reconnects to the next one.
-async fn requeue(state: &AppState, run_id: &str) {
+async fn requeue(state: &AppState, run_id: &str, spec: &RunSpec) -> bool {
+    // Serialize the cancellation decision, durable transition and live queue publication
+    // with DELETE. A request arriving during the DB write cannot be lost.
+    let _transition = state.runs.queue.admit.lock().await;
+    if state
+        .runs
+        .registry
+        .get(run_id)
+        .is_none_or(|r| r.cancel_requested)
+    {
+        return false;
+    }
     match barca_service::serve::run_queue::requeue(&state.config.resolved.db_path, run_id, None)
         .await
     {
@@ -402,9 +417,21 @@ async fn requeue(state: &AppState, run_id: &str) {
             if let Some(mut r) = state.runs.registry.get_mut(run_id) {
                 r.status = RunStatus::Pending;
             }
+            state
+                .runs
+                .queue
+                .waiting
+                .lock()
+                .unwrap()
+                .push_back(crate::queue::Waiting {
+                    run_id: run_id.to_owned(),
+                    spec: spec.clone(),
+                });
+            true
         }
         Err(e) => {
             barca_service::errln!("[barca] could not put run {run_id} back in the queue: {e}");
+            false
         }
     }
 }

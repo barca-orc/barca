@@ -153,8 +153,17 @@ lost and done again.
 
 ## Stopping the server
 
+Workers and their ordinary subprocesses have private process groups. Cancelling a run,
+reaching the drain deadline, or forcing a stop resumes stopped `parallel()` callers and
+sends TERM to each group, then KILL after a shared 200 ms grace period. This also removes
+children whose worker has already exited, without stopping the server or another run.
+Children that deliberately daemonize, create a new session, or change process group escape
+this ownership boundary; their launcher must arrange their cleanup.
+
 SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way: the
-first one starts a drain, which loses nothing the server accepted.
+first one starts a drain, which loses nothing the server accepted. Server workers remain
+outside the terminal’s process group, so terminal Ctrl-C starts this drain without interrupting
+their running steps. A second signal still cancels the remaining runs.
 
 ```bash
 barca serve pipeline.py                      # on SIGTERM, runs in flight get 30 seconds
@@ -194,10 +203,21 @@ flight that takes well under a second.
 
 When the drain timeout passes before the runs in flight have finished, they are stopped and put
 back at the head of the queue: `[barca] the drain timeout (30s) passed: stopping 1 run and
-putting it back in the queue`. Their workers are stopped, the steps that finished are kept (and
-are cache hits on the next attempt), and the stopped attempt is not recorded as a run that ended:
+putting it back in the queue`. Their workers are stopped, completed asset results are kept (and
+reused when their code and inputs still match), and the stopped attempt is not recorded as a run that ended:
 its row and lines are replaced by the next attempt's. The server exits 0, and the next server
 starts them again from the beginning, first, under the same run ids.
+
+A refresh-all or selective refresh keeps its original acceptance time across attempts. A
+successful asset result with the current run hash recorded at or after that time satisfies
+the refresh, including an individual partition key or a result another run produced while
+this request waited. Older results and changed hashes still run; selective cascade and cutoff
+rules still apply. Fully cached steps satisfied this way report `refreshed_by_this_run`.
+
+This is not exactly-once task execution. Outside a scheduled tick, completed tasks can run
+again after a restart, including their side effects. Make retried task effects idempotent;
+interrupted tasks and sensors can also execute again.
+
 
 With a store, a step that finished counts as kept even when its upload was still in flight at the
 drain timeout: the upload is stopped and kept pending, as a failed one is (`barca docs remote`,
@@ -218,7 +238,9 @@ open after that get 2 more (shorter with a drain timeout under 10 seconds: below
 
 A run the drain timeout requeued runs again from its start, planned on the code the restarted
 server has. Assets that finished are cache hits then while their code and inputs are unchanged; one
-a deploy changed runs again under its new run hash, as in a new run. A step that was interrupted
+a deploy changed runs again under its new run hash, as in a new run. If a previously failed
+key succeeds after requeue, its success is recorded under the same run id and run hash and is
+cached normally; the earlier failure remains in history. A step that was interrupted
 runs again, and a task runs again from its beginning
 (including what it did before it was stopped, such as an email or an insert). So a run the server
 accepted is executed at least once, not exactly once. A task with side effects should be safe to
@@ -279,7 +301,15 @@ and 75 or more with one (73 plus a margin); the table gives the no-store numbers
 | Docker | `docker stop -t`, `stop_grace_period` in Compose | 10 s | `stop_grace_period: 45s` |
 | Kubernetes | `terminationGracePeriodSeconds` | 30 s | `45` |
 
-This also holds when barca is process 1 of a container, so a plain `docker stop` drains. Keep
+For systemd, set `KillMode=mixed` in `[Service]`. It sends the initial SIGTERM only to the
+main server, so Barca can drain its workers and transfer helper. The default `control-group`
+signals every child immediately, interrupting their work before the drain can finish. With
+`mixed`, systemd still sends SIGKILL to remaining children when the main process exits or
+`TimeoutStopSec` expires; keep that timeout above the printed stop grace.
+
+Docker sends the initial stop signal to the container’s main process. The documented exec-form
+`CMD ["barca", "serve", ...]` makes Barca that process, so `docker stop` starts its drain. A shell
+wrapper must use `exec barca serve ...` to forward that responsibility. Keep
 `.barca/` on persistent storage: the queue is in its metadata DB.
 
 ### Clients ride through a restart
@@ -431,7 +461,7 @@ def sync() -> dict:
 ```
 
 A run that times out is stopped like a cancelled one (its workers are terminated; steps that
-finished stay cached) and is recorded as `error` in `barca history`, with the reason in its
+finished assets can be reused when their hashes match; tasks may repeat) and is recorded as `error` in `barca history`, with the reason in its
 outcome: `run timed out after 240s (Schedule(timeout_seconds=) of sync)`, naming the setting
 that applied. Before 0.31.0 every run under `barca serve` stopped at 600 seconds, a limit that was
 not configurable; `--run-timeout 600` restores it.

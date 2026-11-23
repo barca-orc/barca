@@ -393,3 +393,22 @@ having no archived attempts. Startup uses predecessor queue ownership to finish 
 records without depending on host/PID liveness, preserving the existing killed-drain retry
 limit. Conformance: run_queue tests, queue_routes tests, and `test_serve_queue.py` restart and
 local follower cases.
+
+Successful materialization `created_at` values written by step persistence include fractional
+seconds (`YYYY-MM-DD HH:MM:SS.nnnnnnnnn`, UTC) to distinguish refresh acceptance within a
+second. Readers accept legacy whole-second values too. No column or schema migration is needed.
+
+## Last writer version
+
+`metadata_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)` is an additive format-1 table.
+`last_writer_version` records the barca package version of the last metadata write, including
+schema initialization/migration. Connection-local triggers update it with successful row
+writes, in the same transaction, including when a server keeps its connection open. Reads
+leave it untouched. Preexisting databases gain the table at the next schema initialization.
+Older releases that predate this feature cannot update the marker.
+
+Opening metadata last written by a newer semantic version prints a stderr warning naming
+both versions. This is advisory; schema compatibility still decides admission. The warning
+is deduplicated within a process. Missing or unrecognized writer versions do not block access.
+Conformance: `python/tests/test_version_warnings.py` and the writer transaction tests in
+`crates/barca-db/src/db/schema/writer.rs`.

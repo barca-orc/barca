@@ -8,17 +8,48 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Completed queued cancellation (`DELETE /runs/{id}` and `barca cancel --json`) now returns `status: "cancelled"`; running cancellations still return `"cancelling"` (#936).
+
 ### Bug Fixes
 
-- Recover queue-owned predecessor runs even when their host or PID cannot be checked. Retain stopped executions and their logs across server requeues, link them from run detail, and keep local log followers waiting for the next execution.
+- Recover queue-owned predecessor runs even when their host or PID cannot be checked. Retain stopped executions and their logs across server requeues, link them from run detail, and keep local log followers waiting for the next execution (#930, #931).
+
+- Cancel, drain timeout, forced stop and local SIGTERM now stop worker process groups, including inherited subprocesses and suspended `parallel()` callers. Children that ignore TERM are killed after the grace period even when their worker has exited (#935).
+
+- Cancelling a run just requeued by server drain durably removes it so a restart cannot run it. Hanging partition-key and `batches_by` resolvers stop on cancellation, with a bounded subprocess shutdown (#936).
+
+- Record a successful retry after a server requeue even when the same run id and run hash already have a failed step. Earlier failure evidence remains in history, and the successful result is cached (#929).
+
+- Terminal Ctrl-C now drains server-owned workers instead of interrupting their running steps; the drain deadline requeues remaining work and a second signal still cancels it (#926).
+
+- A server refresh resumed after a drain/restart reuses completed assets and partition keys whose current-hash success was recorded since the original request was accepted. Tasks can still repeat, including side effects (#928).
+
+### Documentation
+
+- Set `KillMode=mixed` and an explicit stop timeout in the systemd recipe so stopping the service lets Barca drain its workers; clarify container signal delivery (#927).
+
+## 0.46.4 (2026-11-22)
 
 ### Bug Fixes
 
+- Warn when metadata was last written by a newer barca, and have `barca doctor` check the running version against `pyproject.toml`'s barca dependency (#672).
+- Warn once per sensor per CLI/server process when `(True, value)` supplies a non-`None` value: it always counts as changed. Return the value alone for comparison or `(True, None)` for a silent explicit change (#673).
+- Refresh locked OAuthLib, OpenTelemetry API and Astro dependencies to their patched versions (#1112).
+
+### Performance
+
+- Share transactional metadata writer-version trigger programs and move doctor requirement parsing into its finite Python helper, reducing coordinator memory without external Python dependencies.
+
+## 0.46.3 (2026-11-22)
+
+### Bug Fixes
+
+- Prevent DuckDB 1.x from hanging while binding batched inputs that read multiple remote Parquet files.
 - Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
-
 - Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).
 - Make the overlapping-refresh release check respect the five-minute store-check window before requiring repair, and cover the deferred repair and changed-bytes warning against real object stores.
-
 - A loopback server refuses foreign HTTP Host names before dispatch, preventing DNS rebinding. Trusted reverse proxies can list exact DNS names in `[server] allowed_hosts`; loopback CLI/UI access and the owner-only project socket keep working (#998).
 - Pinning an asset no longer removes unrelated partitioned nodes from status prediction: their cache state and partition counts remain visible (#1069).
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).

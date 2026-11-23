@@ -211,6 +211,10 @@ pub const SERVER_STATE: &str = "CREATE TABLE IF NOT EXISTS server_state (
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
 /// Created by `init_db`, and by the additive migration in a version-1 database that lacks one.
 pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
+    (
+        "metadata_info",
+        "CREATE TABLE IF NOT EXISTS metadata_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    ),
     // Derived per-node freshness witnesses; never a second ledger.
     ("freshness_proofs", FRESHNESS_PROOFS),
     // Results whose upload failed after their step succeeded (#390).
@@ -314,7 +318,9 @@ pub(crate) fn compatible_version(version: i64) -> Result<i64, String> {
 /// The format version, or [`BarcaError::MetadataUnusable`] (naming no path) for one this
 /// release cannot read.
 pub(crate) async fn check(conn: &Connection) -> Result<i64, BarcaError> {
-    compatible_version(read_version(conn).await?).map_err(crate::db::unusable)
+    let version = compatible_version(read_version(conn).await?).map_err(crate::db::unusable)?;
+    super::writer::warn(conn).await?;
+    Ok(version)
 }
 
 /// Whether a version-1 database lacks an additive column, table or index of this release, so that

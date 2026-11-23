@@ -82,7 +82,11 @@ copying an entry module alone is not proof of isolation.
 
 A client timeout/disconnection alone does not cancel execution. Work remains accessible by
 ID until explicitly cancelled. Cancelling a queued invocation removes it immediately; it must
-not start unless explicitly retried. Cancelling shared work detaches that requester; work
+not start unless explicitly retried. This includes the window after drain requeues a run
+and before server exit: DELETE removes its durable queue row and records cancelled before
+returning `status: cancelled`. Cancellation while execution unwinds returns `status: cancelling`.
+Partition-key and batch resolver subprocesses observe cancellation and are reaped, with
+a one-second SIGTERM grace followed by SIGKILL for an unresponsive resolver. Cancelling shared work detaches that requester; work
 continues while another requester or background freshness demand needs it.
 
 Cancellation first requests graceful termination, then force-stops after a configurable

@@ -139,7 +139,7 @@ stability; the row adds the keys and routes that go with it.
 
 | Item | Why |
 |---|---|
-| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
+| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; `project_version` checks the running CLI against the active `pyproject.toml` barca dependency; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `/events/{run_id}`) are deprecated aliases with no scheduled removal; a removal migrates the Python `Client` first and lands as a breaking change in a minor release |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
@@ -847,6 +847,11 @@ barca or its environment failed (metadata DB, workers, the store, I/O); retrying
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
 `docker stop` sends), at any point of a `get` or `run`: while steps run, and
 with an artifact store also while artifacts upload or download or the history is backed up.
+Workers keep private process groups. The coordinator handles terminal Ctrl-C and stops the
+workers and their inherited subprocesses; a step cannot rely on receiving KeyboardInterrupt
+or completing its exception/finally handlers. Stopped callers are resumed before TERM;
+after 200 ms, remaining group members receive KILL. Deliberately daemonized children that
+leave the group need cleanup by their launcher.
 The exit code is 130 whatever the store does: a cancelled run spends at most 10 seconds backing
 its record up, a second Ctrl-C or SIGTERM ends that at once, and a backup that fails then is a
 line on stderr, not exit 3 ([Remote Storage: Ctrl-C](/reference/remote-storage/#ctrl-c)).
@@ -1056,7 +1061,8 @@ may grow.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. A `cached` step served from a pin ([barca pin and unpin](/reference/cli/pin/)) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
+  words. A `cached` step served from a pin ([barca pin and unpin](/reference/cli/pin/)) has `reason` `pinned`. A cached refresh satisfied by a current-hash success recorded at or after
+  original acceptance has `reason` `refreshed_by_this_run`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
   or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
   `partition_selection`, and the result has `partition_selection` (see "Partitioned targets").
   After a partition key fails, a key of a node that reads it key for key is a step with `status`
@@ -4949,6 +4955,20 @@ while queue ownership shows the request will resume. Step/stream filters also ap
 | `steps_page.total` | integer | always |
 | `steps_page.truncated` | boolean | always |
 <!-- END GENERATED schema history_attempt -->
+
+### Cancelling a queued run
+
+`barca cancel RUN_ID --server URL --json` reports `status: "cancelled"` after removing a
+queued run durably, including a run just requeued during drain. A running run reports
+`status: "cancelling"` until its workers or partition/batch resolvers stop. Resolver
+shutdown allows one second for SIGTERM, then kills and reaps the subprocess.
+
+<!-- BEGIN GENERATED schema cancel_queued -->
+| Key | Type | Present |
+|---|---|---|
+| `run_id` | string | always |
+| `status` | string | always |
+<!-- END GENERATED schema cancel_queued -->
 
 See also: [Scripts and AI Agents](/reference/agents/) (how to drive barca from scripts and agents), [Agent Skill](/reference/agent-skill/).
 
