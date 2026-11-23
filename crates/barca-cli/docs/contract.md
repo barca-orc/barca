@@ -133,7 +133,7 @@ stability; the row adds the keys and routes that go with it.
 
 | Item | Why |
 |---|---|
-| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
+| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; `project_version` checks the running CLI against the active `pyproject.toml` barca dependency; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `/events/{run_id}`) are deprecated aliases with no scheduled removal; a removal migrates the Python `Client` first and lands as a breaking change in a minor release |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
@@ -776,6 +776,11 @@ value of its first key only.
 | `BARCA_SERVER_RECONNECT` | seconds a `--server` client following a run (`get`/`run --server`, `logs -f --server`) waits for a server whose stream broke to come back, and follows the same run id there (default 60; `0`: give up at once, exit 3); not a number of seconds is a usage error (exit 2) | experimental |
 | `DD_SITE` | the Datadog site (`datadoghq.com`, `us3.datadoghq.com`) whose web app the UI's trace links open (beats `[telemetry] datadog_site` in `barca.toml`); one that is not a host name stops `barca serve` with exit 2 (`barca docs telemetry`) | experimental |
 | `BARCA_LOG` | `json`: `barca serve` writes every line as one JSON object on stdout instead of text on stderr (`barca docs telemetry`, "Logs under barca serve"); `text` or unset: the default. Under `serve` any other value is a usage error (exit 2). On every other command it changes nothing and prints `[barca] warning: BARCA_LOG applies to barca serve only; this command writes its usual lines` | experimental |
+
+On a loopback TCP listener, every HTTP route first checks Host (or HTTP/2 authority).
+Foreign hosts receive HTTP 403 in the standard error envelope (`kind: usage`, `code: 2`).
+Loopback names and exact DNS names in `[server] allowed_hosts` are accepted; the project
+socket is exempt. See `barca docs server-mode`, "Loopback Host protection".
 
 The experimental HTTP query `GET /state?targets=a,b` computes only the named nodes and their
 upstream dependencies, including durations. A target may be a group id (`group:FILE:NAME`, as

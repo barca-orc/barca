@@ -166,6 +166,9 @@ pub struct ArtifactRef {
     /// Explicit sensor freshness signal, independent of the optional value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensor_changed: Option<bool>,
+    /// Diagnostic hint: an explicit change accompanied by a non-None payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_explicit_value: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_observation: Option<serde_json::Value>,
     /// When the step finished (Unix seconds, worker clock) and how long it took, for telemetry.

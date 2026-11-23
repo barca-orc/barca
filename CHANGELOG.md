@@ -12,8 +12,31 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Terminal Ctrl-C now drains server-owned workers instead of interrupting their running steps; the drain deadline requeues remaining work and a second signal still cancels it (#926).
 
+## 0.46.4 (2026-11-22)
+
+### Bug Fixes
+
+- Warn when metadata was last written by a newer barca, and have `barca doctor` check the running version against `pyproject.toml`'s barca dependency (#672).
+- Warn once per sensor per CLI/server process when `(True, value)` supplies a non-`None` value: it always counts as changed. Return the value alone for comparison or `(True, None)` for a silent explicit change (#673).
+- Refresh locked OAuthLib, OpenTelemetry API and Astro dependencies to their patched versions (#1112).
+
+### Performance
+
+- Share transactional metadata writer-version trigger programs and move doctor requirement parsing into its finite Python helper, reducing coordinator memory without external Python dependencies.
+
+## 0.46.3 (2026-11-22)
+
+### Bug Fixes
+
+- Prevent DuckDB 1.x from hanging while binding batched inputs that read multiple remote Parquet files.
+- Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
+- Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).
+- Make the overlapping-refresh release check respect the five-minute store-check window before requiring repair, and cover the deferred repair and changed-bytes warning against real object stores.
+- A loopback server refuses foreign HTTP Host names before dispatch, preventing DNS rebinding. Trusted reverse proxies can list exact DNS names in `[server] allowed_hosts`; loopback CLI/UI access and the owner-only project socket keep working (#998).
+- Pinning an asset no longer removes unrelated partitioned nodes from status prediction: their cache state and partition counts remain visible (#1069).
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).
 - Batched nodes split across worker streams no longer stall when the planner packs multiple chunks of the same node or chain into one stream (#1100). Stream adjacency no longer makes unrelated work depend on each other; declared input dependencies and batch boundaries are preserved. This fixes cold runs and explicit refreshes at larger pools, including small pools with several partitioned chains.
+- Preserve input types for remote-only and batched parquet reads: Dataset inputs are fetched locally, and batched DuckDB/Polars readers use Barca's filesystem and credentials. Optional annotations such as `list[ds.Dataset] | None`, `Optional[T]` and `Union[T, None]` retain the inner reader; `pa.Table` also selects Arrow rather than pandas (fixes #1103 and #814).
 
 ## 0.46.2 (2026-11-22)
 

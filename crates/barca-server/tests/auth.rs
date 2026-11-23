@@ -381,3 +381,56 @@ async fn a_run_records_its_requesting_token_and_reason_and_who_cancelled_it() {
     assert_eq!(list["runs"][0]["cancellation"]["started"], false);
     assert_eq!(list["runs"][0]["principal"], "token:ci-bot");
 }
+
+#[tokio::test]
+async fn foreign_hosts_are_refused_before_authentication_or_route_dispatch() {
+    for mode in [AuthMode::Off, AuthMode::Token] {
+        let root = tempfile::tempdir().unwrap();
+        let router = fixture(root.path(), mode, true);
+        for method in ["GET", "HEAD", "POST", "DELETE", "OPTIONS"] {
+            for path in ["/health", "/ui/", "/auth/status", "/runs", "/missing"] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(path)
+                            .header(header::HOST, "evil.example")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            }
+        }
+        for duplicate in [false, true] {
+            let mut request = Request::builder()
+                .uri("http://evil.example/health")
+                .version(axum::http::Version::HTTP_2);
+            if duplicate {
+                request = request.header(header::HOST, "localhost");
+            }
+            let response = router
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header(header::HOST, "localhost")
+                    .header(header::HOST, "evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!root.path().join("metadata.db").exists());
+    }
+}

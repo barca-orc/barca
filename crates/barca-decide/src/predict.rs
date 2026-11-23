@@ -418,7 +418,9 @@ async fn predict_steps(
     phase_ref: &Phase,
 ) -> Result<Vec<barca_compile::planner::StreamStep>, BarcaError> {
     let mut pruned;
-    let phase_ref = if ctx.user_pins.is_empty() {
+    // Status inspects every node in its scope, including inputs a run would stop reading
+    // at a pin. An unscoped prediction likewise has no target cone to prune against.
+    let phase_ref = if ctx.user_pins.is_empty() || ctx.held.is_some() || ctx.targets.is_empty() {
         phase_ref
     } else {
         pruned = phase_ref.clone();
