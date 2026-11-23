@@ -293,6 +293,7 @@ pub(super) struct DispatchPhase<'a> {
     pub(super) total_estimated: f64,
     pub(super) elapsed_so_far: f64,
     pub(super) completed_steps: usize,
+    pub(super) cached_steps: usize,
     pub(super) total_steps: usize,
     pub(super) event_tx: &'a Option<UnboundedSender<barca_model::RunEvent>>,
     pub(super) logs_buffer: &'a mut barca_db::run_logs::Recorder,
@@ -361,6 +362,7 @@ pub(super) async fn dispatch_phase(
         total_estimated,
         mut elapsed_so_far,
         mut completed_steps,
+        cached_steps,
         mut total_steps,
         event_tx,
         logs_buffer,
@@ -530,8 +532,9 @@ pub(super) async fn dispatch_phase(
                 bar.set_position(completed_steps as u64);
                 let remaining = if total_estimated > 0.0 {
                     (total_estimated - elapsed_so_far).max(0.0)
-                } else if completed_steps > 0 {
-                    let avg = elapsed_so_far / completed_steps as f64;
+                } else if completed_steps > cached_steps {
+                    // Cache hits advance progress but contribute no execution time.
+                    let avg = elapsed_so_far / (completed_steps - cached_steps) as f64;
                     avg * total_steps.saturating_sub(completed_steps) as f64
                 } else {
                     0.0

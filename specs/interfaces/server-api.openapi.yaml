@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '32'
-  description: 'Normative current wire contract; specification version 32 is independent of package versions.
+  version: '33'
+  description: 'Normative current wire contract; specification version 33 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -8891,7 +8891,9 @@ components:
                 type: [string, 'null']
                 description: eta_seconds in words (about 4m left).
           - type: 'null'
-          description: For a run in progress, how far it is; null otherwise.
+          description: For a run in progress, how far it is; null otherwise. Cached decisions count
+            immediately after each phase is decided; totals count expanded steps/keys, not nodes.
+            Artifact recovery can lower cached counts before recomputation; restart starts a new count.
         slowest:
           type: array
           maxItems: 5

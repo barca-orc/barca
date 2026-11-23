@@ -98,7 +98,7 @@ pub struct RunCounts {
     #[serde(default, skip_serializing_if = "is_zero_count")]
     #[cfg_attr(feature = "ts", ts(type = "number", optional))]
     pub skipped: u64,
-    /// Steps served from cache. A run counts them when it ends: 0 while it is in progress.
+    /// Steps served from cache, recorded as phases are decided.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub cached: u64,
     /// Planned steps the run did not get to: downstream of a failure, or after it stopped.
@@ -451,16 +451,13 @@ pub fn step_counts(run: StepFacts<'_>) -> RunCounts {
             parts.push(format!("{} failed", count(failed)));
         }
     }
+    parts.push(format!("{} cached", count(cached)));
     if live {
-        // A run counts its cached steps when it ends.
         if not_reached > 0 {
             parts.push(format!("{} left", count(not_reached)));
         }
-    } else {
-        parts.push(format!("{} cached", count(cached)));
-        if not_reached > 0 {
-            parts.push(format!("{} not reached", count(not_reached)));
-        }
+    } else if not_reached > 0 {
+        parts.push(format!("{} not reached", count(not_reached)));
     }
     RunCounts {
         steps,
@@ -1587,9 +1584,9 @@ mod tests {
         );
         let cancelled = of("cancelled", Some(4), 1, 0, 0);
         assert_eq!(cancelled.outcome, "1 started · 0 cached · 3 not reached");
-        // A run in progress counts its cached steps when it ends: it says what it has left.
-        let live = of("running", Some(1_000), 12, 0, 0);
-        assert_eq!(live.outcome, "12 ok · 988 left");
+        // A live run includes decided cache hits, leaving only undecided or unfinished work.
+        let live = of("running", Some(1_000), 12, 980, 0);
+        assert_eq!(live.outcome, "12 ok · 980 cached · 8 left");
         assert_eq!(live.not_reached_line, None);
     }
 
