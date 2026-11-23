@@ -282,6 +282,7 @@ struct RunState {
     total_estimated: f64,
     elapsed_so_far: f64,
     completed_steps: usize,
+    recorded_progress: Option<(usize, usize)>,
     store_paths: HashMap<String, String>,
     transfer_error: Option<String>,
     /// What this run left unpublished in the artifact store (#390), for the run JSON.
@@ -919,6 +920,7 @@ async fn dispatch_ready(
 ) -> barca_engine::coordinator::Coordinator {
     session.state.steps_executed += phase_step_count(filtered_phase);
 
+    let cached = cached_count(&session.state);
     let (coord, phase_err, phase_elapsed, phase_completed, phase_total) =
         dispatch_phase(DispatchPhase {
             filtered_phase,
@@ -939,7 +941,8 @@ async fn dispatch_ready(
             agent_mode: session.request.agent_mode,
             total_estimated: session.state.total_estimated,
             elapsed_so_far: session.state.elapsed_so_far,
-            completed_steps: session.state.completed_steps,
+            completed_steps: session.state.completed_steps + cached,
+            cached_steps: cached,
             total_steps: session.state.total_steps,
             event_tx: &session.request.event_tx,
             logs_buffer: &mut session.state.logs_buffer,
@@ -948,7 +951,7 @@ async fn dispatch_ready(
         })
         .await;
     session.state.elapsed_so_far = phase_elapsed;
-    session.state.completed_steps = phase_completed;
+    session.state.completed_steps = phase_completed.saturating_sub(cached);
     session.state.total_steps = phase_total;
     trace_point!(session.started.trace, "phase{phase_idx}_run_phase_done");
     if let Err(e) = phase_err
@@ -1347,6 +1350,34 @@ async fn plan_calls(
     PlannedCalls { calls, errors }
 }
 
+/// The same count used by terminal persistence, including compact freshness proofs.
+fn cached_count(state: &RunState) -> usize {
+    state.cached_node_ids.len()
+        + state
+            .incremental
+            .as_ref()
+            .map_or(0, |i| i.unseeded_cached())
+}
+
+async fn record_cached_progress(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError> {
+    let cached = cached_count(&session.state);
+    let total = session.state.total_steps;
+    if session.state.recorded_progress != Some((cached, total)) {
+        db::runs::set_cached_progress(
+            &session.request.cfg.db_path,
+            &session.started.run_id,
+            cached,
+            total,
+        )
+        .await?;
+        session.state.recorded_progress = Some((cached, total));
+        if let Some(bar) = &session.pb {
+            bar.set_position((session.state.completed_steps + cached) as u64);
+        }
+    }
+    Ok(())
+}
+
 async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError> {
     let prepared = session.prepared;
     let target_ids: Vec<&str> = prepared.targets.iter().map(|(_, id)| id.as_str()).collect();
@@ -1374,6 +1405,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         next_idx += 1;
         trace_point!(session.started.trace, "phase{phase_idx}_start");
         let selected = select_work(session, work, &mut queue, &requested, phase_idx).await?;
+        record_cached_progress(session).await?;
         if session.state.transfer_error.is_some()
             || (session.state.sink_failed && !prepared.keep_going)
         {
@@ -1384,6 +1416,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         };
         let recovered =
             recover_phase_inputs(session, phase, recompute, &mut queue, phase_idx).await?;
+        record_cached_progress(session).await?;
         if session.state.transfer_error.is_some() {
             break;
         }
@@ -1421,6 +1454,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         let coord = dispatch_ready(session, &phase, &provided, phase_idx, calls).await;
         let phase_outputs = collect_outputs(session, &coord);
         computed_by_other_runs(session, &phase_outputs);
+        record_cached_progress(session).await?;
         collect_failures(session, &coord).await;
         session
             .state
@@ -1452,6 +1486,7 @@ async fn record_and_publish(
     session: &mut RunSession<'_, '_>,
     touched: &[String],
 ) -> Result<f64, BarcaError> {
+    let cached = cached_count(&session.state);
     let elapsed = finalize_run(
         FinalizeRun {
             results: &mut session.state.results,
@@ -1467,7 +1502,7 @@ async fn record_and_publish(
                 .as_ref()
                 .map_or(0, |i| i.unseeded_cached()),
             steps_executed: session.state.steps_executed,
-            completed_steps: session.state.completed_steps,
+            completed_steps: session.state.completed_steps + cached,
             total_steps: session.state.total_steps,
             cancel: &session.started.cancel,
             phase_error: &session.state.phase_error,

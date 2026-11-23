@@ -3601,6 +3601,13 @@ changed since the last success; `subject` is the component as `barca status` wor
 and `evicted` (a valid result whose file is gone), `task` and `sensor` (they always run) and
 `not_examined` (no cache hit, not looked up: a server's ledger answered the lookup, or more than
 10,000 keys of one node ran in one phase). `example` is the first node executed for the reason.
+
+Cached counts update as phases are decided, before their remaining steps execute. History,
+server run lists/details, and the web UI include those counts while a run is still running.
+Progress counts steps (one key of a partitioned node), not nodes or worker calls. Dynamic
+keys can increase the total; recovery of a missing artifact removes that step from the cached
+count before computing it. Repeated phases and restarted attempts do not add old counts.
+
 `explanation` (experimental, #956) is the run in words, derived from those recorded facts by
 the same code that answers `GET /runs/{run_id}` (its `explanation`), so the table, the JSON
 and the web UI say the same. Its `counts` separates planned steps and nodes, executed steps, cache hits, unreached steps, attempts and retries. `outputs` describes returned artifacts, and `target_line` summarizes the requested targets. Other fields include `targets` (a list: the job's node ids, else the targets as given;
