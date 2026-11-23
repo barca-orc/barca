@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 11. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 12. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.

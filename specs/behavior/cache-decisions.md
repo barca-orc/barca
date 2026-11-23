@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 8. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 9. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
